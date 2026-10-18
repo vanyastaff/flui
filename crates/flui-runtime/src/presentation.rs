@@ -299,6 +299,8 @@ pub struct PresentationState {
     pub(crate) gesture_geometry: RefCell<crate::ui_runtime::preferences::GeometryProjection>,
     pub(crate) text_preparation: RefCell<TextPreparation>,
     pub(crate) sampled_motion_tick: Cell<Option<FrameTick>>,
+    /// The refresh rate this presentation asks its display for.
+    pub(crate) frame_rate: Cell<crate::frame_rate_demand::DemandGovernor>,
     pub(super) window_visible: Cell<bool>,
     pub(super) window_focused: Cell<bool>,
     /// The display this presentation's window is on, as the host last derived it
@@ -804,6 +806,7 @@ impl PresentationState {
             completion_scope: Some(capabilities.completion_scope),
             text_preparation: RefCell::new(TextPreparation::default()),
             sampled_motion_tick: Cell::new(None),
+            frame_rate: Cell::default(),
             alive: RefCell::new(Some(alive)),
             window: Arc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
@@ -906,6 +909,7 @@ impl PresentationState {
             completion_scope: None,
             text_preparation: RefCell::new(TextPreparation::default()),
             sampled_motion_tick: Cell::new(None),
+            frame_rate: Cell::default(),
             alive: RefCell::new(Some(alive)),
             window: Arc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
@@ -1073,6 +1077,36 @@ impl PresentationState {
 
     pub(crate) fn motion_is_paused(&self) -> bool {
         self.motion_clock.borrow().is_paused()
+    }
+
+    /// Whether a running animation currently asks this presentation for
+    /// frames: some controller runs, the motion clock is not paused, frames
+    /// are enabled and the presentation is not hidden.
+    pub(crate) fn animation_running(&self, frames_enabled: bool) -> bool {
+        frames_enabled
+            && !self.clock.is_hidden()
+            && self.vsync.has_running()
+            && !self.motion_is_paused()
+    }
+
+    /// Whether this presentation can draw: it is neither hidden nor closing.
+    pub(crate) fn is_shown(&self) -> bool {
+        !self.closing_requested.get() && !self.clock.is_hidden()
+    }
+
+    /// When the hold on the high refresh rate runs out. A presentation that is
+    /// not shown has none: it is released at its next work item instead, so a
+    /// deadline nobody can serve never reaches the loop.
+    pub(crate) fn frame_rate_hold(&self) -> Option<web_time::Instant> {
+        self.is_shown()
+            .then(|| self.frame_rate.get().release_at())
+            .flatten()
+    }
+
+    /// Whether this presentation wants the display's highest refresh rate right
+    /// now: an animation runs or a pointer is down.
+    pub(crate) fn wants_high_frame_rate(&self, frames_enabled: bool) -> bool {
+        self.animation_running(frames_enabled) || self.gestures.active_pointer_count() != 0
     }
 
     pub(crate) fn motion_policy(&self) -> flui_animation::MotionPolicy {

@@ -15,7 +15,8 @@ use std::cell::RefCell;
 use std::sync::{Arc, Weak};
 
 use flui_platform::traits::PlatformWindow;
-use flui_platform_api::DisplaySnapshot;
+use flui_platform_api::{DisplaySnapshot, FrameRateHint};
+use flui_runtime::frame_rate_demand::FrameRateDemand;
 use flui_runtime::owner::DisplayUpdate;
 
 use super::owner_dispatch::PresentationDispatcher;
@@ -26,6 +27,8 @@ struct FollowedWindow {
     /// Weak: the window's own callback table holds the hint that reaches the
     /// host, so a strong reference here would keep a closed window alive.
     window: Weak<dyn PlatformWindow>,
+    /// The refresh rate the runtime last asked for on this window's behalf.
+    demand: FrameRateDemand,
 }
 
 #[derive(Default)]
@@ -75,7 +78,54 @@ impl DisplayHost {
         self.state.borrow_mut().windows.push(FollowedWindow {
             dispatcher,
             window: Arc::downgrade(window),
+            demand: FrameRateDemand::Idle,
         });
+    }
+
+    /// The runtime's demand for the refresh rate changed: remember it and
+    /// pass it to the window of `address`. A presentation nobody follows has
+    /// no window to ask.
+    pub(super) fn set_frame_rate_demand(
+        &self,
+        address: flui_foundation::PresentationAddress,
+        demand: FrameRateDemand,
+    ) {
+        let window = {
+            let mut state = self.state.borrow_mut();
+            let Some(followed) = state
+                .windows
+                .iter_mut()
+                .find(|followed| followed.dispatcher.address == address)
+            else {
+                return;
+            };
+            followed.demand = demand;
+            followed.window.upgrade()
+        };
+        // The window answers outside any host borrow: it is platform code.
+        if let Some(window) = window {
+            window.set_frame_rate_hint(hint_for(demand));
+        }
+    }
+
+    /// Send the window of `address` the demand it holds again, after its native
+    /// surface was replaced and the request that rode on the old one is gone.
+    #[cfg(any(test, target_os = "android", target_os = "ios"))]
+    pub(super) fn reapply_frame_rate(&self, address: flui_foundation::PresentationAddress) {
+        let (window, demand) = {
+            let state = self.state.borrow();
+            let Some(followed) = state
+                .windows
+                .iter()
+                .find(|followed| followed.dispatcher.address == address)
+            else {
+                return;
+            };
+            (followed.window.upgrade(), followed.demand)
+        };
+        if let Some(window) = window {
+            window.set_frame_rate_hint(hint_for(demand));
+        }
     }
 
     /// Stop following the window of `address`.
@@ -113,5 +163,14 @@ impl DisplayHost {
         live.into_iter()
             .map(|(dispatcher, window)| (dispatcher, self.derive(window.as_ref())))
             .collect()
+    }
+}
+
+/// The window request for a runtime demand.
+fn hint_for(demand: FrameRateDemand) -> FrameRateHint {
+    match demand {
+        FrameRateDemand::Active => FrameRateHint::High,
+        // The demand enum grows; an unknown one leaves the rate to the system.
+        _ => FrameRateHint::Default,
     }
 }

@@ -405,6 +405,20 @@ impl OwnerEffects for HostState {
         finish(first);
     }
 
+    /// Only Android has a refresh-rate request to make (`ANativeWindow_setFrameRate`);
+    /// elsewhere the 250 ms hold would add a wake for nothing.
+    fn tracks_frame_rate_demand(&self) -> bool {
+        cfg!(target_os = "android")
+    }
+
+    fn frame_rate_demand_changed(
+        &self,
+        address: PresentationAddress,
+        demand: flui_runtime::frame_rate_demand::FrameRateDemand,
+    ) {
+        self.displays.set_frame_rate_demand(address, demand);
+    }
+
     fn after_turn(&self, turn_recovery: RecoveryState) {
         #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
         let _ = turn_recovery;

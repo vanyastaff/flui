@@ -1999,3 +1999,74 @@ stand-in counts them), and a page without IndexedDB. Node has no IndexedDB, so C
 them against a stand-in that runs one transaction at a time; with
 `WASM_BINDGEN_USE_BROWSER=1` they run against a browser's own. Storage needs no Cargo feature:
 `AppConfig::with_storage_dir` is the one switch.
+
+### Android samples its displays through JNI and refreshes them on announced change only
+
+**Rule:** `Platform::display_snapshot` runs on every owner wake, so a backend whose
+source costs a native round trip keeps the last snapshot and reads again only after
+something that can change it has announced itself. Nothing polls.
+
+**Choice:** `platforms/android/display.rs` reads every `Display`
+(`DisplayManager.getDisplays`): the real size and density (`getRealMetrics`,
+scale `densityDpi / 160`), the rate of the current `Display.Mode`
+(`getRefreshRate` when the mode is absent), the highest rate among
+`getSupportedModes`, and `getDisplayId`, which keys the identity
+(`DisplayKey::AndroidId`; `getUniqueId` is hidden). The Activity's display is
+`Activity.getDisplay` from API 30 and `WindowManager.getDefaultDisplay` below; it
+is what `AndroidWindow::display_id` answers. The snapshot goes stale on
+`ConfigChanged`, on `Resume` and on the choreographer's refresh-rate callback
+(API 30+: an adaptive 60/120 Hz switch raises no configuration change); each of
+those wakes the owner, whose next wake does the read. Below API 30 the rate is read
+at the first two events only. The kept snapshot is the shared `DisplaySource`
+cache (`invalidate`, `snapshot_with`); an Activity whose display is absent from
+a sample is `note_miss`ed, which allows one more sample per snapshot revision.
+`getDisplays()` also lists virtual displays, and a display id is never reused
+within a boot, so a re-plugged display gets a new identity. The callback runs in
+the app thread's own `poll_events`, invalidates the source and wakes the owner; it is taken down
+(`AChoreographer_unregisterRefreshRateCallback`) on that thread when the loop
+exits, before the data it points at is freed, and a registration dropped on any
+other thread leaks that data instead of freeing what a late call could reach.
+The idle `poll_events` timeout is the display's period, cut short by the time
+left to the next wake deadline (`idle_wait_until`), and 16 ms while the period is
+unknown. The loop does not block until the deadline even though `OwnerSignal`
+wakes the looper: the same iteration samples preferences every 500 ms, settles
+the safe area and consumes redraw requests that set a flag without waking the
+looper, so each of those would wait for the deadline.
+
+`shared/android_os_version.rs` reads the API level once, when the platform is
+built, and keeps it in the platform (no `static`): `android_get_device_api_level`
+looked up by name, then `__system_property_get("ro.build.version.sdk")`. The
+function is exported by `libc.so` only from API 29 and is an inline function in the
+NDK header below it, so linking it directly would break `minSdk` 23; the property
+reader is exported from API 23. NDK functions newer than `minSdk`
+(`ANativeWindow_setFrameRate`, `AChoreographer_registerRefreshRateCallback`: API
+30) come back as `NdkFn<N>`, a typed handle that exists only when the level and the
+symbol both do, and that keeps the `dlopen` handle of its library alive. `N` is a
+marker of the sealed `NdkFunction` trait, which pairs the symbol name, the first
+level and the pointer type taken from the NDK header, so resolving is safe code. Both
+`Build.VERSION.SDK_INT` reads in `preferences.rs` use the same level.
+
+`PlatformWindow::set_frame_rate_hint` is `ANativeWindow_setFrameRate(window, max, DEFAULT)`
+for `High`, with `max` the highest supported-mode rate of the Activity's display, and
+`0.0` for `Default`. The window keeps its last hint and sends it again on
+`InitWindow`, because the request rides on one `ANativeWindow`, and again when a
+sample finds another highest rate for the Activity's display (a `High` hint
+skipped while that rate was unknown). The host also sends its demand on
+`PrimarySurfaceRestored`; the two overlap on a resume and are idempotent.
+
+**Alternatives considered:**
+- `DisplayManager.DisplayListener` — it needs a Java object implementing the
+  interface, which a `NativeActivity` app without Java code does not have.
+- Polling `Display.getRefreshRate` — the 500 ms preference poll is a bound on
+  configuration getters with no notification, and a display read would cost a
+  second round trip each time for a value the choreographer announces.
+- Linking `android_get_device_api_level` or the API 30 functions directly — the
+  binary does not load on an older system.
+
+**Trade-off:** below API 30 an adaptive-rate switch that raises no configuration
+change goes unnoticed until the next one or a resume. The JNI path, the
+choreographer registration and the frame-rate request run only on a device; the
+host tests cover the level lookup (`os_capability_table`), the value
+classification (`android_display_table`) and the idle wait
+(`idle_wait_follows_the_real_period`), and CI type-checks the rest for
+`aarch64-linux-android`.

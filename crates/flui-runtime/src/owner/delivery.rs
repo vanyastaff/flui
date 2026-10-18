@@ -66,6 +66,25 @@ pub trait OwnerEffects {
     ) -> Option<super::TextSizingFrontier> {
         Some(frontier)
     }
+    /// Whether this host acts on a presentation's demand for its display's
+    /// highest refresh rate. Off by default: a host that answers `false` is
+    /// never told, and its runtimes arm no hold and report no hold deadline.
+    fn tracks_frame_rate_demand(&self) -> bool {
+        false
+    }
+    /// A presentation's demand for its display's highest refresh rate changed.
+    ///
+    /// Delivered after the runtime that decided it has returned to the owner,
+    /// and never for a presentation that has retired. The owner remembers what
+    /// it delivered, so a hook that panics is offered the same change again at
+    /// the next work item. The runtime has no platform edge: the host turns the
+    /// change into a request to the presentation's window.
+    fn frame_rate_demand_changed(
+        &self,
+        _address: PresentationAddress,
+        _demand: crate::frame_rate_demand::FrameRateDemand,
+    ) {
+    }
     /// Request another owner opportunity without fabricating a frame delivery.
     fn request_continuation(&self) -> bool;
 }
@@ -460,6 +479,89 @@ impl OwnerCore {
         }
     }
 
+    /// Tell the host every demand that differs from the one last delivered for
+    /// its presentation. A demand counts as delivered only once the host's hook
+    /// returned, so one that failed is offered again by the next work item.
+    fn deliver_frame_rate_demands(
+        &self,
+        effects: &dyn OwnerEffects,
+        runtime: UiRuntimeId,
+        demands: &[(
+            flui_foundation::PresentationId,
+            crate::frame_rate_demand::FrameRateDemand,
+        )],
+        failure: &mut Failure,
+    ) {
+        // Presentations that left the runtime owe the host nothing more.
+        self.state
+            .borrow_mut()
+            .frame_rate_delivered
+            .retain(|address, _| {
+                address.ui_runtime_id != runtime
+                    || demands.iter().any(|(id, _)| *id == address.presentation_id)
+            });
+        for &(presentation_id, demand) in demands {
+            let address = PresentationAddress {
+                ui_runtime_id: runtime,
+                presentation_id,
+            };
+            let delivered = {
+                let state = self.state.borrow();
+                if state.authorizer(address).is_err() {
+                    continue;
+                }
+                state
+                    .frame_rate_delivered
+                    .get(&address)
+                    .copied()
+                    .unwrap_or_default()
+            };
+            if delivered == demand {
+                continue;
+            }
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                effects.frame_rate_demand_changed(address, demand);
+            }));
+            match outcome {
+                Ok(()) => {
+                    self.state
+                        .borrow_mut()
+                        .frame_rate_delivered
+                        .insert(address, demand);
+                }
+                Err(payload) => {
+                    preserve_first_lifecycle_panic(failure, Some(payload), "frame rate demand");
+                }
+            }
+        }
+    }
+
+    /// Before a presentation is forgotten, tell the host it no longer wants the
+    /// high refresh rate, if the host was last told it did.
+    pub(super) fn release_frame_rate_demand(
+        &self,
+        effects: &dyn OwnerEffects,
+        address: PresentationAddress,
+        failure: &mut Failure,
+    ) {
+        let delivered = self
+            .state
+            .borrow_mut()
+            .frame_rate_delivered
+            .remove(&address);
+        if delivered != Some(crate::frame_rate_demand::FrameRateDemand::Active) {
+            return;
+        }
+        let released = catch_unwind(AssertUnwindSafe(|| {
+            effects.frame_rate_demand_changed(
+                address,
+                crate::frame_rate_demand::FrameRateDemand::Idle,
+            );
+        }))
+        .err();
+        preserve_first_lifecycle_panic(failure, released, "frame rate demand release");
+    }
+
     fn drain_retired(&self, first_failure: &mut Failure) {
         loop {
             let retired = std::mem::take(&mut *self.retired.borrow_mut());
@@ -647,13 +749,23 @@ impl OwnerCore {
                     if let Some(payload) = failure.as_ref() {
                         runtime.report_contained_panic(address, payload.as_ref());
                     }
-                    let frontiers = if failure.is_none() && first_failure.is_none() {
+                    let healthy = failure.is_none() && first_failure.is_none();
+                    let frontiers = if healthy {
                         runtime.take_text_sizing_frontiers()
                     } else {
                         Vec::new()
                     };
+                    // An unhealthy item observes nothing, and what it did not
+                    // observe it must not forget: the delivered records stay
+                    // until a healthy item replaces them or the presentation
+                    // retires.
+                    let demands = (healthy && effects.tracks_frame_rate_demand())
+                        .then(|| runtime.frame_rate_demands());
                     lease.return_to_owner(&mut failure, RecoveryState::current(&first_failure));
                     self.state.borrow_mut().claim = DeliveryClaim::Completing;
+                    if let Some(demands) = demands {
+                        self.deliver_frame_rate_demands(effects, id, &demands, &mut failure);
+                    }
                     for work in frontiers {
                         let frontier = super::TextSizingFrontier::new(self, id, work);
                         if failure.is_some()

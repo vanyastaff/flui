@@ -224,6 +224,7 @@ impl RuntimeEvent {
         let observation = match self {
             #[cfg(any(test, target_os = "android", target_os = "ios"))]
             Self::PrimarySurfaceRestored => {
+                host.displays().reapply_frame_rate(address);
                 return host
                     .logical()
                     .frame_dispatcher(address)?

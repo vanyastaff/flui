@@ -29,11 +29,18 @@ pub(crate) struct DisplaySource {
         windows,
         target_os = "macos",
         target_os = "ios",
+        target_os = "android",
         target_arch = "wasm32",
         test
     ))]
     stale: std::sync::atomic::AtomicBool,
-    #[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+    #[cfg(any(
+        windows,
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "android",
+        test
+    ))]
     misses: Mutex<MissLedger>,
 }
 
@@ -46,11 +53,18 @@ impl DisplaySource {
                 windows,
                 target_os = "macos",
                 target_os = "ios",
+                target_os = "android",
                 target_arch = "wasm32",
                 test
             ))]
             stale: std::sync::atomic::AtomicBool::new(true),
-            #[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+            #[cfg(any(
+                windows,
+                target_os = "macos",
+                target_os = "ios",
+                target_os = "android",
+                test
+            ))]
             misses: Mutex::new(MissLedger::default()),
         }
     }
@@ -95,6 +109,7 @@ impl DisplaySource {
         windows,
         target_os = "macos",
         target_os = "ios",
+        target_os = "android",
         target_arch = "wasm32",
         test
     ))]
@@ -107,6 +122,7 @@ impl DisplaySource {
         windows,
         target_os = "macos",
         target_os = "ios",
+        target_os = "android",
         target_arch = "wasm32",
         test
     ))]
@@ -124,7 +140,13 @@ impl DisplaySource {
     /// # Errors
     /// What `sample` fails with, or [`PlatformError::Displays`] when the
     /// revision space is used up.
-    #[cfg(any(target_os = "macos", target_os = "ios", target_arch = "wasm32", test))]
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "android",
+        target_arch = "wasm32",
+        test
+    ))]
     pub(crate) fn snapshot_with(
         &self,
         sample: impl FnOnce() -> Result<Vec<DisplayInfo>, PlatformError>,
@@ -145,6 +167,7 @@ impl DisplaySource {
         windows,
         target_os = "macos",
         target_os = "ios",
+        target_os = "android",
         target_arch = "wasm32",
         test
     ))]
@@ -176,9 +199,28 @@ impl DisplaySource {
     /// changes.
     #[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
     pub(crate) fn note_miss(&self, handle: u64) {
+        self.note_miss_with(handle, || {});
+    }
+
+    /// As [`note_miss`](Self::note_miss), and `wake` runs when this miss is the
+    /// first of its handle in the revision, after the source was invalidated.
+    /// A backend whose owner would otherwise sleep until something else wakes
+    /// it passes the call that asks for an owner turn, so the sample the miss
+    /// owes is not left waiting; a backend with OS change notifications that
+    /// already wake the owner uses `note_miss`.
+    #[cfg(any(
+        windows,
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "android",
+        test
+    ))]
+    pub(crate) fn note_miss_with(&self, handle: u64, wake: impl FnOnce()) {
         let revision = self.last.lock().revision().get();
-        if self.misses.lock().first_miss(handle, revision) {
+        let first = self.misses.lock().first_miss(handle, revision);
+        if first {
             self.invalidate();
+            wake();
         }
     }
 }
@@ -187,14 +229,26 @@ impl DisplaySource {
 /// windows on displays the snapshot omits ask for one fresh sample per handle
 /// and revision rather than one per owner wake, however many such displays
 /// there are.
-#[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+#[cfg(any(
+    windows,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    test
+))]
 #[derive(Debug, Default)]
 struct MissLedger {
     revision: u64,
     missed: Vec<u64>,
 }
 
-#[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+#[cfg(any(
+    windows,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    test
+))]
 impl MissLedger {
     /// Whether this miss is the first of `handle` in snapshot `revision`.
     fn first_miss(&mut self, handle: u64, revision: u64) -> bool {
@@ -336,6 +390,23 @@ mod tests {
         source.note_miss(7);
         counted(&source, &samples);
         assert_eq!(samples.get(), 3, "a new revision allows one retry");
+    }
+
+    #[test]
+    fn a_first_miss_asks_for_an_owner_turn_and_a_repeat_does_not() {
+        let source = DisplaySource::new();
+        let samples = Cell::new(0);
+        counted(&source, &samples);
+        let wakes = Cell::new(0);
+        let miss = |handle| source.note_miss_with(handle, || wakes.set(wakes.get() + 1));
+        miss(7);
+        assert_eq!(wakes.get(), 1, "an idle owner must be woken to sample");
+        miss(7);
+        assert_eq!(wakes.get(), 1, "the same miss in the same revision is free");
+        miss(8);
+        assert_eq!(wakes.get(), 2, "another handle owes its own sample");
+        counted(&source, &samples);
+        assert_eq!(samples.get(), 2, "the sample the wake is for");
     }
 
     #[test]

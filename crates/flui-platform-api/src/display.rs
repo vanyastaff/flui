@@ -437,6 +437,19 @@ impl DisplaySnapshot {
     }
 }
 
+/// The refresh rate a window asks its display for (see
+/// `PlatformWindow::set_frame_rate_hint`). A request the system may decline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum FrameRateHint {
+    /// No preference: the system picks the rate.
+    #[default]
+    Default,
+    /// The display's highest rate, for as long as the window animates or is
+    /// touched.
+    High,
+}
+
 /// The part of a display a window pacing itself needs: which display it is on
 /// and that display's refresh period. The scale factor is not here; it reaches
 /// the window through its own metrics observation.

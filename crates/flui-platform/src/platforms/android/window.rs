@@ -13,7 +13,7 @@ use android_activity::AndroidApp;
 use android_activity::ndk::configuration::UiModeNight;
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{EdgeInsets, Point, Size};
-use flui_platform_api::WindowAppearance;
+use flui_platform_api::{DisplayId, FrameRateHint, WindowAppearance};
 use parking_lot::Mutex;
 
 use crate::{
@@ -44,6 +44,10 @@ pub struct AndroidWindow {
     system_chrome: Arc<super::system_chrome::AndroidSystemChrome>,
     /// The night mode last reported to `on_appearance_changed`.
     appearance: Arc<Mutex<WindowAppearance>>,
+    displays: Arc<super::display::AndroidDisplays>,
+    /// The last refresh-rate request, applied again to every native window that
+    /// replaces the one it was made on.
+    frame_rate_hint: Arc<Mutex<FrameRateHint>>,
 }
 
 impl std::fmt::Debug for AndroidWindow {
@@ -56,10 +60,11 @@ impl std::fmt::Debug for AndroidWindow {
 
 impl AndroidWindow {
     /// Create a new Android window wrapping the given `AndroidApp`
-    pub(crate) fn new(
+    pub(super) fn new(
         app: AndroidApp,
         execution_resumed: Arc<AtomicBool>,
         owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
+        displays: Arc<super::display::AndroidDisplays>,
     ) -> Self {
         let system_chrome = Arc::new(super::system_chrome::AndroidSystemChrome::new(app.clone()));
         Self {
@@ -73,7 +78,19 @@ impl AndroidWindow {
             safe_area: Arc::new(Mutex::new(super::safe_area::Capture::default())),
             system_chrome,
             appearance: Arc::new(Mutex::new(night_mode(&app))),
+            displays,
+            frame_rate_hint: Arc::new(Mutex::new(FrameRateHint::Default)),
             app,
+        }
+    }
+
+    /// Send the system the refresh-rate request this window last made, to the
+    /// native window it has now. A request rides on one `ANativeWindow`, so a
+    /// replacement starts without it.
+    pub(crate) fn apply_frame_rate_hint(&self) {
+        let hint = *self.frame_rate_hint.lock();
+        if let Some(native) = self.app.native_window() {
+            self.displays.request_frame_rate(&native, hint);
         }
     }
 
@@ -254,6 +271,15 @@ impl PlatformWindow for AndroidWindow {
 
     fn appearance(&self) -> WindowAppearance {
         night_mode(&self.app)
+    }
+
+    fn display_id(&self) -> Option<DisplayId> {
+        self.displays.activity_display()
+    }
+
+    fn set_frame_rate_hint(&self, hint: FrameRateHint) {
+        *self.frame_rate_hint.lock() = hint;
+        self.apply_frame_rate_hint();
     }
 
     fn scale_factor(&self) -> f64 {

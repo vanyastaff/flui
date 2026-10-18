@@ -53,6 +53,7 @@ pub mod dev_agent;
 pub mod epoch;
 pub mod execution;
 pub mod frame_failure;
+pub mod frame_rate_demand;
 pub mod held_input;
 pub mod lifecycle_state;
 mod media_query_root;
