@@ -14,6 +14,7 @@ use flui_runtime::ui_runtime::UiRuntime;
 
 use crate::app::lifecycle_state::preserve_first_lifecycle_panic;
 
+use super::display_host::DisplayHost;
 use super::host::APP_RUNTIME;
 use super::native_bindings::{NativeBindings, NativeInstallError, PreparedNativeWindow};
 use super::window_install::InstallationWindow;
@@ -104,6 +105,7 @@ pub(in crate::app) struct InstalledHost(Rc<HostState>);
 struct HostState {
     logical: OwnerHost,
     native: NativeBindings,
+    displays: DisplayHost,
     pending: RefCell<Vec<PendingInstall>>,
     initializing: RefCell<Vec<InitializingInstall>>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -115,6 +117,7 @@ impl InstalledHost {
         Self(Rc::new(HostState {
             logical: OwnerHost::new(),
             native: NativeBindings::new(),
+            displays: DisplayHost::default(),
             pending: RefCell::new(Vec::new()),
             initializing: RefCell::new(Vec::new()),
             #[cfg(not(target_arch = "wasm32"))]
@@ -124,6 +127,11 @@ impl InstalledHost {
 
     pub(in crate::app) fn logical(&self) -> &OwnerHost {
         &self.0.logical
+    }
+
+    /// The accepted display snapshot and the windows that follow it.
+    pub(super) fn displays(&self) -> &DisplayHost {
+        &self.0.displays
     }
 
     pub(super) fn same_host(&self, other: &Self) -> bool {
@@ -388,6 +396,7 @@ impl OwnerEffects for HostState {
     }
 
     fn retire_presentation(&self, address: PresentationAddress, _: Option<PresentationAddress>) {
+        self.displays.unfollow(address);
         self.native.retire_presentation(address);
         #[cfg(not(target_arch = "wasm32"))]
         self.closed_presentations.borrow_mut().push(address);

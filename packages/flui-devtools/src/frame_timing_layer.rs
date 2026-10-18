@@ -14,7 +14,7 @@
 //!
 //! | span | opened by | phase |
 //! |------|-----------|-------|
-//! | `frame` | `UpdateScheduler::drive_frame` (`flui-scheduler`) | the frame itself |
+//! | `frame` | `UpdateScheduler::drive_frame` (`flui-scheduler`) | the frame itself; its `period_us` field is the display period the jank line follows |
 //! | `build` | `BuildOwner::build_scope` (`flui-view`) | [`Build`](crate::profiler::FramePhase::Build) |
 //! | `layout` | `PipelineOwner::run_layout` (`flui-rendering`) | [`Layout`](crate::profiler::FramePhase::Layout) |
 //! | `paint` | `PipelineOwner::run_paint` (`flui-rendering`) | [`Paint`](crate::profiler::FramePhase::Paint) |
@@ -83,7 +83,8 @@
 
 use std::sync::Arc;
 
-use tracing::span::{Attributes, Id};
+use tracing::field::{Field, Visit};
+use tracing::span::{Attributes, Id, Record};
 use tracing::{Metadata, Subscriber};
 use tracing_subscriber::filter::{FilterFn, Filtered, filter_fn};
 use tracing_subscriber::layer::{Context, Layer};
@@ -207,6 +208,29 @@ impl FrameTimingLayer {
     }
 }
 
+impl FrameTimingLayer {
+    /// Forward the `period_us` field of the owning frame span, if `record`
+    /// carries one, to the profiler: the period of the display the frame is
+    /// produced for, which the jank line follows.
+    fn report_period(&self, record: impl FnOnce(&mut dyn Visit)) {
+        struct PeriodVisitor(Option<u64>);
+        impl Visit for PeriodVisitor {
+            fn record_u64(&mut self, field: &Field, value: u64) {
+                if field.name() == "period_us" {
+                    self.0 = Some(value);
+                }
+            }
+            fn record_debug(&mut self, _: &Field, _: &dyn std::fmt::Debug) {}
+        }
+        let mut visitor = PeriodVisitor(None);
+        record(&mut visitor);
+        if let Some(micros) = visitor.0 {
+            self.profiler
+                .set_frame_period(std::time::Duration::from_micros(micros));
+        }
+    }
+}
+
 impl std::fmt::Debug for FrameTimingLayer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FrameTimingLayer").finish_non_exhaustive()
@@ -236,6 +260,18 @@ where
             entries: 0,
         });
         self.profiler.begin_frame();
+        self.report_period(|visitor| attrs.record(visitor));
+    }
+
+    fn on_record(&self, id: &Id, values: &Record<'_>, _ctx: Context<'_, S>) {
+        let owns_frame = self
+            .active_frame
+            .lock()
+            .as_ref()
+            .is_some_and(|active| active.id == *id);
+        if owns_frame {
+            self.report_period(|visitor| values.record(visitor));
+        }
     }
 
     fn on_enter(&self, id: &Id, ctx: Context<'_, S>) {
@@ -374,6 +410,49 @@ mod tests {
         flui_testing::log_capture::disarm_interest_cache();
         tracing::dispatcher::with_default(&Dispatch::new(subscriber), body);
         profiler
+    }
+
+    /// The jank line follows the display period the `frame` span reports in
+    /// `period_us`: the same 12 ms frame is jank on a 120 Hz display and smooth
+    /// against a one-second period, and a frame that reports none is judged at
+    /// 60 Hz.
+    ///
+    /// The frame is slept rather than faked because the profiler measures its
+    /// own wall clock; a sleep can only run long, which never turns a frame that
+    /// must be jank into a smooth one, and the smooth case has a line far above.
+    #[test]
+    fn profiler_jank_line_follows_the_refresh_period() {
+        let frame_that_takes = |period_us: Option<u64>, takes: std::time::Duration| {
+            let profiler = profile(|| {
+                let frame = tracing::debug_span!(
+                    target: "flui_scheduler::scheduler::execution",
+                    "frame",
+                    period_us = tracing::field::Empty
+                );
+                let _entered = frame.enter();
+                if let Some(period_us) = period_us {
+                    frame.record("period_us", period_us);
+                }
+                std::thread::sleep(takes);
+            });
+            profiler
+                .frame_stats()
+                .expect("the frame span closed, so a frame was recorded")
+                .is_jank()
+        };
+        let twelve = std::time::Duration::from_millis(12);
+        assert!(
+            frame_that_takes(Some(8_333), twelve),
+            "12 ms on a 120 Hz display is jank"
+        );
+        assert!(
+            !frame_that_takes(Some(1_000_000), twelve),
+            "12 ms against a one-second period is not jank"
+        );
+        assert!(
+            frame_that_takes(None, std::time::Duration::from_millis(40)),
+            "a frame that reports no period is judged at 60 Hz"
+        );
     }
 
     /// This side of the wiring contract: the names this layer maps to phases.

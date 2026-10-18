@@ -61,7 +61,6 @@ pub(crate) mod text_sizing;
 mod window;
 
 pub use clipboard::IOSClipboard;
-pub use display::IOSDisplay;
 pub use executor::IOSExecutor;
 pub use platform::IOSPlatform;
 pub use scene::{IOSSceneAttachmentId, IOSSceneEvent, IOSSceneSessionId};

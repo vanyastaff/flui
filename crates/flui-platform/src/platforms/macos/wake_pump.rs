@@ -49,8 +49,8 @@ use crate::shared::PlatformHandlers;
 /// triggers runs within the pass AppKit schedules for it, and the fallback
 /// gate's own deadline is shorter than a period on every display measured so
 /// far (9.5 ms against a 100 Hz panel). A fixed delay rather than
-/// `refresh_period()` because the pump is per-*platform* while the period is
-/// per-*window*, and the deadline it reads back is absolute — so being a few
+/// the display's refresh period because the pump is per-*platform* while the
+/// period is per-*window*, and the deadline it reads back is absolute — so being a few
 /// milliseconds off costs a re-schedule, never a missed or an early wake.
 const FOLLOW_UP: Duration = Duration::from_millis(8);
 

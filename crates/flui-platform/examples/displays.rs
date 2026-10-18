@@ -20,8 +20,9 @@ fn main() -> anyhow::Result<()> {
     let platform = current_platform()?;
     tracing::info!("Platform: {}", platform.name());
 
-    // Enumerate displays
-    let displays = platform.displays();
+    // Sample the displays
+    let snapshot = platform.display_snapshot()?;
+    let displays = snapshot.displays();
     tracing::info!("Found {} display(s)\n", displays.len());
 
     if displays.is_empty() {
@@ -32,14 +33,17 @@ fn main() -> anyhow::Result<()> {
     // Display detailed information for each monitor
     for (idx, display) in displays.iter().enumerate() {
         let display_num = idx + 1;
-        let id = display.id();
-        let name = display.name();
-        let is_primary = display.is_primary();
-        let bounds = display.bounds();
-        let usable_bounds = display.usable_bounds();
-        let scale = display.scale_factor();
-        let refresh = display.refresh_rate();
-        let logical_size = display.logical_size();
+        let id = display.id;
+        let name = &display.name;
+        let is_primary = display.is_primary;
+        let bounds = display.bounds;
+        let usable_bounds = display.usable_bounds;
+        let scale = display.scale_factor;
+        let refresh = display.refresh_period;
+        let logical_size = (
+            f64::from(bounds.size.width) / scale,
+            f64::from(bounds.size.height) / scale,
+        );
 
         tracing::info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         tracing::info!(
@@ -49,7 +53,7 @@ fn main() -> anyhow::Result<()> {
             if is_primary { " (PRIMARY)" } else { "" }
         );
         tracing::info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        tracing::info!("  ID: {:?}", id);
+        tracing::info!("  ID: {}", id.get());
 
         // Physical (device pixel) information
         tracing::info!(
@@ -66,8 +70,8 @@ fn main() -> anyhow::Result<()> {
         // Logical (DPI-independent) information
         tracing::info!(
             "  Logical Size: {:.0}x{:.0} pt",
-            logical_size.width,
-            logical_size.height
+            logical_size.0,
+            logical_size.1
         );
 
         // DPI scaling
@@ -89,7 +93,15 @@ fn main() -> anyhow::Result<()> {
         tracing::info!("    → Effective DPI: {:.0}", effective_dpi);
 
         // Refresh rate
-        tracing::info!("  Refresh Rate: {:.0} Hz", refresh);
+        if let Some(period) = refresh {
+            tracing::info!(
+                "  Refresh Period: {:.3} ms ({:.2} Hz)",
+                period.get().as_secs_f64() * 1000.0,
+                period.get().as_secs_f64().recip()
+            );
+        } else {
+            tracing::info!("  Refresh Period: unknown");
+        }
 
         // Usable area (excluding taskbar/menu bar)
         let taskbar_width = bounds.size.width - usable_bounds.size.width;
@@ -145,7 +157,7 @@ fn main() -> anyhow::Result<()> {
         let (min_x, max_x, min_y, max_y) = displays.iter().fold(
             (i32::MAX, i32::MIN, i32::MAX, i32::MIN),
             |(min_x, max_x, min_y, max_y), d| {
-                let bounds = d.bounds();
+                let bounds = d.bounds;
                 (
                     min_x.min(bounds.origin.x),
                     max_x.max(bounds.origin.x + bounds.size.width),
@@ -167,12 +179,12 @@ fn main() -> anyhow::Result<()> {
 
         // Analyze arrangement
         let horizontal_arrangement = displays.iter().all(|d| {
-            let bounds = d.bounds();
+            let bounds = d.bounds;
             bounds.origin.y == 0
         });
 
         let vertical_arrangement = displays.iter().all(|d| {
-            let bounds = d.bounds();
+            let bounds = d.bounds;
             bounds.origin.x == 0
         });
 
@@ -185,7 +197,7 @@ fn main() -> anyhow::Result<()> {
         }
 
         // Check for scale factor differences
-        let scales: Vec<_> = displays.iter().map(|d| d.scale_factor()).collect();
+        let scales: Vec<_> = displays.iter().map(|d| d.scale_factor).collect();
         let min_scale = scales.iter().copied().fold(f64::INFINITY, f64::min);
         let max_scale = scales.iter().copied().fold(f64::NEG_INFINITY, f64::max);
 

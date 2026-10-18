@@ -301,6 +301,9 @@ pub struct PresentationState {
     pub(crate) sampled_motion_tick: Cell<Option<FrameTick>>,
     pub(super) window_visible: Cell<bool>,
     pub(super) window_focused: Cell<bool>,
+    /// The display this presentation's window is on, as the host last derived it
+    /// from the platform's snapshot (ADR-0236). `None` is an unknown display.
+    pub(super) window_display: Cell<Option<flui_platform_api::WindowDisplay>>,
     pub(super) window_execution: Cell<flui_platform_api::WindowExecutionState>,
     pub(super) closing_requested: Cell<bool>,
     /// The system-bar overlay style its frames ask for, delivered on change.
@@ -789,6 +792,7 @@ impl PresentationState {
             )),
             window_visible: Cell::new(window.is_visible()),
             window_focused: Cell::new(window.is_focused()),
+            window_display: Cell::new(None),
             window_execution: Cell::new(window.execution_state()),
             closing_requested: Cell::new(false),
             overlay_style: crate::overlay_style::OverlayStyleCoalescer::default(),
@@ -890,6 +894,7 @@ impl PresentationState {
             )),
             window_visible: Cell::new(window.is_visible()),
             window_focused: Cell::new(window.is_focused()),
+            window_display: Cell::new(None),
             window_execution: Cell::new(window.execution_state()),
             closing_requested: Cell::new(false),
             overlay_style: crate::overlay_style::OverlayStyleCoalescer::default(),

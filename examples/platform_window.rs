@@ -27,16 +27,17 @@ fn main() {
     // waiting for a loop that hasn't started).
     platform
         .run(Box::new(|owner| {
-            let displays = owner.displays();
+            let snapshot = owner.display_snapshot()?;
+            let displays = snapshot.displays();
             tracing::info!("Found {} display(s):", displays.len());
             for (i, disp) in displays.iter().enumerate() {
                 tracing::info!(
                     "  Display {}: {} ({}x{} @ {:.1}x scale)",
                     i + 1,
-                    disp.name(),
-                    disp.bounds().size.width,
-                    disp.bounds().size.height,
-                    disp.scale_factor()
+                    disp.name,
+                    disp.bounds.size.width,
+                    disp.bounds.size.height,
+                    disp.scale_factor
                 );
             }
 

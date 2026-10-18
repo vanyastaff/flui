@@ -21,6 +21,8 @@
 mod android_exit_path;
 #[path = "contract.rs"]
 mod contract;
+#[path = "displays.rs"]
+mod displays;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "executor.rs"]
 mod executor;

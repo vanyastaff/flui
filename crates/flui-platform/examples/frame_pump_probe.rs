@@ -127,7 +127,13 @@ mod appkit_frame_pump_probe {
         // the pump result: a display that reports no rate makes this `None`
         // without saying anything about the pump, and the two claims fail
         // independently.
-        if let Some(period) = window.refresh_period() {
+        let period = owner
+            .display_snapshot()
+            .ok()
+            .and_then(|snapshot| snapshot.window_display(window.display_id()))
+            .and_then(|display| display.refresh_period)
+            .map(flui_platform::RefreshPeriod::get);
+        if let Some(period) = period {
             tracing::info!(
                 period_us = period.as_micros() as u64,
                 hz = period.as_secs_f64().recip(),
@@ -135,7 +141,7 @@ mod appkit_frame_pump_probe {
             );
         } else {
             tracing::warn!(
-                "FRAME_PUMP_PROBE_REFRESH_PERIOD=unreported: refresh_period() returned None, so \
+                "FRAME_PUMP_PROBE_REFRESH_PERIOD=unreported: the window's display reported no period, so \
                  the runner paces against its default 60 Hz period on this display"
             );
         }

@@ -243,7 +243,7 @@ CI (`xrandr`), WSLg на машине владельца. Файлы: `crates/fl
 | R7 | `same_connector_after_replug_keeps_the_id`, `two_identical_monitors_get_distinct_ids`, `swapped_cables_swap_identities`, `unkeyed_output_mints_a_fresh_id_each_time` | DP1 | L |
 | R8 | `exhausted_counter_refuses_without_wrapping`, `known_key_still_resolves_after_exhaustion` | DP1 | L |
 | R9 | rustdoc `DisplayInfo` и ADR-0236 | DP1 | — |
-| R10 | `change_between_registration_and_seed_is_not_lost` | DP2 | L |
+| R10 | `a_change_racing_the_sample_still_reaches_the_window` | DP2 | L |
 | R11 | `snapshot_is_committed_before_observers_run`, `panicking_window_observer_keeps_the_snapshot_and_the_tail`, `apply_panic_keeps_the_debt_and_the_next_equal_change_is_delivered`, `foreign_thread_invalidation_wakes_the_owner` | DP2 | L |
 | R12 | `moving_to_another_display_notifies_once`, `refresh_change_of_own_display_notifies`, `other_displays_change_is_silent`, `unread_field_change_is_silent` | DP2 | L |
 | R13 | `several_changes_before_the_turn_deliver_the_last`, `newer_unknown_display_replaces_a_pending_known_one` | DP2 | L |

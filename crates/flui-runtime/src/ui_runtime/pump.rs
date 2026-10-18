@@ -238,6 +238,8 @@ impl UiRuntime {
                     deadline,
                     || {
                         frame_time = Some(FrameTimeGuard::publish(self, now));
+                        // Before the frame begins: it copies the budget's target.
+                        ui_runtime.publish_frame_budget();
                         geometry_turn = Some(ui_runtime.begin_geometry_turn());
                         let report = ui_runtime.drain_commands();
                         if report != DrainReport::default() {

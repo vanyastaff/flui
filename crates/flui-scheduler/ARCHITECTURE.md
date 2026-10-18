@@ -8,6 +8,15 @@ decisions` entries below; a full crate architecture writeup is deferred.
 
 ## Mapping decisions
 
+### The frame budget is set to the display being produced for, before the frame begins
+
+`UpdateScheduler::set_budget_frame_duration` points the stats-only `FrameBudget` at an exact
+period (`FrameDuration::try_from_period` keeps 59.94 Hz from rounding to 60). The host sets it
+before `drive_frame` opens the frame because `handle_begin_frame` copies the budget's target
+into the frame's timing; a change made inside a frame applies to the next one. The `frame` span
+carries the period it judged the frame by as `period_us`, which is how a profiler that cannot be a
+framework dependency follows the display (`frame_span_carries_the_budget_period`).
+
 ### Lifecycle and timing observers preserve accepted delivery
 
 Lifecycle state and frame eligibility commit before notification. Reentrant

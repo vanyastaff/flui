@@ -12,18 +12,18 @@ use wasm_bindgen::prelude::*;
 use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     error::PlatformError,
-    shared::{PlatformHandlers, WindowCallbacks, owner_signal::OwnerSignal},
+    shared::{
+        PlatformHandlers, WindowCallbacks, display_source::DisplaySource, owner_signal::OwnerSignal,
+    },
     traits::{
-        Clipboard, HostWindow, OpenWindowError, OwnerPlatform, Platform, PlatformCapabilities,
-        PlatformDisplay, PlatformExecutor, PlatformReadyCallback, WebCapabilities, WindowEvent,
-        WindowId, WindowOptions,
+        Clipboard, DisplaySnapshot, HostWindow, OpenWindowError, OwnerPlatform, Platform,
+        PlatformCapabilities, PlatformExecutor, PlatformReadyCallback, WebCapabilities,
+        WindowEvent, WindowId, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
 
-use super::{
-    clipboard::WebClipboard, display::WebDisplay, executor::WebExecutor, window::WebWindow,
-};
+use super::{clipboard::WebClipboard, executor::WebExecutor, window::WebWindow};
 
 /// The self-referencing `requestAnimationFrame` callback slot: the closure
 /// re-schedules itself through this handle, so it is created empty and filled
@@ -35,6 +35,7 @@ pub struct WebPlatform {
     state: Arc<Mutex<WebState>>,
     signal: Arc<OwnerSignal>,
     preferences: RefCell<Option<super::preferences::Preferences>>,
+    displays: DisplaySource,
 }
 
 struct WebState {
@@ -96,6 +97,7 @@ impl WebPlatform {
             state,
             signal,
             preferences: RefCell::new(preferences),
+            displays: DisplaySource::new(),
         })
     }
 
@@ -340,12 +342,8 @@ impl Platform for WebPlatform {
             .map(|_| WindowId(0))
     }
 
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        vec![Arc::new(WebDisplay::from_browser())]
-    }
-
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        Some(Arc::new(WebDisplay::from_browser()))
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        super::display::sample_screen(&self.displays)
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {

@@ -113,7 +113,7 @@ use super::{
         control_lane,
     },
     data_transfer::WinitDataTransfer,
-    display::WinitDisplay,
+    display::WinitDisplaySource,
     events as winit_events,
 };
 use crate::{
@@ -122,10 +122,10 @@ use crate::{
     executor::BackgroundExecutor,
     shared::PlatformHandlers,
     traits::{
-        Clipboard, DesktopCapabilities, HostWindow, OpenWindowError, OwnerPlatform, PendingWindow,
-        Platform, PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformInput,
-        PlatformReadyCallback, PlatformWindow, ProxySendError, WindowEvent, WindowId, WindowOpen,
-        WindowOptions,
+        Clipboard, DesktopCapabilities, DisplaySnapshot, HostWindow, OpenWindowError,
+        OwnerPlatform, PendingWindow, Platform, PlatformCapabilities, PlatformExecutor,
+        PlatformInput, PlatformReadyCallback, PlatformWindow, ProxySendError, WindowEvent,
+        WindowId, WindowOpen, WindowOptions,
         owner::{OwnerHooks, ProxyTransport},
     },
 };
@@ -206,6 +206,11 @@ pub struct WinitPlatform {
     /// from `&self` instead of from a `MutexGuard` temporary.
     capabilities: DesktopCapabilities,
 
+    /// The monitors last sampled and the snapshot built from them. Shared with
+    /// every window so each can name its display; outside the state lock so a
+    /// window's `display_id()` never contends with the platform state.
+    displays: Arc<WinitDisplaySource>,
+
     state: Arc<Mutex<WinitPlatformState>>,
 }
 
@@ -259,9 +264,6 @@ struct WinitPlatformState {
     /// Map of platform window IDs to WinitWindow wrappers
     windows: HashMap<WindowId, Arc<WinitWindow>>,
 
-    /// Cached displays
-    displays: Vec<Arc<WinitDisplay>>,
-
     /// Active window ID
     active_window: Option<WindowId>,
 
@@ -313,7 +315,6 @@ impl WinitPlatformState {
             data_transfer: Arc::new(WinitDataTransfer::new()),
             window_id_map: HashMap::new(),
             windows: HashMap::new(),
-            displays: Vec::new(),
             active_window: None,
             next_window_id: 1,
             run_state: WinitRunState::New {
@@ -347,19 +348,9 @@ impl WinitPlatformState {
     fn get_platform_window_id(&self, winit_id: WinitWindowId) -> Option<WindowId> {
         self.window_id_map.get(&winit_id).copied()
     }
-
-    fn init_displays(&mut self, event_loop: &ActiveEventLoop) {
-        let monitors = event_loop.available_monitors();
-        let primary_monitor = event_loop.primary_monitor();
-        self.displays = map_monitor_displays(monitors, primary_monitor, |monitor, id, primary| {
-            Arc::new(WinitDisplay::new(monitor, id, primary))
-        });
-
-        tracing::info!(count = self.displays.len(), "Initialized displays");
-    }
 }
 
-fn map_monitor_displays<M: PartialEq, D>(
+pub(super) fn map_monitor_displays<M: PartialEq, D>(
     monitors: impl Iterator<Item = M>,
     primary: Option<M>,
     mut make: impl FnMut(M, u64, bool) -> D,
@@ -387,7 +378,23 @@ impl WinitPlatform {
         Self {
             owner_signal: Mutex::new(None),
             capabilities: DesktopCapabilities,
+            displays: WinitDisplaySource::new(),
             state: Arc::new(Mutex::new(WinitPlatformState::new())),
+        }
+    }
+
+    /// Re-sample the monitors through `event_loop` and wake the owner when the
+    /// snapshot changed, so the host samples it again.
+    fn resample_displays(&self, event_loop: &ActiveEventLoop) {
+        let primary = event_loop.primary_monitor();
+        let changed = self
+            .displays
+            .resample(event_loop.available_monitors(), primary.as_ref());
+        if changed {
+            let signal = self.owner_signal.lock().clone();
+            if let Some(signal) = signal {
+                let _ = signal.wake();
+            }
         }
     }
 
@@ -564,7 +571,12 @@ impl WinitPlatform {
         // `WinitWindow` can carry its own `id()` from the start, rather than
         // being registered under an identity it cannot itself report.
         let platform_id = self.with_state(WinitPlatformState::allocate_window_id);
-        let winit_window = Arc::new(WinitWindow::new(platform_id, raw_window, close_lane));
+        let winit_window = Arc::new(WinitWindow::new(
+            platform_id,
+            raw_window,
+            close_lane,
+            Arc::clone(&self.displays),
+        ));
         #[cfg(target_os = "linux")]
         if let Some(source) = self.with_state(|state| state.preferences.upgrade()) {
             winit_window.observe_portal_appearance(source.appearance());
@@ -573,6 +585,8 @@ impl WinitPlatform {
         self.with_state(|state| {
             state.register_window(winit_id, platform_id, winit_window.clone());
         });
+        // A monitor attached since the last sample is first seen here.
+        self.resample_displays(event_loop);
 
         tracing::info!(?platform_id, "Created window");
 
@@ -1019,12 +1033,9 @@ impl ApplicationHandler for WinitApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         tracing::info!("Application resumed");
 
-        // Initialize displays on first resume
-        self.platform.with_state(|state| {
-            if state.displays.is_empty() {
-                state.init_displays(event_loop);
-            }
-        });
+        // Sample the monitors now: a platform that resumes after a monitor
+        // change must not keep the list from the previous resume.
+        self.platform.resample_displays(event_loop);
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         if let Err(error) = self.initialize_preferences() {
             self.bootstrap_error = Some(error.into());
@@ -1234,6 +1245,7 @@ impl ApplicationHandler for WinitApp {
                         physical_size.height as f64 / scale,
                     );
                     win.callbacks().dispatch_resize(logical, scale);
+                    self.sync_window_display(event_loop, win, false);
                 }
 
                 // Notify platform handler (leased outside the state lock).
@@ -1287,6 +1299,10 @@ impl ApplicationHandler for WinitApp {
             }
             WinitWindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 tracing::debug!(?platform_id, ?scale_factor, "Scale factor changed");
+
+                if let Some(ref win) = window {
+                    self.sync_window_display(event_loop, win, true);
+                }
 
                 self.platform.lease_window_event_handler().invoke(
                     WindowEvent::ScaleFactorChanged {
@@ -1373,6 +1389,7 @@ impl ApplicationHandler for WinitApp {
             WinitWindowEvent::Moved(_) => {
                 if let Some(ref win) = window {
                     win.callbacks().dispatch_moved();
+                    self.sync_window_display(event_loop, win, false);
                 }
             }
             WinitWindowEvent::ThemeChanged(_) => {
@@ -1517,6 +1534,27 @@ enum DragPath {
 
 // Helper methods for WinitApp
 impl WinitApp {
+    /// Raise the window's display hint when it may be on another display.
+    ///
+    /// `forced` is a scale-factor change, which alters the display's snapshot
+    /// entry whether or not the window moved. Otherwise the hint fires only when
+    /// the window's display really differs from the last one reported, so a
+    /// drag-resize does not hint on every `Resized`. A window on a monitor the
+    /// last sample lacks (a monitor plugged in since) first re-samples.
+    fn sync_window_display(
+        &self,
+        event_loop: &ActiveEventLoop,
+        window: &WinitWindow,
+        forced: bool,
+    ) {
+        if forced || window.on_unsampled_monitor() {
+            self.platform.resample_displays(event_loop);
+        }
+        if window.take_display_change() || forced {
+            window.callbacks().dispatch_display_changed();
+        }
+    }
+
     #[cfg(target_os = "linux")]
     fn initialize_preferences(&mut self) -> Result<(), PlatformError> {
         if self.preference_source.is_none() {
@@ -2385,27 +2423,14 @@ impl Platform for WinitPlatform {
         self.with_state(|state| state.active_window)
     }
 
-    // Empty until `WinitApp::resumed` runs `init_displays` on first resume —
+    // Empty until `WinitApp::resumed` has sampled the monitors on first resume —
     // callers that need real display info must call this from `on_ready` (or
-    // later), never before `Platform::run` starts the event loop.
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        self.with_state(|state| {
-            state
-                .displays
-                .iter()
-                .map(|d| d.clone() as Arc<dyn PlatformDisplay>)
-                .collect()
-        })
-    }
-
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        self.with_state(|state| {
-            state
-                .displays
-                .iter()
-                .find(|d| d.is_primary())
-                .map(|d| d.clone() as Arc<dyn PlatformDisplay>)
-        })
+    // later), never before `Platform::run` starts the event loop. The answer is
+    // the cached sample: the host asks on every owner wake, and the monitors are
+    // re-read only where winit reports a change (resume, window creation, move,
+    // scale change, a monitor the sample lacks), each of which wakes the owner.
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        Ok(self.displays.snapshot())
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {

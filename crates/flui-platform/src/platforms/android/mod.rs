@@ -42,6 +42,7 @@
 //! `Resume`: `native_window()` is `None` until then, so a bootstrap that
 //! needs a window has nothing to build a surface from before it.
 
+mod display;
 pub mod input;
 mod preferences;
 mod safe_area;
@@ -67,11 +68,11 @@ use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     error::{BootstrapError, PlatformError},
     redraw_poll::RedrawPoll,
-    shared::{PlatformHandlers, owner_signal::OwnerSignal},
+    shared::{PlatformHandlers, display_source::DisplaySource, owner_signal::OwnerSignal},
     traits::{
-        Clipboard, DisplayId, MobileCapabilities, OpenWindowError, OwnerPlatform, Platform,
-        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformReadyCallback,
-        PlatformWindow, WindowEvent, WindowId, WindowOptions,
+        Clipboard, DisplaySnapshot, MobileCapabilities, OpenWindowError, OwnerPlatform, Platform,
+        PlatformCapabilities, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent,
+        WindowId, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
@@ -136,6 +137,7 @@ pub struct AndroidPlatform {
     owner_signal: Arc<OwnerSignal>,
     scroll_factors: Mutex<crate::shared::android_scroll::FactorCache>,
     preference_admission: crate::shared::preference_read::ReadAdmission,
+    displays: DisplaySource,
 }
 
 // Opaque on purpose, matching `HeadlessPlatform` and `WinitPlatform`. A
@@ -172,6 +174,7 @@ impl AndroidPlatform {
             owner_signal,
             scroll_factors: Mutex::new(crate::shared::android_scroll::FactorCache::default()),
             preference_admission: crate::shared::preference_read::ReadAdmission::default(),
+            displays: DisplaySource::new(),
         }
     }
 
@@ -762,12 +765,8 @@ impl Platform for AndroidPlatform {
         self.window.lock().as_ref().map(|_| WindowId(0))
     }
 
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        vec![Arc::new(AndroidDisplay)]
-    }
-
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        Some(Arc::new(AndroidDisplay))
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        display::placeholder_snapshot(&self.displays)
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
@@ -870,31 +869,5 @@ impl Clipboard for MockClipboard {
 
     fn write_text(&self, text: String) {
         *self.content.lock() = Some(text);
-    }
-}
-
-/// Android display info (MVP — returns reasonable defaults)
-struct AndroidDisplay;
-
-impl PlatformDisplay for AndroidDisplay {
-    fn id(&self) -> DisplayId {
-        DisplayId(0)
-    }
-
-    fn name(&self) -> String {
-        "Android Display".to_string()
-    }
-
-    fn bounds(&self) -> flui_foundation::geometry::Bounds<i32> {
-        use flui_foundation::geometry::{Bounds, Point, Size};
-        Bounds::new(Point::new(0, 0), Size::new(1080, 2340))
-    }
-
-    fn scale_factor(&self) -> f64 {
-        2.75
-    }
-
-    fn is_primary(&self) -> bool {
-        true
     }
 }

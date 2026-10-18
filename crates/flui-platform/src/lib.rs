@@ -221,7 +221,8 @@ pub use platforms::LinuxPlatform;
 #[cfg(target_os = "macos")]
 pub use platforms::MacOSPlatform;
 pub use platforms::{
-    FakeAccessibility, FakeHaptics, FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens,
+    DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeHaptics,
+    FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessDisplayControls,
     HeadlessExitReevaluation, HeadlessOwnerTurns, HeadlessPlatform, MockWindow,
 };
 // Web platform
@@ -244,12 +245,13 @@ pub use task::{Task, TaskLabel};
 // Re-export core traits
 pub use traits::{
     AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem,
-    CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, HostWindow,
+    CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, DisplayIdsExhausted,
+    DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision, DisplaySnapshot, HostWindow,
     MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities,
-    PlatformDisplay, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput,
-    PlatformWindow, SessionEndAnswer, SessionEndPhase, WebCapabilities, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowExecutionState, WindowId,
-    WindowMode, WindowOptions, WindowReveal, WindowShowError,
+    PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow,
+    RefreshPeriod, SessionEndAnswer, SessionEndPhase, WebCapabilities, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowDisplay, WindowEvent, WindowExecutionState,
+    WindowId, WindowMode, WindowOptions, WindowReveal, WindowShowError,
 };
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.

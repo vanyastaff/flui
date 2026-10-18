@@ -14,15 +14,12 @@ use wasm_bindgen::JsCast;
 use crate::{
     shared::WindowCallbacks,
     traits::{
-        CursorError, OpenWindowError, PlatformDisplay, PlatformWindow, WindowAppearance,
-        WindowBackgroundAppearance, WindowBounds, WindowId,
+        CursorError, OpenWindowError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance,
+        WindowBounds, WindowId,
     },
 };
 
-use super::{
-    display::WebDisplay,
-    registration::{CanvasClaim, Registration, effective_focus},
-};
+use super::registration::{CanvasClaim, Registration, effective_focus};
 
 /// Web window wrapping a `<canvas>` element
 pub struct WebWindow {
@@ -448,10 +445,6 @@ impl PlatformWindow for WebWindow {
         } else {
             WindowAppearance::Light
         }
-    }
-
-    fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        Some(Arc::new(WebDisplay::from_browser()))
     }
 
     fn get_title(&self) -> String {

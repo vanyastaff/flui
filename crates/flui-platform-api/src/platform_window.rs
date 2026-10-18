@@ -13,9 +13,9 @@ use flui_foundation::geometry::{Bounds, Point, Size};
 
 use crate::keyboard::Modifiers;
 use crate::{
-    CursorError, DispatchEventResult, PlatformDisplay, PlatformHaptics, PlatformInput,
-    PlatformTextInput, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowExecutionState, WindowId, WindowShowError,
+    CursorError, DispatchEventResult, DisplayId, PlatformHaptics, PlatformInput, PlatformTextInput,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowExecutionState, WindowId,
+    WindowShowError,
 };
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -317,18 +317,16 @@ pub trait PlatformWindow: Send + Sync {
         WindowAppearance::default()
     }
 
-    /// Get the display this window is currently on
-    fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        None
-    }
-
-    /// The refresh period of the display this window is currently on, when
-    /// the backend can tell — the interval an embedder's own frame pacing
-    /// should never produce faster than. `None` when unknown (no monitor
-    /// reported, a backend without the query); an embedder then falls back
-    /// to a documented default rather than guessing. Re-query after a move
-    /// or resize: a window can change monitors, and monitors differ.
-    fn refresh_period(&self) -> Option<std::time::Duration> {
+    /// The display this window is on right now, named by the identity the
+    /// platform's [`DisplaySnapshot`](crate::DisplaySnapshot) uses.
+    ///
+    /// `None` when the backend cannot tell (no monitor reported, a window
+    /// before its first placement, a backend without the query, an output the
+    /// platform could not issue an id for). A consumer reads that as an unknown
+    /// display, never as the primary one. The display's refresh period and
+    /// scale come from the snapshot, not from here: the window names the
+    /// display and the snapshot describes it.
+    fn display_id(&self) -> Option<DisplayId> {
         None
     }
 
@@ -603,6 +601,19 @@ pub trait PlatformWindow: Send + Sync {
     /// Called on the owner thread after the value `appearance()` returns has
     /// changed; the callback carries no payload, so it re-reads `appearance()`.
     fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        let _ = callback;
+    }
+
+    /// Register a callback meaning "the display this window is on may have
+    /// changed".
+    ///
+    /// Called on the owner thread when the window moves to another display,
+    /// when its display's scale changes, or when the backend otherwise suspects
+    /// [`display_id`](Self::display_id) answers differently now. The callback
+    /// carries no payload and the hint may be spurious: the consumer re-reads
+    /// the platform's snapshot and the window's `display_id()`, and acts only on
+    /// a real difference. A backend that never learns of a change never calls it.
+    fn on_display_changed(&self, callback: Box<dyn FnMut() + Send>) {
         let _ = callback;
     }
 

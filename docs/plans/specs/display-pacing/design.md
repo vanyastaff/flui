@@ -132,6 +132,9 @@ Proposed). Ни один принятый ADR не заменяется.
   | Web | один дисплей — `Web(Primary)`; для `screenschange` ключ — идентичность JS-объекта `ScreenDetailed` в удерживаемом списке (метка не ключ: названия повторяются); новый объект без совпадения — `Unkeyed` |
   | headless | `Injected(u64)` — внедряемое значение |
   | оболочка winit до DP7 | `Backend(String)` — стабильная строка бэкенда (`native_id`); это ключ-метка (на Windows — имя `\\.\DISPLAYn`), поэтому он временный: **DP7 удаляет `DisplayKey::Backend` из публичного перечисления**, когда winit переходит на нативные источники ОС |
+  Варианты `DisplayKey` появляются вместе с источником, который их производит: в первом PR есть только
+  `AndroidId`, `IosScreen`, `Web`, `Injected`, `Backend` и `Unkeyed`; ключи Windows, macOS, Wayland и X11
+  приходят с PR своих источников.
   Нюансы документируются: два одинаковых монитора различаются разъёмом; обмен кабелями меняет
   идентичности; повторное подключение сохраняет. Постоянная идентичность между запусками
   **не добавляется**: она относится к восстановлению положения окна (пробел 9). Как добавить без
@@ -555,7 +558,7 @@ trybuild в `tests/compile_fail/` (AGENTS: compile-fail — fixture, не doctes
 
 **Доставка** (`flui-app`, `tests/` через headless, таблица `display_delivery_contract`):
 `seed_holds_every_display_before_the_first_window` (R1), `refresh_switch_publishes_a_new_snapshot`
-(R2), `change_between_registration_and_seed_is_not_lost` (R10), `snapshot_is_committed_before_observers_run`,
+(R2), `a_change_racing_the_sample_still_reaches_the_window` (R10), `snapshot_is_committed_before_observers_run`,
 `panicking_window_observer_keeps_the_snapshot_and_the_tail` (R11),
 `apply_panic_keeps_the_debt_and_the_next_equal_change_is_delivered` (R11),
 `foreign_thread_invalidation_wakes_the_owner`, `late_callback_cannot_reach_a_replacement_host` (R15).

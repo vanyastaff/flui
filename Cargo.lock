@@ -1972,6 +1972,7 @@ dependencies = [
  "flui-objects",
  "flui-protocol",
  "flui-rendering",
+ "flui-scheduler",
  "flui-sdk",
  "flui-testing",
  "interprocess",
@@ -2270,6 +2271,7 @@ dependencies = [
  "static_assertions",
  "thiserror 2.0.20",
  "tracing",
+ "trybuild",
 ]
 
 [[package]]

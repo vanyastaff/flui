@@ -1,6 +1,6 @@
 # ADR-0236: The host owns an immutable display snapshot; the presentation owns its refresh period
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-17
 - **Amends:** [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md) decision 2 only: where
   the fallback period comes from. The fallback deadline, its 0.95 factor and the rest of the

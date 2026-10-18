@@ -10,7 +10,7 @@ use std::{
 };
 
 use flui_platform_api::{
-    Clipboard, ClipboardItem, PlatformDisplay, WindowEvent, WindowId, WindowOptions,
+    Clipboard, ClipboardItem, DisplaySnapshot, WindowEvent, WindowId, WindowOptions,
 };
 
 use super::{HostWindow, OpenWindowError, OwnerPlatform, PlatformCapabilities};
@@ -294,11 +294,25 @@ pub trait Platform: Send + Sync + 'static {
 
     // ==================== Display Management ====================
 
-    /// Get all available displays (monitors)
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>>;
-
-    /// Get the primary display
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>>;
+    /// Sample every display (monitor) the platform knows right now.
+    ///
+    /// Call on the platform owner thread. The value is immutable: identity,
+    /// name, bounds, usable bounds, scale factor and the refresh period of each
+    /// display's current mode (`None` when the OS does not report one — never a
+    /// guessed 60 Hz). A source that learns of a change from the OS invalidates
+    /// this by waking the owner; the host then samples again, so a change
+    /// between registering the source and the first sample is not lost. A
+    /// failed read is an error, not an empty snapshot: the host keeps the last
+    /// snapshot it accepted.
+    ///
+    /// Display ids come from the platform's own
+    /// [`DisplayRegistry`](flui_platform_api::DisplayRegistry) and are
+    /// comparable only with ids from this platform instance (ADR-0236).
+    ///
+    /// # Errors
+    /// Reports a failed native read or a platform with no display source
+    /// compiled in.
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError>;
 
     // ==================== Input & Clipboard ====================
 

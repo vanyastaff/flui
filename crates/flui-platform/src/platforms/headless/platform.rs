@@ -21,16 +21,18 @@ use flui_platform_api::InMemoryClipboard;
 use flui_platform_api::text_store::TextStoreHost;
 use parking_lot::Mutex;
 
+use super::display::{DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplays};
 use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     error::PlatformError,
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
-        Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult,
-        HostWindow, OpenWindowError, OwnerPlatform, PendingWindow, Platform, PlatformCapabilities,
-        PlatformDisplay, PlatformExecutor, PlatformHaptics, PlatformInput, PlatformReadyCallback,
-        PlatformTextInput, PlatformWindow, SessionEndAnswer, SessionEndPhase, WindowAppearance,
-        WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowOpen, WindowOptions,
+        Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId,
+        DisplaySnapshot, HostWindow, OpenWindowError, OwnerPlatform, PendingWindow, Platform,
+        PlatformCapabilities, PlatformExecutor, PlatformHaptics, PlatformInput,
+        PlatformReadyCallback, PlatformTextInput, PlatformWindow, SessionEndAnswer,
+        SessionEndPhase, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent,
+        WindowId, WindowOpen, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks, ProxyTransport},
     },
 };
@@ -110,6 +112,10 @@ struct HeadlessState {
     /// What every window opened from now on offers as its text-store host
     /// ([`HeadlessPlatform::with_text_store_host`]); `None`: push-model.
     text_store_host: Option<TextStoreHostFactory>,
+    /// The displays this platform reports; replaced by
+    /// [`HeadlessPlatform::with_displays`] and changed through
+    /// [`HeadlessDisplayControls`].
+    displays: HeadlessDisplays,
 }
 
 impl HeadlessPlatform {
@@ -129,6 +135,7 @@ impl HeadlessPlatform {
             pending_opens: Vec::new(),
             exit_reevaluation_requested: false,
             text_store_host: None,
+            displays: HeadlessDisplays::new(vec![DisplaySpec::default()]),
         };
 
         let wake_failure = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -207,6 +214,26 @@ impl HeadlessPlatform {
         self.with_state(|state| state.text_store_host = Some(Arc::new(factory)));
         self
     }
+    /// Replace the displays this platform reports with `displays`, laid out
+    /// left to right; the first is primary. Windows opened afterwards start on
+    /// the primary display.
+    #[must_use]
+    pub fn with_displays(self, displays: Vec<DisplaySpec>) -> Self {
+        self.with_state(|state| state.displays = HeadlessDisplays::new(displays));
+        self
+    }
+
+    /// Obtain the display controls before `run` consumes this platform: the
+    /// handle changes a display the way an operating system would, from any
+    /// thread. See [`HeadlessDisplayControls`].
+    #[must_use]
+    pub fn display_controls(&self) -> HeadlessDisplayControls {
+        HeadlessDisplayControls {
+            signal: Arc::downgrade(&self.signal),
+            state: Arc::downgrade(&self.state),
+        }
+    }
+
     /// Simulate one phase of the user's session ending, as the operating
     /// system reports it: the callback registered with
     /// [`Platform::on_session_end`] is asked, on the calling thread, and its
@@ -352,13 +379,8 @@ impl Platform for HeadlessPlatform {
         self.with_state(|state| state.active_window)
     }
 
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        // Return one mock display
-        vec![Arc::new(MockDisplay::primary())]
-    }
-
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        Some(Arc::new(MockDisplay::primary()))
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        Ok(self.with_state(|state| state.displays.snapshot()))
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
@@ -447,6 +469,7 @@ fn create_mock_window(
         options,
         platform_state,
         state.text_store_host.clone(),
+        state.displays.default_window_display(),
     );
 
     state.windows.push(window.clone());
@@ -552,6 +575,59 @@ impl HeadlessOwnerTurns {
                 }
             }
         }
+    }
+}
+
+/// Changes the headless platform's displays after `run` has consumed it —
+/// obtained from [`HeadlessPlatform::display_controls`] before `run`, the same
+/// take-a-handle-first shape as [`HeadlessPlatform::owner_turns`].
+///
+/// A change commits to the platform's snapshot and then wakes the owner, as a
+/// native source does when the OS reports a mode switch, and so works from any
+/// thread: the owner re-samples `Platform::display_snapshot` on its next turn.
+#[derive(Clone)]
+pub struct HeadlessDisplayControls {
+    signal: Weak<crate::shared::owner_signal::OwnerSignal>,
+    state: Weak<Mutex<HeadlessState>>,
+}
+
+impl std::fmt::Debug for HeadlessDisplayControls {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeadlessDisplayControls")
+            .finish_non_exhaustive()
+    }
+}
+
+impl HeadlessDisplayControls {
+    /// The platform's current snapshot, `None` once the platform is gone.
+    #[must_use]
+    pub fn snapshot(&self) -> Option<DisplaySnapshot> {
+        let state = self.state.upgrade()?;
+        let snapshot = state.lock().displays.snapshot();
+        Some(snapshot)
+    }
+
+    /// Apply `change` to display `id` and wake the owner. A platform that is
+    /// gone applies nothing.
+    ///
+    /// # Errors
+    /// [`DisplayChangeError::UnknownDisplay`] for an id this platform does not
+    /// hold; [`DisplayChangeError::RevisionExhausted`] when the snapshot
+    /// revision cannot advance.
+    pub fn simulate_display_change(
+        &self,
+        id: DisplayId,
+        change: DisplayChange,
+    ) -> Result<(), DisplayChangeError> {
+        let Some(state) = self.state.upgrade() else {
+            return Ok(());
+        };
+        state.lock().displays.apply(id, change)?;
+        // A failed wake leaves the signal's pending debt for the next turn.
+        if let Some(signal) = self.signal.upgrade() {
+            let _ = signal.wake();
+        }
+        Ok(())
     }
 }
 
@@ -813,6 +889,8 @@ struct MockWindowState {
     modifiers: flui_platform_api::keyboard::Modifiers,
     appearance: WindowAppearance,
     cursor: CursorIcon,
+    /// The display this window is on; `None` when the platform has no displays.
+    display: Option<DisplayId>,
 }
 
 impl Clone for MockWindowState {
@@ -834,6 +912,7 @@ impl Clone for MockWindowState {
             modifiers: self.modifiers,
             appearance: self.appearance,
             cursor: self.cursor,
+            display: self.display,
         }
     }
 }
@@ -844,6 +923,7 @@ impl MockWindow {
         options: WindowOptions,
         platform_state: Weak<Mutex<HeadlessState>>,
         text_store_host: Option<TextStoreHostFactory>,
+        display: Option<DisplayId>,
     ) -> Self {
         Self {
             id,
@@ -867,6 +947,7 @@ impl MockWindow {
                 modifiers: flui_platform_api::keyboard::Modifiers::NONE,
                 appearance: WindowAppearance::default(),
                 cursor: CursorIcon::default(),
+                display,
             })),
             callbacks: Arc::new(WindowCallbacks::new()),
             text_input: Arc::new(FakeTextInput::new()),
@@ -1138,6 +1219,32 @@ impl MockWindow {
         self.callbacks.dispatch_appearance_changed();
     }
 
+    /// Move this window to display `id`, as the user dragging it onto another
+    /// monitor does. Fires `on_display_changed` only when the display really
+    /// changes; a closed window ignores the report.
+    ///
+    /// # Errors
+    /// [`DisplayChangeError::UnknownDisplay`] when the platform holds no
+    /// display with this id (or is gone); the window stays where it was.
+    pub fn simulate_move_to(&self, id: DisplayId) -> Result<(), DisplayChangeError> {
+        let known = self
+            .platform_state
+            .upgrade()
+            .is_some_and(|platform| platform.lock().displays.contains(id));
+        if !known {
+            return Err(DisplayChangeError::UnknownDisplay);
+        }
+        {
+            let mut state = self.state.lock();
+            if state.closed || state.display == Some(id) {
+                return Ok(());
+            }
+            state.display = Some(id);
+        }
+        self.callbacks.dispatch_display_changed();
+        Ok(())
+    }
+
     /// Simulate a GPU-surface availability change for testing.
     /// Fires the registered `on_surface_status_change` callback.
     ///
@@ -1296,8 +1403,8 @@ impl PlatformWindow for MockWindow {
         self.state.lock().appearance
     }
 
-    fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        Some(Arc::new(MockDisplay::primary()))
+    fn display_id(&self) -> Option<DisplayId> {
+        self.state.lock().display
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
@@ -1667,40 +1774,6 @@ impl flui_platform_api::PlatformSystemChrome for FakeSystemChrome {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
-    }
-}
-
-/// Mock display for headless testing
-struct MockDisplay {
-    is_primary: bool,
-}
-
-impl MockDisplay {
-    fn primary() -> Self {
-        Self { is_primary: true }
-    }
-}
-
-impl crate::traits::PlatformDisplay for MockDisplay {
-    fn id(&self) -> crate::traits::DisplayId {
-        crate::traits::DisplayId(0)
-    }
-
-    fn name(&self) -> String {
-        "Mock Display".to_string()
-    }
-
-    fn bounds(&self) -> Bounds<i32> {
-        // Mock display: 1920x1080 at origin (0, 0)
-        Bounds::new(Point::new(0, 0), Size::new(1920, 1080))
-    }
-
-    fn scale_factor(&self) -> f64 {
-        1.0
-    }
-
-    fn is_primary(&self) -> bool {
-        self.is_primary
     }
 }
 

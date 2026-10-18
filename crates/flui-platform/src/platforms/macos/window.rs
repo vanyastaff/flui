@@ -6,7 +6,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 
 use cursor_icon::CursorIcon;
@@ -38,11 +37,14 @@ type BObjC = Bool;
 const YES: Bool = Bool::YES;
 const NO: Bool = Bool::NO;
 
-use super::{display::refresh_period_for_screen, view};
+use super::{display::display_key_of, view};
 use crate::{
     config::WindowConfiguration,
-    shared::WindowCallbacks,
-    traits::{CursorError, OpenWindowError, PlatformWindow, WindowId, WindowOptions, WindowReveal},
+    shared::{WindowCallbacks, display_source::DisplaySource},
+    traits::{
+        CursorError, DisplayId, OpenWindowError, PlatformWindow, WindowId, WindowOptions,
+        WindowReveal,
+    },
 };
 
 /// macOS window wrapper around NSWindow
@@ -119,6 +121,12 @@ pub struct MacOSWindow {
     /// `&self` accessor and must be handed out as one shared instance per
     /// window, not a fresh one per call.
     text_input: std::sync::OnceLock<Arc<super::text_input::MacOSTextInput>>,
+
+    /// The platform's display registry, by which this window turns its
+    /// screen into a [`DisplayId`]. A `OnceLock` filled once by
+    /// `MacOSPlatform::open_window` right after construction, like the wake
+    /// pump; a window built without a platform names no display.
+    displays: std::sync::OnceLock<Arc<DisplaySource>>,
 }
 
 // SAFETY: the remaining fields are `Arc`/`Mutex`-protected, and sharing the
@@ -186,14 +194,12 @@ struct MacOSWindowState {
     /// Scale factor (1.0 for non-Retina, 2.0 for Retina)
     scale_factor: f64,
 
-    /// Inter-frame period of the display this window is on, when that display
-    /// reports a rate. Cached, not queried per call: the query messages the
-    /// window's screen, which is AppKit traffic this backend keeps on the
-    /// owner lane, while `PlatformWindow::refresh_period` is a plain `&self`
+    /// The display this window is on. Cached, not queried per call: reading it
+    /// messages the window's screen, which is AppKit traffic this backend keeps
+    /// on the owner lane, while `PlatformWindow::display_id` is a plain `&self`
     /// accessor any thread may call. Refreshed wherever `scale_factor` is —
-    /// `windowDidChangeScreen:` and `windowDidChangeBackingProperties:` — which
-    /// is the re-query point the trait's own contract names.
-    refresh_period: Option<Duration>,
+    /// `windowDidChangeScreen:` and `windowDidChangeBackingProperties:`.
+    display: Option<DisplayId>,
 
     /// Cursor selected by this exact window's presentation.
     cursor: CursorIcon,
@@ -280,6 +286,39 @@ impl MacOSWindow {
             super::owner_lane::owner_queue(),
             true,
         )
+    }
+
+    /// Hand this window the platform's display registry, and read which display
+    /// it is on.
+    ///
+    /// Called once by `MacOSPlatform::open_window`, right after construction
+    /// and before the window is handed to anyone. `pub(crate)` and a setter,
+    /// like [`Self::install_wake_pump`], so a platform-internal type stays out
+    /// of the public `MacOSWindow::new` signature.
+    pub(crate) fn bind_displays(&self, displays: Arc<DisplaySource>) {
+        // First writer wins, like the wake pump: the slot is read on every
+        // screen change and must not flip between registries.
+        if self.displays.set(displays).is_ok() {
+            self.refresh_display();
+        }
+    }
+
+    /// Re-read which display this window is on; `true` when the answer
+    /// changed. Owner lane only (this messages the window's screen).
+    fn refresh_display(&self) -> bool {
+        let Some(displays) = self.displays.get() else {
+            return false;
+        };
+        // SAFETY: `ns_window` is alive for the lifetime of `self`; the screen
+        // answer is nil or a live `NSScreen*` for the duration of this call.
+        let id = unsafe {
+            let screen: ObjcId = msg_send![self.ns_window, screen];
+            screen_display_key(screen).and_then(|key| displays.mint(&key))
+        };
+        let mut state = self.state.lock();
+        let changed = state.display != id;
+        state.display = id;
+        changed
     }
 
     /// Hand this window the platform's wake pump.
@@ -431,18 +470,6 @@ impl MacOSWindow {
             // Center window on screen
             let _: () = msg_send![ns_window, center];
 
-            // Refresh period of the display this window is on. The window is
-            // created at the origin — a point on a screen — so
-            // `-[NSWindow screen]` answers here rather than returning NIL;
-            // measured at this exact stage rather than assumed, by the
-            // `scale_order.m` probe, which reports the screen live and the
-            // display id reachable before `makeKeyAndOrderFront:`.
-            // `screen` is nil only for a window not yet on any screen, which
-            // cannot happen here (the window is created at the origin); a nil
-            // therefore means no period, not a panic.
-            let screen: ObjcId = msg_send![ns_window, screen];
-            let refresh_period = screen_refresh_period(screen);
-
             let callbacks = Arc::new(WindowCallbacks::new());
 
             // Create content view for input events. `frame` is
@@ -458,7 +485,7 @@ impl MacOSWindow {
                         size: options.size,
                     },
                     scale_factor: scale,
-                    refresh_period,
+                    display: None,
                     cursor: CursorIcon::default(),
                     occlusion_visible: true,
                     first_reveal_pending,
@@ -474,6 +501,7 @@ impl MacOSWindow {
                 accessibility: std::sync::OnceLock::new(),
                 wake_pump: std::sync::OnceLock::new(),
                 text_input: std::sync::OnceLock::new(),
+                displays: std::sync::OnceLock::new(),
             });
 
             let _: () = msg_send![ns_window, setContentView: content_view];
@@ -883,8 +911,8 @@ impl PlatformWindow for MacOSWindow {
         state.scale_factor
     }
 
-    fn refresh_period(&self) -> Option<Duration> {
-        self.state.lock().refresh_period
+    fn display_id(&self) -> Option<DisplayId> {
+        self.state.lock().display
     }
 
     /// # Thread affinity — owner-routed
@@ -1357,6 +1385,8 @@ impl Clone for MacOSWindow {
             // A clone shares the window, so it is the same capability — one
             // `NSTextInputClient` view behind both handles, never two.
             text_input: self.text_input.clone(),
+            // A clone shares the window, so it names the same display.
+            displays: self.displays.clone(),
         }
     }
 }
@@ -2168,14 +2198,14 @@ impl MacOSWindowExtTrait for MacOSWindow {
 
 use std::sync::Weak;
 
-/// The refresh period of the display a raw `NSScreen*` names, or `None` when
-/// the pointer is nil or the display reports no rate.
+/// The key of the display a raw `NSScreen*` names, or `None` when the pointer
+/// is nil (a window not on any screen).
 ///
 /// # Safety
 ///
 /// `screen` must be null or a live `NSScreen*`, and the call must run on the
 /// owner lane (this messages the screen).
-unsafe fn screen_refresh_period(screen: ObjcId) -> Option<Duration> {
+unsafe fn screen_display_key(screen: ObjcId) -> Option<flui_platform_api::DisplayKey> {
     // SAFETY: the caller's contract — nil or a live `NSScreen*` on the owner
     // lane; the borrow is scoped to the `and_then` closure.
     let screen = unsafe { screen.as_ref() }?;
@@ -2183,7 +2213,7 @@ unsafe fn screen_refresh_period(screen: ObjcId) -> Option<Duration> {
     // and the caller guarantees the pointee really is an `NSScreen`.
     let screen: &objc2_app_kit::NSScreen =
         unsafe { &*std::ptr::from_ref::<AnyObject>(screen).cast() };
-    refresh_period_for_screen(screen)
+    display_key_of(screen)
 }
 
 /// Create a window delegate for lifecycle events
@@ -2606,16 +2636,6 @@ impl MacOSWindow {
         unsafe {
             let new_scale: f64 = msg_send![self.ns_window, backingScaleFactor];
 
-            // Re-read the refresh period in the same pass: this handler is
-            // reached on both a backing-properties change and a screen change
-            // (`handle_screen_changed` delegates here), and the period belongs
-            // to the display, so it moves with the window exactly as the scale
-            // does. No resize is dispatched for it — a period change does not
-            // invalidate layout, and the runner re-reads the period when it
-            // does resize.
-            let screen: ObjcId = msg_send![self.ns_window, screen];
-            let new_refresh_period = screen_refresh_period(screen);
-
             // Update window state
             let (changed, size) = {
                 let mut state = self.state.lock();
@@ -2624,9 +2644,16 @@ impl MacOSWindow {
                     state.scale_factor = new_scale;
                     tracing::info!("Window scale factor changed to {}", new_scale);
                 }
-                state.refresh_period = new_refresh_period;
                 (changed, state.bounds.size)
             };
+
+            // Re-read the display in the same pass: this handler is reached on
+            // both a backing-properties change and a screen change
+            // (`handle_screen_changed` delegates here), and the display belongs
+            // to the window exactly as the scale does. A change of display or
+            // of its scale is a hint to re-read the snapshot; it dispatches no
+            // resize, because a refresh period does not invalidate layout.
+            let moved = self.refresh_display();
 
             // Update the FLUI view's scale factor
             view::update_view_scale_factor(self.view, new_scale);
@@ -2634,6 +2661,9 @@ impl MacOSWindow {
             // A scale change invalidates layout: notify as a resize
             if changed {
                 self.callbacks.dispatch_resize(size, new_scale);
+            }
+            if moved || changed {
+                self.callbacks.dispatch_display_changed();
             }
         }
     }

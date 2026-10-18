@@ -85,7 +85,7 @@ pub use window_ext::*;
 use crate::data_transfer::{DataTransferSource, NullDataTransferSource};
 use crate::error::PlatformError;
 use crate::traits::{
-    Clipboard, HostWindow, OpenWindowError, Platform, PlatformCapabilities, PlatformDisplay,
+    Clipboard, DisplaySnapshot, HostWindow, OpenWindowError, Platform, PlatformCapabilities,
     PlatformExecutor, PlatformReadyCallback, WindowEvent, WindowId, WindowOptions,
 };
 
@@ -186,20 +186,13 @@ impl Platform for LinuxPlatform {
         unimplemented!("Linux active window query not implemented")
     }
 
-    #[expect(
-        clippy::unimplemented,
-        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
-    )]
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        unimplemented!("Linux display enumeration (wl_output/Xrandr) not implemented")
-    }
-
-    #[expect(
-        clippy::unimplemented,
-        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
-    )]
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        unimplemented!("Linux primary display query not implemented")
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        // The native display source (`wl_output`, RandR) is not written yet.
+        // That is an error, not an empty snapshot, which would claim the
+        // machine has no display.
+        Err(PlatformError::Displays {
+            message: "the native Linux display source is not implemented".into(),
+        })
     }
 
     #[expect(

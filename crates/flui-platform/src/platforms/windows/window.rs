@@ -12,10 +12,7 @@ use raw_window_handle::{
 use windows::{
     Win32::{
         Foundation::{FALSE, HWND, LPARAM, POINT, RECT, TRUE, WPARAM},
-        Graphics::Gdi::{
-            ClientToScreen, HRGN, InvalidateRect, MONITOR_DEFAULTTOPRIMARY, MonitorFromWindow,
-            ScreenToClient, UpdateWindow,
-        },
+        Graphics::Gdi::{ClientToScreen, HRGN, InvalidateRect, ScreenToClient, UpdateWindow},
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             HiDpi::{GetDpiForSystem, GetDpiForWindow},
@@ -40,9 +37,9 @@ use super::util::{USER_DEFAULT_SCREEN_DPI, WINDOW_CLASS_NAME, logical_to_device}
 use crate::{
     shared::{PlatformHandlers, WindowCallbacks, hwnd_affinity::UserDataRefusal},
     traits::{
-        CursorError, DispatchEventResult, OpenWindowError, PlatformDisplay, PlatformInput,
-        PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-        WindowExecutionState, WindowId, WindowMode, WindowOptions,
+        CursorError, DispatchEventResult, OpenWindowError, PlatformInput, PlatformWindow,
+        WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowExecutionState, WindowId,
+        WindowMode, WindowOptions,
     },
 };
 
@@ -1062,27 +1059,6 @@ impl PlatformWindow for WindowsWindow {
         // Not the DWM dark-mode flag: this backend sets that flag to match,
         // so reading it back would report the backend's own choice.
         super::appearance::system_appearance()
-    }
-
-    fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        // SAFETY: `MonitorFromWindow` takes `self.hwnd` by value and a flag;
-        // `MONITOR_DEFAULTTOPRIMARY` guarantees a non-null `HMONITOR` even
-        // for an invalid `hwnd`, so the `is_invalid()` check below is
-        // defensive rather than load-bearing for memory safety — no pointer
-        // is dereferenced here.
-        unsafe {
-            let monitor = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTOPRIMARY);
-            if monitor.is_invalid() {
-                return None;
-            }
-            // Use the display enumeration to find matching monitor
-            let displays = super::display::enumerate_displays();
-            displays.into_iter().find(|d| {
-                // Match by checking if this is the same monitor handle
-                // The display enumeration uses HMONITOR internally
-                d.is_primary() // Fallback: return primary
-            })
-        }
     }
 
     fn get_title(&self) -> String {

@@ -13,10 +13,12 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::window::Window;
 
 use super::control::ControlSender;
+use super::display::WinitDisplaySource;
 #[cfg(all(target_os = "linux", feature = "a11y"))]
 use crate::traits::PlatformAccessibility;
 use crate::traits::{
-    CursorError, HostWindow, PlatformTextInput, PlatformWindow, WindowAppearance, WindowId,
+    CursorError, DisplayId, HostWindow, PlatformTextInput, PlatformWindow, WindowAppearance,
+    WindowId,
 };
 
 /// Concrete winit window wrapper
@@ -49,6 +51,11 @@ pub struct WinitWindow {
     /// in place; it posts a non-droppable per-window request and the owner
     /// runs the exact teardown the compositor's `CloseRequested` arm runs.
     close_lane: ControlSender,
+    /// The platform's monitor list, by which this window names its display.
+    displays: Arc<WinitDisplaySource>,
+    /// The display last reported through `on_display_changed`, so a hint fires
+    /// when the window really moved.
+    reported_display: parking_lot::Mutex<Option<DisplayId>>,
 }
 
 /// [`PlatformTextInput`] for a winit window.
@@ -94,7 +101,12 @@ impl WinitWindow {
     /// programmatic `close()` reports to. Backend-private: only this
     /// backend's own window creation can supply that lane, so nothing
     /// outside it can construct a window whose close would go nowhere.
-    pub(super) fn new(id: WindowId, window: Arc<Window>, close_lane: ControlSender) -> Self {
+    pub(super) fn new(
+        id: WindowId,
+        window: Arc<Window>,
+        close_lane: ControlSender,
+        displays: Arc<WinitDisplaySource>,
+    ) -> Self {
         Self {
             id,
             closed: std::sync::atomic::AtomicBool::new(false),
@@ -107,7 +119,28 @@ impl WinitWindow {
             #[cfg(target_os = "linux")]
             portal_dark: std::sync::atomic::AtomicBool::new(false),
             close_lane,
+            displays,
+            reported_display: parking_lot::Mutex::new(None),
         }
+    }
+
+    /// Whether the window sits on a monitor the last sample does not hold — a
+    /// monitor that appeared since, which calls for a fresh sample.
+    pub(super) fn on_unsampled_monitor(&self) -> bool {
+        self.window
+            .current_monitor()
+            .is_some_and(|monitor| self.displays.id_of(&monitor).is_none())
+    }
+
+    /// Whether [`PlatformWindow::display_id`] answers differently from the last
+    /// time this was asked, remembering the answer. The window event handler
+    /// uses it to raise `on_display_changed` only on a real move.
+    pub(super) fn take_display_change(&self) -> bool {
+        let current = PlatformWindow::display_id(self);
+        let mut reported = self.reported_display.lock();
+        let changed = *reported != current;
+        *reported = current;
+        changed
     }
 
     /// Record the portal's `color-scheme`; `true` when it changed what
@@ -204,12 +237,9 @@ impl PlatformWindow for WinitWindow {
         self.window.request_redraw();
     }
 
-    fn refresh_period(&self) -> Option<std::time::Duration> {
-        self.window
-            .current_monitor()
-            .and_then(|monitor| monitor.refresh_rate_millihertz())
-            .filter(|&millihertz| millihertz > 0)
-            .map(|millihertz| std::time::Duration::from_secs_f64(1000.0 / f64::from(millihertz)))
+    fn display_id(&self) -> Option<DisplayId> {
+        let monitor = self.window.current_monitor()?;
+        self.displays.id_of(&monitor)
     }
 
     fn pre_present_notify(&self) {

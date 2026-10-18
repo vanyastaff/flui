@@ -895,6 +895,33 @@ later reports without reentering the original checkout. `owner_sampling_contract
 pins this public owner path with query, tracing, handler and earlier-operation
 failures in competition.
 
+### A presentation stores its display; every pacing reader reads that one value
+
+The host derives which display a window is on (and its refresh period) and delivers
+it as `WindowObservation::Display` ([ADR-0236](../../docs/adr/ADR-0236-display-snapshot-and-refresh-period.md)).
+Pending updates merge as a whole `DisplayUpdate`, so a newer "unknown" replaces an
+older known display instead of losing to it
+(`newer_unknown_display_replaces_a_pending_known_one`). A presentation applies a
+changed display by moving everything that follows it (the pointer resampler's
+window, the gesture-geometry barrier, a redraw) and stores the value last, so a step
+that fails part-way leaves the previous value and the next delivery, even of an equal
+value, applies it again; an unchanged value does nothing.
+
+`UiRuntime::refresh_interval` is the one reader's answer: the display's period, or
+`DEFAULT_REFRESH_PERIOD` (60 Hz, a policy of this crate, never a value the snapshot
+carries) while it is unknown, and it falls back when the window moves to a display that
+reports nothing. The scheduler's frame budget is set to the shortest interval among the
+runtime's presentations in the pump's preparation, before the frame begins, because the
+frame copies the budget's target when it starts
+(`jank_is_judged_against_the_current_period`,
+`shared_frame_budget_uses_the_shortest_period`). `scaled_refresh_interval` is the metric
+ADR-0212 multiplies: the product runs through `Duration::try_from_secs_f64`, a product
+that overflows for the display's own period is treated as that period being unknown, and
+a factor that is not finite and positive is unknown
+(`period_product_overflow_is_treated_as_unknown`,
+`non_finite_factor_is_treated_as_unknown`). No tick or media-query field carries the
+period: nothing in animation or interaction reads it from there.
+
 ## Exceptional terminal presentation ownership
 
 A presentation close that holds a failure, or runs inside an unwind, is in
