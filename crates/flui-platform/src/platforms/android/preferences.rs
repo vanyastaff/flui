@@ -10,6 +10,7 @@ use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform_api::{MotionPreference, TextWeightPreference};
 use jni::{JValue, JavaVM, jni_sig, jni_str, objects::JObject, refs::Global};
 
+use super::super::android_os_version::AndroidApi;
 use crate::{
     GestureGeometry, GesturePreferences, NativeTouchGeometry, PreferenceQueryError,
     SystemPreferences,
@@ -29,7 +30,7 @@ struct Reading {
 
 enum ReadScope {
     Geometry,
-    Preferences,
+    Preferences(AndroidApi),
 }
 
 #[expect(
@@ -140,15 +141,8 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
             .i()?;
         let text_weight = match scope {
             ReadScope::Geometry => None,
-            ReadScope::Preferences => {
-                let sdk = env
-                    .get_static_field(
-                        jni_str!("android/os/Build$VERSION"),
-                        jni_str!("SDK_INT"),
-                        jni_sig!("I"),
-                    )?
-                    .i()?;
-                crate::shared::android_text_weight::observe(sdk, || {
+            ReadScope::Preferences(api) => {
+                crate::shared::android_text_weight::observe(api.sdk_int(), || {
                     let configuration = env
                         .call_method(
                             &resources,
@@ -168,7 +162,7 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
         };
         let duration_scale = match scope {
             ReadScope::Geometry => None,
-            ReadScope::Preferences => {
+            ReadScope::Preferences(_) => {
                 let resolver = env
                     .call_method(
                         activity,
@@ -271,7 +265,8 @@ pub(super) fn pixel_ratio(app: &AndroidApp) -> Result<DevicePixelRatio, Preferen
 /// through the same Activity resource metrics that produced the measurement.
 pub(super) fn scroll_factors(
     app: &AndroidApp,
-) -> Result<crate::shared::android_scroll::PixelFactors, PreferenceQueryError> {
+    api: AndroidApi,
+) ->Result<crate::shared::android_scroll::PixelFactors, PreferenceQueryError> {
     use crate::shared::android_scroll::{FactorApi, PixelFactors};
     let factors = with_activity(app, |env, activity| {
         let resources = env
@@ -293,14 +288,7 @@ pub(super) fn scroll_factors(
         let density = env
             .get_field(&metrics, jni_str!("density"), jni_sig!("F"))?
             .f()?;
-        let sdk = env
-            .get_static_field(
-                jni_str!("android/os/Build$VERSION"),
-                jni_str!("SDK_INT"),
-                jni_sig!("I"),
-            )?
-            .i()?;
-        if FactorApi::for_sdk(sdk) == FactorApi::ThemeAttribute {
+        if FactorApi::for_sdk(api.sdk_int()) == FactorApi::ThemeAttribute {
             let value =
                 env.new_object(jni_str!("android/util/TypedValue"), jni_sig!("()V"), &[])?;
             let theme = env
@@ -400,8 +388,8 @@ fn native_geometry(reading: &Reading) -> Result<NativeTouchGeometry, PreferenceQ
     .map_err(Into::into)
 }
 
-pub(super) fn sample(app: &AndroidApp) -> Result<SystemPreferences, PreferenceQueryError> {
-    let reading = read(app, ReadScope::Preferences)?;
+pub(super) fn sample(app: &AndroidApp, api: AndroidApi) -> Result<SystemPreferences, PreferenceQueryError> {
+    let reading = read(app, ReadScope::Preferences(api))?;
     let duration = |value: i32| {
         u64::try_from(value)
             .map(Duration::from_millis)

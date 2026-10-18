@@ -17,6 +17,11 @@ pub mod linux;
 // Mobile platforms
 #[cfg(target_os = "android")]
 pub mod android;
+// The API-level rules of the Android backend sit in its directory but compile on
+// every host, so their tests run where the backend does not.
+#[cfg(any(target_os = "android", test))]
+#[path = "android/os_version.rs"]
+pub(crate) mod android_os_version;
 
 #[cfg(target_os = "ios")]
 pub mod ios;

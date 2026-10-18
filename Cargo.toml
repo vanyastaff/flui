@@ -265,6 +265,8 @@ objc2-app-kit = { version = "0.3.2", default-features = false }
 dispatch2 = "0.3.1"
 block2 = "0.6.2"
 jni = "0.22.4"
+# Android's dynamic loader: the NDK functions newer than minSdk are looked up by name.
+libc = "0.2"
 # Quartz window identities, including windows omitted from capture lists.
 core-foundation = "0.10"
 core-graphics = "0.25"

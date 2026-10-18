@@ -17,6 +17,8 @@ pub(crate) mod clipboard_lock;
 // `pub` for the same off-target-consumed reason as `hwnd_affinity` below
 // (consumers: the winit, Win32, and AppKit event-conversion backends).
 #[cfg(any(target_os = "android", test))]
+pub(crate) mod android_display;
+#[cfg(any(target_os = "android", test))]
 pub(crate) mod android_scroll;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_text_weight;
