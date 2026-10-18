@@ -478,30 +478,29 @@ impl UiRuntime {
                     presentation.gestures(),
                 )
                 || presentation
-                    .frame_rate
-                    .get()
-                    .release_due(presentation.clock().now())
+                    .frame_rate_hold()
+                    .is_some_and(|due| presentation.clock().now() >= due)
         })
     }
 
     /// Fold what every presentation wants of its display's refresh rate at the
-    /// end of an owner work item and return the presentations whose demand
-    /// changed. The demand is read live: the clock's animation bit is cleared
-    /// by every produced frame, so it cannot say whether an animation still
-    /// runs.
-    pub(crate) fn take_frame_rate_changes(
+    /// end of an owner work item and return the demand each now holds. The
+    /// demand is read live: the clock's animation bit is cleared by every
+    /// produced frame, so it cannot say whether an animation still runs. A
+    /// hidden or closing presentation is released at once.
+    pub(crate) fn frame_rate_demands(
         &self,
     ) -> Vec<(PresentationId, crate::frame_rate_demand::FrameRateDemand)> {
         let frames_enabled = self.scheduler.frames_enabled();
         self.presentations
             .iter()
-            .filter(|presentation| !presentation.closing_requested.get())
-            .filter_map(|presentation| {
-                let wanted = presentation.wants_high_frame_rate(frames_enabled);
+            .map(|presentation| {
+                let wanted = !presentation.closing_requested.get()
+                    && presentation.wants_high_frame_rate(frames_enabled);
                 let mut governor = presentation.frame_rate.get();
-                let change = governor.observe(wanted, presentation.clock().now());
+                governor.observe(wanted, presentation.is_shown(), presentation.clock().now());
                 presentation.frame_rate.set(governor);
-                Some((presentation.id(), change?))
+                (presentation.id(), governor.decided())
             })
             .collect()
     }
@@ -528,7 +527,7 @@ impl UiRuntime {
                     flui_interaction::__runtime::next_deadline_snapshot(presentation.gestures()),
                     presentation.gesture_geometry.borrow().next_wake(),
                     presentation.text_preparation.borrow().next_wake(),
-                    presentation.frame_rate.get().release_at(),
+                    presentation.frame_rate_hold(),
                 ]
             })
             .flatten()

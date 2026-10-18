@@ -975,13 +975,20 @@ enabled and the presentation is shown) or a pointer is down, and `Idle` after
 neither has held for 250 ms (`FRAME_RATE_HOLD`). The demand is read live at the end
 of every runtime work item, next to the text-sizing frontiers: the clock's
 animation bit cannot be read there, because `poll` clears it after each produced
-frame. A change is published once through
-`OwnerEffects::frame_rate_demand_changed` after the runtime has returned to the
-owner (a default no-op, so hosts with nothing to ask need no code), and not for a
-presentation that retired in between. The hold is a wall-clock deadline: it joins
-`UiRuntime::next_wake`, and `has_pending_work` reports it once due, so a static
-screen, which produces no frames, still reaches `Idle` and the frame closure of a
-host does not skip a due wake and spin.
+frame. The host opts in through `OwnerEffects::tracks_frame_rate_demand` (off by
+default; only Android answers `true`): without it no demand is observed, no hold
+is armed and no deadline joins the host's wake sources. The owner keeps, per
+presentation, the demand it last delivered, and each work item offers
+`OwnerEffects::frame_rate_demand_changed` whatever differs from it, after the
+runtime has returned to the owner and not for a presentation that retired. A
+demand counts as delivered only once the hook returned, so a hook that panics is
+offered the same change again at the next work item. The hold is a wall-clock
+deadline: it joins `UiRuntime::next_wake`, and `has_pending_work` reports it once
+due, so a static screen, which produces no frames, still reaches `Idle` and the
+frame closure of a host does not skip a due wake and spin. A hidden or closing
+presentation draws nothing: it is released at once, with no hold, and reports no
+hold deadline, so a hold that comes due while it is hidden cannot leave
+`has_pending_work` true with no work item to clear it.
 
 **Alternatives considered:**
 - Calling the window from the runtime — it would give the runtime a platform edge.
@@ -990,6 +997,6 @@ host does not skip a due wake and spin.
 - Releasing without a hold — the rate would flutter between the frames of an
   animation.
 
-**Trade-off:** an effect that panics loses its edge for that presentation until the
-demand changes again; the host re-applies its stored demand when a native surface is
+**Trade-off:** a host that tracks demand pays one extra wake per interaction, 250 ms
+after it ends; the host re-applies its stored demand when a native surface is
 replaced.

@@ -2,17 +2,27 @@
 //!
 //! A presentation is [`Active`](FrameRateDemand::Active) while it animates or a
 //! pointer is down, and [`Idle`](FrameRateDemand::Idle) when neither has held
-//! for [`FRAME_RATE_HOLD`]. The runtime only decides and publishes the edge
+//! for [`FRAME_RATE_HOLD`]. The runtime only decides and publishes the change
 //! through [`OwnerEffects::frame_rate_demand_changed`]; it has no platform edge,
-//! so the host turns the edge into a window request (ADR-0083).
+//! so the host turns the change into a window request (ADR-0083).
 //!
 //! The release is delayed so that the demand does not flutter between the
 //! frames of an animation. A still screen produces no frames, so the delay
 //! is also a wake deadline the runtime reports through its ordinary
 //! wall-clock deadline sources: without it the release would wait for an
-//! unrelated frame.
+//! unrelated frame. A hidden or closing presentation draws nothing and is
+//! released at once, with no hold.
+//!
+//! Only a host that asks for it ([`OwnerEffects::tracks_frame_rate_demand`])
+//! gets any of this: elsewhere no demand is observed, no hold is armed and no
+//! deadline joins the loop's wake sources.
+//!
+//! The owner keeps, per presentation, the demand it last delivered, and each
+//! work item delivers whatever differs from it. A hook that fails or is absent
+//! therefore does not lose the change: it is owed until a delivery succeeds.
 //!
 //! [`OwnerEffects::frame_rate_demand_changed`]: crate::owner::OwnerEffects::frame_rate_demand_changed
+//! [`OwnerEffects::tracks_frame_rate_demand`]: crate::owner::OwnerEffects::tracks_frame_rate_demand
 
 use std::time::Duration;
 
@@ -43,14 +53,18 @@ pub(crate) struct DemandGovernor {
 }
 
 impl DemandGovernor {
-    /// Fold in what the presentation wants at `now`; the new demand when it
-    /// changed.
-    pub(crate) fn observe(&mut self, wanted: bool, now: Instant) -> Option<FrameRateDemand> {
-        let before = self.decided;
+    /// Fold in what the presentation wants at `now`. With `hold` false a demand
+    /// that is no longer wanted is released at once instead of after the hold.
+    pub(crate) fn observe(&mut self, wanted: bool, hold: bool, now: Instant) {
         if wanted {
             self.release_at = None;
             self.decided = FrameRateDemand::Active;
-        } else if before == FrameRateDemand::Active {
+        } else if self.decided == FrameRateDemand::Active {
+            if !hold {
+                self.release_at = None;
+                self.decided = FrameRateDemand::Idle;
+                return;
+            }
             match self.release_at {
                 None => self.release_at = Some(now + FRAME_RATE_HOLD),
                 Some(due) if now >= due => {
@@ -60,16 +74,15 @@ impl DemandGovernor {
                 Some(_) => {}
             }
         }
-        (self.decided != before).then_some(self.decided)
+    }
+
+    /// The demand as last decided.
+    pub(crate) fn decided(&self) -> FrameRateDemand {
+        self.decided
     }
 
     /// The instant the pending release is due.
     pub(crate) fn release_at(&self) -> Option<Instant> {
         self.release_at
-    }
-
-    /// Whether the pending release is due at `now`.
-    pub(crate) fn release_due(&self, now: Instant) -> bool {
-        self.release_at.is_some_and(|due| now >= due)
     }
 }

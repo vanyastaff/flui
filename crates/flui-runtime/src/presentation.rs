@@ -1089,6 +1089,20 @@ impl PresentationState {
             && !self.motion_is_paused()
     }
 
+    /// Whether this presentation can draw: it is neither hidden nor closing.
+    pub(crate) fn is_shown(&self) -> bool {
+        !self.closing_requested.get() && !self.clock.is_hidden()
+    }
+
+    /// When the hold on the high refresh rate runs out. A presentation that is
+    /// not shown has none: it is released at its next work item instead, so a
+    /// deadline nobody can serve never reaches the loop.
+    pub(crate) fn frame_rate_hold(&self) -> Option<web_time::Instant> {
+        self.is_shown()
+            .then(|| self.frame_rate.get().release_at())
+            .flatten()
+    }
+
     /// Whether this presentation wants the display's highest refresh rate right
     /// now: an animation runs or a pointer is down.
     pub(crate) fn wants_high_frame_rate(&self, frames_enabled: bool) -> bool {

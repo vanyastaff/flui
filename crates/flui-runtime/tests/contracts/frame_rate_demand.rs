@@ -14,7 +14,7 @@ use flui_foundation::{ManualClock, MonotonicClock, PresentationAddress};
 use flui_interaction::events::{PointerKind, make_down_event, make_up_event};
 use flui_platform_api::PlatformInput;
 use flui_runtime::frame_rate_demand::{FRAME_RATE_HOLD, FrameRateDemand};
-use flui_runtime::owner::{OwnerEffects, OwnerHost, PresentationDispatcher};
+use flui_runtime::owner::{OwnerEffects, OwnerHost, PresentationDispatcher, WindowObservation};
 use flui_runtime::pump::SampledClock;
 use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 
@@ -33,6 +33,10 @@ impl flui_runtime::sink::FrameSink for Sink {
 struct Effects {
     clock: ManualClock,
     edges: RefCell<Vec<(PresentationAddress, FrameRateDemand)>>,
+    /// Whether this host asks for demand edges at all.
+    tracks: bool,
+    /// Makes the next delivery of an edge panic, once.
+    panic_next_edge: std::cell::Cell<bool>,
 }
 
 impl OwnerEffects for Effects {
@@ -77,7 +81,14 @@ impl OwnerEffects for Effects {
     }
     fn retire_presentation(&self, _: PresentationAddress, _: Option<PresentationAddress>) {}
     fn after_turn(&self, _: flui_runtime::owner::RecoveryState) {}
+    fn tracks_frame_rate_demand(&self) -> bool {
+        self.tracks
+    }
     fn frame_rate_demand_changed(&self, address: PresentationAddress, demand: FrameRateDemand) {
+        assert!(
+            !self.panic_next_edge.replace(false),
+            "scripted demand hook failure"
+        );
         self.edges.borrow_mut().push((address, demand));
     }
     fn request_continuation(&self) -> bool {
@@ -98,6 +109,10 @@ impl Rig {
     /// A mounted, resumed presentation on a clock the test advances, with one
     /// animation controller registered that has not started.
     fn new() -> Self {
+        Self::with_tracking(true)
+    }
+
+    fn with_tracking(tracks: bool) -> Self {
         let clock = ManualClock::new();
         let window = crate::owner_publication::window();
         // A native host owns the window; the runtime holds it weakly.
@@ -138,6 +153,8 @@ impl Rig {
             effects: Effects {
                 clock,
                 edges: RefCell::new(Vec::new()),
+                tracks,
+                panic_next_edge: std::cell::Cell::new(false),
             },
             window,
             controller,
@@ -278,6 +295,57 @@ fn static_screen_releases_the_hint_after_the_hold_via_a_wake_deadline() {
     assert!(!rig.pending_work());
 }
 
+fn no_hold_arms_without_the_host_capability() {
+    let rig = Rig::with_tracking(false);
+    rig.touch(true);
+    rig.touch(false);
+    assert_eq!(rig.demands(), [], "a host that did not ask is told nothing");
+    assert_eq!(
+        rig.next_wake(),
+        None,
+        "and no hold deadline joins the wake sources of its loop"
+    );
+    rig.advance(FRAME_RATE_HOLD);
+    assert!(!rig.pending_work());
+}
+
+fn a_hidden_presentation_releases_at_once_and_is_not_busy() {
+    let rig = Rig::new();
+    rig.touch(true);
+    rig.touch(false);
+    assert_eq!(rig.demands(), [FrameRateDemand::Active]);
+    rig.window
+        .observe(WindowObservation::Visibility(false), &rig.effects)
+        .expect("hide");
+    assert_eq!(
+        rig.demands(),
+        [FrameRateDemand::Active, FrameRateDemand::Idle],
+        "a hidden presentation draws nothing, so its hold is not waited out"
+    );
+    rig.advance(FRAME_RATE_HOLD);
+    assert_eq!(rig.next_wake(), None, "no stale hold deadline is left");
+    assert!(
+        !rig.pending_work(),
+        "no due hold without a work item to clear it"
+    );
+}
+
+fn a_demand_whose_delivery_panicked_is_delivered_by_the_next_work_item() {
+    let rig = Rig::new();
+    rig.effects.panic_next_edge.set(true);
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rig.touch(true)));
+    assert!(failed.is_err(), "the hook's failure propagates");
+    assert_eq!(rig.demands(), [], "the failed delivery recorded nothing");
+    rig.frame();
+    assert_eq!(
+        rig.demands(),
+        [FrameRateDemand::Active],
+        "the edge is owed until a delivery succeeds"
+    );
+    rig.frame();
+    assert_eq!(rig.demands(), [FrameRateDemand::Active], "and only once");
+}
+
 #[test]
 fn frame_rate_demand_contract() {
     crate::table_test::run_table(
@@ -294,6 +362,18 @@ fn frame_rate_demand_contract() {
             (
                 "static_screen_releases_the_hint_after_the_hold_via_a_wake_deadline",
                 static_screen_releases_the_hint_after_the_hold_via_a_wake_deadline as fn(),
+            ),
+            (
+                "no_hold_arms_without_the_host_capability",
+                no_hold_arms_without_the_host_capability as fn(),
+            ),
+            (
+                "a_hidden_presentation_releases_at_once_and_is_not_busy",
+                a_hidden_presentation_releases_at_once_and_is_not_busy as fn(),
+            ),
+            (
+                "a_demand_whose_delivery_panicked_is_delivered_by_the_next_work_item",
+                a_demand_whose_delivery_panicked_is_delivered_by_the_next_work_item as fn(),
             ),
         ],
     );

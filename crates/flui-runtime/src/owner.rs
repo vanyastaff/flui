@@ -78,6 +78,10 @@ struct OwnerState {
     next_continuation: u64,
     callback_depth: usize,
     callback_remaining: usize,
+    /// The frame-rate demand last delivered to the host for each presentation;
+    /// a missing entry is `Idle`.
+    frame_rate_delivered:
+        std::collections::HashMap<PresentationAddress, crate::frame_rate_demand::FrameRateDemand>,
 }
 
 #[derive(Default, PartialEq, Eq)]
