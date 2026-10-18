@@ -26,7 +26,7 @@ use std::sync::Arc;
 use flui_foundation::panic::{payload_text, retain_opaque_payload};
 use flui_foundation::{IdExhausted, IdMint};
 
-use crate::input_record::InputRecord;
+use crate::input_record::{InputRecord, RecordingStart};
 
 /// The tracing target every contained tap failure is reported on.
 pub const INPUT_TAP_TARGET: &str = "flui_runtime::input_tap";
@@ -433,26 +433,35 @@ impl Drop for InputTapHandle {
     }
 }
 
+/// What an [`InputTapFactory`] calls once per runtime.
+type MakeTap = dyn Fn(&RecordingStart) -> Box<dyn InputTap> + Send + Sync;
+
 /// Makes one tap per runtime: the application's recording hook, which
 /// `flui-app` installs on every runtime it builds (ADR-0215 §1). A tap lives
 /// on its runtime's owner thread, so the factory, not the tap, crosses
 /// threads.
 #[derive(Clone)]
-pub struct InputTapFactory(Arc<dyn Fn() -> Box<dyn InputTap> + Send + Sync>);
+pub struct InputTapFactory(Arc<MakeTap>);
 
 impl InputTapFactory {
-    /// A factory calling `make` once per runtime.
-    pub fn new(make: impl Fn() -> Box<dyn InputTap> + Send + Sync + 'static) -> Self {
+    /// A factory calling `make` once per runtime, with what that runtime's
+    /// recording starts from, for the recording's header.
+    pub fn new(
+        make: impl Fn(&RecordingStart) -> Box<dyn InputTap> + Send + Sync + 'static,
+    ) -> Self {
         Self(Arc::new(make))
     }
 
-    /// Register a fresh tap on `taps` for the rest of its runtime's life.
+    /// Register a fresh tap on `runtime` for the rest of its life, made from
+    /// [`UiRuntime::recording_start`](crate::ui_runtime::UiRuntime::recording_start).
     ///
     /// # Errors
     ///
-    /// [`IdExhausted`] when `taps` issued every registration generation.
-    pub fn install_on(&self, taps: &InputTaps) -> Result<(), IdExhausted> {
-        taps.install_boxed((self.0)())?.detach();
+    /// [`IdExhausted`] when the runtime's taps issued every registration
+    /// generation.
+    pub fn install_on(&self, runtime: &crate::ui_runtime::UiRuntime) -> Result<(), IdExhausted> {
+        let tap = (self.0)(&runtime.recording_start());
+        runtime.input_taps().install_boxed(tap)?.detach();
         Ok(())
     }
 }

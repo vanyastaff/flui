@@ -206,6 +206,10 @@ mod native_windows {
     const CHILD: &str = "FLUI_NATIVE_WINDOW_CONTRACT_CHILD";
     const CASES: &[(&str, fn())] = &[
         (
+            "a_window_reports_its_monitors_refresh_period",
+            a_window_reports_its_monitors_refresh_period,
+        ),
+        (
             "touchpad_viewport_initialises_and_survives_its_messages",
             touchpad_viewport_initialises_and_survives_its_messages,
         ),
@@ -500,6 +504,22 @@ mod native_windows {
                 ..Default::default()
             })
             .expect("create actual hidden Win32 window")
+    }
+
+    // The period is the window's monitor's current mode, which the haptic
+    // frame deadline and the frame-pacing fallback follow; a host with a
+    // display reports one between 1000 Hz and 1 Hz.
+    fn a_window_reports_its_monitors_refresh_period() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let period = window
+            .refresh_period()
+            .expect("a window on a monitor reports its refresh period");
+        assert!(
+            (std::time::Duration::from_millis(1)..=std::time::Duration::from_secs(1))
+                .contains(&period),
+            "{period:?}"
+        );
     }
 
     // The DirectManipulation viewport initialises on a real window and the

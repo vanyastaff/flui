@@ -11,10 +11,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 
 use super::super::gallery::{
-    ACCENT, ARCHIVE, BACKGROUND, CARDS, COLLAPSING, FOCUS, GESTURES, LANE, MAP_GROUND, MENU_SCREEN,
-    PAD_IDLE, PAGE_COLORS, PAGES, PIN, REFRESH, RING, Rgb, SHEET, SURFACE, SWIPE, TINT_DOUBLE,
-    TINT_LONG, TINT_PAN, TINT_SCALE, TINT_TAP, TOLERANCE, VIEWER, cell_at, scene_under,
-    viewer_state,
+    ACCENT, ADA, ARCHIVE, BACKGROUND, BROOK, CARDS, COLLAPSING, CONTACTLESS_LATCH_IDLE, DESKTOP,
+    EMPTY_DONE, FIRST_CARD, FIRST_STOP, FOCUS, FULL, GESTURES, HALF, INITIAL_FOCUS, INITIAL_MENU,
+    INITIAL_SWIPE, LANE, MAP_GROUND, MENU_SCREEN, PAD_IDLE, PAGE_COLORS, PAGES, PIN, REFRESH, RING,
+    Rgb, SHEET, SHEET_NODE, SURFACE, SWIPE, TINT_DOUBLE, TINT_LONG, TINT_PAN, TINT_SCALE, TINT_TAP,
+    TOLERANCE, VIEWER, below_list, cell_at, done_slot, ensure_near, grid_origin, in_header,
+    left_of, pager_point, right_of, scene_under, viewer_state,
 };
 use super::super::uia::{BUTTON, TEXT};
 use super::super::windows_input::centre;
@@ -187,48 +189,9 @@ const fn check(
     (name, Check { screen, run })
 }
 
-/// How long a wheel burst stays one sequence after its last notch: the
-/// default preset's `GestureSettings::contactless_latch_idle`
-/// (`flui-interaction`, which xtask does not link).
-const CONTACTLESS_LATCH_IDLE: Duration = Duration::from_millis(1500);
-
-fn ensure_near(what: &str, seen: Rgb, expected: Rgb) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        seen.near(expected, TOLERANCE),
-        "{what}: {seen} before the action, expected {expected}"
-    );
-    Ok(())
-}
-
-fn left_of(rect: RECT, inset: f64, driver: &Driver<'_>) -> anyhow::Result<POINT> {
-    driver.offset(
-        POINT {
-            x: rect.left,
-            y: rect.top + (rect.bottom - rect.top) / 2,
-        },
-        inset,
-        0.0,
-    )
-}
-
-fn right_of(rect: RECT, inset: f64, driver: &Driver<'_>) -> anyhow::Result<POINT> {
-    driver.offset(
-        POINT {
-            x: rect.right,
-            y: rect.top + (rect.bottom - rect.top) / 2,
-        },
-        -inset,
-        0.0,
-    )
-}
-
 // ---------------------------------------------------------------------------
 // Swipe actions
 // ---------------------------------------------------------------------------
-
-const INITIAL_SWIPE: &str = "4 in inbox, 0 pinned, 0 archived, 3 tasks left, 0 completed";
-const ADA: &str = "A Ada Design review moved to Thursday";
-const BROOK: &str = "B Brook Your order has shipped";
 
 /// The message row's full width: its merged label spans the content, which
 /// fills the row.
@@ -239,9 +202,14 @@ fn row_rect(driver: &Driver<'_>, label: &str) -> anyhow::Result<RECT> {
 fn swipe_touch_archive(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text(INITIAL_SWIPE)?;
     let row = row_rect(driver, ADA)?;
-    let tray = right_of(row, 30.0, driver)?;
-    ensure_near("the row's right end", driver.sample(tray)?, SURFACE)?;
-    let from = right_of(row, 60.0, driver)?;
+    let tray = right_of(&driver, row, 30.0)?;
+    ensure_near(
+        "the row's right end",
+        driver.sample(tray)?,
+        SURFACE,
+        TOLERANCE,
+    )?;
+    let from = right_of(&driver, row, 60.0)?;
     let to = driver.offset(from, -150.0, 0.0)?;
     driver.touch_drag(
         from,
@@ -262,9 +230,14 @@ fn swipe_mouse_pin(driver: &Driver<'_>) -> anyhow::Result<()> {
     let row = row_rect(driver, BROOK)?;
     // Between the row's left edge and its avatar: where the revealed action
     // slides in.
-    let tray = left_of(row, 8.0, driver)?;
-    ensure_near("the row's left end", driver.sample(tray)?, SURFACE)?;
-    let from = left_of(row, 120.0, driver)?;
+    let tray = left_of(&driver, row, 8.0)?;
+    ensure_near(
+        "the row's left end",
+        driver.sample(tray)?,
+        SURFACE,
+        TOLERANCE,
+    )?;
+    let from = left_of(&driver, row, 120.0)?;
     let to = driver.offset(from, 150.0, 0.0)?;
     driver.mouse_drag(from, to, 12, Duration::from_millis(150))?;
     driver.wait_node(BUTTON, "Pin Brook")?;
@@ -288,7 +261,12 @@ fn swipe_dismiss_task(driver: &Driver<'_>) -> anyhow::Result<()> {
         300.0,
         0.0,
     )?;
-    ensure_near("the last task row", driver.sample(tail)?, SURFACE)?;
+    ensure_near(
+        "the last task row",
+        driver.sample(tail)?,
+        SURFACE,
+        TOLERANCE,
+    )?;
     let from = driver.offset(
         POINT {
             x: first.left,
@@ -335,24 +313,15 @@ fn swipe_done_control(driver: &Driver<'_>) -> anyhow::Result<()> {
 // Pull to refresh
 // ---------------------------------------------------------------------------
 
-/// A point just below the list's last row: the page now, a row once the
-/// list has grown by one.
-fn below_list(driver: &Driver<'_>) -> anyhow::Result<POINT> {
-    let last = driver.bounds_of(TEXT, "Message 1")?;
-    driver.offset(
-        POINT {
-            x: last.left,
-            y: last.bottom,
-        },
-        200.0,
-        40.0,
-    )
-}
-
 fn refresh_pull(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text("6 messages, 0 refreshes, idle")?;
-    let below = below_list(driver)?;
-    ensure_near("below the list", driver.sample(below)?, BACKGROUND)?;
+    let below = below_list(driver, &DESKTOP)?;
+    ensure_near(
+        "below the list",
+        driver.sample(below)?,
+        BACKGROUND,
+        TOLERANCE,
+    )?;
     let top = driver.bounds_of(TEXT, "Message 6")?;
     let from = driver.offset(centre(top), 100.0, 0.0)?;
     let to = driver.offset(from, 0.0, 220.0)?;
@@ -369,8 +338,13 @@ fn refresh_pull(driver: &Driver<'_>) -> anyhow::Result<()> {
 
 fn refresh_control(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text("6 messages, 0 refreshes, idle")?;
-    let below = below_list(driver)?;
-    ensure_near("below the list", driver.sample(below)?, BACKGROUND)?;
+    let below = below_list(driver, &DESKTOP)?;
+    ensure_near(
+        "below the list",
+        driver.sample(below)?,
+        BACKGROUND,
+        TOLERANCE,
+    )?;
     driver.click_node(BUTTON, "Refresh inbox")?;
     driver.text("7 messages, 1 refreshes, idle")?;
     driver.pixel("the grown list's last row", below, SURFACE, TOLERANCE)
@@ -378,7 +352,7 @@ fn refresh_control(driver: &Driver<'_>) -> anyhow::Result<()> {
 
 fn refresh_key(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text("6 messages, 0 refreshes, idle")?;
-    let below = below_list(driver)?;
+    let below = below_list(driver, &DESKTOP)?;
     driver.tab_until(16, |name| name == "Refresh inbox" || name == "Messages")?;
     driver.chord(&[VK_F5])?;
     driver.text("7 messages, 1 refreshes, idle")?;
@@ -389,26 +363,15 @@ fn refresh_key(driver: &Driver<'_>) -> anyhow::Result<()> {
 // Collapsing header
 // ---------------------------------------------------------------------------
 
-const FIRST_STOP: &str = "Train to Porto";
-
-/// A point inside the expanded header, 60 logical pixels above the first
-/// stop as it first lies: the header's blue until it collapses past it.
-fn in_header(driver: &Driver<'_>) -> anyhow::Result<POINT> {
-    let stop = driver.bounds_of(TEXT, FIRST_STOP)?;
-    driver.offset(
-        POINT {
-            x: stop.left,
-            y: stop.top,
-        },
-        400.0,
-        -60.0,
-    )
-}
-
 fn collapsing_wheel(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text("Itinerary scrolled 0 px")?;
-    let header = in_header(driver)?;
-    ensure_near("the expanded header", driver.sample(header)?, ACCENT)?;
+    let header = in_header(driver, &DESKTOP)?;
+    ensure_near(
+        "the expanded header",
+        driver.sample(header)?,
+        ACCENT,
+        TOLERANCE,
+    )?;
     let list = driver.offset(centre(driver.bounds_of(TEXT, FIRST_STOP)?), 0.0, 120.0)?;
     // The header goes first: a notch collapses it, and only what it leaves
     // over reaches the list.
@@ -435,8 +398,13 @@ fn collapsing_wheel(driver: &Driver<'_>) -> anyhow::Result<()> {
 
 fn collapsing_touch(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text("Itinerary scrolled 0 px")?;
-    let header = in_header(driver)?;
-    ensure_near("the expanded header", driver.sample(header)?, ACCENT)?;
+    let header = in_header(driver, &DESKTOP)?;
+    ensure_near(
+        "the expanded header",
+        driver.sample(header)?,
+        ACCENT,
+        TOLERANCE,
+    )?;
     let from = driver.offset(centre(driver.bounds_of(TEXT, FIRST_STOP)?), 0.0, 250.0)?;
     let to = driver.offset(from, 0.0, -200.0)?;
     driver.touch_drag(
@@ -454,22 +422,9 @@ fn collapsing_touch(driver: &Driver<'_>) -> anyhow::Result<()> {
 // Pages
 // ---------------------------------------------------------------------------
 
-/// The middle of the pager: the current page's colour.
-fn pager_point(driver: &Driver<'_>) -> anyhow::Result<POINT> {
-    let readout = driver.bounds_of(TEXT, "Page 1 of 3: Plan")?;
-    driver.offset(
-        POINT {
-            x: readout.left,
-            y: readout.bottom,
-        },
-        300.0,
-        200.0,
-    )
-}
-
 fn pages_swipe(driver: &Driver<'_>) -> anyhow::Result<()> {
-    let point = pager_point(driver)?;
-    ensure_near("page 1", driver.sample(point)?, PAGE_COLORS[0])?;
+    let point = pager_point(driver, &DESKTOP)?;
+    ensure_near("page 1", driver.sample(point)?, PAGE_COLORS[0], TOLERANCE)?;
     let from = driver.offset(point, 250.0, 0.0)?;
     let to = driver.offset(point, -250.0, 0.0)?;
     driver.touch_drag(from, to, Duration::from_millis(200), Duration::ZERO)?;
@@ -478,7 +433,7 @@ fn pages_swipe(driver: &Driver<'_>) -> anyhow::Result<()> {
 }
 
 fn pages_keys(driver: &Driver<'_>) -> anyhow::Result<()> {
-    let point = pager_point(driver)?;
+    let point = pager_point(driver, &DESKTOP)?;
     // A drag gives the pager the focus its keys need.
     let from = driver.offset(point, 120.0, 0.0)?;
     let to = driver.offset(point, -120.0, 0.0)?;
@@ -493,8 +448,8 @@ fn pages_keys(driver: &Driver<'_>) -> anyhow::Result<()> {
 }
 
 fn pages_button(driver: &Driver<'_>) -> anyhow::Result<()> {
-    let point = pager_point(driver)?;
-    ensure_near("page 1", driver.sample(point)?, PAGE_COLORS[0])?;
+    let point = pager_point(driver, &DESKTOP)?;
+    ensure_near("page 1", driver.sample(point)?, PAGE_COLORS[0], TOLERANCE)?;
     driver.click_node(BUTTON, "Next")?;
     driver.text("Page 2 of 3: Pack")?;
     driver.pixel("page 2", point, PAGE_COLORS[1], TOLERANCE)?;
@@ -506,11 +461,6 @@ fn pages_button(driver: &Driver<'_>) -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 // Bottom sheet
 // ---------------------------------------------------------------------------
-
-const SHEET_NODE: &str = "Places sheet Nearby places";
-/// The sheet's anchors: its top below the map's (`screens/sheet.rs`).
-const HALF: f64 = 240.0;
-const FULL: f64 = 24.0;
 
 /// The map's top-left corner: the slider's node spans the drag's whole
 /// area, which the map fills.
@@ -541,7 +491,12 @@ fn sheet_touch_full(driver: &Driver<'_>) -> anyhow::Result<()> {
     // A block of the map, clear of every street, above the sheet at Half
     // and under it at Full.
     let probe = driver.offset(map, 250.0, 100.0)?;
-    ensure_near("the map above the sheet", driver.sample(probe)?, MAP_GROUND)?;
+    ensure_near(
+        "the map above the sheet",
+        driver.sample(probe)?,
+        MAP_GROUND,
+        TOLERANCE,
+    )?;
     let from = handle(driver)?;
     let to = driver.offset(from, 0.0, FULL - HALF)?;
     driver.touch_drag(
@@ -559,7 +514,12 @@ fn sheet_mouse_peek(driver: &Driver<'_>) -> anyhow::Result<()> {
     let map = map_origin(driver)?;
     // Between Half and Peek: the sheet now, the map once it rests at Peek.
     let probe = driver.offset(map, 250.0, 320.0)?;
-    ensure_near("the sheet at Half", driver.sample(probe)?, SURFACE)?;
+    ensure_near(
+        "the sheet at Half",
+        driver.sample(probe)?,
+        SURFACE,
+        TOLERANCE,
+    )?;
     let from = handle(driver)?;
     let to = driver.offset(from, 0.0, 190.0)?;
     driver.mouse_drag(from, to, 16, Duration::from_millis(200))?;
@@ -594,20 +554,6 @@ fn sheet_keys(driver: &Driver<'_>) -> anyhow::Result<()> {
 // Zoom and pan
 // ---------------------------------------------------------------------------
 
-/// The grid's top-left corner: 16 logical pixels below the readout's
-/// panel, whose text is inset 12 across and 8 down.
-fn grid_origin(driver: &Driver<'_>) -> anyhow::Result<POINT> {
-    let readout = driver.bounds_of(TEXT, "Zoom 100%, offset 0 by 0 px")?;
-    driver.offset(
-        POINT {
-            x: readout.left,
-            y: readout.bottom,
-        },
-        -12.0,
-        24.0,
-    )
-}
-
 /// Waits for the readout to state `zoom` and an offset within two logical
 /// pixels of `offset` (the readout rounds, the origin is read in physical
 /// pixels).
@@ -627,6 +573,7 @@ fn viewer_double_tap(driver: &Driver<'_>) -> anyhow::Result<()> {
         "the cell before the zoom",
         driver.sample(probe)?,
         cell_at((295.0, 255.0)),
+        TOLERANCE,
     )?;
     driver.touch_tap(tap)?;
     std::thread::sleep(Duration::from_millis(80));
@@ -650,6 +597,7 @@ fn viewer_spread(driver: &Driver<'_>) -> anyhow::Result<()> {
         "the cell before the spread",
         before,
         cell_at((295.0, 255.0)),
+        TOLERANCE,
     )?;
     let a = (
         driver.offset(focal, -40.0, 0.0)?,
@@ -726,6 +674,7 @@ fn viewer_mouse_pan(driver: &Driver<'_>) -> anyhow::Result<()> {
         "the cell before the zoom",
         driver.sample(probe)?,
         cell_at((295.0, 255.0)),
+        TOLERANCE,
     )?;
     // The child fills the viewport, so there is room to pan only zoomed in:
     // Ctrl+wheel zooms about the cursor.
@@ -757,26 +706,10 @@ fn viewer_mouse_pan(driver: &Driver<'_>) -> anyhow::Result<()> {
 // Drag and drop
 // ---------------------------------------------------------------------------
 
-const FIRST_CARD: &str = "Write the release notes Drag me";
-
-/// Where a first card lands in Done, below the lane's heading: the empty
-/// lane until one does.
-fn done_slot(driver: &Driver<'_>) -> anyhow::Result<POINT> {
-    let header = driver.bounds_of(TEXT, "Done (0)")?;
-    driver.offset(
-        POINT {
-            x: header.left,
-            y: header.top,
-        },
-        60.0,
-        50.0,
-    )
-}
-
 fn cards_drag(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text("To do 3, done 0")?;
-    let slot = done_slot(driver)?;
-    ensure_near("the empty Done lane", driver.sample(slot)?, LANE)?;
+    let slot = done_slot(driver, &DESKTOP, EMPTY_DONE)?;
+    ensure_near("the empty Done lane", driver.sample(slot)?, LANE, TOLERANCE)?;
     let card = driver.bounds_of(TEXT, FIRST_CARD)?;
     let from = driver.offset(
         POINT {
@@ -799,7 +732,7 @@ fn cards_drag(driver: &Driver<'_>) -> anyhow::Result<()> {
 
 fn cards_controls(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text("To do 3, done 0")?;
-    let slot = done_slot(driver)?;
+    let slot = done_slot(driver, &DESKTOP, EMPTY_DONE)?;
     driver.click_node(BUTTON, "Cut Review the layout fix")?;
     driver.click_node(BUTTON, "Paste into Done")?;
     driver.text("To do 2, done 1, moved Review the layout fix to Done")?;
@@ -808,7 +741,7 @@ fn cards_controls(driver: &Driver<'_>) -> anyhow::Result<()> {
 
 fn cards_keys(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text("To do 3, done 0")?;
-    let slot = done_slot(driver)?;
+    let slot = done_slot(driver, &DESKTOP, EMPTY_DONE)?;
     driver.tab_until(20, |name| name.starts_with("Record the demo"))?;
     driver.chord(&[VK_CONTROL, VIRTUAL_X])?;
     driver.tab_until(20, |name| name.starts_with("Done"))?;
@@ -825,8 +758,6 @@ const VIRTUAL_V: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY =
 // ---------------------------------------------------------------------------
 // Context menu
 // ---------------------------------------------------------------------------
-
-const INITIAL_MENU: &str = "4 files, last action: nothing yet";
 
 /// A point over the page below the last file, where a menu opened at the
 /// last row's middle draws its panel.
@@ -850,6 +781,7 @@ fn menu_right_click(driver: &Driver<'_>) -> anyhow::Result<()> {
         "the page below the files",
         driver.sample(panel)?,
         BACKGROUND,
+        TOLERANCE,
     )?;
     driver.right_click(at)?;
     driver.wait_node(MENU_ITEM, "Duplicate Notes.txt")?;
@@ -952,7 +884,7 @@ fn gesture(
     tint: Rgb,
 ) -> anyhow::Result<()> {
     let (middle, fill) = pad(driver)?;
-    ensure_near("the idle pad", driver.sample(fill)?, PAD_IDLE)?;
+    ensure_near("the idle pad", driver.sample(fill)?, PAD_IDLE, TOLERANCE)?;
     act(middle)?;
     driver.text(readout)?;
     driver.pixel("the pad's tint", fill, tint, TOLERANCE)
@@ -1026,8 +958,6 @@ fn gestures_pinch(driver: &Driver<'_>) -> anyhow::Result<()> {
 // Focus and keys
 // ---------------------------------------------------------------------------
 
-const INITIAL_FOCUS: &str = "Focused: nothing; saved name: none; settings page: Settings";
-
 /// The focus ring's dark outer band runs along the inside of the focused
 /// control's edge (`FocusRingStyle::BUILT_IN`): its left edge, halfway down.
 fn ring_point(driver: &Driver<'_>, button: &str) -> anyhow::Result<POINT> {
@@ -1041,7 +971,7 @@ fn ring_point(driver: &Driver<'_>, button: &str) -> anyhow::Result<POINT> {
 fn focus_tab_order(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text(INITIAL_FOCUS)?;
     let ring = ring_point(driver, "Save")?;
-    ensure_near("Save's edge", driver.sample(ring)?, ACCENT)?;
+    ensure_near("Save's edge", driver.sample(ring)?, ACCENT, TOLERANCE)?;
     driver.click_node(EDIT, "")?;
     driver.text("Focused: Name field; saved name: none; settings page: Settings")?;
     driver.chord(&[VK_TAB])?;

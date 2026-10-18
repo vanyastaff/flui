@@ -3422,3 +3422,18 @@ page gives the focus back to the element that opened it
 `push_moves_focus_into_the_new_route`, `pop_restores_the_opening_element`,
 `late_autofocus_does_not_override_the_restored_focus`,
 `keys_during_transition_reach_only_the_top_route`, `back_keys_pop_only_the_current_page`).
+
+### 41. A dragged row keeps itself alive while its drag runs
+
+**Choice:** a `Draggable` acquires a `KeepAliveHandle` in its lifecycle hooks
+and holds one lease from the start of its first live drag (a held cut or copy
+included) to the end of its last. A lazy list that scrolls the row out of its
+cache band, by the drag's own autoscroll or otherwise, skips it in band
+eviction, so the row keeps its state and its sessions, and the drag still
+drops. Disposal, which cancels the drags, now comes only from removing the row
+or its list.
+
+**Why:** the drag's feedback is drawn in the overlay, so the row needs its
+state, not a layout: the plain keep-alive hold is enough, and the pinned slot
+that lays a focused row out beyond the band is not needed for it.
+**Test:** `a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag`.

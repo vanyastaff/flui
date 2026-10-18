@@ -1,15 +1,20 @@
 //! Windows display implementation
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use windows::Win32::{
-    Foundation::{LPARAM, RECT, TRUE},
-    Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW},
+    Foundation::{HWND, LPARAM, RECT, TRUE},
+    Graphics::Gdi::{
+        DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplayMonitors, EnumDisplaySettingsW,
+        GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFOEXW,
+        MonitorFromWindow,
+    },
     UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
 };
 // BOOL moved from Win32::Foundation to windows_core in windows 0.62
-use windows::core::BOOL;
+use windows::core::{BOOL, PCWSTR};
 
 use crate::traits::{DisplayId, PlatformDisplay};
 
@@ -104,6 +109,43 @@ impl PlatformDisplay for WindowsDisplay {
     fn is_primary(&self) -> bool {
         self.is_primary
     }
+}
+
+/// The refresh period of the monitor `hwnd` is mostly on, read when asked so
+/// a move to another monitor shows: that monitor's current mode
+/// (`EnumDisplaySettingsW`). `None` when the mode reports no rate (0 or 1 is
+/// "the hardware default"), or the monitor cannot be read.
+pub(super) fn refresh_period(hwnd: HWND) -> Option<Duration> {
+    // SAFETY: `MonitorFromWindow` takes the handle by value and, with
+    // `MONITOR_DEFAULTTONEAREST`, returns a monitor for any window (null only
+    // for an invalid one, checked). `MONITORINFOEXW` and `DEVMODEW` are zeroed
+    // with their size fields set before the calls that fill them, which is
+    // what `GetMonitorInfoW` and `EnumDisplaySettingsW` require; `szDevice`
+    // is NUL-terminated by `GetMonitorInfoW` and outlives the call reading it.
+    let hertz = unsafe {
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        if monitor.is_invalid() {
+            return None;
+        }
+        let mut monitor_info: MONITORINFOEXW = std::mem::zeroed();
+        monitor_info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if !GetMonitorInfoW(monitor, (&raw mut monitor_info.monitorInfo).cast()).as_bool() {
+            return None;
+        }
+        let mut mode: DEVMODEW = std::mem::zeroed();
+        mode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+        if !EnumDisplaySettingsW(
+            PCWSTR(monitor_info.szDevice.as_ptr()),
+            ENUM_CURRENT_SETTINGS,
+            &raw mut mode,
+        )
+        .as_bool()
+        {
+            return None;
+        }
+        mode.dmDisplayFrequency
+    };
+    (hertz > 1).then(|| Duration::from_secs(1) / hertz)
 }
 
 /// Enumerate all displays

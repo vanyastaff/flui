@@ -59,7 +59,7 @@ pub use app::{
 // per runtime; the serialiser for its records lives in `flui-testing`.
 pub use app::{
     DecisionRow, HostInput, InputOutcome, InputRecord, InputRow, InputTap, InputTapFactory,
-    PreferencesRow, WindowObservation,
+    PreferencesRow, RecordingStart, RecordingWindow, WindowObservation,
 };
 // The app's font registration door (ADR-0092 §2).
 pub use app::{FontRegistrationError, register_font};

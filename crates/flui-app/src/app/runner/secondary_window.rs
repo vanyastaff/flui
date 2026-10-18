@@ -1101,7 +1101,7 @@ fn finish_open_secondary_window(
                 ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
                 if let Some(factory) = &config.input_tap {
                     factory
-                        .install_on(ui_runtime.input_taps())
+                        .install_on(&ui_runtime)
                         .expect("BUG: a fresh runtime issues its first tap registration");
                 }
                 ui_runtime.set_motion_override(config.motion_override);

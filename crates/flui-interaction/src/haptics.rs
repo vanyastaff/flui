@@ -59,8 +59,11 @@ pub const FALLBACK_REFRESH_PERIOD: Duration = Duration::from_nanos(16_666_667);
 /// periods of the window's display (ADR-0212 §4).
 ///
 /// An unknown or zero period, or one whose product with `factor` overflows,
-/// uses [`FALLBACK_REFRESH_PERIOD`]; the overflow is reported as a
-/// diagnostic, since a backend reported a period no display has.
+/// uses [`FALLBACK_REFRESH_PERIOD`], and says so as a diagnostic: the
+/// deadline then fits a 60 Hz display, not necessarily the window's. An
+/// overflow is a warning, since a backend reported a period no display has.
+/// The host computes the deadline again only when the period changes, so a
+/// window reports this once per display, not per request.
 #[must_use]
 pub fn haptic_frame_deadline(factor: NonZeroU32, period: Option<Duration>) -> Duration {
     let fallback = || {
@@ -69,7 +72,14 @@ pub fn haptic_frame_deadline(factor: NonZeroU32, period: Option<Duration>) -> Du
             .expect("BUG: a u32 multiple of 16.7 ms fits in a Duration")
     };
     match period.filter(|period| !period.is_zero()) {
-        None => fallback(),
+        None => {
+            tracing::info!(
+                ?period,
+                factor = factor.get(),
+                "the window reports no refresh period; the haptic frame deadline uses the 60 Hz period"
+            );
+            fallback()
+        }
         Some(period) => period.checked_mul(factor.get()).unwrap_or_else(|| {
             tracing::warn!(
                 ?period,
@@ -428,21 +438,75 @@ impl fmt::Debug for HapticsHost {
     }
 }
 
+/// The configuration of a [`HapticsHost`] not yet built.
+///
+/// No [`HapticsHandle`] can exist before [`build`](Self::build) returns the
+/// host, so configuration never runs while a widget holds the host.
+#[must_use = "a builder does nothing until it is built"]
+pub struct HapticsHostBuilder {
+    state: State,
+}
+
+impl fmt::Debug for HapticsHostBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HapticsHostBuilder")
+            .field("factor", &self.state.factor)
+            .finish_non_exhaustive()
+    }
+}
+
+impl HapticsHostBuilder {
+    /// Call `request_frame` when a request joins the frame queue.
+    pub fn frame_requester(mut self, request_frame: impl Fn() + 'static) -> Self {
+        self.state.request_frame = Box::new(request_frame);
+        self
+    }
+
+    /// Read the window display's refresh period from `period` when a request
+    /// is queued; the deadline is recomputed whenever it changes.
+    pub fn refresh_period(mut self, period: impl Fn() -> Option<Duration> + 'static) -> Self {
+        self.state.refresh_period = Box::new(period);
+        self
+    }
+
+    /// The platform's `haptic_frame_deadline_factor`: how many refresh
+    /// periods a queued request waits.
+    pub fn deadline_factor(mut self, factor: NonZeroU32) -> Self {
+        self.state.factor = factor;
+        self
+    }
+
+    /// Issue tickets after ordinal `last`, so a test reaches the terminal
+    /// ticket without issuing every one before it.
+    #[cfg(feature = "testing")]
+    pub fn tickets_after(mut self, last: u64) -> Self {
+        self.state.tickets = IdMint::starting_after(last);
+        self
+    }
+
+    /// The configured host, ready to hand out handles.
+    #[must_use]
+    pub fn build(self) -> HapticsHost {
+        HapticsHost {
+            state: Rc::new(self.state),
+        }
+    }
+}
+
 impl HapticsHost {
-    /// A host on `binding`'s clock, tagging requests with the sequence it is
-    /// dispatching, playing on the actuator `actuator` returns (`None` when
-    /// the window has none or is gone).
+    /// Configure a host on `binding`'s clock, tagging requests with the
+    /// sequence it is dispatching, playing on the actuator `actuator` returns
+    /// (`None` when the window has none or is gone).
     ///
     /// The deadline factor is 2 and the display period unknown until
-    /// [`with_deadline_factor`](Self::with_deadline_factor) and
-    /// [`with_refresh_period`](Self::with_refresh_period) say otherwise.
-    #[must_use]
-    pub fn new(
+    /// [`deadline_factor`](HapticsHostBuilder::deadline_factor) and
+    /// [`refresh_period`](HapticsHostBuilder::refresh_period) say otherwise.
+    pub fn builder(
         binding: &crate::GestureBinding,
         actuator: impl Fn() -> Option<Arc<dyn PlatformHaptics>> + 'static,
-    ) -> Self {
-        Self {
-            state: Rc::new(State {
+    ) -> HapticsHostBuilder {
+        HapticsHostBuilder {
+            state: State {
                 clock: Arc::clone(binding.clock()),
                 sequence: binding.dispatched_sequence_cell(),
                 actuator: Box::new(actuator),
@@ -459,44 +523,8 @@ impl HapticsHost {
                 observers: RefCell::new(Vec::new()),
                 registrations: IdMint::new(),
                 delivering: Cell::new(false),
-            }),
+            },
         }
-    }
-
-    fn configured(self, configure: impl FnOnce(&mut State)) -> Self {
-        let mut state =
-            Rc::into_inner(self.state).expect("BUG: a host is configured before any handle exists");
-        configure(&mut state);
-        Self {
-            state: Rc::new(state),
-        }
-    }
-
-    /// Call `request_frame` when a request joins the frame queue.
-    #[must_use]
-    pub fn with_frame_requester(self, request_frame: impl Fn() + 'static) -> Self {
-        self.configured(|state| state.request_frame = Box::new(request_frame))
-    }
-
-    /// Read the window display's refresh period from `period` when a request
-    /// is queued; the deadline is recomputed whenever it changes.
-    #[must_use]
-    pub fn with_refresh_period(self, period: impl Fn() -> Option<Duration> + 'static) -> Self {
-        self.configured(|state| state.refresh_period = Box::new(period))
-    }
-
-    /// The platform's `haptic_frame_deadline_factor`: how many refresh
-    /// periods a queued request waits.
-    #[must_use]
-    pub fn with_deadline_factor(self, factor: NonZeroU32) -> Self {
-        self.configured(|state| state.factor = factor)
-    }
-
-    /// Issue tickets after ordinal `last`, so a test reaches the terminal
-    /// ticket without issuing every one before it.
-    #[must_use]
-    pub fn with_tickets_after(self, last: u64) -> Self {
-        self.configured(|state| state.tickets = IdMint::starting_after(last))
     }
 
     /// A widget-facing handle on this host.

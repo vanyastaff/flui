@@ -9,7 +9,15 @@
 //! pixels from an element's rectangle, so they hold at any density; on a
 //! phone the content column is about 340 logical pixels wide.
 
-use super::{BUTTON, Check, Driver, EDIT, Gesture, MENU, MENU_ITEM, Point, Rect, Rgb, TEXT};
+use super::super::gallery::{
+    ACCENT, ADA, ARCHIVE, BACKGROUND, BROOK, CARDS, COLLAPSING, EMPTY_DONE, FIRST_CARD, FIRST_STOP,
+    FOCUS, FULL, GESTURES, HALF, INITIAL_FOCUS, INITIAL_MENU, INITIAL_SWIPE, MAP_GROUND,
+    MENU_SCREEN, PAD_IDLE, PAGE_COLORS, PAGES, PHONE, PIN, REFRESH, RING, Rgb, SHEET, SHEET_NODE,
+    SURFACE, SWIPE, TINT_DOUBLE, TINT_LONG, TINT_PAN, TINT_SCALE, TINT_TAP, TOLERANCE, VIEWER,
+    below_list, cell_at, done_slot, ensure_near, grid_origin, in_header, left_of, pager_point,
+    right_of, scene_under, viewer_state,
+};
+use super::{BUTTON, Check, Driver, EDIT, Gesture, MENU, MENU_ITEM, Point, TEXT};
 
 /// Every check, in the order it runs.
 pub(super) const CHECKS: &[(&str, Check)] = &[
@@ -183,17 +191,6 @@ pub(super) const CHECKS: &[(&str, Check)] = &[
     ),
 ];
 
-const SWIPE: &str = "Swipe actions";
-const REFRESH: &str = "Pull to refresh";
-const COLLAPSING: &str = "Collapsing header";
-const PAGES: &str = "Pages";
-const SHEET: &str = "Bottom sheet";
-const VIEWER: &str = "Zoom and pan";
-const CARDS: &str = "Drag and drop";
-const MENU_SCREEN: &str = "Context menu";
-const GESTURES: &str = "Gestures";
-const FOCUS: &str = "Focus and keys";
-
 const fn check(
     name: &'static str,
     screen: &'static str,
@@ -202,22 +199,6 @@ const fn check(
     (name, Check { screen, run })
 }
 
-// The gallery's colours.
-const BACKGROUND: Rgb = Rgb(244, 245, 248);
-const SURFACE: Rgb = Rgb(255, 255, 255);
-const ACCENT: Rgb = Rgb(46, 92, 230);
-const PIN: Rgb = Rgb(232, 160, 32);
-const ARCHIVE: Rgb = Rgb(56, 142, 92);
-const PAGE_COLORS: [Rgb; 3] = [ACCENT, ARCHIVE, Rgb(214, 69, 65)];
-const MAP_GROUND: Rgb = Rgb(229, 236, 222);
-const PAD_IDLE: Rgb = Rgb(222, 230, 252);
-const TINT_TAP: Rgb = Rgb(204, 232, 214);
-const TINT_DOUBLE: Rgb = Rgb(252, 228, 196);
-const TINT_LONG: Rgb = Rgb(246, 214, 214);
-const TINT_PAN: Rgb = Rgb(226, 214, 246);
-const TINT_SCALE: Rgb = Rgb(204, 236, 240);
-/// What anti-aliasing may move a flat fill by.
-const TOLERANCE: u8 = 10;
 /// The viewer's cells differ by 8 or 9 per row or column in a channel, so
 /// they are told apart more tightly than other fills.
 const CELL_TOLERANCE: u8 = 4;
@@ -225,67 +206,23 @@ const CELL_TOLERANCE: u8 = 4;
 /// long-press timeout.
 const LONG_PRESS: u32 = 900;
 
-/// The viewer grid's cell colour (`painters::cell_color`).
-fn cell(column: i32, row: i32) -> Rgb {
-    let (column, row) = (
-        u8::try_from(column).expect("BUG: a grid column"),
-        u8::try_from(row).expect("BUG: a grid row"),
-    );
-    Rgb(30 + 9 * column, 40 + 8 * row, 200 - 4 * column.min(row))
-}
-/// The viewer grid's cell side, in logical pixels.
-const CELL: f64 = 40.0;
-
-fn ensure_near(what: &str, seen: Rgb, expected: Rgb, tolerance: u8) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        seen.near(expected, tolerance),
-        "{what}: {seen} before the action, expected {expected}"
-    );
-    Ok(())
-}
-
-fn left_of(driver: &Driver<'_>, rect: Rect, inset: f64) -> Point {
-    driver.offset(
-        Point {
-            x: rect.left,
-            y: rect.centre().y,
-        },
-        inset,
-        0.0,
-    )
-}
-
-fn right_of(driver: &Driver<'_>, rect: Rect, inset: f64) -> Point {
-    driver.offset(
-        Point {
-            x: rect.right,
-            y: rect.centre().y,
-        },
-        -inset,
-        0.0,
-    )
-}
-
 // ---------------------------------------------------------------------------
 // Swipe actions
 // ---------------------------------------------------------------------------
 
-const INITIAL_SWIPE: &str = "4 in inbox, 0 pinned, 0 archived, 3 tasks left, 0 completed";
-const ADA: &str = "A Ada Design review moved to Thursday";
-const BROOK: &str = "B Brook Your order has shipped";
 const CHEN: &str = "C Chen Lunch on Friday?";
 
 fn swipe_archive(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text(INITIAL_SWIPE)?;
     let row = driver.bounds_of(TEXT, ADA)?;
-    let tray = right_of(driver, row, 30.0);
+    let tray = right_of(&driver, row, 30.0)?;
     ensure_near(
         "the row's right end",
         driver.sample(tray)?,
         SURFACE,
         TOLERANCE,
     )?;
-    let from = right_of(driver, row, 40.0);
+    let from = right_of(&driver, row, 40.0)?;
     let to = driver.offset(from, -150.0, 0.0);
     driver.drag(from, to, 300, 150)?;
     driver.wait_node(BUTTON, "Archive Ada")?;
@@ -300,14 +237,14 @@ fn swipe_pin(driver: &Driver<'_>) -> anyhow::Result<()> {
     let row = driver.bounds_of(TEXT, BROOK)?;
     // Between the row's left edge and its avatar: where the revealed action
     // slides in.
-    let tray = left_of(driver, row, 8.0);
+    let tray = left_of(&driver, row, 8.0)?;
     ensure_near(
         "the row's left end",
         driver.sample(tray)?,
         SURFACE,
         TOLERANCE,
     )?;
-    let from = left_of(driver, row, 60.0);
+    let from = left_of(&driver, row, 60.0)?;
     let to = driver.offset(from, 150.0, 0.0);
     driver.drag(from, to, 300, 150)?;
     driver.wait_node(BUTTON, "Pin Brook")?;
@@ -341,7 +278,7 @@ fn swipe_dismiss_task(driver: &Driver<'_>) -> anyhow::Result<()> {
         SURFACE,
         TOLERANCE,
     )?;
-    let from = left_of(driver, first, 30.0);
+    let from = left_of(&driver, first, 30.0)?;
     let to = driver.offset(from, 280.0, 0.0);
     driver.drag(from, to, 120, 0)?;
     driver.text("4 in inbox, 0 pinned, 0 archived, 2 tasks left, 1 completed")?;
@@ -371,7 +308,7 @@ fn swipe_done_control(driver: &Driver<'_>) -> anyhow::Result<()> {
 fn swipe_long_press_menu(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text(INITIAL_SWIPE)?;
     let row = driver.bounds_of(TEXT, CHEN)?;
-    driver.gesture(Gesture::press(left_of(driver, row, 160.0), LONG_PRESS))?;
+    driver.gesture(Gesture::press(left_of(&driver, row, 160.0)?, LONG_PRESS))?;
     driver.wait_node(MENU_ITEM, "Archive Chen")?;
     driver.tap_node(MENU_ITEM, "Archive Chen")?;
     driver.text("3 in inbox, 0 pinned, 1 archived, 3 tasks left, 0 completed")?;
@@ -382,23 +319,9 @@ fn swipe_long_press_menu(driver: &Driver<'_>) -> anyhow::Result<()> {
 // Pull to refresh
 // ---------------------------------------------------------------------------
 
-/// A point just below the list's last row: the page now, a row once the
-/// list has grown by one.
-fn below_list(driver: &Driver<'_>) -> anyhow::Result<Point> {
-    let last = driver.bounds_of(TEXT, "Message 1")?;
-    Ok(driver.offset(
-        Point {
-            x: last.left,
-            y: last.bottom,
-        },
-        100.0,
-        40.0,
-    ))
-}
-
 fn refresh_pull(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text("6 messages, 0 refreshes, idle")?;
-    let below = below_list(driver)?;
+    let below = below_list(driver, &PHONE)?;
     ensure_near(
         "below the list",
         driver.sample(below)?,
@@ -416,7 +339,7 @@ fn refresh_pull(driver: &Driver<'_>) -> anyhow::Result<()> {
 
 fn refresh_control(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text("6 messages, 0 refreshes, idle")?;
-    let below = below_list(driver)?;
+    let below = below_list(driver, &PHONE)?;
     ensure_near(
         "below the list",
         driver.sample(below)?,
@@ -430,7 +353,7 @@ fn refresh_control(driver: &Driver<'_>) -> anyhow::Result<()> {
 
 fn refresh_key(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text("6 messages, 0 refreshes, idle")?;
-    let below = below_list(driver)?;
+    let below = below_list(driver, &PHONE)?;
     driver.tab_until(16, |name| name == "Refresh inbox" || name == "Messages")?;
     driver.key("KEYCODE_F5")?;
     driver.text("7 messages, 1 refreshes, idle")?;
@@ -441,25 +364,9 @@ fn refresh_key(driver: &Driver<'_>) -> anyhow::Result<()> {
 // Collapsing header
 // ---------------------------------------------------------------------------
 
-const FIRST_STOP: &str = "Train to Porto";
-
-/// A point inside the expanded header, 60 logical pixels above the first
-/// stop as it first lies: the header's blue until it collapses past it.
-fn in_header(driver: &Driver<'_>) -> anyhow::Result<Point> {
-    let stop = driver.bounds_of(TEXT, FIRST_STOP)?;
-    Ok(driver.offset(
-        Point {
-            x: stop.left,
-            y: stop.top,
-        },
-        220.0,
-        -60.0,
-    ))
-}
-
 fn collapsing_touch(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text("Itinerary scrolled 0 px")?;
-    let header = in_header(driver)?;
+    let header = in_header(driver, &PHONE)?;
     ensure_near(
         "the expanded header",
         driver.sample(header)?,
@@ -490,7 +397,7 @@ fn collapsing_touch(driver: &Driver<'_>) -> anyhow::Result<()> {
 
 fn collapsing_wheel(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text("Itinerary scrolled 0 px")?;
-    let header = in_header(driver)?;
+    let header = in_header(driver, &PHONE)?;
     ensure_near(
         "the expanded header",
         driver.sample(header)?,
@@ -511,21 +418,8 @@ fn collapsing_wheel(driver: &Driver<'_>) -> anyhow::Result<()> {
 // Pages
 // ---------------------------------------------------------------------------
 
-/// The middle of the pager: the current page's colour.
-fn pager_point(driver: &Driver<'_>) -> anyhow::Result<Point> {
-    let readout = driver.bounds_of(TEXT, "Page 1 of 3: Plan")?;
-    Ok(driver.offset(
-        Point {
-            x: readout.left,
-            y: readout.bottom,
-        },
-        150.0,
-        250.0,
-    ))
-}
-
 fn pages_swipe(driver: &Driver<'_>) -> anyhow::Result<()> {
-    let point = pager_point(driver)?;
+    let point = pager_point(driver, &PHONE)?;
     ensure_near("page 1", driver.sample(point)?, PAGE_COLORS[0], TOLERANCE)?;
     let from = driver.offset(point, 130.0, 0.0);
     let to = driver.offset(point, -130.0, 0.0);
@@ -535,7 +429,7 @@ fn pages_swipe(driver: &Driver<'_>) -> anyhow::Result<()> {
 }
 
 fn pages_keys(driver: &Driver<'_>) -> anyhow::Result<()> {
-    let point = pager_point(driver)?;
+    let point = pager_point(driver, &PHONE)?;
     // A drag gives the pager the focus its keys need.
     let from = driver.offset(point, 100.0, 0.0);
     let to = driver.offset(point, -100.0, 0.0);
@@ -550,7 +444,7 @@ fn pages_keys(driver: &Driver<'_>) -> anyhow::Result<()> {
 }
 
 fn pages_buttons(driver: &Driver<'_>) -> anyhow::Result<()> {
-    let point = pager_point(driver)?;
+    let point = pager_point(driver, &PHONE)?;
     ensure_near("page 1", driver.sample(point)?, PAGE_COLORS[0], TOLERANCE)?;
     driver.tap_node(BUTTON, "Next")?;
     driver.text("Page 2 of 3: Pack")?;
@@ -564,10 +458,7 @@ fn pages_buttons(driver: &Driver<'_>) -> anyhow::Result<()> {
 // Bottom sheet
 // ---------------------------------------------------------------------------
 
-const SHEET_NODE: &str = "Places sheet Nearby places";
 /// The sheet's anchors: its top below the map's (`screens/sheet.rs`).
-const HALF: f64 = 240.0;
-const FULL: f64 = 24.0;
 const PEEK: f64 = 430.0;
 
 /// The map's top-left corner: the sheet's slider spans the drag's whole
@@ -655,40 +546,6 @@ fn sheet_keys(driver: &Driver<'_>) -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 // Zoom and pan
 // ---------------------------------------------------------------------------
-
-/// The grid's top-left corner: 16 logical pixels below the readout's
-/// panel, whose text is inset 12 across and 8 down.
-fn grid_origin(driver: &Driver<'_>) -> anyhow::Result<Point> {
-    let readout = driver.bounds_of(TEXT, "Zoom 100%, offset 0 by 0 px")?;
-    Ok(driver.offset(
-        Point {
-            x: readout.left,
-            y: readout.bottom,
-        },
-        -12.0,
-        24.0,
-    ))
-}
-
-/// The cell under a point `scene` logical pixels into the unzoomed grid.
-fn cell_at(scene: (f64, f64)) -> Rgb {
-    cell((scene.0 / CELL) as i32, (scene.1 / CELL) as i32)
-}
-
-/// The zoom percentage and offset the viewer's readout states.
-fn viewer_state(text: &str) -> Option<(f64, f64, f64)> {
-    let rest = text.strip_prefix("Zoom ")?;
-    let (zoom, rest) = rest.split_once("%, offset ")?;
-    let (x, rest) = rest.split_once(" by ")?;
-    let y = rest.strip_suffix(" px")?;
-    Some((zoom.parse().ok()?, x.parse().ok()?, y.parse().ok()?))
-}
-
-/// The scene point under a viewer point, for a readout's zoom and offset.
-fn scene_under(state: (f64, f64, f64), at: (f64, f64)) -> (f64, f64) {
-    let (zoom, x, y) = state;
-    ((at.0 - x) / (zoom / 100.0), (at.1 - y) / (zoom / 100.0))
-}
 
 /// Where the probe samples the grid, in viewer logical pixels: inside the
 /// phone's narrow viewer, on cells whose colours differ from those the
@@ -823,25 +680,9 @@ fn viewer_keys(driver: &Driver<'_>) -> anyhow::Result<()> {
 // Drag and drop
 // ---------------------------------------------------------------------------
 
-const FIRST_CARD: &str = "Write the release notes Drag me";
-
-/// Where a first card lies in the Done lane `lane`, below its heading: on a
-/// phone, where the lanes stack, the page below the lane while it is empty.
-fn done_slot(driver: &Driver<'_>, lane: &str) -> anyhow::Result<Point> {
-    let header = driver.bounds_of(TEXT, lane)?;
-    Ok(driver.offset(
-        Point {
-            x: header.left,
-            y: header.top,
-        },
-        40.0,
-        80.0,
-    ))
-}
-
 /// The empty Done lane ends above its first card's slot.
 fn empty_done_lane(driver: &Driver<'_>) -> anyhow::Result<()> {
-    let slot = done_slot(driver, "Done (0)")?;
+    let slot = done_slot(driver, &PHONE, EMPTY_DONE)?;
     ensure_near(
         "the page below the empty Done lane",
         driver.sample(slot)?,
@@ -853,7 +694,7 @@ fn empty_done_lane(driver: &Driver<'_>) -> anyhow::Result<()> {
 /// The moved card in Done, measured once the lanes settled: the To do lane
 /// above shrank by the card.
 fn card_in_done(driver: &Driver<'_>) -> anyhow::Result<()> {
-    let slot = done_slot(driver, "Done (1)")?;
+    let slot = done_slot(driver, &PHONE, "Done (1)")?;
     driver.pixel("the card in Done", slot, SURFACE, TOLERANCE)
 }
 
@@ -861,7 +702,7 @@ fn cards_drag(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text("To do 3, done 0")?;
     empty_done_lane(driver)?;
     let card = driver.bounds_of(TEXT, FIRST_CARD)?;
-    let from = left_of(driver, card, 40.0);
+    let from = left_of(&driver, card, 40.0)?;
     let lane = driver.bounds_of(TEXT, "Done (0)")?;
     // The lanes scroll on a phone, so a card is picked up by a long press,
     // then carried without lifting.
@@ -895,13 +736,11 @@ fn cards_keys(driver: &Driver<'_>) -> anyhow::Result<()> {
 // Context menu
 // ---------------------------------------------------------------------------
 
-const INITIAL_MENU: &str = "4 files, last action: nothing yet";
-
 /// The last file's middle, and a point over the page below it where a
 /// menu opened there draws its panel.
 fn under_last_row(driver: &Driver<'_>) -> anyhow::Result<(Point, Point)> {
     let row = driver.bounds_of(TEXT, "N Notes.txt")?;
-    let at = left_of(driver, row, 160.0);
+    let at = left_of(&driver, row, 160.0)?;
     Ok((at, driver.offset(at, 30.0, 70.0)))
 }
 
@@ -1074,8 +913,6 @@ fn gestures_mouse_click(driver: &Driver<'_>) -> anyhow::Result<()> {
 // Focus and keys
 // ---------------------------------------------------------------------------
 
-const INITIAL_FOCUS: &str = "Focused: nothing; saved name: none; settings page: Settings";
-
 /// The focus ring's dark outer band runs along the inside of the focused
 /// control's edge (`FocusRingStyle::BUILT_IN`): its left edge, halfway down.
 fn ring_point(driver: &Driver<'_>, button: &str) -> anyhow::Result<Point> {
@@ -1085,9 +922,6 @@ fn ring_point(driver: &Driver<'_>, button: &str) -> anyhow::Result<Point> {
         y: rect.centre().y,
     })
 }
-
-/// The ring's dark band.
-const RING: Rgb = Rgb(0, 0, 0);
 
 fn focus_tab_order(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text(INITIAL_FOCUS)?;
@@ -1176,7 +1010,7 @@ fn focus_navigator(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.key("KEYCODE_ENTER")?;
     driver.text("Privacy options would live here.")?;
     let back = driver.bounds_of(BUTTON, "Back")?;
-    let fill = left_of(driver, back, 8.0);
+    let fill = left_of(&driver, back, 8.0)?;
     driver.pixel("the Back button", fill, ACCENT, TOLERANCE)?;
     driver.tab_until(6, |name| name == "Back")?;
     driver.key("KEYCODE_SPACE")?;

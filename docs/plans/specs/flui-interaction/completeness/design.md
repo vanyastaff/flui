@@ -212,7 +212,7 @@ pub trait NestedScrollConnection {
 | Windows | DirectManipulation (тачпад): перевод в `Scroll` с фазами и `PanZoom`, прокачка, свой запрос кадра, модальный цикл размера; QPC | OLE источник и цель, отложенный старт, кадры всем рантаймам потока, перерисовка второго окна | `SimpleHapticsController` пера; `InputHapticsManager` — `Unavailable` (в опубликованных `windows` его нет; при нужде — узкий биндинг `windows-bindgen` 0.65) | TSF (существует) | `InjectSyntheticPointerInput`, `SendInput`; тачпад — записи с железа |
 | macOS | перо (tablet, proximity), smart magnify, swipe | `NSDragging*`, promised files, маски по контексту | `NSHapticFeedbackManager` + `drawCompleted` | `NSTextInputClient` | `CGEvent` (мышь, scroll); жесты — записи |
 | iOS | трекпадные pinch/rotate и прокрутка, coalesced/predicted, `Revise`, Pencil, системные края | `UIDrag/DropInteraction`, несколько сессий | `UIFeedbackGenerator(view:)`, Core Haptics с `resetHandler` | `UITextInput` | XCUITest |
-| Android | pinch тачпада, стилус, рукописный ввод, системные края, `ViewConfiguration` | `OnReceiveContentListener`, DnD | `VibrationEffect` (envelope 36+, primitives 30–35, `USAGE_TOUCH`) | `InputConnection` | instrumentation |
+| Android | pinch тачпада, стилус, рукописный ввод, системные края, `ViewConfiguration` | `OnReceiveContentListener`, DnD | `VibrationEffect` (envelope 36+, primitives 30–35, `USAGE_TOUCH`) | `InputConnection` | `adb shell input` и `uinput` (не instrumentation, ADR-0215 §8) |
 | Linux | winit 0.31 (перо — только Wayland; X11 — `Unavailable`); жесты тачпада X11 — `Unavailable` | DnD winit 0.31 (исходящий на X11 — `Unavailable`) | `Unavailable` | честный `composing` | uinput/libei |
 | Web | события с `preventDefault` — синхронно в колбэке; ctrl+wheel → pinch (дробная дельта, классификация по первому событию, End — дедлайн на шкале `EventTime`, `Emulated`, отказ в пользу браузерного zoom); Safari `gesture*` | HTML DnD | Vibration API с активацией | `EditContext` / скрытый `<textarea>` (свои `extern`: `EditContext`, наклон пера, predicted events) | WebDriver BiDi |
 
@@ -240,7 +240,7 @@ pub trait NestedScrollConnection {
 - Идентичность: (nonce процесса, `UiRuntimeId`, `DragSessionId`) в приватном формате предложения;
   Rust-значение — из таблицы сессий своего `UiRuntime` (любая его презентация). Между рантаймами — только сериализуемые представления (Q35); `WindowPolicy::Shared` — для обмена значениями между окнами.
 - `AllowedActions`, несколько сессий, drop только цели, принявшей последнее движение, каждая другая вошедшая цель (в том числе отказавшаяся) получает ровно один leave; spring-loading;
-  автопрокрутка `SideEffect`; keep-alive перетаскиваемого (pinned keep-alive slot focus-keyboard T4).
+  автопрокрутка `SideEffect`; keep-alive перетаскиваемого: `Draggable` держит аренду `KeepAliveHandle::hold`, пока жива его сессия, так что строка ленивого списка, уехавшая из полосы кэша, сохраняет состояние и сессию (`a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag`). Pinned-слот focus-keyboard T4 для этого не нужен: строку вне полосы не раскладывают, а отклик перетаскивания рисуется в оверлее.
 - Модальный цикл: отложенный старт в самой внешней точке покоя; кадры всем рантаймам потока; строки
   реентрантности и перерисовки второго окна.
 - Reorder — DnD-сессия с быстрым путём внутри процесса; `AnchoredDrag` — одномерный.

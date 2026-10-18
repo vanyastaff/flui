@@ -1,6 +1,7 @@
 # ADR-0215: Input is recorded as the `HostInput` stream, and backends are certified against one conformance table
 
-- **Status:** Accepted (2026-10-13). §1–§6 are implemented; §4's native codec is in
+- **Status:** Accepted (2026-10-13); §8 amended (2026-10-18): Android injects through the shell's
+  `input` and `uinput` commands, not instrumentation. §1–§6 are implemented; §4's native codec is in
   `crates/flui-platform/tests/native_recording/`, with the `native-capture` feature to record on a
   native host. §7 is implemented for pointer assembly, clocks, the scroll grammar, undecodable
   readings, availability and ownership (`flui_testing::backend_conformance`), with its DnD,
@@ -53,9 +54,12 @@ and put `serde` on the Stable contract crate.
    resolves an embedded surface against the ones its host embedded in the same order. The
    header holds devices, scale factors, the behavior values in effect (each window's per-kind
    gesture values, as values and never a preset's name, and the `SystemPreferences` revision
-   with its values), the clocks and a major format version; replay restores the gesture values
-   and preferences before its first row (row
-   `a_recording_replays_under_its_recorded_gesture_values`). Each preference revision the runtime applies while
+   with its values), the clocks and a major format version; replay restores the windows' scales,
+   gesture values and preferences before its first row (rows
+   `a_recording_replays_under_its_recorded_gesture_values`, `a_replay_starts_at_the_recorded_scale`).
+   The runtime reports what a recording starts from (`UiRuntime::recording_start`), and an
+   application's `InputTapFactory` is handed it for each runtime, so a runner's header holds what
+   a headless host's does (row `a_factory_tap_ends_its_recording_when_the_runtime_goes_away`). Each preference revision the runtime applies while
    recording (ADR-0172: applied before the next input, seen by new sequences) is recorded as a
    `Preferences` row at its position in the stream, and replay applies it at the same position,
    so host-owned values are part of the replayed timeline (row
@@ -145,8 +149,14 @@ and put `serde` on the Stable contract crate.
    per-sequence clock choice, QPC on Win32, monotonic order, counter wrap), the `Scroll` and
    `PanZoom` grammar, DnD, haptics and IME event order. Each feature adds its own rows.
 8. **Native injection.** `cargo xtask device <os>-input` exists for every OS: `SendInput` and
-   `InjectSyntheticPointerInput` on Windows, `CGEvent` on macOS, XCUITest on iOS, instrumentation
-   on Android, uinput/libei on Linux, WebDriver BiDi on the web. It certifies translation (native
+   `InjectSyntheticPointerInput` on Windows, `CGEvent` on macOS, XCUITest on iOS, the shell's
+   `input` and `uinput` commands on Android, uinput/libei on Linux, WebDriver BiDi on the web.
+   Android does not use instrumentation: an event injected through `Instrumentation` or
+   `UiAutomation` enters the input dispatcher after `InputReader`, so it never carries the device
+   classification, motion ranges, tool type and hover the backend translates, and it needs a test
+   APK and runner. `input` reaches the system's virtual touchscreen, stylus, mouse and keyboard;
+   `uinput` creates a kernel device the real `InputReader` reads (a pen with pressure, tilt and
+   hover, a touchpad in pointer mode), which is what certifying the translation needs. It certifies translation (native
    input in, expected `HostInput` out), needs an interactive desktop, and its result is quoted in
    the PR. Paths no injector reaches — the Windows precision touchpad through DirectManipulation
    and macOS trackpad gestures — are certified only by recordings taken on hardware.

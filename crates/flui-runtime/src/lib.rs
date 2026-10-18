@@ -80,7 +80,7 @@ pub use flui_animation::MotionOverride;
 pub use host_input::HostInput;
 pub use input_record::{
     DeadlineRow, DecisionRow, InputRecord, InputRow, PreferencesRow, RecordedMember,
-    RecordedSequence, RecordedSurface,
+    RecordedSequence, RecordedSurface, RecordingStart, RecordingWindow,
 };
 pub use input_tap::{
     INPUT_TAP_TARGET, InputTap, InputTapFactory, InputTapHandle, InputTaps, RecordingIncomplete,

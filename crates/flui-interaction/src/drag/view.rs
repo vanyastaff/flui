@@ -97,9 +97,10 @@ impl<'a> DragView<'a> {
             .or_else(|| self.offer.map(|offer| DragIdentity::Offer(offer.id())))
     }
 
-    /// The kind of pointer that drags, when the drag is this window's own
-    /// session; [`PointerKind::Unknown`] for an OS drag, whose pointer the
-    /// OS does not name.
+    /// The kind of pointer that drags, when this runtime started the drag
+    /// (in its window, or back through the OS over another of its windows);
+    /// [`PointerKind::Unknown`] for another application's drag, whose pointer
+    /// the OS does not name.
     #[must_use]
     pub fn pointer_kind(&self) -> PointerKind {
         self.pointer

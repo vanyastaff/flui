@@ -366,6 +366,37 @@ pub const fn android_feedback(
     (constant, exact_or_approximated(exact && available))
 }
 
+/// What the decor view said to `performHapticFeedback`, as far as the owner
+/// thread learned it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AndroidFeedbackAnswer {
+    /// It returned `true`: the feedback played.
+    Played,
+    /// It returned `false`: haptic feedback is off for the view or the
+    /// system, or the view has no window, so nothing played.
+    Declined,
+    /// The call is posted but the Java main thread has not answered in time;
+    /// it still plays when that thread gets to it.
+    Late,
+    /// The call failed (a JNI error or a Java exception): nothing played.
+    Failed,
+}
+
+/// The outcome Android tier 1 reports: the table's (`android_feedback`)
+/// once the view played it or when the answer comes too late to wait for,
+/// [`HapticOutcome::Suppressed`] when the view declined, and
+/// [`HapticOutcome::Unavailable`] when the call could not be made.
+pub const fn android_feedback_outcome(
+    table: HapticOutcome,
+    answer: AndroidFeedbackAnswer,
+) -> HapticOutcome {
+    match answer {
+        AndroidFeedbackAnswer::Played | AndroidFeedbackAnswer::Late => table,
+        AndroidFeedbackAnswer::Declined => HapticOutcome::Suppressed,
+        AndroidFeedbackAnswer::Failed => HapticOutcome::Unavailable,
+    }
+}
+
 /// A `VibrationEffect.Composition` primitive and the API level that added it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AndroidPrimitive {

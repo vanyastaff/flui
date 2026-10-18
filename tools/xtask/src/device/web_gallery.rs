@@ -29,7 +29,7 @@ use anyhow::Context as _;
 use serde_json::{Value, json};
 
 use super::bidi::{Driver, Session};
-use super::gallery::{FOCUS, Rgb, SWIPE};
+use super::gallery::{Corner, FOCUS, Placement, Rgb, SWIPE};
 use super::web_input::Page;
 
 /// The page's size in CSS pixels, the desktop gallery's window: wide enough
@@ -355,6 +355,25 @@ pub(super) struct Web {
     session: Session,
     url: String,
     shots: PathBuf,
+}
+
+impl Placement for &mut Web {
+    type Rect = Bounds;
+    type Point = Point;
+
+    fn text_bounds(&mut self, name: &str) -> anyhow::Result<Bounds> {
+        self.bounds_of(TEXT, name)
+    }
+
+    fn at(&self, rect: Bounds, corner: Corner, dx: f64, dy: f64) -> anyhow::Result<Point> {
+        let point = match corner {
+            Corner::TopLeft => rect.top_left(),
+            Corner::BottomLeft => rect.bottom_left(),
+            Corner::LeftMiddle => rect.left_middle(0.0),
+            Corner::RightMiddle => rect.right_middle(0.0),
+        };
+        Ok(point.offset(dx, dy))
+    }
 }
 
 /// WebDriver's key values for the keys the checks press.

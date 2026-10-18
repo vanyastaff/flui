@@ -79,6 +79,161 @@ pub(super) fn cell_at(scene: (f64, f64)) -> Rgb {
     cell((scene.0 / CELL) as i32, (scene.1 / CELL) as i32)
 }
 
+/// Fails unless `seen` is within `tolerance` of `expected`: a check's
+/// precondition, sampled before it acts.
+pub(super) fn ensure_near(
+    what: &str,
+    seen: Rgb,
+    expected: Rgb,
+    tolerance: u8,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        seen.near(expected, tolerance),
+        "{what}: {seen} before the action, expected {expected}"
+    );
+    Ok(())
+}
+
+// The gallery's texts a check finds or waits for.
+pub(super) const INITIAL_SWIPE: &str =
+    "4 in inbox, 0 pinned, 0 archived, 3 tasks left, 0 completed";
+pub(super) const ADA: &str = "A Ada Design review moved to Thursday";
+pub(super) const BROOK: &str = "B Brook Your order has shipped";
+pub(super) const FIRST_STOP: &str = "Train to Porto";
+pub(super) const SHEET_NODE: &str = "Places sheet Nearby places";
+pub(super) const FIRST_CARD: &str = "Write the release notes Drag me";
+pub(super) const INITIAL_MENU: &str = "4 files, last action: nothing yet";
+pub(super) const INITIAL_FOCUS: &str =
+    "Focused: nothing; saved name: none; settings page: Settings";
+const LAST_MESSAGE: &str = "Message 1";
+const FIRST_PAGE: &str = "Page 1 of 3: Plan";
+const UNZOOMED: &str = "Zoom 100%, offset 0 by 0 px";
+pub(super) const EMPTY_DONE: &str = "Done (0)";
+
+/// How long a wheel burst stays one sequence after its last notch: the
+/// default preset's `GestureSettings::contactless_latch_idle`
+/// (`flui-interaction`, which xtask does not link).
+pub(super) const CONTACTLESS_LATCH_IDLE: std::time::Duration =
+    std::time::Duration::from_millis(1500);
+
+/// The sheet's anchors: its top below the map's (`screens/sheet.rs`).
+pub(super) const HALF: f64 = 240.0;
+pub(super) const FULL: f64 = 24.0;
+
+/// Where on an element's rectangle a check points from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Corner {
+    TopLeft,
+    BottomLeft,
+    LeftMiddle,
+    RightMiddle,
+}
+
+/// How a driver finds the gallery's elements and turns a logical offset
+/// from one of their corners into a point it can act at. Implemented for a
+/// shared reference to the Windows and Android drivers and for a mutable one
+/// to the web driver, so the helpers below take it by value.
+pub(super) trait Placement {
+    /// An element's rectangle, in the driver's pixels.
+    type Rect: Copy;
+    /// A point, in the driver's pixels.
+    type Point;
+    /// The rectangle of the one text element named `name`.
+    fn text_bounds(&mut self, name: &str) -> anyhow::Result<Self::Rect>;
+    /// `corner` of `rect`, moved by `(dx, dy)` logical pixels.
+    fn at(&self, rect: Self::Rect, corner: Corner, dx: f64, dy: f64)
+    -> anyhow::Result<Self::Point>;
+}
+
+/// The logical offsets the gallery's anchors take on one form factor: the
+/// content column is about 340 logical pixels wide on a phone and wider on
+/// a desktop window or page.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Layout {
+    below_list: (f64, f64),
+    in_header: (f64, f64),
+    pager: (f64, f64),
+    done_slot: (f64, f64),
+}
+
+/// A desktop window or page.
+pub(super) const DESKTOP: Layout = Layout {
+    below_list: (200.0, 40.0),
+    in_header: (400.0, -60.0),
+    pager: (300.0, 200.0),
+    done_slot: (60.0, 50.0),
+};
+
+/// A phone.
+pub(super) const PHONE: Layout = Layout {
+    below_list: (100.0, 40.0),
+    in_header: (220.0, -60.0),
+    pager: (150.0, 250.0),
+    done_slot: (40.0, 80.0),
+};
+
+fn anchor<P: Placement>(
+    mut scene: P,
+    name: &str,
+    corner: Corner,
+    (dx, dy): (f64, f64),
+) -> anyhow::Result<P::Point> {
+    let rect = scene.text_bounds(name)?;
+    scene.at(rect, corner, dx, dy)
+}
+
+/// The middle of `rect`'s left edge, `inset` logical pixels in.
+pub(super) fn left_of<P: Placement>(
+    scene: &P,
+    rect: P::Rect,
+    inset: f64,
+) -> anyhow::Result<P::Point> {
+    scene.at(rect, Corner::LeftMiddle, inset, 0.0)
+}
+
+/// The middle of `rect`'s right edge, `inset` logical pixels in.
+pub(super) fn right_of<P: Placement>(
+    scene: &P,
+    rect: P::Rect,
+    inset: f64,
+) -> anyhow::Result<P::Point> {
+    scene.at(rect, Corner::RightMiddle, -inset, 0.0)
+}
+
+// A point just below the refresh list's last row: the page now, a row once
+/// the list has grown by one.
+pub(super) fn below_list<P: Placement>(scene: P, layout: &Layout) -> anyhow::Result<P::Point> {
+    anchor(scene, LAST_MESSAGE, Corner::BottomLeft, layout.below_list)
+}
+
+// A point inside the expanded header, above the first stop as it first
+/// lies: the header's blue until it collapses past it.
+pub(super) fn in_header<P: Placement>(scene: P, layout: &Layout) -> anyhow::Result<P::Point> {
+    anchor(scene, FIRST_STOP, Corner::TopLeft, layout.in_header)
+}
+
+// The middle of the pager: the current page's colour.
+pub(super) fn pager_point<P: Placement>(scene: P, layout: &Layout) -> anyhow::Result<P::Point> {
+    anchor(scene, FIRST_PAGE, Corner::BottomLeft, layout.pager)
+}
+
+// The grid's top-left corner: 16 logical pixels below the readout's panel,
+/// whose text is inset 12 across and 8 down.
+pub(super) fn grid_origin<P: Placement>(scene: P) -> anyhow::Result<P::Point> {
+    anchor(scene, UNZOOMED, Corner::BottomLeft, (-12.0, 24.0))
+}
+
+/// Where a first card lands in the Done lane whose heading reads `lane`,
+/// below the heading: the empty lane until one does (on a phone, where the
+/// lanes stack, the page below it).
+pub(super) fn done_slot<P: Placement>(
+    scene: P,
+    layout: &Layout,
+    lane: &str,
+) -> anyhow::Result<P::Point> {
+    anchor(scene, lane, Corner::TopLeft, layout.done_slot)
+}
+
 /// The zoom percentage and offset the viewer's readout states.
 pub(super) fn viewer_state(text: &str) -> Option<(f64, f64, f64)> {
     let rest = text.strip_prefix("Zoom ")?;

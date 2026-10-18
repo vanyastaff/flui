@@ -1115,6 +1115,21 @@ impl HeadlessHost {
         self.ui_runtime.gestures().arena()
     }
 
+    /// Install a tap from `factory` on this host's runtime for the rest of
+    /// its life, as `flui-app` installs an application's on every runtime it
+    /// builds: the factory is handed what the recording starts from.
+    ///
+    /// # Errors
+    ///
+    /// [`IdExhausted`](flui_foundation::IdExhausted) when the runtime issued
+    /// every tap registration generation.
+    pub fn install_input_tap(
+        &self,
+        factory: &flui_runtime::InputTapFactory,
+    ) -> Result<(), flui_foundation::IdExhausted> {
+        factory.install_on(&self.ui_runtime)
+    }
+
     /// The UI runtime's tap registry: [`record`](crate::recording::record)
     /// into it to record everything this host applies (ADR-0215 §1).
     #[must_use]
@@ -1132,28 +1147,11 @@ impl HeadlessHost {
         &self,
         privacy: crate::recording::Privacy,
     ) -> crate::recording::RecordingHeader {
-        let mut header =
-            crate::recording::RecordingHeader::new(crate::recording::RecordingClock::Virtual);
+        let mut header = crate::recording::RecordingHeader::starting(
+            crate::recording::RecordingClock::Virtual,
+            &self.ui_runtime.recording_start(),
+        );
         header.privacy = privacy;
-        for (presentation, window) in
-            std::iter::once((self.ui_runtime.presentation_id(), &*self.window)).chain(
-                self.secondary
-                    .iter()
-                    .map(|secondary| (secondary.id, &*secondary.window)),
-            )
-        {
-            let profiles = self
-                .ui_runtime
-                .presentation_gestures_for_test(presentation)
-                .default_profiles();
-            header = header.with_window(
-                crate::recording::RecordedWindow::new(window.id, *window.scale_factor.lock())
-                    .with_gesture_profiles(profiles),
-            );
-        }
-        if let Some((revision, values)) = self.ui_runtime.system_preferences() {
-            header = header.with_preferences(flui_runtime::PreferencesRow::new(revision, values));
-        }
         header
     }
 
@@ -1187,8 +1185,9 @@ impl HeadlessHost {
     /// return the arena decisions the replay made, to compare with
     /// [`ReplayableRecording::decisions`](crate::recording::ReplayableRecording::decisions).
     ///
-    /// Before the first row the header's behavior values are restored: each
-    /// recorded window's per-kind gesture values replace this host's, and
+    /// Before the first row the header's starting state is restored: each
+    /// recorded window moves to its recorded scale (as a runner delivers a
+    /// scale change) and its per-kind gesture values replace this host's, and
     /// the recorded system-preference values apply. Each input is then
     /// applied at its recorded arrival: the clock advances to it first. The
     /// windows the recording names must be this host's (the same
@@ -1218,8 +1217,12 @@ impl HeadlessHost {
         };
         let header = recording.header();
         for window in &header.windows {
+            let presentation = self.presentation_of(window.window);
+            let id = HeadlessWindowId(presentation);
+            if *self.window_of(id).scale_factor.lock() != window.scale_factor {
+                self.set_scale_factor(id, window.scale_factor);
+            }
             if let Some(profiles) = &window.gesture_profiles {
-                let presentation = self.presentation_of(window.window);
                 self.ui_runtime
                     .replace_gesture_profiles(presentation, profiles.clone());
             }

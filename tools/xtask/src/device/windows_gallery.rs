@@ -45,6 +45,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowPos, WINDOWINFO,
 };
 
+use super::gallery::{Corner, Placement};
 use super::uia::{self, BUTTON, Session, Start, TEXT};
 use super::windows_input::{self as input, Cursor};
 use super::windows_screen::{Capture, Rgb, Touchscreen, touch_refused_by_host};
@@ -262,6 +263,26 @@ fn drive(session: &mut Session, shots: &Path) -> anyhow::Result<Report> {
 pub(super) struct Check {
     pub(super) screen: &'static str,
     pub(super) run: fn(&Driver<'_>) -> anyhow::Result<()>,
+}
+
+impl Placement for &Driver<'_> {
+    type Rect = RECT;
+    type Point = POINT;
+
+    fn text_bounds(&mut self, name: &str) -> anyhow::Result<RECT> {
+        self.bounds_of(TEXT, name)
+    }
+
+    fn at(&self, rect: RECT, corner: Corner, dx: f64, dy: f64) -> anyhow::Result<POINT> {
+        let middle = i32::midpoint(rect.top, rect.bottom);
+        let (x, y) = match corner {
+            Corner::TopLeft => (rect.left, rect.top),
+            Corner::BottomLeft => (rect.left, rect.bottom),
+            Corner::LeftMiddle => (rect.left, middle),
+            Corner::RightMiddle => (rect.right, middle),
+        };
+        self.offset(POINT { x, y }, dx, dy)
+    }
 }
 
 /// The gallery's window, and the input and observations a check uses.

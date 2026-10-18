@@ -2,8 +2,11 @@
 //! semantic tier, the `Vibrator` for patterns.
 //!
 //! Semantic feedback goes to the decor view on the Java main thread, which
-//! owns the view hierarchy, so the call is posted and the outcome is the
-//! degradation table's. Patterns go to the `Vibrator`, which any thread may
+//! owns the view hierarchy, so the call is posted and the owner waits a
+//! bounded time for its answer: a declined call reports `Suppressed`, a
+//! played one the degradation table's outcome, and one Java has not reached
+//! in time the table's too, since it still plays (`android_feedback_outcome`).
+//! Patterns go to the `Vibrator`, which any thread may
 //! call: one envelope for the whole pattern on API 36 devices that have
 //! them, else a composition of primitives or an amplitude waveform, as
 //! `android_pattern` plans, each with the touch usage
@@ -19,8 +22,9 @@ use jni::objects::JObject;
 use jni::{JValue, jni_sig, jni_str};
 
 use crate::shared::haptic_degradation::{
-    AndroidPatternPlan, AndroidPrimitive, AndroidVibrationUsage, AndroidVibrator,
-    ComposedPrimitive, EnvelopeStep, android_feedback, android_pattern, android_vibration_usage,
+    AndroidFeedbackAnswer, AndroidPatternPlan, AndroidPrimitive, AndroidVibrationUsage,
+    AndroidVibrator, ComposedPrimitive, EnvelopeStep, android_feedback, android_feedback_outcome,
+    android_pattern, android_vibration_usage,
 };
 
 /// `PackageManager.PERMISSION_GRANTED`.
@@ -361,8 +365,17 @@ fn waveform<'local>(
     .l()
 }
 
-/// Ask the decor view for `constant` on the Java main thread.
-fn perform_on_view(app: &AndroidApp, constant: i32) {
+/// How long the owner thread waits for the decor view's answer: half a
+/// 60 Hz frame. The Java main thread is normally idle and answers in well
+/// under a millisecond; a busy one (or one waiting on the native thread, as
+/// a lifecycle callback does) must not stall the owner, and a later answer
+/// still plays.
+const VIEW_ANSWER_WAIT: Duration = Duration::from_millis(8);
+
+/// Ask the decor view for `constant` on the Java main thread and wait, at
+/// most [`VIEW_ANSWER_WAIT`], for what `performHapticFeedback` returned.
+fn perform_on_view(app: &AndroidApp, constant: i32) -> AndroidFeedbackAnswer {
+    let (answer_tx, answer_rx) = std::sync::mpsc::sync_channel(1);
     let app = app.clone();
     app.clone().run_on_java_main_thread(Box::new(move || {
         let result = super::preferences::with_activity(&app, |env, activity| {
@@ -390,14 +403,32 @@ fn perform_on_view(app: &AndroidApp, constant: i32) {
             )?
             .z()
         });
-        if let Err(error) = result {
-            tracing::warn!(
+        let answer = match result {
+            Ok(true) => AndroidFeedbackAnswer::Played,
+            Ok(false) => AndroidFeedbackAnswer::Declined,
+            Err(error) => {
+                tracing::warn!(
+                    target: "flui_platform::android",
+                    %error,
+                    "haptic feedback did not reach the decor view"
+                );
+                AndroidFeedbackAnswer::Failed
+            }
+        };
+        if answer_tx.send(answer).is_err() && answer != AndroidFeedbackAnswer::Played {
+            tracing::debug!(
                 target: "flui_platform::android",
-                %error,
-                "haptic feedback did not reach the decor view"
+                ?answer,
+                "the decor view answered haptic feedback after the owner stopped waiting"
             );
         }
     }));
+    match answer_rx.recv_timeout(VIEW_ANSWER_WAIT) {
+        Ok(answer) => answer,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => AndroidFeedbackAnswer::Late,
+        // The posted call was dropped unrun.
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => AndroidFeedbackAnswer::Failed,
+    }
 }
 
 impl PlatformHaptics for AndroidHaptics {
@@ -406,9 +437,8 @@ impl PlatformHaptics for AndroidHaptics {
     }
 
     fn perform_with(&self, feedback: HapticFeedback, _request: &HapticRequest) -> HapticOutcome {
-        let (constant, outcome) = android_feedback(feedback, api_level());
-        perform_on_view(&self.app, constant.value);
-        outcome
+        let (constant, table) = android_feedback(feedback, api_level());
+        android_feedback_outcome(table, perform_on_view(&self.app, constant.value))
     }
 
     fn play(

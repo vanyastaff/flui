@@ -187,6 +187,23 @@ impl RecordingHeader {
         }
     }
 
+    /// A header on `clock` for a recording that starts from `start`: its
+    /// windows with their scales and gesture values, and its preference
+    /// revision. A runner's factory tap and a headless host build their
+    /// headers this way, from the facts the runtime reports.
+    #[must_use]
+    pub fn starting(clock: RecordingClock, start: &flui_runtime::RecordingStart) -> Self {
+        let mut header = Self::new(clock);
+        for window in &start.windows {
+            header = header.with_window(
+                RecordedWindow::new(window.window, window.scale_factor)
+                    .with_gesture_profiles(window.gesture_profiles.clone()),
+            );
+        }
+        header.preferences.clone_from(&start.preferences);
+        header
+    }
+
     /// This header with `window`.
     #[must_use]
     pub fn with_window(mut self, window: RecordedWindow) -> Self {

@@ -38,6 +38,7 @@ use anyhow::{Context as _, bail};
 use serde_json::{Value, json};
 
 use super::android::{Apk, Device, Registration, Screen, Script, Sdk, keyboard_keys};
+use super::gallery::{Corner, Placement, Rgb};
 
 /// The gallery's application.
 const GALLERY: Apk = Apk {
@@ -294,21 +295,23 @@ impl Rect {
     }
 }
 
-/// A colour as the screen shows it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Rgb(pub(super) u8, pub(super) u8, pub(super) u8);
+impl Placement for &Driver<'_> {
+    type Rect = Rect;
+    type Point = Point;
 
-impl Rgb {
-    pub(super) fn near(self, other: Self, tolerance: u8) -> bool {
-        self.0.abs_diff(other.0) <= tolerance
-            && self.1.abs_diff(other.1) <= tolerance
-            && self.2.abs_diff(other.2) <= tolerance
+    fn text_bounds(&mut self, name: &str) -> anyhow::Result<Rect> {
+        self.bounds_of(TEXT, name)
     }
-}
 
-impl fmt::Display for Rgb {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "rgb({}, {}, {})", self.0, self.1, self.2)
+    fn at(&self, rect: Rect, corner: Corner, dx: f64, dy: f64) -> anyhow::Result<Point> {
+        let middle = i32::midpoint(rect.top, rect.bottom);
+        let (x, y) = match corner {
+            Corner::TopLeft => (rect.left, rect.top),
+            Corner::BottomLeft => (rect.left, rect.bottom),
+            Corner::LeftMiddle => (rect.left, middle),
+            Corner::RightMiddle => (rect.right, middle),
+        };
+        Ok(self.offset(Point { x, y }, dx, dy))
     }
 }
 

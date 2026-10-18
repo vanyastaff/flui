@@ -6,10 +6,12 @@
 use std::time::Duration;
 
 use super::super::gallery::{
-    ACCENT, ARCHIVE, BACKGROUND, CARDS, COLLAPSING, FOCUS, GESTURES, LANE, MAP_GROUND, MENU_SCREEN,
-    PAD_IDLE, PAGE_COLORS, PAGES, PIN, REFRESH, RING, Rgb, SHEET, SURFACE, SWIPE, TINT_DOUBLE,
-    TINT_LONG, TINT_PAN, TINT_SCALE, TINT_TAP, TOLERANCE, VIEWER, cell_at, scene_under,
-    viewer_state,
+    ACCENT, ADA, ARCHIVE, BACKGROUND, BROOK, CARDS, COLLAPSING, CONTACTLESS_LATCH_IDLE, DESKTOP,
+    EMPTY_DONE, FIRST_CARD, FIRST_STOP, FOCUS, FULL, GESTURES, HALF, INITIAL_FOCUS, INITIAL_MENU,
+    INITIAL_SWIPE, LANE, MAP_GROUND, MENU_SCREEN, PAD_IDLE, PAGE_COLORS, PAGES, PIN, REFRESH, RING,
+    Rgb, SHEET, SHEET_NODE, SURFACE, SWIPE, TINT_DOUBLE, TINT_LONG, TINT_PAN, TINT_SCALE, TINT_TAP,
+    TOLERANCE, VIEWER, below_list, cell_at, done_slot, ensure_near, grid_origin, in_header,
+    pager_point, scene_under, viewer_state,
 };
 use super::{BUTTON, Bounds, Check, EDIT, MENU, MENU_ITEM, Point, SLIDER, TEXT, Web, key};
 
@@ -204,32 +206,15 @@ const fn check(
     (name, Check { screen, run })
 }
 
-/// How long a wheel burst stays one sequence after its last notch: the
-/// default preset's `GestureSettings::contactless_latch_idle`
-/// (`flui-interaction`, which xtask does not link).
-const CONTACTLESS_LATCH_IDLE: Duration = Duration::from_millis(1500);
-
-fn ensure_near(what: &str, seen: Rgb, expected: Rgb) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        seen.near(expected, TOLERANCE),
-        "{what}: {seen} before the action, expected {expected}"
-    );
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Swipe actions
 // ---------------------------------------------------------------------------
-
-const INITIAL_SWIPE: &str = "4 in inbox, 0 pinned, 0 archived, 3 tasks left, 0 completed";
-const ADA: &str = "A Ada Design review moved to Thursday";
-const BROOK: &str = "B Brook Your order has shipped";
 
 fn swipe_touch_archive(web: &mut Web) -> anyhow::Result<()> {
     web.text(INITIAL_SWIPE)?;
     let row = web.bounds_of(TEXT, ADA)?;
     let tray = row.right_middle(30.0);
-    ensure_near("the row's right end", web.sample(tray)?, SURFACE)?;
+    ensure_near("the row's right end", web.sample(tray)?, SURFACE, TOLERANCE)?;
     let from = row.right_middle(60.0);
     web.touch_drag(
         from,
@@ -251,7 +236,7 @@ fn swipe_mouse_pin(web: &mut Web) -> anyhow::Result<()> {
     // Between the row's left edge and its avatar: where the revealed action
     // slides in.
     let tray = row.left_middle(8.0);
-    ensure_near("the row's left end", web.sample(tray)?, SURFACE)?;
+    ensure_near("the row's left end", web.sample(tray)?, SURFACE, TOLERANCE)?;
     let from = row.left_middle(120.0);
     web.mouse_drag(
         from,
@@ -277,7 +262,7 @@ fn swipe_dismiss_task(web: &mut Web) -> anyhow::Result<()> {
     web.text(INITIAL_SWIPE)?;
     let first = web.bounds_of(TEXT, "Water the plants")?;
     let tail = task_tail(web)?;
-    ensure_near("the last task row", web.sample(tail)?, SURFACE)?;
+    ensure_near("the last task row", web.sample(tail)?, SURFACE, TOLERANCE)?;
     let from = first.left_middle(40.0);
     web.touch_drag(
         from,
@@ -313,17 +298,10 @@ fn swipe_done_control(web: &mut Web) -> anyhow::Result<()> {
 // Pull to refresh
 // ---------------------------------------------------------------------------
 
-/// A point just below the list's last row: the page now, a row once the
-/// list has grown by one.
-fn below_list(web: &mut Web) -> anyhow::Result<Point> {
-    let last = web.bounds_of(TEXT, "Message 1")?;
-    Ok(last.bottom_left().offset(200.0, 40.0))
-}
-
 fn refresh_pull(web: &mut Web) -> anyhow::Result<()> {
     web.text("6 messages, 0 refreshes, idle")?;
-    let below = below_list(web)?;
-    ensure_near("below the list", web.sample(below)?, BACKGROUND)?;
+    let below = below_list(&mut *web, &DESKTOP)?;
+    ensure_near("below the list", web.sample(below)?, BACKGROUND, TOLERANCE)?;
     let from = web
         .bounds_of(TEXT, "Message 6")?
         .centre()
@@ -341,8 +319,8 @@ fn refresh_pull(web: &mut Web) -> anyhow::Result<()> {
 
 fn refresh_control(web: &mut Web) -> anyhow::Result<()> {
     web.text("6 messages, 0 refreshes, idle")?;
-    let below = below_list(web)?;
-    ensure_near("below the list", web.sample(below)?, BACKGROUND)?;
+    let below = below_list(&mut *web, &DESKTOP)?;
+    ensure_near("below the list", web.sample(below)?, BACKGROUND, TOLERANCE)?;
     web.click_node(BUTTON, "Refresh inbox")?;
     web.text("7 messages, 1 refreshes, idle")?;
     web.pixel("the grown list's last row", below, SURFACE, TOLERANCE)
@@ -359,7 +337,7 @@ fn page_load(web: &mut Web) -> anyhow::Result<f64> {
 /// browser's own reload, which the key also means, does not happen.
 fn refresh_by_key(web: &mut Web, chord: &[&str]) -> anyhow::Result<()> {
     web.text("6 messages, 0 refreshes, idle")?;
-    let below = below_list(web)?;
+    let below = below_list(&mut *web, &DESKTOP)?;
     let load = page_load(web)?;
     web.tab_until(16, |name| name == "Refresh inbox" || name == "Messages")?;
     web.chord(chord)?;
@@ -389,21 +367,15 @@ fn refresh_ctrl_r(web: &mut Web) -> anyhow::Result<()> {
 // Collapsing header
 // ---------------------------------------------------------------------------
 
-const FIRST_STOP: &str = "Train to Porto";
-
-/// A point inside the expanded header, 60 pixels above the first stop as
-/// it first lies: the header's blue until it collapses past it.
-fn in_header(web: &mut Web) -> anyhow::Result<Point> {
-    Ok(web
-        .bounds_of(TEXT, FIRST_STOP)?
-        .top_left()
-        .offset(400.0, -60.0))
-}
-
 fn collapsing_wheel(web: &mut Web) -> anyhow::Result<()> {
     web.text("Itinerary scrolled 0 px")?;
-    let header = in_header(web)?;
-    ensure_near("the expanded header", web.sample(header)?, ACCENT)?;
+    let header = in_header(&mut *web, &DESKTOP)?;
+    ensure_near(
+        "the expanded header",
+        web.sample(header)?,
+        ACCENT,
+        TOLERANCE,
+    )?;
     let list = web.bounds_of(TEXT, FIRST_STOP)?.centre().offset(0.0, 120.0);
     // The header goes first: a notch collapses it, and only what it leaves
     // over reaches the list.
@@ -430,8 +402,13 @@ fn collapsing_wheel(web: &mut Web) -> anyhow::Result<()> {
 
 fn collapsing_touch(web: &mut Web) -> anyhow::Result<()> {
     web.text("Itinerary scrolled 0 px")?;
-    let header = in_header(web)?;
-    ensure_near("the expanded header", web.sample(header)?, ACCENT)?;
+    let header = in_header(&mut *web, &DESKTOP)?;
+    ensure_near(
+        "the expanded header",
+        web.sample(header)?,
+        ACCENT,
+        TOLERANCE,
+    )?;
     let from = web.bounds_of(TEXT, FIRST_STOP)?.centre().offset(0.0, 250.0);
     web.touch_drag(
         from,
@@ -451,17 +428,9 @@ fn collapsing_touch(web: &mut Web) -> anyhow::Result<()> {
 // Pages
 // ---------------------------------------------------------------------------
 
-/// The middle of the pager: the current page's colour.
-fn pager_point(web: &mut Web) -> anyhow::Result<Point> {
-    Ok(web
-        .bounds_of(TEXT, "Page 1 of 3: Plan")?
-        .bottom_left()
-        .offset(300.0, 200.0))
-}
-
 fn pages_swipe(web: &mut Web) -> anyhow::Result<()> {
-    let point = pager_point(web)?;
-    ensure_near("page 1", web.sample(point)?, PAGE_COLORS[0])?;
+    let point = pager_point(&mut *web, &DESKTOP)?;
+    ensure_near("page 1", web.sample(point)?, PAGE_COLORS[0], TOLERANCE)?;
     web.touch_drag(
         point.offset(250.0, 0.0),
         point.offset(-250.0, 0.0),
@@ -473,7 +442,7 @@ fn pages_swipe(web: &mut Web) -> anyhow::Result<()> {
 }
 
 fn pages_keys(web: &mut Web) -> anyhow::Result<()> {
-    let point = pager_point(web)?;
+    let point = pager_point(&mut *web, &DESKTOP)?;
     // A drag gives the pager the focus its keys need.
     web.mouse_drag(
         point.offset(120.0, 0.0),
@@ -491,8 +460,8 @@ fn pages_keys(web: &mut Web) -> anyhow::Result<()> {
 }
 
 fn pages_button(web: &mut Web) -> anyhow::Result<()> {
-    let point = pager_point(web)?;
-    ensure_near("page 1", web.sample(point)?, PAGE_COLORS[0])?;
+    let point = pager_point(&mut *web, &DESKTOP)?;
+    ensure_near("page 1", web.sample(point)?, PAGE_COLORS[0], TOLERANCE)?;
     web.click_node(BUTTON, "Next")?;
     web.text("Page 2 of 3: Pack")?;
     web.pixel("page 2", point, PAGE_COLORS[1], TOLERANCE)?;
@@ -504,11 +473,6 @@ fn pages_button(web: &mut Web) -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 // Bottom sheet
 // ---------------------------------------------------------------------------
-
-const SHEET_NODE: &str = "Places sheet Nearby places";
-/// The sheet's anchors: its top below the map's (`screens/sheet.rs`).
-const HALF: f64 = 240.0;
-const FULL: f64 = 24.0;
 
 /// The map's top-left corner: the slider's node spans the drag's whole
 /// area, which the map fills.
@@ -530,7 +494,12 @@ fn sheet_touch_full(web: &mut Web) -> anyhow::Result<()> {
     // A block of the map, clear of every street, above the sheet at Half
     // and under it at Full.
     let probe = sheet.top_left().offset(250.0, 100.0);
-    ensure_near("the map above the sheet", web.sample(probe)?, MAP_GROUND)?;
+    ensure_near(
+        "the map above the sheet",
+        web.sample(probe)?,
+        MAP_GROUND,
+        TOLERANCE,
+    )?;
     let from = handle(sheet);
     web.touch_drag(
         from,
@@ -547,7 +516,7 @@ fn sheet_mouse_peek(web: &mut Web) -> anyhow::Result<()> {
     let sheet = sheet_area(web)?;
     // Between Half and Peek: the sheet now, the map once it rests at Peek.
     let probe = sheet.top_left().offset(250.0, 320.0);
-    ensure_near("the sheet at Half", web.sample(probe)?, SURFACE)?;
+    ensure_near("the sheet at Half", web.sample(probe)?, SURFACE, TOLERANCE)?;
     let from = handle(sheet);
     web.mouse_drag(
         from,
@@ -585,15 +554,6 @@ fn sheet_keys(web: &mut Web) -> anyhow::Result<()> {
 // Zoom and pan
 // ---------------------------------------------------------------------------
 
-/// The grid's top-left corner: 16 pixels below the readout's panel, whose
-/// text is inset 12 across and 8 down.
-fn grid_origin(web: &mut Web) -> anyhow::Result<Point> {
-    Ok(web
-        .bounds_of(TEXT, "Zoom 100%, offset 0 by 0 px")?
-        .bottom_left()
-        .offset(-12.0, 24.0))
-}
-
 /// Waits for the readout to state `zoom` and an offset within two pixels
 /// of `offset`.
 fn viewer_reads(web: &mut Web, zoom: f64, offset: (f64, f64)) -> anyhow::Result<String> {
@@ -612,13 +572,14 @@ fn viewer_zoom_about(
     web: &mut Web,
     act: fn(&mut Web, Point) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
-    let origin = grid_origin(web)?;
+    let origin = grid_origin(&mut *web)?;
     let tap = origin.offset(205.0, 205.0);
     let probe = origin.offset(295.0, 255.0);
     ensure_near(
         "the cell before the zoom",
         web.sample(probe)?,
         cell_at((295.0, 255.0)),
+        TOLERANCE,
     )?;
     act(web, tap)?;
     viewer_reads(web, 200.0, (-205.0, -205.0))?;
@@ -639,7 +600,7 @@ fn viewer_double_click(web: &mut Web) -> anyhow::Result<()> {
 }
 
 fn viewer_spread(web: &mut Web) -> anyhow::Result<()> {
-    let origin = grid_origin(web)?;
+    let origin = grid_origin(&mut *web)?;
     let focal = origin.offset(200.0, 200.0);
     let probe = origin.offset(295.0, 255.0);
     let before = web.sample(probe)?;
@@ -647,6 +608,7 @@ fn viewer_spread(web: &mut Web) -> anyhow::Result<()> {
         "the cell before the spread",
         before,
         cell_at((295.0, 255.0)),
+        TOLERANCE,
     )?;
     web.touch_pinch(
         (focal.offset(-40.0, 0.0), focal.offset(-120.0, 0.0)),
@@ -661,7 +623,7 @@ fn viewer_spread(web: &mut Web) -> anyhow::Result<()> {
 }
 
 fn viewer_keys(web: &mut Web) -> anyhow::Result<()> {
-    let origin = grid_origin(web)?;
+    let origin = grid_origin(&mut *web)?;
     // A drag gives the viewer the keys, as it gives a scrollable its own;
     // unzoomed, it has no room to move the grid.
     let from = origin.offset(100.0, 100.0);
@@ -697,12 +659,13 @@ fn viewer_keys(web: &mut Web) -> anyhow::Result<()> {
 }
 
 fn viewer_mouse_pan(web: &mut Web) -> anyhow::Result<()> {
-    let origin = grid_origin(web)?;
+    let origin = grid_origin(&mut *web)?;
     let probe = origin.offset(295.0, 255.0);
     ensure_near(
         "the cell before the zoom",
         web.sample(probe)?,
         cell_at((295.0, 255.0)),
+        TOLERANCE,
     )?;
     // The child fills the viewport, so there is room to pan only zoomed in:
     // Ctrl+wheel zooms about the cursor.
@@ -748,25 +711,14 @@ fn viewer_mouse_pan(web: &mut Web) -> anyhow::Result<()> {
 // Drag and drop
 // ---------------------------------------------------------------------------
 
-const FIRST_CARD: &str = "Write the release notes Drag me";
-
-/// Where a first card lands in Done, below the lane's heading: the empty
-/// lane until one does.
-fn done_slot(web: &mut Web) -> anyhow::Result<Point> {
-    Ok(web
-        .bounds_of(TEXT, "Done (0)")?
-        .top_left()
-        .offset(60.0, 50.0))
-}
-
 fn card_grip(web: &mut Web) -> anyhow::Result<Point> {
     Ok(web.bounds_of(TEXT, FIRST_CARD)?.left_middle(60.0))
 }
 
 fn cards_drag(web: &mut Web) -> anyhow::Result<()> {
     web.text("To do 3, done 0")?;
-    let slot = done_slot(web)?;
-    ensure_near("the empty Done lane", web.sample(slot)?, LANE)?;
+    let slot = done_slot(&mut *web, &DESKTOP, EMPTY_DONE)?;
+    ensure_near("the empty Done lane", web.sample(slot)?, LANE, TOLERANCE)?;
     let from = card_grip(web)?;
     web.mouse_drag(
         from,
@@ -781,8 +733,8 @@ fn cards_drag(web: &mut Web) -> anyhow::Result<()> {
 
 fn cards_touch_drag(web: &mut Web) -> anyhow::Result<()> {
     web.text("To do 3, done 0")?;
-    let slot = done_slot(web)?;
-    ensure_near("the empty Done lane", web.sample(slot)?, LANE)?;
+    let slot = done_slot(&mut *web, &DESKTOP, EMPTY_DONE)?;
+    ensure_near("the empty Done lane", web.sample(slot)?, LANE, TOLERANCE)?;
     let from = card_grip(web)?;
     web.touch_drag(
         from,
@@ -796,7 +748,7 @@ fn cards_touch_drag(web: &mut Web) -> anyhow::Result<()> {
 
 fn cards_controls(web: &mut Web) -> anyhow::Result<()> {
     web.text("To do 3, done 0")?;
-    let slot = done_slot(web)?;
+    let slot = done_slot(&mut *web, &DESKTOP, EMPTY_DONE)?;
     web.click_node(BUTTON, "Cut Review the layout fix")?;
     web.click_node(BUTTON, "Paste into Done")?;
     web.text("To do 2, done 1, moved Review the layout fix to Done")?;
@@ -805,7 +757,7 @@ fn cards_controls(web: &mut Web) -> anyhow::Result<()> {
 
 fn cards_keys(web: &mut Web) -> anyhow::Result<()> {
     web.text("To do 3, done 0")?;
-    let slot = done_slot(web)?;
+    let slot = done_slot(&mut *web, &DESKTOP, EMPTY_DONE)?;
     web.tab_until(20, |name| name.starts_with("Record the demo"))?;
     web.chord(&[key::CONTROL, "x"])?;
     web.tab_until(20, |name| name.starts_with("Done"))?;
@@ -818,8 +770,6 @@ fn cards_keys(web: &mut Web) -> anyhow::Result<()> {
 // Context menu
 // ---------------------------------------------------------------------------
 
-const INITIAL_MENU: &str = "4 files, last action: nothing yet";
-
 /// A point on the last file's row, and one over the page below it, where a
 /// menu opened at the row's middle draws its panel.
 fn under_last_row(web: &mut Web) -> anyhow::Result<(Point, Point)> {
@@ -830,7 +780,12 @@ fn under_last_row(web: &mut Web) -> anyhow::Result<(Point, Point)> {
 fn menu_right_click(web: &mut Web) -> anyhow::Result<()> {
     web.text(INITIAL_MENU)?;
     let (at, panel) = under_last_row(web)?;
-    ensure_near("the page below the files", web.sample(panel)?, BACKGROUND)?;
+    ensure_near(
+        "the page below the files",
+        web.sample(panel)?,
+        BACKGROUND,
+        TOLERANCE,
+    )?;
     web.right_click(at)?;
     web.wait_node(MENU_ITEM, "Duplicate Notes.txt")?;
     anyhow::ensure!(
@@ -940,7 +895,7 @@ fn gesture(
     tint: Rgb,
 ) -> anyhow::Result<()> {
     let (middle, fill) = pad(web)?;
-    ensure_near("the idle pad", web.sample(fill)?, PAD_IDLE)?;
+    ensure_near("the idle pad", web.sample(fill)?, PAD_IDLE, TOLERANCE)?;
     act(web, middle)?;
     web.text(readout)?;
     web.pixel("the pad's tint", fill, tint, TOLERANCE)
@@ -1010,8 +965,6 @@ fn gestures_pinch(web: &mut Web) -> anyhow::Result<()> {
 // Focus and keys
 // ---------------------------------------------------------------------------
 
-const INITIAL_FOCUS: &str = "Focused: nothing; saved name: none; settings page: Settings";
-
 /// The focus ring's dark outer band runs along the inside of the focused
 /// control's edge (`FocusRingStyle::BUILT_IN`): its left edge, halfway down.
 fn ring_point(web: &mut Web, button: &str) -> anyhow::Result<Point> {
@@ -1021,7 +974,7 @@ fn ring_point(web: &mut Web, button: &str) -> anyhow::Result<Point> {
 fn focus_tab_order(web: &mut Web) -> anyhow::Result<()> {
     web.text(INITIAL_FOCUS)?;
     let ring = ring_point(web, "Save")?;
-    ensure_near("Save's edge", web.sample(ring)?, ACCENT)?;
+    ensure_near("Save's edge", web.sample(ring)?, ACCENT, TOLERANCE)?;
     web.click_node(EDIT, "")?;
     web.text("Focused: Name field; saved name: none; settings page: Settings")?;
     web.chord(&[key::TAB])?;

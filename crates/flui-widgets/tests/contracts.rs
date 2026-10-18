@@ -126,6 +126,7 @@ fn drag_and_drop() {
             ("drag_and_drop::a_drag_reports_to_the_callbacks_it_started_with", crate::drag_and_drop::a_drag_reports_to_the_callbacks_it_started_with),
             ("drag_and_drop::autoscroll_finds_the_target_scrolled_under_a_resting_pointer", crate::drag_and_drop::autoscroll_finds_the_target_scrolled_under_a_resting_pointer),
             ("drag_and_drop::unmounting_a_target_releases_its_receiver", crate::drag_and_drop::unmounting_a_target_releases_its_receiver),
+            ("drag_and_drop::a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag", crate::drag_and_drop::a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag),
             ("drag_and_drop::the_alternatives_perform_the_transfer_the_drag_would", crate::drag_and_drop::the_alternatives_perform_the_transfer_the_drag_would),
             ("drag_and_drop::draggable_reads_admission_profiles_and_retires_authored_owners", crate::drag_and_drop::draggable_reads_admission_profiles_and_retires_authored_owners),
         ],

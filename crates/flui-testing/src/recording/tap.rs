@@ -184,18 +184,25 @@ impl<W: Write> JoinWriter<W> for Sink<W> {
     }
 }
 
-// A factory for [`AppConfig::with_input_tap`](https://docs.rs/flui-app):
+/// A factory for [`AppConfig::with_input_tap`](https://docs.rs/flui-app):
 /// each runtime records into the writer `make` returns, for the runtime's
-/// life. A worker thread writes each runtime's rows; it ends, flushing its
-/// writer, once the runtime and its tap are gone.
+/// life. `make` gets the header that runtime's recording starts from, on
+/// the monotonic clock: its windows with their scales and gesture values and
+/// its preference revision, as [`HeadlessHost::recording_header`](crate::HeadlessHost::recording_header)
+/// writes them. A worker thread writes each runtime's rows; it ends,
+/// flushing its writer, once the runtime and its tap are gone.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn tap_factory<W, F>(make: F) -> flui_runtime::InputTapFactory
 where
     W: Write + Send + 'static,
-    F: Fn() -> RecordingWriter<W> + Send + Sync + 'static,
+    F: Fn(super::format::RecordingHeader) -> RecordingWriter<W> + Send + Sync + 'static,
 {
-    flui_runtime::InputTapFactory::new(move || {
-        let (tap, worker) = spawn(make());
+    flui_runtime::InputTapFactory::new(move |start| {
+        let header = super::format::RecordingHeader::starting(
+            super::format::RecordingClock::Monotonic,
+            start,
+        );
+        let (tap, worker) = spawn(make(header));
         // Detached: the worker owns the writer and exits when the tap's
         // sender drops with the runtime.
         drop(worker);

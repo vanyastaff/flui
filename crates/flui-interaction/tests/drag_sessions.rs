@@ -302,6 +302,8 @@ struct Fixture {
     offers: RefCell<OfferTable>,
     presentation: PresentationId,
     windows: RefCell<Vec<Arc<dyn PlatformWindow>>>,
+    /// The pointer kinds an OS drag's hit tests asked for, in order.
+    hit_kinds: Rc<RefCell<Vec<PointerKind>>>,
 }
 
 fn presentation(n: usize) -> PresentationId {
@@ -338,6 +340,7 @@ impl Fixture {
             offers: RefCell::new(OfferTable::new()),
             presentation: presentation(1),
             windows: RefCell::default(),
+            hit_kinds: Rc::default(),
         }
     }
 
@@ -454,10 +457,12 @@ impl Fixture {
 
     fn deliver(&self, presentation: PresentationId, event: DragDropEvent) {
         let probe = Rc::clone(&self.probe);
-        let mut hit = move |position: Offset<f64>| {
+        let kinds = Rc::clone(&self.hit_kinds);
+        let mut hit = move |position: Offset<f64>, kind: PointerKind| {
+            kinds.borrow_mut().push(kind);
             let mut result = HitTestResult::new();
             probe
-                .probe(position, PointerKind::Mouse, &mut result)
+                .probe(position, kind, &mut result)
                 .ok()
                 .map(|()| result.path().to_vec())
         };
@@ -988,6 +993,12 @@ fn drag_between_presentations_of_one_runtime_redeems_the_value() {
         );
         assert_eq!(*target.scopes.borrow(), [DragScope::Runtime]);
         assert_eq!(
+            *f.hit_kinds.borrow(),
+            [PointerKind::Touch],
+            "the hit test asks with the touch the session started from, so a touch gets \
+             touch-sized targets"
+        );
+        assert_eq!(
             *f.source.feedback.lock(),
             [(id, DropFeedback { accept: Some(MOVE) })],
             "the answer reaches the OS as drop feedback"
@@ -1073,6 +1084,11 @@ fn a_drop_is_concluded_once_its_requests_resolve() {
             },
         );
         assert!(logged(&f.log).contains(&"T:dropped COPY".to_owned()));
+        assert_eq!(
+            *f.hit_kinds.borrow(),
+            [PointerKind::Unknown, PointerKind::Unknown],
+            "another application's drag names no pointer"
+        );
         assert!(
             f.source.concluded.lock().is_empty(),
             "the fetch made on entry is outstanding"

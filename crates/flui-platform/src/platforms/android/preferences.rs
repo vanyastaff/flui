@@ -294,6 +294,35 @@ pub(super) fn pixel_ratio(app: &AndroidApp) -> Result<DevicePixelRatio, Preferen
     DevicePixelRatio::new(density).ok_or_else(|| crate::InvalidPreference::PixelRatio.into())
 }
 
+/// The refresh period of the display the Activity is on, read when asked so
+/// a move to another display or a mode change shows: `Display.getRefreshRate`
+/// of the Activity's window manager. `None` when the rate cannot be read or
+/// is not a positive finite number.
+pub(super) fn refresh_period(app: &AndroidApp) -> Option<Duration> {
+    let hertz = with_activity(app, |env, activity| {
+        let manager = env
+            .call_method(
+                activity,
+                jni_str!("getWindowManager"),
+                jni_sig!("()Landroid/view/WindowManager;"),
+                &[],
+            )?
+            .l()?;
+        let display = env
+            .call_method(
+                &manager,
+                jni_str!("getDefaultDisplay"),
+                jni_sig!("()Landroid/view/Display;"),
+                &[],
+            )?
+            .l()?;
+        env.call_method(&display, jni_str!("getRefreshRate"), jni_sig!("()F"), &[])?
+            .f()
+    })
+    .ok()?;
+    (hertz.is_finite() && hertz >= 1.0).then(|| Duration::from_secs_f64(1.0 / f64::from(hertz)))
+}
+
 /// Public API26 factors, or the public theme attribute on API21–25, projected
 /// through the same Activity resource metrics that produced the measurement.
 pub(super) fn scroll_factors(

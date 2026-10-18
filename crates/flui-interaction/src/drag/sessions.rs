@@ -111,6 +111,9 @@ pub(crate) struct Incoming {
     /// The target's callbacks are done; the OS is told once nothing is in flight.
     pub(crate) dropped: bool,
     pub(crate) position: Option<flui_foundation::geometry::Offset<f64>>,
+    /// The kind of pointer that drags, when this runtime started the drag;
+    /// `Unknown` for another application's.
+    pub(crate) pointer: PointerKind,
 }
 
 /// An open presentation of the runtime, as its drags reach it.

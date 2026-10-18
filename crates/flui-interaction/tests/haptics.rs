@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use flui_foundation::panic::RecoveryScope;
 use flui_interaction::haptics::{
-    FALLBACK_REFRESH_PERIOD, HapticsHost, MAILBOX_CAPACITY, haptic_frame_deadline,
+    FALLBACK_REFRESH_PERIOD, HapticsHost, HapticsHostBuilder, MAILBOX_CAPACITY,
+    haptic_frame_deadline,
 };
 use flui_interaction::{GestureBinding, HapticObserver, HapticsHandle, ManualClock};
 
@@ -42,7 +43,7 @@ struct Fixture {
     _binding: GestureBinding,
 }
 
-fn fixture_with(configure: impl FnOnce(HapticsHost) -> HapticsHost) -> Fixture {
+fn fixture_with(configure: impl FnOnce(HapticsHostBuilder) -> HapticsHostBuilder) -> Fixture {
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
     let fake = Arc::new(FakeHaptics::new());
@@ -50,17 +51,18 @@ fn fixture_with(configure: impl FnOnce(HapticsHost) -> HapticsHost) -> Fixture {
     let frames = Rc::new(Cell::new(0));
     let period = Rc::new(Cell::new(Some(PERIOD)));
     let host = configure(
-        HapticsHost::new(&binding, move || Some(Arc::clone(&actuator)))
-            .with_frame_requester({
+        HapticsHost::builder(&binding, move || Some(Arc::clone(&actuator)))
+            .frame_requester({
                 let frames = Rc::clone(&frames);
                 move || frames.set(frames.get() + 1)
             })
-            .with_refresh_period({
+            .refresh_period({
                 let period = Rc::clone(&period);
                 move || period.get()
             })
-            .with_deadline_factor(NonZeroU32::new(2).expect("nonzero")),
-    );
+            .deadline_factor(NonZeroU32::new(2).expect("nonzero")),
+    )
+    .build();
     let handle = host.handle();
     Fixture {
         clock,
@@ -238,7 +240,7 @@ fn a_request_outside_dispatch_carries_no_sequence() {
 }
 
 fn ticket_exhaustion_degrades_to_immediate() {
-    let f = fixture_with(|host| host.with_tickets_after(u64::MAX - 1));
+    let f = fixture_with(|host| host.tickets_after(u64::MAX - 1));
     let last = f.queue();
     assert_eq!(last.get().get(), u64::MAX, "the terminal ticket is issued");
     assert_eq!(
@@ -311,7 +313,7 @@ fn frame_presented_haptics_play_with_the_frame() {
 // --- deadline ---------------------------------------------------------------
 
 fn overflowing_deadline() {
-    let f = fixture_with(|host| host.with_deadline_factor(NonZeroU32::MIN));
+    let f = fixture_with(|host| host.deadline_factor(NonZeroU32::MIN));
     f.period.set(Some(Duration::from_nanos(u64::MAX)));
     f.clock.advance(Duration::from_nanos(1));
     assert_eq!(
@@ -329,7 +331,7 @@ fn overflowing_deadline() {
 }
 
 fn deadline_at_the_terminal_time() {
-    let f = fixture_with(|host| host.with_deadline_factor(NonZeroU32::MIN));
+    let f = fixture_with(|host| host.deadline_factor(NonZeroU32::MIN));
     f.period.set(Some(Duration::from_nanos(u64::MAX)));
     assert_eq!(
         f.handle.perform(HapticFeedback::LightImpact, FRAME),
@@ -358,24 +360,34 @@ fn two(period: Option<Duration>) -> Duration {
     haptic_frame_deadline(NonZeroU32::new(2).expect("nonzero"), period)
 }
 
+fn falls_back_with_a_diagnostic(period: Option<Duration>) {
+    let (deadline, log) = flui_testing::log_capture::capture(|| two(period));
+    assert_eq!(deadline, FALLBACK_REFRESH_PERIOD * 2, "{period:?}");
+    assert_eq!(
+        log.count_containing("the 60 Hz period"),
+        1,
+        "{period:?} is reported: {log}"
+    );
+}
+
 fn unknown_period() {
-    assert_eq!(two(None), FALLBACK_REFRESH_PERIOD * 2);
+    falls_back_with_a_diagnostic(None);
     assert_eq!(FALLBACK_REFRESH_PERIOD, Duration::from_nanos(16_666_667));
 }
 
 fn zero_period() {
-    assert_eq!(two(Some(Duration::ZERO)), FALLBACK_REFRESH_PERIOD * 2);
+    falls_back_with_a_diagnostic(Some(Duration::ZERO));
 }
 
 fn overflowing_product() {
-    assert_eq!(two(Some(Duration::MAX)), FALLBACK_REFRESH_PERIOD * 2);
+    falls_back_with_a_diagnostic(Some(Duration::MAX));
 }
 
 fn known_period() {
-    assert_eq!(
-        two(Some(Duration::from_nanos(8_333_333))),
-        Duration::from_nanos(16_666_666)
-    );
+    let (deadline, log) =
+        flui_testing::log_capture::capture(|| two(Some(Duration::from_nanos(8_333_333))));
+    assert_eq!(deadline, Duration::from_nanos(16_666_666));
+    assert_eq!(log.count_containing("the 60 Hz period"), 0, "{log}");
 }
 
 fn a_queued_request_keeps_its_snapshot_across_a_display_change() {

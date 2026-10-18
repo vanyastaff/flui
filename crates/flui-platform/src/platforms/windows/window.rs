@@ -1199,6 +1199,10 @@ impl PlatformWindow for WindowsWindow {
         }
     }
 
+    fn refresh_period(&self) -> Option<std::time::Duration> {
+        super::display::refresh_period(self.hwnd)
+    }
+
     fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
         // SAFETY: `MonitorFromWindow` takes `self.hwnd` by value and a flag;
         // `MONITOR_DEFAULTTOPRIMARY` guarantees a non-null `HMONITOR` even

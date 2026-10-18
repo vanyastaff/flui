@@ -2496,7 +2496,7 @@ impl HoveringDrag {
                     allowed: TransferActions::COPY,
                     position: Some(Point::new(150.0, y)),
                 },
-                &mut |_| Some(path.clone()),
+                &mut |_, _| Some(path.clone()),
             );
         });
         drag
@@ -2523,7 +2523,7 @@ impl HoveringDrag {
                     allowed: TransferActions::COPY,
                     position: Point::new(150.0, y),
                 },
-                &mut |_| Some(path.clone()),
+                &mut |_, _| Some(path.clone()),
             );
         });
     }
@@ -2542,7 +2542,7 @@ impl HoveringDrag {
             self.owner.deliver(
                 self.window,
                 flui_platform_api::DragDropEvent::Exited { id },
-                &mut |_| None,
+                &mut |_, _| None,
             );
         });
     }

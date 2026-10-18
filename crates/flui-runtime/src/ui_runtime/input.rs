@@ -432,12 +432,12 @@ impl UiRuntime {
                 clock.stamp_input_epoch(clock.now());
                 let dispatch = Self::dispatch_after_pending_motion(presentation, || {
                     self.drag
-                        .deliver(presentation.id(), drag_drop_event, &mut |position| {
+                        .deliver(presentation.id(), drag_drop_event, &mut |position, kind| {
                             let mut result = flui_interaction::pointer::HitTestResult::new();
                             presentation.renderer().hit_test_in_view(
                                 &mut result,
                                 position,
-                                flui_interaction::events::PointerKind::Mouse,
+                                kind,
                                 0,
                             );
                             Some(result.path().to_vec())

@@ -293,7 +293,7 @@ impl AppConfig {
     pub(crate) fn install_input_tap(&self, runtime: &flui_runtime::ui_runtime::UiRuntime) {
         if let Some(factory) = &self.input_tap {
             factory
-                .install_on(runtime.input_taps())
+                .install_on(runtime)
                 .expect("BUG: a fresh runtime issues its first tap registration");
         }
     }
@@ -530,7 +530,7 @@ mod tests {
         let config = AppConfig::new().with_input_tap(InputTapFactory::new({
             let seen = Arc::clone(&seen);
             let made = Arc::clone(&made);
-            move || {
+            move |_start: &crate::RecordingStart| {
                 let index = {
                     let mut made = made.lock().expect("factory count");
                     *made += 1;

@@ -13,7 +13,8 @@ use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_even
 use flui_platform_api::{GesturePreferences, PlatformInput, SystemPreferences};
 use flui_runtime::{DecisionRow, InputRecord};
 use flui_testing::recording::{
-    Privacy, RecordingError, RecordingReader, RecordingWriter, ReplayableRecording, record,
+    Privacy, RecordingClock, RecordingError, RecordingReader, RecordingWriter, ReplayableRecording,
+    record,
 };
 use flui_testing::{HeadlessHost, HeadlessWindow};
 
@@ -161,6 +162,33 @@ fn a_scale_change_mid_recording_replays_to_the_same_decisions() {
     assert!(
         (fresh.window().scale_factor() - 1.5).abs() < f64::EPSILON,
         "the replay moved the window to the recorded scale"
+    );
+}
+
+/// A window recorded at a scale other than the replaying host's is moved to
+/// that scale before the first row, as the header says it started.
+#[test]
+fn a_replay_starts_at_the_recorded_scale() {
+    use flui_platform_api::PlatformWindow as _;
+
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut recorder = host(&log);
+    recorder.set_scale_factor(recorder.primary_window(), 2.0);
+    let _ = recorder.pump(Duration::from_millis(16));
+    let writer = RecordingWriter::new(Vec::new(), &recorder.recording_header(Privacy::Redact))
+        .expect("the header writes");
+    let recording = record(recorder.input_taps(), writer).expect("first tap registration");
+    press(&mut recorder, 1, 3);
+    let bytes = recording.finish().expect("a complete recording");
+    let recording = replayable(&bytes).expect("a whole recording");
+    assert!((recording.header().windows[0].scale_factor - 2.0).abs() < f64::EPSILON);
+
+    let mut fresh = host(&Rc::new(RefCell::new(Vec::new())));
+    assert!((fresh.window().scale_factor() - 1.0).abs() < f64::EPSILON);
+    assert_eq!(fresh.replay(&recording), recording.decisions());
+    assert!(
+        (fresh.window().scale_factor() - 2.0).abs() < f64::EPSILON,
+        "the replay started the window at the recorded scale"
     );
 }
 
@@ -542,15 +570,18 @@ impl Drop for Handover {
     }
 }
 
-/// An application's tap, installed for its runtime's life, still ends its
-/// recording whole when the runtime goes away.
+/// An application's tap, installed for its runtime's life, starts its
+/// recording from the header a headless host writes (the windows with their
+/// scales and gesture values, the preference revision), on the monotonic
+/// clock, and still ends it whole when the runtime goes away.
 #[test]
 fn a_factory_tap_ends_its_recording_when_the_runtime_goes_away() {
     let (done, handed_over) = std::sync::mpsc::channel();
     let log = Rc::new(RefCell::new(Vec::new()));
     let mut host = host(&log);
-    let header = host.recording_header(Privacy::Redact);
-    let factory = flui_testing::recording::tap_factory(move || {
+    host.set_scale_factor(host.primary_window(), 1.5);
+    let headless = host.recording_header(Privacy::Redact);
+    let factory = flui_testing::recording::tap_factory(move |header| {
         RecordingWriter::new(
             Handover {
                 bytes: Vec::new(),
@@ -560,8 +591,7 @@ fn a_factory_tap_ends_its_recording_when_the_runtime_goes_away() {
         )
         .expect("the header writes")
     });
-    factory
-        .install_on(host.input_taps())
+    host.install_input_tap(&factory)
         .expect("first tap registration");
     press(&mut host, 1, 3);
     drop(host);
@@ -569,6 +599,15 @@ fn a_factory_tap_ends_its_recording_when_the_runtime_goes_away() {
         .recv_timeout(Duration::from_secs(10))
         .expect("the worker hands the sink over once the runtime is gone");
     let recording = replayable(&bytes).expect("the recording ends with its end row");
+    let header = recording.header();
+    assert_eq!(header.clock, RecordingClock::Monotonic);
+    assert_eq!(
+        (&header.windows, &header.preferences),
+        (&headless.windows, &headless.preferences),
+        "the runner's header is the headless host's"
+    );
+    assert!((header.windows[0].scale_factor - 1.5).abs() < f64::EPSILON);
+    assert!(header.windows[0].gesture_profiles.is_some());
     assert_eq!(
         accepted(&recording.decisions()),
         [(1, "TapArenaMember".to_owned())]

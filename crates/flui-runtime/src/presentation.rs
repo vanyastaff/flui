@@ -667,12 +667,13 @@ impl PresentationState {
     ) -> flui_interaction::HapticsHost {
         let actuator = Arc::downgrade(window);
         let display = Arc::downgrade(window);
-        let haptics = flui_interaction::HapticsHost::new(gestures, move || {
+        let haptics = flui_interaction::HapticsHost::builder(gestures, move || {
             actuator.upgrade().and_then(|window| window.haptics())
         })
-        .with_frame_requester(request_frame)
-        .with_refresh_period(move || display.upgrade().and_then(|window| window.refresh_period()))
-        .with_deadline_factor(gestures.default_profiles().haptic_frame_deadline_factor());
+        .frame_requester(request_frame)
+        .refresh_period(move || display.upgrade().and_then(|window| window.refresh_period()))
+        .deadline_factor(gestures.default_profiles().haptic_frame_deadline_factor())
+        .build();
         haptics.set_visible(
             window.is_visible()
                 && window.execution_state() == flui_platform_api::WindowExecutionState::Running,

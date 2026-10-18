@@ -22,7 +22,7 @@ use flui_platform_api::{EventTime, WindowId};
 use super::UiRuntime;
 use crate::input_record::{
     DeadlineRow, DecisionRow, InputRecord, InputRow, PreferencesRow, RecordedMember,
-    RecordedSequence, input_time,
+    RecordedSequence, RecordingStart, RecordingWindow, input_time,
 };
 use crate::owner::InputOutcome;
 use crate::{HostInput, InputTaps};
@@ -80,6 +80,32 @@ impl UiRuntime {
     #[must_use]
     pub fn input_taps(&self) -> &InputTaps {
         &self.input_taps
+    }
+
+    /// What a recording of this runtime starts from now: every open window,
+    /// the primary first, with its scale and the gesture values its contacts
+    /// are admitted with, and the system-preference revision in effect. A
+    /// window whose platform window is gone is left out.
+    #[must_use]
+    pub fn recording_start(&self) -> RecordingStart {
+        let windows = self
+            .presentations
+            .iter()
+            .filter_map(|presentation| {
+                let scale_factor = presentation.with_window(|window| window.scale_factor())?;
+                Some(RecordingWindow {
+                    window: presentation.window_id(),
+                    scale_factor,
+                    gesture_profiles: presentation.gestures().default_profiles(),
+                })
+            })
+            .collect();
+        RecordingStart {
+            windows,
+            preferences: self.preferences.borrow().as_ref().map(|snapshot| {
+                PreferencesRow::new(snapshot.revision, std::sync::Arc::clone(&snapshot.values))
+            }),
+        }
     }
 
     /// Prepare to record an input about to be applied: every presentation's

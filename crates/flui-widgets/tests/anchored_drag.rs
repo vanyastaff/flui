@@ -764,7 +764,7 @@ pub(crate) fn anchored_drag_is_no_drop_autoscroll_target() {
                 allowed: TransferActions::COPY,
                 position: Some(Point::new(150.0, 10.0)),
             },
-            &mut |_| Some(top.clone()),
+            &mut |_, _| Some(top.clone()),
         );
         owner.tick(time(0));
         owner.tick(time(100));
@@ -782,7 +782,7 @@ pub(crate) fn anchored_drag_is_no_drop_autoscroll_target() {
                 allowed: TransferActions::COPY,
                 position: Point::new(150.0, 290.0),
             },
-            &mut |_| Some(bottom.clone()),
+            &mut |_, _| Some(bottom.clone()),
         );
         owner.tick(time(200));
         owner.tick(time(300));
@@ -793,7 +793,7 @@ pub(crate) fn anchored_drag_is_no_drop_autoscroll_target() {
         "hovering at either edge left the drag where it rests"
     );
     laid.enter_owner_scope(|| {
-        owner.deliver(window, DragDropEvent::Exited { id }, &mut |_| None);
+        owner.deliver(window, DragDropEvent::Exited { id }, &mut |_, _| None);
     });
 }
 

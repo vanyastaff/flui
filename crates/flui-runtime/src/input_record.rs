@@ -347,6 +347,34 @@ impl PreferencesRow {
     }
 }
 
+/// What a recording of a runtime starts from: each open window with the
+/// scale it is at and the per-kind gesture values its contacts are admitted
+/// with, and the system-preference revision in effect (ADR-0215 §1). A
+/// recording's header holds it, so a replay restores it before its first row;
+/// the runtime produces it, so a recording made by a runner and one made by a
+/// headless host start from the same facts.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct RecordingStart {
+    /// The open windows, the primary first.
+    pub windows: Vec<RecordingWindow>,
+    /// The system-preference revision in effect, with its values; `None`
+    /// before the host reported one.
+    pub preferences: Option<PreferencesRow>,
+}
+
+/// One window a recording starts with.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct RecordingWindow {
+    /// The window.
+    pub window: WindowId,
+    /// Device pixels per logical pixel, possibly fractional.
+    pub scale_factor: f64,
+    /// The per-kind gesture values the window's contacts are admitted with.
+    pub gesture_profiles: flui_interaction::GestureProfiles,
+}
+
 /// The time `input` carries, if any: a pointer or key event's stamp or a
 /// frame's vsync.
 pub(crate) fn input_time(input: &HostInput) -> Option<EventTime> {

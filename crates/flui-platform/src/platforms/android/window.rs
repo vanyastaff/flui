@@ -307,6 +307,10 @@ impl PlatformWindow for AndroidWindow {
         }
     }
 
+    fn refresh_period(&self) -> Option<std::time::Duration> {
+        super::preferences::refresh_period(&self.app)
+    }
+
     fn scale_factor(&self) -> f64 {
         if let Ok(ratio) = super::preferences::pixel_ratio(&self.app) {
             return ratio.get();

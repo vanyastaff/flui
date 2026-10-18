@@ -35,6 +35,7 @@ use flui_platform_api::haptics::{HapticRequest, HapticTiming};
 use flui_platform_api::pointer::PointerInfo;
 use flui_platform_api::{CursorIcon, HapticFeedback};
 use flui_view::element::ElementKind;
+use flui_view::owner::{KeepAliveHandle, KeepAliveLease};
 use flui_view::prelude::*;
 use flui_view::{EventCx, EventOutcome, RebuildHandle, WriterSource};
 
@@ -295,6 +296,7 @@ struct Capabilities {
     pipeline: Option<flui_rendering::pipeline::PipelineCell>,
     rebuild: Option<RebuildHandle>,
     writer: Option<WriterSource>,
+    keep_alive: Option<KeepAliveHandle>,
 }
 
 /// One draggable as its drags, recognizers and actions share it. Owner-local;
@@ -308,6 +310,9 @@ struct Source {
     held: RefCell<Option<DragSession>>,
     /// The contacts pressed on the child, as their Down reported them.
     pressed: RefCell<Vec<PointerInfo>>,
+    /// Held while a drag is live, so a lazy list scrolling the dragged row
+    /// out of its cache band keeps its state and its drags (ADR-0211).
+    kept_alive: RefCell<Option<KeepAliveLease>>,
 }
 
 impl Source {
@@ -334,7 +339,10 @@ impl Source {
 
     /// A drag of this draggable began.
     fn started(&self) {
-        self.active.set(self.active.get() + 1);
+        if self.active.replace(self.active.get() + 1) == 0 {
+            let keep_alive = self.capabilities.borrow().keep_alive.clone();
+            *self.kept_alive.borrow_mut() = keep_alive.map(|handle| handle.hold());
+        }
         self.rebuild();
         let callback = self.config.borrow().on_drag_started.clone();
         if let Some(callback) = callback {
@@ -345,7 +353,12 @@ impl Source {
     /// A drag of this draggable ended with `outcome`; `callback` is the
     /// `on_drag_end` it started with.
     fn ended(&self, outcome: DragOutcome, callback: Option<&ValueCallback<DragOutcome>>) {
-        self.active.set(self.active.get().saturating_sub(1));
+        let active = self.active.get().saturating_sub(1);
+        self.active.set(active);
+        if active == 0 {
+            let released = self.kept_alive.borrow_mut().take();
+            drop(released);
+        }
         self.rebuild();
         if matches!(outcome, DragOutcome::Dropped { .. }) {
             self.haptic(HapticFeedback::Drop, HapticTiming::Immediate);
@@ -678,6 +691,7 @@ impl StatefulView for Draggable {
                 active: Cell::new(0),
                 held: RefCell::new(None),
                 pressed: RefCell::new(Vec::new()),
+                kept_alive: RefCell::new(None),
             }),
             drag: None,
             hold: None,
@@ -730,6 +744,7 @@ impl DraggableState {
         capabilities.pipeline = ctx.pipeline_owner();
         capabilities.rebuild = Some(ctx.rebuild_handle());
         capabilities.writer = Some(ctx.writer_source());
+        capabilities.keep_alive = Some(ctx.keep_alive_handle());
     }
 
     /// Build the recognizers for `trigger` under `settings`, retiring the ones
@@ -921,7 +936,13 @@ impl ViewState<Draggable> for DraggableState {
     /// Cancels every drag of this widget, its held transfer included: the
     /// targets entered get their leave and `on_drag_end` hears `Cancelled`.
     /// A drag the operating system runs continues until the OS ends it.
+    ///
+    /// A lazy list does not get here by scrolling a dragged row away: while
+    /// a drag is live the row holds a keep-alive lease, so only removing the
+    /// row (or its list) disposes it mid-drag.
     fn dispose(&mut self) {
+        let released = self.source.kept_alive.borrow_mut().take();
+        drop(released);
         self.drag_attachment.clear();
         self.hold_attachment.clear();
         let held = self.source.held.borrow_mut().take();

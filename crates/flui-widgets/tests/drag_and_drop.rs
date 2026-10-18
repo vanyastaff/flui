@@ -1316,3 +1316,107 @@ fn autoscroll_through(fixed_extent: bool) {
     );
     laid.dispatch_pointer_up(resting.0, resting.1);
 }
+
+/// A dragged row of a lazy list stays alive while its drag runs: the list
+/// scrolling it far out of its cache band under a resting pointer neither
+/// disposes it nor cancels the drag, which still drops on a target outside
+/// the list.
+pub(crate) fn a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag() {
+    let outcomes: Rc<RefCell<Vec<DragOutcome>>> = Rc::default();
+    let deepest = Rc::new(Cell::new(0_usize));
+    let row = {
+        let outcomes = Rc::clone(&outcomes);
+        let deepest = Rc::clone(&deepest);
+        move |index: usize| -> Option<BoxedView> {
+            (index < 200).then(|| {
+                deepest.set(deepest.get().max(index));
+                if index == 0 {
+                    let outcomes = Rc::clone(&outcomes);
+                    Draggable::new(
+                        quiet_commands(),
+                        || vec![DragItem::new().with_value("Alice")],
+                        SizedBox::new(400.0, 50.0).child(Text::new("Alice")),
+                    )
+                    .expect("one labelled command")
+                    .on_drag_end(move |_, outcome| outcomes.borrow_mut().push(outcome))
+                    .into_view()
+                    .boxed()
+                } else {
+                    // A row that declines, through which the drag finds the
+                    // list to scroll.
+                    DropTarget::new(
+                        DropCommands::new(CommandAppearance::new(
+                            format!("Paste into {index}"),
+                            Text::new("v"),
+                        )),
+                        |_drag| None,
+                        |_hover| SizedBox::new(400.0, 50.0).into_view().boxed(),
+                    )
+                    .expect("one labelled command")
+                    .into_view()
+                    .boxed()
+                }
+            })
+        }
+    };
+    let row = Rc::new(row);
+    let list = flui_widgets::Scrollable::new().viewport_builder(Rc::new(move |position| {
+        let row = Rc::clone(&row);
+        flui_widgets::ListView::builder(200, 50.0, move |index| row(index))
+            .position(position)
+            .into_view()
+            .boxed()
+    }));
+    let target = DropTarget::new(
+        DropCommands::new(CommandAppearance::new("Paste", Text::new("v"))),
+        |drag| drag.value::<&'static str>().map(|_| TransferActions::MOVE),
+        |_hover| SizedBox::new(400.0, 100.0).into_view().boxed(),
+    )
+    .expect("one labelled command");
+    let mut laid = lay_out(
+        Stack::new(vec![
+            Positioned::new(list)
+                .left(0.0)
+                .top(0.0)
+                .width(400.0)
+                .height(200.0)
+                .into_view()
+                .boxed(),
+            Positioned::new(target)
+                .left(0.0)
+                .top(300.0)
+                .width(400.0)
+                .height(100.0)
+                .into_view()
+                .boxed(),
+        ])
+        .fit(StackFit::Expand),
+        tight(400.0, 400.0),
+    );
+    laid.pump();
+    laid.dispatch_pointer_down(100.0, 25.0);
+    // Across first, so the list's vertical drag does not take the contact.
+    laid.dispatch_pointer_move(140.0, 25.0);
+    // Resting in the band along the list's bottom edge scrolls it down.
+    laid.dispatch_pointer_move(100.0, 196.0);
+    for _ in 0..240 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    laid.dispatch_pointer_move(100.0, 350.0);
+    laid.dispatch_pointer_up(100.0, 350.0);
+    settle(&mut laid);
+    assert_eq!(
+        *outcomes.borrow(),
+        [DragOutcome::Dropped {
+            action: TransferActions::MOVE
+        }],
+        "the drag outlived its row's trip out of the cache band"
+    );
+    // Row 0 leaves the 250-pixel cache band once row 16 is built; a drag that
+    // ended there would have stopped the autoscroll with it.
+    assert!(
+        deepest.get() > 40,
+        "the autoscroll kept going with the drag: row {}",
+        deepest.get()
+    );
+}

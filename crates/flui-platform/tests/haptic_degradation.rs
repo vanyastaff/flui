@@ -5,14 +5,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_platform::shared::haptic_degradation::{
-    ANDROID_USAGE_ASSISTANCE_SONIFICATION, ANDROID_USAGE_TOUCH, AndroidHapticConstant,
-    AndroidPatternPlan, AndroidPrimitive, AndroidVibrationUsage, AndroidVibrator,
-    CORE_HAPTICS_CURVE_POINTS, ComposedPrimitive, CoreHapticsControl, CoreHapticsCurve,
-    CoreHapticsEngine, CoreHapticsEvent, EnvelopeStep, IosGenerator, IosImpact, IosNotification,
-    MacFeedback, PEN_BUZZ, PenCommand, PenController, PenWaveform, WebVibration, actuator_for,
-    android_feedback, android_pattern, android_vibration_usage, ios_feedback, ios_pattern,
-    ios_pattern_parts, linux, macos_feedback, macos_pattern, pen_feedback_step, pen_timeline,
-    web_feedback, web_pattern, windows_capabilities, windows_feedback, windows_pattern,
+    ANDROID_USAGE_ASSISTANCE_SONIFICATION, ANDROID_USAGE_TOUCH, AndroidFeedbackAnswer,
+    AndroidHapticConstant, AndroidPatternPlan, AndroidPrimitive, AndroidVibrationUsage,
+    AndroidVibrator, CORE_HAPTICS_CURVE_POINTS, ComposedPrimitive, CoreHapticsControl,
+    CoreHapticsCurve, CoreHapticsEngine, CoreHapticsEvent, EnvelopeStep, IosGenerator, IosImpact,
+    IosNotification, MacFeedback, PEN_BUZZ, PenCommand, PenController, PenWaveform, WebVibration,
+    actuator_for, android_feedback, android_feedback_outcome, android_pattern,
+    android_vibration_usage, ios_feedback, ios_pattern, ios_pattern_parts, linux, macos_feedback,
+    macos_pattern, pen_feedback_step, pen_timeline, web_feedback, web_pattern,
+    windows_capabilities, windows_feedback, windows_pattern,
 };
 use flui_platform::traits::WindowOptions;
 use flui_platform::{FakeHaptics, HeadlessPlatform, OwnerPlatform, Platform as _};
@@ -230,6 +231,34 @@ fn android_feedback_rows() {
         );
     }
     assert_eq!(AndroidHapticConstant::DRAG_START.since, 34);
+    // The view's own answer decides what is reported: a declined call
+    // played nothing, whatever the table expected.
+    for (table, answer, reported) in [
+        (Submitted, AndroidFeedbackAnswer::Played, Submitted),
+        (Approximated, AndroidFeedbackAnswer::Played, Approximated),
+        (
+            Submitted,
+            AndroidFeedbackAnswer::Declined,
+            HapticOutcome::Suppressed,
+        ),
+        (
+            Approximated,
+            AndroidFeedbackAnswer::Declined,
+            HapticOutcome::Suppressed,
+        ),
+        (Submitted, AndroidFeedbackAnswer::Late, Submitted),
+        (
+            Submitted,
+            AndroidFeedbackAnswer::Failed,
+            HapticOutcome::Unavailable,
+        ),
+    ] {
+        assert_eq!(
+            android_feedback_outcome(table, answer),
+            reported,
+            "{table:?} answered {answer:?}"
+        );
+    }
 }
 
 fn vibrator(

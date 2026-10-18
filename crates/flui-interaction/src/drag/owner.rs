@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Offset;
-use flui_foundation::{DataTransferId, DragSessionId, IdMint, PresentationId, UiRuntimeId};
+use flui_foundation::{DataTransferId, DragSessionId, PresentationId, UiRuntimeId};
 use flui_platform_api::data_transfer::{
     DataTransferOffer, DataTransferSource, DropFeedback, Mime, RepresentationIndex,
     TransferActions, TransferError, TransferPayload,
@@ -218,9 +218,9 @@ impl DragOwner {
 
     /// This owner issuing session identities from `mint`, so a test can reach the
     /// terminal identity.
-    #[doc(hidden)]
+    #[cfg(feature = "testing")]
     #[must_use]
-    pub fn with_session_mint(self, mint: IdMint<DragSessionId>) -> Self {
+    pub fn with_session_mint(self, mint: flui_foundation::IdMint<DragSessionId>) -> Self {
         self.shared.borrow_mut().mint = mint;
         self
     }
@@ -542,14 +542,18 @@ impl DragOwner {
 
     /// Deliver an OS drag event to `presentation`'s receivers.
     ///
-    /// `hit` returns the hit-test path under a window position, innermost first.
+    /// `hit` returns the hit-test path under a window position for a pointer
+    /// of the given kind, innermost first: the kind of the session the drag
+    /// is, when this runtime started it (so a touch drag gets touch-sized
+    /// targets), and [`PointerKind::Unknown`] for another application's drag,
+    /// whose pointer the OS does not name.
     /// Runs in the owner's lane scope, where dispatch runs. The target's answer
     /// to each enter and move reaches the OS as drop feedback.
     pub fn deliver(
         &self,
         presentation: PresentationId,
         event: DragDropEvent,
-        hit: &mut dyn FnMut(Offset<f64>) -> Option<Vec<HitTestEntry>>,
+        hit: &mut dyn FnMut(Offset<f64>, PointerKind) -> Option<Vec<HitTestEntry>>,
     ) {
         match event {
             DragDropEvent::Entered {
@@ -610,16 +614,19 @@ impl DragOwner {
             return;
         }
         let key = DragSessionKey::from_offer(&offer);
-        let (scope, data, source_allowed) = match key {
-            None => (DragScope::External, None, None),
-            Some(key) if key.nonce() != state.nonce => (DragScope::External, None, None),
+        let (scope, data, source_allowed, pointer) = match key {
+            None => (DragScope::External, None, None, PointerKind::Unknown),
+            Some(key) if key.nonce() != state.nonce => {
+                (DragScope::External, None, None, PointerKind::Unknown)
+            }
             Some(key) => match state.find_live(key) {
                 Some(entry) => (
                     DragScope::Runtime,
                     Some(Rc::clone(&entry.data)),
                     Some(entry.allowed.within_app),
+                    pointer_kind(entry.pointer),
                 ),
-                None => (DragScope::OtherRuntime, None, None),
+                None => (DragScope::OtherRuntime, None, None, PointerKind::Unknown),
             },
         };
         state.incoming.push(Incoming {
@@ -634,6 +641,7 @@ impl DragOwner {
             in_flight: Arc::new(AtomicUsize::new(0)),
             dropped: false,
             position: None,
+            pointer,
         });
     }
 
@@ -641,7 +649,7 @@ impl DragOwner {
         &self,
         id: DataTransferId,
         position: Offset<f64>,
-        hit: &mut dyn FnMut(Offset<f64>) -> Option<Vec<HitTestEntry>>,
+        hit: &mut dyn FnMut(Offset<f64>, PointerKind) -> Option<Vec<HitTestEntry>>,
     ) {
         let found = {
             let mut state = self.shared.borrow_mut();
@@ -655,7 +663,7 @@ impl DragOwner {
             (incoming.tracker.clone(), ViewParts::of_incoming(incoming))
         };
         let (tracker, parts) = found;
-        let hits = hit(position)
+        let hits = hit(position, parts.pointer)
             .and_then(|path| receivers_on_path(&path, position).ok())
             .unwrap_or_default();
         // A failed hover still answers the OS, with nothing accepting, before
@@ -784,7 +792,7 @@ impl ViewParts {
             scope: incoming.scope,
             allowed,
             in_flight: Some(Arc::clone(&incoming.in_flight)),
-            pointer: PointerKind::Unknown,
+            pointer: incoming.pointer,
         }
     }
 
