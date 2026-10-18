@@ -58,6 +58,9 @@ const HOLD: Duration = Duration::from_millis(40);
 const STILL: Duration = Duration::from_millis(600);
 /// About how long a run drives the desktop, as it announces.
 const RUN_MINUTES: u32 = 4;
+/// Narrows a run to the checks whose name contains its value, such as
+/// `focus:`; unset or empty runs every check.
+const ONLY_ENV: &str = "FLUI_GALLERY_CHECKS";
 /// The sidebar entry the gallery opens on, which proves its window is up.
 const FIRST_SCREEN: &str = "Swipe actions";
 
@@ -221,7 +224,11 @@ fn drive(session: &mut Session, shots: &Path) -> anyhow::Result<Report> {
     std::thread::sleep(Duration::from_millis(500));
     let mut report = Report::default();
     let mut shot: Vec<&str> = Vec::new();
+    let only = std::env::var(ONLY_ENV).ok().filter(|only| !only.is_empty());
     for (name, check) in checks::CHECKS {
+        if only.as_deref().is_some_and(|only| !name.contains(only)) {
+            continue;
+        }
         let outcome = driver.open(check.screen).and_then(|()| {
             // Each screen as it first opens, for a person to look at.
             if !shot.contains(&check.screen) {

@@ -832,6 +832,24 @@ pub(crate) fn momentum_never_offers_post_fling() {
             .momentum(Offset::new(0.0, 600.0), 12, SAMPLE)
             .build()
             .expect("a whole pan");
+        // Momentum offers split by where the inner list was when the
+        // participant above it was asked: with room left, or at its end.
+        let offered = Rc::new(Cell::new((0.0, 0_u32)));
+        {
+            let (offered, inner) = (Rc::clone(&offered), inner.clone());
+            middle.set_observe(move |seen| {
+                if let Seen::Pre(step) = seen
+                    && step.cause == ScrollCause::Momentum
+                {
+                    let (moving, at_end) = offered.get();
+                    offered.set(if inner.pixels() < 800.0 {
+                        (moving + step.available.y, at_end)
+                    } else {
+                        (moving, at_end + 1)
+                    });
+                }
+            });
+        }
         laid.replay(&trackpad);
         settle(&mut laid);
         assert_eq!(
@@ -842,17 +860,17 @@ pub(crate) fn momentum_never_offers_post_fling() {
         // The fling above is the control that makes "never" mean something:
         // the same probe records the offer when a fling makes one. Wheel
         // packets are clamped to the extent, so momentum offers the list only
-        // what it has left.
-        let momentum_offered: f64 = middle
-            .steps()
-            .iter()
-            .filter(|step| step.cause == ScrollCause::Momentum)
-            .map(|step| step.available.y)
-            .sum();
+        // what it has left; at its end the list still offers each packet to
+        // the participant above it, which is asked before the list.
+        let (moving, at_end) = offered.get();
         assert_eq!(
-            momentum_offered,
+            moving,
             800.0 - 690.0,
             "{device:?}: momentum ran the inner list from where the pan left it to its end"
+        );
+        assert!(
+            at_end > 0,
+            "{device:?}: the participant above the list at its end still had its turn"
         );
         assert_eq!(
             middle.flings() + top.flings(),

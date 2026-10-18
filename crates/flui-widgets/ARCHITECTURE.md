@@ -2772,7 +2772,10 @@ Changing a `Scrollable` controller's position identity stops the old trajectory
 before changing its value/status listeners, then detaches the old command
 listener and cancellation hook. A stopped trajectory cannot transfer its old
 metrics to the new position. Rebuilding with the same identity preserves the
-run. Cancellation hooks have an owning attachment: detaching or disposing an
+run. A `Scrollable` built without a controller uses one its state makes and keeps
+for as long as it is mounted, so a parent rebuilt mid-drag (a `LayoutBuilder`, a
+focus change above it) changes no identity: the offset, the owner and the drag
+survive (`a_same_position_scrollable_rebuild_preserves_motion`). Cancellation hooks have an owning attachment: detaching or disposing an
 older attachment removes its hook and pending command only if that hook is
 still installed. Hook comparison/take is under a short owner-local borrow; retired hooks,
 command values and animation callbacks retire or execute after it is released.

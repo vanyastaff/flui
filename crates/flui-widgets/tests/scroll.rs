@@ -2313,6 +2313,45 @@ pub(crate) fn a_same_position_scrollable_rebuild_preserves_motion() {
         scroll.pixels() > before,
         "same position keeps its active trajectory"
     );
+
+    // Without a controller of its own the position is the state's: a parent
+    // rebuilt mid-drag (a layout builder, a focus change above it) keeps the
+    // offset and the drag.
+    let top = flui_interaction::focus::FocusNode::with_debug_label("content top");
+    let own_position = |vsync: &Vsync| {
+        VsyncScope::new(
+            vsync.clone(),
+            Scrollable::new().child(flui_widgets::Column::new(vec![
+                flui_widgets::Focus::new(SizedBox::new(300.0, 10.0))
+                    .focus_node(Rc::clone(&top))
+                    .boxed(),
+                SizedBox::new(300.0, 5000.0).boxed(),
+            ])),
+        )
+    };
+    let vsync = Vsync::new();
+    let mut laid =
+        crate::common::lay_out_animated(own_position(&vsync), tight(300.0, 300.0), vsync.clone());
+    laid.dispatch_pointer_down(150.0, 250.0);
+    laid.dispatch_pointer_move(150.0, 200.0);
+    laid.dispatch_pointer_move(150.0, 150.0);
+    laid.pump_for(Duration::from_millis(16));
+    let dragged = -top.rect().top();
+    assert!(dragged > 0.0, "the drag scrolled the content, by {dragged}");
+    laid.pump_widget(own_position(&vsync));
+    assert_eq!(
+        -top.rect().top(),
+        dragged,
+        "a rebuild above it keeps the scrollable's own position"
+    );
+    laid.dispatch_pointer_move(150.0, 100.0);
+    laid.pump_for(Duration::from_millis(16));
+    assert!(
+        -top.rect().top() >= dragged + 49.0,
+        "and the drag goes on, at {}",
+        -top.rect().top()
+    );
+    laid.dispatch_pointer_up(150.0, 100.0);
 }
 
 pub(crate) fn retiring_one_scrollable_preserves_a_later_owners_jump_hook() {

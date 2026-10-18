@@ -389,7 +389,8 @@ enum DeviceCheck {
     /// fails if any did. Captures of each screen land in
     /// `target/interaction-gallery/`. Exits 2 when the host refuses the
     /// foreground or the input. Needs an interactive desktop session; do not
-    /// touch the mouse or keyboard while it runs.
+    /// touch the mouse or keyboard while it runs. `FLUI_GALLERY_CHECKS=<text>`
+    /// runs only the checks whose name contains `<text>` (`focus:`).
     WindowsGallery,
     /// The web backend in a real headless Chrome, on any host that has one.
     ///

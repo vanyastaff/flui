@@ -134,6 +134,14 @@ impl ChainNode {
     pub(crate) fn parent(&self) -> Option<&Rc<ChainNode>> {
         self.parent.as_ref()
     }
+
+    /// Whether this node is a user connection. As the parent of a
+    /// scrollable's node, it says a connection sits between the scrollable
+    /// and the nearest one enclosing it: no listener of its own asks it for
+    /// a wheel packet, so the scrollable beneath offers the packet for it.
+    pub(crate) fn is_user_connection(&self) -> bool {
+        matches!(self.participant, Participant::Connection(_))
+    }
 }
 
 /// Publishes the nearest chain node to a subtree.
@@ -720,6 +728,7 @@ impl ScrollSequence {
             sequence: self.id,
             cause,
             device: self.device,
+            contact: self.contact,
             available,
         }
     }

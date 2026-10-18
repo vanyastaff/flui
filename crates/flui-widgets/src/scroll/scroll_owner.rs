@@ -823,6 +823,44 @@ impl ScrollOwner {
         recovery.finish();
     }
 
+    /// A wheel packet of `delta` (scroll coordinates) that cannot move this
+    /// leaf, at its extent: when a participant connection sits between the
+    /// leaf and the nearest enclosing scrollable, the packet still runs
+    /// through the chain under the binding's latch for its source, the leaf
+    /// taking nothing, so that connection gets its turn by the chain's own
+    /// latch (ADR-0209 §5). Returns whether the chain took part of it: the
+    /// leaf then claims the packet. Without such a connection nothing is
+    /// dispatched, and the enclosing scrollable's own claim decides.
+    pub(crate) fn wheel_at_extent(
+        self: &Rc<Self>,
+        device: ScrollDevice,
+        cause: ScrollCause,
+        delta: f64,
+    ) -> bool {
+        if !self.alive.get()
+            || self.refused()
+            || !self
+                .node
+                .parent()
+                .is_some_and(|parent| parent.is_user_connection())
+        {
+            return false;
+        }
+        let Some(sequence) = self.wheel_sequence(device) else {
+            return false;
+        };
+        let mut recovery = PanicRecovery::new();
+        let consumed = sequence.dispatch(
+            0,
+            cause,
+            self.to_physical(delta),
+            |_| Vec2::ZERO,
+            &mut recovery,
+        );
+        recovery.finish();
+        consumed != Vec2::ZERO
+    }
+
     /// A delta of the current run: the controller ticked.
     pub(crate) fn tick(&self) {
         let value = self.fling.value();

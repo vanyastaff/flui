@@ -212,6 +212,10 @@ const TINT_PAN: Rgb = Rgb(226, 214, 246);
 const TINT_SCALE: Rgb = Rgb(204, 236, 240);
 /// What anti-aliasing and colour management may move a flat fill by.
 const TOLERANCE: u8 = 10;
+/// How long a wheel burst stays one sequence after its last notch: the
+/// default preset's `GestureSettings::contactless_latch_idle`
+/// (`flui-interaction`, which xtask does not link).
+const CONTACTLESS_LATCH_IDLE: Duration = Duration::from_millis(1500);
 
 /// The viewer grid's cell colour (`painters::cell_color`).
 fn cell(column: i32, row: i32) -> Rgb {
@@ -456,7 +460,11 @@ fn collapsing_wheel(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver
         .text("Itinerary scrolled 0 px")
         .map_err(|error| error.context(format!("after {scrolled:?}, scrolling back up")))?;
-    // At its top, the list leaves the next notches to the header.
+    // At its top, the list leaves the next wheel burst to the header. The
+    // burst that brought the list back is latched to the list for as long
+    // as its notches keep coming (ADR-0209 §5, the preset's contactless
+    // idle time), as a drag is for as long as its contact lasts.
+    std::thread::sleep(CONTACTLESS_LATCH_IDLE + Duration::from_millis(300));
     driver.wheel(list, 3, false)?;
     driver.pixel("the header expanded again", header, ACCENT, TOLERANCE)
 }

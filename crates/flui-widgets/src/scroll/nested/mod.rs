@@ -36,7 +36,8 @@
 //!   re-latches to the nearest consuming ancestor once the latched
 //!   participant consumes nothing at its edge, never back.
 //!   [`pre_scroll`](NestedScrollConnection::pre_scroll) is offered regardless
-//!   of the latch.
+//!   of the latch, also for a wheel packet the leaf at its extent cannot
+//!   take: the leaf still carries it to the connections above it.
 //! - **Containment.** A scrollable with [`OverscrollBehavior::Contain`] keeps
 //!   the remainder and the fling residual of its subtree: nothing above it
 //!   is offered either.
@@ -166,6 +167,11 @@ pub struct ScrollStep {
     pub cause: ScrollCause,
     /// The device the sequence runs on.
     pub device: ScrollDevice,
+    /// A user contact drives the sequence: a finger, a pen, or a mouse
+    /// with a button held. False for a wheel or trackpad packet, a key, an
+    /// assistive action and a programmatic scroll, which share a pointer
+    /// kind or no pointer at all with it.
+    pub contact: bool,
     /// What is left of the delta when this participant is asked, in
     /// physical axes (see the [module](self) documentation).
     pub available: Vec2,
@@ -186,6 +192,7 @@ impl ScrollStep {
             sequence,
             cause,
             device,
+            contact: false,
             available,
         }
     }

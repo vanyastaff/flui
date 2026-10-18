@@ -213,8 +213,10 @@ pub type ViewportBuilder = Rc<dyn Fn(ScrollPosition) -> BoxedView>;
 /// [`Listenable`]: flui_foundation::Listenable
 #[derive(Clone, StatefulView)]
 pub struct Scrollable {
-    /// The shared position + notification hub.
-    controller: ScrollController,
+    /// The shared position + notification hub, when the application holds
+    /// it; `None` uses one the state keeps for its lifetime, so a rebuild
+    /// of a parent never swaps the position under a drag.
+    controller: Option<ScrollController>,
     wheel_distances: WheelScrollDistances,
     /// An authored boundary / fling policy; `None` uses the owner's default.
     physics: Option<SharedScrollPhysics>,
@@ -273,7 +275,7 @@ impl std::fmt::Debug for Scrollable {
 impl Default for Scrollable {
     fn default() -> Self {
         Self {
-            controller: ScrollController::new(),
+            controller: None,
             wheel_distances: WheelScrollDistances::default(),
             physics: None,
             snap: None,
@@ -291,9 +293,10 @@ impl Default for Scrollable {
 }
 
 impl Scrollable {
-    /// A new vertical `Scrollable` with clamping physics and a fresh
-    /// `ScrollController`. Call `.controller(...)` to share the position with
-    /// a [`Scrollbar`](super::Scrollbar) or to read the offset programmatically.
+    /// A new vertical `Scrollable` with clamping physics and a position of
+    /// its own, which it keeps across rebuilds for as long as it is mounted.
+    /// Call `.controller(...)` to share the position with a
+    /// [`Scrollbar`](super::Scrollbar) or to read the offset programmatically.
     pub fn new() -> Self {
         Self::default()
     }
@@ -303,7 +306,7 @@ impl Scrollable {
     /// to the same controller.
     #[must_use]
     pub fn controller(mut self, controller: ScrollController) -> Self {
-        self.controller = controller;
+        self.controller = Some(controller);
         self
     }
 
@@ -583,7 +586,7 @@ impl StatefulView for Scrollable {
             default_physics: Arc::new(ClampingScrollPhysics::new()),
             focus: Rc::clone(&focus),
             reveal: Rc::new(ScrollReveal::new(focus)),
-            scroll_controller: self.controller.clone(),
+            scroll_controller: self.controller.clone().unwrap_or_default(),
             stop_hook: None,
             fling_controller,
             fling_clock: None,
@@ -638,7 +641,7 @@ impl ScrollableState {
         ctx: &dyn BuildContext,
     ) -> Rc<ScrollOwner> {
         let config = OwnerConfig {
-            controller: view.controller.clone(),
+            controller: self.scroll_controller.clone(),
             fling: self.fling_controller.controller().clone(),
             physics: physics.clone(),
             snap: view.snap.clone(),
@@ -882,8 +885,8 @@ impl ViewState<Scrollable> for ScrollableState {
     fn build(&self, view: &Scrollable, ctx: &dyn BuildContext) -> impl IntoView {
         let wheel_preferences = GestureArenaScope::wheel_preferences_of(ctx);
         let wheel_distances = view.wheel_distances;
-        let scroll_controller = view.controller.clone();
-        let a11y_controller = view.controller.clone();
+        let scroll_controller = self.scroll_controller.clone();
+        let a11y_controller = self.scroll_controller.clone();
         let physics = view
             .physics
             .as_ref()
@@ -1143,8 +1146,27 @@ impl ViewState<Scrollable> for ScrollableState {
                         pixels = ctrl_wheel.pixels(),
                         "pointer-scroll tick"
                     );
+                    let device = ScrollDevice::Pointer {
+                        kind: data.pointer.kind,
+                        device: data.pointer.device,
+                    };
+                    let cause = match data.phase {
+                        Some(
+                            ScrollPhase::MomentumBegan
+                            | ScrollPhase::MomentumChanged
+                            | ScrollPhase::MomentumEnded,
+                        ) => ScrollCause::Momentum,
+                        _ => ScrollCause::UserInput,
+                    };
                     if target == base {
-                        return EventPropagation::Continue;
+                        // At its extent the leaf still carries the packet to
+                        // a participant above it (a collapsing header), which
+                        // has no claim of its own.
+                        return if owner_wheel.wheel_at_extent(device, cause, delta) {
+                            EventPropagation::Stop
+                        } else {
+                            EventPropagation::Continue
+                        };
                     }
                     // Commit admission before callbacks. A nested tick inherits
                     // this destination and replaces its owner; the older handler
@@ -1162,10 +1184,6 @@ impl ViewState<Scrollable> for ScrollableState {
                     };
                     // The packet is a step of the binding's latch for this
                     // source; a new latch preempts the motion of the last one.
-                    let device = ScrollDevice::Pointer {
-                        kind: data.pointer.kind,
-                        device: data.pointer.device,
-                    };
                     let Some(sequence) = owner_wheel.wheel_sequence(device) else {
                         wheel_motion.borrow_mut().take();
                         return EventPropagation::Continue;
@@ -1226,14 +1244,6 @@ impl ViewState<Scrollable> for ScrollableState {
                     if !is_current() {
                         return EventPropagation::Stop;
                     }
-                    let cause = match data.phase {
-                        Some(
-                            ScrollPhase::MomentumBegan
-                            | ScrollPhase::MomentumChanged
-                            | ScrollPhase::MomentumEnded,
-                        ) => ScrollCause::Momentum,
-                        _ => ScrollCause::UserInput,
-                    };
                     owner_wheel.wheel_step(&sequence, cause, target);
                     if !is_current() {
                         return EventPropagation::Stop;
@@ -1401,11 +1411,18 @@ impl ViewState<Scrollable> for ScrollableState {
         }
     }
 
-    fn did_update_view(&mut self, _old_view: &Scrollable, new_view: &Scrollable) {
+    fn did_update_view(&mut self, old_view: &Scrollable, new_view: &Scrollable) {
+        // Without a controller of its own, a rebuild keeps the position this
+        // state made; one taken away from the application gets a fresh one.
+        let incoming = match (&new_view.controller, &old_view.controller) {
+            (Some(controller), _) => controller.clone(),
+            (None, None) => return,
+            (None, Some(_)) => ScrollController::new(),
+        };
         if self
             .scroll_controller
             .position()
-            .ptr_eq(&new_view.controller.position())
+            .ptr_eq(&incoming.position())
         {
             return;
         }
@@ -1417,7 +1434,7 @@ impl ViewState<Scrollable> for ScrollableState {
         self.scroll_controller.position().set_is_scrolling(false);
         self.remove_command_listener();
         self.detach_stop_hook();
-        self.scroll_controller = new_view.controller.clone();
+        self.scroll_controller = incoming;
         self.recognizer_owner = Rc::new(());
         self.install_fling_listener();
         self.install_fling_status_listener();

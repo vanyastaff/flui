@@ -11,7 +11,9 @@
   programmatic request made during a pass waits for the pass instead of being refused
   ([research](../research/2026-10-17-scroll-jump-during-dispatch.md)); §6a: a remainder catches
   an ancestor's own motion, and the sequence settles every scrollable it moved
-  ([research](../research/2026-10-17-nested-scroll-spring-remainder.md)).
+  ([research](../research/2026-10-17-nested-scroll-spring-remainder.md)). 2026-10-18 — §1:
+  a step says whether a contact drives it; §5: a leaf at its extent still carries a wheel or
+  trackpad packet to the connections below the nearest enclosing scrollable.
 - **Supersedes:** [ADR-0169](ADR-0169-nested-scroll-ballistic-handoff.md)
 - **Related:** [ADR-0051](ADR-0051-anchor-stationary-scroll-correction.md),
   [ADR-0157](ADR-0157-native-scroll-range-actions.md),
@@ -38,7 +40,8 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
 
    ```rust
    #[non_exhaustive] pub struct ScrollStep { pub sequence: InputSequenceId, pub cause: ScrollCause,
-                                             pub device: ScrollDevice, pub available: Vec2 }
+                                             pub device: ScrollDevice, pub contact: bool,
+                                             pub available: Vec2 }
    #[non_exhaustive] pub struct FlingStep { pub sequence: InputSequenceId, pub device: ScrollDevice,
                                             pub available: Velocity }
    pub trait NestedScrollConnection {                    // object-safe, &self, !Send by design
@@ -66,6 +69,9 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    `#[non_exhaustive]` (Surface Dial, Digital Crown); `FlingHandoff` is exhaustive — a two-way
    answer whose growth would be a contract change. Participants decide by these, never by delta size, and opt in to `Programmatic`: the
    default methods ignore it (Compose deprecated `Relocate` for unintended consumption).
+   `ScrollStep::contact` says whether a user contact (a finger, a pen, a mouse with a button
+   held) drives the sequence: a mouse drag and a mouse wheel share `PointerKind::Mouse`, and a
+   participant that only a dragging hand may move (pull-to-refresh) needs the difference.
 3. **One offset primitive.** Every scroll (drag, wheel, keyboard, assistive actions per ADR-0157,
    `reveal(rect)` per ADR-0168, controller jumps and animations, DnD autoscroll) goes through the
    dispatcher with its cause. `reveal(rect)` passes every ancestor through the chain and keeps
@@ -136,6 +142,18 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    `EventTime` from the preset, phased sources longer (Wayland can send Start without End). The
    channel keeps no timer and never re-derives sequence boundaries; the only re-latch inside a
    sequence is the preset-selected edge exception in §6.
+
+   **A leaf at its extent still carries a wheel packet.** The binding routes a wheel or trackpad
+   packet to the first listener on the hit path that claims it, leaf first, and a scrollable
+   claims only a packet it can act on. A user connection has no listener of its own, so a
+   scrollable that cannot move by a packet still dispatches it, taking nothing itself, when a
+   connection sits between it and the nearest enclosing scrollable, and claims the packet if the
+   chain took part of it. The dispatch is an ordinary step under the sequence's latch:
+   `pre_scroll` is offered regardless of it, as for a drag at the edge, and `post_scroll` only
+   where §5 and §6 admit a remainder. So a header that expands after its content expands on the
+   next wheel sequence once the list is at its top, as it does on the next drag, and an
+   enclosing scrollable still decides by its own claim when no connection is in between. Rows:
+   `collapsing_header_expands_first_or_last` and `momentum_never_offers_post_fling`.
 6. **Remainder policy.** `OverscrollBehavior::{Auto, Contain}` (CSS `overscroll-behavior`) is a
    channel policy, never an arena input. `Contain` stops the remainder at that scrollable. Under
    `Auto`, the latch holds for the whole `InputSequenceId` by default (§5); the ancestor moves on

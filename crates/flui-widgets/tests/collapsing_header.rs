@@ -5,11 +5,13 @@
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use flui_animation::Vsync;
 use flui_interaction::RemainderHandoff;
 use flui_interaction::focus::FocusNode;
 use flui_interaction::{GestureProfiles, GestureSettings, GestureSettingsSource, GestureValues};
+use flui_testing::MouseScript;
 use flui_testing::a11y::{Action, ActionRequest, Role, TreeId};
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
@@ -294,6 +296,46 @@ pub(crate) fn collapsing_header_expands_first_or_last() {
         assert!(
             screen.extent() > COLLAPSED + 50.0,
             "{device:?}: and the same contact went on to expand the header, at {}",
+            screen.extent()
+        );
+    }
+
+    // A wheel over a list at its start: the list cannot move, and still
+    // carries the notch to the header above it, which has no claim of its
+    // own; in a later burst, and within the burst that collapsed it.
+    let idle = GestureSettings::default().contactless_latch_idle();
+    for pause in [idle + Duration::from_millis(50), Duration::from_millis(50)] {
+        let mut screen = Screen::new(extents(), |header| header);
+        let mut wheel = MouseScript::new("wheel down, then up").move_to(at(150.0, 280.0));
+        for _ in 0..2 {
+            wheel = wheel.wheel(1.0).wait(Duration::from_millis(30)).frame();
+        }
+        wheel = wheel.wait(pause).frame();
+        for _ in 0..6 {
+            wheel = wheel.wheel(-1.0).wait(Duration::from_millis(30)).frame();
+        }
+        let wheel = wheel.build().expect("a hovering mouse");
+        let list = screen.list.clone();
+        let body = Rc::clone(&screen.body);
+        let collapsed = Cell::new(EXPANDED);
+        screen.laid.replay_with(&wheel, |laid, _| {
+            laid.tick();
+            collapsed.set(collapsed.get().min(body.rect().top()));
+        });
+        screen.settle();
+        assert!(
+            collapsed.get() < EXPANDED - 20.0,
+            "{pause:?}: the notches down collapsed the header first, to {}",
+            collapsed.get()
+        );
+        assert_eq!(
+            list.pixels(),
+            0.0,
+            "{pause:?}: the list stayed at its start"
+        );
+        assert!(
+            near(screen.extent(), EXPANDED),
+            "{pause:?}: the notches up expanded the header again, at {}",
             screen.extent()
         );
     }

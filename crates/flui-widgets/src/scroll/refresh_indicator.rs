@@ -11,9 +11,9 @@
 //!   when the step is [`ScrollCause::UserInput`]: a drag. A fling
 //!   ([`ScrollCause::SideEffect`]) and platform momentum never pull, and a
 //!   fling residual is declined. A wheel, a trackpad pan, keys and
-//!   assistive steps are user input too, but a scrollable moves to a target
-//!   clamped to its extents for them, so they leave no remainder to pull
-//!   with: only a dragging hand reveals the indicator. Taking the first
+//!   assistive steps are user input too, and a list at its top passes a
+//!   wheel or trackpad packet up its chain, but none of them is a contact
+//!   ([`ScrollStep::contact`]): only a dragging hand reveals the indicator. Taking the first
 //!   delta latches the contact here (ADR-0209 §5): `pre_scroll` gives a
 //!   reversing finger its pull back first, and the list moves again on the
 //!   next contact. A leaf with bouncing physics keeps its own overscroll and
@@ -584,7 +584,9 @@ impl NestedScrollConnection for Refresher {
     }
 
     fn post_scroll(&self, step: &ScrollStep, _consumed_by_child: Vec2) -> Vec2 {
-        if step.cause != ScrollCause::UserInput || !self.mounted.get() {
+        // Only a contact pulls: a wheel or trackpad packet at the top
+        // reaches the chain too, and pulls nothing.
+        if step.cause != ScrollCause::UserInput || !step.contact || !self.mounted.get() {
             return Vec2::ZERO;
         }
         if self.controller().is_refreshing() {
