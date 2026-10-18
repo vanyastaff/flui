@@ -95,7 +95,7 @@ fn hover_moves_on_two_surfaces_coalesce_apart() {
     let embedded = binding.embed_surface().expect("surface");
     let moves = count_router_moves(&binding);
     binding.handle_pointer_event(&hover(1, Offset::new(1.0, 1.0)), |_| HitTestResult::new());
-    binding.handle_pointer_event_on(embedded, &hover(1, Offset::new(2.0, 2.0)), |_| {
+    let _ = binding.dispatch_pointer_on(embedded, &hover(1, Offset::new(2.0, 2.0)), |_| {
         HitTestResult::new()
     });
     assert_eq!(
@@ -117,7 +117,7 @@ fn hover_position_is_kept_per_surface() {
     let PointerEvent::Move(update) = hover(1, Offset::new(5.0, 5.0)) else {
         unreachable!("a move helper builds a move")
     };
-    binding.handle_pointer_event_on(embedded, &PointerEvent::Move(update.clone()), |_| {
+    let _ = binding.dispatch_pointer_on(embedded, &PointerEvent::Move(update.clone()), |_| {
         HitTestResult::new()
     });
     assert_eq!(
@@ -155,7 +155,7 @@ fn a_wheel_latch_stays_on_its_surface() {
         let window_path = path_for(&window_consumed, 1);
         let embedded_path = path_for(&embedded_consumed, 2);
         binding.handle_pointer_event(&wheel(ScrollPhase::Began), |_| window_path.clone());
-        binding.handle_pointer_event_on(embedded, &wheel(ScrollPhase::Changed), |_| {
+        let _ = binding.dispatch_pointer_on(embedded, &wheel(ScrollPhase::Changed), |_| {
             embedded_path.clone()
         });
         binding.handle_pointer_event(&wheel(ScrollPhase::Changed), |_| embedded_path.clone());
@@ -193,13 +193,13 @@ fn a_contact_stays_with_the_surface_that_admitted_it() {
             |_| path.clone(),
         );
         // The drag left the window: the embedded surface reports its tail.
-        binding.handle_pointer_event_on(
+        let _ = binding.dispatch_pointer_on(
             embedded,
             &make_move_event_for_id(id, Offset::new(4.0, 0.0), PointerKind::Touch).expect("move"),
             |_| panic!("a captured touch contact is not hit-tested"),
         );
         assert_eq!(binding.flush_pending_moves(), 1);
-        binding.handle_pointer_event_on(
+        let _ = binding.dispatch_pointer_on(
             embedded,
             &make_up_event_for_id(id, Offset::new(4.0, 0.0), PointerKind::Touch).expect("up"),
             |_| panic!("a terminal is not hit-tested"),

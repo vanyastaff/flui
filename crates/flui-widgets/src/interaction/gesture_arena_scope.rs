@@ -102,6 +102,29 @@ impl GestureArenaScope {
         )
     }
 
+    /// [`Self::of`], registering a dependency: the caller's
+    /// `did_change_dependencies` runs when the scope hands out a handle that
+    /// admits elsewhere or another policy.
+    ///
+    /// # Panics
+    /// Panics outside a presentation scope, as [`Self::of`] does.
+    pub(crate) fn dependent_of(ctx: &dyn BuildContext) -> GestureArena {
+        ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| {
+            scope.data.arena.with_settings(scope.data.settings.clone())
+        })
+        .expect(
+            "BUG: gesture consumers must be mounted beneath GestureArenaScope; \
+             the presentation binding is the sole GestureArena lifecycle owner",
+        )
+    }
+
+    /// [`Self::of`], or `None` outside a presentation scope.
+    pub(crate) fn maybe_of(ctx: &dyn BuildContext) -> Option<GestureArena> {
+        ctx.get::<ResolvedGestureArenaScope, _>(|scope| {
+            scope.data.arena.with_settings(scope.data.settings.clone())
+        })
+    }
+
     /// The shared arena configured for this scope.
     #[must_use]
     pub fn arena(&self) -> &GestureArena {
@@ -166,8 +189,11 @@ impl InheritedView for ResolvedGestureArenaScope {
     fn child(&self) -> &dyn View {
         &self.child
     }
+    /// A consumer's recognizers join the arena and follow the policy they were
+    /// built with, so a change of either reaches every dependent.
     fn update_should_notify(&self, old: &Self) -> bool {
-        self.data.settings != old.data.settings
+        !self.data.arena.admits_like(&old.data.arena)
+            || self.data.settings != old.data.settings
             || self.data.wheel_preferences != old.data.wheel_preferences
     }
 }

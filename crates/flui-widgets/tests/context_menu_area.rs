@@ -2,14 +2,17 @@
 //! Where it opens for each trigger (flipping at the window's edges and
 //! mirrored right-to-left), the keys that move inside it, what closes it and
 //! where the focus goes then, a command that panics, and what assistive
-//! technology reads. Its rows of the input-path matrix sit with the other
-//! behavioural widgets' in `gesture_alternatives`.
+//! technology reads, and the menu's long press handing its contact to a drag.
+//! Its rows of the input-path matrix sit with the other behavioural widgets'
+//! in `gesture_alternatives`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
+use flui_interaction::drag::{DragItem, DragTrigger};
+use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_platform_api::EventTime;
 use flui_platform_api::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
@@ -20,9 +23,9 @@ use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture
 use flui_view::prelude::*;
 use flui_view::{BoxedView, StateHandle};
 use flui_widgets::{
-    Actions, Alternative, CallbackAction, ContextMenuArea, Directionality, GestureAlternatives,
-    GestureCommand, Intent, MenuSpec, Navigator, NavigatorHandle, Padding, PageRoute, Positioned,
-    SizedBox, Stack,
+    Actions, Alternative, AlternativeKind, CallbackAction, ColoredBox, CommandAppearance,
+    ContextMenuArea, Directionality, DragCommands, Draggable, GestureAlternatives, GestureCommand,
+    Intent, MenuSpec, Navigator, NavigatorHandle, Padding, PageRoute, Positioned, SizedBox, Stack,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -669,6 +672,112 @@ pub(crate) fn a_panicking_item_leaves_no_menu_open() {
     let delete = mounted.item_center(DELETE);
     mounted.click(delete);
     assert_eq!(*mounted.log.borrow(), [DELETE], "the next menu works");
+}
+
+// ============================================================================
+// Hand-off to a drag
+// ============================================================================
+
+/// What a menu-to-drag scene recorded, in order: the menu opening and
+/// closing, and the drag starting.
+type Events = Rc<RefCell<Vec<&'static str>>>;
+
+/// A card dragged by a long press, logging its start to `events`; its own
+/// commands open a menu that logs to `events` when `own_menu`.
+fn long_press_card(events: &Events, own_menu: bool) -> Draggable {
+    let mut commands = DragCommands::new(CommandAppearance::new(
+        "Cut card",
+        SizedBox::new(10.0, 10.0),
+    ));
+    if own_menu {
+        let opened = Rc::clone(events);
+        commands = commands.alternative(AlternativeKind::context_menu(move |_cx, _request| {
+            opened.borrow_mut().push("open");
+        }));
+    }
+    let started = Rc::clone(events);
+    Draggable::new(
+        commands,
+        || vec![DragItem::new().with_value("card")],
+        SizedBox::new(ROW.0, ROW.1).child(ColoredBox::new(Color::RED)),
+    )
+    .expect("one labelled command")
+    .trigger(DragTrigger::LongPress)
+    .on_drag_started(move |_| started.borrow_mut().push("drag"))
+}
+
+/// `content` as a `WidgetsApp`'s home, in a 400 × 300 window.
+fn mount_home(content: impl IntoView) -> LaidOut {
+    let mut laid = lay_out(flui_widgets::WidgetsApp::new(content), tight(400.0, 300.0));
+    laid.pump();
+    laid
+}
+
+/// A finger held past the long-press timeout, then moved past the slop.
+fn hold_then_drag(at: Offset<f64>) -> PointerScript {
+    let mut script = TouchScript::new("hold, then drag")
+        .down(1, at)
+        .wait(Duration::from_secs(1));
+    for dx in [1.0, 2.0, 60.0, 80.0] {
+        script = script
+            .move_to(1, at + Offset::new(dx, 0.0))
+            .wait(Duration::from_millis(16));
+    }
+    script.up(1).build().expect("the press lifts its finger")
+}
+
+/// A menu's long press around a long-press drag is the drag's hold, not a
+/// second one: the press opens the menu, and once the finger moves past the
+/// slop the menu's `dismiss` closes it and the drag takes the contact. A
+/// long press that does not move keeps the menu and starts no drag. The same
+/// holds for a card whose own commands open a menu.
+pub(crate) fn a_held_press_moved_past_the_slop_closes_the_menu_and_drags() {
+    let at = Offset::new(150.0, 25.0);
+    let around = |events: &Events| {
+        let (opened, closed) = (Rc::clone(events), Rc::clone(events));
+        GestureAlternatives::new(Alternative::ContextMenu(
+            MenuSpec::new(GestureCommand::new(DELETE, Delete), move |_cx, _request| {
+                opened.borrow_mut().push("open");
+            })
+            .dismiss(move |_cx| closed.borrow_mut().push("close")),
+        ))
+        .expect("one labelled command")
+        .child(long_press_card(events, false))
+    };
+    let still = TouchScript::new("long press")
+        .down(1, at)
+        .wait(Duration::from_secs(1))
+        .up(1)
+        .build()
+        .expect("the press lifts its finger");
+    let rows: [(&str, bool, &PointerScript, &[&str]); 3] = [
+        (
+            "around: moved",
+            false,
+            &hold_then_drag(at),
+            &["open", "drag", "close"],
+        ),
+        ("around: still", false, &still, &["open"]),
+        (
+            "own menu: moved",
+            true,
+            &hold_then_drag(at),
+            &["open", "drag"],
+        ),
+    ];
+    for (name, own_menu, script, expected) in rows {
+        let events = Events::default();
+        let mut laid = if own_menu {
+            mount_home(long_press_card(&events, true))
+        } else {
+            mount_home(around(&events))
+        };
+        laid.replay(script);
+        for _ in 0..4 {
+            laid.pump_for(Duration::from_millis(16));
+        }
+        assert_eq!(*events.borrow(), expected, "{name}");
+    }
 }
 
 // ============================================================================

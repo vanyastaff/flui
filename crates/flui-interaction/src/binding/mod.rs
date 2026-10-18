@@ -420,7 +420,7 @@ impl GestureBinding {
     /// Mint the identity of a surface embedded in this binding's window.
     ///
     /// Input the embedder routes through
-    /// [`handle_pointer_event_on`](Self::handle_pointer_event_on) with this
+    /// [`dispatch_pointer_on`](Self::dispatch_pointer_on) with this
     /// surface keeps its own hover, move coalescing and wheel and pan-zoom
     /// latches, apart from the window's.
     ///
@@ -773,30 +773,17 @@ impl GestureBinding {
     where
         F: FnOnce(Offset<f64>) -> HitTestResult,
     {
-        self.handle_pointer_event_on(InputSurface::Window, event, hit_test_fn);
+        let _ = self.dispatch_pointer_on(InputSurface::Window, event, hit_test_fn);
     }
 
-    /// Handle a pointer event `surface` reported; `hit_test_fn` answers in
-    /// that surface's coordinates.
+    /// Dispatch a pointer event `surface` reported, and report the input
+    /// sequence it belonged to; `hit_test_fn` answers in that surface's
+    /// coordinates.
     ///
     /// Hover, move coalescing and wheel and pan-zoom latches are kept per
     /// surface. A contact belongs to the surface that admitted its Down: its
     /// Move/Up/Cancel are delivered on that route even when another surface
     /// reports them, so a drag that leaves its surface stays with it.
-    pub fn handle_pointer_event_on<F>(
-        &self,
-        surface: InputSurface,
-        event: &PointerEvent,
-        hit_test_fn: F,
-    ) where
-        F: FnOnce(Offset<f64>) -> HitTestResult,
-    {
-        let _ = self.dispatch_pointer_on(surface, event, hit_test_fn);
-    }
-
-    /// Dispatch a pointer event `surface` reported, as
-    /// [`handle_pointer_event_on`](Self::handle_pointer_event_on) does, and
-    /// report the input sequence it belonged to.
     ///
     /// A Down mints its contact's [`InputSequenceId`]; the contact's Move, Up
     /// and Cancel carry the same one. A wheel or trackpad packet carries its

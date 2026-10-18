@@ -34,6 +34,7 @@ use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, curves};
 use flui_foundation::Listenable;
+use flui_interaction::GestureArena;
 use flui_interaction::gesture::horizontal_drag;
 use flui_interaction::{
     DragEndDetails, DragGestureRecognizer, DragStartDetails, DragUpdateDetails, GestureRecognizer,
@@ -537,7 +538,7 @@ impl StatefulView for BackGestureDetector {
                 Rc::clone(&self.enabled),
             ))),
             recognizer: None,
-            settings: None,
+            built_for: None,
             attachment: Rc::new(RecognizerAttachment::default()),
         }
     }
@@ -547,7 +548,8 @@ pub(crate) struct BackGestureDetectorState {
     runtime: super::lifecycle::Terminal<Rc<BackGestureRuntime>>,
     /// Current admission owner, replaced when an authored provider changes.
     recognizer: Option<Rc<DragGestureRecognizer>>,
-    settings: Option<flui_interaction::GestureSettingsProvider>,
+    /// The policy and arena handle the recognizer was built with.
+    built_for: Option<(flui_interaction::GestureSettingsProvider, GestureArena)>,
     attachment: Rc<RecognizerAttachment<DragGestureRecognizer>>,
 }
 
@@ -570,17 +572,27 @@ impl std::fmt::Debug for BackGestureDetectorState {
 impl ViewState<BackGestureDetector> for BackGestureDetectorState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let settings = GestureArenaScope::settings_of(ctx);
-        let recognizer = self.build_recognizer(ctx, settings.clone());
-        self.settings = Some(settings);
+        let arena = GestureArenaScope::of(ctx);
+        let recognizer = self.build_recognizer(arena.clone(), settings.clone());
+        self.built_for = Some((settings, arena));
         self.attachment.attach(&recognizer);
         self.recognizer = Some(recognizer);
     }
 
+    /// A scope with another policy, or one handing out a handle that admits
+    /// elsewhere, replaces the recognizer.
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         let settings = GestureArenaScope::settings_of(ctx);
-        if self.settings.as_ref() != Some(&settings) {
-            let incoming = self.build_recognizer(ctx, settings.clone());
-            self.settings = Some(settings);
+        let arena = GestureArenaScope::of(ctx);
+        let current = self
+            .built_for
+            .as_ref()
+            .is_some_and(|(built_settings, built_arena)| {
+                *built_settings == settings && built_arena.admits_like(&arena)
+            });
+        if !current {
+            let incoming = self.build_recognizer(arena.clone(), settings.clone());
+            self.built_for = Some((settings, arena));
             self.attachment.attach(&incoming);
             let outgoing = self.recognizer.replace(incoming);
             if let Some(outgoing) = outgoing {
@@ -636,11 +648,9 @@ impl ViewState<BackGestureDetector> for BackGestureDetectorState {
 impl BackGestureDetectorState {
     fn build_recognizer(
         &self,
-        ctx: &dyn LifecycleContext,
+        arena: GestureArena,
         settings: flui_interaction::GestureSettingsProvider,
     ) -> Rc<DragGestureRecognizer> {
-        let arena = GestureArenaScope::of(ctx);
-
         let start_runtime = Rc::clone(&self.runtime);
         let update_runtime = Rc::clone(&self.runtime);
         let end_runtime = Rc::clone(&self.runtime);

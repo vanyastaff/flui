@@ -15,11 +15,11 @@ use flui_interaction::gesture::{
 };
 use flui_interaction::pointer::{EventPropagation, PanZoomDispatch};
 use flui_interaction::{
-    CancelOutcome, DoubleTapDetails, DoubleTapGestureRecognizer, DragAxis, DragDownDetails,
-    DragEndDetails, DragGestureRecognizer, DragPointerStrategy, DragStartDetails,
+    AxisLock, CancelOutcome, DoubleTapDetails, DoubleTapGestureRecognizer, DragAxis,
+    DragDownDetails, DragEndDetails, DragGestureRecognizer, DragPointerStrategy, DragStartDetails,
     DragUpdateDetails, ForcePressDetails, ForcePressGestureRecognizer, GestureArenaMember,
     GestureContest, GestureRecognizer, LongPressGestureRecognizer, MultiTapGestureRecognizer,
-    PointerDispatch, RecognizerSet, TapGestureRecognizer, cancel_all,
+    PointerDispatch, RecognizerSet, TapGestureRecognizer, TransformLock, cancel_all,
 };
 use flui_interaction::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo, PointerKindSet};
 use flui_platform_api::EventTime;
@@ -64,6 +64,7 @@ pub struct DragSlot {
     axis: DragAxis,
     devices: PointerKindSet,
     strategy: DragPointerStrategy,
+    axis_lock: AxisLock,
     callbacks: DragCallbacks,
 }
 
@@ -73,8 +74,19 @@ impl DragSlot {
             axis,
             devices: PointerKindSet::all(),
             strategy: DragPointerStrategy::PrimaryOnly,
+            axis_lock: AxisLock::default(),
             callbacks: DragCallbacks::default(),
         }
+    }
+
+    /// Rail a pan that starts near an axis onto it (default
+    /// [`Free`](AxisLock::Free)): its updates and release velocity follow
+    /// that axis alone, for touch and touchpad (ADR-0208 §4). An axial drag
+    /// is on its axis already. A mounted detector whose lock changes cancels
+    /// the drag in progress.
+    pub fn axis_lock(mut self, lock: AxisLock) -> Self {
+        self.axis_lock = lock;
+        self
     }
 
     /// A drag in any direction: it claims a contact past the pan slop and
@@ -175,6 +187,7 @@ impl std::fmt::Debug for DragSlot {
             .field("axis", &self.axis)
             .field("devices", &self.devices)
             .field("strategy", &self.strategy)
+            .field("axis_lock", &self.axis_lock)
             .finish_non_exhaustive()
     }
 }
@@ -203,6 +216,8 @@ impl TransformCallbacks {
 #[must_use]
 pub struct TransformSlot {
     start_mode: ScaleStartMode,
+    axis_lock: AxisLock,
+    transform_lock: TransformLock,
     callbacks: TransformCallbacks,
 }
 
@@ -210,6 +225,22 @@ impl TransformSlot {
     /// A transform slot with no callbacks yet.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Rail focal motion that starts near an axis onto it, for touch and
+    /// touchpad (default [`Free`](AxisLock::Free); ADR-0208 §4). A mounted
+    /// detector whose lock changes cancels the transform in progress.
+    pub fn axis_lock(mut self, lock: AxisLock) -> Self {
+        self.axis_lock = lock;
+        self
+    }
+
+    /// Keep rotation or scale at identity in a transform that begins as a
+    /// pan (default [`None`](TransformLock::None); ADR-0208 §4). A mounted
+    /// detector whose lock changes cancels the transform in progress.
+    pub fn transform_lock(mut self, lock: TransformLock) -> Self {
+        self.transform_lock = lock;
+        self
     }
 
     /// Called when a multi-contact or native trackpad scale begins.
@@ -274,6 +305,8 @@ impl std::fmt::Debug for TransformSlot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TransformSlot")
             .field("start_mode", &self.start_mode)
+            .field("axis_lock", &self.axis_lock)
+            .field("transform_lock", &self.transform_lock)
             .finish_non_exhaustive()
     }
 }
@@ -1064,6 +1097,7 @@ struct DragFactory {
     axis: DragAxis,
     devices: PointerKindSet,
     strategy: DragPointerStrategy,
+    axis_lock: AxisLock,
     live: Rc<LiveCallbacks>,
 }
 
@@ -1088,6 +1122,7 @@ impl GestureRecognizerFactory for DragFactory {
         DragGestureRecognizer::builder(cx.arena().clone(), self.axis)
             .allowed_devices(self.devices)
             .pointer_strategy(self.strategy)
+            .axis_lock(self.axis_lock)
             .settings(cx.settings().clone())
             .on_down(move |details| {
                 deliver(
@@ -1129,8 +1164,8 @@ impl GestureRecognizerFactory for DragFactory {
             .build()
     }
 
-    // The axis, devices and strategy are in the key and the callbacks are
-    // read live.
+    // The axis, devices, strategy and lock are in the key and the callbacks
+    // are read live.
     fn update(&self, _: &DragGestureRecognizer) {}
 }
 
@@ -1139,6 +1174,8 @@ type ScaleLink = RefCell<Weak<ScaleGestureRecognizer>>;
 
 struct TransformFactory {
     start_mode: ScaleStartMode,
+    axis_lock: AxisLock,
+    transform_lock: TransformLock,
     live: Rc<LiveCallbacks>,
     link: Rc<ScaleLink>,
     route: Rc<RefCell<NativeScaleRoute>>,
@@ -1163,6 +1200,8 @@ impl GestureRecognizerFactory for TransformFactory {
         let recognizer = ScaleGestureRecognizer::builder(cx.arena().clone())
             .settings(cx.settings().clone())
             .start_mode(self.start_mode)
+            .axis_lock(self.axis_lock)
+            .transform_lock(self.transform_lock)
             .on_start(move |details| {
                 deliver(
                     &start,
@@ -1200,7 +1239,8 @@ impl GestureRecognizerFactory for TransformFactory {
         recognizer
     }
 
-    // The start mode is in the key and the callbacks are read live.
+    // The start mode and locks are in the key and the callbacks are read
+    // live.
     fn update(&self, _: &ScaleGestureRecognizer) {}
 }
 
@@ -1544,11 +1584,18 @@ impl GestureDetectorState {
         }
         if let Some(slot) = &view.drag {
             raw = raw.recognizer_with_key(
-                ValueKey::new((owner, slot.axis, slot.devices, slot.strategy)),
+                ValueKey::new((
+                    owner,
+                    slot.axis,
+                    slot.devices,
+                    slot.strategy,
+                    slot.axis_lock,
+                )),
                 DragFactory {
                     axis: slot.axis,
                     devices: slot.devices,
                     strategy: slot.strategy,
+                    axis_lock: slot.axis_lock,
                     live: Rc::clone(&self.live),
                 },
             );
@@ -1556,9 +1603,11 @@ impl GestureDetectorState {
         if let Some(slot) = &view.transform {
             raw = raw
                 .recognizer_with_key(
-                    ValueKey::new((owner, slot.start_mode)),
+                    ValueKey::new((owner, slot.start_mode, slot.axis_lock, slot.transform_lock)),
                     TransformFactory {
                         start_mode: slot.start_mode,
+                        axis_lock: slot.axis_lock,
+                        transform_lock: slot.transform_lock,
                         live: Rc::clone(&self.live),
                         link: Rc::clone(&self.scale_link),
                         route: Rc::clone(&self.native_scale_route),

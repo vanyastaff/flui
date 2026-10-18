@@ -1,6 +1,6 @@
 ### Added
 
-- `flui_interaction::InputSurface` names the routing root of an input stream: a presentation's window, or a surface embedded in it that `GestureBinding::embed_surface` mints. `GestureBinding::handle_pointer_event_on` routes input a surface reported; hover, move coalescing and wheel and pan-zoom latches are kept per surface, and a contact stays with the surface that admitted its Down when another surface reports its tail.
+- `flui_interaction::InputSurface` names the routing root of an input stream: a presentation's window, or a surface embedded in it that `GestureBinding::embed_surface` mints. `GestureBinding::dispatch_pointer_on` routes input a surface reported; hover, move coalescing and wheel and pan-zoom latches are kept per surface, and a contact stays with the surface that admitted its Down when another surface reports its tail.
 
 ### Changed
 

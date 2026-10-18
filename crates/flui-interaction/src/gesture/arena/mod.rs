@@ -253,7 +253,7 @@ impl GestureDisposition {
 /// arena.close(pointer);
 /// ```
 ///
-pub trait GestureArenaMember {
+pub trait GestureArenaMember: member_type::MemberTypeName {
     /// Accept the gesture for `contest`.
     ///
     /// Called when this recognizer wins that contest.
@@ -286,30 +286,56 @@ pub trait GestureArenaMember {
         None
     }
 
-    /// Runtime integration for one deadline invocation under owner custody.
+    /// [`poll_deadline`](Self::poll_deadline) under the arena's failure
+    /// custody, which the arena calls in its place.
     ///
-    /// The default preserves the open hook's unknown postcondition after an
-    /// unwind. Built-ins separate preparation from committed notification
-    /// delivery. `true` proves this invocation's required transition returned
-    /// or committed; an older failure in the same scope cannot change it.
-    #[doc(hidden)]
+    /// The default runs `poll_deadline` and returns `true`; the arena contains
+    /// a panic escaping it. Override it when the deadline commits a transition
+    /// and then calls user code (a long press fires its callbacks): commit the
+    /// state first, run each callback through
+    /// [`RecoveryScope::run`](flui_foundation::panic::RecoveryScope::run) so a
+    /// panic in one is caught once and the callbacks after it still run, and
+    /// retire values whose destructors may run user code through
+    /// [`RecoveryScope::retire`](flui_foundation::panic::RecoveryScope::retire).
+    ///
+    /// Return `true` once the transition this poll owed has committed, even
+    /// if a callback after it failed, so the arena does not poll it again; an
+    /// older failure in the same scope cannot change that answer. `false`
+    /// parks the deadline until its registration publishes an update.
     fn poll_deadline_with_recovery(
         &self,
         now: EventTime,
-        _recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
+        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
     ) -> bool {
         // The owning arena contains this open hook. A second catch here would
         // classify its escaped payload before an earlier nested arena receipt.
+        let _ = recovery;
         self.poll_deadline(now);
         true
     }
+}
 
+/// `member`'s concrete type name.
+pub(crate) fn member_type_name(member: &dyn GestureArenaMember) -> &'static str {
+    member_type::MemberTypeName::member_type_name(member)
+}
+
+/// The concrete type name of an arena member: a supertrait every type
+/// implements, so a member never implements it and a recording reads the
+/// name through the member's vtable.
+mod member_type {
     /// The member's concrete type name, which an input recording's decision
     /// row carries ([`ObservedMember::type_name`](crate::gesture::ObservedMember::type_name)).
-    /// A description, not an identity; implementations keep the default.
-    #[doc(hidden)]
-    fn member_type_name(&self) -> &'static str {
-        core::any::type_name::<Self>()
+    /// A description, not an identity.
+    pub trait MemberTypeName {
+        /// The implementing type's name.
+        fn member_type_name(&self) -> &'static str;
+    }
+
+    impl<T> MemberTypeName for T {
+        fn member_type_name(&self) -> &'static str {
+            core::any::type_name::<T>()
+        }
     }
 }
 
@@ -1441,6 +1467,28 @@ impl GestureArena {
             pan_claim: Some(PanClaimNode::nested(claim, self.pan_claim.clone())),
             ..self.clone()
         }
+    }
+
+    /// Whether `self` and `other` admit members alike: into one arena, through
+    /// one composition branch and inside one [`PanClaim`] region. The settings
+    /// compositions are checked against may differ. A widget that built its
+    /// recognizers with one handle rebuilds them when its scope hands it a
+    /// handle that does not admit like it.
+    #[must_use]
+    pub fn admits_like(&self, other: &Self) -> bool {
+        let same_branch = match (&self.branch, &other.branch) {
+            (None, None) => true,
+            (Some(ours), Some(theirs)) => {
+                Rc::ptr_eq(&ours.node, &theirs.node) && ours.position == theirs.position
+            }
+            _ => false,
+        };
+        let same_claim = match (&self.pan_claim, &other.pan_claim) {
+            (None, None) => true,
+            (Some(ours), Some(theirs)) => Rc::ptr_eq(ours, theirs),
+            _ => false,
+        };
+        Rc::ptr_eq(&self.entries, &other.entries) && same_branch && same_claim
     }
 
     /// Create a binding-owned gesture arena driven by the given clock.

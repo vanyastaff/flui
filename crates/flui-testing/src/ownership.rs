@@ -1,7 +1,8 @@
 //! The normative ownership table (ADR-0208 §1) as a conformance check.
 //!
 //! [`assert_ownership_table`] runs one row per cell of the table, the 44°,
-//! 45° and 46° rows with first-sample noise, and the [`PanClaim`] rows, each
+//! 45° and 46° rows with first-sample noise, the [`PanClaim`] rows and an
+//! `allowed_devices` row (a pen draws, a finger scrolls), each
 //! for a touch and a mouse contact. Every row scripts its contact with a
 //! [`PointerScript`] and dispatches it through a [`HeadlessBinding`] on a hit
 //! route of nested targets, the member under test innermost, so the arena sees
@@ -26,8 +27,8 @@ use flui_foundation::geometry::{Axis, EdgeInsets, Offset};
 use flui_interaction::{
     DragAxis, DragGestureRecognizer, GestureRecognizer, HitTestEntry, HitTestResult,
     LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
-    MultiDragHandle, MultiDragUpdateDetails, PointerId, PointerKind, RecognizerSet, RenderId,
-    ScaleGestureRecognizer, TapAndDragGestureRecognizer,
+    MultiDragHandle, MultiDragUpdateDetails, PointerId, PointerKind, PointerKindSet, RecognizerSet,
+    RenderId, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
     gesture::{GestureArena, GestureSettings, PanClaim, ScaleStartMode, SequencedBranch},
 };
 use flui_painting::styling::Color;
@@ -43,7 +44,7 @@ use flui_widgets::{
 
 use crate::{
     HeadlessBinding,
-    replay::{MouseScript, PointerScript, TouchScript},
+    replay::{MouseScript, PenScript, PointerScript, TouchScript},
     widgets::{LaidOut, lay_out, tight},
 };
 
@@ -84,13 +85,17 @@ const ROWS: &[(&str, Row)] = &[
     ),
     ("axial / same-axis ancestor", axial_in_same_axis_ancestor),
     ("axial / no competitor", axial_alone_holds_until_its_axis),
+    ("axial / channel-leaf ancestor", axial_in_channel_leaf),
     ("free / orthogonal ancestor at 44°", free_at_44_degrees),
     ("free / orthogonal ancestor at 45°", free_at_45_degrees),
     ("free / orthogonal ancestor at 46°", free_at_46_degrees),
     ("free / same-axis ancestor", free_in_same_axis_ancestor),
     ("free / PanClaim::None", free_with_pan_claim_none),
     ("free / PanClaim::PanY", free_with_pan_claim_pan_y),
+    ("free / PanClaim::PanX", free_with_pan_claim_pan_x),
+    ("free / allowed_devices: pen", free_admitting_only_a_pen),
     ("free / no competitor", free_alone),
+    ("free / channel-leaf ancestor", free_in_channel_leaf),
     ("scale / orthogonal ancestor", scale_in_orthogonal_ancestor),
     ("scale / same-axis ancestor", scale_in_same_axis_ancestor),
     ("scale / no competitor", scale_alone),
@@ -386,6 +391,42 @@ fn axial_alone_holds_until_its_axis(device: PointerKind) {
     }
 }
 
+/// A list inside a viewer: the innermost claimant owns its axis, and the
+/// viewer, which yields to no ancestor, takes what the list's axis does not
+/// (rule 2, the viewer standing as the free member).
+fn axial_in_channel_leaf(device: PointerKind) {
+    for (degrees, owner) in [
+        (90.0, "list"),
+        (46.0, "list"),
+        (44.0, "viewer"),
+        (0.0, "viewer"),
+    ] {
+        let mut route = Route::new();
+        route.level().axial("list", Axis::Vertical);
+        route.level().scale("viewer");
+        assert_eq!(
+            route.run(&swipe(device, heading(degrees))),
+            [owner],
+            "motion at {degrees}°"
+        );
+    }
+}
+
+/// A pan inside a viewer is the innermost claimant whichever way it moves.
+fn free_in_channel_leaf(device: PointerKind) {
+    for degrees in [0.0, 90.0] {
+        let mut route = Route::new();
+        let arena = route.arena();
+        route.level().pan("pan", arena);
+        route.level().scale("viewer");
+        assert_eq!(
+            route.run(&swipe(device, heading(degrees))),
+            ["pan"],
+            "motion at {degrees}°"
+        );
+    }
+}
+
 fn free_in_pager(device: PointerKind, degrees: f64, owner: &str) {
     let mut route = Route::new();
     let arena = route.arena();
@@ -448,6 +489,60 @@ fn free_with_pan_claim_pan_y(device: PointerKind) {
             [owner],
             "motion at {degrees}°"
         );
+    }
+}
+
+fn free_with_pan_claim_pan_x(device: PointerKind) {
+    for (degrees, owner) in [(90.0, "pan"), (0.0, "pager")] {
+        let mut route = Route::new();
+        let region = route.arena().with_pan_claim(PanClaim::PanX);
+        route.level().pan("pan", region);
+        route.level().axial("pager", Axis::Horizontal);
+        route.level().axial("scroll", Axis::Vertical);
+        assert_eq!(
+            route.run(&swipe(device, heading(degrees))),
+            [owner],
+            "motion at {degrees}°"
+        );
+    }
+}
+
+/// A pen-only pan in a vertical list, moved at 60° off the list's axis: the
+/// pen draws, where the table gives a free member such a contact, and the
+/// other device scrolls, because admission refused it to the pan before any
+/// rule of the table ran.
+fn free_admitting_only_a_pen(device: PointerKind) {
+    const DEGREES: f64 = 30.0;
+    let pen_swipe = || {
+        let to = heading(DEGREES);
+        PenScript::new("pen contact")
+            .down(ORIGIN, 0.5)
+            .wait(SAMPLE)
+            .move_to(ORIGIN + noise(PointerKind::Touch), 0.5)
+            .wait(SAMPLE)
+            .move_to(ORIGIN + to, 0.5)
+            .wait(SAMPLE)
+            .move_to(ORIGIN + to * 1.5, 0.5)
+            .wait(SAMPLE)
+            .up()
+            .build()
+            .expect("BUG: the pen lifts")
+    };
+    for (pen, owner) in [(false, "scroll"), (true, "pen")] {
+        let mut route = Route::new();
+        let starts = Rc::clone(&route.starts);
+        let drawing = DragGestureRecognizer::builder(route.arena(), DragAxis::Free)
+            .allowed_devices(PointerKindSet::PEN)
+            .on_start(move |_| starts.borrow_mut().push("pen"))
+            .build();
+        route.level().attach(drawing);
+        route.level().axial("scroll", Axis::Vertical);
+        let script = if pen {
+            pen_swipe()
+        } else {
+            swipe(device, heading(DEGREES))
+        };
+        assert_eq!(route.run(&script), [owner], "a pen contact: {pen}");
     }
 }
 

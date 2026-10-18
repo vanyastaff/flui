@@ -334,8 +334,10 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   tap-and-drag and scale admit with a `MotionRole` (axial, free, channel leaf) and claims through
   `GestureArenaEntry::claim_motion` with the root-space displacement since
   Down; the arena then picks the owner among every moving member, not the
-  first claimant. A channel leaf keeps the contact, except a two-contact scale
-  on a contact it holds alone, whose role is dormant there; a free member yields to an
+  first claimant. A channel leaf keeps the contact from its ancestors, except a
+  two-contact scale on a contact it holds alone, whose role is dormant there; the
+  members inside the innermost leaf are inner claimants, which the leaf meets as a
+  free member, so a list in a viewer owns its axis; a free member yields to an
   axial member taking at least cos 45° (exact at 45°, compared squared); the
   larger axial component wins and a tie goes to the innermost member. A
   `PanClaim` region, carried by the arena handle

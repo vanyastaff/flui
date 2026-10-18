@@ -233,6 +233,9 @@ fn pointer_and_gesture_recognition() {
             ("pointer_vocabulary::viewer_reports_scale_velocity_separately_from_focal_velocity", crate::pointer_vocabulary::viewer_reports_scale_velocity_separately_from_focal_velocity),
             ("listener::presentation_resampling_uses_the_owner_frame_clock", crate::listener::presentation_resampling_uses_the_owner_frame_clock as fn()),
             ("gesture_detector::pan_claim_region_keeps_the_pan_from_an_enclosing_drag", crate::gesture_detector::pan_claim_region_keeps_the_pan_from_an_enclosing_drag),
+            ("gesture_detector::recognizers_follow_a_changed_arena_scope", crate::gesture_detector::recognizers_follow_a_changed_arena_scope),
+            ("gesture_detector::drag_and_transform_slots_carry_their_locks", crate::gesture_detector::drag_and_transform_slots_carry_their_locks),
+            ("gesture_detector::a_composition_past_the_delay_ceiling_is_reported", crate::gesture_detector::a_composition_past_the_delay_ceiling_is_reported),
             ("gesture_detector::drag_and_transform_slots_split_one_contact_from_two", crate::gesture_detector::drag_and_transform_slots_split_one_contact_from_two),
             ("gesture_detector::a_detector_in_a_composed_scope_preserves_double_tap_timing", crate::gesture_detector::a_detector_in_a_composed_scope_preserves_double_tap_timing),
             ("pointer_vocabulary::viewer_native_pan_moves_the_scene_under_the_focal_point", crate::pointer_vocabulary::viewer_native_pan_moves_the_scene_under_the_focal_point as fn()),
@@ -281,6 +284,7 @@ fn pointer_and_gesture_recognition() {
             ("hit_slop::overlapping_slops_go_to_the_nearest_edge_then_the_topmost", crate::hit_slop::overlapping_slops_go_to_the_nearest_edge_then_the_topmost),
             ("hit_slop::a_visual_hit_beats_a_neighbours_slop", crate::hit_slop::a_visual_hit_beats_a_neighbours_slop),
             ("hit_slop::slop_does_not_leave_its_composited_layer", crate::hit_slop::slop_does_not_leave_its_composited_layer),
+            ("hit_slop::slop_does_not_cross_an_overlay_entry", crate::hit_slop::slop_does_not_cross_an_overlay_entry),
             ("hit_slop::content_shape_rejects_the_corners_of_a_circle", crate::hit_slop::content_shape_rejects_the_corners_of_a_circle),
             ("hit_slop::min_target_defaults_to_the_settings_preset", crate::hit_slop::min_target_defaults_to_the_settings_preset),
             ("hit_slop::min_target_follows_a_live_settings_update", crate::hit_slop::min_target_follows_a_live_settings_update),
@@ -1187,6 +1191,10 @@ fn context_menu_area() {
             (
                 "context_menu_area::a_panicking_item_leaves_no_menu_open",
                 crate::context_menu_area::a_panicking_item_leaves_no_menu_open,
+            ),
+            (
+                "context_menu_area::a_held_press_moved_past_the_slop_closes_the_menu_and_drags",
+                crate::context_menu_area::a_held_press_moved_past_the_slop_closes_the_menu_and_drags,
             ),
             (
                 "context_menu_area::assistive_technology_reads_a_menu_of_menu_items",

@@ -104,7 +104,7 @@ impl ContextMenuArea {
             target: None,
             child: None,
         };
-        area.alternatives(|_cx, _request| {})?;
+        area.alternatives(MenuSpec::new(area.first.clone(), |_cx, _request| {}))?;
         Ok(area)
     }
 
@@ -123,15 +123,13 @@ impl ContextMenuArea {
         self
     }
 
+    /// The alternatives of `menu`, which shows the first command, followed by
+    /// the others.
     fn alternatives(
         &self,
-        presenter: impl Fn(&mut EventCx<'_>, MenuRequest) + 'static,
+        menu: MenuSpec,
     ) -> Result<GestureAlternatives, GestureAlternativesError> {
-        let spec = self
-            .more
-            .iter()
-            .cloned()
-            .fold(MenuSpec::new(self.first.clone(), presenter), MenuSpec::item);
+        let spec = self.more.iter().cloned().fold(menu, MenuSpec::item);
         let alternatives = GestureAlternatives::new(Alternative::ContextMenu(spec))?;
         Ok(match &self.target {
             Some(target) => alternatives.target(target.to_string()),
@@ -213,7 +211,14 @@ impl ViewState<ContextMenuArea> for ContextMenuAreaState {
         let content = Listener::new()
             .behavior(HitTestBehavior::Opaque)
             .child(AnchoredBox::new(self.anchor.clone(), content));
-        view.alternatives(move |_cx, request| presenter.present(request))
+        // A long press that hands its contact to a drag closes the menu it
+        // opened.
+        let session = Rc::clone(&self.session);
+        let menu = MenuSpec::new(view.first.clone(), move |_cx, request| {
+            presenter.present(request);
+        })
+        .dismiss(move |_cx| session.close_current());
+        view.alternatives(menu)
             .expect("BUG: ContextMenuArea::new checked the labels")
             .child(content)
     }

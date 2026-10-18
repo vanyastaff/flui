@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::common::{lay_out, tight};
+use crate::common::{LaidOut, lay_out, tight};
 use flui_painting::styling::Color;
 use flui_widgets::{ColoredBox, DragSlot, GestureDetector, TransformSlot};
 
@@ -178,6 +178,375 @@ pub(crate) fn pan_claim_region_keeps_the_pan_from_an_enclosing_drag() {
         scoped.dispatch_pointer_up(60.0, 50.0);
         let expected = if claim.is_some() { "pan" } else { "pager" };
         assert_eq!(calls.borrow().as_slice(), [expected], "{claim:?}");
+    }
+}
+
+/// A detector whose tap and double tap would wait past the preset's
+/// `max_resolution_delay` reports the refused composition as a build
+/// diagnostic (ADR-0208 §3), and its tap still works uncomposed.
+pub(crate) fn a_composition_past_the_delay_ceiling_is_reported() {
+    use std::time::Duration;
+    let taps = Arc::new(AtomicUsize::new(0));
+    let tapped = Arc::clone(&taps);
+    let settings = flui_interaction::GestureSettings::default()
+        .with_double_tap_timeout(Duration::from_secs(2));
+    let (laid, log) = flui_testing::log_capture::capture(|| {
+        lay_out(
+            crate::gesture_settings::SettingsScope::new(
+                settings,
+                GestureDetector::new()
+                    .on_tap(move |_| {
+                        tapped.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .on_double_tap(|_| {})
+                    .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            ),
+            tight(100.0, 100.0),
+        )
+    });
+    assert!(
+        log.records().iter().any(|record| {
+            record.level == tracing::Level::WARN
+                && record.target == "flui_widgets::gesture_detector"
+                && record.message.contains("composition refused")
+        }),
+        "the refusal is reported:\n{log}"
+    );
+    laid.dispatch_pointer_down(50.0, 50.0);
+    laid.dispatch_pointer_up(50.0, 50.0);
+    let mut laid = laid;
+    laid.pump_for(Duration::from_secs(3));
+    assert_eq!(taps.load(Ordering::SeqCst), 1, "the tap still works");
+}
+
+/// A detector's drag and transform slots carry the recognizers' locks: a
+/// railed pan that starts near the horizontal axis moves on it alone, and a
+/// transform locked against rotation that begins as a pan does not turn.
+pub(crate) fn drag_and_transform_slots_carry_their_locks() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::{AxisLock, TransformLock};
+    use flui_testing::replay::TouchScript;
+    use std::time::Duration;
+    use std::{cell::RefCell, rc::Rc};
+
+    let near_axis = {
+        let mut script = TouchScript::new("near-axis pan").down(1, Offset::new(50.0, 150.0));
+        for step in 1..=8 {
+            script = script.wait(Duration::from_millis(16)).move_to(
+                1,
+                Offset::new(50.0 + 10.0 * f64::from(step), 150.0 + 1.5 * f64::from(step)),
+            );
+        }
+        script
+            .wait(Duration::from_millis(16))
+            .up(1)
+            .build()
+            .expect("one finger")
+    };
+    for (lock, railed) in [(AxisLock::Rails, true), (AxisLock::Free, false)] {
+        let vertical = Rc::new(RefCell::new(0.0_f64));
+        let moved = Rc::clone(&vertical);
+        let mut laid = lay_out(
+            GestureDetector::new()
+                .drag(DragSlot::pan().axis_lock(lock).on_update(move |_, update| {
+                    *moved.borrow_mut() += update.delta.dy;
+                }))
+                .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            tight(300.0, 300.0),
+        );
+        laid.replay(&near_axis);
+        let dy = *vertical.borrow();
+        assert_eq!(
+            dy.abs() < f64::EPSILON,
+            railed,
+            "{lock:?}: vertical travel {dy}"
+        );
+    }
+
+    let pan_then_turn = {
+        let (mut a, mut b) = (Offset::new(50.0, 150.0), Offset::new(250.0, 150.0));
+        let mut script = TouchScript::new("pan, then turn").down(1, a).down(2, b);
+        for round in 0..20 {
+            let (a_by, b_by) = if round < 10 {
+                (Offset::new(4.0, 0.0), Offset::new(4.0, 0.0))
+            } else {
+                (Offset::new(0.0, -5.0), Offset::new(0.0, 5.0))
+            };
+            a += a_by;
+            b += b_by;
+            script = script
+                .wait(Duration::from_millis(8))
+                .move_to(1, a)
+                .wait(Duration::from_millis(8))
+                .move_to(2, b);
+        }
+        script
+            .wait(Duration::from_millis(16))
+            .up(1)
+            .up(2)
+            .build()
+            .expect("two fingers")
+    };
+    for (lock, turns) in [
+        (TransformLock::Rotation, false),
+        (TransformLock::None, true),
+    ] {
+        let rotation = Rc::new(RefCell::new(0.0_f64));
+        let turned = Rc::clone(&rotation);
+        let mut laid = lay_out(
+            GestureDetector::new()
+                .transform(
+                    TransformSlot::new()
+                        .transform_lock(lock)
+                        .on_update(move |_, update| *turned.borrow_mut() = update.rotation),
+                )
+                .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            tight(300.0, 300.0),
+        );
+        laid.replay(&pan_then_turn);
+        let rotation = *rotation.borrow();
+        assert_eq!(rotation.abs() > 0.3, turns, "{lock:?}: rotation {rotation}");
+    }
+
+    let two_near_axis = {
+        let (mut a, mut b) = (Offset::new(50.0, 150.0), Offset::new(150.0, 150.0));
+        let mut script = TouchScript::new("two-finger near-axis pan")
+            .down(1, a)
+            .down(2, b);
+        for _ in 0..40 {
+            let by = Offset::new(2.0, 0.3);
+            a += by;
+            b += by;
+            script = script
+                .wait(Duration::from_millis(8))
+                .move_to(1, a)
+                .wait(Duration::from_millis(8))
+                .move_to(2, b);
+        }
+        script
+            .wait(Duration::from_millis(16))
+            .up(1)
+            .up(2)
+            .build()
+            .expect("two fingers")
+    };
+    for (lock, railed) in [(AxisLock::Rails, true), (AxisLock::Free, false)] {
+        let vertical = Rc::new(RefCell::new(0.0_f64));
+        let moved = Rc::clone(&vertical);
+        let mut laid = lay_out(
+            GestureDetector::new()
+                .transform(
+                    TransformSlot::new()
+                        .axis_lock(lock)
+                        .on_update(move |_, update| {
+                            *moved.borrow_mut() += update.focal_point_delta.dy;
+                        }),
+                )
+                .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            tight(300.0, 300.0),
+        );
+        laid.replay(&two_near_axis);
+        let dy = *vertical.borrow();
+        assert_eq!(
+            dy.abs() < f64::EPSILON,
+            railed,
+            "{lock:?}: focal vertical travel {dy}"
+        );
+    }
+}
+
+/// A scope that hands its subtree another arena handle: here, a
+/// `PanClaim::None` region once `claimed` is set.
+#[derive(Clone, flui_view::prelude::StatefulView)]
+struct SwitchingScope {
+    claimed: flui_view::StateHandle<bool>,
+    child: flui_view::BoxedView,
+}
+
+struct SwitchingScopeState {
+    claimed: flui_view::StateHandle<bool>,
+    handles: Option<(
+        flui_interaction::GestureArena,
+        flui_interaction::GestureArena,
+    )>,
+}
+
+impl flui_view::StatefulView for SwitchingScope {
+    type State = SwitchingScopeState;
+    fn create_state(&self) -> Self::State {
+        SwitchingScopeState {
+            claimed: self.claimed.clone(),
+            handles: None,
+        }
+    }
+}
+
+impl flui_view::ViewState<SwitchingScope> for SwitchingScopeState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        self.claimed.bind(ctx);
+        let plain = flui_widgets::GestureArenaScope::of(ctx);
+        let claimed = plain.with_pan_claim(flui_interaction::gesture::PanClaim::None);
+        self.handles = Some((plain, claimed));
+    }
+    fn build(
+        &self,
+        view: &SwitchingScope,
+        _: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        let (plain, claimed) = self.handles.as_ref().expect("mounted handles");
+        let arena = if view.claimed.with(|claimed| *claimed) {
+            claimed
+        } else {
+            plain
+        };
+        flui_widgets::GestureArenaScope::new(arena.clone(), view.child.clone())
+    }
+}
+
+impl std::fmt::Debug for SwitchingScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SwitchingScope")
+    }
+}
+
+impl std::fmt::Debug for SwitchingScopeState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SwitchingScopeState")
+    }
+}
+
+/// Live recognizers follow the arena their scope hands them: once the scope
+/// above a pan turns into a `PanClaim::None` region, the pan keeps the
+/// horizontal contact the enclosing drag took before; and a rebuilt
+/// `PanClaimRegion` is the same region, so the recognizers inside it stay.
+pub(crate) fn recognizers_follow_a_changed_arena_scope() {
+    use flui_interaction::gesture::PanClaim;
+    use flui_view::StateHandle;
+    use flui_view::prelude::IntoView;
+    use flui_widgets::PanClaimRegion;
+    use std::{cell::RefCell, rc::Rc};
+
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let (pan, pager) = (Rc::clone(&calls), Rc::clone(&calls));
+    let claimed = StateHandle::new(false);
+    let map = GestureDetector::new()
+        .drag(DragSlot::pan().on_start(move |_, _| pan.borrow_mut().push("pan")))
+        .child(ColoredBox::new(Color::rgb(10, 20, 30)));
+    let mut laid = lay_out(
+        GestureDetector::new()
+            .drag(DragSlot::horizontal().on_start(move |_, _| pager.borrow_mut().push("pager")))
+            .child(SwitchingScope {
+                claimed: claimed.clone(),
+                child: flui_view::BoxedView(Box::new(map.into_view())),
+            }),
+        tight(100.0, 100.0),
+    );
+    let swipe = |laid: &LaidOut| {
+        laid.dispatch_pointer_down(10.0, 50.0);
+        laid.dispatch_pointer_move(50.0, 50.0);
+        laid.dispatch_pointer_move(60.0, 50.0);
+        laid.dispatch_pointer_up(60.0, 50.0);
+    };
+    swipe(&laid);
+    claimed.update(|claimed| *claimed = true);
+    laid.pump();
+    swipe(&laid);
+    assert_eq!(
+        calls.borrow().as_slice(),
+        ["pager", "pan"],
+        "the pan joins the region its scope now declares"
+    );
+
+    let (created, rebuilt) = (
+        Rc::new(std::cell::Cell::new(0_u32)),
+        StateHandle::new(0_u32),
+    );
+    let factory = CountingPan(Rc::clone(&created));
+    let mut laid = lay_out(
+        Rebuilding {
+            revision: rebuilt.clone(),
+            child: Rc::new(move || {
+                let detector = flui_widgets::RawGestureDetector::new()
+                    .recognizer(factory.clone())
+                    .child(ColoredBox::new(Color::rgb(10, 20, 30)));
+                flui_view::BoxedView(Box::new(
+                    PanClaimRegion::new(PanClaim::None, detector).into_view(),
+                ))
+            }),
+        },
+        tight(100.0, 100.0),
+    );
+    rebuilt.update(|revision| *revision += 1);
+    laid.pump();
+    assert_eq!(
+        created.get(),
+        1,
+        "a rebuilt region is the same region: its recognizers stay"
+    );
+}
+
+/// Builds a pan and counts how many it built.
+#[derive(Clone)]
+struct CountingPan(std::rc::Rc<std::cell::Cell<u32>>);
+
+impl flui_widgets::GestureRecognizerFactory for CountingPan {
+    type Recognizer = flui_interaction::DragGestureRecognizer;
+
+    fn create(&self, cx: &flui_widgets::RecognizerContext) -> std::rc::Rc<Self::Recognizer> {
+        self.0.set(self.0.get() + 1);
+        flui_interaction::DragGestureRecognizer::builder(
+            cx.arena().clone(),
+            flui_interaction::DragAxis::Free,
+        )
+        .build()
+    }
+
+    fn update(&self, _recognizer: &Self::Recognizer) {}
+}
+
+/// Builds a fresh `child` whenever `revision` changes.
+#[derive(Clone, flui_view::prelude::StatefulView)]
+struct Rebuilding {
+    revision: flui_view::StateHandle<u32>,
+    child: std::rc::Rc<dyn Fn() -> flui_view::BoxedView>,
+}
+
+struct RebuildingState {
+    revision: flui_view::StateHandle<u32>,
+}
+
+impl flui_view::StatefulView for Rebuilding {
+    type State = RebuildingState;
+    fn create_state(&self) -> Self::State {
+        RebuildingState {
+            revision: self.revision.clone(),
+        }
+    }
+}
+
+impl flui_view::ViewState<Rebuilding> for RebuildingState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        self.revision.bind(ctx);
+    }
+    fn build(
+        &self,
+        view: &Rebuilding,
+        _: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        let _ = view.revision.with(|revision| *revision);
+        (view.child)()
+    }
+}
+
+impl std::fmt::Debug for Rebuilding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Rebuilding")
+    }
+}
+
+impl std::fmt::Debug for RebuildingState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RebuildingState")
     }
 }
 

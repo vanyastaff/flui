@@ -4,9 +4,11 @@
 //! decides between every competing moving member on the displacement
 //! accumulated since Down, never on a single sample:
 //!
-//! - a channel leaf (scale, `InteractiveViewer`) does not yield; a member
-//!   whose role is dormant on the contact (a two-contact scale holding it
-//!   alone) is no candidate at all;
+//! - a channel leaf (scale, `InteractiveViewer`) does not yield to its
+//!   ancestors, which are no candidates; the members inside it are inner
+//!   claimants, and the leaf meets them as a free member does, so a list in a
+//!   viewer owns its axis. A member whose role is dormant on the contact (a
+//!   two-contact scale holding it alone) is no candidate at all;
 //! - a free member (pan) yields to the axial member whose axis takes at least
 //!   cos 45° of the displacement, unless the subtree's [`PanClaim`] keeps that
 //!   axis from it; exactly 45° goes to the axial member;
@@ -114,15 +116,19 @@ pub(super) fn motion_owner(
     candidates: &[MotionCandidate<'_>],
     displacement: Offset<f64>,
 ) -> Option<usize> {
-    if let Some(leaf) = candidates
+    // The innermost channel leaf yields to no ancestor, so the members outside
+    // it are no candidates; the members inside it are inner claimants, and
+    // the leaf meets them as a free member does.
+    let candidates = match candidates
         .iter()
         .position(|candidate| candidate.role == MotionRole::ChannelLeaf)
     {
-        return Some(leaf);
-    }
+        Some(leaf) => &candidates[..=leaf],
+        None => candidates,
+    };
     let free = candidates
         .iter()
-        .position(|candidate| candidate.role == MotionRole::Free);
+        .position(|candidate| matches!(candidate.role, MotionRole::Free | MotionRole::ChannelLeaf));
     // The larger component wins; iteration is innermost first, so only a
     // strictly larger component displaces an earlier member.
     let mut best: Option<(usize, f64)> = None;

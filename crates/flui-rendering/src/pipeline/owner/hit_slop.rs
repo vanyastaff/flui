@@ -29,6 +29,11 @@
 //!   covers the position and blocks also stops the re-walk before it reaches a
 //!   candidate below it.
 //!
+//! An overlay entry needs no rule of its own: its content that the position
+//! hits ends the re-walk of the stack it sits in before the walk reaches an
+//! entry below, so a page target's area never takes a position a toast above
+//! it covers (`slop_does_not_cross_an_overlay_entry`, `flui-widgets`).
+//!
 //! [`RenderObject::hit_slop_area`]: crate::traits::RenderObject::hit_slop_area
 
 use flui_foundation::RenderId;

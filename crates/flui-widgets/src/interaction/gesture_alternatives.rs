@@ -19,16 +19,21 @@
 //! without its single-pointer path.
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::fmt;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::Offset;
+use flui_interaction::gesture::SequencedBranch;
 use flui_interaction::{
-    FocusManager, LongPressGestureRecognizer, LongPressStartDetails, PointerKindSet,
-    TapGestureRecognizer, TapUpDetails,
+    FocusManager, GestureArena, GestureRecognizer, GestureSettingsProvider,
+    LongPressGestureRecognizer, LongPressMoveUpdateDetails, LongPressStartDetails, PointerEvent,
+    PointerEventExt, PointerId, PointerKindSet, TapGestureRecognizer, TapUpDetails,
 };
 use flui_platform_api::TargetPlatform;
 use flui_view::prelude::*;
+use flui_view::{InheritedView, WriterSource, impl_inherited_view};
+use smallvec::SmallVec;
 
 use super::actions::{
     Action, ActionChain, ActionChainProvider, ActionOutcome, Actions, Intent,
@@ -37,10 +42,12 @@ use super::actions::{
 use super::focus::Focus;
 use super::focus_ring::FocusRing;
 use super::gesture_arena_scope::GestureArenaScope;
+use super::listener::Listener;
 use super::raw_button::RawButton;
 use super::raw_gesture_detector::{
     GestureRecognizerFactory, RawGestureDetector, RecognizerContext,
 };
+use super::recognizer_attachment::RecognizerAttachment;
 use super::shortcuts::{Shortcuts, SingleActivator, reserved_key};
 use crate::localization::Directionality;
 use crate::localization::{
@@ -309,11 +316,21 @@ pub type MenuPresenter = Rc<dyn Fn(&mut EventCx<'_>, MenuRequest)>;
 /// `ShowContextMenu`, and from a control revealed while keyboard or
 /// assistive-technology focus is in the row. Each item is also its own
 /// custom action. None of these can be turned off.
+///
+/// The long press is the hold the long-press drags beneath the row succeed:
+/// a finger that opened the menu and then moves past the pan slop hands its
+/// contact to the drag under it, and the menu closes through
+/// [`dismiss`](Self::dismiss). A finger that moves with no such drag beneath
+/// leaves the menu open.
 #[derive(Clone)]
 pub struct MenuSpec {
     items: Vec<GestureCommand>,
     presenter: MenuPresenter,
+    dismiss: Option<MenuDismiss>,
 }
+
+/// Closes the menu a [`MenuPresenter`] shows.
+type MenuDismiss = Rc<dyn Fn(&mut EventCx<'_>)>;
 
 impl MenuSpec {
     /// A menu whose first item is `first`, the gesture's command, shown by
@@ -326,6 +343,7 @@ impl MenuSpec {
         Self {
             items: vec![first],
             presenter: Rc::new(presenter),
+            dismiss: None,
         }
     }
 
@@ -333,6 +351,15 @@ impl MenuSpec {
     #[must_use]
     pub fn item(mut self, command: GestureCommand) -> Self {
         self.items.push(command);
+        self
+    }
+
+    /// Close the menu the presenter shows when the long press that opened it
+    /// hands its contact to a drag. Without it the menu stays open behind
+    /// the drag.
+    #[must_use]
+    pub fn dismiss(mut self, dismiss: impl Fn(&mut EventCx<'_>) + 'static) -> Self {
+        self.dismiss = Some(Rc::new(dismiss));
         self
     }
 }
@@ -465,6 +492,7 @@ impl GestureAlternatives {
                 let menu = MenuSpec {
                     items: vec![first.0],
                     presenter,
+                    dismiss: None,
                 };
                 Alternative::ContextMenu(
                     more.into_iter()
@@ -598,6 +626,9 @@ pub struct GestureAlternatives {
     alternative: Alternative,
     target: Option<Rc<str>>,
     child: Option<BoxedView>,
+    /// The hold a menu's long press joins instead of composing its own: the
+    /// widget's own long-press drag succeeds it.
+    hold: Option<Rc<SequencedBranch>>,
 }
 
 impl GestureAlternatives {
@@ -613,6 +644,7 @@ impl GestureAlternatives {
             alternative,
             target: None,
             child: None,
+            hold: None,
         };
         let mut seen: Vec<&str> = Vec::new();
         for command in alternatives.commands() {
@@ -643,6 +675,19 @@ impl GestureAlternatives {
     pub fn child(mut self, content: impl IntoView) -> Self {
         self.child = Some(content.into_view().boxed());
         self
+    }
+
+    /// Open the menu's long press as `hold`, whose successor the mounting
+    /// widget's own long-press drag is, instead of composing a hold of its
+    /// own. Ignored by visible controls.
+    pub(crate) fn with_hold(mut self, hold: Option<Rc<SequencedBranch>>) -> Self {
+        self.hold = hold;
+        self
+    }
+
+    /// Whether one pointer reaches the commands through a context menu.
+    pub(crate) fn is_menu(&self) -> bool {
+        matches!(self.alternative, Alternative::ContextMenu(_))
     }
 
     /// Every command, the gesture's first.
@@ -692,32 +737,211 @@ impl StatefulView for GestureAlternatives {
     fn create_state(&self) -> Self::State {
         GestureAlternativesState {
             opener: OpenerSlot::new(Rc::new(|_cx, _cause, _position| {})),
+            menu: self.is_menu(),
+            given_hold: self.hold.clone(),
+            policy: None,
+            hold: None,
+            hold_attachment: Rc::new(RecognizerAttachment::default()),
+            pressed: Rc::default(),
         }
     }
 }
 
 /// What a mounted [`GestureAlternatives`] keeps across rebuilds: the menu
 /// opener its live pointer triggers read when they fire, replaced by each
-/// build so a trigger always opens the latest items.
+/// build so a trigger always opens the latest items, and a menu's long press.
 pub struct GestureAlternativesState {
     opener: OpenerSlot,
+    /// Whether the alternative is a menu, and the hold the view hands its
+    /// long press.
+    menu: bool,
+    given_hold: Option<Rc<SequencedBranch>>,
+    /// The arena, settings and writer the long press is built against.
+    policy: Option<(GestureArena, GestureSettingsProvider, WriterSource)>,
+    hold: Option<MenuHold>,
+    hold_attachment: Rc<RecognizerAttachment<LongPressGestureRecognizer>>,
+    /// The contacts down on the row, one of which the long press holds.
+    pressed: Rc<RefCell<SmallVec<[PointerId; 2]>>>,
+}
+
+/// A menu's long press: a hold whose successors are the long-press drags
+/// beneath the row, and the recognizer built as that hold.
+struct MenuHold {
+    branch: Option<Rc<SequencedBranch>>,
+    recognizer: Rc<LongPressGestureRecognizer>,
+    /// What the hold was built for: the arena handle and policy, and the hold
+    /// the view handed it.
+    built_for: (
+        GestureArena,
+        GestureSettingsProvider,
+        Option<Rc<SequencedBranch>>,
+    ),
 }
 
 impl fmt::Debug for GestureAlternativesState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GestureAlternativesState")
+            .field("menu", &self.menu)
             .finish_non_exhaustive()
     }
 }
 
+impl GestureAlternativesState {
+    /// Acquire the arena, the policy and the writer, in a lifecycle hook.
+    /// Only a menu's long press uses them, and visible controls work outside
+    /// a gesture scope, so there is none outside one.
+    fn acquire(&mut self, ctx: &dyn LifecycleContext) {
+        self.policy = GestureArenaScope::maybe_of(ctx).map(|arena| {
+            (
+                arena,
+                GestureArenaScope::settings_or_default_of(ctx),
+                ctx.writer_source(),
+            )
+        });
+        self.rebuild_hold();
+    }
+
+    /// Build the menu's long press for the current arena, policy and hold,
+    /// retiring the one it replaces; drop it when the alternative is no
+    /// longer a menu.
+    fn rebuild_hold(&mut self) {
+        let Some((arena, settings, writer)) = self.policy.clone().filter(|_| self.menu) else {
+            self.hold_attachment.clear();
+            if let Some(outgoing) = self.hold.take() {
+                let _ = outgoing.recognizer.cancel();
+            }
+            return;
+        };
+        let current = self.hold.as_ref().is_some_and(|hold| {
+            let (built_arena, built_settings, built_hold) = &hold.built_for;
+            built_arena.admits_like(&arena)
+                && *built_settings == settings
+                && same_hold(built_hold.as_ref(), self.given_hold.as_ref())
+        });
+        if current {
+            return;
+        }
+        let branch = match &self.given_hold {
+            Some(branch) => Some(Rc::clone(branch)),
+            None => match arena.sequenced() {
+                Ok(branch) => Some(Rc::new(branch)),
+                Err(error) => {
+                    tracing::warn!(
+                        target: "flui::a11y",
+                        %error,
+                        "the context menu's long press could not compose as Sequenced; it joins the arena directly"
+                    );
+                    None
+                }
+            },
+        };
+        let recognizer = menu_long_press(
+            branch.as_ref(),
+            &arena,
+            &settings,
+            &writer,
+            &self.opener,
+            &self.pressed,
+        );
+        self.hold_attachment.attach(&recognizer);
+        let outgoing = self.hold.replace(MenuHold {
+            branch,
+            recognizer,
+            built_for: (arena, settings, self.given_hold.clone()),
+        });
+        if let Some(outgoing) = outgoing {
+            let _ = outgoing.recognizer.cancel();
+        }
+    }
+}
+
+fn same_hold(a: Option<&Rc<SequencedBranch>>, b: Option<&Rc<SequencedBranch>>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+        _ => false,
+    }
+}
+
+/// The menu's long press, built as the hold of `branch` (or, when the
+/// composition was refused, as a plain member of `arena`): it opens the menu,
+/// and once the contact moves past the pan slop it hands the contact to the
+/// drag beneath and closes the menu.
+fn menu_long_press(
+    branch: Option<&Rc<SequencedBranch>>,
+    arena: &GestureArena,
+    settings: &GestureSettingsProvider,
+    writer: &WriterSource,
+    menu: &OpenerSlot,
+    pressed: &Rc<RefCell<SmallVec<[PointerId; 2]>>>,
+) -> Rc<LongPressGestureRecognizer> {
+    let hold_arena = branch.map_or_else(|| arena.clone(), |branch| branch.hold());
+    let (opener, open_writer) = (menu.clone(), writer.clone());
+    let mut builder = LongPressGestureRecognizer::builder(hold_arena)
+        .settings(settings.clone())
+        .allowed_devices(LONG_PRESS_DEVICES)
+        .on_long_press_start(move |details: LongPressStartDetails| {
+            let open = opener.get();
+            open_writer.write(|cx| open(cx, MenuCause::LongPress, Some(details.global_position)));
+        });
+    if let Some(branch) = branch {
+        let (branch, settings, writer) = (Rc::clone(branch), settings.clone(), writer.clone());
+        let (menu, pressed) = (menu.clone(), Rc::clone(pressed));
+        builder = builder.on_long_press_move_update(move |details: LongPressMoveUpdateDetails| {
+            let moved = settings
+                .snapshot_for(details.kind)
+                .exceeds_pan_slop_for(details.kind, details.offset_from_origin);
+            if !moved {
+                return;
+            }
+            let contacts: SmallVec<[PointerId; 2]> = pressed.borrow().iter().copied().collect();
+            if contacts.into_iter().any(|pointer| branch.hand_off(pointer))
+                && let Some(dismiss) = menu.dismiss()
+            {
+                writer.write(|cx| dismiss(cx));
+            }
+        });
+    }
+    builder.build()
+}
+
 impl ViewState<GestureAlternatives> for GestureAlternativesState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.acquire(ctx);
+    }
+
+    /// A new arena, policy or writer replaces the menu's long press.
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.acquire(ctx);
+    }
+
+    /// A view that turns the alternative into a menu, out of one, or hands
+    /// the long press another hold replaces it.
+    fn did_update_view(&mut self, _old_view: &GestureAlternatives, new_view: &GestureAlternatives) {
+        self.menu = new_view.is_menu();
+        self.given_hold.clone_from(&new_view.hold);
+        self.rebuild_hold();
+    }
+
+    fn dispose(&mut self) {
+        self.hold_attachment.clear();
+        if let Some(hold) = self.hold.take() {
+            let _ = hold.recognizer.cancel();
+        }
+    }
+
     fn build(&self, view: &GestureAlternatives, ctx: &dyn BuildContext) -> impl IntoView {
-        view.build_alternatives(ctx, &self.opener)
+        view.build_alternatives(ctx, self)
     }
 }
 
 impl GestureAlternatives {
-    fn build_alternatives(&self, ctx: &dyn BuildContext, opener_slot: &OpenerSlot) -> BoxedView {
+    fn build_alternatives(
+        &self,
+        ctx: &dyn BuildContext,
+        state: &GestureAlternativesState,
+    ) -> BoxedView {
+        let opener_slot = &state.opener;
         let chain = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
         let platform = TargetPlatform::current();
         let content = self
@@ -834,13 +1058,14 @@ impl GestureAlternatives {
                     menu_control: Some((label, Rc::clone(&opener))),
                     min_target,
                 };
-                opener_slot.set(Rc::clone(&opener));
+                opener_slot.set(Rc::clone(&opener), menu.dismiss.clone());
                 let triggers = RawGestureDetector::new()
                     .recognizer(SecondaryClickTrigger(opener_slot.clone()))
-                    .recognizer(LongPressTrigger(opener_slot.clone()))
-                    .child(decorated)
-                    .boxed();
-                (triggers, Some(OpenMenu(opener)))
+                    .child(MenuHoldScope {
+                        hold: state.hold.as_ref().and_then(|hold| hold.branch.clone()),
+                        child: decorated.boxed(),
+                    });
+                (state.long_press(triggers), Some(OpenMenu(opener)))
             }
         };
 
@@ -1029,56 +1254,97 @@ impl GestureRecognizerFactory for SecondaryClickTrigger {
 /// device by clicking the control focus reveals, so neither holds.
 const LONG_PRESS_DEVICES: PointerKindSet = PointerKindSet::TOUCH.union(PointerKindSet::PEN);
 
-/// The menu's long-press trigger: the hold of a `Sequenced` composition, so
-/// a later successor (press, drag onto an item, release) composes with it.
-struct LongPressTrigger(OpenerSlot);
-
-impl GestureRecognizerFactory for LongPressTrigger {
-    type Recognizer = LongPressGestureRecognizer;
-
-    fn create(&self, cx: &RecognizerContext) -> Rc<Self::Recognizer> {
-        let arena = match cx.arena().sequenced() {
-            Ok(branch) => branch.hold(),
-            Err(error) => {
-                tracing::warn!(
-                    target: "flui::a11y",
-                    %error,
-                    "the context menu's long press could not compose as Sequenced; it joins the arena directly"
-                );
-                cx.arena().clone()
-            }
-        };
-        let opener = self.0.clone();
-        let writer = cx.writer().clone();
-        LongPressGestureRecognizer::builder(arena)
-            .settings(cx.settings().clone())
-            .allowed_devices(LONG_PRESS_DEVICES)
-            .on_long_press_start(move |details: LongPressStartDetails| {
-                let open = opener.get();
-                writer.write(|cx| open(cx, MenuCause::LongPress, Some(details.global_position)));
+impl GestureAlternativesState {
+    /// `child` under the menu's long press, which this listener feeds and
+    /// whose contacts it records for the hand-off.
+    fn long_press(&self, child: impl IntoView) -> BoxedView {
+        let (pressed, lifted, cancelled) = (
+            Rc::downgrade(&self.pressed),
+            Rc::downgrade(&self.pressed),
+            Rc::downgrade(&self.pressed),
+        );
+        Listener::new()
+            .on_pointer_down(move |_cx, dispatch| {
+                if let (Some(pressed), PointerEvent::Down(press)) =
+                    (pressed.upgrade(), dispatch.local)
+                {
+                    let mut contacts = pressed.borrow_mut();
+                    contacts.retain(|id| *id != press.pointer.id);
+                    contacts.push(press.pointer.id);
+                }
             })
-            .build()
+            .on_pointer_up(move |_cx, dispatch| forget_contact(&lifted, dispatch.local))
+            .on_pointer_cancel(move |_cx, dispatch| forget_contact(&cancelled, dispatch.local))
+            .recognizer(&self.hold_attachment)
+            .child(child)
+            .boxed()
     }
-
-    fn update(&self, _recognizer: &Self::Recognizer) {}
 }
 
-/// The opener a trigger's callback reads when it fires.
+/// A contact on the row ended: the long press holds it no more.
+fn forget_contact(pressed: &Weak<RefCell<SmallVec<[PointerId; 2]>>>, event: &PointerEvent) {
+    if let (Some(pressed), Some(pointer)) = (pressed.upgrade(), event.pointer_id()) {
+        pressed.borrow_mut().retain(|id| *id != pointer);
+    }
+}
+
+/// The hold of the nearest enclosing context menu's long press, which a
+/// long-press drag beneath it succeeds instead of holding the contact itself
+/// (ADR-0208 §3): one hold per contact opens the menu, then hands the contact
+/// to the drag.
 #[derive(Clone)]
-struct OpenerSlot(Rc<std::cell::RefCell<MenuOpener>>);
+pub(crate) struct MenuHoldScope {
+    hold: Option<Rc<SequencedBranch>>,
+    child: BoxedView,
+}
+
+impl MenuHoldScope {
+    /// The hold a long-press drag at `ctx` succeeds, if a context menu
+    /// encloses it.
+    pub(crate) fn of(ctx: &dyn BuildContext) -> Option<Rc<SequencedBranch>> {
+        ctx.depend_on::<Self, _>(|scope| scope.hold.clone())
+            .flatten()
+    }
+}
+
+impl InheritedView for MenuHoldScope {
+    type Data = Option<Rc<SequencedBranch>>;
+    fn data(&self) -> &Self::Data {
+        &self.hold
+    }
+    fn child(&self) -> &dyn View {
+        &self.child
+    }
+    fn update_should_notify(&self, old: &Self) -> bool {
+        !same_hold(self.hold.as_ref(), old.hold.as_ref())
+    }
+}
+
+impl_inherited_view!(MenuHoldScope);
+
+/// What a trigger's callback reads when it fires: the opener, and how the
+/// presenter closes the menu.
+#[derive(Clone)]
+struct OpenerSlot(Rc<RefCell<(MenuOpener, Option<MenuDismiss>)>>);
 
 impl OpenerSlot {
     fn new(opener: MenuOpener) -> Self {
-        Self(Rc::new(std::cell::RefCell::new(opener)))
+        Self(Rc::new(RefCell::new((opener, None))))
     }
 
     /// The current opener, with the borrow released before it runs.
     fn get(&self) -> MenuOpener {
-        Rc::clone(&self.0.borrow())
+        Rc::clone(&self.0.borrow().0)
     }
 
-    fn set(&self, opener: MenuOpener) {
-        let outgoing = self.0.replace(opener);
+    /// How the presenter closes the menu, with the borrow released before it
+    /// runs.
+    fn dismiss(&self) -> Option<MenuDismiss> {
+        self.0.borrow().1.clone()
+    }
+
+    fn set(&self, opener: MenuOpener, dismiss: Option<MenuDismiss>) {
+        let outgoing = self.0.replace((opener, dismiss));
         drop(outgoing);
     }
 }

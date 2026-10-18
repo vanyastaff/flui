@@ -1729,18 +1729,6 @@ impl GestureSettings {
     // Utility methods
     // ========================================================================
 
-    /// Check if a distance exceeds the touch slop.
-    #[inline]
-    pub fn exceeds_touch_slop(&self, distance: f64) -> bool {
-        distance > self.touch_slop
-    }
-
-    /// Check if a distance exceeds the pan slop.
-    #[inline]
-    pub fn exceeds_pan_slop(&self, distance: f64) -> bool {
-        distance > self.pan_slop
-    }
-
     /// Check if a scale factor exceeds the scale slop.
     ///
     /// Scale slop is applied symmetrically around 1.0.
@@ -1753,7 +1741,7 @@ impl GestureSettings {
     /// [`Self::max_fling_velocity`] in magnitude, keeping its sign.
     ///
     /// Slow velocities are returned unchanged: whether a release is a fling
-    /// at all is [`Self::is_fling_velocity`]'s question, and raising a slow
+    /// at all is [`Self::min_fling_velocity`]'s question, and raising a slow
     /// release to the minimum would turn a gentle lift into a fling. A NaN
     /// velocity is no velocity (`0.0`); an infinite one is clamped like any
     /// other. Never panics.
@@ -1765,11 +1753,5 @@ impl GestureSettings {
         }
         let max = self.max_fling_velocity();
         velocity.clamp(-max, max)
-    }
-
-    /// Check if a velocity is fast enough for a fling.
-    #[inline]
-    pub fn is_fling_velocity(&self, velocity: f64) -> bool {
-        velocity.abs() >= self.min_fling_velocity
     }
 }

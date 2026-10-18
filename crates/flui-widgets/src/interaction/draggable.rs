@@ -24,6 +24,7 @@ use flui_interaction::drag::{
     AllowedActions, DragAndDrop, DragItem, DragObserver, DragOutcome, DragPoint, DragSession,
     DragTrigger, MoveOutcome,
 };
+use flui_interaction::gesture::SequencedBranch;
 use flui_interaction::{
     GestureArena, GestureRecognizer, GestureSettingsProvider, HapticsHandle, HitTestHandle,
     LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
@@ -40,6 +41,7 @@ use flui_view::{EventCx, EventOutcome, RebuildHandle, WriterSource};
 use super::actions::{Action, ActionOutcome, Actions, CopySelectionTextIntent};
 use super::gesture_alternatives::{
     AlternativeKind, CommandAppearance, GestureAlternatives, GestureAlternativesError,
+    MenuHoldScope,
 };
 use super::gesture_arena_scope::GestureArenaScope;
 use super::recognizer_attachment::RecognizerAttachment;
@@ -645,7 +647,14 @@ pub struct DraggableState {
     /// recognizers are built for.
     trigger: DragTrigger,
     arena: Option<GestureArena>,
-    built_for: Option<(GestureSettingsProvider, DragTrigger)>,
+    /// The hold of an enclosing context menu, and whether the widget's own
+    /// alternatives are a menu: a long-press drag succeeds a menu's long press
+    /// instead of holding the contact itself.
+    enclosing_hold: Option<Rc<SequencedBranch>>,
+    own_menu: bool,
+    /// The hold this widget composed for its own menu's long press.
+    own_hold: Option<Rc<SequencedBranch>>,
+    built_for: Option<BuiltFor>,
     drag_attachment: Rc<RecognizerAttachment<MultiDragGestureRecognizer>>,
     hold_attachment: Rc<RecognizerAttachment<LongPressGestureRecognizer>>,
 }
@@ -674,10 +683,38 @@ impl StatefulView for Draggable {
             hold: None,
             trigger: self.trigger,
             arena: None,
+            enclosing_hold: None,
+            own_menu: self.alternatives.is_menu(),
+            own_hold: None,
             built_for: None,
             drag_attachment: Rc::new(RecognizerAttachment::default()),
             hold_attachment: Rc::new(RecognizerAttachment::default()),
         }
+    }
+}
+
+/// What a draggable's recognizers were built for.
+struct BuiltFor {
+    arena: GestureArena,
+    settings: GestureSettingsProvider,
+    trigger: DragTrigger,
+    enclosing_hold: Option<Rc<SequencedBranch>>,
+    own_menu: bool,
+}
+
+impl BuiltFor {
+    /// Whether recognizers built for `self` serve `wanted` too.
+    fn matches(&self, wanted: &Self) -> bool {
+        let same_hold = match (&self.enclosing_hold, &wanted.enclosing_hold) {
+            (None, None) => true,
+            (Some(ours), Some(theirs)) => Rc::ptr_eq(ours, theirs),
+            _ => false,
+        };
+        self.arena.admits_like(&wanted.arena)
+            && self.settings == wanted.settings
+            && self.trigger == wanted.trigger
+            && self.own_menu == wanted.own_menu
+            && same_hold
     }
 }
 
@@ -699,16 +736,23 @@ impl DraggableState {
     /// they replace.
     fn rebuild_recognizers(&mut self, settings: GestureSettingsProvider) {
         let trigger = self.trigger;
-        if self
-            .built_for
-            .as_ref()
-            .is_some_and(|built| built.0 == settings && built.1 == trigger)
-        {
-            return;
-        }
         let Some(arena) = self.arena.clone() else {
             return;
         };
+        let built_for = BuiltFor {
+            arena: arena.clone(),
+            settings: settings.clone(),
+            trigger,
+            enclosing_hold: self.enclosing_hold.clone(),
+            own_menu: self.own_menu,
+        };
+        if self
+            .built_for
+            .as_ref()
+            .is_some_and(|built| built.matches(&built_for))
+        {
+            return;
+        }
         let on_start = {
             let source = Rc::downgrade(&self.source);
             move |pointer: PointerId, grab: Offset<f64>| {
@@ -718,9 +762,29 @@ impl DraggableState {
                     .map(|contact| contact as Rc<dyn MultiDragHandle>)
             }
         };
-        let (drag_arena, hold) = match trigger {
-            DragTrigger::Immediate => (arena, None),
-            DragTrigger::LongPress => match arena.sequenced() {
+        let mut own_hold = None;
+        let (drag_arena, hold) = match (trigger, &self.enclosing_hold) {
+            (DragTrigger::Immediate, _) => (arena, None),
+            // A context menu's long press holds the contact and hands it to
+            // the drag once it moves: the enclosing menu's, or this widget's
+            // own, built by its alternatives on the hold composed here.
+            (DragTrigger::LongPress, Some(menu)) => (menu.successor(), None),
+            (DragTrigger::LongPress, None) if self.own_menu => match arena.sequenced() {
+                Ok(branch) => {
+                    let branch = Rc::new(branch);
+                    let successor = branch.successor();
+                    own_hold = Some(branch);
+                    (successor, None)
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        "a long-press drag could not compose as Sequenced; it starts at once"
+                    );
+                    (arena, None)
+                }
+            },
+            (DragTrigger::LongPress, None) => match arena.sequenced() {
                 Ok(branch) => {
                     let branch = Rc::new(branch);
                     let pressed = Rc::downgrade(&self.source);
@@ -755,7 +819,7 @@ impl DraggableState {
             },
         };
         let drag = MultiDragGestureRecognizer::builder(drag_arena, MultiDragAxis::Free)
-            .settings(settings.clone())
+            .settings(settings)
             .on_start(on_start)
             .build();
         self.drag_attachment.attach(&drag);
@@ -767,7 +831,8 @@ impl DraggableState {
             self.drag.replace(drag),
             std::mem::replace(&mut self.hold, hold),
         );
-        self.built_for = Some((settings, trigger));
+        self.own_hold = own_hold;
+        self.built_for = Some(built_for);
         if let Some(drag) = outgoing.0 {
             let _ = drag.cancel();
         }
@@ -779,25 +844,29 @@ impl DraggableState {
 
 impl ViewState<Draggable> for DraggableState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.acquire(ctx);
-        self.arena = Some(GestureArenaScope::of(ctx));
-        self.rebuild_recognizers(GestureArenaScope::settings_of(ctx));
+        self.did_change_dependencies(ctx);
     }
 
     /// Re-acquires the capabilities and the overlay, and replaces the
-    /// recognizers when the gesture policy changed (ADR-0208).
+    /// recognizers when the arena, the gesture policy or an enclosing menu's
+    /// hold changed (ADR-0208).
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.acquire(ctx);
         self.arena = Some(GestureArenaScope::of(ctx));
+        self.enclosing_hold = MenuHoldScope::of(ctx);
         self.rebuild_recognizers(GestureArenaScope::settings_of(ctx));
     }
 
-    /// A new trigger replaces the recognizers; a drag already running keeps
-    /// going until the replaced ones cancel it.
+    /// A new trigger, or alternatives that turn into a menu or out of one,
+    /// replace the recognizers; a drag already running keeps going until the
+    /// replaced ones cancel it.
     fn did_update_view(&mut self, _old_view: &Draggable, new_view: &Draggable) {
-        if new_view.trigger != self.trigger {
+        let own_menu = new_view.alternatives.is_menu();
+        if new_view.trigger != self.trigger || own_menu != self.own_menu {
             self.trigger = new_view.trigger;
-            if let Some((settings, _)) = self.built_for.clone() {
+            self.own_menu = own_menu;
+            if let Some(built) = &self.built_for {
+                let settings = built.settings.clone();
                 self.rebuild_recognizers(settings);
             }
         }
@@ -837,11 +906,14 @@ impl ViewState<Draggable> for DraggableState {
             source: Rc::clone(&self.source),
         };
         Actions::new(
-            view.alternatives.clone().child(
-                MouseRegion::new()
-                    .cursor(CursorIcon::Grab)
-                    .child(listener.child(content)),
-            ),
+            view.alternatives
+                .clone()
+                .with_hold(self.own_hold.clone())
+                .child(
+                    MouseRegion::new()
+                        .cursor(CursorIcon::Grab)
+                        .child(listener.child(content)),
+                ),
         )
         .action(transfers)
     }

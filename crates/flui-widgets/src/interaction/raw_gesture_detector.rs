@@ -233,8 +233,10 @@ impl Slot {
 /// Recognizers join the presentation arena of the enclosing
 /// [`GestureArenaScope`] and receive the pointer stream in list order, so the
 /// first factory's recognizer is the arena's front member. A scope whose
-/// gesture settings change rebuilds every recognizer: the new ones are
-/// committed before the old ones are cancelled.
+/// gesture settings change, or that hands the detector an arena handle
+/// admitting elsewhere (another arena, composition branch or `PanClaim`
+/// region), rebuilds every recognizer: the new ones are committed before the
+/// old ones are cancelled.
 ///
 /// The default hit behavior is [`DeferToChild`](HitTestBehavior::DeferToChild).
 #[derive(Clone, StatefulView)]
@@ -409,10 +411,9 @@ impl ViewState<RawGestureDetector> for RawGestureDetectorState {
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         let incoming = context_of(ctx);
-        let changed = self
-            .context
-            .as_ref()
-            .is_some_and(|current| current.settings != incoming.settings);
+        let changed = self.context.as_ref().is_some_and(|current| {
+            current.settings != incoming.settings || !current.arena.admits_like(&incoming.arena)
+        });
         if !changed {
             self.context = Some(incoming);
             return;

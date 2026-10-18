@@ -131,7 +131,11 @@ pub struct ObservedMember {
 
 impl ObservedMember {
     pub(crate) fn new(member: Weak<dyn GestureArenaMember>) -> Self {
-        let type_name = member.upgrade().map(|member| member.member_type_name());
+        // Through the `dyn` member, so the name is the member's own type's,
+        // not the `Rc`'s.
+        let type_name = member
+            .upgrade()
+            .map(|member| super::arena::member_type_name(&*member));
         Self { member, type_name }
     }
 

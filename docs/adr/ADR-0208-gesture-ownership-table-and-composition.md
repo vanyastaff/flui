@@ -48,7 +48,11 @@ Each cell is a row of `assert_ownership_table` (`flui-testing`); other documents
    an exact tie goes to the innermost member on the route.
 3. **Same axis.** An ancestor channel participant does not compete in the arena with a
    descendant channel leaf on that axis; the innermost claimant owns and the ancestor receives
-   deltas. A free pan is not a channel leaf and follows rule 2. This replaces ADR-0167's sentence
+   deltas. A free pan is not a channel leaf and follows rule 2. A channel leaf yields to no
+   ancestor, but the members inside it are inner claimants: the leaf meets them as a free member
+   does (rule 2), so a list in an `InteractiveViewer` owns a drag on its axis and the viewer the
+   rest, and a pan inside it owns every drag (rows `axial / channel-leaf ancestor`,
+   `free / channel-leaf ancestor`). This replaces ADR-0167's sentence
    "Horizontal drag acquires no invented orthogonal-rejection behavior": an axial member rejects
    when the table gives the contact to an orthogonal winner, and a pan meeting an axial drag is
    decided by rule 2, not by first claim.
@@ -101,7 +105,9 @@ pub enum CompositionError { DelayCeilingExceeded { sum: Duration, ceiling: Durat
 - `Sequenced` is one arena member with explicit hand-off from hold to successor; only
   `sequenced()`'s `SequencedBranch` carries that authority. `CompositionKind` is what each node
   reports to `GestureObserver` and `GestureInspector`. The menu stays visible until release;
-  motion past slop closes it and starts the drag.
+  motion past slop closes it and starts the drag. A context menu's long press is the hold the
+  long-press drags beneath its row succeed, so one contact has one hold: a nested
+  `Sequenced` hold of its own would compete with the menu's instead of handing off.
 - A composition whose summed deadlines on any root-to-leaf path exceed the preset's
   `max_resolution_delay` returns `DelayCeilingExceeded`, which the detector reports as a build
   diagnostic. Every deadline is on the `EventTime` scale.

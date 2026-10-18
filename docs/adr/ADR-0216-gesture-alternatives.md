@@ -138,7 +138,10 @@ GestureAlternatives::handle(&self, &dyn BuildContext) -> CommandHandle   // the 
   Apple platforms) are root bindings of `DefaultFocusTraversal`.
 - **The menu's pointer triggers.** Secondary click for a mouse, pen or trackpad; a long press,
   the hold of a `Sequenced` composition, for touch and pen. A mouse, a dwell or a switch device
-  has no long press, so a mouse drag on the row meets no competitor. The menu itself is the
+  has no long press, so a mouse drag on the row meets no competitor. The long-press drags
+  beneath the row are that hold's successors, not holds of their own: a finger that opened the
+  menu and moves past the pan slop hands its contact to the drag, and the presenter closes the
+  menu through `MenuSpec::dismiss` (ADR-0208 §3). The menu itself is the
   `MenuSpec`'s presenter, which receives the items, the cause and the pointer position;
   `assert_gesture_alternatives` finds the items it shows in the semantics tree.
 - **Controls** are focusable buttons labelled by their command, drawn at least the touch minimum

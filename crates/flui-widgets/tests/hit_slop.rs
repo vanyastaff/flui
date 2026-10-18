@@ -20,7 +20,8 @@ use flui_view::{IntoView, ViewExt};
 use flui_widgets::row;
 use flui_widgets::{
     AbsorbPointer, Center, ColoredBox, ContentShape, GestureDetector, HitShape, HitSlop,
-    Positioned, RepaintBoundary, SizedBox, Stack,
+    InsertPosition, Overlay, OverlayEntry, OverlayHandle, Positioned, RepaintBoundary, SizedBox,
+    Stack,
 };
 
 /// A `side`-square tap target that counts its taps.
@@ -153,6 +154,49 @@ pub(crate) fn slop_does_not_leave_its_composited_layer() {
     );
     tap(&laid, 100.0, 100.0);
     assert_eq!(counts(&[&isolated]), [1], "a visual hit still works");
+}
+
+/// A target's slop stays inside its overlay entry: a toast in the entry above
+/// that covers part of a page button's slop keeps the taps that land on it,
+/// though it takes no pointer input itself and shares the page's layer; the
+/// slop the toast leaves uncovered still reaches the button.
+pub(crate) fn slop_does_not_cross_an_overlay_entry() {
+    let taps = Arc::new(AtomicUsize::new(0));
+    let page_taps = Arc::clone(&taps);
+    let page_entry = OverlayEntry::new(move |_ctx| {
+        Stack::new(row![
+            SizedBox::new(200.0, 200.0).child(page()),
+            Positioned::new(
+                HitSlop::new()
+                    .slop(EdgeInsets::all(30.0))
+                    .child(target(20.0, &page_taps)),
+            )
+            .left(90.0)
+            .top(90.0),
+        ])
+        .into_view()
+        .boxed()
+    });
+    let toast = OverlayEntry::new(|_ctx| {
+        Stack::new(row![
+            Positioned::new(
+                SizedBox::new(25.0, 20.0).child(ColoredBox::new(Color::rgb(30, 30, 30)))
+            )
+            .left(60.0)
+            .top(90.0),
+        ])
+        .into_view()
+        .boxed()
+    });
+    let handle = OverlayHandle::new();
+    handle.insert(&page_entry, &InsertPosition::Top);
+    handle.insert(&toast, &InsertPosition::Top);
+    let laid = lay_out(Overlay::new(handle), tight(200.0, 200.0));
+
+    tap(&laid, 80.0, 100.0);
+    assert_eq!(counts(&[&taps]), [0], "the toast keeps the tap");
+    tap(&laid, 80.0, 80.0);
+    assert_eq!(counts(&[&taps]), [1], "uncovered slop reaches the button");
 }
 
 /// A circular target ignores taps in the corners of its bounding box; they

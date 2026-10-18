@@ -637,8 +637,12 @@ contact in progress keeps its arena membership and accumulated state across a
 parent rebuild. Unmatched factories `create` before anything is committed (a
 panicking `create` leaves the mounted set intact); the new list is committed
 before retired recognizers are cancelled and before any `update` runs. A
-scope whose gesture settings change rebuilds every recognizer, as
-`GestureDetector` does. The recognizer type is an associated type of the
+scope whose gesture settings change, or that hands out an arena handle
+admitting elsewhere (`GestureArena::admits_like`: another arena, composition
+branch or `PanClaim` region), rebuilds every recognizer, as `GestureDetector`,
+`Draggable` and the back gesture do; `PanClaimRegion` keeps one handle while
+its claim and the enclosing handle stay, so its rebuild rebuilds nothing
+(`recognizers_follow_a_changed_arena_scope`). The recognizer type is an associated type of the
 factory, so `update` receives `&Self::Recognizer` without a caller-side
 downcast; the private erasure downcasts once against the factory's own type.
 
@@ -714,7 +718,14 @@ A menu opens on a secondary click, on a touch or pen long press that
 joins the arena as a `Sequenced` hold, on the menu keys, on `ShowContextMenu`,
 and from a control shown only while keyboard or assistive-technology focus is
 in the row; a mouse has no long press, so a mouse drag of the same row meets
-no competitor. The menu itself is the `MenuSpec`'s presenter. Controls are
+no competitor. The menu itself is the `MenuSpec`'s presenter. The long press
+is one `Sequenced` hold for the row and the long-press drags beneath it: a
+`Draggable` with `DragTrigger::LongPress` under a menu (or whose own commands
+are a menu) joins that hold's successor branch instead of composing a hold of
+its own, and a finger that opened the menu and then moves past the pan slop
+hands its contact to the drag and closes the menu through `MenuSpec::dismiss`;
+with no drag beneath, the menu stays
+(`a_held_press_moved_past_the_slop_closes_the_menu_and_drags`). Controls are
 drawn at least the touch minimum target square, so a window edge cannot clip
 them. A visible-control row keeps the kind of constraint it receives (a tight
 width fills, a loose one takes the content's width) through a
