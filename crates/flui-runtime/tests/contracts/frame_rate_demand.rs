@@ -261,7 +261,7 @@ fn static_screen_releases_the_hint_after_the_hold_via_a_wake_deadline() {
     );
     assert!(!rig.pending_work(), "the hold is not due yet");
 
-    rig.advance(FRAME_RATE_HOLD - Duration::from_millis(1));
+    rig.advance(FRAME_RATE_HOLD.saturating_sub(Duration::from_millis(1)));
     assert!(!rig.pending_work(), "one millisecond short of the hold");
     rig.advance(Duration::from_millis(1));
     assert!(
