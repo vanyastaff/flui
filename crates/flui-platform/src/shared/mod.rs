@@ -26,7 +26,8 @@ pub(crate) mod android_text_weight;
     target_os = "android",
     target_os = "ios",
     target_os = "macos",
-    target_arch = "wasm32"
+    target_arch = "wasm32",
+    test
 ))]
 pub(crate) mod display_source;
 // The keys the macOS and iOS display sources give a screen, the iOS version

@@ -85,6 +85,8 @@ pub struct FluiViewIvars {
     /// The screen this window's scene is on; shared with the window, whose
     /// `display_id` any thread may call.
     screen: Arc<parking_lot::Mutex<ScreenIdentity>>,
+    /// The window this view belongs to; owns the link periods it reports.
+    window_id: WindowId,
     metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
     /// Whether the view's `userInterfaceStyle` was dark when last sampled.
     /// Apart from `metrics`: the theme is the system's, so it needs neither a
@@ -202,6 +204,14 @@ define_class!(
     unsafe impl NSObjectProtocol for FluiView {}
 );
 
+/// What a view needs to name its display: the platform's source, the screen
+/// slot it shares with its window, and the window that owns its link periods.
+struct ViewDisplay {
+    displays: Arc<IosDisplays>,
+    screen: Arc<parking_lot::Mutex<ScreenIdentity>>,
+    window: WindowId,
+}
+
 /// Ask `link` to run at the best rate `screen` sustains: a frame-rate range on
 /// iOS 15 and later, `preferredFramesPerSecond` before it.
 fn request_frame_rate(link: &CADisplayLink, displays: &IosDisplays, screen: &UIScreen) {
@@ -251,8 +261,7 @@ impl FluiView {
         metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
         dark: Arc<AtomicBool>,
         owner_signal: std::sync::Weak<crate::shared::owner_signal::OwnerSignal>,
-        displays: Arc<IosDisplays>,
-        screen: Arc<parking_lot::Mutex<ScreenIdentity>>,
+        display: ViewDisplay,
     ) -> Retained<Self> {
         let bounds = objc2_ui_kit::UIScreen::mainScreen(mtm).bounds();
         let this = mtm.alloc::<Self>();
@@ -267,8 +276,9 @@ impl FluiView {
             sampling_pending: std::cell::Cell::new(false),
             display_link: RefCell::new(None),
             link_period: RefCell::new(LinkPeriod::default()),
-            displays,
-            screen,
+            displays: display.displays,
+            screen: display.screen,
+            window_id: display.window,
             metrics,
             dark,
         });
@@ -416,7 +426,9 @@ impl FluiView {
             return;
         }
         if let Some(number) = previous.number {
-            self.ivars().displays.forget_link_period(number);
+            self.ivars()
+                .displays
+                .forget_link_period(number, self.ivars().window_id);
         }
         self.ivars().link_period.borrow_mut().forget();
         let link = self.ivars().display_link.borrow().clone();
@@ -436,7 +448,9 @@ impl FluiView {
         let (Some(period), Some(number)) = (published, number) else {
             return;
         };
-        self.ivars().displays.report_link_period(number, period);
+        self.ivars()
+            .displays
+            .report_link_period(number, self.ivars().window_id, period);
         if let Some(signal) = self.ivars().owner_signal.upgrade() {
             let _ = signal.wake();
         }
@@ -461,7 +475,9 @@ impl FluiView {
             self.ivars().link_period.borrow_mut().forget();
             let number = self.ivars().screen.lock().number;
             if let Some(number) = number {
-                self.ivars().displays.forget_link_period(number);
+                self.ivars()
+                    .displays
+                    .forget_link_period(number, self.ivars().window_id);
             }
         }
     }
@@ -704,8 +720,11 @@ impl IOSWindow {
             Arc::clone(&metrics),
             Arc::clone(&dark),
             signal,
-            displays,
-            Arc::clone(&screen),
+            ViewDisplay {
+                displays,
+                screen: Arc::clone(&screen),
+                window: id,
+            },
         );
         Self {
             native: NativeOwner::new(

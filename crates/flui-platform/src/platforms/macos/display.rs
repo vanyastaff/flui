@@ -32,7 +32,6 @@ use objc2_foundation::{
     NSArray, NSDictionary, NSNotification, NSNotificationCenter, NSNumber, NSObjectProtocol,
     NSString,
 };
-use parking_lot::Mutex;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform_api::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
@@ -111,74 +110,45 @@ fn refresh_period_for_screen(screen: &NSScreen) -> Option<RefreshPeriod> {
     core_graphics_refresh_period(mode.refresh_rate())
 }
 
-/// The displays of one macOS platform: their ids, the last snapshot, and
-/// whether an event has made that snapshot stale.
+/// The displays of one macOS platform: their ids and the last snapshot, which
+/// the [`DisplaySource`] keeps until an event invalidates it.
 pub(super) struct MacosDisplays {
     source: DisplaySource,
-    /// Set by anything that can change a display; cleared by the sample that
-    /// answers it. Starts set, so the first read samples.
-    stale: AtomicBool,
-    sampled: Mutex<Option<DisplaySnapshot>>,
 }
 
 impl MacosDisplays {
     pub(super) fn new() -> Self {
         Self {
             source: DisplaySource::new(),
-            stale: AtomicBool::new(true),
-            sampled: Mutex::new(None),
         }
     }
 
     /// Mark the snapshot stale; the next [`snapshot`](Self::snapshot) samples
     /// again. Any thread: this is one atomic store.
     pub(super) fn invalidate(&self) {
-        self.stale.store(true, Ordering::Release);
+        self.source.invalidate();
     }
 
     /// The displays now: the last sample while nothing has invalidated it,
     /// otherwise a fresh one. Main thread.
     pub(super) fn snapshot(&self, mtm: MainThreadMarker) -> Result<DisplaySnapshot, PlatformError> {
-        let mut sampled = self.sampled.lock();
-        if !self.stale.load(Ordering::Acquire)
-            && let Some(snapshot) = sampled.as_ref()
-        {
-            return Ok(snapshot.clone());
-        }
-        // Cleared before reading, so an invalidation that lands while the
-        // screens are read leaves the snapshot stale for the next call.
-        self.stale.store(false, Ordering::Release);
-        match self.sample(mtm) {
-            Ok(snapshot) => {
-                *sampled = Some(snapshot.clone());
-                Ok(snapshot)
-            }
-            Err(error) => {
-                self.invalidate();
-                Err(error)
-            }
-        }
+        self.source.snapshot_with(|| Ok(self.read(mtm)))
     }
 
     /// The id of the display `screen` is on; `None` for a screen the source
     /// leaves out. A display the published snapshot does not hold yet (a
-    /// monitor plugged in since the last sample) marks the snapshot stale.
+    /// monitor plugged in since the last sample) marks the snapshot stale, once
+    /// per revision.
     pub(super) fn id_of(&self, screen: &NSScreen) -> Option<DisplayId> {
         let id = display_key_of(screen).and_then(|key| self.source.mint(&key))?;
-        if !self.stale.load(Ordering::Acquire)
-            && self
-                .sampled
-                .lock()
-                .as_ref()
-                .is_none_or(|snapshot| snapshot.get(id).is_none())
-        {
-            self.invalidate();
+        if self.source.published().get(id).is_none() {
+            self.source.note_miss(id.get());
         }
         Some(id)
     }
 
-    /// Read every screen (`+[NSScreen screens]`) and publish the result.
-    fn sample(&self, mtm: MainThreadMarker) -> Result<DisplaySnapshot, PlatformError> {
+    /// Read every screen (`+[NSScreen screens]`).
+    fn read(&self, mtm: MainThreadMarker) -> Vec<DisplayInfo> {
         let screens: Retained<NSArray<NSScreen>> = NSScreen::screens(mtm);
         let mut displays = Vec::with_capacity(screens.count());
         // The first screen is always the primary (main) display.
@@ -215,8 +185,7 @@ impl MacosDisplays {
             display.refresh_period = refresh_period_for_screen(&screen);
             displays.push(display);
         }
-        tracing::debug!("Sampled {} displays", displays.len());
-        self.source.publish(displays)
+        displays
     }
 }
 

@@ -2658,16 +2658,21 @@ impl MacOSWindow {
             // Update the FLUI view's scale factor
             view::update_view_scale_factor(self.view, new_scale);
 
+            if moved || changed {
+                // The snapshot carries each display's scale, and a window that
+                // moved may sit on a display the last sample did not hold.
+                // Invalidated before any callback so a resize handler that
+                // reads the snapshot sees the new scale.
+                if let Some(displays) = self.displays.get() {
+                    displays.invalidate();
+                }
+            }
+
             // A scale change invalidates layout: notify as a resize
             if changed {
                 self.callbacks.dispatch_resize(size, new_scale);
             }
             if moved || changed {
-                // The snapshot carries each display's scale, and a window that
-                // moved may sit on a display the last sample did not hold.
-                if let Some(displays) = self.displays.get() {
-                    displays.invalidate();
-                }
                 self.callbacks.dispatch_display_changed();
             }
         }

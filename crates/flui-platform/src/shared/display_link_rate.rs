@@ -115,12 +115,65 @@ impl LinkPeriod {
     }
 }
 
+/// The periods display links published, by screen and the window whose link
+/// measured them. A screen can host several windows, each with its own link, so
+/// an entry belongs to its window: one window's link going away takes that
+/// window's entry and leaves the screen's other entries.
+#[derive(Debug)]
+pub(crate) struct ScreenPeriods<W> {
+    /// `(screen number, window, period)` in the order windows first reported.
+    entries: Vec<(u64, W, RefreshPeriod)>,
+}
+
+impl<W: Copy + PartialEq> ScreenPeriods<W> {
+    pub(crate) fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    /// Record the period `window`'s link measured on `screen`.
+    pub(crate) fn report(&mut self, screen: u64, window: W, period: RefreshPeriod) {
+        match self
+            .entries
+            .iter_mut()
+            .find(|(held, owner, _)| *held == screen && *owner == window)
+        {
+            Some(entry) => entry.2 = period,
+            None => self.entries.push((screen, window, period)),
+        }
+    }
+
+    /// Drop `window`'s entry for `screen`; whether there was one.
+    pub(crate) fn forget(&mut self, screen: u64, window: W) -> bool {
+        let before = self.entries.len();
+        self.entries
+            .retain(|(held, owner, _)| !(*held == screen && *owner == window));
+        self.entries.len() != before
+    }
+
+    /// The period of `screen`: that of the window that reported first among
+    /// those still live, or `None` when no link on it is measuring.
+    pub(crate) fn period_of(&self, screen: u64) -> Option<RefreshPeriod> {
+        self.entries
+            .iter()
+            .find(|(held, _, _)| *held == screen)
+            .map(|(_, _, period)| *period)
+    }
+
+    /// Keep only the entries of the screens in `live`.
+    pub(crate) fn retain_screens(&mut self, live: &[u64]) {
+        self.entries.retain(|(held, _, _)| live.contains(held));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use flui_platform_api::RefreshPeriod;
 
     use super::{
-        FrameRatePreference, FrameRateRange, LinkPeriod, OsVersion, frame_rate_preference,
+        FrameRatePreference, FrameRateRange, LinkPeriod, OsVersion, ScreenPeriods,
+        frame_rate_preference,
     };
 
     fn period_hz(hz: f64) -> RefreshPeriod {
@@ -195,6 +248,29 @@ mod tests {
         // A link that was rebuilt starts again from unknown.
         link.forget();
         assert_eq!(link.observe(1.0 / 30.0), Some(period_hz(30.0)));
+    }
+
+    #[test]
+    fn closing_one_window_keeps_the_screen_period_of_another() {
+        let mut periods = ScreenPeriods::new();
+        periods.report(1, 10u64, period_hz(120.0));
+        periods.report(1, 11, period_hz(60.0));
+        periods.report(2, 10, period_hz(60.0));
+        // The first window's link goes away: the second still measures screen 1.
+        assert!(periods.forget(1, 10));
+        assert_eq!(periods.period_of(1), Some(period_hz(60.0)));
+        // Screen 2 had only that window's entry for 10, which is untouched.
+        assert_eq!(periods.period_of(2), Some(period_hz(60.0)));
+        // Forgetting an entry that is not there changes nothing.
+        assert!(!periods.forget(1, 10));
+        // The last link on a screen takes the screen's period with it.
+        assert!(periods.forget(1, 11));
+        assert_eq!(periods.period_of(1), None);
+        // A window re-reporting replaces its own entry.
+        periods.report(2, 10, period_hz(120.0));
+        assert_eq!(periods.period_of(2), Some(period_hz(120.0)));
+        periods.retain_screens(&[]);
+        assert_eq!(periods.period_of(2), None);
     }
 
     #[test]

@@ -55,40 +55,13 @@ pub(crate) fn resolve_display(
     mint(&monitor.key)
 }
 
-/// Remembers which monitor handles missed in the current snapshot revision, so
-/// windows on monitors the snapshot omits ask for one fresh sample per handle
-/// and revision rather than one per owner wake, however many such monitors
-/// there are.
-#[derive(Debug, Default)]
-pub(crate) struct MissLedger {
-    revision: u64,
-    missed: Vec<isize>,
-}
-
-impl MissLedger {
-    /// Whether this miss is the first of `nearest` in snapshot `revision`.
-    pub(crate) fn first_miss(&mut self, nearest: isize, revision: u64) -> bool {
-        if revision != self.revision {
-            self.revision = revision;
-            self.missed.clear();
-        }
-        if self.missed.contains(&nearest) {
-            return false;
-        }
-        self.missed.push(nearest);
-        true
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
     use flui_platform_api::{DisplayKey, DisplayRegistry, RefreshPeriod};
 
-    use super::{
-        MissLedger, SampledMonitor, frequency_period, rational_refresh_period, resolve_display,
-    };
+    use super::{SampledMonitor, frequency_period, rational_refresh_period, resolve_display};
 
     fn target(target_id: u32) -> DisplayKey {
         DisplayKey::WindowsTarget {
@@ -184,18 +157,6 @@ mod tests {
         assert_eq!(empty, None);
     }
 
-    fn a_repeated_miss_asks_for_one_sample_per_revision() {
-        let mut ledger = MissLedger::default();
-        assert!(ledger.first_miss(0x9, 3));
-        assert!(!ledger.first_miss(0x9, 3), "the same miss asked again");
-        assert!(ledger.first_miss(0xa, 3), "another monitor missed");
-        assert!(
-            !ledger.first_miss(0x9, 3),
-            "alternating misses in one revision are each asked once"
-        );
-        assert!(!ledger.first_miss(0xa, 3));
-        assert!(ledger.first_miss(0x9, 4), "a new revision may be retried");
-    }
     #[test]
     fn os_display_classification() {
         crate::table_test::run_table(
@@ -216,10 +177,6 @@ mod tests {
                 (
                     "a_monitor_missing_from_the_sample_is_unknown_not_the_primary",
                     a_monitor_missing_from_the_sample_is_unknown_not_the_primary as fn(),
-                ),
-                (
-                    "a_repeated_miss_asks_for_one_sample_per_revision",
-                    a_repeated_miss_asks_for_one_sample_per_revision as fn(),
                 ),
             ],
         );

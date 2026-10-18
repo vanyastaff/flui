@@ -17,7 +17,6 @@
 //! read again only after an event marked it stale: a screen or scene
 //! notification, a window changing screen, or a new link period.
 
-use std::collections::HashMap;
 use std::ptr::NonNull;
 use std::sync::{
     Arc, Weak,
@@ -44,9 +43,10 @@ use super::os_version;
 use crate::error::PlatformError;
 use crate::shared::apple_display_identity::{SameObject, ScreenLedger};
 use crate::shared::apple_os_version::OsVersion;
-use crate::shared::display_link_rate::{FrameRatePreference, frame_rate_preference};
+use crate::shared::display_link_rate::{FrameRatePreference, ScreenPeriods, frame_rate_preference};
 use crate::shared::display_source::DisplaySource;
 use crate::shared::owner_signal::OwnerSignal;
+use crate::traits::WindowId;
 
 type RetainedScreen = Retained<UIScreen>;
 
@@ -66,20 +66,17 @@ pub(super) struct ScreenIdentity {
     pub(super) number: Option<u64>,
 }
 
-/// The displays of one iOS platform: their ids, the last snapshot, the link
-/// periods windows measured, and the OS version.
+/// The displays of one iOS platform: their ids and the last snapshot (kept by
+/// the [`DisplaySource`] until an event invalidates it), the link periods
+/// windows measured, and the OS version.
 pub(super) struct IosDisplays {
     source: DisplaySource,
     version: OsVersion,
     /// The retained screens and their numbers. Main thread only: a
     /// `UIScreen` is retained and compared there.
     screens: NativeOwner<std::cell::RefCell<ScreenLedger<RetainedScreen>>>,
-    /// Set by anything that can change a display; cleared by the sample that
-    /// answers it. Starts set, so the first read samples.
-    stale: AtomicBool,
-    sampled: Mutex<Option<DisplaySnapshot>>,
-    /// The period each screen's display link last published, by screen number.
-    link_periods: Mutex<HashMap<u64, RefreshPeriod>>,
+    /// The period each window's display link last published, by screen.
+    link_periods: Mutex<ScreenPeriods<WindowId>>,
 }
 
 impl IosDisplays {
@@ -88,16 +85,14 @@ impl IosDisplays {
             source: DisplaySource::new(),
             version: os_version::read(),
             screens: NativeOwner::new(std::cell::RefCell::new(ScreenLedger::new()), marker),
-            stale: AtomicBool::new(true),
-            sampled: Mutex::new(None),
-            link_periods: Mutex::new(HashMap::new()),
+            link_periods: Mutex::new(ScreenPeriods::new()),
         }
     }
 
     /// Mark the snapshot stale; the next [`snapshot`](Self::snapshot) samples
     /// again. Any thread: this is one atomic store.
     pub(super) fn invalidate(&self) {
-        self.stale.store(true, Ordering::Release);
+        self.source.invalidate();
     }
 
     /// How a display link on a screen that sustains `maximum_frames_per_second`
@@ -115,70 +110,66 @@ impl IosDisplays {
         &self,
         marker: MainThreadMarker,
     ) -> Result<DisplaySnapshot, PlatformError> {
-        let mut sampled = self.sampled.lock();
-        if !self.stale.load(Ordering::Acquire)
-            && let Some(snapshot) = sampled.as_ref()
-        {
-            return Ok(snapshot.clone());
-        }
-        // Cleared before reading, so an invalidation that lands while the
-        // screens are read leaves the snapshot stale for the next call.
-        self.stale.store(false, Ordering::Release);
-        match self.sample(marker) {
-            Ok(snapshot) => {
-                *sampled = Some(snapshot.clone());
-                Ok(snapshot)
-            }
-            Err(error) => {
-                self.invalidate();
-                Err(error)
-            }
-        }
+        self.source.snapshot_with(|| Ok(self.read(marker)))
     }
 
-    /// The identity of `screen`; retains it. A screen the published snapshot
-    /// does not hold yet marks the snapshot stale.
+    /// The identity of `screen`, retaining it.
+    ///
+    /// A screen `UIScreen.screens` does not list is not numbered: it answers no
+    /// identity and records a miss, so the snapshot is read again once per
+    /// revision and a later call may find the screen listed. A screen the
+    /// published snapshot does not hold yet records a miss too.
     pub(super) fn identify(&self, marker: MainThreadMarker, screen: &UIScreen) -> ScreenIdentity {
-        let number = self
-            .screens
-            .get(marker)
-            .borrow_mut()
-            .number_of(&screen.retain());
+        let screen = screen.retain();
+        let held = self.screens.get(marker).borrow().number_if_held(&screen);
+        let number = if held.is_some() {
+            held
+        } else {
+            let listed = UIScreen::screens(marker);
+            if !listed
+                .iter()
+                .any(|screen_in_list| screen_in_list.same_object(&screen))
+            {
+                // The address stands only for "this missed object" in the
+                // once-per-revision ledger; it names no display.
+                self.source
+                    .note_miss(Retained::as_ptr(&screen).addr() as u64);
+                return ScreenIdentity::default();
+            }
+            self.screens.get(marker).borrow_mut().number_of(&screen)
+        };
         let id = number.and_then(|number| self.source.mint(&DisplayKey::IosScreen(number)));
         if let Some(id) = id
-            && !self.stale.load(Ordering::Acquire)
-            && self
-                .sampled
-                .lock()
-                .as_ref()
-                .is_none_or(|snapshot| snapshot.get(id).is_none())
+            && self.source.published().get(id).is_none()
         {
-            self.invalidate();
+            self.source.note_miss(id.get());
         }
         ScreenIdentity { id, number }
     }
 
-    /// Record the period the display link on screen `number` measured, and
-    /// mark the snapshot stale.
-    pub(super) fn report_link_period(&self, number: u64, period: RefreshPeriod) {
-        self.link_periods.lock().insert(number, period);
+    /// Record the period `window`'s display link measured on screen `number`,
+    /// and mark the snapshot stale.
+    pub(super) fn report_link_period(&self, number: u64, window: WindowId, period: RefreshPeriod) {
+        self.link_periods.lock().report(number, window, period);
         self.invalidate();
     }
 
-    /// Forget the period of screen `number`: its link is gone.
-    pub(super) fn forget_link_period(&self, number: u64) {
-        if self.link_periods.lock().remove(&number).is_some() {
+    /// Forget `window`'s period on screen `number`: its link is gone. Other
+    /// windows' periods on the screen stay.
+    pub(super) fn forget_link_period(&self, number: u64, window: WindowId) {
+        let forgot = self.link_periods.lock().forget(number, window);
+        if forgot {
             self.invalidate();
         }
     }
 
-    /// Read every screen UIKit lists and publish the result.
-    fn sample(&self, marker: MainThreadMarker) -> Result<DisplaySnapshot, PlatformError> {
+    /// Read every screen UIKit lists.
+    fn read(&self, marker: MainThreadMarker) -> Vec<DisplayInfo> {
         let listed = UIScreen::screens(marker);
         let live: Vec<RetainedScreen> = listed.iter().collect();
-        let mut ledger = self.screens.get(marker).borrow_mut();
         let mut displays = Vec::with_capacity(live.len());
         let mut live_numbers = Vec::with_capacity(live.len());
+        let mut ledger = self.screens.get(marker).borrow_mut();
         // The first listed screen is the device's own display.
         for (index, screen) in live.iter().enumerate() {
             let Some(number) = ledger.number_of(screen) else {
@@ -199,16 +190,13 @@ impl IosDisplays {
             // safe-area insets carve out the notch and home indicator for
             // CONTENT, not for the display itself.
             let mut display = DisplayInfo::new(id, name, bounds, scale).with_primary(index == 0);
-            display.refresh_period = self.link_periods.lock().get(&number).copied();
+            display.refresh_period = self.link_periods.lock().period_of(number);
             displays.push(display);
         }
         ledger.release_unlisted(&live);
         drop(ledger);
-        self.link_periods
-            .lock()
-            .retain(|number, _| live_numbers.contains(number));
-        tracing::debug!("Sampled {} displays", displays.len());
-        self.source.publish(displays)
+        self.link_periods.lock().retain_screens(&live_numbers);
+        displays
     }
 }
 

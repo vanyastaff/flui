@@ -53,6 +53,14 @@ impl<S: Clone + SameObject> ScreenLedger<S> {
         }
     }
 
+    /// The number of `screen` when the ledger holds it; never numbers a new one.
+    pub(crate) fn number_if_held(&self, screen: &S) -> Option<u64> {
+        self.retained
+            .iter()
+            .find(|(held, _)| held.same_object(screen))
+            .map(|(_, number)| *number)
+    }
+
     /// The number of `screen`: its own when the ledger holds it, otherwise a
     /// new number, retaining the screen. `None` once the counter is used up
     /// and the screen is not already held.
@@ -150,6 +158,8 @@ mod tests {
         let external_number = ledger.number_of(&external).expect("a number");
         assert_ne!(main_number, external_number);
         assert_eq!(ledger.number_of(&main.clone()), Some(main_number));
+        assert_eq!(ledger.number_if_held(&main), Some(main_number));
+        assert_eq!(ledger.number_if_held(&Screen { object: 3 }), None);
         ledger.release_unlisted(std::slice::from_ref(&main));
         assert_eq!(ledger.number_of(&main), Some(main_number));
     }
