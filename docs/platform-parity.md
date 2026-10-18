@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-18 · **Change:** minor (Windows displays and refresh rate) ·
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-18 · **Change:** minor (macOS and iOS displays and refresh rate) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -95,9 +95,9 @@ Counted over every row of the core and system-service sections.
 
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes | Hours |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Displays: list, work area, current display, changes | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | ✅ | Headless injects displays, changes and window moves. Windows keys each monitor by adapter and target (`QueryDisplayConfig`), names the window's display through `MonitorFromWindow`, and delivers `WM_DISPLAYCHANGE`, DPI and work-area changes. Windows run (2026-10-18, Windows 11, one 3440×1440 monitor, `examples/displays.rs` watching): a refresh switch, a scale change to 125% and a resolution change to 2560×1440 each published a new snapshot with the same `DisplayId`; moving between two monitors was not run (one monitor). Other native backends deliver no change events yet; Android's snapshot is a placeholder that is still hard-coded (1080×2340 @ 2.75) | 6–10 |
+| Displays: list, work area, current display, changes | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | ✅ | Headless injects displays, changes and window moves. Windows keys each monitor by adapter and target (`QueryDisplayConfig`), names the window's display through `MonitorFromWindow`, and delivers `WM_DISPLAYCHANGE`, DPI and work-area changes. Windows run (2026-10-18, Windows 11, one 3440×1440 monitor, `examples/displays.rs` watching): a refresh switch, a scale change to 125% and a resolution change to 2560×1440 each published a new snapshot with the same `DisplayId`; moving between two monitors was not run (one monitor). macOS keys each display by its UUID, resamples after `NSApplicationDidChangeScreenParametersNotification` and raises the window's display observation from `windowDidChangeScreen:` and backing-property changes; iOS numbers each retained `UIScreen`, observes screen and scene notifications and names the window's screen; both are type-checked only; no Apple code runs in CI. The remaining native backends (Wayland, X11, Android) deliver no change events yet; Android's snapshot is a placeholder that is still hard-coded (1080×2340 @ 2.75) | 6–10 |
 | Scale factor and DPI changes | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ✅ | Web misses a change of device pixel ratio alone. Android run: emulator at density 420 | 2–4 |
-| Refresh rate and frame pacing | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | ✅ | Windows reads the active mode's rational rate. Windows run (same session): 60 Hz reported as 16 666 µs, a switch to 144 Hz reported 6 944 µs and raised the window's display observation. Android reports no frame period (60 Hz default); iOS doesn't report ProMotion | 4–6 |
+| Refresh rate and frame pacing | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | ✅ | Windows reads the active mode's rational rate. Windows run (same session): 60 Hz reported as 16 666 µs, a switch to 144 Hz reported 6 944 µs and raised the window's display observation. macOS reads the display's current-mode rate. iOS asks the display link for a 60 Hz to maximum frame-rate range (iOS 15 and later; `preferredFramesPerSecond` before), writes `CADisableMinimumFrameDurationOnPhone` into the app's `Info.plist`, and reports the cadence the link measures once it leaves a 5% band; both are type-checked only; no Apple code runs in CI. Android reports no frame period (60 Hz default) | 4–6 |
 | GPU surface | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | Rendered in every run above | 0 |
 | Safe area | — | ❌ | — | — | ✅ | 🟡 | ❌ | ✅ | macOS ignores the notch in fullscreen; Web doesn't read `env(safe-area-inset-*)`. iOS run: `device ios-safe-area-check` | 2–4 |
 | Soft-keyboard insets | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Not in the contract | 4–6 |
@@ -226,3 +226,4 @@ exists yet.
 | 2026-10-17 | minor | Storage wired on every backend (the Web through IndexedDB); the Windows and Android cells ran live |
 | 2026-10-17 | minor | The Web store moves to IndexedDB, and writes based on a version work there |
 | 2026-10-18 | minor | Windows displays and refresh rate: native keys, the window's display, change delivery and the active-mode rate; the Windows cells ran live |
+| 2026-10-18 | minor | macOS and iOS displays and refresh rate: UUID keys, screen notifications, iOS ProMotion and measured period; type-checked only, the cells stay 🟡 |

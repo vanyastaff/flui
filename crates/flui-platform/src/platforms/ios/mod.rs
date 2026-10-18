@@ -34,9 +34,12 @@
 //!
 //! # iOS versions
 //!
-//! Target: iOS 13+. `objc2`'s bindings span iOS 10–26, so nothing here needs
-//! an availability gate above 13 — a claim to re-check the moment a call is
-//! added that the SDK marks newer.
+//! Target: iOS 13+. `objc2`'s bindings span iOS 10–26, so a call the SDK marks
+//! newer than 13 needs an availability gate. The one today is
+//! `CADisplayLink.preferredFrameRateRange` (iOS 15): `os_version` reads
+//! `NSProcessInfo.operatingSystemVersion` once, the platform keeps it, and the
+//! call takes the proof a version check hands out (`shared::apple_os_version`).
+//! Before iOS 15 the link gets `preferredFramesPerSecond` instead.
 
 // Some screen/geometry APIs remain deprecated in SDK 26.2. Scene ownership is
 // implemented; this allowance does not exempt new code from scene lifetime rules.
@@ -53,6 +56,7 @@ mod display;
 mod events;
 mod executor;
 mod native_owner;
+mod os_version;
 mod platform;
 mod preferences;
 mod scene;

@@ -14,7 +14,7 @@ use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     error::PlatformError,
     executor::BackgroundExecutor,
-    shared::{PlatformHandlers, display_source::DisplaySource},
+    shared::PlatformHandlers,
     traits::{
         Clipboard, DesktopCapabilities, DisplaySnapshot, OpenWindowError, OwnerPlatform, Platform,
         PlatformCapabilities, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent,
@@ -55,7 +55,11 @@ pub struct MacOSPlatform {
 
     /// The id registry and last snapshot of the displays; shared with every
     /// window so each names its screen by the same identity.
-    displays: Arc<DisplaySource>,
+    displays: Arc<display::MacosDisplays>,
+
+    /// Marks `displays` stale and wakes the owner when AppKit reports a
+    /// change of screen parameters; removed when the platform is dropped.
+    _screen_observer: display::ScreenObserver,
 
     /// Records the event-loop owner thread so the thread-affine AppKit
     /// operations below can `debug_assert` their caller (ADR-0039).
@@ -169,6 +173,9 @@ impl MacOSPlatform {
             let loop_control =
                 super::loop_control::LoopControl::new(Arc::clone(&windows), Arc::clone(&handlers));
             let preferences = super::preferences::PreferenceSource::new(&loop_control.owner_signal);
+            let displays = Arc::new(display::MacosDisplays::new());
+            let screen_observer =
+                display::ScreenObserver::new(&displays, &loop_control.owner_signal);
             let platform = Self {
                 loop_control,
                 preferences,
@@ -178,7 +185,8 @@ impl MacOSPlatform {
                 wake_pump,
                 background_executor,
                 config,
-                displays: Arc::new(DisplaySource::new()),
+                displays,
+                _screen_observer: screen_observer,
                 affinity: OwnerAffinity::new(),
             };
             // The constructor requires the main thread (checked above), so
@@ -280,7 +288,7 @@ impl Platform for MacOSPlatform {
         let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
             message: "NSScreen sampling must run on the AppKit main thread".into(),
         })?;
-        display::sample_screens(mtm, &self.displays)
+        self.displays.snapshot(mtm)
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {

@@ -33,8 +33,6 @@
 //! is only meaningful inside the sample that listed it. The window's display is
 //! the one whose sampled monitor has that handle, found through its native key.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform_api::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot};
 use parking_lot::Mutex;
@@ -62,28 +60,19 @@ use super::os_version::WindowsBuild;
 use crate::error::PlatformError;
 use crate::shared::{
     display_source::DisplaySource,
-    windows_display::{
-        MissLedger, SampledMonitor, frequency_period, rational_refresh_period, resolve_display,
-    },
+    windows_display::{SampledMonitor, frequency_period, rational_refresh_period, resolve_display},
 };
 
 /// One platform instance's monitors: the last sample, and whether anything has
-/// invalidated it since.
+/// invalidated it since (both kept by the [`DisplaySource`]).
 pub(crate) struct WindowsDisplays {
     source: DisplaySource,
     build: WindowsBuild,
-    /// Set from any thread when the displays may differ from the last sample.
-    stale: AtomicBool,
-    sampled: Mutex<Sampled>,
+    /// The handle-to-key pairs of the last sample, which resolve a window's
+    /// nearest monitor.
+    monitors: Mutex<Vec<SampledMonitor>>,
     #[cfg(test)]
     samples: std::sync::atomic::AtomicUsize,
-}
-
-struct Sampled {
-    /// `None` until the first sample.
-    snapshot: Option<DisplaySnapshot>,
-    monitors: Vec<SampledMonitor>,
-    misses: MissLedger,
 }
 
 impl WindowsDisplays {
@@ -92,12 +81,7 @@ impl WindowsDisplays {
         Self {
             source: DisplaySource::new(),
             build: WindowsBuild::read(),
-            stale: AtomicBool::new(true),
-            sampled: Mutex::new(Sampled {
-                snapshot: None,
-                monitors: Vec::new(),
-                misses: MissLedger::default(),
-            }),
+            monitors: Mutex::new(Vec::new()),
             #[cfg(test)]
             samples: std::sync::atomic::AtomicUsize::new(0),
         }
@@ -107,7 +91,7 @@ impl WindowsDisplays {
     /// else, so a window procedure or a foreign thread may call it at any point;
     /// the next [`snapshot`](Self::snapshot) samples again.
     pub(crate) fn invalidate(&self) {
-        self.stale.store(true, Ordering::Release);
+        self.source.invalidate();
     }
 
     /// The snapshot: the last sample, or a fresh one when none was taken or
@@ -117,8 +101,10 @@ impl WindowsDisplays {
     /// [`PlatformError::Displays`] when the snapshot revision space is used up;
     /// the next call samples again.
     pub(crate) fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        let mut sampled = self.sampled.lock();
-        self.cached(&mut sampled)
+        self.source.snapshot_with_aux(
+            || Ok(self.sample()),
+            |monitors| *self.monitors.lock() = monitors,
+        )
     }
 
     /// Sample now and report whether the snapshot differs from the one the last
@@ -128,41 +114,9 @@ impl WindowsDisplays {
     /// As [`snapshot`](Self::snapshot).
     #[cfg(feature = "winit-backend")]
     pub(crate) fn resample_changed(&self) -> Result<bool, PlatformError> {
-        let mut sampled = self.sampled.lock();
-        let before = sampled.snapshot.as_ref().map(DisplaySnapshot::revision);
-        let after = self.resample(&mut sampled)?.revision();
-        Ok(before != Some(after))
-    }
-
-    /// The last sample, or a fresh one when none exists or it is invalidated.
-    fn cached(&self, sampled: &mut Sampled) -> Result<DisplaySnapshot, PlatformError> {
-        if !self.stale.load(Ordering::Acquire)
-            && let Some(snapshot) = &sampled.snapshot
-        {
-            return Ok(snapshot.clone());
-        }
-        self.resample(sampled)
-    }
-
-    /// Read the monitors now and publish the result.
-    fn resample(&self, sampled: &mut Sampled) -> Result<DisplaySnapshot, PlatformError> {
-        // Cleared before the read, so an invalidation that lands during it
-        // survives and the next call samples again.
-        self.stale.store(false, Ordering::Release);
-        #[cfg(test)]
-        self.samples.fetch_add(1, Ordering::Relaxed);
-        let (displays, monitors) = self.read();
-        match self.source.publish(displays) {
-            Ok(snapshot) => {
-                sampled.snapshot = Some(snapshot.clone());
-                sampled.monitors = monitors;
-                Ok(snapshot)
-            }
-            Err(error) => {
-                self.invalidate();
-                Err(error)
-            }
-        }
+        let before = self.source.published().revision();
+        self.invalidate();
+        Ok(self.snapshot()?.revision() != before)
     }
 
     /// The display `hwnd` is on: the one the window's nearest monitor is in the
@@ -180,28 +134,26 @@ impl WindowsDisplays {
         if nearest == 0 {
             return None;
         }
-        let mut guard = self.sampled.lock();
-        let sampled = &mut *guard;
-        let revision = sampled
-            .snapshot
-            .as_ref()
-            .map_or(0, |snapshot| snapshot.revision().get());
-        let misses = &mut sampled.misses;
         resolve_display(
             nearest,
-            &sampled.monitors,
-            || {
-                if misses.first_miss(nearest, revision) {
-                    self.invalidate();
-                }
-            },
+            &self.monitors.lock(),
+            || self.source.note_miss(nearest.cast_unsigned() as u64),
             |key| self.source.mint(key),
         )
     }
 
     #[cfg(test)]
     pub(crate) fn sample_count(&self) -> usize {
-        self.samples.load(Ordering::Relaxed)
+        self.samples.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Read the monitors now: their displays, and the handles that resolve
+    /// them, which are committed only once the displays are published.
+    fn sample(&self) -> (Vec<DisplayInfo>, Vec<SampledMonitor>) {
+        #[cfg(test)]
+        self.samples
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.read()
     }
 
     /// Enumerate the monitors now: their displays and the handle-to-key pairs

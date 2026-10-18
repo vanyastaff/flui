@@ -26,9 +26,19 @@ pub(crate) mod android_text_weight;
     target_os = "android",
     target_os = "ios",
     target_os = "macos",
-    target_arch = "wasm32"
+    target_arch = "wasm32",
+    test
 ))]
 pub(crate) mod display_source;
+// The keys the macOS and iOS display sources give a screen, the iOS version
+// check and frame-rate request, and the period a display link publishes; `test`
+// keeps these pure rules checked on every host.
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
+pub(crate) mod apple_display_identity;
+#[cfg(any(target_os = "ios", test))]
+pub(crate) mod apple_os_version;
+#[cfg(any(target_os = "ios", test))]
+pub(crate) mod display_link_rate;
 pub mod events;
 mod handlers;
 pub(crate) mod owner_signal;

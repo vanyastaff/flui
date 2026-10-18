@@ -23,8 +23,10 @@
 //!   (`text_input.rs`, [ADR-0069](../../../../../docs/adr/ADR-0069-a-keydown-produces-one-semantic-event.md)):
 //!   `keyDown:` is a gate, so one press reaches the application exactly once —
 //!   either as a composition/commit or as a key event, never both
-//! - ✅ A display snapshot from `NSScreen.screens`, each display's refresh period
-//!   read from its current mode, and the window's own display
+//! - ✅ A display snapshot from `NSScreen.screens`, each display keyed by its
+//!   UUID with its refresh period read from its current mode, resampled after
+//!   `NSApplicationDidChangeScreenParametersNotification` and the window's own
+//!   display
 //! - ✅ A wake pump that actuates the registered wake deadline (`wake_pump.rs`),
 //!   since AppKit exposes no `ControlFlow::WaitUntil`
 //!
