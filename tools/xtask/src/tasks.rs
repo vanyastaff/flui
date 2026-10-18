@@ -1099,10 +1099,18 @@ pub(crate) struct CleanNestedArgs {
 /// `cargo xtask clean-nested`: remove the nested-cargo test caches under the target directory.
 ///
 /// `cli-template-check/`, `facade-consumer-check/` and `tests/trybuild/`; the
-/// next full `cargo xtask test` rebuilds them (~9 min cold). Run it only while
-/// no test run is using them.
+/// next full `cargo xtask test` rebuilds them (~9 min cold). A test run using
+/// them must not overlap it: run as `cargo heli xtask clean-nested`, which the
+/// repository's `.config/heli.toml` makes wait for every build and test heli
+/// runs in this checkout. Run directly, it says so before deleting anything.
 pub(crate) fn clean_nested(args: &CleanNestedArgs) -> anyhow::Result<ExitCode> {
     let target = target_dir()?;
+    if !args.run.dry_run && std::env::var_os("HELI_RUN").is_none_or(|run| run.is_empty()) {
+        println!(
+            "clean-nested: not run through heli, so nothing waits for a test using these caches; \
+             `cargo heli xtask clean-nested` waits for this checkout's builds first"
+        );
+    }
     let mut found = 0;
     for rel in NESTED_CACHES {
         let mut dir = target.clone();

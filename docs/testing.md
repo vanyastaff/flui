@@ -274,8 +274,9 @@ directory as Cargo resolves it (`cargo metadata`'s `target_directory`), so a
 whatever `CARGO_TARGET_DIR` said. trybuild keeps its own `tests/trybuild/` there, since
 it builds with a different `--cfg` and would thrash a shared cache. Nothing
 prunes these three directories: they grow with every FLUI version and feature
-set built through them (1.5-3 GB each is normal). `cargo xtask clean-nested`
-deletes them, safe whenever no test run is using them; `cargo sweep --installed .`
+set built through them (1.5-3 GB each is normal). `cargo heli xtask clean-nested`
+deletes them once no build or test heli runs in this checkout is using them
+(`.config/heli.toml` makes it a mutating command); `cargo sweep --installed .`
 then `cargo sweep --maxsize 12GB .` bounds the main target directory (oldest
 artifacts first).
 
@@ -331,7 +332,7 @@ multiplies that. To keep it bounded:
   than `TASKS.md` and `target/`. `cargo xtask worktree prune --dry-run` names
   each kept one and why; deleting a kept one's `target/` by hand still frees
   the space.
-- **The main checkout:** `cargo xtask clean-nested` drops the nested-test
+- **The main checkout:** `cargo heli xtask clean-nested` drops the nested-test
   caches, then `cargo sweep --installed .` and `cargo sweep --maxsize 12GB .`
   bound the rest ([Nested-cargo tests](#nested-cargo-tests)).
 
