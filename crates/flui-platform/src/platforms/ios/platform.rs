@@ -54,16 +54,15 @@ use objc2_ui_kit::{
 use parking_lot::Mutex;
 
 use crate::error::PlatformError;
-use crate::shared::PlatformHandlers;
+use crate::shared::{PlatformHandlers, display_source::DisplaySource};
 use crate::traits::{
-    Clipboard, MobileCapabilities, OpenWindowError, OwnerPlatform, Platform, PlatformCapabilities,
-    PlatformDisplay, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent,
+    Clipboard, DisplaySnapshot, MobileCapabilities, OpenWindowError, OwnerPlatform, Platform,
+    PlatformCapabilities, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent,
     WindowId, WindowOptions,
     owner::{DirectOwnerHooks, OwnerHooks},
 };
 
 use super::clipboard::IOSClipboard;
-use super::display::IOSDisplay;
 use super::executor::IOSExecutor;
 use super::window::{IOSWindow, LifecycleObservation};
 
@@ -135,6 +134,7 @@ pub struct IOSPlatform {
     background_executor: Arc<IOSExecutor>,
     clipboard: Arc<IOSClipboard>,
     capabilities: MobileCapabilities,
+    displays: DisplaySource,
 }
 
 impl std::fmt::Debug for IOSPlatform {
@@ -207,6 +207,7 @@ impl IOSPlatform {
             background_executor: Arc::new(IOSExecutor),
             clipboard: Arc::new(IOSClipboard::new()),
             capabilities: MobileCapabilities::ios(),
+            displays: DisplaySource::new(),
         })
     }
 
@@ -443,14 +444,11 @@ impl Platform for IOSPlatform {
         self.preferences.get(marker).sample(marker)
     }
 
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        MainThreadMarker::new()
-            .map(|mtm| vec![IOSDisplay::main_display(mtm)])
-            .unwrap_or_default()
-    }
-
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        MainThreadMarker::new().map(IOSDisplay::main_display)
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        let marker = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
+            message: "UIKit display sampling must run on the main thread".into(),
+        })?;
+        super::display::sample_main_screen(marker, &self.displays)
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {

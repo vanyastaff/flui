@@ -31,9 +31,12 @@ fn test_window_lifecycle_contract() {
         "Platform name should not be empty"
     );
 
-    // Contract 2: Platform must enumerate displays (even if empty for headless)
-    let displays = platform.displays();
-    tracing::info!("Platform has {} display(s)", displays.len());
+    // Contract 2: Platform must sample its displays: a snapshot (empty before a
+    // winit loop runs) or a typed error, never a panic
+    match platform.display_snapshot() {
+        Ok(snapshot) => tracing::info!("Platform has {} display(s)", snapshot.displays().len()),
+        Err(error) => tracing::info!("Platform has no display source: {error}"),
+    }
 
     // Contract 3: Window creation should either succeed or fail gracefully
     let options = WindowOptions {

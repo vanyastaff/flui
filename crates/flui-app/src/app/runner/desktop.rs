@@ -44,6 +44,17 @@ impl Drop for InstallRollback {
     }
 }
 
+/// The refresh period of the display `window` is on, from the platform's
+/// display snapshot; `None` when the window names no display or the display
+/// reports no period.
+fn window_refresh_period(window: &dyn PlatformWindow) -> Option<std::time::Duration> {
+    let snapshot = super::host::with_owner_platform(|owner| owner.display_snapshot().ok())??;
+    snapshot
+        .window_display(window.display_id())?
+        .refresh_period
+        .map(flui_platform::RefreshPeriod::get)
+}
+
 /// The window options for a window this module's runner will drive:
 /// [`From<&AppConfig>`]'s options with the reveal deferred to the first
 /// presented frame. The deferral is a promise to call
@@ -188,11 +199,11 @@ where
     // monitors); `DEFAULT_DISPLAY_PERIOD` covers a backend that cannot
     // report one.
     let fallback = Arc::new(FallbackWake::new(
-        window.refresh_period().unwrap_or(DEFAULT_DISPLAY_PERIOD),
+        window_refresh_period(window.as_ref()).unwrap_or(DEFAULT_DISPLAY_PERIOD),
     ));
     tracing::info!(
         period_us = fallback.period().as_micros() as u64,
-        reported = window.refresh_period().is_some(),
+        reported = window_refresh_period(window.as_ref()).is_some(),
         "frame-pacing fallback period"
     );
 
@@ -267,7 +278,7 @@ where
         // A resize can also be a move to another monitor; re-read the
         // period so the pacing fallback follows the display the window
         // is actually on (ADR-0058).
-        if let Some(period) = resize_window.refresh_period() {
+        if let Some(period) = window_refresh_period(resize_window.as_ref()) {
             resize_fallback.set_period(period);
         }
         let _ = dispatch_platform_ui_runtime(

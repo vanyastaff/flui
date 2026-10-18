@@ -1,8 +1,12 @@
-//! macOS display (NSScreen) implementation.
+//! The macOS display source (`NSScreen`).
 //!
-//! On `objc2` / `objc2-app-kit`, like the rest of the backend.
-
-use std::sync::Arc;
+//! On `objc2` / `objc2-app-kit`, like the rest of the backend. Each screen
+//! becomes a [`DisplayInfo`] whose refresh period is the rate of the display's
+//! current mode (`CGDisplayCopyDisplayMode`), so a 120 Hz ProMotion panel
+//! reports 120 Hz and a mode the display cannot describe reports nothing.
+//!
+//! The screen key is the `CGDirectDisplayID`, a label that is stable for the
+//! session of one attached display; the display-UUID source replaces it.
 
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
@@ -10,62 +14,11 @@ use objc2_app_kit::NSScreen;
 use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_platform_api::{DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
 
-use crate::traits::{DisplayId, PlatformDisplay};
-
-/// macOS display wrapper around `NSScreen`.
-#[derive(Debug)]
-pub struct MacOSDisplay {
-    id: DisplayId,
-    name: String,
-    bounds: Bounds<i32>,
-    usable_bounds: Bounds<i32>,
-    scale_factor: f64,
-    is_primary: bool,
-}
-
-impl MacOSDisplay {
-    /// Create a `MacOSDisplay` from a live `NSScreen`.
-    ///
-    /// Must run on the main thread (`NSScreen` is main-thread-only in objc2's
-    /// model).
-    pub fn new(screen: &NSScreen, is_primary: bool) -> Self {
-        let frame = screen.frame();
-        let visible_frame = screen.visibleFrame();
-        let scale = screen.backingScaleFactor();
-
-        // NSScreen frames are in points (logical units, bottom-left origin);
-        // the PlatformDisplay contract wants device pixels, so scale by
-        // `backingScaleFactor` before converting.
-        let to_device = |points: f64| (points * scale).round() as i32;
-
-        let bounds = Bounds {
-            origin: Point::new(to_device(frame.origin.x), to_device(frame.origin.y)),
-            size: Size::new(to_device(frame.size.width), to_device(frame.size.height)),
-        };
-        let usable_bounds = Bounds {
-            origin: Point::new(
-                to_device(visible_frame.origin.x),
-                to_device(visible_frame.origin.y),
-            ),
-            size: Size::new(
-                to_device(visible_frame.size.width),
-                to_device(visible_frame.size.height),
-            ),
-        };
-
-        let display_id = display_id_of(screen);
-
-        Self {
-            id: DisplayId(display_id),
-            name: format!("Display {display_id}"),
-            bounds,
-            usable_bounds,
-            scale_factor: scale,
-            is_primary,
-        }
-    }
-}
+use crate::error::PlatformError;
+use crate::shared::display_period::core_graphics_refresh_period;
+use crate::shared::display_source::DisplaySource;
 
 /// The `CGDirectDisplayID` a screen carries in its `deviceDescription`'s
 /// `"NSScreenNumber"` entry, or `0` when the screen reports none.
@@ -84,87 +37,72 @@ fn display_id_of(screen: &NSScreen) -> u64 {
     value.unsignedLongLongValue()
 }
 
-impl PlatformDisplay for MacOSDisplay {
-    fn id(&self) -> DisplayId {
-        self.id
-    }
-
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-
-    fn bounds(&self) -> Bounds<i32> {
-        self.bounds
-    }
-
-    fn usable_bounds(&self) -> Bounds<i32> {
-        self.usable_bounds
-    }
-
-    fn scale_factor(&self) -> f64 {
-        self.scale_factor
-    }
-
-    fn is_primary(&self) -> bool {
-        self.is_primary
-    }
+/// The key under which `screen` is issued a display id.
+pub(super) fn display_key_of(screen: &NSScreen) -> DisplayKey {
+    DisplayKey::Backend(format!("cgdisplay:{}", display_id_of(screen)))
 }
 
-/// The inter-frame period of the display `screen` is on, or `None` when the
+/// The refresh period of the display `screen` is on, or `None` when the
 /// display cannot be reached or does not report a rate.
 ///
 /// Reads the refresh rate of the display's *current* mode
-/// (`CGDisplayModeGetRefreshRate` over `CGDisplayCopyDisplayMode`), which is
-/// the same source the winit backend reads, so both backends answer
-/// `PlatformWindow::refresh_period` the same way. A rate of 0 — CoreGraphics
-/// reports 0 for modes it cannot describe, and some displays do — is treated
-/// as unknown rather than turned into an infinite period.
-///
-/// A typed `&NSScreen`, so no raw-pointer boundary survives.
+/// (`CGDisplayModeGetRefreshRate` over `CGDisplayCopyDisplayMode`), the same
+/// source the winit backend reads. A rate of 0 — CoreGraphics reports 0 for
+/// modes it cannot describe, and some displays do — is unknown rather than an
+/// infinite period.
 ///
 /// Call on the owner lane: this messages the screen, which is AppKit traffic
 /// this backend keeps there.
-pub(super) fn refresh_period_for_screen(screen: &NSScreen) -> Option<std::time::Duration> {
-    let display_id = display_id_of(screen);
+pub(super) fn refresh_period_for_screen(screen: &NSScreen) -> Option<RefreshPeriod> {
     // `CGDirectDisplayID` is a `u32`; the `NSScreenNumber` number is a wider
     // CFNumber, so narrow it explicitly.
-    let display_id = u32::try_from(display_id).ok()?;
-
+    let display_id = u32::try_from(display_id_of(screen)).ok()?;
     let mode = core_graphics::display::CGDisplay::new(display_id).display_mode()?;
-    period_from_refresh_hz(mode.refresh_rate())
+    core_graphics_refresh_period(mode.refresh_rate())
 }
 
-/// Convert a refresh rate in Hz into the interval between two frames, or
-/// `None` for a value that does not describe a cadence (zero, negative, NaN,
-/// infinite).
-///
-/// Free-standing and AppKit-free so the arithmetic is testable without a
-/// display: it is the part that can be wrong for inputs this machine cannot
-/// produce, and neither this backend's path nor the winit implementation it
-/// mirrors had a test for it.
-pub(super) fn period_from_refresh_hz(hz: f64) -> Option<std::time::Duration> {
-    if !hz.is_finite() || hz <= 0.0 {
-        return None;
-    }
-    Some(std::time::Duration::from_secs_f64(1.0 / hz))
-}
-
-/// Enumerate all displays using `+[NSScreen screens]`. Main-thread only.
-pub fn enumerate_displays() -> Vec<Arc<dyn PlatformDisplay>> {
-    let Some(mtm) = MainThreadMarker::new() else {
-        tracing::warn!("NSScreen enumeration requested off the main thread; returning none");
-        return Vec::new();
-    };
-
+/// Sample every screen (`+[NSScreen screens]`) and publish the result through
+/// `source`. Main-thread only.
+pub(super) fn sample_screens(
+    mtm: MainThreadMarker,
+    source: &DisplaySource,
+) -> Result<DisplaySnapshot, PlatformError> {
     let screens: Retained<NSArray<NSScreen>> = NSScreen::screens(mtm);
-    let mut displays: Vec<Arc<dyn PlatformDisplay>> = Vec::with_capacity(screens.count());
-
-    // First screen is always primary (main display).
-    for (i, screen) in screens.iter().enumerate() {
-        let display = Arc::new(MacOSDisplay::new(&screen, i == 0));
+    let mut displays = Vec::with_capacity(screens.count());
+    // The first screen is always the primary (main) display.
+    for (index, screen) in screens.iter().enumerate() {
+        let Some(id) = source.mint(&display_key_of(&screen)) else {
+            continue;
+        };
+        let scale = screen.backingScaleFactor();
+        // NSScreen frames are in points (logical units, bottom-left origin);
+        // the snapshot carries device pixels, so scale by `backingScaleFactor`
+        // before converting.
+        let to_device = |points: f64| (points * scale).round() as i32;
+        let frame = screen.frame();
+        let visible = screen.visibleFrame();
+        let bounds = Bounds {
+            origin: Point::new(to_device(frame.origin.x), to_device(frame.origin.y)),
+            size: Size::new(to_device(frame.size.width), to_device(frame.size.height)),
+        };
+        let usable_bounds = Bounds {
+            origin: Point::new(to_device(visible.origin.x), to_device(visible.origin.y)),
+            size: Size::new(
+                to_device(visible.size.width),
+                to_device(visible.size.height),
+            ),
+        };
+        let mut display = DisplayInfo::new(
+            id,
+            format!("Display {}", display_id_of(&screen)),
+            bounds,
+            scale,
+        )
+        .with_usable_bounds(usable_bounds)
+        .with_primary(index == 0);
+        display.refresh_period = refresh_period_for_screen(&screen);
         displays.push(display);
     }
-
-    tracing::debug!("Enumerated {} displays", displays.len());
-    displays
+    tracing::debug!("Sampled {} displays", displays.len());
+    source.publish(displays)
 }

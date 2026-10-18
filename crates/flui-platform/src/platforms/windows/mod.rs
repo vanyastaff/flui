@@ -28,7 +28,6 @@ mod window_ext;
 #[cfg(feature = "a11y")]
 pub use accessibility::WindowsAccessibility;
 pub use clipboard::WindowsClipboard;
-pub use display::{WindowsDisplay, enumerate_displays};
 pub use platform::WindowsPlatform;
 pub use window::WindowsWindow;
 pub use window_ext::{

@@ -95,7 +95,7 @@ Counted over every row of the core and system-service sections.
 
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes | Hours |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Displays: list, work area, current display, changes | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | ✅ | No change events anywhere; Windows `display()` always returns the primary; Android hard-codes 1080×2340 @ 2.75 | 6–10 |
+| Displays: list, work area, current display, changes | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | ✅ | Headless injects displays, changes and window moves; no native backend delivers change events yet; Windows names no window display yet; Android hard-codes 1080×2340 @ 2.75 | 6–10 |
 | Scale factor and DPI changes | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ✅ | Web misses a change of device pixel ratio alone. Android run: emulator at density 420 | 2–4 |
 | Refresh rate and frame pacing | ❌ | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | ✅ | Windows and Android report no frame period (60 Hz default); iOS doesn't report ProMotion | 4–6 |
 | GPU surface | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | Rendered in every run above | 0 |

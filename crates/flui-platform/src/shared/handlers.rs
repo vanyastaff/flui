@@ -273,6 +273,9 @@ pub struct WindowCallbacks {
     /// Called when the system appearance (light/dark) changes.
     pub on_appearance_changed: Mutex<Option<Box<dyn FnMut() + Send>>>,
 
+    /// Called when the display this window is on may have changed.
+    pub on_display_changed: Mutex<Option<Box<dyn FnMut() + Send>>>,
+
     /// Called when the GPU surface's availability changes. Parameter:
     /// `has_surface` (`false` means the surface must be released before this
     /// callback returns).
@@ -330,6 +333,7 @@ enum WindowCallbackEvent {
     Visibility(bool, Option<Box<dyn FnOnce() + Send>>),
     Hover(bool),
     AppearanceChanged,
+    DisplayChanged,
     SurfaceStatus(bool),
     /// A deferred [`WindowCallbacks::clear`]: queued instead of run inline
     /// when `clear()` is called while this window's FIFO is already
@@ -522,6 +526,7 @@ impl WindowCallbacks {
             on_visibility_status_change: Mutex::new(None),
             on_hover_status_change: Mutex::new(None),
             on_appearance_changed: Mutex::new(None),
+            on_display_changed: Mutex::new(None),
             on_surface_status_change: Mutex::new(None),
             event_dispatch: Mutex::new(DispatchState::new()),
             should_close_dispatching: Mutex::new(false),
@@ -650,6 +655,7 @@ impl WindowCallbacks {
         let on_visibility_status_change = self.on_visibility_status_change.lock().take();
         let on_hover_status_change = self.on_hover_status_change.lock().take();
         let on_appearance_changed = self.on_appearance_changed.lock().take();
+        let on_display_changed = self.on_display_changed.lock().take();
         let on_surface_status_change = self.on_surface_status_change.lock().take();
         // Each slot retires independently: distinct panicking destructors must
         // never meet during the same unwind. No slot lock is held here.
@@ -665,6 +671,7 @@ impl WindowCallbacks {
         super::panic_boundary::contain_owner_callback(|| drop(on_visibility_status_change));
         super::panic_boundary::contain_owner_callback(|| drop(on_hover_status_change));
         super::panic_boundary::contain_owner_callback(|| drop(on_appearance_changed));
+        super::panic_boundary::contain_owner_callback(|| drop(on_display_changed));
         super::panic_boundary::contain_owner_callback(|| drop(on_surface_status_change));
     }
 
@@ -808,6 +815,12 @@ impl WindowCallbacks {
                 }
                 WindowCallbackEvent::AppearanceChanged => {
                     let mut lease = CallbackLease::take(&self.on_appearance_changed, &self.cleared);
+                    if let Some(callback) = lease.callback_mut() {
+                        callback();
+                    }
+                }
+                WindowCallbackEvent::DisplayChanged => {
+                    let mut lease = CallbackLease::take(&self.on_display_changed, &self.cleared);
                     if let Some(callback) = lease.callback_mut() {
                         callback();
                     }
@@ -1105,6 +1118,17 @@ impl WindowCallbacks {
         self.drain_events(drain);
     }
 
+    /// Dispatch a display change hint (the window may be on another display, or
+    /// its display changed).
+    pub fn dispatch_display_changed(&self) {
+        let Some(drain) =
+            DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::DisplayChanged)
+        else {
+            return;
+        };
+        self.drain_events(drain);
+    }
+
     /// Dispatch a GPU-surface availability change. Parameter: `has_surface`
     /// (`false` asks the owner to release its surface before returning).
     ///
@@ -1213,6 +1237,10 @@ macro_rules! impl_window_callback_setters {
             *self.$callbacks_field.on_appearance_changed.lock() = Some(callback);
         }
 
+        fn on_display_changed(&self, callback: Box<dyn FnMut() + Send>) {
+            *self.$callbacks_field.on_display_changed.lock() = Some(callback);
+        }
+
         fn on_surface_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
             *self.$callbacks_field.on_surface_status_change.lock() = Some(callback);
         }
@@ -1247,6 +1275,10 @@ impl std::fmt::Debug for WindowCallbacks {
             .field(
                 "on_appearance_changed",
                 &self.on_appearance_changed.lock().is_some(),
+            )
+            .field(
+                "on_display_changed",
+                &self.on_display_changed.lock().is_some(),
             )
             .field(
                 "on_surface_status_change",

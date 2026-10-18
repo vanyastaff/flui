@@ -143,7 +143,7 @@ pub trait Platform: Send + Sync + 'static {
     // Windows + displays
     fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError>;
     fn active_window(&self) -> Option<WindowId>;
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>>;
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError>;
 
     // Input
     fn clipboard(&self) -> Arc<dyn Clipboard>;

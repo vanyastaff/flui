@@ -5,7 +5,8 @@ this crate. Partial: this file exists for the `## Mapping
 decisions` entries below; a full crate architecture writeup is deferred.
 
 The contracts this crate's backends implement — `PlatformWindow`,
-`PlatformTextInput`, `PlatformHaptics`, `PlatformDisplay`, `Clipboard`, the
+`PlatformTextInput`, `PlatformHaptics`, `Clipboard`, the display snapshot
+vocabulary (`DisplaySnapshot`, `DisplayId`, `RefreshPeriod`), the
 `data_transfer` transport and the window and input vocabulary — live in
 `flui-platform-api` (ADR-0082) and are re-exported here at their old paths
 (`flui_platform::X`, `flui_platform::traits::X`, `flui_platform::data_transfer`),
@@ -1075,31 +1076,34 @@ measurement window with the deferral branch removed. Both runs' marker lines
 (§4 of its `plan.md`) and the raw run logs are kept with the
 [pacing evidence](https://github.com/vanyastaff/flui/tree/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/.rust-studio/specs/macos-native-vsync-pacing-evidence).
 
-### macOS reports its display period as the current mode's rate, cached on the window
+### macOS reports its display period as the current mode's rate, in the display snapshot
 
 **Rule:** a backend that can tell an embedder the display's refresh period should
 report the rate of the mode that display is *in* — not a capability of the panel
 and not a generic default. The value is a floor for pacing ("never produce faster
-than this", `PlatformWindow::refresh_period`), so a rate that is too high paces
+than this", the display snapshot's `refresh_period`), so a rate that is too high paces
 against a cadence the display is not running, and a rate that cannot be
 determined must be reported as unknown rather than guessed at.
 
-**Choice:** `MacOSWindow::refresh_period` answers from
-`CGDisplayModeGetRefreshRate` over the display's *current* mode
+**Choice:** `Platform::display_snapshot` carries, for every `NSScreen`, a period
+from `CGDisplayModeGetRefreshRate` over the display's *current* mode
 (`platforms/macos/display.rs::refresh_period_for_screen`), reached from the
-window's screen via `NSScreenNumber` — the same display id `display.rs` already
-reads for its bounds. A rate of 0 is `None`: CoreGraphics reports 0 for modes it
-cannot describe and some displays do, and a 0 turned into a period is infinite.
-The read is **cached** in `MacOSWindowState` beside `scale_factor`, refreshed in
-the handler that already updates the scale
-(`handle_backing_properties_changed`, reached from `handle_screen_changed`) and
-seeded at construction, which is safe there because the window is created at the
-origin — a point on a screen — so `-[NSWindow screen]` answers rather than
-returning nil. Caching is the one place this diverges from the winit
-implementation it otherwise mirrors: winit queries the monitor per call, but this
-backend's AppKit traffic belongs to the owner lane while `refresh_period` is a
-plain `&self` accessor any thread may call, so the query happens on the lane and
-the accessor reads the lock.
+screen via `NSScreenNumber` — the same display id `display.rs` reads for its
+bounds. A rate of 0 is `None`: CoreGraphics reports 0 for modes it cannot
+describe and some displays do, and a 0 turned into a period is infinite. The
+window names its display through `PlatformWindow::display_id`, **cached** in
+`MacOSWindowState` beside `scale_factor`: re-read in the handler that already
+updates the scale (`handle_backing_properties_changed`, reached from
+`handle_screen_changed`), which then raises `on_display_changed`, and seeded when
+the platform binds its display registry to the new window, which is safe there
+because the window is created at the origin — a point on a screen — so
+`-[NSWindow screen]` answers rather than returning nil. Caching is the one place
+this diverges from the winit implementation it otherwise mirrors: winit queries
+the monitor per call, but this backend's AppKit traffic belongs to the owner lane
+while `display_id` is a plain `&self` accessor any thread may call, so the query
+happens on the lane and the accessor reads the lock. The screen key is the
+`CGDirectDisplayID` (a label, stable while the display stays attached), a stopgap
+the display-UUID source replaces.
 
 **Alternatives considered:**
 - `NSScreen.maximumFramesPerSecond` — rejected twice over. It is macOS 12+, above
@@ -1122,20 +1126,20 @@ back to `CVDisplayLinkGetNominalOutputVideoRefreshPeriod`. That is the source
 read here and the reason for the `> 0` guard. Read at the version pinned in this
 workspace's `Cargo.lock`, not recalled.
 
-**Trade-off:** the cached value follows the window across screens and backing
-changes, and is re-read whenever a resize reaches the runner. It does **not**
-follow a mode change that leaves the window where it is (a user switching refresh
-rate in System Settings): this backend observes no screen-parameters
-notification, so such a change is picked up on the next move or resize rather
-than immediately. Named rather than assumed away — it is unobservable on the
-single fixed-mode display this was measured on.
+**Trade-off:** the cached display follows the window across screens and backing
+changes. A mode change that leaves the window where it is (a user switching
+refresh rate in System Settings) is **not** observed yet: this backend observes no
+screen-parameters notification, so the new period is picked up the next time the
+host samples the snapshot (a move, a resize or another owner wake) rather than
+immediately. Named rather than assumed away — it is unobservable on the single
+fixed-mode display this was measured on.
 
 **Replacement coverage:** the arithmetic is free-standing and AppKit-free
-(`period_from_refresh_hz`), with three always-run tests: the 100 Hz → 10 ms
-conversion, a fractional rate that must not round to its neighbour, and the
-non-cadence inputs (zero, negative, NaN, ±infinity) that must be unknown rather
-than an infinite or panicking period — removing the guard makes that third test
-fail inside `Duration::from_secs_f64`, checked by mutation. The live path is
+(`RefreshPeriod::from_hz`, reached through `shared::display_period`), pinned by
+`refresh_value_classification_table` (non-cadence inputs — zero, negative, NaN,
+±infinity — are unknown rather than an infinite or panicking period) and by
+`macos_and_winit_shims_keep_the_period_they_report_today`, which holds the shim
+to the value this backend reported before the snapshot. The live path is
 pinned behaviourally by the same bundled probe that pins the frame pump
 (`cargo xtask device macos-frame-pump`), which reports `FRAME_PUMP_PROBE_REFRESH_PERIOD` from
 the real backend on the real display: measured 2026-09-17 as `period_us=10000

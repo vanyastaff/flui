@@ -14,11 +14,11 @@ use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     error::PlatformError,
     executor::BackgroundExecutor,
-    shared::PlatformHandlers,
+    shared::{PlatformHandlers, display_source::DisplaySource},
     traits::{
-        Clipboard, DesktopCapabilities, OpenWindowError, OwnerPlatform, Platform,
-        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformReadyCallback,
-        PlatformWindow, WindowEvent, WindowId, WindowOptions,
+        Clipboard, DesktopCapabilities, DisplaySnapshot, OpenWindowError, OwnerPlatform, Platform,
+        PlatformCapabilities, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent,
+        WindowId, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
@@ -52,6 +52,10 @@ pub struct MacOSPlatform {
 
     /// Window configuration
     config: WindowConfiguration,
+
+    /// The id registry and last snapshot of the displays; shared with every
+    /// window so each names its screen by the same identity.
+    displays: Arc<DisplaySource>,
 
     /// Records the event-loop owner thread so the thread-affine AppKit
     /// operations below can `debug_assert` their caller (ADR-0039).
@@ -174,6 +178,7 @@ impl MacOSPlatform {
                 wake_pump,
                 background_executor,
                 config,
+                displays: Arc::new(DisplaySource::new()),
                 affinity: OwnerAffinity::new(),
             };
             // The constructor requires the main thread (checked above), so
@@ -251,6 +256,7 @@ impl Platform for MacOSPlatform {
         // a later install would be silently ignored rather than racing.
         window.install_loop_control(Arc::downgrade(&self.loop_control));
         window.install_wake_pump(Arc::downgrade(&self.wake_pump));
+        window.bind_displays(Arc::clone(&self.displays));
 
         Ok(window)
     }
@@ -267,19 +273,14 @@ impl Platform for MacOSPlatform {
         Some(WindowId(ptr))
     }
 
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        self.affinity.debug_assert_owner("MacOSPlatform::displays");
-        debug_assert_appkit_main_thread("MacOSPlatform::displays");
-        display::enumerate_displays()
-    }
-
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
         self.affinity
-            .debug_assert_owner("MacOSPlatform::primary_display");
-        debug_assert_appkit_main_thread("MacOSPlatform::primary_display");
-        display::enumerate_displays()
-            .into_iter()
-            .find(|d| d.is_primary())
+            .debug_assert_owner("MacOSPlatform::display_snapshot");
+        debug_assert_appkit_main_thread("MacOSPlatform::display_snapshot");
+        let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
+            message: "NSScreen sampling must run on the AppKit main thread".into(),
+        })?;
+        display::sample_screens(mtm, &self.displays)
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {

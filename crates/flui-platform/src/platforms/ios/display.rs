@@ -1,67 +1,47 @@
-//! iOS display (UIScreen) implementation.
+//! The iOS display source (`UIScreen`).
 //!
 //! `UIScreen.mainScreen` is the one display an iOS app renders to. Its
-//! `bounds` are in points (logical, top-left origin), and `scale` is the
-//! device pixel ratio (2.0 or 3.0 on current hardware), so bounds are scaled
-//! by `nativeScale` for the `PlatformDisplay` device-pixel contract.
-
-use std::sync::Arc;
+//! `bounds` are in points (logical, top-left origin), and `nativeScale` is the
+//! device pixel ratio (2.0 or 3.0 on current hardware), so bounds are scaled by
+//! it to the device pixels the snapshot carries. The refresh period is not read
+//! yet and stays unknown.
 
 use objc2::MainThreadMarker;
+use objc2::rc::Retained;
 use objc2_foundation::NSRect;
 use objc2_ui_kit::UIScreen;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_platform_api::{DisplayInfo, DisplayKey, DisplaySnapshot};
 
-use crate::traits::{DisplayId, PlatformDisplay};
+use crate::error::PlatformError;
+use crate::shared::display_source::DisplaySource;
 
-/// iOS display wrapping the process's `UIScreen`.
-#[derive(Debug)]
-pub struct IOSDisplay {
-    id: DisplayId,
-    name: String,
-    bounds: Bounds<i32>,
-    usable_bounds: Bounds<i32>,
-    scale_factor: f64,
-    is_primary: bool,
-}
-
-impl IOSDisplay {
-    /// Read the main screen's metrics. Must run on the main thread
-    /// (`UIScreen.mainScreen` is main-thread-only in objc2's model).
-    pub fn new(mtm: MainThreadMarker, is_primary: bool) -> Self {
-        let screen = UIScreen::mainScreen(mtm);
-        Self::from_screen(&screen, is_primary)
-    }
-
-    /// Build from an already-obtained screen. Separate from [`Self::new`] so
-    /// the conversion below is reachable from a test with a handed-in screen.
-    pub fn from_screen(screen: &UIScreen, is_primary: bool) -> Self {
-        let bounds = screen.bounds();
-        let scale = screen.nativeScale();
-        let bounds_dp = device_bounds_from_points(bounds, scale);
-
-        // iOS has no per-display "usable bounds" concept separate from the
-        // frame — safe-area insets carve out the notch/home-indicator region
-        // for CONTENT, not for the display itself, and no `PlatformDisplay`
-        // method reports them. The frame is the honest answer here.
-        let usable_bounds = bounds_dp;
-
-        Self {
-            id: DisplayId(0),
-            name: "iOS Display".to_string(),
-            bounds: bounds_dp,
-            usable_bounds,
-            scale_factor: scale,
-            is_primary,
-        }
-    }
-
-    /// The main screen as a `PlatformDisplay`, for `Platform::displays`/
-    /// `primary_display`.
-    pub fn main_display(mtm: MainThreadMarker) -> Arc<dyn PlatformDisplay> {
-        Arc::new(Self::new(mtm, true))
-    }
+/// Sample the main screen and publish the result through `source`.
+///
+/// The main screen is a process-lifetime singleton, so its address is a stable
+/// key for the session; a second screen would be keyed by the object the
+/// snapshot retains instead.
+pub(super) fn sample_main_screen(
+    mtm: MainThreadMarker,
+    source: &DisplaySource,
+) -> Result<DisplaySnapshot, PlatformError> {
+    let screen: Retained<UIScreen> = UIScreen::mainScreen(mtm);
+    let key = DisplayKey::IosScreen(Retained::as_ptr(&screen) as usize as u64);
+    let displays = source
+        .mint(&key)
+        .map(|id| {
+            let bounds = device_bounds_from_points(screen.bounds(), screen.nativeScale());
+            // iOS has no per-display "usable bounds" separate from the frame:
+            // safe-area insets carve out the notch and home indicator for
+            // CONTENT, not for the display itself.
+            vec![
+                DisplayInfo::new(id, "iOS Display", bounds, screen.nativeScale())
+                    .with_primary(true),
+            ]
+        })
+        .unwrap_or_default();
+    source.publish(displays)
 }
 
 /// The `(points, scale)` → device-pixel conversion, free-standing so it can
@@ -71,31 +51,5 @@ pub(super) fn device_bounds_from_points(bounds: NSRect, scale: f64) -> Bounds<i3
     Bounds {
         origin: Point::new(to_device(bounds.origin.x), to_device(bounds.origin.y)),
         size: Size::new(to_device(bounds.size.width), to_device(bounds.size.height)),
-    }
-}
-
-impl PlatformDisplay for IOSDisplay {
-    fn id(&self) -> DisplayId {
-        self.id
-    }
-
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-
-    fn bounds(&self) -> Bounds<i32> {
-        self.bounds
-    }
-
-    fn usable_bounds(&self) -> Bounds<i32> {
-        self.usable_bounds
-    }
-
-    fn scale_factor(&self) -> f64 {
-        self.scale_factor
-    }
-
-    fn is_primary(&self) -> bool {
-        self.is_primary
     }
 }

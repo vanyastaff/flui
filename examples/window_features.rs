@@ -32,16 +32,17 @@ fn main() -> anyhow::Result<()> {
     // (ADR-0039 §1): the winit backend can only enumerate real
     // displays and create windows once its event loop is pumping.
     platform.run(Box::new(move |owner| {
-        let displays = owner.displays();
+        let snapshot = owner.display_snapshot()?;
+        let displays = snapshot.displays();
         tracing::info!("Displays:");
         for (i, disp) in displays.iter().enumerate() {
             tracing::info!(
                 "  {}. {} - {}x{} @ {:.1}x",
                 i + 1,
-                disp.name(),
-                disp.bounds().size.width,
-                disp.bounds().size.height,
-                disp.scale_factor()
+                disp.name,
+                disp.bounds.size.width,
+                disp.bounds.size.height,
+                disp.scale_factor
             );
         }
 

@@ -47,7 +47,7 @@ use windows::{
 };
 
 use super::{
-    display::enumerate_displays,
+    display as displays,
     text_services::TextServices,
     util::{WINDOW_CLASS_NAME, get_x_lparam, get_y_lparam, hiword, load_cursor_style},
     window::WindowsWindow,
@@ -59,11 +59,12 @@ use crate::{
     executor::BackgroundExecutor,
     shared::{
         PlatformHandlers, WindowCallbacks,
+        display_source::DisplaySource,
         hwnd_affinity::{ContextLedger, UserDataRefusal},
     },
     traits::{
-        Clipboard, DesktopCapabilities, HostWindow, OpenWindowError, OwnerPlatform, Platform,
-        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformReadyCallback,
+        Clipboard, DesktopCapabilities, DisplaySnapshot, HostWindow, OpenWindowError,
+        OwnerPlatform, Platform, PlatformCapabilities, PlatformExecutor, PlatformReadyCallback,
         WindowAppearance, WindowEvent, WindowId, WindowMode, WindowOptions, owner::OwnerHooks,
     },
 };
@@ -685,6 +686,9 @@ pub struct WindowsPlatform {
     /// Window configuration (shared across all windows)
     config: WindowConfiguration,
 
+    /// The monitors this platform last sampled and the registry of their ids.
+    displays: DisplaySource,
+
     /// Records the owner thread so the thread-affine Win32 operations below
     /// can `debug_assert` their caller (ADR-0039). Bound at construction —
     /// the message-only window's queue belongs to the constructing thread —
@@ -702,9 +706,10 @@ pub struct WindowsPlatform {
 // only an `Arc`-shared signal and a locked address (its owner-thread state,
 // callbacks included, sits behind the owner window's `GWLP_USERDATA` and is
 // reached only through the owner-thread gate `OwnerControl::shares`), the
-// executors are `Arc`-shared and internally synchronized, and `config` is
-// plain data. The only non-`Sync` member is `message_window: HWND`, a bare
-// address that is never dereferenced here.
+// executors are `Arc`-shared and internally synchronized, `displays` is a
+// registry and a snapshot each behind a lock, and `config` is plain data. The
+// only non-`Sync` member is `message_window: HWND`, a bare address that is
+// never dereferenced here.
 //
 // NOT claimed — an earlier version of this comment claimed both, wrongly: that
 // an HWND is "thread-safe by design" (it is thread-AFFINE; its message queue
@@ -871,6 +876,7 @@ impl WindowsPlatform {
             windows,
             background_executor,
             config,
+            displays: DisplaySource::new(),
             affinity: flui_foundation::OwnerAffinity::new(),
             apartment: super::com_apartment::ApartmentHold::new(apartment),
         };
@@ -2337,12 +2343,8 @@ impl Platform for WindowsPlatform {
 
     // ==================== Display Management ====================
 
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        enumerate_displays()
-    }
-
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        enumerate_displays().into_iter().find(|d| d.is_primary())
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        displays::sample(&self.displays)
     }
 
     fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {

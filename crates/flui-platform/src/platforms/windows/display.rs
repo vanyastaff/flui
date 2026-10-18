@@ -1,8 +1,13 @@
-//! Windows display implementation
-
-use std::sync::Arc;
+//! Windows display source.
+//!
+//! Samples the monitors with `EnumDisplayMonitors` and turns them into a
+//! [`DisplaySnapshot`]. The refresh period is not read yet, so every display
+//! reports an unknown period (a consumer falls back to 60 Hz, as it did before
+//! the snapshot existed). The monitor key is the GDI device name, a label that
+//! the `QueryDisplayConfig` source replaces.
 
 use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_platform_api::{DisplayInfo, DisplayKey, DisplaySnapshot};
 use windows::Win32::{
     Foundation::{LPARAM, RECT, TRUE},
     Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW},
@@ -11,43 +16,61 @@ use windows::Win32::{
 // BOOL moved from Win32::Foundation to windows_core in windows 0.62
 use windows::core::BOOL;
 
-use crate::traits::{DisplayId, PlatformDisplay};
+use crate::error::PlatformError;
+use crate::shared::display_source::DisplaySource;
 
-/// Windows display implementation
-#[derive(Debug)]
-pub struct WindowsDisplay {
-    id: DisplayId,
-    name: String,
+/// Enumerate the monitors now and publish the result through `source`.
+///
+/// # Errors
+/// [`PlatformError::Displays`] when the snapshot revision space is used up.
+pub(super) fn sample(source: &DisplaySource) -> Result<DisplaySnapshot, PlatformError> {
+    let mut displays = Vec::new();
+    for monitor in enumerate_monitors() {
+        let Some(id) = source.mint(&DisplayKey::Backend(monitor.device_name.clone())) else {
+            continue;
+        };
+        displays.push(
+            DisplayInfo::new(
+                id,
+                monitor.device_name,
+                monitor.bounds,
+                monitor.scale_factor,
+            )
+            .with_usable_bounds(monitor.usable_bounds)
+            .with_primary(monitor.is_primary),
+        );
+    }
+    source.publish(displays)
+}
+
+/// One monitor as `EnumDisplayMonitors` and `GetMonitorInfoW` describe it.
+struct Monitor {
+    device_name: String,
     bounds: Bounds<i32>,
     usable_bounds: Bounds<i32>,
     scale_factor: f64,
     is_primary: bool,
 }
 
-impl WindowsDisplay {
-    /// Create a new WindowsDisplay from MONITORINFOEXW
-    pub fn new(hmonitor: HMONITOR, is_primary: bool) -> Self {
-        // SAFETY: `hmonitor` is a valid monitor handle supplied by the OS via
-        // `EnumDisplayMonitors` or the `new` call path from `enumerate_displays`.
-        // `MONITORINFOEXW` is zeroed then its `cbSize` is set before passing to
-        // `GetMonitorInfoW`, satisfying that API's contract. `GetDpiForMonitor`
-        // requires a valid HMONITOR and valid out-pointers, both of which hold here.
+impl Monitor {
+    fn new(hmonitor: HMONITOR) -> Option<Self> {
+        // SAFETY: `hmonitor` is a valid monitor handle the OS handed to
+        // `EnumDisplayMonitors`'s callback. `MONITORINFOEXW` is zeroed with its
+        // `cbSize` set before `GetMonitorInfoW`, which is that API's contract;
+        // `GetDpiForMonitor` takes a valid HMONITOR and two valid out-pointers.
         unsafe {
             let mut monitor_info: MONITORINFOEXW = std::mem::zeroed();
             monitor_info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
-
-            let _ = GetMonitorInfoW(hmonitor, (&raw mut monitor_info.monitorInfo).cast());
-
+            if !GetMonitorInfoW(hmonitor, (&raw mut monitor_info.monitorInfo).cast()).as_bool() {
+                return None;
+            }
             let rc = monitor_info.monitorInfo.rcMonitor;
             let rc_work = monitor_info.monitorInfo.rcWork;
 
-            // Get DPI for this monitor
             let mut dpi_x = 96u32;
             let mut dpi_y = 96u32;
             let _ = GetDpiForMonitor(hmonitor, MDT_EFFECTIVE_DPI, &raw mut dpi_x, &raw mut dpi_y);
-            let scale_factor = dpi_x as f64 / 96.0;
 
-            // Convert device name from wide string
             let device_name = String::from_utf16_lossy(
                 &monitor_info.szDevice[..]
                     .iter()
@@ -55,112 +78,60 @@ impl WindowsDisplay {
                     .copied()
                     .collect::<Vec<u16>>(),
             );
-
-            let id = DisplayId(hmonitor.0 as u64);
-
-            let bounds = Bounds {
-                origin: Point::new(rc.left, rc.top),
-                size: Size::new(rc.right - rc.left, rc.bottom - rc.top),
-            };
-
-            let usable_bounds = Bounds {
-                origin: Point::new(rc_work.left, rc_work.top),
-                size: Size::new(rc_work.right - rc_work.left, rc_work.bottom - rc_work.top),
-            };
-
-            Self {
-                id,
-                name: device_name,
-                bounds,
-                usable_bounds,
-                scale_factor,
-                is_primary,
-            }
+            Some(Self {
+                device_name,
+                bounds: Bounds {
+                    origin: Point::new(rc.left, rc.top),
+                    size: Size::new(rc.right - rc.left, rc.bottom - rc.top),
+                },
+                usable_bounds: Bounds {
+                    origin: Point::new(rc_work.left, rc_work.top),
+                    size: Size::new(rc_work.right - rc_work.left, rc_work.bottom - rc_work.top),
+                },
+                scale_factor: f64::from(dpi_x) / 96.0,
+                // MONITORINFOF_PRIMARY = 1
+                is_primary: (monitor_info.monitorInfo.dwFlags & 1) != 0,
+            })
         }
     }
 }
 
-impl PlatformDisplay for WindowsDisplay {
-    fn id(&self) -> DisplayId {
-        self.id
+fn enumerate_monitors() -> Vec<Monitor> {
+    // Callback for EnumDisplayMonitors.
+    //
+    // # Safety
+    // The caller (`EnumDisplayMonitors`) guarantees `hmonitor` is a valid
+    // monitor handle and `lparam` carries the pointer passed below: a `*mut
+    // Vec<Monitor>` live and unaliased for the whole enumeration.
+    unsafe extern "system" fn enum_proc(
+        hmonitor: HMONITOR,
+        _hdc: HDC,
+        _rect: *mut RECT,
+        lparam: LPARAM,
+    ) -> BOOL {
+        // SAFETY: `lparam.0` is the address of `monitors` below, cast to
+        // `isize`. `EnumDisplayMonitors` blocks until every callback returns, so
+        // the vector is live and no other reference to it exists concurrently.
+        let monitors = unsafe {
+            &mut *std::ptr::with_exposed_provenance_mut::<Vec<Monitor>>(lparam.0 as usize)
+        };
+        if let Some(monitor) = Monitor::new(hmonitor) {
+            monitors.push(monitor);
+        }
+        TRUE
     }
 
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-
-    fn bounds(&self) -> Bounds<i32> {
-        self.bounds
-    }
-
-    fn usable_bounds(&self) -> Bounds<i32> {
-        self.usable_bounds
-    }
-
-    fn scale_factor(&self) -> f64 {
-        self.scale_factor
-    }
-
-    fn is_primary(&self) -> bool {
-        self.is_primary
-    }
-}
-
-/// Enumerate all displays
-pub fn enumerate_displays() -> Vec<Arc<dyn PlatformDisplay>> {
-    // SAFETY: `EnumDisplayMonitors` calls `enum_proc` on the same thread before
-    // returning, so `displays` is live and exclusively accessible during all
-    // callbacks. We pass a raw pointer to it via `LPARAM` and recover the unique
-    // reference inside the callback; no aliasing occurs because only this thread
-    // drives the enumeration.
+    let mut monitors: Vec<Monitor> = Vec::new();
+    // SAFETY: `enum_proc` runs on this thread before `EnumDisplayMonitors`
+    // returns, so `monitors` is live and exclusively accessible during all
+    // callbacks; the pointer is passed through `LPARAM` and recovered there.
     unsafe {
-        let mut displays: Vec<Arc<dyn PlatformDisplay>> = Vec::new();
-
-        // Callback for EnumDisplayMonitors.
-        //
-        // # Safety
-        // The caller (`EnumDisplayMonitors`) guarantees: `hmonitor` is a valid
-        // monitor handle, `lparam` carries the pointer we passed in (a `*mut
-        // Vec<Arc<dyn PlatformDisplay>>` that is live and unaliased for the
-        // duration of the enumeration).
-        unsafe extern "system" fn enum_proc(
-            hmonitor: HMONITOR,
-            _hdc: HDC,
-            _rect: *mut RECT,
-            lparam: LPARAM,
-        ) -> BOOL {
-            // SAFETY: `lparam.0` is the address of `displays` cast to `isize`
-            // in `enumerate_displays`. The vector is live on the caller's stack
-            // for the entire duration of `EnumDisplayMonitors`, which blocks
-            // until all callbacks return, so the pointer is valid and no other
-            // reference to `displays` exists concurrently.
-            unsafe {
-                let displays = &mut *std::ptr::with_exposed_provenance_mut::<
-                    Vec<Arc<dyn PlatformDisplay>>,
-                >(lparam.0 as usize);
-
-                let mut monitor_info: MONITORINFOEXW = std::mem::zeroed();
-                monitor_info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
-
-                if GetMonitorInfoW(hmonitor, (&raw mut monitor_info.monitorInfo).cast()).as_bool() {
-                    // MONITORINFOF_PRIMARY = 1
-                    let is_primary = (monitor_info.monitorInfo.dwFlags & 1) != 0;
-
-                    let display = Arc::new(WindowsDisplay::new(hmonitor, is_primary));
-                    displays.push(display);
-                }
-
-                TRUE
-            }
-        }
-
         let _ = EnumDisplayMonitors(
             None,
             None,
             Some(enum_proc),
-            LPARAM((&raw mut displays).expose_provenance() as isize),
+            LPARAM((&raw mut monitors).expose_provenance() as isize),
         );
-
-        displays
     }
+    monitors
 }

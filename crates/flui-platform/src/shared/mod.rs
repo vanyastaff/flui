@@ -20,6 +20,15 @@ pub(crate) mod clipboard_lock;
 pub(crate) mod android_scroll;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_text_weight;
+// The id registry and last snapshot every native display source keeps.
+#[cfg(any(
+    windows,
+    target_os = "android",
+    target_os = "ios",
+    target_os = "macos",
+    target_arch = "wasm32"
+))]
+pub(crate) mod display_source;
 pub mod events;
 mod handlers;
 pub(crate) mod owner_signal;
@@ -50,6 +59,10 @@ pub mod text_geometry;
 // `pub` for the same Linux-tested/off-target-consumed reason as
 // `hwnd_affinity` above (consumers: the Win32 and AppKit backends).
 pub mod visibility;
+// The macOS and winit sources turn their current-mode rate into a snapshot
+// period here; `test` keeps the rule checked on every host.
+#[cfg(any(target_os = "macos", feature = "winit-backend", test))]
+pub(crate) mod display_period;
 // UIKit consumes this acknowledgement; its transport contract runs on every host.
 pub mod window_installation;
 
