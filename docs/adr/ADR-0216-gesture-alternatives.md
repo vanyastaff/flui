@@ -97,8 +97,16 @@ start" and "move to end" actions.
   mirrors leading and trailing.
 - **Reduced motion.** Under `MotionPreference::Reduce`, including Android's animator duration
   scale 0, alternatives reach the same end state without animation.
-- **Assistive pointers.** Dwell and switch devices report their own pointer kind, so presets
-  and `allowed_devices` can route them to the single-pointer path.
+- **Assistive pointers.** A dwell or switch device that drives a pointer of its own reports
+  `PointerKind::Virtual`, with the device named by the event's `DeviceId`, so presets and
+  `allowed_devices` route it to the single-pointer path. It gets no kind of its own: what
+  routing needs from it (no physical contact, so no long press and no contact slop; a preset's
+  `min_target`) is what every contactless pointer needs, and a consumer that must tell a dwell
+  device from a gamepad cursor reads the `DeviceId`. Where the operating system turns such a
+  device into mouse input (Windows Eye Control) or into accessibility actions (Android Switch
+  Access, iOS Switch Control), it reaches FLUI as that input, and the alternatives' mouse and
+  semantics paths serve it; `assert_gesture_alternatives` drives the single-pointer path with a
+  mouse, a finger and a virtual pointer.
 - **The UIA rule.** UI Automation has no custom-action surface through AccessKit, so every
   `CustomAction` is also reachable through UIA by Invoke on a visible or focus-revealed control,
   or from the context menu, and from the keyboard.
@@ -147,7 +155,10 @@ GestureAlternatives::handle(&self, &dyn BuildContext) -> CommandHandle   // the 
   through `PointerScript`, the semantics action through an AT request, the key through the
   platform's keys, and the single-pointer path with a mouse, a finger and a virtual pointer. It
   asserts one identical model effect and announcement per path, Esc non-destructive, the
-  controls' target size, and reachability without hover.
+  controls' target size, and reachability without hover. Under `MotionPreference::Reduce`, set
+  directly and derived from an animator duration scale of 0, the semantics action must reach the
+  same end state within two frames, so an alternative that waits on an animation reduced motion
+  does not settle fails there.
 - Each behavioural widget adds its rows to the input-path matrix in its own PR; a widget whose
   gesture path lacks an alternative fails there. The shortcut-collision table lives in
   `flui-widgets` (`gesture_key_collision_table`).

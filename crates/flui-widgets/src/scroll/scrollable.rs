@@ -95,7 +95,7 @@ use crate::support::command_modifiers;
 use crate::{
     DragSlot, Focus, GestureArenaScope, GestureDetector, Listener, Semantics, SingleChildScrollView,
 };
-use flui_interaction::focus::{FocusNode, KeyEventResult};
+use flui_interaction::focus::{FocusNode, FocusNodeRegistration, KeyEventResult};
 use flui_interaction::pointer::EventPropagation;
 use flui_interaction::{HoldGestureRecognizer, PointerEvent, PointerKindSet};
 use flui_platform_api::keyboard::{
@@ -470,6 +470,10 @@ pub struct ScrollableState {
     /// The node arrow, page, space, Home and End keys reach this scrollable
     /// through, when it or something inside it has the focus.
     focus: Rc<FocusNode>,
+    /// Ends the keyboard sequence a held key began when the key is cancelled
+    /// instead of released here: focus moved to another unit meanwhile, or
+    /// the window lost activation.
+    _key_cancel: FocusNodeRegistration,
     /// The scroll controller from the current view configuration. Kept in
     /// state so the fling listener (installed by
     /// [`install_fling_listener`](ScrollableState::install_fling_listener))
@@ -580,8 +584,16 @@ impl StatefulView for Scrollable {
             .unbounded()
             .build_on(None);
         let focus = FocusNode::with_debug_label("Scrollable");
+        let cancelled = Rc::clone(&owner);
+        let key_cancel = focus.register_on_key_cancel(Rc::new(move |press: &KeyEvent| {
+            let owner: Option<Rc<ScrollOwner>> = cancelled.borrow().clone();
+            if let Some(owner) = owner {
+                owner.key_released(press.code);
+            }
+        }));
 
         ScrollableState {
+            _key_cancel: key_cancel,
             recognizer_owner: Rc::new(()),
             default_physics: Arc::new(ClampingScrollPhysics::new()),
             focus: Rc::clone(&focus),

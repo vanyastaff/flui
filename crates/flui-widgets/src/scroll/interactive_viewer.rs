@@ -90,7 +90,7 @@ use flui_animation::{
 use flui_foundation::geometry::{Axis, EdgeInsets, Matrix4, Offset, Point, Rect, Vec2};
 use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{Listenable, ListenerId};
-use flui_interaction::focus::{FocusNode, KeyEventResult};
+use flui_interaction::focus::{FocusNode, FocusNodeRegistration, KeyEventResult};
 use flui_interaction::gesture::{
     GestureArena, GestureSettingsProvider, ScaleEndDetails, ScaleStartDetails, ScaleStartMode,
     ScaleUpdateDetails,
@@ -587,8 +587,19 @@ impl StatefulView for InteractiveViewer {
             overlay: Cell::new(Overlay::default()),
             stretched: Cell::new(None),
         });
+        let keys = FocusNode::with_debug_label("InteractiveViewer");
+        let cancelled = Rc::downgrade(&core);
+        let key_cancel = keys.register_on_key_cancel(Rc::new(
+            move |press: &flui_platform_api::keyboard::KeyEvent| {
+                if let Some(core) = cancelled.upgrade() {
+                    core.leaf.key_released(press.code);
+                }
+            },
+        ));
         InteractiveViewerState {
             core,
+            keys,
+            _key_cancel: key_cancel,
             post_frame: None,
             writer: None,
             controller,
@@ -1850,6 +1861,12 @@ impl FocalRun {
 /// Persistent state for [`InteractiveViewer`].
 pub struct InteractiveViewerState {
     core: Rc<ViewerCore>,
+    /// The node the arrow keys reach this viewer through, from a focused row
+    /// inside it.
+    keys: Rc<FocusNode>,
+    /// Ends the keyboard sequence a held arrow began when the key is
+    /// cancelled instead of released here.
+    _key_cancel: FocusNodeRegistration,
     writer: Option<WriterSource>,
     post_frame: Option<PostFrameHandle>,
     controller: DrivenController,
@@ -1930,8 +1947,8 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
         };
         let key_core = Rc::clone(&core);
         let keys = Focus::new(mount)
+            .focus_node(Rc::clone(&self.keys))
             .can_request_focus(false)
-            .debug_label("InteractiveViewer")
             .on_key_event(move |_cx, event| key_core.key_pan(event));
         let mut shortcuts = Shortcuts::new(keys);
         for (activator, intent) in zoom_keys(TargetPlatform::current()) {

@@ -14,9 +14,9 @@ mod traversal;
 pub use focus_scope::{
     EntryTarget, FocusAttachment, FocusCause, FocusDetachOutcome, FocusNode,
     FocusNodeChangeCallback, FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode,
-    FocusSubscription, FocusTraversalPolicy, FocusTreeError, KeyEventHandler, KeyEventResult,
-    NodeContext, ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalDirection,
-    TraversalEdgeBehavior, TraversalEntry,
+    FocusSubscription, FocusTraversalPolicy, FocusTreeError, KeyCancelHandler, KeyEventHandler,
+    KeyEventResult, NodeContext, ReadingOrderPolicy, RectProvider, ResolvedStep,
+    TraversalDirection, TraversalEdgeBehavior, TraversalEntry,
 };
 pub use manager::{
     FocusChangeCallback, FocusManager, GlobalKeyRegistration, GlobalKeyRegistrationError,

@@ -243,6 +243,38 @@ pub(crate) fn keys_typed_in_a_field_stay_in_the_field() {
     assert!(field.has_primary_focus(), "and the field keeps the focus");
 }
 
+/// Space pressed on one button and released after Tab moved the focus to the
+/// next activates neither: the release belongs to the press, not to the
+/// focus. A fresh press on the next button activates it once.
+pub(crate) fn a_space_released_after_tab_activates_nothing() {
+    let (first, second) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (counted_first, counted_second) = (Rc::clone(&first), Rc::clone(&second));
+    let harness = mount(Row::new((
+        RawButton::new(SizedBox::new(40.0, 40.0))
+            .on_press(move |_cx| counted_first.set(counted_first.get() + 1)),
+        RawButton::new(SizedBox::new(40.0, 40.0))
+            .on_press(move |_cx| counted_second.set(counted_second.get() + 1)),
+    )));
+    let manager = harness.focus_manager();
+    let space = Key::character(" ");
+    assert!(tab(&manager), "Tab focuses the first button");
+    let pressed = manager.primary_focus().expect("the first button");
+    let _ = down(&manager, &space);
+    assert!(tab(&manager), "Tab moves on while Space is held");
+    assert!(!Rc::ptr_eq(
+        &pressed,
+        &manager.primary_focus().expect("the second button")
+    ));
+    up(&manager, &space);
+    assert_eq!(
+        (first.get(), second.get()),
+        (0, 0),
+        "the release activates neither button"
+    );
+    let _ = press(&manager, &space);
+    assert_eq!((first.get(), second.get()), (0, 1), "a fresh press does");
+}
+
 /// A panic in a button's press or in a focus listener reaches the caller of
 /// that dispatch; the next Tab still moves the focus and the next button still
 /// activates.

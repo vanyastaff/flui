@@ -766,20 +766,26 @@ an indicator can follow it (`keyboard_focus_contracts`).
 The key ledger in `focus/key_ledger.rs` sits between the global handlers, which
 still see every event, and the focus walk. It records, per held key (physical
 `Code`, or the logical key when the code is `Unidentified`), the traversal unit
-that had primary focus at key-down, and the node its walk started from,
-before any handler runs; a repeat reaches the walk only while that unit still
-has primary focus. A release clears the record and reaches the walk that heard
-the press: from the primary focus while the unit still has it, otherwise from
-the recorded node while it is still in the tree, so what the press began (a
-keyboard scroll) ends and the node focused since hears nothing
-(`a_released_key_reaches_the_node_that_took_its_press`). A key-down that moved focus by traversal rebinds the
+that had primary focus at key-down, the key-down itself and the node its walk
+started from, before any handler runs; a repeat or release reaches the walk
+only while that unit still has primary focus. A release clears the record.
+One that arrives after focus moved to another unit is no key event anywhere:
+a root binding resolving at the primary focus (Space-up activating) and the
+nodes of a covered route never hear it. Instead every node on the recorded
+node's path, while that node is still in the tree, hears its
+`KeyCancelHandler` with the key-down, so what the press began (a keyboard
+scroll) ends; every handler runs even after one panics, and the first panic
+propagates (`a_release_after_focus_moved_only_cancels_its_press`). The cancel
+channel is apart from the key handler on purpose: no binding can mistake a
+cancellation for a release. A key-down that moved focus by traversal rebinds the
 record to the new unit after the walk, so a held Tab keeps moving; one that
 moved focus programmatically (Enter opening a page) does not, so its repeats
 never reach the new page's field (`key_repeats_follow_their_key_down`). A key
 the input method was composing with, or `NamedKey::Process`, is recorded as the
 method's and none of its events reach the walk. A handler panic leaves the
 record as the key-down made it. `forget_pressed_keys` clears the ledger for the
-runtime's window deactivation. `dispatch_pointer_back` delivers a pointer's
+runtime's window deactivation and cancels each held press the walk took the
+same way; closing the manager clears it without telling anyone. `dispatch_pointer_back` delivers a pointer's
 back button (X1) as `NamedKey::BrowserBack` with `Code::Unidentified`, held
 under its own ledger identity so it neither ends nor is ended by a keyboard's
 Back key, and, being a pointer press, without changing the modality.
@@ -792,7 +798,9 @@ unit, and landing on a unit — by Tab, `set_first_focus` or a deferred first
 focus — asks its entry. The entry is user code run with no borrow held; a
 target outside the unit, a `Pending` or `Unit` answer, or a panic lands on the
 unit itself, and the panic propagates after focus has moved
-(`traversal_unit_contracts`).
+(`traversal_unit_contracts`). No framework widget registers an entry yet; the
+focusable `ListView` of `docs/plans/specs/focus-keyboard/design.md` is its
+planned production caller.
 
 `FocusScopeNode::set_provisional_first_focus` is `set_first_focus` for a scope
 entered for the first time: it also marks the focus it lands on as a guess.

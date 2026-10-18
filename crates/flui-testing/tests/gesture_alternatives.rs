@@ -4,16 +4,22 @@
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
+use std::time::Duration;
 
+use flui_animation::{
+    Animation, AnimationBehavior, AnimationController, AnimationStatus, DrivenController,
+    StatusSubscription,
+};
 use flui_foundation::geometry::Offset;
 use flui_painting::styling::Color;
 use flui_testing::replay::PointerScript;
 use flui_testing::widgets::tight;
 use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
-use flui_view::ViewExt;
+use flui_view::prelude::*;
+use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
     Actions, Alternative, CallbackAction, ColoredBox, ControlSpec, Dismissible,
-    GestureAlternatives, GestureCommand, Intent, MenuSpec, SizedBox,
+    GestureAlternatives, GestureCommand, Intent, MenuSpec, SizedBox, VsyncScope,
 };
 
 /// Count one removal.
@@ -31,6 +37,60 @@ enum Subject {
     Unbound,
     /// The menu opens but shows nothing assistive technology can reach.
     SilentMenu,
+    /// Removal waits for an animation that plays under reduced motion too.
+    IgnoresReducedMotion,
+}
+
+/// Performs `Remove` once a 300 ms animation that ignores reduced motion
+/// (`AnimationBehavior::Preserve`) has finished.
+#[derive(Clone, StatefulView)]
+struct AnimatedRemoval {
+    child: BoxedView,
+    removed: Rc<Cell<u32>>,
+}
+
+struct AnimatedRemovalState {
+    driven: DrivenController,
+    _settled: StatusSubscription,
+}
+
+impl StatefulView for AnimatedRemoval {
+    type State = AnimatedRemovalState;
+
+    fn create_state(&self) -> Self::State {
+        let driven = AnimationController::builder(Duration::from_millis(300))
+            .behavior(AnimationBehavior::Preserve)
+            .build_on(None);
+        let removed = Rc::clone(&self.removed);
+        let settled = driven.controller().subscribe_status(Rc::new(move |status| {
+            if status == AnimationStatus::ForwardSettled {
+                removed.set(removed.get() + 1);
+            }
+        }));
+        AnimatedRemovalState {
+            driven,
+            _settled: settled,
+        }
+    }
+}
+
+impl ViewState<AnimatedRemoval> for AnimatedRemovalState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.driven
+            .rebind(VsyncScope::maybe_of(ctx).as_ref())
+            .expect("a registry seat");
+    }
+
+    fn build(&self, view: &AnimatedRemoval, _ctx: &dyn BuildContext) -> impl IntoView {
+        let controller = self.driven.controller().clone();
+        Actions::new(view.child.clone()).action(CallbackAction::new(move |_cx, _: &Remove| {
+            let _ = controller.forward();
+        }))
+    }
+
+    fn dispose(&mut self) {
+        self.driven.dispose();
+    }
 }
 
 fn mount(subject: Subject) -> AlternativesSubject<u32> {
@@ -52,6 +112,12 @@ fn mount(subject: Subject) -> AlternativesSubject<u32> {
     let count = Rc::clone(&removed);
     let view = if matches!(subject, Subject::Unbound) {
         card.boxed()
+    } else if matches!(subject, Subject::IgnoresReducedMotion) {
+        AnimatedRemoval {
+            child: card.boxed(),
+            removed: Rc::clone(&removed),
+        }
+        .boxed()
     } else {
         Actions::new(card)
             .action(CallbackAction::new(move |_cx, _: &Remove| {
@@ -97,6 +163,20 @@ fn the_check_passes_a_conforming_row_and_names_each_broken_path() {
     assert!(
         unbound.contains("by gesture: the model did not change from 0"),
         "an intent nothing answers is caught:\n{unbound}"
+    );
+
+    let animated = failure(Subject::IgnoresReducedMotion);
+    for source in ["reduced motion", "an animator duration scale of 0"] {
+        assert!(
+            animated.contains(&format!(
+                "by assistive technology under {source}: the model did not change from 0"
+            )),
+            "an alternative that animates under {source} is caught:\n{animated}"
+        );
+    }
+    assert!(
+        !animated.contains("by assistive technology: "),
+        "and it conforms with motion on:\n{animated}"
     );
 
     let silent = failure(Subject::SilentMenu);

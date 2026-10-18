@@ -249,8 +249,8 @@ pub use focus::{
     FocusDirection, FocusManager, FocusNode, FocusNodeChangeCallback, FocusNodeRegistration,
     FocusRequestOutcome, FocusScopeNode, FocusSubscription, FocusTraversalOverrides,
     FocusTraversalPolicy, FocusTreeError, GlobalKeyRegistration, GlobalKeyRegistrationError,
-    KeyEventHandler, KeyEventResult, NodeContext, ReadingOrderPolicy, RectProvider, ResolvedStep,
-    TraversalDirection, TraversalEdgeBehavior, TraversalEntry,
+    KeyCancelHandler, KeyEventHandler, KeyEventResult, NodeContext, ReadingOrderPolicy,
+    RectProvider, ResolvedStep, TraversalDirection, TraversalEdgeBehavior, TraversalEntry,
 };
 pub use gesture::{
     DEFAULT_DOUBLE_TAP_SLOP, DEFAULT_DOUBLE_TAP_TIMEOUT, DEFAULT_LONG_PRESS_TIMEOUT,

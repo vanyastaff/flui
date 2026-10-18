@@ -42,6 +42,13 @@ fn allocate_focus_node_id(counter: &AtomicU64) -> FocusNodeId {
 /// Owner-local callback for handling key events.
 pub type KeyEventHandler = Rc<dyn Fn(&KeyEvent) -> KeyEventResult>;
 
+/// Owner-local callback told that a key whose press a node's path took has
+/// ended without its release reaching that path: focus moved to another
+/// traversal unit while the key was held, or the window lost activation. It
+/// receives that key-down. Nothing is handled or activated through it; a
+/// node that began something on the press (a keyboard scroll) ends it here.
+pub type KeyCancelHandler = Rc<dyn Fn(&KeyEvent)>;
+
 /// Computes a node's bounding rectangle on demand, in root coordinates.
 pub type RectProvider = Rc<dyn Fn() -> Option<Rect<f64>>>;
 
@@ -403,6 +410,7 @@ impl Drop for FocusSubscription {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FocusNodeRegistrationKind {
     KeyHandler,
+    KeyCancelHandler,
     RectProvider,
     Context,
     TraversalGroup,
@@ -413,7 +421,7 @@ enum FocusNodeRegistrationKind {
 /// Generation-checked ownership of one replaceable [`FocusNode`] property.
 ///
 /// A registration is returned by
-/// [`FocusNode::register_on_key_event`],
+/// [`FocusNode::register_on_key_event`], [`FocusNode::register_on_key_cancel`],
 /// [`FocusNode::register_rect_provider`], [`FocusNode::register_context`],
 /// [`FocusNode::register_traversal_group`] or [`FocusNode::register_traversal_overrides`].
 /// Dropping it clears the installed
@@ -452,6 +460,9 @@ impl FocusNodeRegistration {
                     && match self.kind {
                         FocusNodeRegistrationKind::KeyHandler => {
                             node.on_key_event_generation.get() == self.generation
+                        }
+                        FocusNodeRegistrationKind::KeyCancelHandler => {
+                            node.on_key_cancel_generation.get() == self.generation
                         }
                         FocusNodeRegistrationKind::RectProvider => {
                             node.rect_provider_generation.get() == self.generation
@@ -492,6 +503,9 @@ impl FocusNodeRegistration {
         match self.kind {
             FocusNodeRegistrationKind::KeyHandler => {
                 node.clear_on_key_event_generation(self.generation);
+            }
+            FocusNodeRegistrationKind::KeyCancelHandler => {
+                node.clear_on_key_cancel_generation(self.generation);
             }
             FocusNodeRegistrationKind::RectProvider => {
                 node.clear_rect_provider_generation(self.generation);
@@ -542,6 +556,8 @@ pub struct FocusNode {
     descendants_are_focusable: Cell<bool>,
     scope_owner: RefCell<Option<Weak<FocusScopeNode>>>,
     on_key_event: RefCell<Option<KeyEventHandler>>,
+    on_key_cancel: RefCell<Option<KeyCancelHandler>>,
+    on_key_cancel_generation: Cell<u64>,
     listeners: RefCell<Vec<(ListenerId, FocusNodeChangeCallback)>>,
     next_listener_id: Cell<usize>,
     rect: Cell<Rect<f64>>,
@@ -570,6 +586,7 @@ pub struct FocusNode {
 pub(super) struct ClosedFocusNode {
     node: Rc<FocusNode>,
     key_handler: Option<KeyEventHandler>,
+    key_cancel: Option<KeyCancelHandler>,
     rect_provider: Option<RectProvider>,
     context: Option<NodeContext>,
     policy: Option<Rc<dyn FocusTraversalPolicy>>,
@@ -582,15 +599,17 @@ impl ClosedFocusNode {
         let Self {
             node,
             key_handler,
+            key_cancel,
             rect_provider,
             context,
             policy,
             group_policy,
             entry,
         } = self;
-        // The order a healthy close always kept: key handler, listeners,
+        // The order a healthy close always kept: key handlers, listeners,
         // rect provider, context.
         failure.retire(key_handler);
+        failure.retire(key_cancel);
         let listeners = std::mem::take(&mut *node.listeners.borrow_mut());
         for (_, listener) in listeners {
             failure.retire(listener);
@@ -636,6 +655,8 @@ impl FocusNode {
             descendants_are_focusable: Cell::new(true),
             scope_owner: RefCell::new(scope_owner),
             on_key_event: RefCell::new(None),
+            on_key_cancel: RefCell::new(None),
+            on_key_cancel_generation: Cell::new(0),
             listeners: RefCell::new(Vec::new()),
             next_listener_id: Cell::new(1),
             rect: Cell::new(Rect::ZERO),
@@ -852,6 +873,43 @@ impl FocusNode {
     ) -> FocusNodeRegistration {
         let generation = self.replace_on_key_event(Some(handler));
         FocusNodeRegistration::new(self, generation, FocusNodeRegistrationKind::KeyHandler)
+    }
+
+    /// Install this node's [`KeyCancelHandler`] with generation-checked
+    /// cleanup ownership.
+    ///
+    /// Every node on the path that heard a cancelled key's press is told, the
+    /// pressed node first, whatever its key handler answered then. Dropping
+    /// the returned registration clears `handler` only if no later writer has
+    /// replaced it.
+    pub fn register_on_key_cancel(
+        self: &Rc<Self>,
+        handler: KeyCancelHandler,
+    ) -> FocusNodeRegistration {
+        let generation = self.replace_on_key_cancel(Some(handler));
+        FocusNodeRegistration::new(
+            self,
+            generation,
+            FocusNodeRegistrationKind::KeyCancelHandler,
+        )
+    }
+
+    fn replace_on_key_cancel(&self, handler: Option<KeyCancelHandler>) -> u64 {
+        if self.is_closed() {
+            let mut failure = FocusClosePanic::for_rejection(self.close_mode());
+            failure.retire(handler);
+            failure.finish();
+            return self.on_key_cancel_generation.get();
+        }
+        let generation = Self::next_property_generation(&self.on_key_cancel_generation);
+        let _prev = std::mem::replace(&mut *self.on_key_cancel.borrow_mut(), handler);
+        generation
+    }
+
+    fn clear_on_key_cancel_generation(&self, generation: u64) {
+        if self.on_key_cancel_generation.get() == generation {
+            self.replace_on_key_cancel(None);
+        }
     }
 
     fn replace_rect_provider(&self, provider: Option<RectProvider>) -> u64 {
@@ -1230,6 +1288,12 @@ impl FocusNode {
     /// `entry` says ([`EntryTarget`]). A lazy list is the unit; its built
     /// rows are its descendants.
     ///
+    /// No widget registers an entry yet: its planned caller is a focusable
+    /// `ListView` (one Tab stop, roving focus over its rows), specified in
+    /// `docs/plans/specs/focus-keyboard/design.md` and not built. Until then
+    /// a list's rows are ordinary Tab candidates, and an application that
+    /// wants one stop registers the entry on its own node.
+    ///
     /// Dropping the returned registration removes `entry` unless a later
     /// registration replaced it.
     pub fn register_traversal_entry(
@@ -1347,6 +1411,19 @@ impl FocusNode {
         failure.retire(handler);
         failure.finish();
         result
+    }
+
+    /// Tell this node's [`KeyCancelHandler`] that the key `press` took was
+    /// cancelled. A panic propagates after the handler is retired.
+    pub(super) fn handle_key_cancel(&self, press: &KeyEvent) {
+        let handler = self.on_key_cancel.borrow().clone();
+        let Some(handler) = handler else {
+            return;
+        };
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
+        failure.run(|| handler(press));
+        failure.retire(handler);
+        failure.finish();
     }
 
     /// Iterate parent-first over ancestors.
@@ -1738,6 +1815,7 @@ impl FocusNode {
             // terminal state and outgoing ownership have been committed.
             node.children.borrow_mut().clear();
             let key_handler = node.on_key_event.borrow_mut().take();
+            let key_cancel = node.on_key_cancel.borrow_mut().take();
             let rect_provider = node.rect_provider.borrow_mut().take();
             let context = node.context.borrow_mut().take();
             let group_policy = node
@@ -1758,6 +1836,7 @@ impl FocusNode {
             retired.push(ClosedFocusNode {
                 node,
                 key_handler,
+                key_cancel,
                 rect_provider,
                 context,
                 policy,

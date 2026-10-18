@@ -97,6 +97,14 @@ Amends §1 and the `Escape` item of "Not implemented"; the rest stands.
   `ActivateIntent` on its release (`SingleActivator::on_release`), so a control can show itself
   pressed while Space is held. A control that answers `ActivationPressIntent` consumes the
   key-down.
+- **A press owns its repeats and its release.** `FocusManager` records the traversal unit that
+  had primary focus at each key-down; a repeat or release reaches the focus walk only while that
+  unit still has it. A release that arrives after focus moved to another unit (Space held, then
+  Tab or a route push) is no key event anywhere, so no binding activates the new focus and no
+  node of a covered route hears it. The press's path is told instead, through
+  `FocusNode::register_on_key_cancel`, and so is it when the window loses activation with the
+  key held: a held-key consumer such as a keyboard scroll ends what the press began
+  (`keyboard_focus_contracts` in `flui-interaction` and `flui-widgets`).
 - **Escape sends `DismissIntent`.** Only a dismissible surface answers it.
 - **Back sends `BackIntent`:** Alt+Left and `BrowserBack`, or Cmd+[ and `BrowserBack` on macOS and
   iOS (Option+Left moves by word there), once per press.

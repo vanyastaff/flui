@@ -9,8 +9,8 @@ use std::rc::Rc;
 use flui_foundation::geometry::Rect;
 use flui_interaction::__runtime::mark_widget_owned;
 use flui_interaction::focus::{
-    EntryTarget, FocusAttachment, FocusCause, FocusManager, FocusNode, FocusRequestOutcome,
-    FocusScopeNode, FocusTreeError, KeyEventResult,
+    EntryTarget, FocusAttachment, FocusCause, FocusManager, FocusNode, FocusNodeRegistration,
+    FocusRequestOutcome, FocusScopeNode, FocusTreeError, KeyEventResult,
 };
 use flui_interaction::ids::FocusNodeId;
 use flui_platform_api::{
@@ -599,8 +599,8 @@ fn keyboard_focus_contracts() {
             key_repeats_follow_their_key_down,
         ),
         (
-            "a_released_key_reaches_the_node_that_took_its_press",
-            a_released_key_reaches_the_node_that_took_its_press,
+            "a_release_after_focus_moved_only_cancels_its_press",
+            a_release_after_focus_moved_only_cancels_its_press,
         ),
         (
             "traversal hands repeats to the new focus",
@@ -674,30 +674,106 @@ fn key_repeats_follow_their_key_down() {
     assert_eq!(page.get(), 3, "a press on the new focus delivers all of it");
 }
 
-/// A key held on one node while focus moves elsewhere: its release reaches
-/// the node that took the key-down, which ends what the press began (a
-/// keyboard scroll), and never the node focused since.
-fn a_released_key_reaches_the_node_that_took_its_press() {
+/// Record the codes of the presses `node` is told were cancelled.
+fn record_cancels(node: &Rc<FocusNode>) -> (Rc<RefCell<Vec<Code>>>, FocusNodeRegistration) {
+    let cancelled = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&cancelled);
+    let registration = node.register_on_key_cancel(Rc::new(move |press: &KeyEvent| {
+        assert_eq!(press.state(), KeyState::Down, "told of the key-down");
+        seen.borrow_mut().push(press.code);
+    }));
+    (cancelled, registration)
+}
+
+/// A key held on one node while focus moves to another unit: its release is
+/// no key event anywhere, so nothing on the press's path (a root binding
+/// resolving at the primary focus) or at the new focus acts on it. Every node
+/// on the press's path is told the key was cancelled instead, which ends what
+/// the press began (a keyboard scroll).
+fn a_release_after_focus_moved_only_cancels_its_press() {
     let (manager, nodes, _attachments) = manager_with_nodes(2);
+    let root = manager.root_scope().as_focus_node();
     let _ = nodes[0].request_focus();
     let presser = Rc::new(RefCell::new(Vec::new()));
     let seen = Rc::clone(&presser);
     nodes[0].set_on_key_event(Rc::new(move |event| {
         seen.borrow_mut().push(event.state());
-        KeyEventResult::Handled
+        if event.state() == KeyState::Down {
+            KeyEventResult::Handled
+        } else {
+            KeyEventResult::Ignored
+        }
     }));
+    let releases = Rc::new(Cell::new(0));
+    let bound = Rc::clone(&releases);
+    root.set_on_key_event(Rc::new(move |event| {
+        if event.state() == KeyState::Up {
+            bound.set(bound.get() + 1);
+        }
+        KeyEventResult::Ignored
+    }));
+    let (pressed_cancels, _pressed) = record_cancels(&nodes[0]);
+    let (root_cancels, _root) = record_cancels(root);
+    let (since_cancels, _since) = record_cancels(&nodes[1]);
     let since = count_keys(&nodes[1]);
     let arrow = |state| key(state, Key::Named(NamedKey::ArrowDown), Code::ArrowDown);
+
     let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
-    let _ = nodes[1].request_focus();
+    assert!(manager.focus_next(), "focus moves to another unit");
+    assert!(nodes[1].has_primary_focus());
     let _ = manager.dispatch_key_event(&arrow(KeyState::Down).with_repeat(KeyRepeat::AutoRepeat));
+    assert!(
+        pressed_cancels.borrow().is_empty(),
+        "a held key is not cancelled before its release"
+    );
     let _ = manager.dispatch_key_event(&arrow(KeyState::Up));
     assert_eq!(
         *presser.borrow(),
-        [KeyState::Down, KeyState::Up],
-        "the press's node hears the release, not the repeats"
+        [KeyState::Down],
+        "the press's node hears neither the repeats nor the release"
+    );
+    assert_eq!(
+        releases.get(),
+        0,
+        "no binding on the path hears the release"
     );
     assert_eq!(since.get(), 0, "the node focused since hears nothing");
+    assert_eq!(
+        *pressed_cancels.borrow(),
+        [Code::ArrowDown],
+        "the pressed node is told once"
+    );
+    assert_eq!(
+        *root_cancels.borrow(),
+        [Code::ArrowDown],
+        "and so is its path"
+    );
+    assert!(since_cancels.borrow().is_empty(), "but not the new focus");
+
+    // A cancel handler that panics: the rest of the path is still told, and
+    // the first panic propagates once.
+    let _ = nodes[1].request_focus();
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let failing = nodes[1].register_on_key_cancel(Rc::new(|_: &KeyEvent| {
+        panic!("cancel handler failed");
+    }));
+    let _ = nodes[0].request_focus();
+    let failed = catch_unwind(AssertUnwindSafe(|| {
+        manager.dispatch_key_event(&arrow(KeyState::Up))
+    }));
+    assert!(failed.is_err(), "the panic propagates");
+    assert_eq!(
+        *root_cancels.borrow(),
+        [Code::ArrowDown, Code::ArrowDown],
+        "after the panic the path is still told"
+    );
+    drop(failing);
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    assert_eq!(
+        *presser.borrow(),
+        [KeyState::Down, KeyState::Down],
+        "the next press is delivered"
+    );
 }
 
 /// Tab moves focus by traversal; its repeats keep moving it.
@@ -786,11 +862,18 @@ fn forgotten_keys_stop_repeating() {
     let (manager, nodes, _attachments) = manager_with_nodes(1);
     let _ = nodes[0].request_focus();
     let node_keys = count_keys(&nodes[0]);
+    let (cancelled, _registration) = record_cancels(&nodes[0]);
     let _ = manager.dispatch_key_event(&enter(KeyState::Down, KeyRepeat::First));
     manager.forget_pressed_keys();
+    assert_eq!(
+        *cancelled.borrow(),
+        [Code::Enter],
+        "the held key's path is told it ended"
+    );
     let _ = manager.dispatch_key_event(&enter(KeyState::Down, KeyRepeat::AutoRepeat));
     let _ = manager.dispatch_key_event(&enter(KeyState::Up, KeyRepeat::First));
     assert_eq!(node_keys.get(), 1);
+    assert_eq!(cancelled.borrow().len(), 1, "once");
 }
 
 fn panicking_handler_keeps_its_keys_record() {

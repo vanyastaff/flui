@@ -598,11 +598,14 @@ here, in the frame that removed the node, and never through `None` while a
 candidate remains. When that edge moved the primary, the segment rebuilds
 (`rebuild_within_frame`, which keeps the frame's recovered-panic records) and
 settles layout exactly once more before paint; what the listeners dirty beyond
-that waits for the next frame. Settling after paint would show a frame with
+that waits for the next frame. When that repeat itself removed the new focus,
+the segment asks for the next frame (`FocusManager::has_orphaned_focus`), which
+moves it on; nothing else may ask for one. Settling after paint would show a frame with
 focus on a node that is gone; settling inside the fixpoint would run listeners
 under the binding's write lock. `focus_survives_rebuild_and_moves_on_removal`
 pins the edges, and its row
-`the_successor_rebuilds_in_the_frame_that_moved_focus` the single repeat.
+`the_successor_rebuilds_in_the_frame_that_moved_focus` the single repeat (a loop
+would publish the second edge in the same frame) and the frame it asks for.
 
 ### A pointer press is focus input
 

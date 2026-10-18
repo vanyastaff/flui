@@ -255,6 +255,7 @@ fn pointer_and_gesture_recognition() {
             ("interactive_viewer::viewer_rebuild_from_its_update_callback_keeps_the_gesture", crate::interactive_viewer::viewer_rebuild_from_its_update_callback_keeps_the_gesture),
             ("interactive_viewer::viewer_pinch_past_the_scale_bounds_stretches_and_snaps_back", crate::interactive_viewer::viewer_pinch_past_the_scale_bounds_stretches_and_snaps_back),
             ("interactive_viewer::viewer_contact_gives_it_the_keys", crate::interactive_viewer::viewer_contact_gives_it_the_keys),
+            ("interactive_viewer::viewer_key_sequence_ends_when_focus_moves_before_the_release", crate::interactive_viewer::viewer_key_sequence_ends_when_focus_moves_before_the_release),
             ("gesture_detector::clearing_pan_callbacks_mid_drag_still_finishes_the_drag", crate::gesture_detector::clearing_pan_callbacks_mid_drag_still_finishes_the_drag as fn()),
             ("gesture_detector::mounted_drag_policy_replaces_targets_before_cancellation_and_recovers", crate::gesture_detector::mounted_drag_policy_replaces_targets_before_cancellation_and_recovers),
             ("gesture_detector::authored_settings_replace_active_owners_and_preserve_equal_profiles", crate::gesture_detector::authored_settings_replace_active_owners_and_preserve_equal_profiles),
@@ -403,6 +404,10 @@ fn keyboard_focus_contracts() {
             (
                 "keyboard_focus::activation::keys_typed_in_a_field_stay_in_the_field",
                 crate::keyboard_focus::activation::keys_typed_in_a_field_stay_in_the_field,
+            ),
+            (
+                "keyboard_focus::activation::a_space_released_after_tab_activates_nothing",
+                crate::keyboard_focus::activation::a_space_released_after_tab_activates_nothing,
             ),
             (
                 "keyboard_focus::activation::keyboard_continues_after_callback_panic",
@@ -1044,6 +1049,7 @@ fn nested_scroll_channel() {
             ("nested_scroll::a_run_short_of_the_edge_of_a_long_list_hands_nothing_on", crate::nested_scroll::a_run_short_of_the_edge_of_a_long_list_hands_nothing_on),
             ("nested_scroll::shared_connection_hears_a_sequence_once", crate::nested_scroll::shared_connection_hears_a_sequence_once),
             ("nested_scroll::keyboard_scrolls_through_the_channel_as_its_own_sequence", crate::nested_scroll::keyboard_scrolls_through_the_channel_as_its_own_sequence),
+            ("nested_scroll::a_held_scroll_key_ends_its_sequence_when_its_release_goes_elsewhere", crate::nested_scroll::a_held_scroll_key_ends_its_sequence_when_its_release_goes_elsewhere),
             ("nested_scroll::drag_autoscroll_dispatches_side_effect_deltas", crate::nested_scroll::drag_autoscroll_dispatches_side_effect_deltas),
             ("nested_scroll::drag_autoscroll_from_past_an_edge_moves_by_its_step", crate::nested_scroll::drag_autoscroll_from_past_an_edge_moves_by_its_step),
             ("nested_scroll::a_remainder_moves_an_overscrolled_ancestor_only_toward_its_range", crate::nested_scroll::a_remainder_moves_an_overscrolled_ancestor_only_toward_its_range),

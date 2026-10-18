@@ -4,9 +4,11 @@
 //! Enter that opens a page must not have its auto-repeats type into the field
 //! the new page focuses, and a release whose press went to another window must
 //! not activate anything here. The ledger records, per held key, the traversal
-//! unit that had primary focus at key-down; a repeat reaches the focus walk
-//! only while that unit still has it, and a release reaches the walk that
-//! heard the press, so whatever the press began ends there.
+//! unit that had primary focus at key-down; a repeat or release reaches the
+//! focus walk only while that unit still has it. A release that arrives after
+//! focus moved to another unit is no key event anywhere: the path that heard
+//! the press is told its key was cancelled instead, so what the press began
+//! (a keyboard scroll) ends without anything activating.
 
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
@@ -58,9 +60,18 @@ enum KeyOrigin {
     Focus {
         /// The traversal unit holding primary focus at key-down, if any.
         unit: Option<FocusNodeId>,
-        /// Where that walk started: the node whose path heard the press.
-        leaf: Option<Weak<FocusNode>>,
+        /// The press, as its path is told of it when the key is cancelled.
+        press: HeldPress,
     },
+}
+
+/// A key-down the focus walk took, and where that walk started.
+#[derive(Debug, Clone)]
+pub(super) struct HeldPress {
+    /// The node whose path heard the press.
+    pub(super) leaf: Option<Weak<FocusNode>>,
+    /// The key-down itself.
+    pub(super) event: KeyEvent,
 }
 
 /// What the ledger lets through to the focus walk.
@@ -70,10 +81,10 @@ pub(super) enum Admission {
     Press,
     /// A repeat or release of a key whose key-down this unit received.
     Continuation,
-    /// The release of a key whose key-down the walk from `leaf` received,
-    /// after focus moved to another unit: that path ends what the press
-    /// began, and the node focused since never hears it.
-    ReleaseToOrigin(Weak<FocusNode>),
+    /// The release of a key whose key-down another unit's walk took, after
+    /// focus moved: the release reaches no key handler, and the press's path
+    /// is told the key was cancelled.
+    Cancelled(HeldPress),
     /// An input method's key, an orphan, or a repeat of a key whose key-down
     /// went to another unit: global handlers saw it, the walk does not.
     Withheld,
@@ -105,7 +116,10 @@ impl KeyLedger {
                 } else {
                     KeyOrigin::Focus {
                         unit,
-                        leaf: leaf.map(Rc::downgrade),
+                        press: HeldPress {
+                            leaf: leaf.map(Rc::downgrade),
+                            event: event.clone(),
+                        },
                     }
                 };
                 self.pressed.insert(id, origin);
@@ -125,9 +139,7 @@ impl KeyLedger {
                 Some(KeyOrigin::Focus { unit: pressed, .. }) if pressed == unit => {
                     Admission::Continuation
                 }
-                Some(KeyOrigin::Focus {
-                    leaf: Some(leaf), ..
-                }) => Admission::ReleaseToOrigin(leaf),
+                Some(KeyOrigin::Focus { press, .. }) => Admission::Cancelled(press),
                 _ => Admission::Withheld,
             },
         }
@@ -144,19 +156,27 @@ impl KeyLedger {
         leaf: Option<&Rc<FocusNode>>,
     ) {
         if event.state() == KeyState::Down
-            && let Some(origin @ KeyOrigin::Focus { .. }) = self.pressed.get_mut(id)
+            && let Some(KeyOrigin::Focus {
+                unit: pressed,
+                press,
+            }) = self.pressed.get_mut(id)
         {
-            *origin = KeyOrigin::Focus {
-                unit,
-                leaf: leaf.map(Rc::downgrade),
-            };
+            *pressed = unit;
+            press.leaf = leaf.map(Rc::downgrade);
         }
     }
 
-    /// Forget every held key: the window lost activation, and the releases
-    /// will not arrive here.
-    pub(super) fn clear(&mut self) {
-        self.pressed.clear();
+    /// Forget every held key: the window lost activation, or its focus owner
+    /// closed, and the releases will not arrive here. Returns the presses the
+    /// focus walk took, whose paths are owed a cancellation.
+    pub(super) fn forget(&mut self) -> Vec<HeldPress> {
+        self.pressed
+            .drain()
+            .filter_map(|(_, origin)| match origin {
+                KeyOrigin::Focus { press, .. } => Some(press),
+                KeyOrigin::Ime => None,
+            })
+            .collect()
     }
 }
 

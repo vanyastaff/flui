@@ -499,6 +499,12 @@ impl LaidOut {
         self.host.ui_runtime().set_motion_override(preference);
     }
 
+    /// Apply `values` as the host's next system-preference revision; see
+    /// [`HeadlessHost::set_system_preferences`](crate::HeadlessHost::set_system_preferences).
+    pub fn set_system_preferences(&self, values: flui_platform_api::SystemPreferences) {
+        self.host.ui_runtime().set_system_preferences(values);
+    }
+
     /// Close the tree's presentation for `reason`, as the host does once the
     /// close is agreed: its lifecycle observers are told it is detached, its
     /// held input is dropped, and later lifecycle updates are ignored. The

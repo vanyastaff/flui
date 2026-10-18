@@ -215,8 +215,12 @@ key-down или `Ime`. Фильтр стоит **только перед обх�
    **поднятые до внешней единицы обхода**, совпадают; key-up удаляет запись; сироты отбрасываются.
    Поднятие держит удержанный PageDown/End к непостроенной строке (фокус придёт позже из
    `init_state` строки, но единица — тот же список); Enter на строке → редактор — разные единицы,
-   повторы отброшены;
-4. `forget_pressed_keys()` при деактивации окна.
+   повторы отброшены. key-up другой единицы не доходит ни до одного обработчика клавиш (Space,
+   отпущенный после Tab или push, ничего не активирует, перекрытый маршрут его не слышит);
+   вместо этого путь узла, получившего key-down, слышит отмену клавиши
+   (`FocusNode::register_on_key_cancel`, получает тот key-down), и удерживающий потребитель
+   (клавиатурная прокрутка) завершает начатое;
+4. `forget_pressed_keys()` при деактивации окна: та же отмена каждой удерживаемой клавиши обхода.
 
 Запись — до вызова обработчиков, перепривязка — после: паника обработчика оставляет запись
 согласованной (R16).
@@ -263,10 +267,12 @@ pub enum FocusTreeError { /* … */ NotificationInFlight { node: FocusNodeId } }
 pub enum FocusCause { Programmatic, Traversal, Assistive }
 #[non_exhaustive] pub enum EntryTarget { Node(Rc<FocusNode>), Pending, Unit }
 pub type TraversalEntry = Rc<dyn Fn() -> EntryTarget>;
+pub type KeyCancelHandler = Rc<dyn Fn(&KeyEvent)>; // получает key-down отменённой клавиши
 impl FocusNode {
     pub fn request_focus_with(self: &Rc<Self>, cause: FocusCause) -> FocusRequestOutcome;
     pub fn has_visible_focus(&self) -> bool;
     pub fn register_traversal_entry(self: &Rc<Self>, entry: TraversalEntry) -> FocusNodeRegistration;
+    pub fn register_on_key_cancel(self: &Rc<Self>, handler: KeyCancelHandler) -> FocusNodeRegistration;
 }
 impl FocusAttachment { pub fn replace_node(&self, r: &Rc<FocusNode>) -> Result<FocusAttachment, FocusTreeError>; } // (изм.)
 impl FocusManager {
@@ -310,7 +316,8 @@ impl ListView {
 
 Production-вызовы: `request_focus_with` — `Focus` (Assistive), список и `NextFocusAction`
 (Traversal); `note_pointer_input`, `forget_pressed_keys`, `settle_orphaned_focus` — `flui-runtime`;
-`pin` — `ListItemFocus`; `register_traversal_entry` — `ListView`; `on_release` —
+`pin` — `ListItemFocus`; `register_traversal_entry` — `ListView`; `register_on_key_cancel` —
+`Scrollable`, `InteractiveViewer`; `on_release` —
 `DefaultFocusTraversal`; `DefaultFocusRingStyle` — Material `Theme`.
 
 `examples/two_screens/tree.rs`: `.focusable(true).semantics_label("Notes").empty_label("No notes")`,
@@ -342,7 +349,7 @@ Production-вызовы: `request_focus_with` — `Focus` (Assistive), спис�
 | запрос на узел виджета после его `dispose` | `Stale` | фокус прежний, ничего не ждёт |
 | запрос на отсоединённый внешний узел | `Queued` | исполнится при присоединении |
 | `replace_node` из слушателя фокуса | `Err(NotificationInFlight)` | дерево и primary не тронуты, аттачмент возвращён |
-| repeat/key-up другой единицы, сирота, IME-клавиша | в обход не идёт | глобальные обработчики видели |
+| repeat/key-up другой единицы, сирота, IME-клавиша | в обход не идёт | глобальные обработчики видели; key-up другой единицы — отмена на пути key-down |
 | удалён сфокусированный | маркер; одно ребро в шаге разрешения | без `None` |
 | вход: цель не построена | `Pending`, фокус на списке | строка берёт фокус при монтировании |
 | цель ≥ `count` при монтировании | `pending` сброшен | фокус на списке |

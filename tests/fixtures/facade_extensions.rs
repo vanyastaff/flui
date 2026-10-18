@@ -611,8 +611,8 @@ use flui::interaction::{
     ClientToken, Code, DetachOutcome, FocusAttachment, FocusChangeCallback, FocusDetachOutcome,
     FocusManager, FocusNode, FocusNodeChangeCallback, FocusNodeId, FocusNodeRegistration,
     FocusRequestOutcome, FocusScopeNode, FocusTraversalPolicy, FocusTreeError, HitTestEntry,
-    HitTestHandle, HitTestSnapshot, InteractionDispatchError, Key, KeyEvent, KeyEventHandler,
-    KeyEventResult, KeyState, Location, Modifiers, NamedKey, ReadingOrderPolicy, RectProvider,
+    HitTestHandle, HitTestSnapshot, InteractionDispatchError, Key, KeyCancelHandler, KeyEvent,
+    KeyEventHandler, KeyEventResult, KeyState, Location, Modifiers, NamedKey, ReadingOrderPolicy, RectProvider,
     ResolvedStep, TextInputClient, TextInputError, TextInputHandle, TraversalEdgeBehavior,
 };
 
@@ -637,6 +637,7 @@ fn interaction_callback_vocabulary_is_nameable_through_the_facade() {
     nameable::<HitTestEntry>();
     nameable::<HitTestSnapshot>();
     nameable::<InteractionDispatchError>();
+    nameable::<KeyCancelHandler>();
     nameable::<KeyEventHandler>();
     nameable::<KeyEventResult>();
     nameable::<ReadingOrderPolicy>();

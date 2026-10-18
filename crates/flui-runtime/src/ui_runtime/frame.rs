@@ -146,6 +146,13 @@ impl UiRuntime {
                 )
             }));
 
+            // A removal during the segment's one repeat left the focus on a
+            // node that is gone; nothing else may ask for the frame that
+            // moves it.
+            if presentation.focus_manager().has_orphaned_focus() {
+                self.request_redraw_for(presentation);
+            }
+
             // Publish readiness before diagnostics or deferred owner code can
             // query render objects changed by this attempt.
             if matches!(&attempt, Ok(Ok(_))) {

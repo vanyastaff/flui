@@ -2279,6 +2279,66 @@ pub(crate) fn keyboard_scrolls_through_the_channel_as_its_own_sequence() {
     assert_eq!(probe.started(), vec![], "and begins no sequence");
 }
 
+/// A held scroll key whose release cannot reach the scrollable still ends its
+/// sequence: focus moved to another control before the release, or the
+/// window lost activation while the key was down.
+pub(crate) fn a_held_scroll_key_ends_its_sequence_when_its_release_goes_elsewhere() {
+    let down = Key::Named(NamedKey::ArrowDown);
+    let (probe, vsync) = (Probe::new(), Vsync::new());
+    let elsewhere = flui_interaction::focus::FocusNode::with_debug_label("elsewhere");
+    let tree = VsyncScope::new(
+        vsync.clone(),
+        Column::new(vec![
+            SizedBox::new(300.0, 200.0)
+                .child(NestedScroll::new(
+                    probe.connection(),
+                    Scrollable::new()
+                        .autofocus(true)
+                        .child(SizedBox::new(300.0, 1000.0)),
+                ))
+                .boxed(),
+            flui_widgets::interaction::Focus::new(SizedBox::new(40.0, 40.0))
+                .focus_node(Rc::clone(&elsewhere))
+                .boxed(),
+        ]),
+    )
+    .boxed();
+    let mut laid = mounted(tree, vsync);
+    laid.tick();
+    let keys = Keys::of(&laid);
+    let manager = laid.focus_manager();
+    let scrollable = manager.primary_focus().expect("the scrollable has focus");
+
+    assert!(keys.down(Code::ArrowDown, down.clone()), "handled");
+    let held = probe.started()[0];
+    let _ = elsewhere.request_focus();
+    assert!(elsewhere.has_primary_focus());
+    keys.up(Code::ArrowDown, down.clone());
+    settle(&mut laid);
+    assert_eq!(
+        probe.ended(),
+        vec![(held, ScrollEndReason::Released)],
+        "a release after focus moved ends the held key's sequence once"
+    );
+
+    let _ = scrollable.request_focus();
+    assert!(keys.down(Code::ArrowDown, down.clone()));
+    let held = probe.started()[1];
+    manager.forget_pressed_keys();
+    settle(&mut laid);
+    assert!(
+        probe.ended().contains(&(held, ScrollEndReason::Released)),
+        "so does the window losing activation: {:?}",
+        probe.seen()
+    );
+    keys.up(Code::ArrowDown, down);
+    assert_eq!(
+        probe.ended().len(),
+        2,
+        "and the orphan release ends nothing more"
+    );
+}
+
 /// A key a nested scrollable cannot use bubbles to the enclosing one, whose
 /// own sequence the key begins; arrows follow a horizontal axis and its
 /// reading direction (ADR-0209 C6).

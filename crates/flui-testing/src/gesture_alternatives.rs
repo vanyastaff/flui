@@ -7,7 +7,10 @@
 //!
 //! - the gesture itself, from the [`PointerScript`] the check is given, for
 //!   the first command;
-//! - assistive technology's custom action, found by the command's label;
+//! - assistive technology's custom action, found by the command's label, and
+//!   again under reduced motion, both the user's setting and an animator
+//!   duration scale of 0, where it must reach the same end state within two
+//!   frames, without animation;
 //! - each of the command's keys on the running platform, with focus moved
 //!   into the row by Tab;
 //! - one pointer: a [`VisibleControl`](Alternative::VisibleControl) pressed
@@ -36,7 +39,7 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::GestureSettings;
 use flui_platform_api::keyboard::{Code, KeyEvent, KeyState, NamedKey};
 use flui_platform_api::pointer::PointerButton;
-use flui_platform_api::{DeviceId, EventTime, TargetPlatform};
+use flui_platform_api::{DeviceId, EventTime, MotionPreference, SystemPreferences, TargetPlatform};
 use flui_rendering::constraints::BoxConstraints;
 use flui_view::{BoxedView, View, ViewExt};
 use flui_widgets::{Alternative, GestureAlternatives, ShowContextMenuIntent, SingleActivator};
@@ -52,6 +55,10 @@ const HOLD: Duration = Duration::from_millis(1_000);
 const SETTLE: Duration = Duration::from_secs(2);
 /// More Tab presses than any subject has stops before its row.
 const MAX_TABS: usize = 32;
+/// Frames a path has under reduced motion: the action's own and one for a
+/// delivery deferred to the next frame. Reduced motion settles an animation
+/// at its next tick, so anything slower is an animation that kept playing.
+const REDUCED_FRAMES: usize = 2;
 
 /// One mounted copy of the subject: its tree, the alternatives it mounts and
 /// a reading of its model.
@@ -212,6 +219,7 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
                 (None, None) => continue,
             };
             self.require_change(label, &reference, &initial);
+            self.reduced_motion_paths(label, &reference, &initial);
 
             for key in keys {
                 let path = format!("key {key:?}");
@@ -271,6 +279,11 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
             mounted.laid.pump_for(step);
             elapsed += step;
         }
+        Self::outcome(mounted)
+    }
+
+    /// The model and the live-region announcements as they are now.
+    fn outcome(mounted: &Mounted<M>) -> Outcome<M> {
         Outcome {
             model: (mounted.model)(),
             announcements: tree(mounted)
@@ -281,6 +294,40 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
                         .collect()
                 })
                 .unwrap_or_default(),
+        }
+    }
+
+    /// Under reduced motion, from the user's setting or from an animator
+    /// duration scale of 0 (Android's), the custom action reaches the
+    /// reference's end state within [`REDUCED_FRAMES`]: no animation plays
+    /// before the model changes.
+    fn reduced_motion_paths(&mut self, label: &str, reference: &(&str, Outcome<M>), initial: &M) {
+        let sources = [
+            ("reduced motion", MotionPreference::Reduce),
+            (
+                "an animator duration scale of 0",
+                MotionPreference::from_duration_scale(0.0)
+                    .expect("BUG: a zero duration scale is a valid observation"),
+            ),
+        ];
+        for (source, motion) in sources {
+            let path = format!("assistive technology under {source}");
+            let mut mounted = self.mount();
+            mounted
+                .laid
+                .set_system_preferences(SystemPreferences::default().with_motion(motion));
+            mounted.laid.pump();
+            if Self::invoke_custom_action(&mut mounted, label).is_none() {
+                self.failures.push(format!(
+                    "  - {label:?} by {path}: the path could not be driven"
+                ));
+                continue;
+            }
+            for _ in 0..REDUCED_FRAMES {
+                mounted.laid.pump_for(Duration::from_millis(16));
+            }
+            let outcome = Self::outcome(&mounted);
+            self.compare(label, reference, (&path, outcome), initial);
         }
     }
 

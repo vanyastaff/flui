@@ -930,6 +930,51 @@ pub(crate) fn viewer_fling_into_its_boundary_overshoots_and_settles() {
     }
 }
 
+/// An arrow held on the viewer whose release goes elsewhere, because focus
+/// moved meanwhile, still ends the keyboard sequence the press began.
+pub(crate) fn viewer_key_sequence_ends_when_focus_moves_before_the_release() {
+    let (transform, probe, vsync) = (TransformationController::new(), Probe::new(), Vsync::new());
+    let elsewhere = flui_interaction::focus::FocusNode::with_debug_label("elsewhere");
+    let tree = flui_widgets::Column::new(vec![
+        SizedBox::new(300.0, 300.0)
+            .child(NestedScroll::new(
+                probe.connection(),
+                photo(&transform).boundary_margin(EdgeInsets::all(100.0)),
+            ))
+            .boxed(),
+        flui_widgets::interaction::Focus::new(SizedBox::new(40.0, 40.0))
+            .focus_node(Rc::clone(&elsewhere))
+            .boxed(),
+    ]);
+    let mut laid = mounted(VsyncScope::new(vsync.clone(), tree).boxed(), vsync);
+    focus_viewer(&mut laid);
+    let manager = laid.focus_manager();
+    let right = |state| {
+        KeyEvent::new(
+            state,
+            Key::Named(NamedKey::ArrowRight),
+            Code::ArrowRight,
+            EventTime::from_nanos(0),
+        )
+    };
+    assert!(
+        manager
+            .dispatch_key_event(&right(KeyState::Down))
+            .is_handled(),
+        "the arrow pans the focused viewer"
+    );
+    let held = probe.started()[0];
+    let _ = elsewhere.request_focus();
+    assert!(elsewhere.has_primary_focus());
+    let _ = manager.dispatch_key_event(&right(KeyState::Up));
+    settle(&mut laid);
+    assert_eq!(
+        probe.ended(),
+        [(held, ScrollEndReason::Released)],
+        "the release after focus moved ends the sequence, once"
+    );
+}
+
 /// A contact on the viewer gives it the keys: an arrow pans it next,
 /// without moving focus there first.
 pub(crate) fn viewer_contact_gives_it_the_keys() {

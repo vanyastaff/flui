@@ -180,8 +180,8 @@ pub use flui_interaction::focus::{
     FocusDirection, FocusManager, FocusNode, FocusNodeChangeCallback, FocusNodeRegistration,
     FocusRequestOutcome, FocusScopeNode, FocusSubscription, FocusTraversalOverrides,
     FocusTraversalPolicy, FocusTreeError, GlobalKeyRegistration, GlobalKeyRegistrationError,
-    KeyEventHandler, KeyEventResult, ReadingOrderPolicy, RectProvider, ResolvedStep,
-    TraversalDirection, TraversalEdgeBehavior, TraversalEntry,
+    KeyCancelHandler, KeyEventHandler, KeyEventResult, ReadingOrderPolicy, RectProvider,
+    ResolvedStep, TraversalDirection, TraversalEdgeBehavior, TraversalEntry,
 };
 pub use flui_interaction::ids::FocusNodeId;
 pub use flui_interaction::pointer::{

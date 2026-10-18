@@ -14,11 +14,12 @@ use flui_foundation::ListenerId;
 use flui_platform_api::EventTime;
 use flui_platform_api::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
 
+use crate::containment::RoutePanic;
 use crate::focus::focus_scope::{
     FocusCause, FocusNode, FocusScopeNode, KeyEventHandler, KeyEventResult, OrphanMarker,
     TraversalDirection,
 };
-use crate::focus::key_ledger::{self, Admission, InputModality, KeyId, KeyLedger};
+use crate::focus::key_ledger::{self, Admission, HeldPress, InputModality, KeyId, KeyLedger};
 
 /// Callback invoked after primary focus or its focus-tree ancestry changes.
 pub type FocusChangeCallback = Rc<dyn Fn(Option<Rc<FocusNode>>, Option<Rc<FocusNode>>)>;
@@ -307,9 +308,14 @@ impl FocusManager {
 
     /// Forget which keys are held, for when the window loses activation:
     /// their releases go elsewhere, and a key pressed again after
-    /// reactivation starts fresh.
+    /// reactivation starts fresh. The path that heard each held key's press
+    /// is told the key was cancelled ([`FocusNode::register_on_key_cancel`]).
     pub fn forget_pressed_keys(&self) {
-        self.key_ledger.borrow_mut().clear();
+        if self.closed.get() {
+            return;
+        }
+        let presses = self.key_ledger.borrow_mut().forget();
+        self.cancel_presses(presses);
     }
 
     fn set_modality(&self, modality: InputModality) {
@@ -338,6 +344,16 @@ impl FocusManager {
         if orphan.is_none() {
             *orphan = Some(marker);
         }
+    }
+
+    /// Whether a removal left the primary focus on a node that is no longer
+    /// in the tree, for [`Self::settle_orphaned_focus`] to move. A runtime
+    /// that has already settled once in a frame schedules the next frame
+    /// while this holds, so the focus does not stay on the removed node until
+    /// something else asks for one.
+    #[must_use]
+    pub fn has_orphaned_focus(&self) -> bool {
+        self.orphan.borrow().is_some()
     }
 
     /// Move focus off a node that a removal took out of the tree, publishing
@@ -970,12 +986,14 @@ impl FocusManager {
     /// default action available; only `Handled` consumes it.
     ///
     /// Global handlers see every event. The focus walk then sees a key's
-    /// repeats only while the traversal unit that had primary focus at its
-    /// key-down still has it: Enter that opens a page does not repeat into
-    /// the field the page focuses. Its release reaches the walk that heard
-    /// the press, from that node while it is still in this tree, so a keyboard
-    /// scroll the press began still ends when focus moved meanwhile; the node
-    /// focused since never hears it. A key-down that moved focus by
+    /// repeats and release only while the traversal unit that had primary
+    /// focus at its key-down still has it: Enter that opens a page does not
+    /// repeat into the field the page focuses, and Space released after Tab
+    /// moved focus activates nothing. Such a release reaches no key handler;
+    /// instead every node on the path that heard the press, while it is still
+    /// in this tree, is told the key was cancelled
+    /// ([`FocusNode::register_on_key_cancel`]), so a keyboard scroll the
+    /// press began still ends. A key-down that moved focus by
     /// traversal hands its repeats to the new unit, so a held Tab keeps
     /// moving. A key an input method was composing with, its repeats and
     /// release never reach the walk. A first key-down other than a modifier
@@ -1057,15 +1075,12 @@ impl FocusManager {
                 tracing::trace!("key event withheld: its key-down went elsewhere");
                 return KeyEventResult::Ignored;
             }
-            Admission::ReleaseToOrigin(origin) => {
-                // Focus moved while the key was held: the press's own path
-                // hears its release, if that node is still in this tree.
-                return match origin.upgrade() {
-                    Some(origin) if origin.is_attached() && self.owns(&origin) => {
-                        Self::walk_key_event_from(origin, event)
-                    }
-                    _ => KeyEventResult::Ignored,
-                };
+            Admission::Cancelled(press) => {
+                // Focus moved to another unit while the key was held: the
+                // release is no key event here, and the press's path is told
+                // its key was cancelled.
+                self.cancel_presses(std::iter::once(press));
+                return KeyEventResult::Ignored;
             }
             Admission::Press if !pointer && !key_ledger::is_modifier(&event.key) => {
                 self.set_modality(InputModality::Keyboard);
@@ -1093,6 +1108,28 @@ impl FocusManager {
     /// claim while nothing is focused.
     fn key_walk_start(&self) -> Option<Rc<FocusNode>> {
         self.primary_focus().or_else(|| self.unfocused_key_target())
+    }
+
+    /// Tell each press's path, the pressed node first, that its key was
+    /// cancelled, while that node is still in this tree. Every handler runs
+    /// even after one panics; the first panic propagates once all have run.
+    fn cancel_presses(&self, presses: impl IntoIterator<Item = HeldPress>) {
+        let mut first = None;
+        for press in presses {
+            let Some(origin) = press.leaf.as_ref().and_then(Weak::upgrade) else {
+                continue;
+            };
+            if !origin.is_attached() || !self.owns(&origin) {
+                continue;
+            }
+            for node in std::iter::once(Rc::clone(&origin)).chain(origin.ancestors()) {
+                let failure = RoutePanic::capture(|| node.handle_key_cancel(&press.event));
+                RoutePanic::preserve_first(&mut first, failure, "key cancellation");
+            }
+        }
+        if let Some(failure) = first {
+            failure.resume();
+        }
     }
 
     fn walk_key_event(&self, event: &KeyEvent) -> KeyEventResult {
@@ -1218,7 +1255,8 @@ impl FocusManager {
         }
         self.closed.set(true);
         self.orphan.borrow_mut().take();
-        self.key_ledger.borrow_mut().clear();
+        // The nodes are about to retire with their handlers: nothing is told.
+        drop(self.key_ledger.borrow_mut().forget());
         let pending = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
         let previous = self.primary_focus.borrow_mut().take();
         let mut notified = previous.as_ref().map_or_else(Vec::new, |node| {

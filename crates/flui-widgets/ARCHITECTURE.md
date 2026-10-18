@@ -2997,7 +2997,13 @@ handler maps arrows along the axis (line step; orientation and RTL through the r
 direction), PageUp/PageDown and Space/Shift+Space (0.8 viewport, vertical axis), Home and End
 to a target offset, ignores command chords and IME composition, and calls
 `ScrollOwner::key_scroll`: a press mints a keyboard sequence (`ScrollDevice::Keyboard`,
-`UserInput`) that the key's auto-repeats continue and its release ends; a key that cannot move
+`UserInput`) that the key's auto-repeats continue and its release ends. A release the focus
+manager withholds because focus moved to another unit meanwhile, or a window deactivation with
+the key held, reaches the scrollable's node as a key cancellation
+(`FocusNode::register_on_key_cancel`) and ends the sequence the same way; `InteractiveViewer`
+registers the same on its key node
+(`a_held_scroll_key_ends_its_sequence_when_its_release_goes_elsewhere`,
+`viewer_key_sequence_ends_when_focus_moves_before_the_release`). A key that cannot move
 the scrollable returns `Ignored`, so it bubbles to the enclosing scrollable's own sequence.
 
 `PageView` is a `Scrollable` with a `PageSnap` policy and nothing of its own below it. With a

@@ -6,17 +6,21 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
+use flui_foundation::geometry::Offset;
 use flui_painting::Alignment;
 use flui_platform_api::TargetPlatform;
 use flui_platform_api::keyboard::{Key, Modifiers, NamedKey};
+use flui_platform_api::pointer::PointerButton;
+use flui_testing::MouseScript;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};
 use flui_widgets::interaction::{Actions, ActivateIntent, CallbackAction, Focus};
 use flui_widgets::navigator::{Navigator, NavigatorHandle, PageRoute, PopupRoute, RouteAnimation};
 use flui_widgets::{Align, AnimatedBuilder, Column, SizedBox};
 
-use super::{chord, press, tab};
+use super::{chord, down, press, tab, up};
 use crate::common::harness::{Harness, mount};
+use crate::common::{lay_out, tight};
 
 const FRAME: Duration = Duration::from_millis(50);
 
@@ -338,6 +342,20 @@ pub(crate) fn keys_during_transition_reach_only_the_top_route() {
         (2, 1),
         "the cancelled page does not take the key"
     );
+
+    // Space held on the page while a push moves the focus into the popup:
+    // its release activates neither the covered page nor the popup.
+    let space = Key::character(" ");
+    let _ = down(&manager, &space);
+    drop(navigator.push(dialog("dialog", &popup_count)));
+    harness.pump_for(FRAME);
+    assert_eq!(focused(&harness).as_deref(), Some("dialog"));
+    up(&manager, &space);
+    assert_eq!(
+        (home_count.get(), popup_count.get()),
+        (2, 1),
+        "a release whose press the covered page took activates nothing"
+    );
 }
 
 /// Back pops the current page and nothing at the bottom of the stack;
@@ -383,6 +401,39 @@ pub(crate) fn back_keys_pop_only_the_current_page() {
         navigator.route_ids().len(),
         1,
         "BrowserBack pops a popup too"
+    );
+
+    // The mouse's back button (XButton1), through the runtime's pointer
+    // input, pops the current page and nothing at the bottom of the stack.
+    let navigator = NavigatorHandle::new();
+    let counted = Rc::clone(&counts);
+    navigator.seed_initial(PageRoute::<i32>::new(move |_, _, _| {
+        control("home", &counted)
+    }));
+    let mut laid = lay_out(Navigator::new(navigator.clone()), tight(800.0, 600.0));
+    let back_button = || {
+        MouseScript::new("back button")
+            .press_button(Offset::new(10.0, 10.0), PointerButton::BACK)
+            .release()
+            .build()
+            .expect("the back button is released")
+    };
+    drop(navigator.push(page("detail", &counts)));
+    laid.pump_for(Duration::from_millis(500));
+    assert_eq!(navigator.route_ids().len(), 2);
+    laid.replay(&back_button());
+    laid.pump_for(Duration::from_millis(500));
+    assert_eq!(
+        navigator.route_ids().len(),
+        1,
+        "the back button popped the page"
+    );
+    laid.replay(&back_button());
+    laid.pump_for(Duration::from_millis(500));
+    assert_eq!(
+        navigator.route_ids().len(),
+        1,
+        "and does nothing at the bottom of the stack"
     );
 }
 

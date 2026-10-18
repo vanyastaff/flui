@@ -72,7 +72,7 @@
 |---|---|---|---|---|
 | T17 | `RawGestureDetector` (фабрика, `update(&config)`), поверхность SDK, нестандартный распознаватель с пересборкой посреди жеста, шаблон-чеклист | W2, E1–E3, E5 | T14 | merged |
 | T18 | `AxisLock`, `TransformLock`, `SwipeGestureRecognizer`, поворот как Scale, hold на Down как правило арены, замирание hover | G7–G10, ADR-0208 | T14 | merged |
-| T19 | `GestureAlternatives`, `assert_gesture_alternatives`, клавиши как `Shortcuts` платформы, локализация с параметрами, диагностика без `Intent` | A1–A5, A9, ADR-0216 | T17; semantics `semantics/custom-action-ids` (слит); FK3, FK6, FK8, FK10r | merged |
+| T19 | `GestureAlternatives`, `assert_gesture_alternatives`, клавиши как `Shortcuts` платформы, локализация с параметрами, диагностика без `Intent` | A1–A5, A9, ADR-0216 | T17; semantics `semantics/custom-action-ids` (слит); FK3, FK6, FK8, FK10r | merged; из A5 слиты параметризованные метки (`context_menu_button_label`, `page_label` — позиция и число страниц `PageView`), объявление позиции после перемещения — в T33 |
 
 ## Ярус 6
 
@@ -101,7 +101,7 @@
 | T30 | DnD: spring-loading, автопрокрутка, несколько сессий, drop последней принявшей цели | D3, D4 | T28 | merged |
 | T31 | `Dismissible` на `AnchoredDrag`, `SwipeActions`, системные края | W4 | T27, T09, T19, T32 | merged |
 | T32 | `ContextMenuArea` на `Sequenced` | W7 | T14, T19 | merged |
-| T33 | `ReorderableList`, `ReorderableGrid` как DnD-сессия, keep-alive, A8 | W5, A8 | T29, T30; focus-keyboard T4, T11 | todo |
+| T33 | `ReorderableList`, `ReorderableGrid` как DnD-сессия, keep-alive, A8; объявление новой позиции после перемещения — метод `WidgetsLocalizations` с параметрами (элемент, позиция, число), добавляется здесь вместе с его единственным производителем | W5, A8, A5 (объявление позиции) | T29, T30; focus-keyboard T4, T11 | todo |
 | T34 | `SelectionArea` (указатель, клавиатура, AT, ручки на `Sequenced`, `TapAndDrag`) | W8, S17, ADR-0214 | T17, T19, T14; поправка ADR-0204 (T01); спека text-ime | todo |
 | T35 | Несколько окон и рантаймов: DnD между окнами, захват при drag над другим окном | Q2, D2 | T28 | merged |
 

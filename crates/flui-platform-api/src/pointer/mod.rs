@@ -247,9 +247,10 @@ pub enum PointerKind {
     /// A trackpad gesture ([`PanZoomEvent`]). A trackpad that moves the cursor reports as
     /// [`Mouse`](Self::Mouse).
     Trackpad,
-    /// A pointer with no physical contact: a gamepad-driven cursor, UI automation, a future
-    /// XR ray. Which one is the event's [`DeviceId`] ([`PointerInfo::device`]), so the kind
-    /// carries no fields of its own.
+    /// A pointer with no physical contact: a gamepad-driven cursor, a dwell or switch device
+    /// driving a pointer of its own, UI automation, a future XR ray. Which one is the event's
+    /// [`DeviceId`] ([`PointerInfo::device`]), so the kind carries no fields of its own: routing
+    /// treats every contactless pointer alike (ADR-0216 §3).
     Virtual,
     /// The platform did not say.
     Unknown,

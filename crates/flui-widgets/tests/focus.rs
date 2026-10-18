@@ -502,7 +502,8 @@ pub(crate) fn removing_every_field_releases_focus() {
 }
 
 /// The successor's focus callback writes state; the frame that removed the
-/// focused field rebuilds that state's reader before it paints.
+/// focused field rebuilds that state's reader before it paints, once: when
+/// that rebuild removes the successor too, the next frame moves focus on.
 pub(crate) fn the_successor_rebuilds_in_the_frame_that_moved_focus() {
     use crate::common::{ProbeSignals, SignalProbe};
     use std::cell::Cell;
@@ -537,6 +538,57 @@ pub(crate) fn the_successor_rebuilds_in_the_frame_that_moved_focus() {
         probe.reads(),
         [0, 0, 1],
         "one frame: the removal's build, then the successor's rebuild"
+    );
+
+    // The successor's rebuild removes the successor itself: the frame has had
+    // its one repeat, so focus leaves it only in the next frame.
+    let label = |node: Option<Rc<FocusNode>>| node.and_then(|n| n.debug_label().map(String::from));
+    let (show_a, show_b) = (Rc::new(Cell::new(true)), Rc::new(Cell::new(true)));
+    let (shown_a, shown_b) = (Rc::clone(&show_a), Rc::clone(&show_b));
+    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        let mut fields = Vec::new();
+        if shown_a.get() {
+            fields.push(Field::new("a").into_view().boxed());
+        }
+        if shown_b.get() {
+            let mut second = Field::new("b");
+            let hide = Rc::clone(&shown_b);
+            second.on_focus_change = Some(Rc::new(move |cx, focused| {
+                if focused && hide.replace(false) {
+                    count
+                        .set(cx, 1)
+                        .expect("the focus edge may write the probe signal");
+                }
+            }));
+            fields.push(second.into_view().boxed());
+        }
+        fields.push(Field::new("c").into_view().boxed());
+        flui_widgets::Column::new(fields)
+    });
+    let mut harness = mount(probe.view());
+    let manager = harness.focus_manager();
+    assert!(manager.focus_next());
+    assert_eq!(label(manager.primary_focus()).as_deref(), Some("a"));
+    let edges = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = Rc::clone(&edges);
+    let _listener = manager.add_listener(Rc::new(move |old, new| {
+        seen.borrow_mut().push((label(old), label(new)));
+    }));
+    let pair = |old: &str, new: &str| (Some(old.to_owned()), Some(new.to_owned()));
+
+    show_a.set(false);
+    harness.swap_root(probe.view());
+    assert!(!show_b.get(), "the successor's focus callback removed it");
+    assert_eq!(
+        *edges.borrow(),
+        [pair("a", "b")],
+        "the frame repeats once: the successor's own removal waits"
+    );
+    harness.tick();
+    assert_eq!(
+        *edges.borrow(),
+        [pair("a", "b"), pair("b", "c")],
+        "the next frame moves focus on"
     );
 }
 
