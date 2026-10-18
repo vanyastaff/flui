@@ -178,12 +178,12 @@ link gets `preferredFramesPerSecond` instead. The platform reads
 `NSProcessInfo.operatingSystemVersion` once into a value it owns (no `static`),
 and the range call takes a `Since<FrameRateRangeProperty>` proof that only the
 version check makes, so it cannot be written without the check. The 60 Hz
-floor and the 5% band are choices to confirm on a device; this host has none.
+floor and the 5% band are choices to confirm on a device; no Apple code runs in CI.
 macOS has no version-gated call here, so it reads no version.
 
 The rules (UUID keying, screen ledger, version proof, frame-rate request, band)
 are plain functions in `shared/` so Linux CI runs them; the UIKit and AppKit
-glue around them is only type-checked on this host.
+glue around them is only type-checked: no Apple code runs in CI.
 
 ### Native text sizing captures conversion inputs on the owner lane
 

@@ -158,7 +158,7 @@ objc2-foundation = { workspace = true, features = [
     "block2",
 ] }
 # The screen-parameters observer is a block handed to `NSNotificationCenter`.
-block2 = "0.6.2"
+block2.workspace = true
 # `CGDisplayCreateUUIDFromDisplayID` returns a `CFUUID`, whose 16 bytes are the
 # display key. The version `core-graphics` 0.25 already uses.
 core-foundation = { workspace = true }
@@ -351,7 +351,7 @@ objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
     "CAMetalLayer",
     "objc2-core-foundation",
 ] }
-block2 = "0.6.2"
+block2.workspace = true
 dispatch2 = "0.3.1"
 
 # UIA bridge for Windows, same `a11y` feature. Version cohort must match the
@@ -471,7 +471,7 @@ all-features = true
 
 # Exercise the exact asynchronous UIKit error block on an Apple host.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
-block2 = "0.6.2"
+block2.workspace = true
 
 # Layer 3, not the substrate's 2: its `flui-semantics` edge (the
 # `PlatformAccessibility` trait, ADR-0082 §2) points at layer 3. Only
