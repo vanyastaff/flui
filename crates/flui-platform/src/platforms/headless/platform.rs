@@ -874,6 +874,8 @@ struct MockWindowState {
     /// the oracle for "the frame pump arms the compositor frame callback
     /// once per presented frame, before the present".
     pre_present_notifies: u64,
+    /// Every [`PlatformWindow::set_frame_rate_hint`] the window received, in order.
+    frame_rate_hints: Vec<flui_platform_api::FrameRateHint>,
     title: String,
     bounds: Bounds<f64>,
     scale_factor: f64,
@@ -897,6 +899,7 @@ impl Clone for MockWindowState {
     fn clone(&self) -> Self {
         Self {
             pre_present_notifies: self.pre_present_notifies,
+            frame_rate_hints: self.frame_rate_hints.clone(),
             title: self.title.clone(),
             bounds: self.bounds,
             scale_factor: self.scale_factor,
@@ -929,6 +932,7 @@ impl MockWindow {
             id,
             state: Arc::new(Mutex::new(MockWindowState {
                 pre_present_notifies: 0,
+                frame_rate_hints: Vec::new(),
                 title: options.title.clone(),
                 bounds: Bounds {
                     origin: Point::default(),
@@ -1132,6 +1136,12 @@ impl MockWindow {
     #[must_use]
     pub fn pre_present_notifies(&self) -> u64 {
         self.state.lock().pre_present_notifies
+    }
+
+    /// Every frame-rate hint the window was given, oldest first.
+    #[must_use]
+    pub fn frame_rate_hints(&self) -> Vec<flui_platform_api::FrameRateHint> {
+        self.state.lock().frame_rate_hints.clone()
     }
 
     /// Inject a platform input event for testing.
@@ -1405,6 +1415,10 @@ impl PlatformWindow for MockWindow {
 
     fn display_id(&self) -> Option<DisplayId> {
         self.state.lock().display
+    }
+
+    fn set_frame_rate_hint(&self, hint: flui_platform_api::FrameRateHint) {
+        self.state.lock().frame_rate_hints.push(hint);
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {

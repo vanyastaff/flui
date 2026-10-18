@@ -120,7 +120,8 @@ pub use cursor_icon::CursorIcon;
 pub use data_transfer::{DataTransferOffer, DataTransferSource, NullDataTransferSource};
 pub use display::{
     DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision,
-    DisplayRevisionExhausted, DisplaySnapshot, InvalidRefreshPeriod, RefreshPeriod, WindowDisplay,
+    DisplayRevisionExhausted, DisplaySnapshot, FrameRateHint, InvalidRefreshPeriod, RefreshPeriod,
+    WindowDisplay,
 };
 pub use event_time::EventTime;
 pub use haptic_feedback::HapticFeedback;

@@ -617,6 +617,22 @@ pub trait PlatformWindow: Send + Sync {
         let _ = callback;
     }
 
+    /// Tell the system which refresh rate this window wants from its display.
+    ///
+    /// [`FrameRateHint::High`] asks for the display's highest rate while the
+    /// window animates or is touched; [`FrameRateHint::Default`] withdraws the
+    /// request and leaves the choice to the system. It is a request, not a
+    /// command: the system may keep any rate. A native surface carries the
+    /// request, so a host sends the current hint again after the surface was
+    /// replaced. A backend without such a request, or one running on an
+    /// operating system version that lacks it, ignores the hint; that is the
+    /// default.
+    ///
+    /// Called on the owner thread.
+    fn set_frame_rate_hint(&self, hint: crate::FrameRateHint) {
+        let _ = hint;
+    }
+
     /// Register a callback for the GPU surface's availability.
     ///
     /// Called with `false` when the surface behind this window is about to
