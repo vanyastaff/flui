@@ -1075,6 +1075,11 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn display_id(&self) -> Option<flui_platform_api::DisplayId> {
+        // A destroyed or recycled `HWND` names another window's monitor: refuse
+        // it with the identity probe `window_handle` uses.
+        if !handle_available(super::platform::teardown_route(self.hwnd, self.context)) {
+            return None;
+        }
         self.displays.display_of_window(self.hwnd)
     }
 

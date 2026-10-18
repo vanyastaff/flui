@@ -55,20 +55,28 @@ pub(crate) fn resolve_display(
     mint(&monitor.key)
 }
 
-/// Remembers which monitor handle missed in which snapshot revision, so a
-/// window on a monitor the snapshot omits asks for one fresh sample per
-/// revision rather than one per owner wake.
+/// Remembers which monitor handles missed in the current snapshot revision, so
+/// windows on monitors the snapshot omits ask for one fresh sample per handle
+/// and revision rather than one per owner wake, however many such monitors
+/// there are.
 #[derive(Debug, Default)]
 pub(crate) struct MissLedger {
-    last: Option<(isize, u64)>,
+    revision: u64,
+    missed: Vec<isize>,
 }
 
 impl MissLedger {
     /// Whether this miss is the first of `nearest` in snapshot `revision`.
     pub(crate) fn first_miss(&mut self, nearest: isize, revision: u64) -> bool {
-        let first = self.last != Some((nearest, revision));
-        self.last = Some((nearest, revision));
-        first
+        if revision != self.revision {
+            self.revision = revision;
+            self.missed.clear();
+        }
+        if self.missed.contains(&nearest) {
+            return false;
+        }
+        self.missed.push(nearest);
+        true
     }
 }
 
@@ -181,6 +189,11 @@ mod tests {
         assert!(ledger.first_miss(0x9, 3));
         assert!(!ledger.first_miss(0x9, 3), "the same miss asked again");
         assert!(ledger.first_miss(0xa, 3), "another monitor missed");
+        assert!(
+            !ledger.first_miss(0x9, 3),
+            "alternating misses in one revision are each asked once"
+        );
+        assert!(!ledger.first_miss(0xa, 3));
         assert!(ledger.first_miss(0x9, 4), "a new revision may be retried");
     }
     #[test]
