@@ -47,10 +47,6 @@ windows = { workspace = true, features = [
 # Authoritative source for the generated owned key vocabulary.
 keyboard-types.workspace = true
 
-# `host_lock`'s tests create a named semaphore, the jobserver Windows hosts use.
-[target.'cfg(windows)'.dev-dependencies]
-windows = { workspace = true, features = ["Win32_Security", "Win32_System_Threading"] }
-
 [lints]
 workspace = true
 

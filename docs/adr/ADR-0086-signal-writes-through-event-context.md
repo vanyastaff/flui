@@ -357,7 +357,7 @@ compile-time claim of this record is limited to writes into `Signal<T>`.
 
 ### 8. Order and rollback
 
-The changes land one at a time, each with `cargo xtask check-changed` green:
+The changes land one at a time, each with the pre-PR checks (AGENTS.md, "Checking a change") green:
 
 1. ADR-0085 §1 (UI runtime routing of `UiCommand::SignalWrite`), with its failing multi-presentation
    test. It does not depend on anything else here.
@@ -530,4 +530,4 @@ Marked **(exists)** where the item is in the repository.
 - `bound_local_state_refuses_build_mutation_then_recovers` covers bound local-state mutation refusal through the public writer-source family.
 - ADR-0085's multi-presentation routing test, now written through `WriterSource`.
 - The completed §6 table, reproduced by its grep command, in the change that alters setter
-  signatures; `flui migrate` applied to `examples/` with `cargo xtask check-changed` green.
+  signatures; `flui migrate` applied to `examples/` with the pre-PR checks green.

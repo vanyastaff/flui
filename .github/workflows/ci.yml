@@ -219,7 +219,7 @@ jobs:
   #   schedule, workflow_dispatch      extended
   #   push, merge_group                full
   #   pull_request, otherwise, by the change (the classification
-  #   `cargo xtask check-changed` uses):
+  #   `cargo xtask affected` prints):
   #     docs      only documentation changed
   #     tooling   only repo tooling, or a standalone crate (own [workspace],
   #               no member depends on it): `checks` and `standalone` cover it
@@ -227,8 +227,7 @@ jobs:
   #               whether the change was a set of packages (`packages`) or a
   #               workspace-wide input (`full`: Cargo.lock, root Cargo.toml,
   #               .cargo/, the toolchain, a workflow, the lane code)
-  # Local check-changed also uses discovered native scope. The
-  # docs-only allowlist and the triggers live in
+  # The docs-only allowlist and the triggers live in
   # tools/xtask/src/change_scope/, once; `cargo xtask checks` proves no
   # compiled include_str!() target falls inside it.
   #

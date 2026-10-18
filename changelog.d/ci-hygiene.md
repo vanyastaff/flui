@@ -7,5 +7,5 @@
 ### Changed
 
 - CI: every pull request that compiles runs the wide lane (every Linux job over the whole
-  workspace, in parallel); the scoped `fast` lane is gone, and `cargo xtask check-changed` keeps
-  the scoped check locally. `miri`, `macos-ci` and `test-windows` now block.
+  workspace, in parallel); the scoped `fast` lane is gone. `miri`, `macos-ci` and `test-windows`
+  now block.

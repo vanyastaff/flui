@@ -120,8 +120,10 @@ for the harness API.
 ## The gates a change must pass
 
 ```bash
-cargo xtask check-changed   # before a PR: this crate and its dependents
-cargo xtask ci              # the full local gate
+cargo fmt --all                                         # before a PR, one at a time:
+cargo clippy -p flui-engine --all-targets -- -D warnings
+cargo nextest run -p flui-engine
+cargo xtask ci                                          # reproduce CI locally
 ```
 
 For a change confined to this crate, the parts that matter most:
