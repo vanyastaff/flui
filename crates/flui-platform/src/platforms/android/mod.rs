@@ -265,6 +265,9 @@ impl AndroidPlatform {
                 }
                 java_view::ViewEvent::EditorAction { action, uptime_ms } => {
                     if let Some(window) = &window {
+                        if let Some(input) = window.text_input() {
+                            input.editor_action();
+                        }
                         let (key, shift) = crate::shared::android_ime::editor_action_key(action);
                         for input in input::editor_action_keys(key, shift, uptime_ms) {
                             window.callbacks().dispatch_input(input);

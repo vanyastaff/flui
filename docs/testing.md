@@ -1085,6 +1085,25 @@ cargo xtask device android-input            # record, hold against the goldens, 
 cargo xtask device android-input --bless    # replace the goldens with this run's recordings
 ```
 
+`android-gallery` is `windows-gallery`'s counterpart on the same device: it
+builds `examples/interaction_gallery`'s library with its `agent` feature,
+packages and installs it, and drives every screen with the phone's own input:
+touches from a virtual multi-touch screen the `uinput` command registers
+(written report by report as they fall due, since a `delay` read from its
+standard input does not hold the reports back), `input stylus` and
+`input mouse` events, hardware key events and the device's soft keyboard.
+FLUI publishes no Android accessibility tree, so each outcome is read from the
+gallery's development agent (ADR-0095 §3) over its socket, reached as the
+application's user (`run-as … nc -U`), and from `screencap` pixels where the
+right and the wrong outcome differ. The gallery is uninstalled at the end;
+`FLUI_GALLERY_KEEP=1` leaves it installed, and `FLUI_GALLERY_CHECKS=<text>`
+runs the checks whose name contains `<text>`:
+
+```bash
+cargo xtask device android-gallery
+FLUI_GALLERY_CHECKS=cards: cargo xtask device android-gallery
+```
+
 ## CI Expectations
 
 CI runs the same local gates plus repository-wide source checks. Every job is

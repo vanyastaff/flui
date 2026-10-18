@@ -139,14 +139,14 @@ pub struct AppConfig {
     /// [`Self::with_dev_agent`] (ADR-0095 §3).
     ///
     /// `None` (the default): no agent is served, and no devtools crate is in
-    /// the application's graph. `Some`: the desktop and iOS runners attach
+    /// the application's graph. `Some`: the desktop, iOS and Android runners attach
     /// the hook once per event loop and hand it each window that mounts a
     /// root view once the window is installed; a window with no content, and
     /// a presentation opened into another window's UI runtime, are not handed
     /// over. Every window opened with a clone of this configuration shares
     /// the one hook, so a secondary window is served only when opened with
-    /// the application's configuration. The Android and web runners drive no
-    /// hook, and log so at start.
+    /// the application's configuration. The web runner drives no hook, and
+    /// logs so at start.
     pub dev_agent: Option<DevAgent>,
 
     /// Governs when the platform loop exits once every hosted window has

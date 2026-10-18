@@ -2174,6 +2174,7 @@ version = "0.2.0-dev"
 dependencies = [
  "console_error_panic_hook",
  "flui",
+ "flui-devtools",
  "wasm-bindgen",
 ]
 

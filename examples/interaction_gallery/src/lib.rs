@@ -8,8 +8,9 @@
 //!
 //! Every screen shows a readout of what its last interaction did, and every
 //! control publishes a name for assistive technology, so a person, a screen
-//! reader and an automation client (`cargo xtask device windows-gallery`)
-//! all read the same outcome. Each gesture also has its keyboard and
+//! reader and an automation client (`cargo xtask device windows-gallery`,
+//! and `android-gallery` through the development agent) all read the same
+//! outcome. Each gesture also has its keyboard and
 //! assistive path, which the widgets require through
 //! [`GestureAlternatives`](flui::widgets::GestureAlternatives).
 
@@ -29,7 +30,11 @@ pub struct Gallery;
 
 impl StatelessView for Gallery {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        WidgetsApp::new(shell::Shell).text_style(style::body_style())
+        // On a phone the window runs under the status and navigation bars:
+        // the shell keeps clear of them, and the strip behind them is the
+        // tab strip's colour.
+        WidgetsApp::new(ColoredBox::new(style::SURFACE).child(SafeArea::new().child(shell::Shell)))
+            .text_style(style::body_style())
     }
 }
 
@@ -52,7 +57,31 @@ pub fn config() -> AppConfig {
 )]
 #[unsafe(no_mangle)]
 extern "Rust" fn android_main(app: flui::android_activity::AndroidApp) {
-    flui::run_app_android(app, Gallery);
+    let config = AppConfig::new().with_title("FLUI interaction gallery");
+    #[cfg(feature = "agent")]
+    let config = with_agent(config, &app);
+    flui::run_app_android_with_config(app, Gallery, config);
+}
+
+/// The development agent, served at `files/agent/agent.sock` to a client
+/// presenting the token in `files/agent/token`. The driver creates the
+/// directory (owner-only, as the endpoint requires) and writes the token as
+/// the application's own user (`run-as`) before it launches the gallery, and
+/// reaches the socket the same way; without a token the server stays inert.
+#[cfg(all(target_os = "android", feature = "agent"))]
+fn with_agent(config: AppConfig, app: &flui::android_activity::AndroidApp) -> AppConfig {
+    use flui_devtools::agent::{AgentEndpoint, AgentServer};
+
+    let Some(directory) = app.internal_data_path().map(|files| files.join("agent")) else {
+        return config;
+    };
+    let token = std::fs::read_to_string(directory.join("token")).unwrap_or_default();
+    let socket = directory.join("agent.sock");
+    let _ = std::fs::remove_file(&socket);
+    config.with_dev_agent(AgentServer::new(AgentEndpoint::new(
+        socket.to_string_lossy(),
+        token.trim(),
+    )))
 }
 
 /// The browser's entry point: a panic reads as a console error rather than

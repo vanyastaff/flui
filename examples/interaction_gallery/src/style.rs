@@ -6,6 +6,10 @@ use flui::painting::styling::{BorderRadius, BorderRadiusExt, BoxDecoration};
 use flui::painting::typography::{FontWeight, TextStyle};
 use flui::prelude::*;
 
+/// Below this width a screen's content is a phone's: what sits side by side
+/// on a desktop stacks.
+pub(crate) const COMPACT: f64 = 560.0;
+
 /// The page behind every screen.
 pub(crate) const BACKGROUND: Color = Color::rgb(244, 245, 248);
 /// Cards, rows and the sidebar.

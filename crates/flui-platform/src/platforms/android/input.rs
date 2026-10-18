@@ -327,12 +327,20 @@ pub fn convert_key_event(
     // Keycode implements Into<u32> via num_enum::IntoPrimitive
     let keycode_i32 = i32::try_from(u32::from(event.key_code())).ok()?;
     let code = ui_events::keyboard::android::keycode_to_code(keycode_i32);
-    let named_key = ui_events::keyboard::android::keycode_to_named_key(keycode_i32);
+    let named_key = match ui_events::keyboard::android::keycode_to_named_key(keycode_i32) {
+        NamedKey::Unidentified => crate::shared::android_keys::unnamed_key(keycode_i32)
+            .and_then(|named| named.as_str().parse().ok())
+            .unwrap_or(NamedKey::Unidentified),
+        named => named,
+    };
     let location = ui_events::keyboard::android::keycode_to_location(keycode_i32);
 
     let mapped = if named_key == NamedKey::Unidentified {
+        let lookup = android_activity::input::MetaState(
+            crate::shared::android_keys::character_meta_state(event.meta_state().0),
+        );
         app.device_key_character_map(event.device_id())
-            .and_then(|map| map.get(event.key_code(), event.meta_state()))
+            .and_then(|map| map.get(event.key_code(), lookup))
             .ok()
     } else {
         None

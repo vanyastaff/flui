@@ -2,7 +2,7 @@
 //! Ctrl+X on a focused card and Ctrl+V on a focused column move it by
 //! keyboard, and the Cut and Paste buttons with one pointer.
 
-use flui::interaction::drag::{DragItem, TransferActions};
+use flui::interaction::drag::{DragItem, DragTrigger, TransferActions};
 use flui::prelude::*;
 use flui::widgets::{CommandAppearance, DragCommands, DropCommands, DropHover, column};
 
@@ -79,12 +79,51 @@ impl ViewState<CardsScreen> for CardsState {
             count(Lane::Todo),
             count(Lane::Done)
         );
-        let board = Row::new(vec![
-            Expanded::new(lane(Lane::Todo, &cards, self.cards, self.last)).boxed(),
-            SizedBox::width(16.0).boxed(),
-            Expanded::new(lane(Lane::Done, &cards, self.cards, self.last)).boxed(),
-        ])
-        .cross_axis_alignment(CrossAxisAlignment::Stretch);
+        let (model, last) = (self.cards, self.last);
+        // Each column carries its Paste control beside it and each card its
+        // Cut control, so on a phone the columns stack and scroll rather than
+        // squeeze their cards to a sliver side by side; there a drag scrolls,
+        // so a card is picked up by a long press.
+        let board = LayoutBuilder::new(move |_ctx, constraints| {
+            if constraints.max_width < style::COMPACT {
+                Scrollable::new()
+                    .child(
+                        Column::new(vec![
+                            lane(Lane::Todo, &cards, model, last, DragTrigger::LongPress)
+                                .into_view()
+                                .boxed(),
+                            SizedBox::height(16.0).boxed(),
+                            lane(Lane::Done, &cards, model, last, DragTrigger::LongPress)
+                                .into_view()
+                                .boxed(),
+                        ])
+                        .cross_axis_alignment(CrossAxisAlignment::Stretch),
+                    )
+                    .boxed()
+            } else {
+                Row::new(vec![
+                    Expanded::new(lane(
+                        Lane::Todo,
+                        &cards,
+                        model,
+                        last,
+                        DragTrigger::Immediate,
+                    ))
+                    .boxed(),
+                    SizedBox::width(16.0).boxed(),
+                    Expanded::new(lane(
+                        Lane::Done,
+                        &cards,
+                        model,
+                        last,
+                        DragTrigger::Immediate,
+                    ))
+                    .boxed(),
+                ])
+                .cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .boxed()
+            }
+        });
         page(
             "Drag and drop",
             "Drag a card onto the other column. With a card focused, Ctrl+X cuts it; with a \
@@ -102,6 +141,7 @@ fn lane(
     cards: &[Card],
     model: Signal<Vec<Card>>,
     last: Signal<Option<(&'static str, Lane)>>,
+    trigger: DragTrigger,
 ) -> impl IntoView {
     let here: Vec<Card> = cards
         .iter()
@@ -124,7 +164,7 @@ fn lane(
                 SizedBox::height(12.0).boxed(),
             ];
             for card in &here {
-                children.push(Keyed::new(card.id, card_view(card)).boxed());
+                children.push(Keyed::new(card.id, card_view(card, trigger)).boxed());
                 children.push(SizedBox::height(10.0).boxed());
             }
             Container::new()
@@ -157,7 +197,7 @@ fn lane(
     })
 }
 
-fn card_view(card: &Card) -> impl IntoView {
+fn card_view(card: &Card, trigger: DragTrigger) -> impl IntoView {
     let id = card.id;
     let title = card.title;
     let face = move || {
@@ -183,6 +223,7 @@ fn card_view(card: &Card) -> impl IntoView {
     )
     .expect("BUG: a card's cut command is labelled by its title")
     .target(title)
+    .trigger(trigger)
     .feedback(move || {
         Opacity::new(0.85)
             .child(SizedBox::width(240.0).child(face()))

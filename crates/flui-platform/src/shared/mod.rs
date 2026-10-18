@@ -23,6 +23,7 @@ pub mod android_motion;
 // `hwnd_affinity` below (consumer: the Android backend's `FluiView`).
 pub mod android_drag;
 pub mod android_ime;
+pub mod android_keys;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_scroll;
 #[cfg(any(target_os = "android", test))]

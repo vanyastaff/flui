@@ -7,13 +7,14 @@
 //! hook's containment is the runtime's (`flui_runtime::dev_agent`), shared
 //! with `flui-testing`'s headless host.
 //!
-//! - desktop and iOS: the loop attaches the hook when it starts and detaches
-//!   it when it ends; each window that mounts a root view is handed over once
-//!   its UI runtime is installed. The window's agent is vended while the UI runtime is
-//!   still the runner's, so an installation that fails drops the agent with
-//!   the UI runtime and the hook never sees a half-installed window.
-//! - Android and web: no call; the runner logs once, at start, that an
-//!   installed hook is not driven there.
+//! - desktop, iOS and Android: the loop attaches the hook when it starts and
+//!   detaches it when it ends; each window that mounts a root view is handed
+//!   over once its UI runtime is installed. The window's agent is vended while
+//!   the UI runtime is still the runner's, so an installation that fails drops
+//!   the agent with the UI runtime and the hook never sees a half-installed
+//!   window.
+//! - web: no call; the runner logs once, at start, that an installed hook is
+//!   not driven there.
 
 use std::fmt;
 
@@ -40,7 +41,7 @@ impl fmt::Debug for DevAgent {
     }
 }
 
-#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 mod driven {
     use flui_foundation::PresentationId;
     use flui_runtime::dev_agent::DevAgentAttachment;
@@ -75,7 +76,7 @@ mod driven {
 }
 
 /// Logs, once per runner start, that this host drives no agent hook.
-#[cfg(any(target_os = "android", target_arch = "wasm32"))]
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn log_undriven(config: &crate::AppConfig, host: &'static str) {
     if config.dev_agent.is_some() {
         tracing::info!(

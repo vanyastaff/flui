@@ -306,6 +306,57 @@ fn a_lifted_pen_hovers_on_its_identity_until_it_leaves() {
     );
 }
 
+/// Android's `input` injector reports its mouse and its pen on one device
+/// and pointer id: a hovering mouse whose label comes back as a pen leaves,
+/// and the pen's press starts its own contact rather than being refused. A
+/// mouse holding a press is mid-sequence, so the same relabel stays refused
+/// and ends the press as invalid input.
+fn a_hovering_mouse_relabelled_as_a_pen_leaves_before_the_pen_starts() {
+    let mut contacts = registry();
+    let pen = PointerKind::Pen {
+        tool: flui_platform_api::pointer::PenTool::Tip,
+    };
+    let mut events = Vec::new();
+    events.extend(decode(&mut contacts, &mouse(ReadingAction::Move, 1)).expect("valid"));
+    events.extend(decode(&mut contacts, &reading(0, pen, PRESS, 2)).expect("a new contact"));
+    events.extend(decode(&mut contacts, &reading(0, pen, RELEASE, 3)).expect("valid"));
+    let verbs: Vec<(&str, PointerKind)> = pointer_events(&events)
+        .into_iter()
+        .map(|event| match event {
+            PointerEvent::Enter(signal) => ("enter", signal.pointer.kind),
+            PointerEvent::Leave(signal) => ("leave", signal.pointer.kind),
+            PointerEvent::Move(movement) => ("move", movement.pointer.kind),
+            PointerEvent::Down(press) => ("down", press.pointer.kind),
+            PointerEvent::Up(release) => ("up", release.pointer.kind),
+            other => panic!("unexpected {other:?}"),
+        })
+        .filter(|(verb, _)| *verb != "enter")
+        .collect();
+    assert_eq!(
+        verbs,
+        [
+            ("move", PointerKind::Mouse),
+            ("leave", PointerKind::Mouse),
+            ("down", pen),
+            ("up", pen)
+        ],
+        "the mouse's hover ends, then the pen taps"
+    );
+
+    let mut contacts = registry();
+    decode(&mut contacts, &mouse(PRESS, 1)).expect("valid");
+    let refused = decode(&mut contacts, &reading(0, pen, PRESS, 2))
+        .expect_err("a pressed mouse cannot change kind mid-sequence");
+    assert_eq!(refused.fault(), DecodeFault::IdentityChanged);
+    assert!(
+        matches!(
+            pointer_events(&refused.into_inputs()).as_slice(),
+            [PointerEvent::Cancel(cancel)] if cancel.reason == CancelReason::InvalidInput
+        ),
+        "the mouse's press is cancelled"
+    );
+}
+
 /// A touch that entered leaves when it ends, at `Up` or at a cancel, so every
 /// `Enter` is paired (as a DOM `pointerleave` follows `pointerup`); the
 /// platform's own later leave for it emits nothing.
@@ -1052,6 +1103,10 @@ fn pointer_assembly_contracts() {
             (
                 "a_lifted_pen_hovers_on_its_identity_until_it_leaves",
                 a_lifted_pen_hovers_on_its_identity_until_it_leaves,
+            ),
+            (
+                "a_hovering_mouse_relabelled_as_a_pen_leaves_before_the_pen_starts",
+                a_hovering_mouse_relabelled_as_a_pen_leaves_before_the_pen_starts,
             ),
             (
                 "a_pen_in_range_is_its_haptic_contact",

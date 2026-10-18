@@ -23,6 +23,8 @@ mod android_drag;
 mod android_exit_path;
 #[path = "android_ime.rs"]
 mod android_ime;
+#[path = "android_keys.rs"]
+mod android_keys;
 #[path = "android_motion.rs"]
 mod android_motion;
 #[path = "backend_conformance.rs"]

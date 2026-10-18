@@ -233,6 +233,15 @@ pub(super) enum Native {
         recordings: PathBuf,
         work: PathBuf,
     },
+    /// The interaction gallery's library, packaged under `work`, installed
+    /// and driven screen by screen over `adb`, read through its development
+    /// agent and the screen's pixels (`device/android_gallery.rs`, any host
+    /// with the SDK); its captures land in `shots`.
+    AndroidGallery {
+        library: PathBuf,
+        work: PathBuf,
+        shots: PathBuf,
+    },
 }
 
 impl Native {
@@ -263,6 +272,15 @@ impl Native {
                 &root.join(probe),
                 &root.join(recordings),
                 &root.join(work),
+            ),
+            Self::AndroidGallery {
+                library,
+                work,
+                shots,
+            } => super::android_gallery::run(
+                &root.join(library),
+                &root.join(work),
+                &root.join(shots),
             ),
         }
     }
@@ -744,6 +762,19 @@ impl fmt::Display for Step {
                             quote(&show(probe)),
                             quote(&show(recordings)),
                             quote(&show(work))
+                        );
+                    }
+                    Native::AndroidGallery {
+                        library,
+                        work,
+                        shots,
+                    } => {
+                        return write!(
+                            f,
+                            "adb-gallery {} {} {}; if rc=2: echo '{cannot_verify}'; elif rc!=0: echo '{failed}'; exit $rc",
+                            quote(&show(library)),
+                            quote(&show(work)),
+                            quote(&show(shots))
                         );
                     }
                 };

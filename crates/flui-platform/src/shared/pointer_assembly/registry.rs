@@ -261,10 +261,12 @@ impl Contact {
         matches!(self.info.kind, PointerKind::Mouse | PointerKind::Pen { .. })
     }
 
-    /// A pen hovering between sequences, whose label the platform may hand
-    /// to another kind once the pen is gone without a leave.
-    fn hovering_pen(&self) -> bool {
-        matches!(self.info.kind, PointerKind::Pen { .. })
+    /// A pen or a mouse hovering between sequences, whose label the platform
+    /// may hand to another kind once it is gone without a leave: Android's
+    /// `input` injector reports its mouse, pen and touch on one device and
+    /// pointer id, and a hovering mouse sends no exit before a pen touches.
+    fn hovering(&self) -> bool {
+        matches!(self.info.kind, PointerKind::Pen { .. } | PointerKind::Mouse)
             && !self.buttons.in_sequence()
             && !self.gesture.is_active()
     }
@@ -768,13 +770,14 @@ impl ContactRegistry {
     ) -> Result<Assembled, DecodeError> {
         let key = ContactKey::of(reading);
         let mut index = self.find(key);
-        // A hovering pen whose label comes back as another kind left without
-        // a leave: its hover ends with one, and the reading is a new contact.
+        // A hovering pen or mouse whose label comes back as another kind left
+        // without a leave: its hover ends with one, and the reading is a new
+        // contact.
         let mut stale = None;
         if let Some(found) = index
             && self.contacts[found].info.kind != reading.kind
         {
-            if !self.contacts[found].hovering_pen() {
+            if !self.contacts[found].hovering() {
                 return Err(self.fail(Some(found), reading, DecodeFault::IdentityChanged));
             }
             stale = index.take();
@@ -848,19 +851,19 @@ impl ContactRegistry {
             index
         } else {
             let ended = stale.map(|stale| (stale, self.contacts.remove(stale)));
-            if let Some((_, pen)) = &ended {
-                let time = pen
+            if let Some((_, hover)) = &ended {
+                let time = hover
                     .last_time
                     .map_or(measured.time, |last| last.max(measured.time));
-                let mut signal = PointerSignal::new(pen.info, time);
-                if let Some((position, _)) = pen.last_position {
+                let mut signal = PointerSignal::new(hover.info, time);
+                if let Some((position, _)) = hover.last_position {
                     signal = signal.with_position(position);
                 }
                 output.push(PlatformInput::Pointer(PointerEvent::Leave(signal)));
             }
             let Some(index) = self.admit(reading, choice, measured.time, &mut output) else {
-                if let Some((stale, pen)) = ended {
-                    self.contacts.insert(stale, pen);
+                if let Some((stale, hover)) = ended {
+                    self.contacts.insert(stale, hover);
                 }
                 return Err(self.fail(None, reading, DecodeFault::Exhausted));
             };

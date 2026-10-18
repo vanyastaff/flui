@@ -14,6 +14,8 @@
 //! drivers (the first skips with 0, the second refuses with 1). Paths are
 //! relative to the repository root, where every step runs.
 
+mod android;
+mod android_gallery;
 mod android_input;
 mod bidi;
 mod chrome;
@@ -456,6 +458,32 @@ enum DeviceCheck {
         #[arg(long)]
         bless: bool,
     },
+    /// The interaction gallery on an attached Android device, every screen
+    /// driven by the system's own input and each outcome read through the
+    /// gallery's development agent and the screen's pixels.
+    ///
+    /// Builds `examples/interaction_gallery`'s library with `agent` (debug,
+    /// `cargo ndk`), packages it into a debuggable APK, installs it, writes
+    /// the agent's launch token as the application's user (`run-as`) and
+    /// launches it. FLUI publishes no Android accessibility tree, so the
+    /// semantics tree is read from the development agent (ADR-0095 §3) over
+    /// its socket, reached through `run-as … nc -U`. Each screen is opened
+    /// from the tab strip and driven with `uinput` touches from a virtual
+    /// multi-touch screen (taps, drags, flings, long presses, double taps,
+    /// pinches), `input stylus` and `input mouse` events, hardware key
+    /// events (`input keyevent`) and the device's own soft keyboard, then
+    /// each outcome is read from the tree (the screen's readout, a row
+    /// gone, a menu open, the focused element) and from `screencap` pixels
+    /// where the right and the wrong outcome differ. Every check is
+    /// reported; the run fails if any did. Captures land in
+    /// `target/android-gallery/shots/`, and the gallery is uninstalled at
+    /// the end. Needs the Android SDK, `cargo-ndk`, the
+    /// `aarch64-linux-android` target, a JDK and one unlocked device
+    /// (`FLUI_ANDROID_SERIAL` picks one); exits 2 without them. Do not
+    /// touch the device while it runs. `FLUI_GALLERY_CHECKS=<text>` runs
+    /// only the checks whose name contains `<text>`; `FLUI_GALLERY_KEEP=1`
+    /// leaves the gallery installed for a look at what a failure left.
+    AndroidGallery,
 }
 
 impl DeviceCheck {
@@ -465,7 +493,7 @@ impl DeviceCheck {
             // Every host Chrome runs on; the first step says when it has none.
             return true;
         }
-        if matches!(self, Self::AndroidInput { .. }) {
+        if matches!(self, Self::AndroidInput { .. } | Self::AndroidGallery) {
             // Any host with the SDK drives a device over `adb`.
             return true;
         }
@@ -535,7 +563,8 @@ impl DeviceCheck {
             Self::MacosWorkload
             | Self::MacosHotReloadLoop { .. }
             | Self::WebInput { .. }
-            | Self::AndroidInput { .. } => {
+            | Self::AndroidInput { .. }
+            | Self::AndroidGallery => {
                 return None;
             }
         })
@@ -643,6 +672,32 @@ impl DeviceCheck {
                 }])
                 .collect(),
             Self::AndroidInput { bless } => android_input(target, *bless),
+            Self::AndroidGallery => vec![
+                Step::Run(Run::new(Program::Cargo).args([
+                    "ndk",
+                    "-t",
+                    "arm64-v8a",
+                    "build",
+                    "-p",
+                    "flui-interaction-gallery",
+                    "--locked",
+                    "--lib",
+                    "--features",
+                    "agent",
+                ])),
+                Step::Native {
+                    check: Native::AndroidGallery {
+                        library: target
+                            .join("aarch64-linux-android/debug/libflui_interaction_gallery.so"),
+                        work: target.join("android-gallery"),
+                        shots: target.join("android-gallery/shots"),
+                    },
+                    announce: Announce {
+                        cannot_verify: "android-gallery CANNOT VERIFY: no Android SDK, no attached device, a locked device, or no agent answered (details above)",
+                        failed: "android-gallery FAILED: a screen's outcome did not reach the tree or the pixels (summary above)",
+                    },
+                },
+            ],
         }
     }
 }
@@ -1364,6 +1419,7 @@ mod tests {
             ),
             (&["windows-notes"], DeviceCheck::WindowsNotes),
             (&["windows-gallery"], DeviceCheck::WindowsGallery),
+            (&["android-gallery"], DeviceCheck::AndroidGallery),
             (
                 &["android-input"],
                 DeviceCheck::AndroidInput { bless: false },
@@ -1594,6 +1650,19 @@ mod tests {
         );
     }
 
+    /// Runs on any host: the gallery's library is built for the device with
+    /// its development agent, then packaged and driven in one native step.
+    fn android_gallery_builds_the_library_with_its_agent_and_drives_it() {
+        assert!(DeviceCheck::AndroidGallery.runs_on_this_host());
+        assert_plan(
+            &DeviceCheck::AndroidGallery,
+            &[
+                "cargo ndk -t arm64-v8a build -p flui-interaction-gallery --locked --lib --features agent",
+                "adb-gallery target/aarch64-linux-android/debug/libflui_interaction_gallery.so target/android-gallery target/android-gallery/shots; if rc=2: echo 'android-gallery CANNOT VERIFY: no Android SDK, no attached device, a locked device, or no agent answered (details above)'; elif rc!=0: echo 'android-gallery FAILED: a screen's outcome did not reach the tree or the pixels (summary above)'; exit $rc",
+            ],
+        );
+    }
+
     fn ios_sim_matches_its_recipe() {
         assert_plan(
             &DeviceCheck::IosSim,
@@ -1716,6 +1785,10 @@ mod tests {
                 (
                     "windows_gallery_builds_the_gallery_and_drives_every_screen",
                     windows_gallery_builds_the_gallery_and_drives_every_screen as fn(),
+                ),
+                (
+                    "android_gallery_builds_the_library_with_its_agent_and_drives_it",
+                    android_gallery_builds_the_library_with_its_agent_and_drives_it as fn(),
                 ),
                 (
                     "ios_sim_matches_its_recipe",

@@ -319,6 +319,46 @@ impl AndroidTextInput {
         }
     }
 
+    /// The input method performs its editor action (`performEditorAction`):
+    /// the action acts on the text the input method shows, so a composition
+    /// still open in the focused store is committed first. An input method
+    /// may send the action without finishing its composition (Samsung
+    /// Keyboard's Done does); the field would otherwise take the action's
+    /// Enter for the input method's own and ignore it. The commit is queued
+    /// like an edit, so the key that follows lands after it.
+    pub(super) fn editor_action(&self) {
+        let Some(store) = self.focused() else {
+            return;
+        };
+        let published = Rc::clone(&self.published);
+        let view = Arc::clone(&self.view);
+        let status = Self::status(&*store);
+        let grant = LockGrant::read_write(move |session: &mut dyn TextStoreEdit| {
+            if session.composition().is_none() {
+                return;
+            }
+            let _ = session.set_composition(None);
+            view.set_composing(false);
+            let generation = Self::next_generation(&published);
+            publish(
+                &view,
+                Snapshot::read(&*session, generation),
+                Publish::Restart,
+                status,
+            );
+        });
+        {
+            let _entered = self.enter();
+            if let Err(error) = store.request_lock(grant, LockTiming::Async) {
+                tracing::debug!(
+                    ?error,
+                    "the focused store refused the editor action's commit"
+                );
+            }
+        }
+        self.drain();
+    }
+
     /// `requestCursorUpdates(mode)`.
     pub(super) fn cursor_updates(&self, mode: i32) {
         self.cursor_mode.set(mode & CURSOR_UPDATE_MONITOR);

@@ -3,9 +3,8 @@
 //!
 //! The probe is `crates/flui-platform/examples/android_input_probe.rs`, a
 //! `NativeActivity` library built with `native-capture`. This module packages
-//! it into a debuggable APK with the SDK's build tools (no Gradle: the probe
-//! has no `classes.dex`; `FluiView`'s dex is inside the library), installs it
-//! over `adb`, and runs one session per launch so
+//! it into a debuggable APK (`device/android.rs`), installs it over `adb`,
+//! and runs one session per launch so
 //! each recording starts from a fresh registry:
 //!
 //! 1. `adb shell input`: a touchscreen tap and swipe, a stylus tap and swipe
@@ -38,35 +37,19 @@
 //! Exit 0 on PASS, 1 on FAIL, 2 when there is no SDK, no device, or the
 //! device cannot show the probe (locked).
 
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, bail};
+use anyhow::Context as _;
 
-/// The probe's application id.
-const PACKAGE: &str = "dev.flui.android_input_probe";
-/// The probe's activity.
-const ACTIVITY: &str = "dev.flui.android_input_probe/android.app.NativeActivity";
-/// The library the manifest names, without `lib` and `.so`.
-const LIBRARY: &str = "android_input_probe";
-/// The probe's manifest: a debuggable `NativeActivity` with no Java, allowed
-/// to vibrate as every FLUI app is (haptic patterns need it).
-const MANIFEST: &str = r#"<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.flui.android_input_probe">
-    <uses-permission android:name="android.permission.VIBRATE"/>
-    <application android:label="FLUI input probe" android:hasCode="false" android:debuggable="true">
-        <activity android:name="android.app.NativeActivity" android:exported="true"
-            android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|uiMode|density">
-            <meta-data android:name="android.app.lib_name" android:value="android_input_probe"/>
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
-            </intent-filter>
-        </activity>
-    </application>
-</manifest>
-"#;
+use super::android::{Apk, Device, ImeKey, Registration, Screen, Script, Sdk, keyboard_keys};
+
+/// The probe's application.
+const PROBE: Apk = Apk {
+    package: "dev.flui.android_input_probe",
+    library: "android_input_probe",
+    label: "FLUI input probe",
+};
 /// How long a launch may take to open and paint its window.
 const READY_WITHIN: Duration = Duration::from_secs(20);
 /// How long the probe may take to answer a key.
@@ -115,10 +98,9 @@ pub(super) fn run(library: &Path, recordings: &Path, work: &Path) -> anyhow::Res
         return Ok(2);
     };
     println!("android-input: device {}", device.describe());
-    let apk = sdk.package(library, work)?;
+    let apk = sdk.package(&PROBE, library, work)?;
     device.adb(["install", "-r", "-t"]).arg(&apk).check()?;
-    device.shell("input keyevent KEYCODE_WAKEUP")?;
-    device.shell("wm dismiss-keyguard")?;
+    device.wake()?;
     let screen = device.screen()?;
     std::fs::create_dir_all(recordings)
         .with_context(|| format!("creating {}", recordings.display()))?;
@@ -249,44 +231,6 @@ fn check_drag_and_drop(device: &Device, screen: Screen) -> anyhow::Result<bool> 
         );
     }
     Ok(passed)
-}
-
-/// One key of the on-screen keyboard, from a `uiautomator dump`.
-#[derive(Debug, Clone)]
-struct ImeKey {
-    label: String,
-    center: (i32, i32),
-}
-
-/// The keys of the input method's window, by their accessibility labels, in
-/// the dump's (reading) order.
-fn keyboard_keys(dump: &str, package: &str) -> Vec<ImeKey> {
-    let node = regex::Regex::new(r"<node [^>]*>").expect("BUG: a valid pattern");
-    let attribute = |node: &str, name: &str| {
-        let start = node.find(&format!(" {name}=\""))? + name.len() + 3;
-        let end = node[start..].find('"')? + start;
-        Some(node[start..end].to_owned())
-    };
-    node.find_iter(dump)
-        .filter_map(|found| {
-            let node = found.as_str();
-            if attribute(node, "package")? != package {
-                return None;
-            }
-            let label = attribute(node, "content-desc")?;
-            let bounds = attribute(node, "bounds")?;
-            let numbers: Vec<i32> = bounds
-                .split(|c: char| !c.is_ascii_digit())
-                .filter(|part| !part.is_empty())
-                .filter_map(|part| part.parse().ok())
-                .collect();
-            let [left, top, right, bottom] = <[i32; 4]>::try_from(numbers).ok()?;
-            (!label.is_empty()).then(|| ImeKey {
-                label,
-                center: (i32::midpoint(left, right), i32::midpoint(top, bottom)),
-            })
-        })
-        .collect()
 }
 
 /// `FluiView` as the input method's editor (ADR-0237, ADR-0090): the probe
@@ -500,7 +444,7 @@ fn probe_vibrations(device: &Device) -> anyhow::Result<Vec<String>> {
     let dump = device.shell("dumpsys vibrator_manager")?;
     Ok(dump
         .lines()
-        .filter(|line| line.contains(&format!("| {PACKAGE} (uid=")))
+        .filter(|line| line.contains(&format!("| {} (uid=", PROBE.package)))
         .map(|line| line.trim().to_owned())
         .collect())
 }
@@ -676,392 +620,20 @@ fn two_fingers(
     ]);
 }
 
-/// A virtual input device for Android's `uinput` command: its keys, its
-/// absolute axes as `(code, minimum, maximum, resolution)` and its
-/// properties. Every name is a Linux input constant, so none needs escaping.
-struct Registration<'a> {
-    id: u32,
-    name: &'a str,
-    product: u32,
-    keys: &'a [&'a str],
-    axes: &'a [(&'a str, i32, i32, i32)],
-    props: &'a [&'a str],
-}
-
-impl Registration<'_> {
-    /// The register command. The command reads its fields in order and a
-    /// configuration's `data` by its `type`, so the JSON is written by hand
-    /// in that order rather than through a map.
-    fn command(&self) -> String {
-        let names = |names: &[&str]| {
-            names
-                .iter()
-                .map(|name| format!("\"{name}\""))
-                .collect::<Vec<_>>()
-                .join(",")
-        };
-        let codes: Vec<&str> = self.axes.iter().map(|axis| axis.0).collect();
-        let infos = self
-            .axes
-            .iter()
-            .map(|(code, minimum, maximum, resolution)| {
-                format!(
-                    "{{\"code\":\"{code}\",\"info\":{{\"value\":0,\"minimum\":{minimum},\"maximum\":{maximum},\"fuzz\":0,\"flat\":0,\"resolution\":{resolution}}}}}"
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        format!(
-            "{{\"id\":{},\"command\":\"register\",\"name\":\"{}\",\"vid\":6353,\"pid\":{},\"bus\":\"usb\",\"configuration\":[{{\"type\":\"UI_SET_EVBIT\",\"data\":[\"EV_KEY\",\"EV_ABS\"]}},{{\"type\":\"UI_SET_KEYBIT\",\"data\":[{}]}},{{\"type\":\"UI_SET_ABSBIT\",\"data\":[{}]}},{{\"type\":\"UI_SET_PROPBIT\",\"data\":[{}]}}],\"abs_info\":[{infos}]}}",
-            self.id,
-            self.name,
-            self.product,
-            names(self.keys),
-            names(&codes),
-            names(self.props),
-        )
-    }
-}
-
-/// A script for Android's `uinput` command: JSON objects, one per line.
-struct Script {
-    id: u32,
-    lines: Vec<String>,
-}
-
-impl Script {
-    fn new(device: &Registration<'_>) -> Self {
-        Self {
-            id: device.id,
-            lines: vec![device.command()],
-        }
-    }
-
-    fn delay(&mut self, millis: u32) {
-        self.lines.push(format!(
-            "{{\"id\":{},\"command\":\"delay\",\"duration\":{millis}}}",
-            self.id
-        ));
-    }
-
-    /// One report: the events, then `SYN_REPORT`.
-    fn inject(&mut self, events: &[(&str, &str, i32)]) {
-        let events = events
-            .iter()
-            .chain([&("EV_SYN", "SYN_REPORT", 0)])
-            .map(|(kind, code, value)| format!("\"{kind}\",\"{code}\",{value}"))
-            .collect::<Vec<_>>()
-            .join(",");
-        self.lines.push(format!(
-            "{{\"id\":{},\"command\":\"inject\",\"events\":[{events}]}}",
-            self.id
-        ));
-    }
-
-    fn finish(self) -> String {
-        self.lines.join("\n") + "\n"
-    }
-}
-
-/// The display in physical pixels, in its natural orientation.
-#[derive(Debug, Clone, Copy)]
-struct Screen {
-    width: i32,
-    height: i32,
-}
-
-/// The SDK pieces the check runs.
-struct Sdk {
-    adb: PathBuf,
-    aapt2: PathBuf,
-    zipalign: PathBuf,
-    apksigner: PathBuf,
-    android_jar: PathBuf,
-    api_level: u32,
-}
-
-impl Sdk {
-    /// The SDK at `ANDROID_HOME` (or `ANDROID_SDK_ROOT`) with its newest
-    /// build tools and platform.
-    fn locate() -> Option<Self> {
-        let root = std::env::var_os("ANDROID_HOME")
-            .or_else(|| std::env::var_os("ANDROID_SDK_ROOT"))
-            .map(PathBuf::from)?;
-        let build_tools = newest(&root.join("build-tools"), |_| true)?;
-        let platform = newest(&root.join("platforms"), |dir| {
-            dir.join("android.jar").is_file()
-        })?;
-        let api_level = platform
-            .file_name()?
-            .to_str()?
-            .strip_prefix("android-")?
-            .parse()
-            .ok()?;
-        let tool = |dir: &Path, name: &str| {
-            [
-                format!("{name}.exe"),
-                format!("{name}.bat"),
-                name.to_owned(),
-            ]
-            .into_iter()
-            .map(|file| dir.join(file))
-            .find(|path| path.is_file())
-        };
-        Some(Self {
-            adb: tool(&root.join("platform-tools"), "adb")?,
-            aapt2: tool(&build_tools, "aapt2")?,
-            zipalign: tool(&build_tools, "zipalign")?,
-            apksigner: tool(&build_tools, "apksigner")?,
-            android_jar: platform.join("android.jar"),
-            api_level,
-        })
-    }
-
-    /// A signed APK of `library` under `work`: `aapt2` links the manifest,
-    /// the JDK's `jar` stores the library uncompressed, `zipalign` page-aligns
-    /// it and `apksigner` signs with the SDK's debug keystore.
-    fn package(&self, library: &Path, work: &Path) -> anyhow::Result<PathBuf> {
-        let lib_dir = work.join("lib/arm64-v8a");
-        std::fs::create_dir_all(&lib_dir)
-            .with_context(|| format!("creating {}", lib_dir.display()))?;
-        std::fs::copy(library, lib_dir.join(format!("lib{LIBRARY}.so")))
-            .with_context(|| format!("copying {}", library.display()))?;
-        let manifest = work.join("AndroidManifest.xml");
-        std::fs::write(&manifest, MANIFEST)?;
-        let (base, aligned, apk) = (
-            work.join("base.apk"),
-            work.join("aligned.apk"),
-            work.join("android_input_probe.apk"),
-        );
-        Run(Command::new(&self.aapt2))
-            .args(["link", "--manifest"])
-            .arg(&manifest)
-            .arg("-I")
-            .arg(&self.android_jar)
-            .args(["--min-sdk-version", "26", "--target-sdk-version"])
-            .arg(self.api_level.to_string())
-            .arg("-o")
-            .arg(&base)
-            .check()?;
-        let mut store = Command::new(jdk_tool("jar"));
-        store
-            .current_dir(work)
-            .args(["-u", "-0", "-f", "base.apk"])
-            .arg(format!("lib/arm64-v8a/lib{LIBRARY}.so"));
-        Run(store).check()?;
-        Run(Command::new(&self.zipalign))
-            .args(["-f", "-p", "4"])
-            .arg(&base)
-            .arg(&aligned)
-            .check()?;
-        let keystore = home()?.join(".android/debug.keystore");
-        if !keystore.is_file() {
-            bail!(
-                "no debug keystore at {} (any Android SDK build creates one)",
-                keystore.display()
-            );
-        }
-        Run(Command::new(&self.apksigner))
-            .args(["sign", "--ks"])
-            .arg(&keystore)
-            .args([
-                "--ks-pass",
-                "pass:android",
-                "--ks-key-alias",
-                "androiddebugkey",
-                "--key-pass",
-                "pass:android",
-                "--out",
-            ])
-            .arg(&apk)
-            .arg(&aligned)
-            .check()?;
-        Ok(apk)
-    }
-}
-
-/// `name` from `JAVA_HOME`'s `bin`, else from `PATH`.
-fn jdk_tool(name: &str) -> PathBuf {
-    std::env::var_os("JAVA_HOME")
-        .map(|home| PathBuf::from(home).join("bin").join(name))
-        .filter(|path| path.with_extension("exe").is_file() || path.is_file())
-        .unwrap_or_else(|| PathBuf::from(name))
-}
-
-fn home() -> anyhow::Result<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .context("neither HOME nor USERPROFILE is set")
-}
-
-/// The subdirectory of `parent` with the highest version-like name that
-/// `accept`s.
-fn newest(parent: &Path, accept: impl Fn(&Path) -> bool) -> Option<PathBuf> {
-    std::fs::read_dir(parent)
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir() && accept(path))
-        .max_by_key(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or_default()
-                .split(|c: char| !c.is_ascii_digit())
-                .filter(|part| !part.is_empty())
-                .map(|part| part.parse::<u32>().unwrap_or(0))
-                .collect::<Vec<_>>()
-        })
-}
-
-/// A command that must succeed.
-struct Run(Command);
-
-impl Run {
-    fn arg(mut self, arg: impl AsRef<std::ffi::OsStr>) -> Self {
-        self.0.arg(arg);
-        self
-    }
-
-    fn args<I, S>(mut self, args: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<std::ffi::OsStr>,
-    {
-        self.0.args(args);
-        self
-    }
-
-    /// Its output, when it exited 0.
-    fn output(mut self) -> anyhow::Result<Output> {
-        let output = self
-            .0
-            .stdin(Stdio::null())
-            .output()
-            .with_context(|| format!("running {:?}", self.0))?;
-        if !output.status.success() {
-            bail!(
-                "{:?} failed ({}):\n{}{}",
-                self.0,
-                output.status,
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        Ok(output)
-    }
-
-    fn check(self) -> anyhow::Result<()> {
-        self.output().map(drop)
-    }
-}
-
-/// The attached device the check drives.
-struct Device {
-    adb: PathBuf,
-    serial: String,
-}
-
+/// What only the probe answers: its files, its window's readiness and its
+/// replies to the function keys it listens for.
 impl Device {
-    /// `FLUI_ANDROID_SERIAL`, else the only authorized device `adb` lists.
-    fn find(adb: &Path) -> anyhow::Result<Option<Self>> {
-        if let Some(serial) = std::env::var_os("FLUI_ANDROID_SERIAL") {
-            return Ok(Some(Self {
-                adb: adb.to_path_buf(),
-                serial: serial.to_string_lossy().into_owned(),
-            }));
-        }
-        let listed = Run(Command::new(adb)).arg("devices").output()?;
-        let serials: Vec<String> = String::from_utf8_lossy(&listed.stdout)
-            .lines()
-            .skip(1)
-            .filter_map(|line| {
-                let (serial, state) = line.split_once('\t')?;
-                (state.trim() == "device").then(|| serial.to_owned())
-            })
-            .collect();
-        match serials.as_slice() {
-            [serial] => Ok(Some(Self {
-                adb: adb.to_path_buf(),
-                serial: serial.clone(),
-            })),
-            [] => Ok(None),
-            _ => bail!("several devices are attached; FLUI_ANDROID_SERIAL picks one: {serials:?}"),
-        }
-    }
-
-    fn describe(&self) -> String {
-        let property = |name: &str| {
-            self.shell(&format!("getprop {name}"))
-                .map(|value| value.trim().to_owned())
-                .unwrap_or_default()
-        };
-        format!(
-            "{} ({} {}, Android {}, API {})",
-            self.serial,
-            property("ro.product.manufacturer"),
-            property("ro.product.model"),
-            property("ro.build.version.release"),
-            property("ro.build.version.sdk")
-        )
-    }
-
-    fn adb<I, S>(&self, args: I) -> Run
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<std::ffi::OsStr>,
-    {
-        Run(Command::new(&self.adb))
-            .args(["-s", self.serial.as_str()])
-            .args(args)
-    }
-
-    /// `adb shell command`'s output.
-    fn shell(&self, command: &str) -> anyhow::Result<String> {
-        let output = self.adb(["shell", command]).output()?;
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-    }
-
     /// The probe's file `name`, or `None` when it does not exist yet.
     fn read(&self, name: &str) -> anyhow::Result<Option<String>> {
-        let output = Command::new(&self.adb)
-            .args(["-s", self.serial.as_str(), "exec-out", "run-as", PACKAGE])
-            .args(["cat", &format!("files/{name}")])
-            .stdin(Stdio::null())
-            .output()
-            .context("reading a probe file")?;
-        Ok(output
-            .status
-            .success()
-            .then(|| String::from_utf8_lossy(&output.stdout).into_owned()))
-    }
-
-    fn key(&self, code: &str) -> anyhow::Result<()> {
-        self.shell(&format!("input keyevent {code}")).map(drop)
-    }
-
-    /// The physical display size.
-    fn screen(&self) -> anyhow::Result<Screen> {
-        let size = self.shell("wm size")?;
-        let physical = size
-            .lines()
-            .find_map(|line| line.trim().strip_prefix("Physical size: "))
-            .context("`wm size` names no physical size")?;
-        let (width, height) = physical
-            .split_once('x')
-            .context("`wm size` is not WIDTHxHEIGHT")?;
-        Ok(Screen {
-            width: width.trim().parse()?,
-            height: height.trim().parse()?,
-        })
+        self.read_app_file(PROBE.package, &format!("files/{name}"))
     }
 
     /// Start the probe afresh; its window's scale once the window is ready,
     /// `None` when it did not get ready.
     fn launch(&self) -> anyhow::Result<Option<f64>> {
-        self.shell(&format!("am force-stop {PACKAGE}"))?;
-        self.shell(&format!("run-as {PACKAGE} rm -f files/status.txt"))?;
-        self.shell(&format!("am start -W -n {ACTIVITY}"))?;
+        self.shell(&format!("am force-stop {}", PROBE.package))?;
+        self.shell(&format!("run-as {} rm -f files/status.txt", PROBE.package))?;
+        self.shell(&format!("am start -W -n {}", PROBE.activity()))?;
         let deadline = Instant::now() + READY_WITHIN;
         while Instant::now() < deadline {
             let ready = self.read("status.txt")?.and_then(|status| {
@@ -1125,14 +697,5 @@ impl Device {
     fn preferences(&self) -> anyhow::Result<Option<String>> {
         std::thread::sleep(Duration::from_millis(1200));
         self.ask("KEYCODE_F10", "PREFERENCES")
-    }
-
-    /// Run `script` with the device's `uinput` command.
-    fn uinput(&self, name: &str, script: &str) -> anyhow::Result<()> {
-        let local = std::env::temp_dir().join(format!("flui-android-input-{name}.json"));
-        std::fs::write(&local, script)?;
-        let remote = format!("/data/local/tmp/flui-{name}.json");
-        self.adb(["push"]).arg(&local).arg(&remote).check()?;
-        self.shell(&format!("uinput {remote}")).map(drop)
     }
 }
