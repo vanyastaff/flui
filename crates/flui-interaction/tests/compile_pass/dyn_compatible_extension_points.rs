@@ -1,3 +1,4 @@
+use flui_interaction::gesture::GestureContest;
 use flui_interaction::{
     CancelOutcome, GestureArenaMember, GestureRecognizer, MultiDragHandle, PointerId,
     pointer::PointerDispatch,
@@ -6,9 +7,9 @@ use flui_interaction::{
 struct ExternalRecognizer;
 
 impl GestureArenaMember for ExternalRecognizer {
-    fn accept_gesture(&self, _pointer: PointerId) {}
+    fn accept_gesture(&self, _: GestureContest) {}
 
-    fn reject_gesture(&self, _pointer: PointerId) {}
+    fn reject_gesture(&self, _: GestureContest) {}
 }
 
 impl GestureRecognizer for ExternalRecognizer {

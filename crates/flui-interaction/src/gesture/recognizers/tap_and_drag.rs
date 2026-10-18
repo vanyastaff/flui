@@ -52,6 +52,7 @@ use super::{
     callback_containment::{finish_containment, invoke_callback, retire_callbacks},
     recognizer::{EventTimeline, GestureRecognizer, event_time, is_primary_down, motion_history},
 };
+use crate::gesture::observer::GestureContest;
 use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
@@ -916,10 +917,14 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
 }
 
 impl GestureArenaMember for TapAndDragGestureRecognizer {
-    fn accept_gesture(&self, pointer: PointerId) {
+    fn accept_gesture(&self, contest: GestureContest) {
         let mut notices = Vec::new();
         let mut state = self.gesture_state.borrow_mut();
-        if state.pointer != Some(pointer) {
+        if state
+            .entry
+            .as_ref()
+            .is_none_or(|entry| entry.contest() != contest)
+        {
             return;
         }
         state.won = true;
@@ -933,10 +938,14 @@ impl GestureArenaMember for TapAndDragGestureRecognizer {
         self.finish(ArenaStep::None, notices);
     }
 
-    fn reject_gesture(&self, pointer: PointerId) {
+    fn reject_gesture(&self, contest: GestureContest) {
         let mut notices = Vec::new();
         let mut state = self.gesture_state.borrow_mut();
-        if state.pointer != Some(pointer) {
+        if state
+            .entry
+            .as_ref()
+            .is_none_or(|entry| entry.contest() != contest)
+        {
             return;
         }
         // The entry is already resolved; dropping it is all that is left.

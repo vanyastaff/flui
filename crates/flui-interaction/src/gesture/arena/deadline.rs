@@ -598,12 +598,11 @@ impl DeadlineRegistry {
 #[cfg(test)]
 mod identity_exhaustion {
     use super::*;
-    use crate::PointerId;
 
     struct Member;
     impl GestureArenaMember for Member {
-        fn accept_gesture(&self, _: PointerId) {}
-        fn reject_gesture(&self, _: PointerId) {}
+        fn accept_gesture(&self, _: GestureContest) {}
+        fn reject_gesture(&self, _: GestureContest) {}
     }
 
     // Public calls cannot reach billions of registrations/revisions in a test.

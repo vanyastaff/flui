@@ -370,10 +370,10 @@ fn run_custom_key_child(fail: bool) {
 }
 
 impl flui_interaction::GestureArenaMember for CloseArenaMember {
-    fn accept_gesture(&self, _: flui_interaction::PointerId) {
+    fn accept_gesture(&self, _: flui_interaction::GestureContest) {
         self.calls.set(self.calls.get() + 1);
     }
-    fn reject_gesture(&self, _: flui_interaction::PointerId) {
+    fn reject_gesture(&self, _: flui_interaction::GestureContest) {
         let _ = (&self.captures.first, &self.captures.second);
         self.calls.set(self.calls.get() + 1);
         CLOSE_REENTRY.with(|hook| {

@@ -1,3 +1,4 @@
+use flui_interaction::gesture::GestureContest;
 use std::rc::Rc;
 
 use flui_interaction::{GestureArena, GestureArenaMember, PointerId};
@@ -5,9 +6,9 @@ use flui_interaction::{GestureArena, GestureArenaMember, PointerId};
 struct ExternalMember;
 
 impl GestureArenaMember for ExternalMember {
-    fn accept_gesture(&self, _: PointerId) {}
+    fn accept_gesture(&self, _: GestureContest) {}
 
-    fn reject_gesture(&self, _: PointerId) {}
+    fn reject_gesture(&self, _: GestureContest) {}
 }
 
 fn accepts_member(_member: &dyn GestureArenaMember) {}

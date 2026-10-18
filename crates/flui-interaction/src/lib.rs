@@ -194,8 +194,8 @@ pub use flui_platform_api::pointer::{
     PointerPress, PointerRelease, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
     ScrollPhase, ScrollPrecision, ScrollUnit,
 };
+pub use gesture::{GestureContest, GestureObservation, GestureObserver, ObserverHandle};
 pub use gesture::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind};
-pub use gesture::{GestureObservation, GestureObserver, ObserverHandle};
 // ============================================================================
 // Re-exports: geometry from flui_foundation
 // ============================================================================
@@ -219,12 +219,13 @@ pub use gesture::{
     LongPressDownCallback, LongPressEndCallback, LongPressGestureRecognizer,
     LongPressMoveUpdateCallback, LongPressSimpleCallback, LongPressStartCallback, MultiDragAxis,
     MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback,
-    MultiDragUpdateDetails, MultiTapGestureRecognizer, PhysicalEdge, PrimaryContact, RecognizerSet,
-    ScaleGestureRecognizer, SwipeDetails, SwipeGestureRecognizer, SwipeGestureRecognizerBuilder,
-    SwipeStart, TapAndDragGestureRecognizer, TapCallback, TapDownCallback, TapDragDownCallback,
-    TapDragDownDetails, TapDragEndCallback, TapDragEndDetails, TapDragStartCallback,
-    TapDragStartDetails, TapDragUpCallback, TapDragUpDetails, TapDragUpdateCallback,
-    TapDragUpdateDetails, TapGestureRecognizer, TapUpCallback, cancel_all,
+    MultiDragUpdateDetails, MultiTapCount, MultiTapCountError, MultiTapGestureRecognizer,
+    PhysicalEdge, PrimaryContact, RecognizerSet, ScaleGestureRecognizer, SwipeDetails,
+    SwipeGestureRecognizer, SwipeGestureRecognizerBuilder, SwipeStart, TapAndDragGestureRecognizer,
+    TapCallback, TapDownCallback, TapDragDownCallback, TapDragDownDetails, TapDragEndCallback,
+    TapDragEndDetails, TapDragStartCallback, TapDragStartDetails, TapDragUpCallback,
+    TapDragUpDetails, TapDragUpdateCallback, TapDragUpdateDetails, TapGestureRecognizer,
+    TapUpCallback, cancel_all,
 };
 pub use gesture::{
     DoubleTapGestureRecognizerBuilder, DragGestureRecognizerBuilder, EagerGestureRecognizerBuilder,

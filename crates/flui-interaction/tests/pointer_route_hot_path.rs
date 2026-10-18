@@ -461,8 +461,8 @@ fn measure_route_shape(target_count: usize, shape: RouteShape, history: bool) {
 struct QuietMember;
 
 impl flui_interaction::GestureArenaMember for QuietMember {
-    fn accept_gesture(&self, _: flui_interaction::PointerId) {}
-    fn reject_gesture(&self, _: flui_interaction::PointerId) {}
+    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
+    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 }
 
 #[test]

@@ -9,6 +9,7 @@ use super::{
         motion_history,
     },
 };
+use crate::gesture::observer::GestureContest;
 use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
@@ -386,6 +387,14 @@ impl MultiDragGestureRecognizer {
             entry.claim_motion(displacement);
         }
     }
+    /// Whether `contest` is the one its pointer's tracked contact joined.
+    fn tracks_contest(&self, contest: GestureContest) -> bool {
+        self.pointers
+            .borrow()
+            .get(&contest.pointer())
+            .is_some_and(|state| state.arena_entry.contest() == contest)
+    }
+
     fn start_accepted_drag(&self, pointer: PointerId) {
         let (id, initial_position) = {
             let mut pointers = self.pointers.borrow_mut();
@@ -576,10 +585,16 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
     }
 }
 impl GestureArenaMember for MultiDragGestureRecognizer {
-    fn accept_gesture(&self, pointer: PointerId) {
-        self.start_accepted_drag(pointer);
+    fn accept_gesture(&self, contest: GestureContest) {
+        if self.tracks_contest(contest) {
+            self.start_accepted_drag(contest.pointer());
+        }
     }
-    fn reject_gesture(&self, pointer: PointerId) {
+    fn reject_gesture(&self, contest: GestureContest) {
+        if !self.tracks_contest(contest) {
+            return;
+        }
+        let pointer = contest.pointer();
         let removed = self.pointers.borrow_mut().remove(&pointer);
         if let Some(state) = removed {
             let mut failure = None;

@@ -19,6 +19,7 @@ use super::{
     contact::{ArenaMembership, PrimaryContact},
     recognizer::{CancelOutcome, EventTimeline, GestureRecognizer, event_time, is_primary_down},
 };
+use crate::gesture::observer::GestureContest;
 use crate::{
     ForcePressDetails,
     containment::RoutePanic,
@@ -26,7 +27,6 @@ use crate::{
     gesture::PositionSmoother,
     gesture::arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
     gesture::settings::GestureSettingsProvider,
-    ids::PointerId,
     pointer::PointerDispatch,
 };
 use flui_platform_api::input_capabilities::PointerKindSet;
@@ -162,7 +162,7 @@ enum Notice {
 
 enum ArenaStep {
     None,
-    Claim(GestureArenaEntry),
+    Claim(Box<GestureArenaEntry>),
     Withdraw,
     Abandon,
     Finish,
@@ -360,7 +360,7 @@ impl ForcePressGestureRecognizer {
                 } else {
                     state.phase = ForcePressPhase::Claiming;
                     if let Some(entry) = entry {
-                        step = ArenaStep::Claim(entry);
+                        step = ArenaStep::Claim(Box::new(entry));
                     }
                 }
             }
@@ -515,8 +515,8 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
 }
 
 impl GestureArenaMember for ForcePressGestureRecognizer {
-    fn accept_gesture(&self, pointer: PointerId) {
-        if !self.contact.tracks(pointer) {
+    fn accept_gesture(&self, contest: GestureContest) {
+        if !self.contact.tracks_contest(contest) {
             return;
         }
         let mut notices = Vec::new();
@@ -529,8 +529,8 @@ impl GestureArenaMember for ForcePressGestureRecognizer {
         self.finish(ArenaStep::None, notices);
     }
 
-    fn reject_gesture(&self, pointer: PointerId) {
-        if !self.contact.tracks(pointer) {
+    fn reject_gesture(&self, contest: GestureContest) {
+        if !self.contact.tracks_contest(contest) {
             return;
         }
         let mut notices = Vec::new();

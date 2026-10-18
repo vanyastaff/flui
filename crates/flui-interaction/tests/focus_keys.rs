@@ -599,6 +599,10 @@ fn keyboard_focus_contracts() {
             key_repeats_follow_their_key_down,
         ),
         (
+            "a_released_key_reaches_the_node_that_took_its_press",
+            a_released_key_reaches_the_node_that_took_its_press,
+        ),
+        (
             "traversal hands repeats to the new focus",
             traversal_hands_repeats_to_the_new_focus,
         ),
@@ -668,6 +672,32 @@ fn key_repeats_follow_their_key_down() {
     let _ = manager.dispatch_key_event(&enter(KeyState::Down, KeyRepeat::AutoRepeat));
     let _ = manager.dispatch_key_event(&enter(KeyState::Up, KeyRepeat::First));
     assert_eq!(page.get(), 3, "a press on the new focus delivers all of it");
+}
+
+/// A key held on one node while focus moves elsewhere: its release reaches
+/// the node that took the key-down, which ends what the press began (a
+/// keyboard scroll), and never the node focused since.
+fn a_released_key_reaches_the_node_that_took_its_press() {
+    let (manager, nodes, _attachments) = manager_with_nodes(2);
+    let _ = nodes[0].request_focus();
+    let presser = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&presser);
+    nodes[0].set_on_key_event(Rc::new(move |event| {
+        seen.borrow_mut().push(event.state());
+        KeyEventResult::Handled
+    }));
+    let since = count_keys(&nodes[1]);
+    let arrow = |state| key(state, Key::Named(NamedKey::ArrowDown), Code::ArrowDown);
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = nodes[1].request_focus();
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down).with_repeat(KeyRepeat::AutoRepeat));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Up));
+    assert_eq!(
+        *presser.borrow(),
+        [KeyState::Down, KeyState::Up],
+        "the press's node hears the release, not the repeats"
+    );
+    assert_eq!(since.get(), 0, "the node focused since hears nothing");
 }
 
 /// Tab moves focus by traversal; its repeats keep moving it.

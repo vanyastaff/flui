@@ -2,6 +2,7 @@
 //! after the operation that made them, in batched passes, with each observer
 //! call contained and registrations owned by their handles.
 
+use flui_interaction::gesture::GestureContest;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -61,13 +62,13 @@ impl Member {
 }
 
 impl GestureArenaMember for Member {
-    fn accept_gesture(&self, _: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {
         self.log
             .borrow_mut()
             .push(format!("{} accepted", self.name));
     }
 
-    fn reject_gesture(&self, _: PointerId) {
+    fn reject_gesture(&self, _: GestureContest) {
         self.log
             .borrow_mut()
             .push(format!("{} rejected", self.name));

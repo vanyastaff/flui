@@ -65,9 +65,9 @@ struct Probe {
 }
 
 impl GestureArenaMember for Probe {
-    fn accept_gesture(&self, _: PointerId) {}
+    fn accept_gesture(&self, _: flui_sdk::interaction::GestureContest) {}
 
-    fn reject_gesture(&self, _: PointerId) {}
+    fn reject_gesture(&self, _: flui_sdk::interaction::GestureContest) {}
 
     fn deadline(&self) -> Option<EventTime> {
         self.deadline.get()

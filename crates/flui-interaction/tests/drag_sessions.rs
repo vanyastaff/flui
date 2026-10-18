@@ -849,6 +849,45 @@ fn escalates_only_outside_window_with_outside_actions_or_sibling_presentation() 
     }
 }
 
+/// The host could not start the OS session a drag escalated to: back in its
+/// window the drag targets and drops as before, and it does not ask the
+/// backend that refused again.
+fn a_refused_os_drag_still_drops_in_its_window() {
+    in_lane(|f| {
+        let _target = f.spot("T", 0.0, 50.0, Some(COPY));
+        let w = desktop();
+        let session = f.start_with(
+            Arc::clone(&w),
+            AllowedActions::new(COPY, COPY),
+            None,
+            vec![DragItem::new().with_text("payload")],
+        );
+        assert_eq!(moved(&session, 150.0), MoveOutcome::Escalating);
+        assert_eq!(f.owner.take_pending_os_drags().len(), 1);
+        f.owner
+            .os_drag_refused(session.key().expect("live"), DragError::Unavailable);
+        assert_eq!(
+            moved(&session, 10.0),
+            MoveOutcome::Tracking(Some(COPY)),
+            "the receiver under the pointer is entered again"
+        );
+        assert_eq!(
+            moved(&session, 150.0),
+            MoveOutcome::Refused(DragError::Unavailable)
+        );
+        assert!(
+            !f.owner.has_pending_os_drags(),
+            "the refused start is not asked for again"
+        );
+        moved(&session, 10.0);
+        assert_eq!(
+            session.pointer_released(at(10.0), None).expect("live"),
+            Some(DragOutcome::Dropped { action: COPY })
+        );
+        assert!(logged(&f.log).contains(&"T:dropped COPY".to_owned()));
+    });
+}
+
 fn an_at_start_backend_decides_at_the_start_and_never_escalates_later() {
     let lane = InteractionLane::try_new().expect("lane");
     let f = Fixture::new(&lane);
@@ -1068,6 +1107,172 @@ fn a_drop_is_concluded_once_its_requests_resolve() {
     });
 }
 
+/// Accepts a move, and panics taking the drop.
+struct FailingTake;
+
+impl DropReceiver for FailingTake {
+    fn drag_entered(&self, _: &DragView<'_>, _: DragPoint) -> DropFeedback {
+        DropFeedback { accept: Some(MOVE) }
+    }
+    fn drag_moved(&self, _: &DragView<'_>, _: DragPoint) -> DropFeedback {
+        DropFeedback { accept: Some(MOVE) }
+    }
+    fn drag_left(&self, _: &DragView<'_>) {}
+    fn dropped(&self, _: &DragView<'_>, _: DragPoint, _: TransferActions) {
+        panic!("take failure");
+    }
+}
+
+/// A held cut is pasted into a receiver that panics taking it: the cut ends
+/// cancelled, as a drop whose receiver failed does, and a second paste cannot
+/// move it again.
+fn a_paste_whose_receiver_panics_ends_the_held_cut() {
+    in_lane(|f| {
+        let target = f
+            .dispatch
+            .register_local_payload(Rc::new(DropReceiverSlot(Rc::new(FailingTake))))
+            .expect("active lane");
+        let w = desktop();
+        let tracker = flui_interaction::pointer::MouseTracker::new();
+        let drag_and_drop = flui_interaction::drag::DragAndDrop::new(
+            f.handle.clone(),
+            f.presentation,
+            Arc::downgrade(&w),
+            &tracker,
+        );
+        let start = drag_and_drop
+            .drag(
+                vec![DragItem::new().with_value("payload".to_owned())],
+                AllowedActions::within(MOVE),
+            )
+            .observer(Rc::new(Observer(Rc::clone(&f.log))));
+        let cut = drag_and_drop.hold(start, MOVE).expect("a cut is held");
+        let point = DragPoint {
+            global: at(10.0),
+            local: at(10.0),
+            time: None,
+        };
+        let pasted = catch_unwind(AssertUnwindSafe(|| drag_and_drop.paste(target, point)));
+        assert!(pasted.is_err(), "the receiver's panic reaches the caller");
+        assert_eq!(cut.outcome(), Some(DragOutcome::Cancelled));
+        assert_eq!(
+            drag_and_drop.paste(target, point),
+            None,
+            "nothing is held any more"
+        );
+        assert_eq!(
+            logged(&f.log)
+                .iter()
+                .filter(|line| line.starts_with("observer:ended"))
+                .count(),
+            1,
+            "the source hears the end once"
+        );
+    });
+}
+
+/// Panics hearing a session end.
+struct FailingObserver;
+
+impl DragObserver for FailingObserver {
+    fn ended(&self, _: DragOutcome) {
+        panic!("observer failure");
+    }
+}
+
+/// A cancel whose receiver fails to leave and whose observer then fails to
+/// hear the end reports the receiver's failure, the first one.
+fn a_cancel_whose_observer_panics_keeps_the_first_failure() {
+    in_lane(|f| {
+        let spot = f.spot("P", 0.0, 100.0, Some(COPY));
+        *spot.on_leave.borrow_mut() = Some(Box::new(|| panic!("receiver leave failure")));
+        let w = desktop();
+        f.windows.borrow_mut().push(Arc::clone(&w));
+        let session = f
+            .handle
+            .start(
+                DragStart::new(
+                    f.presentation,
+                    vec![DragItem::new().with_value("payload".to_owned())],
+                    AllowedActions::within(COPY),
+                )
+                .window(Arc::downgrade(&w))
+                .hit_test(f.hit.clone())
+                .observer(Rc::new(FailingObserver)),
+            )
+            .expect("a valid drag starts");
+        moved(&session, 10.0);
+        let payload = catch_unwind(AssertUnwindSafe(|| session.cancel()))
+            .expect_err("the failure reaches the caller");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"receiver leave failure"),
+            "the first failure is the one reported"
+        );
+        assert_eq!(session.stage(), Ok(DragStage::Concluded));
+    });
+}
+
+/// The window an OS drop landed in closes while a request made from the drop
+/// is outstanding: the offer is concluded then, once.
+fn detaching_a_window_concludes_a_drop_still_fetching() {
+    in_lane(|f| {
+        let target = Rc::new(Spot {
+            name: "T",
+            log: Rc::clone(&f.log),
+            answer: Cell::new(Some(COPY)),
+            on_enter: RefCell::new(None),
+            on_leave: RefCell::new(None),
+            spring: None,
+            scopes: RefCell::default(),
+            values: RefCell::default(),
+            fetch_text: true,
+            fetched: RefCell::default(),
+            on_spring: RefCell::new(None),
+            on_autoscroll: RefCell::new(None),
+        });
+        f.register(&target, 0.0, 100.0);
+        let offer = f.text_offer();
+        let id = offer.id();
+        let here = Some(Point::new(5.0, 5.0));
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Entered {
+                offer,
+                allowed: COPY,
+                position: here,
+            },
+        );
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Dropped {
+                id,
+                action: COPY,
+                position: here,
+            },
+        );
+        assert!(
+            f.source.concluded.lock().is_empty(),
+            "a fetch is outstanding"
+        );
+        f.owner.detach_presentation(f.presentation);
+        assert_eq!(
+            *f.source.concluded.lock(),
+            [id],
+            "the closing window concludes its drop"
+        );
+        drop(
+            target
+                .fetched
+                .borrow_mut()
+                .pop()
+                .expect("a request was made"),
+        );
+        f.owner.tick(EventTime::from_nanos(1));
+        assert_eq!(*f.source.concluded.lock(), [id], "concluded once");
+    });
+}
+
 // --- the value stays in the source runtime ---------------------------------------------------------
 
 fn value_is_redeemed_only_in_source_runtime() {
@@ -1184,6 +1389,49 @@ fn a_receiver_that_cancels_the_session_while_entered_still_leaves_once() {
         let enter = log.iter().position(|l| l == "R:enter").expect("entered");
         let left = log.iter().position(|l| l == "R:left").expect("left");
         assert!(enter < left, "leave follows enter: {log:?}");
+    });
+}
+
+/// A receiver panics in the hover update an OS drop carries: the drop still
+/// runs, every receiver entered hears its end, the OS hears the target is
+/// done, and then the panic propagates.
+fn a_panicking_hover_before_an_os_drop_still_concludes_it() {
+    in_lane(|f| {
+        let _a = f.spot("A", 0.0, 50.0, Some(COPY));
+        let b = f.spot("B", 50.0, 100.0, Some(COPY));
+        *b.on_enter.borrow_mut() = Some(Box::new(|| panic!("hover failure")));
+        let offer = f.text_offer();
+        let id = offer.id();
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Entered {
+                offer,
+                allowed: COPY,
+                position: Some(Point::new(5.0, 5.0)),
+            },
+        );
+        let dropped = catch_unwind(AssertUnwindSafe(|| {
+            f.deliver(
+                f.presentation,
+                DragDropEvent::Dropped {
+                    id,
+                    action: COPY,
+                    position: Some(Point::new(80.0, 5.0)),
+                },
+            );
+        }));
+        assert!(dropped.is_err(), "the receiver's panic reaches the caller");
+        assert!(
+            logged(&f.log).contains(&"B:left".to_owned()),
+            "the receiver entered by the drop's move hears its end: {:?}",
+            logged(&f.log)
+        );
+        assert_eq!(*f.source.concluded.lock(), [id], "the offer is concluded");
+        assert_eq!(
+            f.source.feedback.lock().last(),
+            Some(&(id, DropFeedback { accept: None })),
+            "the OS hears that nothing accepts the failed hover"
+        );
     });
 }
 
@@ -1796,6 +2044,10 @@ fn drag_sessions() {
                 an_at_start_backend_decides_at_the_start_and_never_escalates_later,
             ),
             (
+                "a_refused_os_drag_still_drops_in_its_window",
+                a_refused_os_drag_still_drops_in_its_window,
+            ),
+            (
                 "drag_between_presentations_of_one_runtime_redeems_the_value",
                 drag_between_presentations_of_one_runtime_redeems_the_value,
             ),
@@ -1831,6 +2083,22 @@ fn drag_sessions() {
             (
                 "a_receiver_that_cancels_the_session_while_entered_still_leaves_once",
                 a_receiver_that_cancels_the_session_while_entered_still_leaves_once,
+            ),
+            (
+                "a_cancel_whose_observer_panics_keeps_the_first_failure",
+                a_cancel_whose_observer_panics_keeps_the_first_failure,
+            ),
+            (
+                "a_paste_whose_receiver_panics_ends_the_held_cut",
+                a_paste_whose_receiver_panics_ends_the_held_cut,
+            ),
+            (
+                "detaching_a_window_concludes_a_drop_still_fetching",
+                detaching_a_window_concludes_a_drop_still_fetching,
+            ),
+            (
+                "a_panicking_hover_before_an_os_drop_still_concludes_it",
+                a_panicking_hover_before_an_os_drop_still_concludes_it,
             ),
             (
                 "a_panicking_receiver_does_not_strand_the_others",

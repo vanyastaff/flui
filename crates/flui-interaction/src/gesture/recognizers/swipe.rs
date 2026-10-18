@@ -20,12 +20,12 @@ use super::{
     callback_containment::{invoke_callback, retire_callbacks},
     recognizer::{EventTimeline, admission_kind, event_time, is_primary_down, motion_history},
 };
+use crate::gesture::observer::GestureContest;
 use crate::{
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{GestureArena, GestureArenaMember, MotionRole},
     gesture::settings::GestureSettingsProvider,
     gesture::{Velocity, VelocityTracker, on_rail},
-    ids::PointerId,
 };
 
 /// An edge of the screen or of a region in physical terms: left is left in
@@ -377,16 +377,16 @@ impl GestureRecognizer for SwipeGestureRecognizer {
 }
 
 impl GestureArenaMember for SwipeGestureRecognizer {
-    fn accept_gesture(&self, pointer: PointerId) {
-        if self.contact.tracks(pointer)
+    fn accept_gesture(&self, contest: GestureContest) {
+        if self.contact.tracks_contest(contest)
             && let Some(state) = self.state.borrow_mut().as_mut()
         {
             state.accepted = true;
         }
     }
 
-    fn reject_gesture(&self, pointer: PointerId) {
-        if self.contact.tracks(pointer) {
+    fn reject_gesture(&self, contest: GestureContest) {
+        if self.contact.tracks_contest(contest) {
             self.state.replace(None);
             self.contact.withdraw();
         }

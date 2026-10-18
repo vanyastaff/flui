@@ -93,7 +93,8 @@ pub use long_press::{
     LongPressStartDetails,
 };
 pub use multi_tap::{
-    MultiTapCallback, MultiTapDetails, MultiTapGestureRecognizer, MultiTapGestureRecognizerBuilder,
+    MultiTapCallback, MultiTapCount, MultiTapCountError, MultiTapDetails,
+    MultiTapGestureRecognizer, MultiTapGestureRecognizerBuilder,
 };
 pub use multidrag::{
     MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,

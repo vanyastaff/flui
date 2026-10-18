@@ -1,5 +1,6 @@
 //! Owner deadline recovery uses the same binding and open members as consumers.
 
+use flui_interaction::gesture::GestureContest;
 use std::{
     cell::{Cell, RefCell},
     panic::AssertUnwindSafe,
@@ -118,10 +119,10 @@ impl VerdictMember {
 }
 
 impl GestureArenaMember for VerdictMember {
-    fn accept_gesture(&self, _: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {
         self.notified();
     }
-    fn reject_gesture(&self, _: PointerId) {
+    fn reject_gesture(&self, _: GestureContest) {
         self.notified();
     }
 }
@@ -173,8 +174,8 @@ impl DeadlineMember {
 }
 
 impl GestureArenaMember for DeadlineMember {
-    fn accept_gesture(&self, _: PointerId) {}
-    fn reject_gesture(&self, _: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, _: GestureContest) {
         let binding = self.rejection_binding.borrow().clone();
         if let Some(binding) = binding
             && self.rejection_deadline.get() == RejectionDeadlineObservation::Unobserved
@@ -546,12 +547,15 @@ fn built_in_deadline_notifications_have_a_committed_delivery_postcondition() {
                 recognizer
             }
             _ => {
-                let recognizer = MultiTapGestureRecognizer::builder(binding.arena().clone(), 2)
-                    .on_multi_tap_cancel(move |_| {
-                        captured.set(captured.get() + 1);
-                        panic!("committed multi-tap cancellation");
-                    })
-                    .build();
+                let recognizer = MultiTapGestureRecognizer::builder(
+                    binding.arena().clone(),
+                    flui_interaction::MultiTapCount::TWO,
+                )
+                .on_multi_tap_cancel(move |_| {
+                    captured.set(captured.get() + 1);
+                    panic!("committed multi-tap cancellation");
+                })
+                .build();
                 recognizer.add_pointer(PointerDispatch::at_root(&down));
                 recognizer
             }
@@ -887,9 +891,12 @@ fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, fault
         "double tap" => DoubleTapGestureRecognizer::builder(binding.arena().clone())
             .on_double_tap_cancel(move |_| captured.set(captured.get() + 1))
             .build(),
-        _ => MultiTapGestureRecognizer::builder(binding.arena().clone(), 2)
-            .on_multi_tap_cancel(move |_| captured.set(captured.get() + 1))
-            .build(),
+        _ => MultiTapGestureRecognizer::builder(
+            binding.arena().clone(),
+            flui_interaction::MultiTapCount::TWO,
+        )
+        .on_multi_tap_cancel(move |_| captured.set(captured.get() + 1))
+        .build(),
     };
     recognizer.add_pointer(PointerDispatch::at_root(&down));
     let owner = Rc::new(RefCell::new(None));
@@ -1308,8 +1315,8 @@ fn open_deadline_poll_with_nested_retirement(panic_after_retirement: bool) {
     }
 
     impl GestureArenaMember for NestedPollMember {
-        fn accept_gesture(&self, _: PointerId) {}
-        fn reject_gesture(&self, _: PointerId) {}
+        fn accept_gesture(&self, _: GestureContest) {}
+        fn reject_gesture(&self, _: GestureContest) {}
         fn deadline(&self) -> Option<EventTime> {
             Some(self.due)
         }

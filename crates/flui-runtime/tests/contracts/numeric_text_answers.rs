@@ -32,9 +32,9 @@ impl FrameSink for Sink {
 struct FailingQuery(Rc<Cell<usize>>);
 
 impl GestureArenaMember for FailingQuery {
-    fn accept_gesture(&self, _: flui_interaction::PointerId) {}
+    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
 
-    fn reject_gesture(&self, _: flui_interaction::PointerId) {}
+    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 
     fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         self.0.set(self.0.get() + 1);

@@ -18,8 +18,8 @@ use flui_interaction::{
     CancelOutcome, DoubleTapDetails, DoubleTapGestureRecognizer, DragAxis, DragDownDetails,
     DragEndDetails, DragGestureRecognizer, DragPointerStrategy, DragStartDetails,
     DragUpdateDetails, ForcePressDetails, ForcePressGestureRecognizer, GestureArenaMember,
-    GestureRecognizer, LongPressGestureRecognizer, MultiTapGestureRecognizer, PointerDispatch,
-    PointerId, RecognizerSet, TapGestureRecognizer, cancel_all,
+    GestureContest, GestureRecognizer, LongPressGestureRecognizer, MultiTapGestureRecognizer,
+    PointerDispatch, RecognizerSet, TapGestureRecognizer, cancel_all,
 };
 use flui_interaction::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo, PointerKindSet};
 use flui_platform_api::EventTime;
@@ -421,70 +421,8 @@ impl PressShape {
     }
 }
 
-/// How many contacts a multi-contact tap takes: two or more, because one
-/// contact is a tap ([`GestureDetector::on_tap`]).
-///
-/// ```rust
-/// use flui_widgets::MultiTapCount;
-///
-/// assert_eq!(MultiTapCount::TWO.get(), 2);
-/// assert_eq!(MultiTapCount::try_from(3).map(MultiTapCount::get), Ok(3));
-/// assert!(MultiTapCount::try_from(1).is_err());
-/// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct MultiTapCount(usize);
-
-impl MultiTapCount {
-    /// A two-contact tap.
-    pub const TWO: Self = Self(2);
-    /// A three-contact tap.
-    pub const THREE: Self = Self(3);
-
-    /// The count, or `None` below two.
-    #[must_use]
-    pub const fn new(contacts: usize) -> Option<Self> {
-        if contacts >= 2 {
-            Some(Self(contacts))
-        } else {
-            None
-        }
-    }
-
-    /// How many contacts the tap takes.
-    #[must_use]
-    pub const fn get(self) -> usize {
-        self.0
-    }
-}
-
-/// A multi-contact tap count below two.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("a multi-contact tap takes at least 2 contacts, not {contacts}; one contact is a tap")]
-pub struct MultiTapCountError {
-    contacts: usize,
-}
-
-impl MultiTapCountError {
-    /// The refused count.
-    #[must_use]
-    pub fn contacts(&self) -> usize {
-        self.contacts
-    }
-}
-
-impl TryFrom<usize> for MultiTapCount {
-    type Error = MultiTapCountError;
-
-    fn try_from(contacts: usize) -> Result<Self, Self::Error> {
-        Self::new(contacts).ok_or(MultiTapCountError { contacts })
-    }
-}
-
-impl From<MultiTapCount> for usize {
-    fn from(count: MultiTapCount) -> Self {
-        count.get()
-    }
-}
+/// The recognizer takes the same validated count the detector does.
+pub use flui_interaction::{MultiTapCount, MultiTapCountError};
 
 #[derive(Clone)]
 struct MultiTapSlot {
@@ -918,8 +856,8 @@ impl PressRecognizers {
 
 impl GestureArenaMember for PressRecognizers {
     // The members join the arena themselves.
-    fn accept_gesture(&self, _: PointerId) {}
-    fn reject_gesture(&self, _: PointerId) {}
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, _: GestureContest) {}
 }
 
 impl GestureRecognizer for PressRecognizers {
@@ -1040,7 +978,7 @@ impl GestureRecognizerFactory for MultiTapFactory {
     fn create(&self, cx: &RecognizerContext) -> Rc<MultiTapGestureRecognizer> {
         let live = Rc::clone(&self.live);
         let writer = cx.writer().clone();
-        MultiTapGestureRecognizer::builder(cx.arena().clone(), self.pointers.get())
+        MultiTapGestureRecognizer::builder(cx.arena().clone(), self.pointers)
             .settings(cx.settings().clone())
             .on_multi_tap(move |details| {
                 deliver(

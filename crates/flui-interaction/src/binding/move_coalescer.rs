@@ -148,6 +148,30 @@ impl MoveCoalescer {
         removed.into_iter().map(|(_, state)| state).collect()
     }
 
+    /// Remove the queued hover moves `leaving` selects, in key order: their
+    /// pointer left before the frame that would deliver them. Contact moves
+    /// and in-flight markers stay.
+    pub(super) fn remove_queued_hovers(
+        &self,
+        leaving: impl Fn(MoveKey, &PointerEvent) -> bool,
+    ) -> SmallVec<[HitTestResult; 1]> {
+        let mut removed: SmallVec<[(MoveKey, PendingMoveState); 1]> = self
+            .pending
+            .borrow_mut()
+            .extract_if(|key, state| {
+                matches!(&state.pending, Some(PendingMove::Hover { event, .. }) if leaving(*key, event))
+            })
+            .collect();
+        removed.sort_unstable_by_key(|(key, _)| *key);
+        removed
+            .into_iter()
+            .filter_map(|(_, state)| match state.pending {
+                Some(PendingMove::Hover { hit_test, .. }) => Some(hit_test),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Freeze the complete queued batch in key order before any user callback
     /// runs. Re-entrant moves replace their exact marker and therefore always
     /// belong to the next frame.

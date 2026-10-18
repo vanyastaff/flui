@@ -2,6 +2,7 @@
 //! `InputSurface`, and drained only after the dispatch that closed them
 //! (ADR-0217 §2, ADR-0207 §5 and §8).
 
+use flui_interaction::gesture::GestureContest;
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
@@ -227,11 +228,11 @@ struct LoggingMember {
 }
 
 impl GestureArenaMember for LoggingMember {
-    fn accept_gesture(&self, _: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {
         self.log.borrow_mut().push("accept");
     }
 
-    fn reject_gesture(&self, _: PointerId) {
+    fn reject_gesture(&self, _: GestureContest) {
         self.log.borrow_mut().push("reject");
         (self.on_reject)();
     }

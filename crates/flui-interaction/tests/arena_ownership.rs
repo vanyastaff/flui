@@ -2,6 +2,7 @@
 //! `Sequenced` hand-off, the delay ceiling, device admission and the
 //! cancellation a claimed contact sends the rest of its route.
 
+use flui_interaction::gesture::GestureContest;
 use std::{cell::RefCell, rc::Rc, sync::Arc, time::Duration};
 
 use flui_foundation::geometry::Offset;
@@ -29,12 +30,12 @@ struct Probe {
 }
 
 impl GestureArenaMember for Probe {
-    fn accept_gesture(&self, _: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {
         self.log
             .borrow_mut()
             .push((self.name, GestureDisposition::Accepted));
     }
-    fn reject_gesture(&self, _: PointerId) {
+    fn reject_gesture(&self, _: GestureContest) {
         self.log
             .borrow_mut()
             .push((self.name, GestureDisposition::Rejected));
@@ -160,6 +161,35 @@ pub(crate) fn sequenced_hold_hands_its_won_contact_to_the_successor() {
     assert_eq!(log.borrow().last(), Some(&("successor", Accepted)));
     assert!(!branch.hand_off(pointer), "a contact hands off once");
     assert_eq!(log.borrow().len(), 3, "every member settles exactly once");
+}
+
+/// An earlier generation a hold kept past its Up sweeps while the same
+/// pointer's next contact is down, its hold won and its successor carried:
+/// the sweep ends only its own contest's successors.
+pub(crate) fn a_swept_earlier_generation_keeps_the_next_contacts_successors() {
+    let arena = GestureArena::new();
+    let branch = arena.sequenced().expect("sequenced composition");
+    let log = Log::default();
+    let pointer = id(1);
+    let earlier = probe("earlier", &log);
+    let earlier_entry = arena.add(pointer, &earlier);
+    earlier_entry.hold();
+    arena.close(pointer);
+    arena.sweep(pointer);
+
+    let (hold, successor) = (probe("hold", &log), probe("successor", &log));
+    let hold_entry = branch.hold().add(pointer, &hold);
+    let _successor_entry = branch.successor().add(pointer, &successor);
+    arena.close(pointer);
+    hold_entry.resolve(Accepted);
+    earlier_entry.release();
+    assert_eq!(
+        *log.borrow(),
+        [("hold", Accepted), ("earlier", Accepted)],
+        "the earlier contest settles alone"
+    );
+    assert!(branch.hand_off(pointer), "the next contact still hands off");
+    assert_eq!(log.borrow().last(), Some(&("successor", Accepted)));
 }
 
 pub(crate) fn sequenced_successor_fails_with_its_hold() {

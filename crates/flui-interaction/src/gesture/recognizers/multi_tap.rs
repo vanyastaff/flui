@@ -8,6 +8,7 @@ use super::{
     },
     recognizer::{GestureRecognizer, measured_positions},
 };
+use crate::gesture::observer::GestureContest;
 use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
@@ -133,22 +134,80 @@ impl MultiTapGestureRecognizerBuilder {
         })
     }
 }
+/// How many contacts a multi-contact tap takes: two or more, because one
+/// contact is a tap.
+///
+/// ```rust
+/// use flui_interaction::MultiTapCount;
+///
+/// assert_eq!(MultiTapCount::TWO.get(), 2);
+/// assert_eq!(MultiTapCount::try_from(3).map(MultiTapCount::get), Ok(3));
+/// assert!(MultiTapCount::try_from(1).is_err());
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MultiTapCount(usize);
+
+impl MultiTapCount {
+    /// A two-contact tap.
+    pub const TWO: Self = Self(2);
+    /// A three-contact tap.
+    pub const THREE: Self = Self(3);
+
+    /// The count, or `None` below two.
+    #[must_use]
+    pub const fn new(contacts: usize) -> Option<Self> {
+        if contacts >= 2 {
+            Some(Self(contacts))
+        } else {
+            None
+        }
+    }
+
+    /// How many contacts the tap takes.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.0
+    }
+}
+
+/// A multi-contact tap count below two.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("a multi-contact tap takes at least 2 contacts, not {contacts}; one contact is a tap")]
+pub struct MultiTapCountError {
+    contacts: usize,
+}
+
+impl MultiTapCountError {
+    /// The refused count.
+    #[must_use]
+    pub fn contacts(&self) -> usize {
+        self.contacts
+    }
+}
+
+impl TryFrom<usize> for MultiTapCount {
+    type Error = MultiTapCountError;
+
+    fn try_from(contacts: usize) -> Result<Self, Self::Error> {
+        Self::new(contacts).ok_or(MultiTapCountError { contacts })
+    }
+}
+
+impl From<MultiTapCount> for usize {
+    fn from(count: MultiTapCount) -> Self {
+        count.get()
+    }
+}
+
 impl MultiTapGestureRecognizer {
-    /// Start immutable owner configuration for at least two contacts.
-    ///
-    /// # Panics
-    /// Panics when `required_pointer_count` is less than two.
+    /// Start immutable owner configuration for a tap of `contacts` contacts.
     pub fn builder(
         arena: GestureArena,
-        required_pointer_count: usize,
+        contacts: MultiTapCount,
     ) -> MultiTapGestureRecognizerBuilder {
-        assert!(
-            required_pointer_count >= 2,
-            "MultiTapGestureRecognizer requires at least 2 pointers, got {required_pointer_count}"
-        );
         MultiTapGestureRecognizerBuilder {
             arena,
-            required_pointer_count,
+            required_pointer_count: contacts.get(),
             callbacks: MultiTapCallbacks::default(),
             settings: GestureSettingsProvider::default(),
             allowed_devices: PointerKindSet::all(),
@@ -440,13 +499,14 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
     }
 }
 impl GestureArenaMember for MultiTapGestureRecognizer {
-    fn accept_gesture(&self, _: PointerId) {}
-    fn reject_gesture(&self, pointer: PointerId) {
-        let tracks = self
-            .sequence
-            .borrow()
-            .as_ref()
-            .is_some_and(|sequence| sequence.contacts.contains_key(&pointer));
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, contest: GestureContest) {
+        let tracks = self.sequence.borrow().as_ref().is_some_and(|sequence| {
+            sequence
+                .contacts
+                .get(&contest.pointer())
+                .is_some_and(|contact| contact.entry.contest() == contest)
+        });
         if tracks {
             self.cancel();
         }

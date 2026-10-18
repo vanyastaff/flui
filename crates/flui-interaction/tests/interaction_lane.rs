@@ -1,5 +1,6 @@
 //! Public-contract tests for the inert ADR-0027 owner-local interaction lane.
 
+use flui_interaction::gesture::GestureContest;
 use flui_interaction::pointer::MouseRegionTarget;
 use flui_interaction::{
     HitTestEntry, InteractionDispatchError, InteractionDispatchHandle, InteractionLane,
@@ -968,6 +969,14 @@ fn binding_input_contract_matrix() {
             frame_coalesced_history_reaches_tap_drag_velocity,
         ),
         (
+            "focus_loss_cancellation_refuses_the_contact_tail",
+            focus_loss_cancellation_refuses_the_contact_tail,
+        ),
+        (
+            "window_leave_drops_queued_hover_moves",
+            window_leave_drops_queued_hover_moves,
+        ),
+        (
             "device_removal_preserves_a_reentrant_replacement",
             device_removal_preserves_a_reentrant_replacement,
         ),
@@ -1507,6 +1516,126 @@ fn mismatched_hover_failed_retirement_and_reentry() {
 }
 fn mismatched_hover_competing_retirement() {
     assert_isolated_hover_metadata_retirement("mismatch");
+}
+
+/// A hover move queued for the frame, then the pointer leaves: the window,
+/// through the pointer's own `Leave`, or with its device. The frame flush
+/// delivers no hover move after the leave; with no leave it delivers one.
+fn window_leave_drops_queued_hover_moves() {
+    use flui_interaction::events::{DeviceId, PointerEvent, PointerKind, make_move_event};
+    use flui_interaction::{GestureBinding, HitTestResult, Offset};
+    use flui_platform_api::{
+        EventTime,
+        pointer::{PointerDeviceChange, PointerSignal},
+    };
+    use std::{cell::Cell, rc::Rc};
+
+    #[derive(Clone, Copy, Debug)]
+    enum Leaves {
+        Not,
+        Window,
+        Pointer,
+        Device,
+    }
+    let device = DeviceId::try_from(7_u64).expect("device");
+    let delivered_after = |leaves: Leaves| {
+        let lane = InteractionLane::try_new().expect("owner lane");
+        let binding = GestureBinding::new();
+        let moves = Rc::new(Cell::new(0));
+        let seen = Rc::clone(&moves);
+        binding
+            .pointer_router()
+            .add_global_handler(Rc::new(move |event| {
+                if matches!(event, PointerEvent::Move(_)) {
+                    seen.set(seen.get() + 1);
+                }
+            }));
+        let PointerEvent::Move(mut hover) =
+            make_move_event(Offset::new(20.0, 20.0), PointerKind::Mouse).expect("finite hover")
+        else {
+            unreachable!("a move fixture")
+        };
+        hover.pointer = hover.pointer.with_device(device);
+        let pointer = hover.pointer;
+        lane.enter(|| {
+            binding.handle_pointer_event(&PointerEvent::Move(hover), |_| HitTestResult::new());
+            match leaves {
+                Leaves::Not => {}
+                Leaves::Window => binding.handle_pointer_left_window(),
+                Leaves::Pointer => binding.handle_pointer_event(
+                    &PointerEvent::Leave(PointerSignal::new(pointer, EventTime::from_nanos(1))),
+                    |_| HitTestResult::new(),
+                ),
+                Leaves::Device => binding.handle_pointer_event(
+                    &PointerEvent::DeviceRemoved(PointerDeviceChange::new(
+                        device,
+                        PointerKind::Mouse,
+                        EventTime::from_nanos(1),
+                    )),
+                    |_| HitTestResult::new(),
+                ),
+            }
+            binding.flush_pending_moves();
+        });
+        moves.get()
+    };
+    let delivered: Vec<_> = [Leaves::Not, Leaves::Window, Leaves::Pointer, Leaves::Device]
+        .into_iter()
+        .map(|leaves| (leaves, delivered_after(leaves)))
+        .collect();
+    assert_eq!(
+        format!("{delivered:?}"),
+        "[(Not, 1), (Window, 0), (Pointer, 0), (Device, 0)]",
+        "only a pointer still in the window hovers at the flush"
+    );
+}
+
+/// Focus loss cancels a contact whose pointer is still pressed: the moves and
+/// release the platform still reports for it reach no listener, and the
+/// pointer's next Down is admitted.
+fn focus_loss_cancellation_refuses_the_contact_tail() {
+    use flui_interaction::events::{
+        PointerEvent, PointerKind, make_down_event_for_id, make_move_event_for_id,
+        make_up_event_for_id,
+    };
+    use flui_interaction::{GestureBinding, HitTestResult, Offset, PointerId};
+    use std::{cell::RefCell, rc::Rc};
+
+    let lane = InteractionLane::try_new().expect("owner lane");
+    let binding = GestureBinding::new();
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&seen);
+    binding
+        .pointer_router()
+        .add_global_handler(Rc::new(move |event| {
+            log.borrow_mut().push(match event {
+                PointerEvent::Down(_) => "down",
+                PointerEvent::Move(_) => "move",
+                PointerEvent::Up(_) => "up",
+                PointerEvent::Cancel(_) => "cancel",
+                _ => "other",
+            });
+        }));
+    let finger = PointerId::try_from(2_u64).expect("pointer");
+    let touch = PointerKind::Touch;
+    let send = |event: PointerEvent| {
+        binding.handle_pointer_event(&event, |_| HitTestResult::new());
+        binding.flush_pending_moves();
+    };
+    lane.enter(|| {
+        send(make_down_event_for_id(finger, Offset::ZERO, touch).expect("down"));
+        binding.cancel_active_pointers();
+        for x in [10.0, 20.0] {
+            send(make_move_event_for_id(finger, Offset::new(x, 0.0), touch).expect("move"));
+        }
+        send(make_up_event_for_id(finger, Offset::new(20.0, 0.0), touch).expect("up"));
+        send(make_down_event_for_id(finger, Offset::ZERO, touch).expect("down"));
+    });
+    assert_eq!(
+        *seen.borrow(),
+        ["down", "cancel", "down"],
+        "the cancelled contact's tail reaches nobody; the next contact is admitted"
+    );
 }
 
 fn device_removal_preserves_a_reentrant_replacement() {
@@ -4997,10 +5126,10 @@ fn drag_dispose_capture_reentry() {
     let weak = owner.clone();
     struct Rival(Rc<Cell<usize>>);
     impl flui_interaction::gesture::GestureArenaMember for Rival {
-        fn accept_gesture(&self, _: flui_interaction::PointerId) {
+        fn accept_gesture(&self, _: flui_interaction::GestureContest) {
             self.0.set(self.0.get() + 1);
         }
-        fn reject_gesture(&self, _: flui_interaction::PointerId) {
+        fn reject_gesture(&self, _: flui_interaction::GestureContest) {
             panic!("retiring owner must not reject its rival");
         }
     }
@@ -5379,20 +5508,20 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
     }
     struct Sibling(Rc<Cell<usize>>);
     impl GestureArenaMember for Sibling {
-        fn accept_gesture(&self, _: PointerId) {
+        fn accept_gesture(&self, _: GestureContest) {
             self.0.set(self.0.get() + 1);
         }
-        fn reject_gesture(&self, _: PointerId) {
+        fn reject_gesture(&self, _: GestureContest) {
             panic!("disposing the drag must preserve its sibling");
         }
     }
 
     struct WithdrawingContact(PrimaryContact);
     impl GestureArenaMember for WithdrawingContact {
-        fn accept_gesture(&self, _: PointerId) {
+        fn accept_gesture(&self, _: GestureContest) {
             panic!("withdrawing member must not win its old competition");
         }
-        fn reject_gesture(&self, _: PointerId) {
+        fn reject_gesture(&self, _: GestureContest) {
             panic!("locally retired contact must not receive its own rejection");
         }
     }
@@ -5573,10 +5702,10 @@ fn stop_tracking_pointer_sweep_accepts_the_unmoved_drag_without_starting_it() {
 
     struct Rival(Rc<Cell<usize>>);
     impl GestureArenaMember for Rival {
-        fn accept_gesture(&self, _: PointerId) {
+        fn accept_gesture(&self, _: GestureContest) {
             panic!("the sweep accepts the front member");
         }
-        fn reject_gesture(&self, _: PointerId) {
+        fn reject_gesture(&self, _: GestureContest) {
             self.0.set(self.0.get() + 1);
         }
     }
@@ -5639,14 +5768,14 @@ fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) 
         fail_after_admission: bool,
     }
     impl GestureArenaMember for ReentrantSweep {
-        fn accept_gesture(&self, pointer: PointerId) {
+        fn accept_gesture(&self, contest: GestureContest) {
             if self.admitted_next.replace(true) {
                 self.next_accepts.set(self.next_accepts.get() + 1);
                 return;
             }
             assert_eq!(
                 self.contact.current().map(|contact| contact.pointer),
-                Some(pointer),
+                Some(contest.pointer()),
                 "the retiring contact stays visible to its sweep resolution"
             );
             // Reuse the platform pointer ID while the old exact-generation
@@ -5662,7 +5791,7 @@ fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) 
                 "sweep failure after next contact admission"
             );
         }
-        fn reject_gesture(&self, _: PointerId) {
+        fn reject_gesture(&self, _: GestureContest) {
             panic!("swept front member must be accepted");
         }
     }

@@ -3,6 +3,7 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::events::{
     PointerEvent, PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
+use flui_interaction::gesture::GestureContest;
 use flui_interaction::gesture::{GestureArena, GestureArenaMember};
 use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
@@ -15,8 +16,8 @@ use std::{
 
 struct Rival;
 impl GestureArenaMember for Rival {
-    fn accept_gesture(&self, _: PointerId) {}
-    fn reject_gesture(&self, _: PointerId) {}
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, _: GestureContest) {}
 }
 
 fn up_before_acceptance_rejects_drag_and_preserves_the_competitor() {
@@ -32,10 +33,10 @@ fn up_before_acceptance_rejects_drag_and_preserves_the_competitor() {
         .build();
     struct Competitor(Rc<Cell<usize>>);
     impl GestureArenaMember for Competitor {
-        fn accept_gesture(&self, _: PointerId) {
+        fn accept_gesture(&self, _: GestureContest) {
             self.0.set(self.0.get() + 1);
         }
-        fn reject_gesture(&self, _: PointerId) {}
+        fn reject_gesture(&self, _: GestureContest) {}
     }
     let rival = Rc::new(Competitor(won.clone()));
     let down = make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)

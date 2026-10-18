@@ -9,13 +9,13 @@ use super::{
     },
 };
 use crate::gesture::details::{LongPressEndDetails, LongPressMoveUpdateDetails};
+use crate::gesture::observer::GestureContest;
 use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{GestureArena, GestureArenaMember},
     gesture::settings::GestureSettingsProvider,
     gesture::{PositionSmoother, VelocityTracker},
-    ids::PointerId,
     pointer::PointerDispatch,
 };
 use flui_foundation::geometry::Offset;
@@ -575,9 +575,9 @@ impl GestureRecognizer for LongPressGestureRecognizer {
     }
 }
 impl GestureArenaMember for LongPressGestureRecognizer {
-    fn accept_gesture(&self, _: PointerId) {}
-    fn reject_gesture(&self, pointer: PointerId) {
-        if self.contact.tracks(pointer) {
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, contest: GestureContest) {
+        if self.contact.tracks_contest(contest) {
             self.cancel();
         }
     }

@@ -1,5 +1,6 @@
 //! Public recognizer cancellation, ownership, and containment contracts.
 
+use flui_interaction::gesture::GestureContest;
 use std::{
     cell::{Cell, RefCell},
     panic::{AssertUnwindSafe, catch_unwind},
@@ -47,11 +48,11 @@ impl Member {
 }
 
 impl GestureArenaMember for Member {
-    fn accept_gesture(&self, _: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {
         self.accepted.set(self.accepted.get() + 1);
     }
 
-    fn reject_gesture(&self, _: PointerId) {
+    fn reject_gesture(&self, _: GestureContest) {
         self.rejected.set(self.rejected.get() + 1);
         let callback = self.on_reject.borrow_mut().take();
         if let Some(callback) = callback {

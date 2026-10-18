@@ -1,10 +1,10 @@
 //! A reusable recognizer that claims an admitted contact immediately.
 use super::{ArenaMembership, CancelOutcome, GestureRecognizer, PrimaryContact};
+use crate::gesture::observer::GestureContest;
 use crate::{
     events::{PointerEvent, PointerEventExt},
     gesture::arena::{GestureArena, GestureArenaMember},
     gesture::settings::GestureSettingsProvider,
-    ids::PointerId,
     pointer::PointerDispatch,
 };
 use flui_platform_api::input_capabilities::PointerKindSet;
@@ -118,9 +118,9 @@ impl GestureRecognizer for EagerGestureRecognizer {
 }
 
 impl GestureArenaMember for EagerGestureRecognizer {
-    fn accept_gesture(&self, _: PointerId) {}
-    fn reject_gesture(&self, pointer: PointerId) {
-        if self.contact.tracks(pointer) {
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, contest: GestureContest) {
+        if self.contact.tracks_contest(contest) {
             self.contact.withdraw();
         }
     }

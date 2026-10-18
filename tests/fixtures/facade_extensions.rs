@@ -368,13 +368,13 @@ struct DistanceRecognizer {
 }
 
 impl flui::interaction::GestureArenaMember for DistanceRecognizer {
-    fn accept_gesture(&self, pointer: flui::interaction::PointerId) {
-        assert!(self.contact.tracks(pointer));
+    fn accept_gesture(&self, contest: flui::interaction::GestureContest) {
+        assert!(self.contact.tracks_contest(contest));
         self.accepted.fetch_add(1, Ordering::SeqCst);
     }
 
-    fn reject_gesture(&self, pointer: flui::interaction::PointerId) {
-        assert!(self.contact.tracks(pointer));
+    fn reject_gesture(&self, contest: flui::interaction::GestureContest) {
+        assert!(self.contact.tracks_contest(contest));
         self.rejected.fetch_add(1, Ordering::SeqCst);
     }
 }

@@ -4,15 +4,18 @@
 //! Enter that opens a page must not have its auto-repeats type into the field
 //! the new page focuses, and a release whose press went to another window must
 //! not activate anything here. The ledger records, per held key, the traversal
-//! unit that had primary focus at key-down; a repeat or release reaches the
-//! focus walk only while that unit still has it.
+//! unit that had primary focus at key-down; a repeat reaches the focus walk
+//! only while that unit still has it, and a release reaches the walk that
+//! heard the press, so whatever the press began ends there.
 
 use std::collections::HashMap;
+use std::rc::{Rc, Weak};
 
 use flui_platform_api::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, NamedKey,
 };
 
+use super::FocusNode;
 use crate::ids::FocusNodeId;
 
 /// Whether focus should be shown: the last input that moved or used focus.
@@ -47,23 +50,32 @@ impl KeyId {
 }
 
 /// Who received a held key's key-down.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 enum KeyOrigin {
     /// An input method took it; none of the key's events reach the walk.
     Ime,
-    /// The traversal unit holding primary focus at key-down, if any.
-    Focus(Option<FocusNodeId>),
+    /// The focus walk took it.
+    Focus {
+        /// The traversal unit holding primary focus at key-down, if any.
+        unit: Option<FocusNodeId>,
+        /// Where that walk started: the node whose path heard the press.
+        leaf: Option<Weak<FocusNode>>,
+    },
 }
 
 /// What the ledger lets through to the focus walk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub(super) enum Admission {
     /// A first key-down: deliver, and it decides the input modality.
     Press,
     /// A repeat or release of a key whose key-down this unit received.
     Continuation,
-    /// An input method's key, an orphan, or a key whose key-down went to
-    /// another unit: global handlers saw it, the walk does not.
+    /// The release of a key whose key-down the walk from `leaf` received,
+    /// after focus moved to another unit: that path ends what the press
+    /// began, and the node focused since never hears it.
+    ReleaseToOrigin(Weak<FocusNode>),
+    /// An input method's key, an orphan, or a repeat of a key whose key-down
+    /// went to another unit: global handlers saw it, the walk does not.
     Withheld,
 }
 
@@ -74,13 +86,15 @@ pub(super) struct KeyLedger {
 
 impl KeyLedger {
     /// Record a key-down of the key `id`, or check a repeat or release
-    /// against its key-down. `unit` is the traversal unit holding primary focus now. A release
-    /// clears the key's record whatever it admits.
+    /// against its key-down. `unit` is the traversal unit holding primary
+    /// focus now, and `leaf` the node a walk would start at. A release clears
+    /// the key's record whatever it admits.
     pub(super) fn admit(
         &mut self,
         id: KeyId,
         event: &KeyEvent,
         unit: Option<FocusNodeId>,
+        leaf: Option<&Rc<FocusNode>>,
     ) -> Admission {
         match (event.state(), event.repeat()) {
             (KeyState::Down, KeyRepeat::First) => {
@@ -89,7 +103,10 @@ impl KeyLedger {
                 let origin = if ime {
                     KeyOrigin::Ime
                 } else {
-                    KeyOrigin::Focus(unit)
+                    KeyOrigin::Focus {
+                        unit,
+                        leaf: leaf.map(Rc::downgrade),
+                    }
                 };
                 self.pressed.insert(id, origin);
                 if ime {
@@ -98,30 +115,41 @@ impl KeyLedger {
                     Admission::Press
                 }
             }
-            (KeyState::Down, KeyRepeat::AutoRepeat) => {
-                Self::continuation(self.pressed.get(&id).copied(), unit)
-            }
-            (KeyState::Up, _) => Self::continuation(self.pressed.remove(&id), unit),
-        }
-    }
-
-    fn continuation(origin: Option<KeyOrigin>, unit: Option<FocusNodeId>) -> Admission {
-        if origin == Some(KeyOrigin::Focus(unit)) {
-            Admission::Continuation
-        } else {
-            Admission::Withheld
+            (KeyState::Down, KeyRepeat::AutoRepeat) => match self.pressed.get(&id) {
+                Some(KeyOrigin::Focus { unit: pressed, .. }) if *pressed == unit => {
+                    Admission::Continuation
+                }
+                _ => Admission::Withheld,
+            },
+            (KeyState::Up, _) => match self.pressed.remove(&id) {
+                Some(KeyOrigin::Focus { unit: pressed, .. }) if pressed == unit => {
+                    Admission::Continuation
+                }
+                Some(KeyOrigin::Focus {
+                    leaf: Some(leaf), ..
+                }) => Admission::ReleaseToOrigin(leaf),
+                _ => Admission::Withheld,
+            },
         }
     }
 
     /// The key-down or repeat `event` moved focus by traversal: the key's
     /// further repeats belong to the unit that now has it (a held Tab keeps
-    /// moving). A release has cleared its record already.
-    pub(super) fn rebind(&mut self, id: &KeyId, event: &KeyEvent, unit: Option<FocusNodeId>) {
+    /// moving), walking from `leaf`. A release has cleared its record already.
+    pub(super) fn rebind(
+        &mut self,
+        id: &KeyId,
+        event: &KeyEvent,
+        unit: Option<FocusNodeId>,
+        leaf: Option<&Rc<FocusNode>>,
+    ) {
         if event.state() == KeyState::Down
-            && let Some(origin) = self.pressed.get_mut(id)
-            && *origin != KeyOrigin::Ime
+            && let Some(origin @ KeyOrigin::Focus { .. }) = self.pressed.get_mut(id)
         {
-            *origin = KeyOrigin::Focus(unit);
+            *origin = KeyOrigin::Focus {
+                unit,
+                leaf: leaf.map(Rc::downgrade),
+            };
         }
     }
 

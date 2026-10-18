@@ -9,6 +9,7 @@ use super::{
         motion_history,
     },
 };
+use crate::gesture::observer::GestureContest;
 use crate::{
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{GestureArena, GestureArenaMember, MotionRole},
@@ -325,19 +326,20 @@ struct DragContact {
     contact: PrimaryContact,
     state: RefCell<DragState>,
 }
+// The member is one contact's, so its allocation already names the contest.
 impl GestureArenaMember for DragContact {
-    fn accept_gesture(&self, pointer: PointerId) {
-        if pointer == self.pointer
+    fn accept_gesture(&self, contest: GestureContest) {
+        if contest.pointer() == self.pointer
             && let Some(owner) = self.owner.upgrade()
         {
-            owner.accept_contact(pointer, self.id);
+            owner.accept_contact(self.pointer, self.id);
         }
     }
-    fn reject_gesture(&self, pointer: PointerId) {
-        if pointer == self.pointer
+    fn reject_gesture(&self, contest: GestureContest) {
+        if contest.pointer() == self.pointer
             && let Some(owner) = self.owner.upgrade()
         {
-            owner.reject_contact(pointer, self.id);
+            owner.reject_contact(self.pointer, self.id);
         }
     }
 }
@@ -938,13 +940,19 @@ impl GestureRecognizer for DragGestureRecognizer {
     }
 }
 impl GestureArenaMember for DragGestureRecognizer {
-    fn accept_gesture(&self, pointer: PointerId) {
-        if let Some(contact) = self.current(pointer) {
+    fn accept_gesture(&self, contest: GestureContest) {
+        let pointer = contest.pointer();
+        if let Some(contact) = self.current(pointer)
+            && contact.contact.tracks_contest(contest)
+        {
             self.accept_contact(pointer, contact.id);
         }
     }
-    fn reject_gesture(&self, pointer: PointerId) {
-        if let Some(contact) = self.current(pointer) {
+    fn reject_gesture(&self, contest: GestureContest) {
+        let pointer = contest.pointer();
+        if let Some(contact) = self.current(pointer)
+            && contact.contact.tracks_contest(contest)
+        {
             self.reject_contact(pointer, contact.id);
         }
     }

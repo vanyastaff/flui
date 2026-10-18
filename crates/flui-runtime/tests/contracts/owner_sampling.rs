@@ -30,9 +30,9 @@ struct DeadlineQuery {
 }
 
 impl GestureArenaMember for DeadlineQuery {
-    fn accept_gesture(&self, _: PointerId) {}
+    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
 
-    fn reject_gesture(&self, _: PointerId) {}
+    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 
     fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         self.calls.set(self.calls.get() + 1);
@@ -250,8 +250,8 @@ struct RetryDeadline {
 }
 
 impl GestureArenaMember for RetryDeadline {
-    fn accept_gesture(&self, _: PointerId) {}
-    fn reject_gesture(&self, _: PointerId) {}
+    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
+    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 
     fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         self.queries.set(self.queries.get() + 1);
@@ -767,9 +767,9 @@ struct PublishedDeadline {
 }
 
 impl GestureArenaMember for PublishedDeadline {
-    fn accept_gesture(&self, _: PointerId) {}
+    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
 
-    fn reject_gesture(&self, _: PointerId) {}
+    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 
     fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         self.queries.set(self.queries.get() + 1);
@@ -1466,8 +1466,8 @@ struct HostedDeadline {
 }
 
 impl GestureArenaMember for HostedDeadline {
-    fn accept_gesture(&self, _: PointerId) {}
-    fn reject_gesture(&self, _: PointerId) {}
+    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
+    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 
     fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         self.queries.set(self.queries.get() + 1);
@@ -1649,8 +1649,8 @@ struct ReentrantDeadlineQuery {
 }
 
 impl GestureArenaMember for ReentrantDeadlineQuery {
-    fn accept_gesture(&self, _: PointerId) {}
-    fn reject_gesture(&self, _: PointerId) {}
+    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
+    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 
     fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         self.queries.set(self.queries.get() + 1);

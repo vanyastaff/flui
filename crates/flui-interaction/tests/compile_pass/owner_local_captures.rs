@@ -1,6 +1,7 @@
 //! Owner-local callbacks capture `Rc` state: no binding, recognizer or router
 //! signature asks for `Send` (ADR-0207 §8).
 
+use flui_interaction::gesture::GestureContest;
 use std::{cell::Cell, rc::Rc};
 
 use flui_interaction::{
@@ -10,11 +11,11 @@ use flui_interaction::{
 struct CountingMember(Rc<Cell<u32>>);
 
 impl GestureArenaMember for CountingMember {
-    fn accept_gesture(&self, _: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {
         self.0.set(self.0.get() + 1);
     }
 
-    fn reject_gesture(&self, _: PointerId) {}
+    fn reject_gesture(&self, _: GestureContest) {}
 }
 
 fn main() {

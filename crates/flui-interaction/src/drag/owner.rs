@@ -350,7 +350,9 @@ impl DragOwner {
         !self.shared.borrow().pending.is_empty()
     }
 
-    /// The host could not start `session`'s OS session: it returns to its window.
+    /// The host could not start `session`'s OS session: it returns to its
+    /// window, targets and drops there, and leaving the window is a move with
+    /// no target from then on, as on a backend with no OS drags.
     pub fn os_drag_refused(&self, session: DragSessionKey, error: DragError) {
         let observer = {
             let mut state = self.shared.borrow_mut();
@@ -369,14 +371,21 @@ impl DragOwner {
                 return;
             }
             entry.phase = DragPhase::InWindow { accepted: None };
+            // Escalating finished the tracker, leaving every receiver: back in
+            // its window the drag targets afresh. The backend that refused
+            // will refuse again, so the drag stays in its window as one with
+            // no OS session does, rather than asking on every move out.
+            let finished = std::mem::take(&mut entry.tracker);
+            entry.available = false;
             let observer = if std::mem::replace(&mut entry.refusal_told, true) {
                 None
             } else {
                 entry.observer.clone()
             };
-            (observer, entry.cursor.clone())
+            (observer, entry.cursor.clone(), finished)
         };
-        let (observer, cursor) = observer;
+        let (observer, cursor, finished) = observer;
+        drop(finished);
         // Back in its window, the drag shows its cursor again.
         if let Some(cursor) = cursor {
             cursor.show(CursorIcon::Grabbing);
@@ -569,10 +578,17 @@ impl DragOwner {
                 action,
                 position,
             } => {
+                // A receiver failing in the drop's last hover does not keep the
+                // drop from running: the OS waits for its conclusion, and no
+                // leave follows a drop.
+                let mut failure = ClosePanic::new();
                 if let Some(position) = position {
-                    self.update_incoming(id, Offset::new(position.x, position.y), hit);
+                    failure.invoke(|| {
+                        self.update_incoming(id, Offset::new(position.x, position.y), hit);
+                    });
                 }
-                self.drop_incoming(id, action);
+                failure.invoke(|| self.drop_incoming(id, action));
+                failure.finish();
             }
             DragDropEvent::Exited { id } => self.exit_incoming(id),
         }
@@ -642,11 +658,19 @@ impl DragOwner {
         let hits = hit(position)
             .and_then(|path| receivers_on_path(&path, position).ok())
             .unwrap_or_default();
-        let accepted = parts.with_view(&self.source, |view| {
-            tracker.update(hits, view, position, None)
-        });
+        // A failed hover still answers the OS, with nothing accepting, before
+        // the failure propagates.
+        let mut failure = ClosePanic::new();
+        let accepted = failure
+            .invoke(|| {
+                parts.with_view(&self.source, |view| {
+                    tracker.update(hits, view, position, None)
+                })
+            })
+            .flatten();
         self.source
             .update_drop_feedback(id, DropFeedback { accept: accepted });
+        failure.finish();
     }
 
     fn drop_incoming(&self, id: DataTransferId, action: TransferActions) {
@@ -672,7 +696,7 @@ impl DragOwner {
     }
 
     fn exit_incoming(&self, id: DataTransferId) {
-        let removed = {
+        let incoming = {
             let mut state = self.shared.borrow_mut();
             let Some(index) = state
                 .incoming
@@ -681,13 +705,19 @@ impl DragOwner {
             else {
                 return;
             };
-            let incoming = state.incoming.remove(index);
-            (!incoming.dropped).then_some(incoming)
+            state.incoming.remove(index)
         };
-        if let Some(incoming) = removed {
+        if incoming.dropped {
+            // Its window went before the drop's requests resolved: nothing
+            // will conclude it later, and the OS holds the offer until told.
+            self.source.conclude_drop(id);
+        } else {
             let parts = ViewParts::of_incoming(&incoming);
             parts.with_view(&self.source, |view| incoming.tracker.finish(view, None));
         }
+        // The offer's data may be the last owner of user values: it retires
+        // here, outside the table's borrow.
+        drop(incoming);
     }
 
     /// Tell the OS every dropped offer whose requests have all resolved that the
@@ -958,17 +988,27 @@ impl DragHandle {
                 })
             })
             .flatten();
-        let dropped = failure
-            .invoke(|| parts.with_view(&no_source(), |view| tracker.finish(view, accepted)))
-            == Some(Dropped::Delivered);
-        if dropped {
-            failure.invoke(|| conclude(&shared, slot, id, DragOutcome::Dropped { action }));
-        } else if let Some(entry) = shared.borrow_mut().entry_mut(slot, id) {
+        let finished =
+            failure.invoke(|| parts.with_view(&no_source(), |view| tracker.finish(view, accepted)));
+        let outcome = match finished {
+            Some(Dropped::Delivered) => Some(DragOutcome::Dropped { action }),
+            Some(Dropped::NoRecipient) => None,
+            // A receiver failed with the drop: it ends cancelled, as a release
+            // whose receivers failed does, and is never pasted again.
+            None => Some(DragOutcome::Cancelled),
+        };
+        if let Some(outcome) = outcome {
+            failure.invoke(|| conclude(&shared, slot, id, outcome));
+        } else {
             // The receiver declined: the transfer waits for another paste.
-            entry.tracker = DropTracker::new();
+            let declined = shared
+                .borrow_mut()
+                .entry_mut(slot, id)
+                .map(|entry| std::mem::take(&mut entry.tracker));
+            drop(declined);
         }
         failure.finish();
-        dropped.then_some(action)
+        matches!(finished, Some(Dropped::Delivered)).then_some(action)
     }
 }
 
@@ -1471,7 +1511,9 @@ fn cancel_session(shared: &Shared, slot: usize, id: DragSessionId) {
             .parts
             .with_view(&no_source(), |view| running.tracker.finish(view, None));
     });
-    conclude(shared, slot, id, DragOutcome::Cancelled);
+    // An observer failing to hear the end does not replace a receiver's
+    // earlier failure.
+    failure.invoke(|| conclude(shared, slot, id, DragOutcome::Cancelled));
     failure.finish();
 }
 

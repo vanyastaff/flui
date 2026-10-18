@@ -21,11 +21,11 @@ use super::{
     callback_containment::{invoke_callback, retire_callbacks},
     recognizer::{admission_kind, is_primary_down},
 };
+use crate::gesture::observer::GestureContest;
 use crate::{
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{GestureArena, GestureArenaMember},
     gesture::settings::GestureSettingsProvider,
-    ids::PointerId,
     pointer::PointerDispatch,
 };
 
@@ -230,10 +230,10 @@ impl GestureRecognizer for HoldGestureRecognizer {
 
 impl GestureArenaMember for HoldGestureRecognizer {
     // A hold that wins keeps the contact until it lifts.
-    fn accept_gesture(&self, _: PointerId) {}
+    fn accept_gesture(&self, _: GestureContest) {}
 
-    fn reject_gesture(&self, pointer: PointerId) {
-        if self.contact.tracks(pointer) && self.contact.withdraw().is_some() {
+    fn reject_gesture(&self, contest: GestureContest) {
+        if self.contact.tracks_contest(contest) && self.contact.withdraw().is_some() {
             self.release(HoldEnd::Yielded);
         }
     }

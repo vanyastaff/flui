@@ -970,9 +970,12 @@ impl FocusManager {
     /// default action available; only `Handled` consumes it.
     ///
     /// Global handlers see every event. The focus walk then sees a key's
-    /// repeats and release only while the traversal unit that had primary
-    /// focus at its key-down still has it: Enter that opens a page does not
-    /// repeat into the field the page focuses. A key-down that moved focus by
+    /// repeats only while the traversal unit that had primary focus at its
+    /// key-down still has it: Enter that opens a page does not repeat into
+    /// the field the page focuses. Its release reaches the walk that heard
+    /// the press, from that node while it is still in this tree, so a keyboard
+    /// scroll the press began still ends when focus moved meanwhile; the node
+    /// focused since never hears it. A key-down that moved focus by
     /// traversal hands its repeats to the new unit, so a held Tab keeps
     /// moving. A key an input method was composing with, its repeats and
     /// release never reach the walk. A first key-down other than a modifier
@@ -1044,11 +1047,25 @@ impl FocusManager {
         // a panicking handler leaves it describing the key-down it received.
         let pointer = id == KeyId::PointerBack;
         let unit = self.focused_unit();
-        let admission = self.key_ledger.borrow_mut().admit(id.clone(), event, unit);
+        let start = self.key_walk_start();
+        let admission = self
+            .key_ledger
+            .borrow_mut()
+            .admit(id.clone(), event, unit, start.as_ref());
         match admission {
             Admission::Withheld => {
                 tracing::trace!("key event withheld: its key-down went elsewhere");
                 return KeyEventResult::Ignored;
+            }
+            Admission::ReleaseToOrigin(origin) => {
+                // Focus moved while the key was held: the press's own path
+                // hears its release, if that node is still in this tree.
+                return match origin.upgrade() {
+                    Some(origin) if origin.is_attached() && self.owns(&origin) => {
+                        Self::walk_key_event_from(origin, event)
+                    }
+                    _ => KeyEventResult::Ignored,
+                };
             }
             Admission::Press if !pointer && !key_ledger::is_modifier(&event.key) => {
                 self.set_modality(InputModality::Keyboard);
@@ -1059,7 +1076,10 @@ impl FocusManager {
         let result = self.walk_key_event(event);
         if self.traversal_transitions.get() != traversals {
             let unit = self.focused_unit();
-            self.key_ledger.borrow_mut().rebind(&id, event, unit);
+            let start = self.key_walk_start();
+            self.key_ledger
+                .borrow_mut()
+                .rebind(&id, event, unit, start.as_ref());
         }
         result
     }
@@ -1069,12 +1089,22 @@ impl FocusManager {
         self.primary_focus().map(|node| node.traversal_unit().id())
     }
 
+    /// Where a key's walk starts: the primary focus, or the unfocused-key
+    /// claim while nothing is focused.
+    fn key_walk_start(&self) -> Option<Rc<FocusNode>> {
+        self.primary_focus().or_else(|| self.unfocused_key_target())
+    }
+
     fn walk_key_event(&self, event: &KeyEvent) -> KeyEventResult {
-        let Some(focused) = self.primary_focus().or_else(|| self.unfocused_key_target()) else {
+        let Some(focused) = self.key_walk_start() else {
             tracing::trace!("key event ignored because nothing is focused");
             return KeyEventResult::Ignored;
         };
+        Self::walk_key_event_from(focused, event)
+    }
 
+    /// Offer `event` to `focused` and then its ancestors, until one handles it.
+    fn walk_key_event_from(focused: Rc<FocusNode>, event: &KeyEvent) -> KeyEventResult {
         for node in std::iter::once(Rc::clone(&focused)).chain(focused.ancestors()) {
             match node.handle_key_event(event) {
                 KeyEventResult::Ignored => {}

@@ -38,7 +38,8 @@
 //! use std::{cell::{Cell, RefCell}, num::NonZeroU64, rc::Rc, time::Duration};
 //! use flui::interaction::{
 //!     GestureArena, GestureArenaMember, GestureDeadlineError,
-//!     GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition, PointerId,
+//!     GestureContest, GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition,
+//!     PointerId,
 //! };
 //!
 //! struct TimedMember {
@@ -58,8 +59,8 @@
 //! }
 //!
 //! impl GestureArenaMember for TimedMember {
-//!     fn accept_gesture(&self, _: PointerId) { self.settle(); }
-//!     fn reject_gesture(&self, _: PointerId) { self.settle(); }
+//!     fn accept_gesture(&self, _: GestureContest) { self.settle(); }
+//!     fn reject_gesture(&self, _: GestureContest) { self.settle(); }
 //! }
 //!
 //! let arena = GestureArena::new();
@@ -134,9 +135,10 @@ pub use flui_interaction::{
     GestureEndReason, GestureProfiles, GestureRecognizer, GestureSettings, GestureSettingsError,
     HorizontalDragGestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
     MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails,
-    MultiTapGestureRecognizer, PanGestureRecognizer, PointerId, ScaleGestureRecognizer,
-    TapAndDragGestureRecognizer, TapDragDownDetails, TapDragEndDetails, TapDragStartDetails,
-    TapDragUpDetails, TapDragUpdateDetails, TapGestureRecognizer, VerticalDragGestureRecognizer,
+    MultiTapCount, MultiTapCountError, MultiTapGestureRecognizer, PanGestureRecognizer, PointerId,
+    ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapDragDownDetails, TapDragEndDetails,
+    TapDragStartDetails, TapDragUpDetails, TapDragUpdateDetails, TapGestureRecognizer,
+    VerticalDragGestureRecognizer,
 };
 pub use flui_interaction::{
     ForcePressDetails, LongPressCallback, LongPressDetails, LongPressDownCallback,

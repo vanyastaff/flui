@@ -1032,9 +1032,9 @@ error[E0277]: `std::rc::Weak<(dyn GestureArenaMember + 'static)>` cannot be sent
   |     |
   |     required by a bound introduced by this call
   |
-  = help: within `(std::rc::Weak<(dyn GestureArenaMember + 'static)>, GestureDisposition)`, the trait `Send` is not implemented for `std::rc::Weak<(dyn GestureArenaMember + 'static)>`
-  = note: required because it appears within the type `(std::rc::Weak<(dyn GestureArenaMember + 'static)>, GestureDisposition)`
-  = note: required for `smallvec::SmallVec<[(std::rc::Weak<(dyn GestureArenaMember + 'static)>, GestureDisposition); 4]>` to implement `Send`
+  = help: within `(std::rc::Weak<(dyn GestureArenaMember + 'static)>, GestureDisposition, GestureContest)`, the trait `Send` is not implemented for `std::rc::Weak<(dyn GestureArenaMember + 'static)>`
+  = note: required because it appears within the type `(std::rc::Weak<(dyn GestureArenaMember + 'static)>, GestureDisposition, GestureContest)`
+  = note: required for `smallvec::SmallVec<[(std::rc::Weak<(dyn GestureArenaMember + 'static)>, GestureDisposition, GestureContest); 2]>` to implement `Send`
 note: required because it appears within the type `gesture::arena::DetachedArenaBatch`
  --> src/gesture/arena/mod.rs
   |

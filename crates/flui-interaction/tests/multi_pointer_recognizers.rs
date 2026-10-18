@@ -2,6 +2,7 @@
 //! production `GestureBinding`: the binding closes each arena after Down,
 //! sweeps it after Up, and the frame drains lone-member default wins, exactly
 //! as a presentation drives them.
+use flui_interaction::gesture::GestureContest;
 use std::{
     cell::{Cell, RefCell},
     f64::consts::PI,
@@ -1741,10 +1742,13 @@ fn stationary_gesture_measured_excursion(family: &str) {
                 .on_double_tap(move |_| r.set(r.get() + 1))
                 .on_double_tap_cancel(move |_| c.set(c.get() + 1))
                 .build(),
-            "multi tap" => MultiTapGestureRecognizer::builder(rig.binding.arena().clone(), 2)
-                .on_multi_tap(move |_| r.set(r.get() + 1))
-                .on_multi_tap_cancel(move |_| c.set(c.get() + 1))
-                .build(),
+            "multi tap" => MultiTapGestureRecognizer::builder(
+                rig.binding.arena().clone(),
+                flui_interaction::MultiTapCount::TWO,
+            )
+            .on_multi_tap(move |_| r.set(r.get() + 1))
+            .on_multi_tap_cancel(move |_| c.set(c.get() + 1))
+            .build(),
             _ => unreachable!(),
         };
         rig.attach(&owner, None);
@@ -2264,10 +2268,10 @@ struct CancelRival {
     accepted: Rc<Cell<usize>>,
 }
 impl flui_interaction::GestureArenaMember for CancelRival {
-    fn accept_gesture(&self, _: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {
         self.accepted.set(self.accepted.get() + 1);
     }
-    fn reject_gesture(&self, _: PointerId) {
+    fn reject_gesture(&self, _: GestureContest) {
         (self.reject)();
     }
 }

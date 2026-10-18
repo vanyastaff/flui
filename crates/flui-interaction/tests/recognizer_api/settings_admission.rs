@@ -1,5 +1,6 @@
 //! Settings are admitted by contacts and remain stable until terminal delivery.
 
+use flui_interaction::gesture::GestureContest;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -70,8 +71,8 @@ fn send(recognizer: &dyn GestureRecognizer, arena: &GestureArena, event: &Pointe
 
 struct Rival;
 impl GestureArenaMember for Rival {
-    fn accept_gesture(&self, _: PointerId) {}
-    fn reject_gesture(&self, _: PointerId) {}
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, _: GestureContest) {}
 }
 
 fn contested_down(
@@ -93,10 +94,11 @@ fn multi_tap_retains_whole_attempt_policy() {
     let source = GestureSettingsSource::new(old.clone());
     let taps = Rc::new(Cell::new(0));
     let output = taps.clone();
-    let tap = MultiTapGestureRecognizer::builder(arena.clone(), 2)
-        .settings(source.provider())
-        .on_multi_tap(move |_| output.set(output.get() + 1))
-        .build();
+    let tap =
+        MultiTapGestureRecognizer::builder(arena.clone(), flui_interaction::MultiTapCount::TWO)
+            .settings(source.provider())
+            .on_multi_tap(move |_| output.set(output.get() + 1))
+            .build();
     for (a, expected) in [(40, 1), (42, 1), (44, 2)] {
         send(
             &*tap,

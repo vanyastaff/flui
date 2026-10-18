@@ -109,6 +109,10 @@ impl GestureContest {
     pub const fn sequence(self) -> Option<InputSequenceId> {
         self.sequence
     }
+
+    pub(crate) const fn generation(self) -> ArenaGeneration {
+        self.generation
+    }
 }
 
 /// The arena member an observation names, held weakly: observing a decision

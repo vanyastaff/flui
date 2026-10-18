@@ -34,6 +34,7 @@ use super::{
         motion_history,
     },
 };
+use crate::gesture::observer::GestureContest;
 use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
@@ -503,6 +504,13 @@ fn carried_ratio(carried: f64, current: f64, baseline: f64) -> Option<f64> {
 impl ScaleState {
     fn index_of(&self, pointer: PointerId) -> Option<usize> {
         self.contacts.iter().position(|c| c.pointer == pointer)
+    }
+
+    /// The contact that joined exactly `contest`.
+    fn index_of_contest(&self, contest: GestureContest) -> Option<usize> {
+        self.contacts
+            .iter()
+            .position(|c| c.entry.contest() == contest)
     }
 
     /// The update the current factors publish. Smoothing shapes only the
@@ -1696,9 +1704,10 @@ impl GestureRecognizer for ScaleGestureRecognizer {
 }
 
 impl GestureArenaMember for ScaleGestureRecognizer {
-    fn accept_gesture(&self, pointer: PointerId) {
+    fn accept_gesture(&self, contest: GestureContest) {
+        let pointer = contest.pointer();
         let mut state = self.gesture_state.borrow_mut();
-        if state.index_of(pointer).is_none() {
+        if state.index_of_contest(contest).is_none() {
             return;
         }
         let first_win = !state.won;
@@ -1729,12 +1738,13 @@ impl GestureArenaMember for ScaleGestureRecognizer {
         }
     }
 
-    fn reject_gesture(&self, pointer: PointerId) {
+    fn reject_gesture(&self, contest: GestureContest) {
+        let pointer = contest.pointer();
         // The contact's arena went to a competitor: it no longer belongs to
         // this scale.
         let id = {
             let state = self.gesture_state.borrow();
-            let Some(index) = state.index_of(pointer) else {
+            let Some(index) = state.index_of_contest(contest) else {
                 return;
             };
             state.contacts[index].id

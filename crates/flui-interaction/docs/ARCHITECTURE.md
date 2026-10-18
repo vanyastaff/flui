@@ -322,6 +322,14 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   The generated operation sequences in
   `arena_settles_every_member_exactly_once` assert terminal verdict uniqueness
   and settlement across pointer reuse.
+- **A verdict names its contest, not its pointer (ADR-0230).** A contest a
+  hold kept past its Up settles while the same pointer ID's next contact is
+  down, so `accept_gesture` and `reject_gesture` receive the `GestureContest`
+  they settle and a member that outlives one contact compares it with its
+  entry's (`PrimaryContact::tracks_contest`). Sweeping a contest ends only the
+  `Sequenced` successors that contest carried. The `gesture_lifecycle_matrix`
+  rows `a_held_earlier_contest_cannot_end_the_next_contact` and
+  `a_swept_earlier_generation_keeps_the_next_contacts_successors` pin both.
 - **One ownership table decides a moving contact (ADR-0208).** Drag, multi-drag,
   tap-and-drag and scale admit with a `MotionRole` (axial, free, channel leaf) and claims through
   `GestureArenaEntry::claim_motion` with the root-space displacement since
@@ -757,9 +765,13 @@ an indicator can follow it (`keyboard_focus_contracts`).
 The key ledger in `focus/key_ledger.rs` sits between the global handlers, which
 still see every event, and the focus walk. It records, per held key (physical
 `Code`, or the logical key when the code is `Unidentified`), the traversal unit
-that had primary focus at key-down, before any handler runs; a repeat or
-release reaches the walk only while that unit still has primary focus, and a
-release clears the record. A key-down that moved focus by traversal rebinds the
+that had primary focus at key-down, and the node its walk started from,
+before any handler runs; a repeat reaches the walk only while that unit still
+has primary focus. A release clears the record and reaches the walk that heard
+the press: from the primary focus while the unit still has it, otherwise from
+the recorded node while it is still in the tree, so what the press began (a
+keyboard scroll) ends and the node focused since hears nothing
+(`a_released_key_reaches_the_node_that_took_its_press`). A key-down that moved focus by traversal rebinds the
 record to the new unit after the walk, so a held Tab keeps moving; one that
 moved focus programmatically (Enter opening a page) does not, so its repeats
 never reach the new page's field (`key_repeats_follow_their_key_down`). A key

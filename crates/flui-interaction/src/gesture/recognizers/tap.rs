@@ -7,12 +7,12 @@ use super::{
 };
 use crate::events::PointerButton;
 use crate::gesture::details::{TapDownDetails, TapUpDetails};
+use crate::gesture::observer::GestureContest;
 use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{GestureArena, GestureArenaEntry, GestureArenaMember},
     gesture::settings::GestureSettingsProvider,
-    ids::PointerId,
     pointer::PointerDispatch,
 };
 use flui_foundation::geometry::Offset;
@@ -316,12 +316,12 @@ struct TapArenaMember {
     sequence: ContactId,
 }
 impl GestureArenaMember for TapArenaMember {
-    fn accept_gesture(&self, _: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {
         if let Some(recognizer) = self.recognizer.upgrade() {
             recognizer.accept_sequence(self.sequence);
         }
     }
-    fn reject_gesture(&self, _: PointerId) {
+    fn reject_gesture(&self, _: GestureContest) {
         if let Some(recognizer) = self.recognizer.upgrade() {
             recognizer.reject_sequence(self.sequence);
         }
@@ -598,6 +598,6 @@ impl GestureRecognizer for TapGestureRecognizer {
     }
 }
 impl GestureArenaMember for TapGestureRecognizer {
-    fn accept_gesture(&self, _: PointerId) {}
-    fn reject_gesture(&self, _: PointerId) {}
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, _: GestureContest) {}
 }

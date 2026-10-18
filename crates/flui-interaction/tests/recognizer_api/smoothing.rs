@@ -2,6 +2,7 @@
 //! are smoothed, decisions before it read the raw samples, and every accepted
 //! gesture starts from an unsmoothed position.
 
+use flui_interaction::gesture::GestureContest;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -26,8 +27,8 @@ const PERIOD_NANOS: u64 = 8_000_000;
 
 struct Rival;
 impl GestureArenaMember for Rival {
-    fn accept_gesture(&self, _: PointerId) {}
-    fn reject_gesture(&self, _: PointerId) {}
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, _: GestureContest) {}
 }
 
 fn pointer(raw: u64) -> PointerId {

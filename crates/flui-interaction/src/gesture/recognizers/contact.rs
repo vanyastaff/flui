@@ -21,6 +21,7 @@ use crate::{
         AdmissionContext, GestureArena, GestureArenaEntry, GestureArenaMember,
         GestureDeadlineRegistration, GestureDisposition, MotionRole, SweepModel,
     },
+    gesture::observer::GestureContest,
     gesture::settings::GestureSettings,
     ids::PointerId,
     pointer::{PointerDispatch, pointer_capture::ContactFeeder},
@@ -299,6 +300,16 @@ impl PrimaryContact {
             .borrow()
             .as_ref()
             .is_some_and(|contact| contact.snapshot.pointer == pointer)
+    }
+
+    /// Whether a verdict for `contest` settles this contact: the contest its
+    /// Down joined, never an earlier one of the same pointer ID.
+    #[must_use]
+    pub fn tracks_contest(&self, contest: GestureContest) -> bool {
+        self.current
+            .borrow()
+            .as_ref()
+            .is_some_and(|contact| contact.entry.contest() == contest)
     }
 
     /// Claim this contact's exact arena entry.

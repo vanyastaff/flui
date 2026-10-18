@@ -396,13 +396,13 @@ pub(crate) fn listener_unmount_preserves_one_captured_contact_terminal() {
 }
 
 pub(crate) fn listener_admission_keeps_terminal_delivery_and_weak_ownership() {
-    use flui_interaction::{CancelOutcome, GestureArenaMember, GestureRecognizer, PointerId};
+    use flui_interaction::{CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer};
     use std::cell::RefCell;
 
     struct ContactObserver(Rc<RefCell<Vec<&'static str>>>);
     impl GestureArenaMember for ContactObserver {
-        fn accept_gesture(&self, _: PointerId) {}
-        fn reject_gesture(&self, _: PointerId) {}
+        fn accept_gesture(&self, _: GestureContest) {}
+        fn reject_gesture(&self, _: GestureContest) {}
     }
     impl GestureRecognizer for ContactObserver {
         fn add_pointer(&self, _: PointerDispatch<'_>) {
@@ -451,11 +451,11 @@ pub(crate) fn listener_admission_keeps_terminal_delivery_and_weak_ownership() {
 }
 
 pub(crate) fn listener_raw_observer_panic_still_delivers_the_recognizer_event() {
-    use flui_interaction::{CancelOutcome, GestureArenaMember, GestureRecognizer, PointerId};
+    use flui_interaction::{CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer};
     struct Observer(Rc<Cell<usize>>);
     impl GestureArenaMember for Observer {
-        fn accept_gesture(&self, _: PointerId) {}
-        fn reject_gesture(&self, _: PointerId) {}
+        fn accept_gesture(&self, _: GestureContest) {}
+        fn reject_gesture(&self, _: GestureContest) {}
     }
     impl GestureRecognizer for Observer {
         fn add_pointer(&self, _: PointerDispatch<'_>) {
@@ -503,7 +503,9 @@ pub(crate) fn listener_raw_observer_panic_still_delivers_the_recognizer_event() 
 /// with the revised sample, and never its recognizers, which decided on the
 /// estimate.
 pub(crate) fn a_revision_reaches_listeners_and_never_recognizers() {
-    use flui_interaction::{CancelOutcome, GestureArenaMember, GestureRecognizer, PointerId};
+    use flui_interaction::{
+        CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer, PointerId,
+    };
     use flui_platform_api::EventTime;
     use flui_platform_api::pointer::{
         PenTool, PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind,
@@ -512,8 +514,8 @@ pub(crate) fn a_revision_reaches_listeners_and_never_recognizers() {
     use std::cell::RefCell;
     struct Observer(Rc<RefCell<Vec<&'static str>>>);
     impl GestureArenaMember for Observer {
-        fn accept_gesture(&self, _: PointerId) {}
-        fn reject_gesture(&self, _: PointerId) {}
+        fn accept_gesture(&self, _: GestureContest) {}
+        fn reject_gesture(&self, _: GestureContest) {}
     }
     impl GestureRecognizer for Observer {
         fn add_pointer(&self, _: PointerDispatch<'_>) {}
@@ -583,8 +585,8 @@ pub(crate) fn a_revision_reaches_listeners_and_never_recognizers() {
 
 pub(crate) fn custom_recognizer_competes_through_a_listener() {
     use flui_interaction::{
-        ArenaMembership, CancelOutcome, GestureArenaMember, GestureRecognizer, GestureSettings,
-        PointerId, PrimaryContact, TapGestureRecognizer,
+        ArenaMembership, CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer,
+        GestureSettings, PrimaryContact, TapGestureRecognizer,
     };
     use flui_rendering::hit_testing::PointerEvent;
     use flui_view::prelude::*;
@@ -596,10 +598,10 @@ pub(crate) fn custom_recognizer_competes_through_a_listener() {
         events: Rc<RefCell<Vec<&'static str>>>,
     }
     impl GestureArenaMember for ExternalRecognizer {
-        fn accept_gesture(&self, _: PointerId) {
+        fn accept_gesture(&self, _: GestureContest) {
             self.events.borrow_mut().push("custom won");
         }
-        fn reject_gesture(&self, _: PointerId) {
+        fn reject_gesture(&self, _: GestureContest) {
             self.contact.finish();
         }
     }

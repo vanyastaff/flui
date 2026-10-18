@@ -45,7 +45,7 @@ fn main() {
         .on_long_press_end(|LongPressEndDetails { velocity, .. }| { let _ = velocity; })
         .on_long_press_cancel(|LongPressDetails { kind, .. }| { let _ = kind; })
         .build();
-    let _multi = MultiTapGestureRecognizer::builder(arena, 2)
+    let _multi = MultiTapGestureRecognizer::builder(arena, flui_interaction::MultiTapCount::TWO)
         .on_multi_tap(|MultiTapDetails { positions, .. }| { let _ = positions; })
         .build();
 }

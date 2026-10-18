@@ -996,11 +996,11 @@ pub(crate) fn held_replay_preserves_hardware_history_and_drag_velocity() {
 struct AcceptLog(Rc<Cell<usize>>);
 
 impl GestureArenaMember for AcceptLog {
-    fn accept_gesture(&self, _: PointerId) {
+    fn accept_gesture(&self, _: flui_interaction::GestureContest) {
         self.0.set(self.0.get() + 1);
     }
 
-    fn reject_gesture(&self, _: PointerId) {}
+    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 }
 
 pub(crate) fn a_secondary_deferred_arena_verdict_is_delivered_by_the_next_frame() {

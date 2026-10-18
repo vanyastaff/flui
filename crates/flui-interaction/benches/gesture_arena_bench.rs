@@ -22,6 +22,7 @@
 // Bench harness, not public API; `criterion_group!` generates the
 // undocumentable entry fn.
 
+use flui_interaction::gesture::GestureContest;
 use std::cell::Cell;
 use std::hint::black_box;
 use std::rc::Rc;
@@ -45,8 +46,8 @@ struct BenchMember {
 }
 
 impl GestureArenaMember for BenchMember {
-    fn accept_gesture(&self, _pointer: PointerId) {}
-    fn reject_gesture(&self, _pointer: PointerId) {}
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, _: GestureContest) {}
 }
 
 /// Pre-build a pool of recogniser handles so per-iteration setup is
@@ -154,11 +155,11 @@ struct ResolutionMember {
 }
 
 impl GestureArenaMember for ResolutionMember {
-    fn accept_gesture(&self, _: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {
         self.accepted.set(self.accepted.get() + 1);
     }
 
-    fn reject_gesture(&self, _: PointerId) {
+    fn reject_gesture(&self, _: GestureContest) {
         self.rejected.set(self.rejected.get() + 1);
     }
 }

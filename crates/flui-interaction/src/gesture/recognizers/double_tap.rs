@@ -5,12 +5,12 @@ use super::{
     contact::{ArenaMembership, PrimaryContact},
     recognizer::{CancelOutcome, GestureRecognizer, is_primary_down, measured_positions},
 };
+use crate::gesture::observer::GestureContest;
 use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
     gesture::settings::{GestureSettings, GestureSettingsProvider},
-    ids::PointerId,
     pointer::PointerDispatch,
 };
 use core::time::Duration;
@@ -419,8 +419,8 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
     }
 }
 impl GestureArenaMember for DoubleTapGestureRecognizer {
-    fn accept_gesture(&self, _: PointerId) {}
-    fn reject_gesture(&self, _: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, _: GestureContest) {
         if self.contact.current().is_some() {
             self.retire_attempt(self.details(), false);
         }

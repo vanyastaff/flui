@@ -1,5 +1,6 @@
 //! Public extension contracts, mounted with the atomic recognizer migration.
 
+use flui_interaction::gesture::GestureContest;
 use std::{
     cell::{Cell, RefCell},
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
@@ -85,11 +86,11 @@ impl Extension {
 }
 
 impl GestureArenaMember for Extension {
-    fn accept_gesture(&self, _pointer: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {
         self.log.borrow_mut().push("accepted");
     }
 
-    fn reject_gesture(&self, _pointer: PointerId) {
+    fn reject_gesture(&self, _: GestureContest) {
         self.log.borrow_mut().push("rejected");
     }
 
@@ -619,7 +620,9 @@ fn double_tap_drop_releases_a_pending_sweep_without_inline_notifications() {
 
 fn multi_tap_drop_releases_a_pending_sweep_without_inline_notifications() {
     held_recognizer_drop_releases_pending_sweep(
-        |arena| MultiTapGestureRecognizer::builder(arena, 2).build(),
+        |arena| {
+            MultiTapGestureRecognizer::builder(arena, flui_interaction::MultiTapCount::TWO).build()
+        },
         true,
     );
 }

@@ -680,8 +680,32 @@ impl GestureBinding {
     /// `CursorLeft`) routes here; without it a widget hovered at the moment
     /// the cursor crosses the window edge stays hovered forever. Must run
     /// inside the owner lane scope, like every other dispatch on this binding.
+    ///
+    /// Hover moves queued for the next frame are dropped first: delivered
+    /// after the leave they would hover regions that heard their `on_exit`.
     pub fn handle_pointer_left_window(&self) {
-        self.dispatch(|| self.mouse_tracker.dispatch_window_left());
+        self.dispatch(|| {
+            let mut first_panic = self.drop_queued_hovers(|_, _| true);
+            let left = RoutePanic::capture(|| self.mouse_tracker.dispatch_window_left());
+            RoutePanic::preserve_first(&mut first_panic, left, "window left");
+            if let Some(panic) = first_panic {
+                panic.resume();
+            }
+        });
+    }
+
+    /// Drop the queued hover moves `leaving` selects, before the leave that
+    /// ends their pointer's hover is delivered, retiring their hit paths
+    /// outside the queue's borrow.
+    fn drop_queued_hovers(
+        &self,
+        leaving: impl Fn(MoveKey, &PointerEvent) -> bool,
+    ) -> Option<RoutePanic> {
+        let mut first_panic = None;
+        for hit_test in self.moves.remove_queued_hovers(leaving) {
+            hit_test.retire_metadata(&mut first_panic);
+        }
+        first_panic
     }
 
     /// Whether hover is frozen: a moving member owns a continuing contact (a
@@ -1273,8 +1297,11 @@ impl GestureBinding {
         self.dispatch(|| {
             self.scrolls.drain();
             let native_sequences = self.pan_zooms.drain();
-            let mut first_panic = self.drain_capture_losses(None);
+            // Forget the refusals of earlier contacts first: the capture
+            // losses drained next, and the contacts cancelled below, record
+            // refusals of their own that must survive this call.
             self.contacts.reset_refusals();
+            let mut first_panic = self.drain_capture_losses(None);
             let contacts = self.contacts.contacts(None);
             pan_zoom_sequences::retire_sequences(native_sequences, &mut first_panic);
             for contact in contacts {
@@ -1311,6 +1338,13 @@ impl GestureBinding {
                     delivered,
                     "focus-loss pointer cancel",
                 );
+                // The pointer may still be pressed: what the platform reports
+                // of it until a fresh Down belongs to no contact, and is not
+                // hover. A contact a handler admitted again meanwhile is its
+                // own sequence and keeps it.
+                if !self.contacts.contains(contact.pointer.id) {
+                    self.contacts.refuse_released(contact.pointer);
+                }
             }
             if let Some(panic) = first_panic {
                 panic.resume();
@@ -1488,6 +1522,12 @@ impl GestureBinding {
             // global observers without fabricating a per-pointer route.
             let mut first_panic = incoming.take();
             if let PointerEvent::DeviceRemoved(device) = event {
+                // A removed device hovers nothing at the next frame.
+                let dropped = self.drop_queued_hovers(|_, queued| {
+                    crate::events::pointer_info(queued).and_then(|info| info.device)
+                        == Some(device.device)
+                });
+                RoutePanic::preserve_first(&mut first_panic, dropped, "removed-device hover moves");
                 let source = SignalSource::Device(device.device);
                 self.scrolls.withdraw_source(source);
                 let native = self.pan_zooms.withdraw_source(source);
@@ -1769,6 +1809,13 @@ impl GestureBinding {
                 }
             }
             PointerEvent::Enter(_) | PointerEvent::Leave(_) => {
+                // A hover move queued before the Leave would reach the frame
+                // after it; the Leave ends the pointer's hover here and now.
+                let mut first_panic = if matches!(event, PointerEvent::Leave(_)) {
+                    self.drop_queued_hovers(|key, _| key == (surface, pointer_id))
+                } else {
+                    None
+                };
                 // An active contact keeps capture semantics: deliver on the
                 // route hit-tested at Down, like every other mid-contact
                 // event of the sequence (a down pointer's events go over the
@@ -1796,7 +1843,8 @@ impl GestureBinding {
                     };
                     self.dispatch_ephemeral(event, &result)
                 };
-                if let Some(panic) = panic {
+                RoutePanic::preserve_first(&mut first_panic, panic, "pointer boundary dispatch");
+                if let Some(panic) = first_panic {
                     panic.resume();
                 }
             }

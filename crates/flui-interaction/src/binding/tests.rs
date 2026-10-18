@@ -1,3 +1,4 @@
+use crate::gesture::GestureContest;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -13,11 +14,11 @@ struct CountingArenaMember {
 }
 
 impl crate::gesture::arena::GestureArenaMember for CountingArenaMember {
-    fn accept_gesture(&self, _pointer: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {
         self.accepts.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn reject_gesture(&self, _pointer: PointerId) {
+    fn reject_gesture(&self, _: GestureContest) {
         self.rejects.fetch_add(1, Ordering::Relaxed);
     }
 }
@@ -26,11 +27,11 @@ impl crate::gesture::arena::GestureArenaMember for CountingArenaMember {
 struct PanickingAcceptArenaMember;
 
 impl crate::gesture::arena::GestureArenaMember for PanickingAcceptArenaMember {
-    fn accept_gesture(&self, _pointer: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {
         panic!("arena accept panic");
     }
 
-    fn reject_gesture(&self, _pointer: PointerId) {}
+    fn reject_gesture(&self, _: GestureContest) {}
 }
 
 fn set_resampling(binding: &GestureBinding, enabled: bool) {
