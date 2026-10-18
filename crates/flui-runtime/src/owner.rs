@@ -30,7 +30,9 @@ mod text_sizing;
 pub use callback::OwnerCallback;
 pub use delivery::{Delivery, DispatchError, FrameDispatcher, OwnerEffects};
 pub use preferences::SystemPreferencesSnapshot;
-pub use presentation_dispatch::{InputOutcome, PresentationDispatcher, WindowObservation};
+pub use presentation_dispatch::{
+    DisplayUpdate, InputOutcome, PresentationDispatcher, WindowObservation,
+};
 use runtime_dispatch::RuntimeWork;
 pub use runtime_dispatch::{RuntimeDispatcher, RuntimeOperation};
 pub use status::RuntimeStatus;

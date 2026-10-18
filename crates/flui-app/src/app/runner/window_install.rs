@@ -256,6 +256,30 @@ impl WindowInstall {
         self.observe(WindowObservation::Brightness(window.appearance().into()));
     }
 
+    /// Follow the display this window is on into the presentation's refresh
+    /// period (ADR-0236).
+    ///
+    /// The window's hint is registered before the seed is derived, so a move
+    /// between the two is delivered rather than lost, and the presentation
+    /// starts on its real display and period before its first frame. The hint
+    /// carries nothing: it wakes the owner, whose next turn samples the
+    /// platform's snapshot and re-derives every window. Without an installed
+    /// owner platform there is nothing to wake and the hint does nothing.
+    pub(super) fn observe_display(&mut self) {
+        let window = Arc::clone(self.window.native());
+        let dispatcher = self.dispatcher();
+        let proxy = super::host::with_owner_platform(flui_platform::OwnerPlatform::proxy);
+        window.on_display_changed(Box::new(move || {
+            if let Some(proxy) = &proxy {
+                // A failed wake leaves the owner's retry debt; nothing to do.
+                let _ = proxy.wake();
+            }
+        }));
+        self.host.displays().follow(dispatcher, &window);
+        let seed = self.host.displays().derive(window.as_ref());
+        self.observe(WindowObservation::Display(seed));
+    }
+
     /// Complete Web bootstrap wiring before sampling and publishing native state.
     #[cfg(any(
         target_arch = "wasm32",
@@ -303,6 +327,7 @@ impl WindowInstall {
             );
         }));
         self.observe_appearance();
+        self.observe_display();
         // Observers precede the snapshot. Keep redraw ownership published
         // before lifecycle reconciliation can synchronously request a frame.
         let metrics = WindowObservation::Metrics {

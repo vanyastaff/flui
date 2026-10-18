@@ -7,7 +7,29 @@ use flui_foundation::{
     PresentationAddress,
     geometry::{EdgeInsets, Size},
 };
-use flui_platform_api::{Brightness, PlatformInput, WindowExecutionState};
+use flui_platform_api::{Brightness, PlatformInput, WindowDisplay, WindowExecutionState};
+
+/// The display a window is on, as the host derived it from the platform's
+/// snapshot: a value to *set*, including "unknown". It is a type of its own
+/// because a coalesced batch must let a newer "unknown" replace an older known
+/// display; a bare `Option<WindowDisplay>` would be merged as "keep the older
+/// when the newer has nothing".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DisplayUpdate(Option<WindowDisplay>);
+
+impl DisplayUpdate {
+    /// An update that sets the window's display to `display`.
+    #[must_use]
+    pub const fn new(display: Option<WindowDisplay>) -> Self {
+        Self(display)
+    }
+
+    /// The display this update sets.
+    #[must_use]
+    pub const fn get(self) -> Option<WindowDisplay> {
+        self.0
+    }
+}
 
 /// Normalized observations of one native window, without backend-specific types.
 #[derive(Clone, Copy, Debug)]
@@ -41,6 +63,8 @@ pub enum WindowObservation {
     SafeArea(EdgeInsets),
     /// Normalized system appearance changed.
     Brightness(Brightness),
+    /// The display the window is on, or that display's refresh period, changed.
+    Display(DisplayUpdate),
 }
 
 impl WindowObservation {
@@ -76,6 +100,11 @@ impl WindowObservation {
                 ..Default::default()
             }
             .apply(runtime, address, effects),
+            Self::Display(update) => PendingWindowState {
+                display: Some(update),
+                ..Default::default()
+            }
+            .apply(runtime, address, effects),
         }
     }
 }
@@ -87,6 +116,8 @@ pub(super) struct PendingWindowState {
     metrics: Option<(Size<f64>, f64)>,
     safe_area: Option<EdgeInsets>,
     brightness: Option<Brightness>,
+    /// The newest display update; an update to "unknown" is still an update.
+    display: Option<DisplayUpdate>,
 }
 
 impl PendingWindowState {
@@ -114,6 +145,10 @@ impl PendingWindowState {
                 brightness: Some(brightness),
                 ..Self::default()
             }),
+            WindowObservation::Display(update) => Ok(Self {
+                display: Some(update),
+                ..Self::default()
+            }),
             other => Err(other),
         }
     }
@@ -122,6 +157,7 @@ impl PendingWindowState {
         self.metrics = newer.metrics.or(self.metrics);
         self.safe_area = newer.safe_area.or(self.safe_area);
         self.brightness = newer.brightness.or(self.brightness);
+        self.display = newer.display.or(self.display);
     }
 
     pub(super) fn apply(
@@ -132,6 +168,10 @@ impl PendingWindowState {
     ) {
         let id = address.presentation_id;
         let mut first = None;
+        // A display update asks for its own redraw, and only when it changes the
+        // display the presentation holds (see `UiRuntime::apply_window_display`).
+        let redraw =
+            self.metrics.is_some() || self.safe_area.is_some() || self.brightness.is_some();
         if let Some((size, scale)) = self.metrics {
             first = catch_unwind(AssertUnwindSafe(|| {
                 effects.resize_surface(address, size, scale);
@@ -176,12 +216,25 @@ impl PendingWindowState {
             failure,
             "window state publication",
         );
-        let failure = catch_unwind(AssertUnwindSafe(|| runtime.request_redraw())).err();
-        crate::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut first,
-            failure,
-            "window state redraw",
-        );
+        if let Some(update) = self.display {
+            let failure = catch_unwind(AssertUnwindSafe(|| {
+                runtime.apply_window_display(id, update.get());
+            }))
+            .err();
+            crate::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first,
+                failure,
+                "window display publication",
+            );
+        }
+        if redraw {
+            let failure = catch_unwind(AssertUnwindSafe(|| runtime.request_redraw())).err();
+            crate::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first,
+                failure,
+                "window state redraw",
+            );
+        }
         super::finish_retirement(first);
     }
 }

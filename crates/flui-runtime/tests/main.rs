@@ -93,6 +93,8 @@ mod numeric_text_answers;
 mod owner_close;
 #[path = "contracts/owner_delivery.rs"]
 mod owner_delivery;
+#[path = "contracts/owner_display.rs"]
+mod owner_display;
 #[path = "contracts/owner_input.rs"]
 mod owner_input;
 #[path = "contracts/owner_metrics.rs"]

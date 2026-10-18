@@ -169,6 +169,11 @@ pub(in crate::app) enum RuntimeEvent {
     /// (`PlatformWindow::on_appearance_changed`). Republishes
     /// `MediaQueryData::platform_brightness` through the root media query.
     AppearanceChanged(flui_platform_api::Brightness),
+    /// The host derived a new display for this window from the platform's
+    /// snapshot (`display_host`): which display it is on and that display's
+    /// refresh period, possibly "unknown". Delivered after every sample and
+    /// acted on only when it differs from what the presentation holds.
+    DisplayChanged(flui_runtime::owner::DisplayUpdate),
     /// The pointer entered (`true`) or left (`false`) the window (winit's
     /// `CursorEntered`/`CursorLeft`, via
     /// `PlatformWindow::on_hover_status_change`). Leave sweeps the addressed
@@ -233,6 +238,7 @@ impl RuntimeEvent {
             Self::WindowExecution(execution) => WindowObservation::Execution(execution),
             Self::WindowHover(inside) => WindowObservation::Hover(inside),
             Self::AppearanceChanged(brightness) => WindowObservation::Brightness(brightness),
+            Self::DisplayChanged(update) => WindowObservation::Display(update),
         };
         target.observe(observation, host.effects())
     }
@@ -812,6 +818,9 @@ pub(super) fn teardown_platform_ui_runtime() {
     }
 }
 
+#[path = "owner_dispatch/display_tests.rs"]
+#[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
+mod display_tests;
 #[path = "owner_dispatch/tests.rs"]
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 mod owner_dispatch_tests;

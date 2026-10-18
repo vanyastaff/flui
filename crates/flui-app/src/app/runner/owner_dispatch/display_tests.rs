@@ -1,0 +1,589 @@
+//! The host's display delivery (ADR-0236), driven end to end through the
+//! headless platform: injected displays and changes, real installed windows,
+//! real owner turns. Declared in `owner_dispatch.rs` through `#[path]` because
+//! the host it exercises is private to the runner.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
+
+use flui_platform::traits::PlatformWindow;
+use flui_platform::{
+    DisplayChange, DisplaySpec, HeadlessDisplayControls, HeadlessOwnerTurns, HeadlessPlatform,
+    MockWindow, Platform as _,
+};
+use flui_platform_api::{DisplayId, DisplaySnapshot, WindowDisplay};
+
+use super::super::host::{
+    OwnerHostClearGuard, build_ui_runtime, install_owner_platform, refresh_displays_with,
+    with_owner_platform,
+};
+use super::*;
+
+const LEFT: usize = 0;
+const RIGHT: usize = 1;
+
+/// A booted headless host with two displays: the left one runs 16 ms frames,
+/// the right one reports no period.
+struct Rig {
+    controls: HeadlessDisplayControls,
+    turns: HeadlessOwnerTurns,
+    ids: Vec<DisplayId>,
+    _clear: OwnerHostClearGuard,
+}
+
+fn boot() -> Rig {
+    let clear = OwnerHostClearGuard::arm();
+    let platform = HeadlessPlatform::new().with_displays(vec![
+        DisplaySpec::new("Left", 1920, 1080).with_refresh_period(Duration::from_millis(16)),
+        DisplaySpec::new("Right", 2560, 1440),
+    ]);
+    let controls = platform.display_controls();
+    let turns = platform.owner_turns();
+    let ids = platform
+        .display_snapshot()
+        .expect("snapshot")
+        .displays()
+        .iter()
+        .map(|display| display.id)
+        .collect();
+    Box::new(platform)
+        .run(Box::new(|owner| {
+            install_owner_platform(owner)?;
+            Ok(())
+        }))
+        .expect("headless run");
+    Rig {
+        controls,
+        turns,
+        ids,
+        _clear: clear,
+    }
+}
+
+impl Rig {
+    fn period(&self, index: usize, millis: u64) {
+        self.controls
+            .simulate_display_change(
+                self.ids[index],
+                DisplayChange::RefreshPeriod(Some(Duration::from_millis(millis))),
+            )
+            .expect("change a display");
+    }
+
+    fn accepted() -> Option<DisplaySnapshot> {
+        APP_RUNTIME.with(|slot| slot.borrow().installed_host.displays().snapshot())
+    }
+}
+
+impl Drop for Rig {
+    fn drop(&mut self) {
+        teardown_platform_ui_runtime();
+    }
+}
+
+/// An installed window: its native handle, its presentation, and what the
+/// presentation asked of the window.
+struct Win {
+    native: MockWindow,
+    /// The platform keeps its windows alive; the headless one does not, so the
+    /// test does.
+    _window: Arc<dyn PlatformWindow>,
+    dispatcher: PresentationDispatcher,
+    /// Redraws the window was asked for.
+    redraws: Arc<AtomicUsize>,
+    /// While set, the redraw request fails the way a platform wake can.
+    fail_redraw: Arc<AtomicBool>,
+}
+
+fn open_window(rig: &Rig, display: Option<usize>) -> Win {
+    let host_window =
+        with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
+            .expect("an installed owner")
+            .and_then(flui_platform::WindowOpen::try_ready)
+            .expect("headless windows are ready");
+    let native = host_window
+        .as_any()
+        .downcast_ref::<MockWindow>()
+        .expect("headless window")
+        .clone();
+    let window: Arc<dyn PlatformWindow> = host_window;
+    if let Some(index) = display {
+        native.simulate_move_to(rig.ids[index]).expect("move");
+    }
+    let redraws = Arc::new(AtomicUsize::new(0));
+    let fail_redraw = Arc::new(AtomicBool::new(false));
+    let counter = Arc::clone(&redraws);
+    let failing = Arc::clone(&fail_redraw);
+    window.on_request_frame(Box::new(move || {
+        assert!(
+            !failing.load(Ordering::SeqCst),
+            "injected redraw wake failure"
+        );
+        counter.fetch_add(1, Ordering::SeqCst);
+    }));
+    let runtime = build_ui_runtime(Arc::clone(&window), 1.0).expect("runtime");
+    let mut installation = prepare_ui_runtime_alongside(runtime, Arc::clone(&window));
+    let dispatcher = installation.dispatcher();
+    installation.observe_display();
+    installation
+        .submit()
+        .outcome()
+        .expect("an idle host publishes synchronously")
+        .expect("installed");
+    Win {
+        native,
+        _window: window,
+        dispatcher,
+        redraws,
+        fail_redraw,
+    }
+}
+
+impl Win {
+    fn redraws(&self) -> usize {
+        self.redraws.load(Ordering::SeqCst)
+    }
+
+    /// The display the presentation holds.
+    fn display(&self) -> Option<WindowDisplay> {
+        let id = self.dispatcher.address.presentation_id;
+        let seen = Rc::new(RefCell::new(None));
+        let out = Rc::clone(&seen);
+        dispatch_platform_ui_runtime(
+            self.dispatcher,
+            RuntimeTask::TestCallback(Box::new(move |runtime| {
+                *out.borrow_mut() = Some(runtime.window_display(id));
+            })),
+        )
+        .expect("read the presentation");
+        seen.borrow_mut().take().expect("read synchronously")
+    }
+
+    fn period_ms(&self) -> Option<u128> {
+        self.display()
+            .and_then(|display| display.refresh_period)
+            .map(|period| period.get().as_millis())
+    }
+}
+
+fn seed_holds_every_display_before_the_first_window() {
+    let rig = boot();
+    let accepted = Rig::accepted().expect("the host sampled at install");
+    assert_eq!(accepted.displays().len(), 2, "no window is open yet");
+    assert_eq!(
+        accepted
+            .get(rig.ids[LEFT])
+            .and_then(|display| display.refresh_period)
+            .map(flui_platform::RefreshPeriod::get),
+        Some(Duration::from_millis(16))
+    );
+}
+
+fn refresh_switch_publishes_a_new_snapshot() {
+    let rig = boot();
+    let before = Rig::accepted().expect("seed").revision();
+    let win = open_window(&rig, None);
+    assert_eq!(
+        win.period_ms(),
+        Some(16),
+        "the seed carries the real period"
+    );
+
+    rig.period(LEFT, 8);
+    rig.turns.drive();
+
+    let after = Rig::accepted().expect("snapshot");
+    assert_eq!(after.revision().get(), before.get() + 1);
+    assert_eq!(
+        win.period_ms(),
+        Some(8),
+        "the window follows its display's mode"
+    );
+}
+
+fn change_between_registration_and_seed_is_not_lost() {
+    let rig = boot();
+    let win = open_window(&rig, None);
+    assert_eq!(win.period_ms(), Some(16));
+
+    // The mode switches while the host is sampling: the sample it commits is the
+    // old one, and the switch must still reach the window.
+    let controls = rig.controls.clone();
+    let left = rig.ids[LEFT];
+    refresh_displays_with(move |owner| {
+        let sampled = owner.display_snapshot();
+        controls
+            .simulate_display_change(
+                left,
+                DisplayChange::RefreshPeriod(Some(Duration::from_millis(7))),
+            )
+            .expect("change during the sample");
+        sampled
+    })
+    .expect("sampling");
+    assert_eq!(win.period_ms(), Some(16), "the committed sample was stale");
+
+    rig.turns.drive();
+    assert_eq!(
+        win.period_ms(),
+        Some(7),
+        "the change that raced the sample was lost"
+    );
+}
+
+fn snapshot_is_committed_before_observers_run() {
+    let rig = boot();
+    let win = open_window(&rig, None);
+    let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let log = Arc::clone(&seen);
+    win.native.on_request_frame(Box::new(move || {
+        let accepted = APP_RUNTIME.with(|slot| slot.borrow().installed_host.displays().snapshot());
+        log.lock()
+            .push(accepted.map(|snapshot| snapshot.revision().get()));
+    }));
+    let before = Rig::accepted().expect("seed").revision().get();
+
+    // One sample, taken directly: owner turns re-sample until they are idle, and
+    // a later pass would hide what the first one did.
+    rig.period(LEFT, 8);
+    refresh_displays_with(flui_platform::OwnerPlatform::display_snapshot).expect("sample");
+
+    assert_eq!(
+        *seen.lock(),
+        [Some(before + 1)],
+        "the window observer ran before the host committed the snapshot"
+    );
+}
+
+fn panicking_window_observer_keeps_the_snapshot_and_the_tail() {
+    let rig = boot();
+    let failing = open_window(&rig, None);
+    let healthy = open_window(&rig, None);
+    failing.fail_redraw.store(true, Ordering::SeqCst);
+    let before = Rig::accepted().expect("seed").revision().get();
+
+    rig.period(LEFT, 8);
+    // The owner loop contains the failure; what is left to check is its effect.
+    rig.turns.drive();
+
+    assert_eq!(
+        Rig::accepted().expect("snapshot").revision().get(),
+        before + 1,
+        "a failing window erased the accepted snapshot"
+    );
+    assert_eq!(
+        healthy.period_ms(),
+        Some(8),
+        "a failing sibling cancelled the delivery of the others"
+    );
+}
+
+fn apply_panic_keeps_the_debt_and_the_next_equal_change_is_delivered() {
+    let rig = boot();
+    let win = open_window(&rig, None);
+    win.fail_redraw.store(true, Ordering::SeqCst);
+
+    rig.period(LEFT, 8);
+    rig.turns.drive();
+    assert_eq!(
+        win.period_ms(),
+        Some(16),
+        "a failed apply must leave the old value and the debt"
+    );
+
+    // The platform recovers; the next change leaves the window's own display
+    // exactly as it was last derived, yet the owed value is delivered.
+    win.fail_redraw.store(false, Ordering::SeqCst);
+    rig.controls
+        .simulate_display_change(rig.ids[LEFT], DisplayChange::Name("renamed".into()))
+        .expect("an unrelated field");
+    rig.turns.drive();
+    assert_eq!(
+        win.period_ms(),
+        Some(8),
+        "an equal derived value after a failed apply was not delivered"
+    );
+}
+
+fn foreign_thread_invalidation_wakes_the_owner() {
+    let rig = boot();
+    let win = open_window(&rig, None);
+    let owner_thread = std::thread::current().id();
+    let ran_on = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let log = Arc::clone(&ran_on);
+    win.native.on_request_frame(Box::new(move || {
+        log.lock().push(std::thread::current().id());
+    }));
+
+    let controls = rig.controls.clone();
+    let left = rig.ids[LEFT];
+    std::thread::spawn(move || {
+        controls
+            .simulate_display_change(
+                left,
+                DisplayChange::RefreshPeriod(Some(Duration::from_millis(8))),
+            )
+            .expect("change from a foreign thread");
+    })
+    .join()
+    .expect("foreign thread");
+    assert!(
+        ran_on.lock().is_empty() && win.period_ms() == Some(16),
+        "application code ran on the foreign thread"
+    );
+
+    rig.turns.drive();
+    assert_eq!(
+        win.period_ms(),
+        Some(8),
+        "the invalidation never woke the owner"
+    );
+    assert_eq!(*ran_on.lock(), [owner_thread]);
+}
+
+fn late_callback_cannot_reach_a_replacement_host() {
+    let rig = boot();
+    let old = open_window(&rig, None);
+    let old_controls = rig.controls.clone();
+    let old_left = rig.ids[LEFT];
+
+    // A second platform replaces the host; the first window's callbacks are
+    // now late callbacks of a retired incarnation. The retired platform is kept
+    // alive so the old window can still report a move.
+    let _retired = APP_RUNTIME.with(|slot| slot.borrow().owner_platform.clone());
+    let second = HeadlessPlatform::new().with_displays(vec![DisplaySpec::new("Only", 800, 600)]);
+    let second_turns = second.owner_turns();
+    Box::new(second)
+        .run(Box::new(|owner| {
+            install_owner_platform(owner)?;
+            Ok(())
+        }))
+        .expect("replacement platform");
+    let replacement = Rig::accepted().expect("the replacement host sampled");
+    assert_eq!(replacement.displays().len(), 1);
+
+    let hints = old.redraws();
+    old.native
+        .simulate_move_to(rig.ids[RIGHT])
+        .expect("late hint from the old window");
+    old_controls
+        .simulate_display_change(
+            old_left,
+            DisplayChange::RefreshPeriod(Some(Duration::from_millis(5))),
+        )
+        .expect("late change on the old platform");
+    second_turns.drive();
+
+    let after = Rig::accepted().expect("snapshot");
+    assert_eq!(
+        after.revision(),
+        replacement.revision(),
+        "a late callback moved the replacement host's snapshot"
+    );
+    assert_eq!(
+        old.redraws(),
+        hints,
+        "the retired host delivered to a window"
+    );
+}
+
+fn moving_to_another_display_notifies_once() {
+    let rig = boot();
+    let win = open_window(&rig, None);
+    let before = win.redraws();
+
+    win.native.simulate_move_to(rig.ids[RIGHT]).expect("move");
+    rig.turns.drive();
+
+    assert_eq!(win.redraws(), before + 1, "one move is one notification");
+    assert_eq!(
+        win.display().map(|display| display.id),
+        Some(rig.ids[RIGHT])
+    );
+    assert_eq!(win.period_ms(), None, "the right display reports no period");
+}
+
+fn refresh_change_of_own_display_notifies() {
+    let rig = boot();
+    let win = open_window(&rig, None);
+    let before = win.redraws();
+
+    rig.period(LEFT, 8);
+    rig.turns.drive();
+
+    assert_eq!(win.redraws(), before + 1);
+}
+
+fn other_displays_change_is_silent() {
+    let rig = boot();
+    let win = open_window(&rig, Some(LEFT));
+    let before = win.redraws();
+
+    rig.period(RIGHT, 8);
+    rig.turns.drive();
+
+    assert_eq!(
+        win.redraws(),
+        before,
+        "a display the window is not on woke it"
+    );
+    assert_eq!(win.period_ms(), Some(16));
+}
+
+fn unread_field_change_is_silent() {
+    let rig = boot();
+    let win = open_window(&rig, None);
+    let before = win.redraws();
+
+    rig.controls
+        .simulate_display_change(rig.ids[LEFT], DisplayChange::Name("renamed".into()))
+        .expect("rename");
+    rig.controls
+        .simulate_display_change(rig.ids[LEFT], DisplayChange::ScaleFactor(2.0))
+        .expect("rescale");
+    rig.turns.drive();
+
+    assert_eq!(
+        win.redraws(),
+        before,
+        "a field the window does not read woke it"
+    );
+}
+
+fn several_changes_before_the_turn_deliver_the_last() {
+    let rig = boot();
+    let win = open_window(&rig, None);
+    let before = win.redraws();
+
+    rig.period(LEFT, 12);
+    rig.period(LEFT, 10);
+    rig.period(LEFT, 8);
+    rig.turns.drive();
+
+    assert_eq!(win.period_ms(), Some(8));
+    assert_eq!(win.redraws(), before + 1, "three changes, one delivery");
+}
+
+fn new_secondary_window_starts_on_its_display() {
+    let rig = boot();
+    let _first = open_window(&rig, None);
+    let second = open_window(&rig, Some(RIGHT));
+
+    assert_eq!(
+        second.display().map(|display| display.id),
+        Some(rig.ids[RIGHT]),
+        "the second window started on the primary display's default"
+    );
+}
+
+fn window_opened_after_a_change_starts_with_the_new_period() {
+    let rig = boot();
+    rig.period(LEFT, 8);
+    rig.turns.drive();
+
+    let win = open_window(&rig, None);
+
+    assert_eq!(
+        win.period_ms(),
+        Some(8),
+        "the first frame would pace by the pre-change period"
+    );
+}
+
+fn closed_window_receives_nothing() {
+    let rig = boot();
+    let win = open_window(&rig, None);
+    let _other = open_window(&rig, None);
+    let before = win.redraws();
+    super::close_this_window(win.dispatcher);
+
+    rig.period(LEFT, 8);
+    rig.turns.drive();
+
+    assert_eq!(win.redraws(), before, "a closed window was notified");
+}
+
+#[test]
+fn display_delivery_contract() {
+    crate::table_test::run_table(
+        "display_delivery_contract",
+        &[
+            (
+                "seed_holds_every_display_before_the_first_window",
+                seed_holds_every_display_before_the_first_window as fn(),
+            ),
+            (
+                "refresh_switch_publishes_a_new_snapshot",
+                refresh_switch_publishes_a_new_snapshot as fn(),
+            ),
+            (
+                "change_between_registration_and_seed_is_not_lost",
+                change_between_registration_and_seed_is_not_lost as fn(),
+            ),
+            (
+                "snapshot_is_committed_before_observers_run",
+                snapshot_is_committed_before_observers_run as fn(),
+            ),
+            (
+                "panicking_window_observer_keeps_the_snapshot_and_the_tail",
+                panicking_window_observer_keeps_the_snapshot_and_the_tail as fn(),
+            ),
+            (
+                "apply_panic_keeps_the_debt_and_the_next_equal_change_is_delivered",
+                apply_panic_keeps_the_debt_and_the_next_equal_change_is_delivered as fn(),
+            ),
+            (
+                "foreign_thread_invalidation_wakes_the_owner",
+                foreign_thread_invalidation_wakes_the_owner as fn(),
+            ),
+            (
+                "late_callback_cannot_reach_a_replacement_host",
+                late_callback_cannot_reach_a_replacement_host as fn(),
+            ),
+        ],
+    );
+}
+
+#[test]
+fn window_display_observation_contract() {
+    crate::table_test::run_table(
+        "window_display_observation_contract",
+        &[
+            (
+                "moving_to_another_display_notifies_once",
+                moving_to_another_display_notifies_once as fn(),
+            ),
+            (
+                "refresh_change_of_own_display_notifies",
+                refresh_change_of_own_display_notifies as fn(),
+            ),
+            (
+                "other_displays_change_is_silent",
+                other_displays_change_is_silent as fn(),
+            ),
+            (
+                "unread_field_change_is_silent",
+                unread_field_change_is_silent as fn(),
+            ),
+            (
+                "several_changes_before_the_turn_deliver_the_last",
+                several_changes_before_the_turn_deliver_the_last as fn(),
+            ),
+            (
+                "new_secondary_window_starts_on_its_display",
+                new_secondary_window_starts_on_its_display as fn(),
+            ),
+            (
+                "window_opened_after_a_change_starts_with_the_new_period",
+                window_opened_after_a_change_starts_with_the_new_period as fn(),
+            ),
+            (
+                "closed_window_receives_nothing",
+                closed_window_receives_nothing as fn(),
+            ),
+        ],
+    );
+}

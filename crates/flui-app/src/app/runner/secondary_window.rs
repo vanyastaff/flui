@@ -1170,6 +1170,7 @@ fn finish_open_secondary_window(
         );
     }));
     installation.observe_appearance();
+    installation.observe_display();
     let execution = window.execution_state();
     let focused = window.is_focused();
     let visible = window.is_visible();

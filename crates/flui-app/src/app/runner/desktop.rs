@@ -390,6 +390,7 @@ where
         );
     }));
     installation.observe_appearance();
+    installation.observe_display();
     // Seed the initial size and device-pixel ratio the same way: the
     // source must not sit on defaults until the first live resize —
     // on the web backend no resize observer exists, so a default

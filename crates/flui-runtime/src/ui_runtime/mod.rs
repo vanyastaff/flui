@@ -22,6 +22,7 @@
 //! still gets a fresh generational [`UiRuntimeId`], so results stamped for a
 //! dead runtime are droppable by identity, not by convention.
 
+mod display;
 pub(crate) mod preferences;
 pub(crate) mod text_preparation;
 pub use text_preparation::{TextSizingSettlement, TextSizingWork};
