@@ -404,7 +404,9 @@ mod tests {
     /// Timestamps of `frames` frames at `period` milliseconds apart, rounded to
     /// whole milliseconds as a browser with a clamped timer reports them.
     fn clamped_timestamps(frames: usize, period: f64) -> Vec<f64> {
-        (0..frames).map(|frame| (frame as f64 * period).round()).collect()
+        (0..frames)
+            .map(|frame| (frame as f64 * period).round())
+            .collect()
     }
 
     fn a_one_millisecond_clock_still_reads_the_real_rate() {

@@ -24,10 +24,16 @@
 //!
 //! `Platform::display_snapshot` runs on every owner wake, so the snapshot is
 //! cached and read from the browser again only after an event that can change
-//! it: a pixel-ratio change, a new published period, a change of the screen
-//! list or of the screen the window is on. Moving the window between two
-//! screens of equal pixel ratio but different size, with no Window Management
-//! access, raises no event and is not seen until the next one.
+//! it: a pixel-ratio change, a new published period, a `change` of `window.screen`
+//! (size, pixel ratio or position; Chromium raises it without any permission),
+//! a change of the screen list, of a listed screen, or of the screen the window
+//! is on. A browser whose `screen` has no `onchange` raises none of the screen
+//! events, so there a move between two screens of equal pixel ratio but
+//! different size is not seen until the next other event.
+//!
+//! The screen the window is on takes its scale from `window.devicePixelRatio`
+//! in both modes, which includes page zoom; the other listed screens report
+//! their own `ScreenDetailed.devicePixelRatio`.
 
 use std::sync::Arc;
 
@@ -131,6 +137,10 @@ impl WebDisplays {
     /// Returns the previous one so the caller retires it outside the lock.
     pub(super) fn set_details(&self, details: Option<JsValue>) -> Option<JsValue> {
         let mut state = self.state.lock();
+        if details.is_none() && state.details.is_none() {
+            // Nothing was granted and nothing is: not an event.
+            return None;
+        }
         state.snapshot = None;
         state.estimator.restart();
         std::mem::replace(&mut state.details, details)
@@ -142,7 +152,7 @@ impl WebDisplays {
         })?;
         let period = state.estimator.published();
         let listed = match state.details.clone() {
-            Some(details) => self.listed_screens(state, &details, period),
+            Some(details) => self.listed_screens(state, &window, &details, period),
             None => None,
         };
         let (displays, current) = match listed {
@@ -188,6 +198,7 @@ impl WebDisplays {
     fn listed_screens(
         &self,
         state: &mut State,
+        window: &web_sys::Window,
         details: &JsValue,
         period: Option<RefreshPeriod>,
     ) -> Option<(Vec<DisplayInfo>, Option<DisplayId>)> {
@@ -200,41 +211,52 @@ impl WebDisplays {
             .reconcile(screens.clone(), js_sys::Object::is, || {
                 self.source.mint(&DisplayKey::Unkeyed)
             });
-        let current_screen = get(details, "currentScreen");
-        let current = current_screen
-            .as_ref()
-            .and_then(|screen| state.screens.id_of(screen, js_sys::Object::is));
-        let mut displays: Vec<DisplayInfo> = screens
-            .iter()
+        let listed: Vec<(JsValue, DisplayId)> = screens
+            .into_iter()
             .zip(ids)
-            .filter_map(|(screen, id)| Some(screen_info(screen, id?)))
+            .filter_map(|(screen, id)| Some((screen, id?)))
             .collect();
-        // A listing whose current screen is missing is still a listing: the
-        // window is then on the primary screen.
-        let current = current.or_else(|| {
-            displays
-                .iter()
-                .find(|display| display.is_primary)
-                .map(|display| display.id)
-        });
-        // The estimate describes the screen the window presents on.
-        for display in &mut displays {
-            if Some(display.id) == current {
-                *display = with_period(display.clone(), period);
-            }
-        }
+        let current = get(details, "currentScreen")
+            .and_then(|screen| state.screens.id_of(&screen, js_sys::Object::is))
+            // A listing whose current screen is missing is still a listing: the
+            // window is then on the primary screen.
+            .or_else(|| {
+                listed
+                    .iter()
+                    .find(|(screen, _)| is_primary(screen))
+                    .map(|(_, id)| *id)
+            });
+        let window_scale = positive(window.device_pixel_ratio());
+        let displays = listed
+            .iter()
+            .map(|(screen, id)| {
+                if Some(*id) == current {
+                    // The screen the window is on is measured like the
+                    // single-screen case: by the window's own pixel ratio, which
+                    // includes page zoom, so zoom behaves the same with and
+                    // without screen access. Its estimate belongs to it alone.
+                    with_period(screen_info(screen, *id, window_scale), period)
+                } else {
+                    screen_info(screen, *id, None)
+                }
+            })
+            .collect();
         Some((displays, current))
     }
 }
 
+fn is_primary(screen: &JsValue) -> bool {
+    get(screen, "isPrimary").is_some_and(|primary| primary.is_truthy())
+}
+
 /// One `ScreenDetailed` as a display. Its metrics are CSS pixels, scaled by
-/// the screen's own pixel ratio, which is also how the single-screen case
-/// reports a size. Origins are scaled the same way: the coordinate space of a
+/// the screen's own pixel ratio (or `scale_override`), which is also how the
+/// single-screen case reports a size. Origins are scaled the same way: the coordinate space of a
 /// mixed-ratio layout is the browser's, and the origin is therefore the
 /// browser's value in that screen's device pixels, not a global device layout.
-fn screen_info(screen: &JsValue, id: DisplayId) -> DisplayInfo {
-    let scale_factor = get_number(screen, "devicePixelRatio")
-        .and_then(positive)
+fn screen_info(screen: &JsValue, id: DisplayId, scale_override: Option<f64>) -> DisplayInfo {
+    let scale_factor = scale_override
+        .or_else(|| get_number(screen, "devicePixelRatio").and_then(positive))
         .unwrap_or(1.0);
     let number = |name: &str, fallback: f64| get_number(screen, name).unwrap_or(fallback);
     let bounds = Bounds::new(
@@ -264,7 +286,7 @@ fn screen_info(screen: &JsValue, id: DisplayId) -> DisplayInfo {
         .and_then(|label| label.as_string())
         .filter(|label| !label.is_empty())
         .unwrap_or_else(|| "Browser Screen".to_string());
-    let is_primary = get(screen, "isPrimary").is_some_and(|primary| primary.is_truthy());
+    let is_primary = is_primary(screen);
     DisplayInfo::new(id, label, bounds, scale_factor)
         .with_usable_bounds(usable)
         .with_primary(is_primary)
