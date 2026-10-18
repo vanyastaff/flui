@@ -12,7 +12,9 @@
 - **ADRs:** [ADR-0238](../../../adr/ADR-0238-flui-driver-protocol.md) (protocol and crate),
   [ADR-0239](../../../adr/ADR-0239-every-debug-app-hosts-the-driver-agent.md) (agent in the app),
   [ADR-0240](../../../adr/ADR-0240-semantics-identifier.md) (test identifier),
-  [ADR-0241](../../../adr/ADR-0241-driver-trace-format.md) (trace format)
+  [ADR-0241](../../../adr/ADR-0241-driver-trace-format.md) (trace format),
+  [ADR-0242](../../../adr/ADR-0242-typed-inspect-and-tracing-conventions.md) (`Inspect` and
+  tracing conventions)
 
 This spec sets the observable behaviour of one tool that drives a running FLUI app and checks
 what it does, for three kinds of user: Rust tests, people and AI agents. It covers every FLUI
@@ -482,6 +484,71 @@ needs none of them. Everything comes in the box.
 - **R49.** Licences: everything the driver and inspector link passes `deny.toml`, so a user can ship
   and modify them under FLUI's own terms.
 
+### Introspection and tracing across crates
+
+The driver can only report what the framework can describe, and today that description is weak.
+`Diagnosticable` stores every property as a `Display` string that tests parse back
+(`get_property_f64`), and it allocates a `String` per name and value on every walk. Views and
+elements describe nothing. Tracing has four target spellings, phase spans matched by name alone,
+recognizer spans that are never entered, and ids logged as `Debug` strings. Errors carry bare ids.
+Each of these was weighed against prior art in the
+[introspection and tracing survey](../../../research/2026-10-18-flui-introspection-and-tracing.md),
+and each idea was accepted or rejected there with a reason.
+
+- **R50.** **`Inspect` replaces `Diagnosticable`** (owner decision). It is a typed, borrowed
+  visitor: a closed `Value` set (bool, integers, float, str, enum variant, size, offset, rect,
+  colour, edge insets, matrix, duration, typed link, and one counted `Debug` escape hatch), with
+  per-field metadata (level, unit, typed default) and no `Debug` supertrait. A walk allocates
+  nothing unless its sink does. `#[derive(Inspect)]` covers named, tuple and unit structs and
+  enums, refuses a field type with no value mapping at compile time, and resolves through
+  `flui-sdk`, so official packages can use it. Render objects and layers require `Inspect`. Views
+  describe themselves through a provided method that the derive fills, so a user view compiles
+  without one. `Diagnosticable`, `DiagnosticsBuilder`, string properties and the type-name
+  scanner are deleted, not deprecated.
+- **R51.** **One description, every consumer.**
+  - The tree, not the object, assigns identity: `InspectId` over the generational ids.
+  - Typed `Link`s join element, render, layer and semantics nodes.
+  - An owned snapshot serializes as the protocol's `InspectNode`.
+  - Tests read typed fields (`node.get::<f64>("width")`, `find_by_link`), never rendered text.
+  - A structural diff compares snapshots with unit-derived tolerances; trace diffs, layout
+    snapshots and reports use it.
+  - One tree renderer serves tests, `flui drive inspect`, dumps and error reports. Geometry has a
+    compact, pinned `Display` (`360x48`, `@8,8`, `8,8 344x32`, `#RRGGBB`). Colour appears only on a
+    TTY without `NO_COLOR`. `--json` is the machine path.
+- **R52.** **Tracing conventions** hold in every framework crate:
+  - contract targets are `flui.<subsystem>` (`flui.frame`, `flui.tree`, `flui.input`,
+    `flui.animation`, `flui.signals`, `flui.pace`); the old spellings keep a one-release alias,
+    after a test through the real `EnvFilter` confirms prefix matching;
+  - a span is an interval, an event is a point. Spans that are never entered become events or are
+    entered;
+  - frame-path fields are primitives only (`u64`, `i64`, `bool`, `f64`, `&'static str`); ids are
+    `u64` that map back to generational ids, and kinds are `&'static str`. No `?x` or `%x` on a hot
+    path;
+  - the hierarchy is a `frame` span, then phase spans (build, layout, compositing, paint,
+    semantics, commit, submit) at DEBUG, then per-node spans at TRACE only at relayout-boundary and
+    rebuild roots. `element_rebuild` moves from INFO to TRACE, and carries the rebuild reasons as a
+    bitmask;
+  - a disabled level costs nothing on the frame path: `tracing::enabled!` gates any field that
+    costs to compute, and nothing allocates before the macro. Framework crates never set
+    `max_level_*` features, so release profiling and the driver's `perf` keep working.
+- **R53.** **One span stream.** A single capture layer, partitioned by runtime and presentation
+  id, feeds the profiler, the devtools timeline, the driver's `perf` and trace rows, and a
+  Chrome/Perfetto export with `X` events and counters. Phases are recognized by
+  `(target, name)` from one table, so an app span named `paint` cannot spoof a phase. `Timeline`
+  becomes a view over the capture, not a second recorder. Tree mutation stays on the ADR-0040
+  observer and time stays on spans; the driver joins them by element id.
+- **R54.** **Creation sites.** A debug-only `CreationSite` moves from `flui-animation` to
+  `flui-foundation`. It is zero-sized in release and filled by `#[track_caller]` constructors and
+  builders, which the widget derive generates. Elements copy it at mount, and the inspector,
+  findings (SARIF locations), errors and traces show `file:line:col`. Struct-literal construction
+  gets no site; constructors are the documented entry point.
+- **R55.** **Errors with tree context.** A `TreeError<E>` wrapper carries an ancestor path (kind
+  and id, capped) and the creation site. It is attached by the boundary that owns the tree, the
+  pipeline owner or the build owner, so hot-path error values stay id-only. Frame containment adds
+  the current phase and node to an internal-invariant report. Its `Display` reads "layout cycle at
+  RenderPadding (r12) < RenderFlex (r7), created at src/app.rs:41:13", and the driver's findings
+  and trace rows carry the same context.
+
 ## Failure scenarios (mandatory at level 1)
 
 - **F1 Disconnection.** The app exits or crashes mid-command. The command fails as `gone` (kind
@@ -575,6 +642,14 @@ needs none of them. Everything comes in the box.
 - **D21 (owner, 2026-10-18).** Self-contained: the library provides everything a user needs to
   test, check and improve an app, with no paid or third-party service. Review, reports, devices
   and trace viewing are built in, and no check depends on an AI model (R46–R49).
+
+- **D22 (owner, 2026-10-18).** `Diagnosticable` is replaced by a typed `Inspect` model.
+  Observability across crates is designed from prior art, with each idea accepted or rejected
+  explicitly (R50–R55; ADR-0242).
+  - **Rejected:** `bevy_reflect` or `facet` as the core model; `valuable`, which is still behind
+    `tracing_unstable`; serde as the description trait (it stays the output format);
+    Compose-style source strings; a second profiling API; `max_level_*` in framework crates;
+    `miette` source-span errors.
 
 ## Market survey refinements (2026-10-18)
 

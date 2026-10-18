@@ -6,12 +6,16 @@
   [ADR-0238](../../../adr/ADR-0238-flui-driver-protocol.md),
   [ADR-0239](../../../adr/ADR-0239-every-debug-app-hosts-the-driver-agent.md),
   [ADR-0240](../../../adr/ADR-0240-semantics-identifier.md),
-  [ADR-0241](../../../adr/ADR-0241-driver-trace-format.md)
+  [ADR-0241](../../../adr/ADR-0241-driver-trace-format.md),
+  [ADR-0242](../../../adr/ADR-0242-typed-inspect-and-tracing-conventions.md)
 - **Base:** `main` @ `0fdd19f1e`. Tasks marked **IC** need `interaction/completeness` merged (its
   recording module, input taps, native recording codec, BiDi and Android drivers). The rest can
   start on `main` now.
-- **Total:** 26 tasks in 26 PRs, 14 of them `[P]`; ≈ 137 engineer-days; critical path FD1 → FD3 →
-  FD5 → FD6 → FD9 → FD10 → FD17 → FD18 ≈ 47 days
+- **Total:** 30 tasks in 30 PRs, 16 of them `[P]`; ≈ 159 engineer-days; critical path FD27 → FD4 →
+  FD5 → FD6 → FD9 → FD15 → FD26 → FD18 ≈ 49 days
+- **Revised 2026-10-18 (D21, D22):** the self-contained task FD26, plus the introspection and tracing
+  tasks FD27–FD30 (`Inspect` replaces `Diagnosticable`, tracing conventions and one span stream,
+  creation sites, tree context on errors). FD4, FD20 and FD23 now build on them.
 - **Revised:** 2026-10-17, after the owner's review of the first draft (requirements D11–D17):
   - OS input is opt-in, announced, guarded and isolated;
   - MCP gets a core tool set and a snapshot delta;
@@ -40,6 +44,9 @@
 ```mermaid
 graph LR
   FD1 --> FD3 & FD4
+  FD27 --> FD4 & FD28 & FD30
+  FD28 --> FD23
+  FD29 --> FD20
   FD2 --> FD3
   FD3 & FD4 --> FD5 --> FD6 & FD7
   FD7 --> FD8
@@ -54,7 +61,7 @@ graph LR
   FD10 --> FD24
   FD9 --> FD25
   FD10 & FD13 & FD15 --> FD26 --> FD18
-  FD11 & FD12 & FD13 & FD14 & FD15 & FD16 & FD17 & FD20 & FD21 & FD22 & FD24 & FD25 & FD26 --> FD19
+  FD11 & FD12 & FD13 & FD14 & FD15 & FD16 & FD17 & FD20 & FD21 & FD22 & FD24 & FD25 & FD26 & FD28 & FD30 --> FD19
   IC["interaction/completeness merged"] -.-> FD6 & FD11 & FD12 & FD13 & FD21
   GAL["interaction_gallery + windows-gallery"] -.-> FD11 & FD19
 ```
@@ -66,7 +73,7 @@ graph LR
 | FD1 | Protocol 0.5: method table with tiers, locator/condition/input/capture/inspect/delta/perf/audit types, four error codes, schema golden, `BREAKING` renames | R6, R7, R10, R12, R13, R16, R18, R28, R28a | — | [P] | L | 4 | — |
 | FD2 | Semantics identifier (ADR-0240): configuration, widget builders, AccessKit `author_id`, wire `Node.identifier` | R8 | — | [P] | L, W | 2 | — |
 | FD3 | Locator resolution and actionability facts in `flui-semantics::agent`; render-to-semantics hit mapping | R6, R7, R9, R11 | FD1, FD2 | — | L | 5 | — |
-| FD4 | Inspection: `flui_view::inspect`, structured render and layer inspection | R15 | FD1 | [P] | L | 4 | — |
+| FD4 | Inspection: `InspectTree` for the element, render and layer trees with typed links; `View::inspect` | R15, R51 | FD1, FD27 | [P] | L | 4 | — |
 | FD5 | Runtime agent: owner jobs for locate, act, inspect, actionability, batch; snapshot delta; wait conditions with unsettled causes; events; containment and reentrancy | R15, R16, R18–R20, F3–F6 | FD3, FD4 | — | L | 6 | — |
 | FD6 | Synthetic input into the host input path; input journal; recording taps (input and native layers); release on close | R10, R12, R13, R24, R26, F2 | FD5 | [P] | L | 5 | IC |
 | FD7 | Agent server in `flui-app` (ADR-0239): transports for desktop, iOS, Android and web; launch contract; `EXIT_ON_DISCONNECT`; `driver` feature; devtools `agent` removed | R2–R4, F1, F2, F7 | FD5 | [P] | L, W | 6 | — |
@@ -81,14 +88,18 @@ graph LR
 | FD16 | Linux lanes: X11 (XTEST, AT-SPI, capture, XInput2 guard) and Wayland (libei, portals, isolated compositor only); `live-smoke` migrated | R14a, R14b, R17, R32, R32a, R33, R35 | FD9 | — | L, X, WL | 5 | — |
 | FD17 | Front ends: `flui drive` CLI with session file, announcement and `call`; `flui mcp` adapter (MCP 2026-07-28) with the core tool set and `--caps` groups | R28–R30, R28a | FD9, FD10 | — | L | 5 | — |
 | FD18 | Inspector app (`tools/flui-inspector`) and `flui inspect`; its own scenario suite; baseline Review view; documented CLI fallback | R25, R31 | FD17, FD26 | — | L, W | 7 | — |
-| FD19 | `interaction_gallery` scenario suite on every target; delete desktop-mcp, xtask drivers, probes, device-check scripts; documentation | R35, R36, R36a, R45 | FD11–FD17, FD20–FD26 | — | all | 4 | IC |
-| FD20 | Performance: agent frame and journal samples, `PerfReport`, per-target budgets, `perf.expect` | R37, R37a | FD5, FD9 | [P] | L, W, A | 5 | — |
+| FD19 | `interaction_gallery` scenario suite on every target; delete desktop-mcp, xtask drivers, probes, device-check scripts; documentation | R35, R36, R36a, R45 | FD11–FD17, FD20–FD30 | — | all | 4 | IC |
+| FD20 | Performance: agent frame and journal samples, `PerfReport`, per-target budgets, `perf.expect` | R37, R37a | FD5, FD9, FD29 | [P] | L, W, A | 5 | — |
 | FD21 | Accessibility audit: `flui-semantics::audit` rules, `audit.a11y`, `audit.alternatives`, `a11y-audit` scenario; `flui-testing`'s alternatives and target checks moved onto it | R38 | FD3, FD9 | [P] | L, W | 6 | IC |
 | FD22 | Exploration: seeded `explore.run` with invariants, delta-debugging `explore.shrink`, replay | R39, F12 | FD10 | — | L | 5 | — |
-| FD23 | Layout facts (boxes, clips, text ink bounds, baselines, styles, painted and background colours), `layout.expect` assertions, `audit.layout` lint with finding outcomes, `audit.text_scale`, `audit.screen` with checked and not-checked lists, the layout-defect benchmark | R40, R41, R41a, R41b, R44 | FD4, FD9 | [P] | L, W | 8 | — |
+| FD23 | Layout facts (boxes, clips, text ink bounds, baselines, styles, painted and background colours), `layout.expect` assertions, `audit.layout` lint with finding outcomes, `audit.text_scale`, `audit.screen` with checked and not-checked lists, the layout-defect benchmark | R40, R41, R41a, R41b, R44 | FD4, FD9, FD28 | [P] | L, W | 8 | — |
 | FD24 | Layout snapshot golden and `capture.annotated` | R42, R43 | FD10, FD23 | — | L, W | 4 | — |
 | FD25 | Parity coverage: scenario `proves` rows, `flui drive report --parity`, the `cargo xtask parity` gate in `checks`, gaps entries naming their scenarios | R45 | FD9 | [P] | L | 3 | — |
 | FD26 | Self-contained: baseline review (CLI and inspector), HTML, JUnit and SARIF reports, device management moved into the lanes, `--repeat` flake triage, `--offline` and the no-network-client test | R46–R49 | FD10, FD13, FD15 | [P] | L, W, A | 6 | — |
+| FD27 | `Inspect` core (ADR-0242): trait, `Value`, `Meta`, `Sink`, `InspectTree`, `Link`, derive with SDK path, owned snapshot in `flui-protocol`, typed accessors, structural diff, tree renderer, compact geometry `Display` | R50, R51 | — | [P] | L | 6 | — |
+| FD28 | Migration: render objects, layers and the GPU profile onto `Inspect` (derive first), consumers (harness, `render_diagnostics`, layer inspection, `agent_workflow.rs`) onto typed access; `Diagnosticable` and its derive deleted; a `Value::Debug` ratchet | R50, R51 | FD27 | — | L | 6 | — |
+| FD29 | Tracing conventions: `flui.<subsystem>` targets with aliases and an `EnvFilter` test; semantics/commit/submit phase spans; primitive fields and numeric ids; `element_rebuild` at TRACE with reasons; recognizer spans fixed; one capture layer with the `(target, name)` table; `Timeline` over it; `X`-event export | R52, R53 | — | [P] | L, W | 6 | — |
+| FD30 | Creation sites (`CreationSite` to `flui-foundation`, `#[track_caller]` constructors and builders, widget derive, element copy at mount) and `TreeError<E>` context at the pipeline and build owners | R54, R55 | FD27 | — | L | 4 | — |
 
 ## Cards
 
@@ -521,3 +532,83 @@ graph LR
   - a check that passes 2 of 3 repeats reports `flaky` with its rate and the worst verdict;
   - `--offline` with no ChromeDriver cached is cannot-verify with the hint;
   - adding `reqwest` to the crate fails the dependency test.
+
+### FD27. `Inspect` core
+
+- **Changes:**
+  - `flui-foundation::inspect`: `Inspect`, `Value<'a>`, `Field`, `Meta` (level, unit, typed
+    default), `Sink`, `Fields`, `InspectTree`, `InspectId`, `Link`;
+  - `flui-macros`: `#[derive(Inspect)]` for named, tuple and unit structs and enums, with
+    `skip`, `name`, `default`, `level`, `unit`, `with` and `debug`; a compile error with a hint for
+    an unmapped field type; paths through `flui_sdk` first;
+  - `flui-sdk`: re-exports, plus the `tests/surface.rs` pinned-list lines;
+  - `flui-protocol`: the owned snapshot as `InspectNode` (serde and schemars);
+  - in `flui-foundation`: typed accessors (`get::<T>`, `find_by_link`,
+    `find_by_kind().unique()`), the structural diff with unit tolerances, the role-styled tree
+    renderer, and compact pinned `Display` for geometry and colour.
+
+  It lands beside `Diagnosticable`.
+- **Done when:**
+  - value-mapping and derive tables pass, with trybuild fixtures for the unmapped-field and
+    unsupported-shape errors;
+  - a counting sink performs zero allocations under an allocation-counting test allocator;
+  - renderer and `Display` goldens pass with round-trip tests;
+  - the diff reports a moved node with its delta and ignores a sub-tolerance change.
+
+### FD28. Migration and removal
+
+- **Changes:**
+  - `flui-objects`, `flui-rendering`, `flui-layer` and `flui-engine`'s GPU profile describe
+    themselves through `Inspect`, by derive where the old body was a field list;
+  - render objects require `Inspect` in place of `Diagnosticable`;
+  - consumers move to typed access: the render-object harness, `render_diagnostics`, the layer
+    inspection, `tests/agent_workflow.rs` and the demo snapshots;
+  - `Diagnosticable`, `DiagnosticsNode`, `DiagnosticsBuilder`, `DiagnosticsProperty`, their derive
+    and `short_diagnostic_type_name` are deleted;
+  - `DebugPaintConfig` moves to `debug_paint`;
+  - a ratchet counts `Value::Debug` fields and only shrinks.
+- **Done when:**
+  - `rg Diagnosticable` finds nothing outside archival docs;
+  - no test parses a rendered property;
+  - any regenerated snapshots are explained in the PR;
+  - `cargo xtask check-changed` is green across the dependents.
+
+### FD29. Tracing conventions and one span stream
+
+- **Changes:**
+  - targets renamed to `flui.<subsystem>`, with one-release aliases for `flui::reconcile` and
+    `flui_animation`, after an `EnvFilter` test pins prefix matching;
+  - `semantics`, `commit` and `submit` phase spans;
+  - primitive fields and `u64` ids everywhere on the frame path;
+  - `element_rebuild` at TRACE with a reasons bitmask;
+  - TRACE spans at relayout-boundary roots;
+  - the ten never-entered recognizer spans entered or made events;
+  - `tracing::enabled!` gates for costly fields;
+  - a capture layer partitioned by runtime and presentation with one `(target, name) → Phase`
+    table, replacing name-only matching in `frame_timing_layer.rs`;
+  - `Timeline` as a view over the capture;
+  - the Chrome/Perfetto export emits `X` events and counters;
+  - `flui-log`'s builder documents how to add Tracy or Chrome layers.
+- **Done when:**
+  - an app span named `paint` is not counted as a phase;
+  - a disabled level performs zero allocations on a frame;
+  - the exported trace loads in Perfetto with nested phases (checked against its JSON schema);
+  - the animation suites of ADR-0202 pass on the new target.
+
+### FD30. Creation sites and tree context on errors
+
+- **Changes:**
+  - `CreationSite` moves from `flui-animation` to `flui-foundation`; it is zero-sized in release;
+  - `#[track_caller]` on widget constructors and builders, generated by the widget derive;
+  - `View::creation_site`, copied by the element at mount;
+  - `TreeContext { path, site }` (capped) and `TreeError<E>`, attached by the pipeline owner and
+    the build owner;
+  - frame containment adds phase and node to an internal-invariant report;
+  - context also flows into the driver's error details and trace rows.
+- **Done when:**
+  - a widget built in a test reports that test's `file:line`;
+  - an optimized build without `diagnostics` reports no site, because the release shape is a unit
+    type under `cfg`. Per AGENTS.md, no test pins `size_of`;
+  - a planted layout cycle reports its ancestor path and creation site;
+  - hot-path errors stay id-only: their variants gain no context field, and the context is only on
+    the wrapper the owner returns.

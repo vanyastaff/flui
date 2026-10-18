@@ -6,7 +6,8 @@
 - **ADRs:** [ADR-0238](../../../adr/ADR-0238-flui-driver-protocol.md),
   [ADR-0239](../../../adr/ADR-0239-every-debug-app-hosts-the-driver-agent.md),
   [ADR-0240](../../../adr/ADR-0240-semantics-identifier.md),
-  [ADR-0241](../../../adr/ADR-0241-driver-trace-format.md)
+  [ADR-0241](../../../adr/ADR-0241-driver-trace-format.md),
+  [ADR-0242](../../../adr/ADR-0242-typed-inspect-and-tracing-conventions.md)
 - **Market survey:** [2026-10-18](../../../research/2026-10-18-flui-driver-market-survey.md). It
   covers AI design agents, layout and visual verification, automation tools, computer-use and MCP
   servers, and performance and exploration tooling; its corrections are folded in here.
@@ -276,14 +277,16 @@ Gesture-arena `Decision` rows from the same tap feed the inspector timeline.
 - `semantics.read` / `semantics.locate`: `flui-semantics::agent` resolves a `Locator` over the
   published `SemanticsOwner` tree. Strictness and `pick` are applied there, and it answers matches
   with their tree revision. `TextMatch` is exact/contains/prefix only, so no regex engine enters the app.
-- `inspect.widgets`: new `flui_view::inspect::inspect_elements(root, InspectQuery)` walks the
-  element tree. It reports the view type name (recorded at mount from `std::any::type_name`), key,
-  element kind (`debug_kind`), lifecycle state, the linked render id, and `Diagnosticable` properties
-  when the view provides them.
-- `inspect.render`: from `PipelineOwner::debug_diagnostics_tree`, structured instead of rendered
-  to text. It adds constraints, size, offset, dirty flags and the linked semantics node.
-- `inspect.layers`: from `flui_layer`'s inspection, moved out of `testing` into a non-test `inspect`
-  module that `testing::inspect` keeps building on.
+All three trees are walked through ADR-0242's `InspectTree` and answer the owned `Inspect`
+snapshot, so every property arrives typed:
+
+- `inspect.widgets`: the element tree implements `InspectTree`. Each node reports its view kind,
+  key, element kind (`debug_kind`), lifecycle state, the linked render id, the creation site, and
+  the fields of `View::inspect` when the view describes itself.
+- `inspect.render`: the render tree's `InspectTree` replaces `PipelineOwner::debug_diagnostics_tree`.
+  It reports constraints, size, offset, dirty flags and the linked semantics node, with the render
+  object's own `Inspect` fields.
+- `inspect.layers`: the layer tree's `InspectTree`, which `flui_layer::testing::inspect` builds on.
 
 Ids are `InspectId`s with a kind prefix (`v`, `r`, `l`) and the generational slot of the tree's
 own ID (`ElementId`, `RenderId`, `LayerId`), so identity follows the "Identity is not a label" rule.
@@ -830,6 +833,31 @@ becomes a cannot-verify check, never a failure.
   `flui drive semantics read`, `inspect widgets|render|layers --json`, `capture … -o` and
   `trace show` cover everything the inspector shows except picking on a live image.
   `docs/testing.md` documents that path.
+
+## Introspection and tracing across crates (R50–R55, ADR-0242)
+
+The driver is only as good as what the framework can describe about itself. This part changes the
+framework's own description and instrumentation, so the driver, the inspector, devtools, tests and
+logs all read one model. The full signatures, the current-state audit and the accept or reject
+verdict for each idea are in the
+[introspection and tracing survey](../../../research/2026-10-18-flui-introspection-and-tracing.md).
+What the driver relies on:
+
+| Piece | Where | Driver consumer |
+|---|---|---|
+| `Inspect`, `Value`, `Meta`, `Sink`, `Fields`, `InspectTree`, `InspectId`, `Link`, `#[derive(Inspect)]` (resolved through `flui-sdk`) | `flui-foundation::inspect`, `flui-macros` | `inspect.*`, `layout.facts` (paragraph and box facts are `Inspect` fields with units) |
+| Owned snapshot (`InspectNode`), typed accessors, structural diff | `flui-protocol` (serde, schemars), `flui-foundation` | protocol replies, layout snapshots, `trace.replay` divergences, report diffs |
+| Tree renderer with role styling, compact geometry `Display` | `flui-foundation` | CLI human output, report HTML, error text |
+| `View::inspect` (provided method), element `InspectTree` | `flui-view` | `inspect.widgets` |
+| Render and layer `InspectTree`s | `flui-rendering`, `flui-layer` | `inspect.render`, `inspect.layers` |
+| `flui.<subsystem>` targets, phase spans including semantics/commit/submit, primitive fields, TRACE per-root spans | every framework crate | trace rows, perf phases |
+| One capture layer, `(target, name)` phase table, `X`-event export | `flui-devtools` (layer and exporter) and the in-app agent | `perf.*`, trace `event` rows, the inspector timeline |
+| `CreationSite` and `#[track_caller]` constructors | `flui-foundation`, `flui-widgets`, the widget derive | inspector "go to source", SARIF locations, findings, errors |
+| `TreeError<E>` with `TreeContext` | `flui-rendering` (pipeline owner), `flui-view` (build owner) | `platform` error details, trace rows, findings |
+
+The agent installs the capture layer per UI runtime only while a driver session subscribes, and it
+partitions by presentation id. Because the framework sets no compile-time level cap, release
+builds with the `driver` feature can be profiled.
 
 ## Self-contained by construction (R46–R49)
 
