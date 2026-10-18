@@ -81,6 +81,17 @@ pub(crate) mod display_period;
 // `test` keeps them checked on every host.
 #[cfg(any(windows, test))]
 pub(crate) mod windows_display;
+// The browser's display rules: the refresh estimate from animation-frame
+// timestamps, the pixel-ratio query, screen identity and feature detection. The
+// Web backend consumes them; `test` keeps the rules checked on every host.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod dppx_query;
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod refresh_estimate;
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod screen_identity;
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod web_feature;
 // UIKit consumes this acknowledgement; its transport contract runs on every host.
 pub mod window_installation;
 

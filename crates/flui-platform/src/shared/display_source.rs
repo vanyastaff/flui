@@ -25,7 +25,13 @@ pub(crate) struct DisplaySource {
     /// Set from any thread when the displays may differ from `last`; cleared
     /// before a sample reads the OS, so an invalidation that lands during the
     /// read survives it.
-    #[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+    #[cfg(any(
+        windows,
+        target_os = "macos",
+        target_os = "ios",
+        target_arch = "wasm32",
+        test
+    ))]
     stale: std::sync::atomic::AtomicBool,
     #[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
     misses: Mutex<MissLedger>,
@@ -36,7 +42,13 @@ impl DisplaySource {
         Self {
             registry: DisplayRegistry::new(),
             last: Mutex::new(DisplaySnapshot::empty()),
-            #[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+            #[cfg(any(
+                windows,
+                target_os = "macos",
+                target_os = "ios",
+                target_arch = "wasm32",
+                test
+            ))]
             stale: std::sync::atomic::AtomicBool::new(true),
             #[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
             misses: Mutex::new(MissLedger::default()),
@@ -79,13 +91,25 @@ impl DisplaySource {
     /// window procedure, a notification block or a foreign thread may call it
     /// at any point; the next [`snapshot_with`](Self::snapshot_with) samples
     /// again.
-    #[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+    #[cfg(any(
+        windows,
+        target_os = "macos",
+        target_os = "ios",
+        target_arch = "wasm32",
+        test
+    ))]
     pub(crate) fn invalidate(&self) {
         self.stale.store(true, std::sync::atomic::Ordering::Release);
     }
 
     /// The last published snapshot, without reading the OS.
-    #[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+    #[cfg(any(
+        windows,
+        target_os = "macos",
+        target_os = "ios",
+        target_arch = "wasm32",
+        test
+    ))]
     pub(crate) fn published(&self) -> DisplaySnapshot {
         self.last.lock().clone()
     }
@@ -100,7 +124,7 @@ impl DisplaySource {
     /// # Errors
     /// What `sample` fails with, or [`PlatformError::Displays`] when the
     /// revision space is used up.
-    #[cfg(any(target_os = "macos", target_os = "ios", test))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_arch = "wasm32", test))]
     pub(crate) fn snapshot_with(
         &self,
         sample: impl FnOnce() -> Result<Vec<DisplayInfo>, PlatformError>,
@@ -117,7 +141,13 @@ impl DisplaySource {
     ///
     /// # Errors
     /// As [`snapshot_with`](Self::snapshot_with).
-    #[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+    #[cfg(any(
+        windows,
+        target_os = "macos",
+        target_os = "ios",
+        target_arch = "wasm32",
+        test
+    ))]
     pub(crate) fn snapshot_with_aux<T>(
         &self,
         sample: impl FnOnce() -> Result<(Vec<DisplayInfo>, T), PlatformError>,

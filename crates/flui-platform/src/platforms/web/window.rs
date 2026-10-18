@@ -19,7 +19,10 @@ use crate::{
     },
 };
 
-use super::registration::{CanvasClaim, Registration, effective_focus};
+use super::{
+    display::WebDisplays,
+    registration::{CanvasClaim, Registration, effective_focus},
+};
 
 /// Web window wrapping a `<canvas>` element
 pub struct WebWindow {
@@ -29,6 +32,8 @@ pub struct WebWindow {
     callbacks: Arc<WindowCallbacks>,
     registration: RefCell<Option<Registration>>,
     retire_frame_slot: RefCell<Option<Box<dyn FnOnce()>>>,
+    /// The platform's display state, which names the screen this window is on.
+    displays: Arc<WebDisplays>,
 }
 
 struct WebWindowState {
@@ -110,11 +115,12 @@ impl WebWindow {
     /// [`OpenWindowError::Backend`] when the browser environment lacks the
     /// pieces this needs (no global window/document/body) or the canvas
     /// element cannot be created.
-    pub fn new(
+    pub(super) fn new(
         id: WindowId,
         title: &str,
         width: f64,
         height: f64,
+        displays: Arc<WebDisplays>,
     ) -> Result<Self, OpenWindowError> {
         fn backend(message: impl Into<String>) -> OpenWindowError {
             OpenWindowError::Backend {
@@ -190,6 +196,7 @@ impl WebWindow {
             canvas,
             state: Arc::new(Mutex::new(state)),
             callbacks: Arc::new(WindowCallbacks::new()),
+            displays,
         })
     }
 
@@ -445,6 +452,16 @@ impl PlatformWindow for WebWindow {
         } else {
             WindowAppearance::Light
         }
+    }
+
+    /// The browser's screen the page is on: the one screen of a tab, or the
+    /// current screen when the Window Management API lists several. The id is
+    /// the snapshot's, so the host derives the period from it.
+    fn display_id(&self) -> Option<flui_platform_api::DisplayId> {
+        if self.registration.borrow().is_none() {
+            return None;
+        }
+        self.displays.current_display()
     }
 
     fn get_title(&self) -> String {
