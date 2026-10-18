@@ -23,6 +23,9 @@
   `expand` and `collapse` reach FLUI's discrete `Expand`/`Collapse` actions rather than the tap
   handler, and a numeric `set_value` keeps its number; the double-toggle race stated below
   remains only for a node that registers neither discrete action
+- **Superseded in part by (Proposed):** [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md)
+  for §3 (the server moves to `flui-app` and every host drives it);
+  [ADR-0238](ADR-0238-flui-driver-protocol.md) settles the still-Proposed items of §§1, 3 and 5
 - **Related:** [ADR-0040](ADR-0040-tree-observation-seam.md),
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md),
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),
