@@ -78,8 +78,6 @@ pub(super) struct WebDisplays {
 }
 
 struct State {
-    /// The last sample; `None` when an event invalidated it.
-    snapshot: Option<DisplaySnapshot>,
     /// The display the window is on, as of the last sample.
     current: Option<DisplayId>,
     estimator: RefreshEstimator,
@@ -99,7 +97,6 @@ impl WebDisplays {
             source: DisplaySource::new(),
             features: BrowserFeatures::detect(),
             state: Mutex::new(State {
-                snapshot: None,
                 current: None,
                 estimator: RefreshEstimator::new(),
                 details: None,
@@ -112,13 +109,10 @@ impl WebDisplays {
     /// The cached snapshot, sampled from the browser when an event invalidated
     /// it.
     pub(super) fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        let mut state = self.state.lock();
-        if let Some(snapshot) = &state.snapshot {
-            return Ok(snapshot.clone());
-        }
-        let snapshot = self.sample(&mut state)?;
-        state.snapshot = Some(snapshot.clone());
-        Ok(snapshot)
+        self.source.snapshot_with(|| {
+            let mut state = self.state.lock();
+            self.sample(&mut state)
+        })
     }
 
     /// The display the window is on; `None` when the platform has no id for it.
@@ -136,7 +130,7 @@ impl WebDisplays {
         if state.estimator.frame(timestamp_ms).is_none() {
             return false;
         }
-        state.snapshot = None;
+        self.source.invalidate();
         true
     }
 
@@ -151,7 +145,7 @@ impl WebDisplays {
     pub(super) fn forget_estimate(&self) {
         let mut state = self.state.lock();
         state.estimator.forget();
-        state.snapshot = None;
+        self.source.invalidate();
     }
 
     /// `window.screen` changed (another size, another display): sample again,
@@ -159,13 +153,13 @@ impl WebDisplays {
     pub(super) fn screen_changed(&self) {
         let mut state = self.state.lock();
         state.screen_ratio = None;
-        state.snapshot = None;
+        self.source.invalidate();
     }
 
     /// Something the snapshot reports changed: sample the browser again on the
     /// next read.
     pub(super) fn invalidate(&self) {
-        self.state.lock().snapshot = None;
+        self.source.invalidate();
     }
 
     /// Replace the `ScreenDetails` object, or drop it when access ended.
@@ -176,12 +170,12 @@ impl WebDisplays {
             // Nothing was granted and nothing is: not an event.
             return None;
         }
-        state.snapshot = None;
+        self.source.invalidate();
         state.estimator.restart();
         std::mem::replace(&mut state.details, details)
     }
 
-    fn sample(&self, state: &mut State) -> Result<DisplaySnapshot, PlatformError> {
+    fn sample(&self, state: &mut State) -> Result<Vec<DisplayInfo>, PlatformError> {
         let window = web_sys::window().ok_or_else(|| PlatformError::Displays {
             message: "no global window".into(),
         })?;
@@ -195,7 +189,7 @@ impl WebDisplays {
             None => self.single_screen(state, &window, period)?,
         };
         state.current = current;
-        self.source.publish(displays)
+        Ok(displays)
     }
 
     /// The one screen `window.screen` describes.
