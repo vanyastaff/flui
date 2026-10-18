@@ -54,10 +54,13 @@ impl Drop for InstallRollback {
 /// bare `open_secondary_window` convert `AppConfig` directly and reveal at
 /// open, because nothing in them would ever perform the reveal.
 pub(super) fn rendered_window_options(config: &AppConfig) -> flui_platform::WindowOptions {
-    flui_platform::WindowOptions {
+    let mut options = flui_platform::WindowOptions {
         reveal: flui_platform::WindowReveal::AfterFirstFrame,
         ..config.into()
-    }
+    };
+    // Read before the window opens, so its first reveal is already in place.
+    super::placement::restore(&mut options, config);
+    options
 }
 
 pub(super) fn install_desktop_window<V>(
@@ -231,6 +234,8 @@ where
         .with_textures(textures),
     ));
 
+    super::host::track_raster_lane(lane.lock().trim_handle());
+
     // 5. Register input callback -> entered ui_runtime input dispatch
     install_input_wiring(owner_dispatch, window.as_ref());
 
@@ -294,8 +299,10 @@ where
     // `Platform::run` actually returns, for the clipboard/redraw-window
     // cleanup no per-window close performs.
     let closing_window_id = window.id();
+    super::placement::keep(config, owner_dispatch.address);
     installation.on_close(move || {
         tracing::info!("Window closed");
+        super::placement::finish(owner_dispatch.address);
         super::main_window::main_window_closing(owner_dispatch.address);
         let closed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             close_this_window(owner_dispatch);

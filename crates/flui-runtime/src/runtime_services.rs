@@ -7,6 +7,7 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+use flui_foundation::memory::MemoryTrim;
 use flui_foundation::{PresentationId, UiRuntimeId};
 use flui_painting::{FontCollection, TextContext};
 use flui_platform_api::{Clipboard, Storage};
@@ -27,12 +28,14 @@ pub struct RuntimeHostServices<'a> {
     pub(crate) fonts: &'a FontCollection,
     pub(crate) clock: ClockSource,
     pub(crate) preferences: Option<crate::owner::SystemPreferencesSnapshot>,
+    pub(crate) memory_trims: Vec<Arc<dyn MemoryTrim + Send + Sync>>,
 }
 
 impl fmt::Debug for RuntimeHostServices<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RuntimeHostServices")
             .field("storage", &self.storage.is_some())
+            .field("memory_trims", &self.memory_trims.len())
             .finish_non_exhaustive()
     }
 }
@@ -72,7 +75,20 @@ impl<'a> RuntimeHostServices<'a> {
             fonts,
             clock,
             preferences: None,
+            memory_trims: Vec::new(),
         }
+    }
+
+    /// A holder of memory the host owns and can rebuild, to give back when the
+    /// system reports memory pressure: an asset registry, the raster thread's
+    /// pools. The UI runtime trims every receiver, in the order added, before
+    /// any application subscriber hears the notice
+    /// ([`HostNotice::MemoryPressure`](flui_platform_api::HostNotice::MemoryPressure)),
+    /// and trims its own text service beside them.
+    #[must_use]
+    pub fn with_memory_trim(mut self, receiver: Arc<dyn MemoryTrim + Send + Sync>) -> Self {
+        self.memory_trims.push(receiver);
+        self
     }
 
     /// The byte storage every presentation of the UI runtime hands its widgets
@@ -125,6 +141,9 @@ pub(crate) struct RuntimeServices {
     /// presentation's pipeline holds a clone of the handle and lends the
     /// context to its layout (ADR-0092 §10 step 3).
     pub(crate) text: TextContextHandle,
+    /// The host's memory receivers, trimmed ahead of the application on a
+    /// memory-pressure notice.
+    pub(crate) memory_trims: Vec<Arc<dyn MemoryTrim + Send + Sync>>,
 }
 
 impl RuntimeServices {
@@ -144,6 +163,7 @@ impl RuntimeServices {
             fonts,
             clock,
             preferences,
+            memory_trims,
         } = host;
         let scheduler = UpdateScheduler::new();
         Self {
@@ -157,6 +177,7 @@ impl RuntimeServices {
             clock,
             preferences,
             text: TextContextHandle::new(TextContext::new(fonts)),
+            memory_trims,
         }
     }
 }

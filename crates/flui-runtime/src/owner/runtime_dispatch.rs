@@ -127,15 +127,33 @@ impl RuntimeWork {
             Self::TestCallback(address, _) => *address,
         }
     }
+    /// Fold `newer` into `self` when it only repeats what is already queued
+    /// directly in front of it: window-state samples of one presentation merge,
+    /// and a memory-pressure notice at a level the runtime is already queued to
+    /// hear collapses into it. Trimming twice for one level frees nothing the
+    /// first did not, and subscribers learn nothing from the repeat.
     pub(super) fn merge_pending_state(&mut self, newer: &Self) -> bool {
-        if let (Self::WindowState(address, state), Self::WindowState(next_address, next)) =
-            (self, newer)
-            && address == next_address
-        {
-            state.merge(next);
-            true
-        } else {
-            false
+        match (self, newer) {
+            (Self::WindowState(address, state), Self::WindowState(next_address, next))
+                if address == next_address =>
+            {
+                state.merge(next);
+                true
+            }
+            (
+                Self::Runtime(id, RuntimeOperation::HostNotice(queued)),
+                Self::Runtime(next_id, RuntimeOperation::HostNotice(next)),
+            ) => {
+                id == next_id
+                    && matches!(
+                        (queued, next),
+                        (
+                            flui_platform_api::HostNotice::MemoryPressure(queued),
+                            flui_platform_api::HostNotice::MemoryPressure(next),
+                        ) if queued == next
+                    )
+            }
+            _ => false,
         }
     }
     pub(super) fn validate_admission(&self, state: &OwnerState) -> Result<usize, DispatchError> {

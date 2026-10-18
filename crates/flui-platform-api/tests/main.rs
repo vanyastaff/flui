@@ -12,6 +12,9 @@ mod host_notice;
 #[path = "input_vocabulary.rs"]
 mod input_vocabulary;
 
+#[path = "placement_resolve.rs"]
+mod placement_resolve;
+
 #[path = "preferences.rs"]
 mod preferences;
 

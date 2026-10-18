@@ -18,6 +18,25 @@
 - **`flui-app`**: `AppConfig::with_position` and `AppConfig::with_mode`, and `window_handle` to turn
   the address a `WindowRequest` delivers into the window's handle. Commands apply on the owner's
   next turn, before its frame, in the order they were queued.
+- **`flui-platform-api`**: `WindowPlacement` remembers where a window was (the display by its
+  `persistent_key`, the offset from its usable area, the size, the mode) as a versioned text
+  encoding, and `resolve` fits it to the displays and capabilities of the next run: a missing
+  display falls back to the primary one, a window too large is cut to the usable area, one off the
+  edge is moved back, a minimized one opens normal or maximized, and without `restores_position`
+  the size and mode stay but the position does not.
+- **`flui-app`**: `AppConfig::restore_placement(name)` reads the placement before the first reveal
+  and keeps it in the host storage, at most once every two seconds while the window moves and at
+  once on close and when the session ends. `AppConfig::with_memory_trim` registers an application
+  cache (for example a `flui_assets::AssetRegistry`) to give back on memory pressure.
+- **`flui-foundation`**: `memory::MemoryTrim` (and `memory::trim_all`) for a holder of rebuildable
+  memory; `MemoryPressureLevel` now lives in `flui_foundation::memory`. On
+  `HostNotice::MemoryPressure` the UI runtime trims its text service, `AssetRegistry`, the
+  registered receivers and the raster thread's pools before any subscriber hears the notice;
+  `Critical` also evicts every pooled GPU buffer and resets the glyph atlas. `RasterHandle` and
+  `AssetRegistry` implement `MemoryTrim`.
+- **`flui-testing`**: `window_conformance`, the checks every window backend runs against its
+  `PlatformWindow`: capabilities are honest, accepted commands converge into the state, revisions
+  change only with the state, bad numbers are refused, and a closed window refuses.
 - **`WindowOptions`** gains `position`, `mode` and `normal_geometry`; **`DisplayInfo`** gains
   `persistent_key` (`with_persistent_key`), a string that names a display across restarts.
 - **`flui-platform`**: the headless platform takes `with_window_capabilities` and

@@ -106,6 +106,7 @@ mod ime;
 mod input;
 pub mod keyboard;
 mod locale;
+mod placement;
 mod platform_window;
 pub mod pointer;
 mod preferences;
@@ -142,6 +143,7 @@ pub use input::{
 };
 pub use keyboard::{Code, Key, KeyEvent, KeyState, Location, Modifiers, NamedKey};
 pub use locale::{InvalidLocale, Locale};
+pub use placement::{PlacementError, ResolvedPlacement, WindowPlacement};
 pub use platform_window::PlatformWindow;
 pub use pointer::{
     ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,

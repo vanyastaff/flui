@@ -13,6 +13,8 @@ use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
+pub use flui_foundation::memory::MemoryPressureLevel;
+
 /// A phase of the user's session ending, as the platform reports it to
 /// `Platform::on_session_end`.
 ///
@@ -45,16 +47,6 @@ pub enum SessionEndAnswer {
     Block,
 }
 
-/// How much memory the system wants back.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum MemoryPressureLevel {
-    /// Free what is easy to restore.
-    Moderate,
-    /// Free everything the current frame does not need.
-    Critical,
-}
-
 /// A one-off system event for the application.
 ///
 /// Delivered on the owner thread through `LifecycleHandle::subscribe_notices`.
@@ -73,6 +65,11 @@ pub enum HostNotice {
     /// The machine is about to sleep.
     Sleep,
     /// The machine woke from sleep.
+    ///
+    /// Displays and windows can have changed while the machine slept without an
+    /// event reaching the process. A backend that delivers this notice marks its
+    /// display snapshot and every window's state stale first, so the first read
+    /// after it asks the operating system again.
     Wake,
     /// The user's session was locked.
     SessionLocked,

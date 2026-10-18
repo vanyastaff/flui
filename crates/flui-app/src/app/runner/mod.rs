@@ -33,6 +33,12 @@ pub(super) mod ios;
 mod native_bindings;
 mod native_retirement;
 mod native_text_sizing;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod placement;
 mod window_install;
 
 mod owner_dispatch;

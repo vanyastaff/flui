@@ -616,6 +616,9 @@ impl FluiView {
         if previous.size != next.size || previous.scale != next.scale {
             self.callbacks()
                 .dispatch_metrics_resize(next.size, next.scale);
+            // The published state follows the metrics: `state()` reads them
+            // again when the owner asks.
+            self.callbacks().dispatch_state_changed();
         }
         if self.ivars().sampling.get() != admission {
             // The resize dispatch above retired this view, so this snapshot's
@@ -967,6 +970,8 @@ impl IOSWindow {
                 }
             }
         }
+        // Visibility and focus are part of the published state.
+        self.callbacks.dispatch_state_changed();
         let current = || {
             !self.closed.load(Ordering::SeqCst) && self.lifecycle.lock().generation == generation
         };
@@ -1189,8 +1194,8 @@ impl PlatformWindow for IOSWindow {
     /// (none) and `apply` refuses every command.
     ///
     /// The metrics and lifecycle live apart from this cell, so each call reads
-    /// them again; `on_state_changed` is raised from the calls that change them
-    /// only as far as they reach this method.
+    /// them again. `on_state_changed` is raised where they change: when the
+    /// view's size or scale does, and on each lifecycle step.
     fn state(&self) -> WindowState {
         self.snapshot.invalidate();
         let published = self.snapshot.state_with(|| {

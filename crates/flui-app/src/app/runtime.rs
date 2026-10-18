@@ -392,6 +392,20 @@ pub(crate) struct AppRuntime {
     /// ([`Self::install_host_storage`]) and released with the owner platform
     /// at loop exit.
     pub(super) host_storage: Option<Arc<dyn flui_platform_api::Storage>>,
+    /// What this host gives back on a memory-pressure notice: one receiver every
+    /// UI runtime it builds shares (`runner::host::build_ui_runtime`).
+    pub(super) host_memory: Arc<super::host_memory::HostMemory>,
+    /// The windows that remember their placement, keyed by presentation, so a
+    /// window closing or the session ending can write the final one.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) placement_keepers: Vec<(
+        flui_foundation::PresentationAddress,
+        Rc<super::placement_keeper::PlacementKeeper>,
+    )>,
 }
 
 impl AppRuntime {
@@ -467,6 +481,13 @@ impl AppRuntime {
             redraw_window: Arc::new(Mutex::new(None)),
             platform_clipboard: Arc::new(Mutex::new(None)),
             host_storage: None,
+            host_memory: Arc::default(),
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            placement_keepers: Vec::new(),
         }
     }
 

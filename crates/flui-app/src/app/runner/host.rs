@@ -88,6 +88,17 @@ pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
     // Always installed, `None` included: a run without storage must not
     // inherit the previous run's on this thread.
     APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(dirs));
+    // The run's receivers replace the last run's, for the same reason.
+    let memory = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().host_memory));
+    memory.replace_receivers(config.memory_trims.0.clone());
+}
+
+/// Have the host trim the GPU memory behind a new raster lane on a
+/// memory-pressure notice, for as long as the lane exists.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn track_raster_lane(lane: flui_engine::RasterHandle) {
+    let memory = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().host_memory));
+    memory.track_raster(lane);
 }
 
 /// Shared host services cannot depend on a desktop window-request error.
@@ -282,6 +293,7 @@ pub(super) fn build_ui_runtime(
     if let Some(storage) = runtime_storage() {
         host = host.with_storage(storage);
     }
+    host = host.with_memory_trim(APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().host_memory)));
     if let Some(preferences) = preferences {
         host = host.with_preferences(preferences);
     }

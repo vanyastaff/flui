@@ -240,6 +240,26 @@ pub struct AppConfig {
     /// The application's directory name under the per-user data roots, set
     /// with [`Self::with_storage_dir`].
     pub(crate) storage_dir: Option<flui_platform_api::StorageName>,
+
+    /// The storage name a window's placement is kept under, set with
+    /// [`Self::restore_placement`].
+    pub(crate) placement: Option<flui_platform_api::StorageName>,
+
+    /// The receivers registered with [`Self::with_memory_trim`].
+    pub(crate) memory_trims: MemoryReceivers,
+}
+
+/// The memory receivers an application registered, cloned with the
+/// configuration.
+#[derive(Clone, Default)]
+pub(crate) struct MemoryReceivers(pub(crate) Vec<super::host_memory::SharedReceiver>);
+
+impl std::fmt::Debug for MemoryReceivers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("MemoryReceivers")
+            .field(&self.0.len())
+            .finish()
+    }
 }
 
 impl Default for AppConfig {
@@ -269,6 +289,8 @@ impl Default for AppConfig {
             #[cfg(not(target_arch = "wasm32"))]
             services: Vec::new(),
             storage_dir: None,
+            placement: None,
+            memory_trims: MemoryReceivers::default(),
         }
     }
 }
@@ -468,6 +490,50 @@ impl AppConfig {
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_storage_dir(mut self, name: flui_platform_api::StorageName) -> Self {
         self.storage_dir = Some(name);
+        self
+    }
+
+    /// Remember where this window was and open the next run there.
+    ///
+    /// The window's position, size and mode are kept in the host storage
+    /// ([`Self::with_storage_dir`]) under `name`, and the next run reads them
+    /// before the window is first shown. They are fitted to the displays of that
+    /// run first: a window whose display is gone opens on the primary one, and a
+    /// window that would lie off the screen is moved back onto it
+    /// ([`WindowPlacement::resolve`]). What it restores replaces the
+    /// configuration's [`with_size`](Self::with_size),
+    /// [`with_position`](Self::with_position) and [`with_mode`](Self::with_mode);
+    /// they apply the first time, when nothing is stored yet, and whenever the
+    /// stored value cannot be read.
+    ///
+    /// The placement is written at most once every two seconds while the window
+    /// moves, and at once when the window closes and when the session ends.
+    /// Windows that share one `name` overwrite each other's placement, so give
+    /// each window it should remember a name of its own. Desktop only: Android,
+    /// iOS and the Web size the window themselves.
+    ///
+    /// [`WindowPlacement::resolve`]: flui_platform_api::WindowPlacement::resolve
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn restore_placement(mut self, name: flui_platform_api::StorageName) -> Self {
+        self.placement = Some(name);
+        self
+    }
+
+    /// Give `receiver` memory back when the system reports memory pressure.
+    ///
+    /// The framework trims its own caches (text, GPU buffers and glyph atlas)
+    /// itself; register what the application owns beside them, such as the
+    /// `flui_assets::AssetRegistry` its images load through. Receivers are
+    /// trimmed in the order registered, before any subscriber of
+    /// [`HostNotice::MemoryPressure`](flui_platform_api::HostNotice::MemoryPressure)
+    /// hears the notice. The host has one set of receivers, read from the
+    /// configuration the run starts with.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_memory_trim(
+        mut self,
+        receiver: std::sync::Arc<dyn flui_foundation::memory::MemoryTrim + Send + Sync>,
+    ) -> Self {
+        self.memory_trims.0.push(receiver);
         self
     }
 }

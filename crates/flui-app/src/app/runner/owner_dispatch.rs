@@ -577,6 +577,16 @@ pub(super) fn apply_queued_window_commands(owner_thread: std::thread::ThreadId) 
 /// Deliver a system notice to every UI runtime this host runs, each on its own
 /// owner turn.
 pub(super) fn deliver_host_notice(notice: &flui_platform::HostNotice) {
+    // The process may be gone before a subscriber has finished: write what the
+    // host itself keeps first.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    if matches!(notice, flui_platform::HostNotice::SessionEnded) {
+        super::placement::flush_all();
+    }
     let dispatchers = APP_RUNTIME.with(|slot| {
         let Ok(runtime) = slot.try_borrow() else {
             return Vec::new();

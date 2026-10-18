@@ -14,10 +14,17 @@ pub(crate) mod close_request;
 mod config;
 pub(crate) mod dev_agent;
 pub mod direct;
+pub(crate) mod host_memory;
 pub(crate) mod hot_reload;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod lifecycle;
 pub(crate) mod logging;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(crate) mod placement_keeper;
 pub(crate) mod raster_lane;
 pub mod runner;
 pub(crate) mod runtime;
