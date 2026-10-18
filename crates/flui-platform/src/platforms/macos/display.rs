@@ -112,12 +112,12 @@ fn refresh_period_for_screen(screen: &NSScreen) -> Option<RefreshPeriod> {
 
 /// The displays of one macOS platform: their ids and the last snapshot, which
 /// the [`DisplaySource`] keeps until an event invalidates it.
-pub(super) struct MacosDisplays {
+pub(crate) struct MacosDisplays {
     source: DisplaySource,
 }
 
 impl MacosDisplays {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             source: DisplaySource::new(),
         }
@@ -125,13 +125,13 @@ impl MacosDisplays {
 
     /// Mark the snapshot stale; the next [`snapshot`](Self::snapshot) samples
     /// again. Any thread: this is one atomic store.
-    pub(super) fn invalidate(&self) {
+    pub(crate) fn invalidate(&self) {
         self.source.invalidate();
     }
 
     /// The displays now: the last sample while nothing has invalidated it,
     /// otherwise a fresh one. Main thread.
-    pub(super) fn snapshot(&self, mtm: MainThreadMarker) -> Result<DisplaySnapshot, PlatformError> {
+    pub(crate) fn snapshot(&self, mtm: MainThreadMarker) -> Result<DisplaySnapshot, PlatformError> {
         self.source.snapshot_with(|| Ok(self.read(mtm)))
     }
 
@@ -139,7 +139,7 @@ impl MacosDisplays {
     /// leaves out. A display the published snapshot does not hold yet (a
     /// monitor plugged in since the last sample) marks the snapshot stale, once
     /// per revision.
-    pub(super) fn id_of(&self, screen: &NSScreen) -> Option<DisplayId> {
+    pub(crate) fn id_of(&self, screen: &NSScreen) -> Option<DisplayId> {
         let id = display_key_of(screen).and_then(|key| self.source.mint(&key))?;
         if self.source.published().get(id).is_none() {
             self.source.note_miss(id.get());
@@ -193,14 +193,14 @@ impl MacosDisplays {
 /// posts when a display is attached or removed, or changes resolution, refresh
 /// rate, arrangement or scale. The handler only marks the snapshot stale and
 /// wakes the owner; the owner samples on its own turn.
-pub(super) struct ScreenObserver {
+pub(crate) struct ScreenObserver {
     center: Retained<NSNotificationCenter>,
     token: Retained<ProtocolObject<dyn NSObjectProtocol>>,
     active: Arc<AtomicBool>,
 }
 
 impl ScreenObserver {
-    pub(super) fn new(displays: &Arc<MacosDisplays>, signal: &Arc<OwnerSignal>) -> Self {
+    pub(crate) fn new(displays: &Arc<MacosDisplays>, signal: &Arc<OwnerSignal>) -> Self {
         let active = Arc::new(AtomicBool::new(true));
         let callback = {
             let active = Arc::clone(&active);

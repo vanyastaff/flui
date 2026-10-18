@@ -9,10 +9,10 @@ use flui_platform_api::{
 
 fn same_connector_after_replug_keeps_the_id() {
     let registry = DisplayRegistry::new();
-    let connector = DisplayKey::Backend("DP-1".into());
+    let connector = DisplayKey::WaylandOutput("DP-1".into());
     let first = registry.mint(&connector).expect("id");
     let other = registry
-        .mint(&DisplayKey::Backend("HDMI-1".into()))
+        .mint(&DisplayKey::WaylandOutput("HDMI-1".into()))
         .expect("id");
     // The connector goes away and comes back; the registry is session state.
     let again = registry.mint(&connector).expect("id");

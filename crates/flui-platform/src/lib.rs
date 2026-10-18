@@ -129,8 +129,16 @@
 //!
 //! # Feature Flags
 //!
-//! - `default`: Includes winit platform
-//! - `headless`: Includes headless testing platform
+//! - `default` (`desktop`): the native desktop backend for the target OS. It
+//!   does not include winit.
+//! - `winit-backend`: the winit backend, the Linux windowing path today. It
+//!   brings `wayland` and `x11`.
+//! - `wayland`, `x11`: on Linux, the clients the display source uses to read the
+//!   outputs and their refresh rates from the compositor. On other targets they
+//!   add nothing.
+//! - `a11y`: the per-OS accessibility bridges.
+//!
+//! The headless testing platform needs no feature.
 //!
 //! # Platform Capabilities
 //!

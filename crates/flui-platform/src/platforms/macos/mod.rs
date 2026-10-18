@@ -63,7 +63,7 @@
 #[cfg(feature = "a11y")]
 mod accessibility;
 mod clipboard;
-mod display;
+pub(super) mod display;
 mod display_pass;
 mod events;
 mod liquid_glass;

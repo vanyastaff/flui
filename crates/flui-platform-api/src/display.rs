@@ -69,8 +69,7 @@ impl DisplayId {
 ///
 /// A key is an identity, not a label: two outputs with the same name are two
 /// keys. Each variant names the source it comes from, and a variant exists only
-/// once a backend produces it: the Windows, macOS, Wayland and X11 keys arrive
-/// with their native sources.
+/// once a backend produces it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DisplayKey {
@@ -103,10 +102,14 @@ pub enum DisplayKey {
     WindowsInterface(String),
     /// A value injected by a test platform.
     Injected(u64),
-    /// A stable string a window backend offers for its monitors. A label, not
-    /// an identity: it exists for backends that have no better source yet and
-    /// is replaced when they gain one.
-    Backend(String),
+    /// The connector name a Wayland compositor gives an output (`wl_output`
+    /// version 4 `name`, such as `DP-1`). An output of an older `wl_output`
+    /// has no name and is [`DisplayKey::Unkeyed`].
+    WaylandOutput(String),
+    /// The RandR output behind an X11 monitor: the XID of the first output of
+    /// the monitor `RRGetMonitors` lists. Outputs are identified by XID, never
+    /// by the name they carry.
+    X11Output(u32),
     /// An output with no stable native key: every appearance is a new display.
     Unkeyed,
 }
@@ -288,7 +291,9 @@ pub struct DisplayInfo {
     /// The display's name, such as "Built-in Display". A label, never an
     /// identity.
     pub name: String,
-    /// Bounds in global screen coordinates, in device pixels.
+    /// Bounds in global screen coordinates, in device pixels. A Wayland
+    /// compositor has no global device-pixel space, so there they are in its
+    /// logical coordinate space.
     pub bounds: Bounds<i32>,
     /// The area windows can occupy without being covered by system chrome.
     pub usable_bounds: Bounds<i32>,

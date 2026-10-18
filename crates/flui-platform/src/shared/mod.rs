@@ -30,6 +30,7 @@ pub(crate) mod android_text_weight;
     target_os = "android",
     target_os = "ios",
     target_os = "macos",
+    all(target_os = "linux", any(feature = "wayland", feature = "x11")),
     target_arch = "wasm32",
     test
 ))]
@@ -73,13 +74,9 @@ pub mod text_geometry;
 // `pub` for the same Linux-tested/off-target-consumed reason as
 // `hwnd_affinity` above (consumers: the Win32 and AppKit backends).
 pub mod visibility;
-// The macOS and winit sources turn their current-mode rate into a snapshot
-// period here; `test` keeps the rule checked on every host.
-#[cfg(any(
-    target_os = "macos",
-    all(feature = "winit-backend", target_os = "linux"),
-    test
-))]
+// The macOS source turns its current-mode rate into a snapshot period here;
+// `test` keeps the rule checked on every host.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) mod display_period;
 // The Windows display source reads rates and resolves monitors by these rules;
 // `test` keeps them checked on every host.

@@ -123,7 +123,7 @@ resume. No backend delivered a display change.
   NativeActivity application does not have): refresh-rate changes come from the NDK choreographer
   callback on API 30 and later, everything else from configuration changes, resume and the existing
   sampling timer.
-- The winit backend matches a window to its display by the native output identity (RandR output,
+- The winit backend matches a window to its display by the native output identity (the RandR CRTC,
   `wl_output` global name), never by bounds or label; mirrored outputs stay distinct. On Wayland a
   move between two outputs of equal scale that winit does not report stays unseen and is documented.
 - The first change keeps every existing backend feeding the snapshot with what it already reads
