@@ -318,7 +318,8 @@ derives once per turn, so they coalesce. Rows: `os_display_classification` and `
 native contract rows `refresh_is_the_rational_active_mode`,
 `window_display_is_a_display_of_the_snapshot`, `dpi_change_raises_the_display_hint` and
 `moves_within_one_monitor_raise_no_display_hint`. A transition between two monitors needs a second monitor and
-is not run here.
+is not a CI row; it ran by hand with `examples/displays.rs` (see
+`docs/platform-parity.md`). Unplugging a monitor on Windows was not run.
 
 ### Windows preferences have a window-independent owner lifetime
 
