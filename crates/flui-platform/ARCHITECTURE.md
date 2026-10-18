@@ -1647,27 +1647,40 @@ function, never by reading a browser version.
 
 **Choice:** `platforms/web/display.rs` owns the snapshot. The period comes from the
 timestamps `requestAnimationFrame` hands the platform's existing frame loop
-(`platform.rs`), fed to `shared::refresh_estimate::RefreshEstimator`: the median of
-the last 30 intervals once at least 10 usable ones exist, with intervals longer than
-three times the window's lower quartile left out (a background tab, a debugger
-pause, throttled frames: a window that is mostly throttled has a slow median, so
-the baseline is the fast end, not the median). A new median is published only when
-it leaves a 3% band around the published value, which keeps 59.94 and 60 Hz one
-value and 60, 75, 90, 120 and 144 Hz apart. The estimate restarts when the tab
-becomes visible and when the pixel ratio changes (the intervals no longer describe
-the cadence; the published period stays until a fresh estimate leaves its band), and
-is forgotten when the window moves to another screen, whose rate it does not
-describe. A published change invalidates the cached snapshot and wakes the owner
-through the `OwnerSignal`; the owner's next turn reads the new snapshot.
+(`platform.rs`), fed to `shared::refresh_estimate::RefreshEstimator`: the trimmed
+mean (without the fastest and slowest tenth) of the last 30 intervals, with
+intervals longer than three times the window's lower quartile left out (a background
+tab, a debugger pause, throttled frames: a window that is mostly throttled has a slow
+median, so the baseline is the fast end, not the median). A mean and not a median
+because a clock clamped to whole milliseconds reports 120 Hz as 8 and 9 ms
+intervals, whose median is 8.0; the trim keeps a few dropped frames out. The first
+value waits for a full window. A replacement is published only when it has left a 3%
+band around the published value for five consecutive frames while the mean of the
+latest ten intervals agrees with it (within 6%): while the window holds two rates
+the estimate sits between them, at a value the display never ran at, and the latest
+intervals disagree with it. The band keeps 59.94 and 60 Hz one value and 60, 75, 90,
+120 and 144 Hz apart. The estimate restarts when the tab becomes visible and when
+the pixel ratio changes (the intervals no longer describe the cadence; the published
+period stays until a fresh estimate replaces it), and is forgotten when the
+`currentScreen` object changes, whose rate the old value does not describe. A
+published change invalidates the cached snapshot and wakes the owner through the
+`OwnerSignal`; the owner's next turn reads the new snapshot.
 
 `Platform::display_snapshot` runs on every owner wake, so the snapshot is cached and
 read from the browser again only after an event that can change it: a pixel-ratio
-change, a published period, a change of the screen list or of the window's screen.
+change, a published period, `change` on `window.screen`, a change of the screen list,
+of a listed screen or of the window's screen.
 The pixel ratio is watched with `matchMedia("(resolution: Xdppx)")`
 (`shared::dppx_query`): the query matches while the ratio is exactly `X`, so it
 fires on any change and is spent by it, and the next one is armed for the new ratio.
-Every query is listened to with one retained JS function, so the callback that is
-running never frees itself.
+Arming checks `matches()` and reads the ratio again, a bounded number of times, when
+it moved between the read and the listening (a query that does not match would never
+fire for a change that already happened); a refused query is retried on the next
+frames. Every query is listened to with one retained JS function, so the callback
+that is running never frees itself. `window.screen` raises `change` for a size, ratio
+or position change in Chromium without any permission, detected by `onchange` being
+present (`WebFeature<ScreenChange>`); the browser calls that need a capability are
+methods on its proof (`platforms/web/features.rs`).
 
 Several screens are listed only when `getScreenDetails` exists and the
 `window-management` permission already reads `granted` (the older
@@ -1678,14 +1691,18 @@ Each `ScreenDetailed` object is the screen's identity, held in a retained list
 (`shared::screen_identity`): a screen found in the list keeps its `DisplayId`, an
 object that matches nothing gets a fresh one, and an id leaves the list with its
 screen and is never issued again. Labels are not keys; two identical monitors share
-one. The estimate belongs to the screen the window is on (`currentScreen`); the
-others report unknown. Their bounds are CSS pixels scaled by each screen's own
-`devicePixelRatio`, origin included, so a layout of mixed-ratio screens is the
-browser's coordinate space expressed per screen, not one global device grid.
+one. A `change` on a listed screen (it is followed with the list) refreshes the
+snapshot. The estimate belongs to the screen the window is on (`currentScreen`); the
+others report unknown. The current screen is scaled by `window.devicePixelRatio`,
+which includes page zoom, exactly as in the single-screen case; the others by their
+own `devicePixelRatio`, origin included, so a layout of mixed-ratio screens is the
+browser's coordinate space expressed per screen, not one global device grid. That
+`ScreenDetailed.devicePixelRatio` leaves out page zoom is to be confirmed in a real
+browser; the choice does not depend on it.
 
-**Limits:** with no Window Management access, moving the window between two screens
-of equal pixel ratio but different size raises no event, so the bounds are stale
-until the next one. The estimate is the presented cadence: a power saver, a
+**Limits:** in a browser whose `screen` has no `onchange`, moving the window between
+two screens of equal pixel ratio but different size raises no event, so the bounds are
+stale until the next one. The estimate is the presented cadence: a power saver, a
 throttled frame or a variable-refresh panel lowers it. Both are documented on the
 module. `WebWindow::display_id` names the current screen; the window raises no
 `on_display_changed` because every event above already wakes the owner, whose turn

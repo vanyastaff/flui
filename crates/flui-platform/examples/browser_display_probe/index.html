@@ -7,6 +7,11 @@ canvas { width: 240px; height: 80px; border: 1px solid #888; display: block; mar
 #display-log { white-space: pre-wrap; }
 button { margin-right: 6px; }
 </style>
+<!-- `trunk serve` copies what wasm-bindgen generated next to this page; a plain
+     static server ignores these links. -->
+<link data-trunk rel="copy-file" href="browser_display_probe.js">
+<link data-trunk rel="copy-file" href="browser_display_probe_bg.wasm">
+<link data-trunk rel="copy-dir" href="snippets">
 <canvas id="flui-canvas" width="240" height="80"></canvas>
 <p>
   <button id="grant">Grant screen access (calls getScreenDetails)</button>

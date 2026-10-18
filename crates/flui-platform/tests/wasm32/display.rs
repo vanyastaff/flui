@@ -849,7 +849,12 @@ async fn web_window_names_the_display_the_snapshot_describes() {
         .snapshot()
         .window_display(window.display_id())
         .expect("window display");
-    assert!(near(display.refresh_period.map(|p| p.get()), 8.333));
+    assert!(near(
+        display
+            .refresh_period
+            .map(flui_platform_api::RefreshPeriod::get),
+        8.333
+    ));
     drop(window);
     running.quit();
     settle().await;
