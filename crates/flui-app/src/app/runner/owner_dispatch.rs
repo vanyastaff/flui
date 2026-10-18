@@ -819,7 +819,12 @@ pub(super) fn teardown_platform_ui_runtime() {
 }
 
 #[path = "owner_dispatch/display_tests.rs"]
-#[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
+#[cfg(all(
+    test,
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
 mod display_tests;
 #[path = "owner_dispatch/tests.rs"]
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
