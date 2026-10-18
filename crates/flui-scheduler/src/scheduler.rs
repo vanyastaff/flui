@@ -2132,7 +2132,7 @@ impl UpdateScheduler {
     /// the `period_us` field of the `frame` span follow the display instead of
     /// the 60 Hz the scheduler was built with.
     ///
-    /// The host sets it before the frame begins. [`FrameTiming`](crate::FrameTiming)
+    /// The host sets it before the frame begins. [`FrameTiming`]
     /// copies the budget's duration when a frame starts, so a change made
     /// inside a frame applies to the following one.
     pub fn set_budget_frame_duration(&self, frame_duration: FrameDuration) {

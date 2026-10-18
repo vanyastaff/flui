@@ -61,7 +61,14 @@ pub mod text_geometry;
 pub mod visibility;
 // The macOS and winit sources turn their current-mode rate into a snapshot
 // period here; `test` keeps the rule checked on every host.
-#[cfg(any(target_os = "macos", feature = "winit-backend", test))]
+#[cfg(any(
+    target_os = "macos",
+    all(
+        feature = "winit-backend",
+        any(target_os = "windows", target_os = "linux")
+    ),
+    test
+))]
 pub(crate) mod display_period;
 // UIKit consumes this acknowledgement; its transport contract runs on every host.
 pub mod window_installation;

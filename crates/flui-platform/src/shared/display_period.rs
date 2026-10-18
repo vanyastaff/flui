@@ -19,7 +19,13 @@ pub(crate) fn core_graphics_refresh_period(hz: f64) -> Option<RefreshPeriod> {
 
 /// The period of a winit monitor's `refresh_rate_millihertz`; `None` when the
 /// monitor reports none or a value that does not describe a cadence.
-#[cfg(any(feature = "winit-backend", test))]
+#[cfg(any(
+    all(
+        feature = "winit-backend",
+        any(target_os = "windows", target_os = "macos", target_os = "linux")
+    ),
+    test
+))]
 pub(crate) fn winit_refresh_period(millihertz: Option<u32>) -> Option<RefreshPeriod> {
     RefreshPeriod::from_millihertz(i64::from(millihertz?)).ok()
 }
