@@ -27,7 +27,6 @@ where
     }
 
     tracing::info!("Starting web platform via flui-platform");
-    crate::app::dev_agent::log_undriven(&config, "web");
 
     // Platform init is an environment failure (unsupported browser, missing
     // wasm feature, driver problem), not a `BUG:` invariant — see the
@@ -118,7 +117,15 @@ where
             tracing::error!("Root widget attach failed: {:?}", e);
             return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
         }
-        let installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
+        // Vended while the ui_runtime is still ours, as on the desktop: an
+        // installation that fails drops it, and the hook is handed only a
+        // window that finished installing.
+        let agent_window = config
+            .dev_agent
+            .as_ref()
+            .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
+        let mut installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
+        installation.dev_agent(config.dev_agent.zip(agent_window));
         owner_platform_installed(|owner| {
             installation.submit_web(
                 super::frame_driver::FrameDriver::Web(WebFrameDriver { renderer, window }),
@@ -141,7 +148,18 @@ where
     let result = platform.run(Box::new(move |owner| {
         install_owner_platform(owner)?;
         APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(&config));
+        // Attached before the page's one window opens, as a desktop loop
+        // attaches before its first. A failed bootstrap drops the attachment,
+        // which detaches the hook.
+        let agent = config
+            .dev_agent
+            .as_ref()
+            .and_then(crate::app::dev_agent::DevAgent::attach);
         bootstrap_web(root, config)?;
+        // The loop this attachment spans is the page's, which outlives this
+        // callback and never ends while the page lives (the host stays
+        // resident for the same reason, above): the hook stays attached.
+        std::mem::forget(agent);
         tracing::info!("Web platform ready");
         Ok(())
     }));

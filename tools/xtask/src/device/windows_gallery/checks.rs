@@ -1,9 +1,6 @@
 //! The gallery's checks, several per screen. Each opens its screen fresh,
 //! acts with real input, and reads the outcome from the UIA tree and from
 //! pixels sampled where the right and the wrong outcome differ.
-//!
-//! The colours are the gallery's own (`examples/interaction_gallery/src/
-//! style.rs`, `painters.rs`, `screens/gestures.rs`).
 
 use std::time::Duration;
 
@@ -13,9 +10,14 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 
+use super::super::gallery::{
+    ACCENT, ARCHIVE, BACKGROUND, CARDS, COLLAPSING, FOCUS, GESTURES, LANE, MAP_GROUND, MENU_SCREEN,
+    PAD_IDLE, PAGE_COLORS, PAGES, PIN, REFRESH, RING, Rgb, SHEET, SURFACE, SWIPE, TINT_DOUBLE,
+    TINT_LONG, TINT_PAN, TINT_SCALE, TINT_TAP, TOLERANCE, VIEWER, cell_at, scene_under,
+    viewer_state,
+};
 use super::super::uia::{BUTTON, TEXT};
 use super::super::windows_input::centre;
-use super::super::windows_screen::Rgb;
 use super::{Check, Driver, EDIT, MENU, MENU_ITEM, SLIDER};
 
 /// Every check, in the order it runs.
@@ -177,17 +179,6 @@ pub(super) const CHECKS: &[(&str, Check)] = &[
     ),
 ];
 
-const SWIPE: &str = "Swipe actions";
-const REFRESH: &str = "Pull to refresh";
-const COLLAPSING: &str = "Collapsing header";
-const PAGES: &str = "Pages";
-const SHEET: &str = "Bottom sheet";
-const VIEWER: &str = "Zoom and pan";
-const CARDS: &str = "Drag and drop";
-const MENU_SCREEN: &str = "Context menu";
-const GESTURES: &str = "Gestures";
-const FOCUS: &str = "Focus and keys";
-
 const fn check(
     name: &'static str,
     screen: &'static str,
@@ -196,37 +187,10 @@ const fn check(
     (name, Check { screen, run })
 }
 
-// The gallery's colours.
-const BACKGROUND: Rgb = Rgb(244, 245, 248);
-const SURFACE: Rgb = Rgb(255, 255, 255);
-const ACCENT: Rgb = Rgb(46, 92, 230);
-const PIN: Rgb = Rgb(232, 160, 32);
-const ARCHIVE: Rgb = Rgb(56, 142, 92);
-const PAGE_COLORS: [Rgb; 3] = [ACCENT, ARCHIVE, Rgb(214, 69, 65)];
-const MAP_GROUND: Rgb = Rgb(229, 236, 222);
-const LANE: Rgb = Rgb(232, 235, 241);
-const TINT_TAP: Rgb = Rgb(204, 232, 214);
-const TINT_DOUBLE: Rgb = Rgb(252, 228, 196);
-const TINT_LONG: Rgb = Rgb(246, 214, 214);
-const TINT_PAN: Rgb = Rgb(226, 214, 246);
-const TINT_SCALE: Rgb = Rgb(204, 236, 240);
-/// What anti-aliasing and colour management may move a flat fill by.
-const TOLERANCE: u8 = 10;
 /// How long a wheel burst stays one sequence after its last notch: the
 /// default preset's `GestureSettings::contactless_latch_idle`
 /// (`flui-interaction`, which xtask does not link).
 const CONTACTLESS_LATCH_IDLE: Duration = Duration::from_millis(1500);
-
-/// The viewer grid's cell colour (`painters::cell_color`).
-fn cell(column: i32, row: i32) -> Rgb {
-    let (column, row) = (
-        u8::try_from(column).expect("BUG: a grid column"),
-        u8::try_from(row).expect("BUG: a grid row"),
-    );
-    Rgb(30 + 9 * column, 40 + 8 * row, 200 - 4 * column.min(row))
-}
-/// The viewer grid's cell side, in logical pixels.
-const CELL: f64 = 40.0;
 
 fn ensure_near(what: &str, seen: Rgb, expected: Rgb) -> anyhow::Result<()> {
     anyhow::ensure!(
@@ -644,20 +608,6 @@ fn grid_origin(driver: &Driver<'_>) -> anyhow::Result<POINT> {
     )
 }
 
-/// The cell under a point `scene` logical pixels into the unzoomed grid.
-fn cell_at(scene: (f64, f64)) -> Rgb {
-    cell((scene.0 / CELL) as i32, (scene.1 / CELL) as i32)
-}
-
-/// The zoom percentage and offset the viewer's readout states.
-fn viewer_state(text: &str) -> Option<(f64, f64, f64)> {
-    let rest = text.strip_prefix("Zoom ")?;
-    let (zoom, rest) = rest.split_once("%, offset ")?;
-    let (x, rest) = rest.split_once(" by ")?;
-    let y = rest.strip_suffix(" px")?;
-    Some((zoom.parse().ok()?, x.parse().ok()?, y.parse().ok()?))
-}
-
 /// Waits for the readout to state `zoom` and an offset within two logical
 /// pixels of `offset` (the readout rounds, the origin is read in physical
 /// pixels).
@@ -767,12 +717,6 @@ fn viewer_keys(driver: &Driver<'_>) -> anyhow::Result<()> {
         .text_where("Zoom 100%", |_| true)
         .map(drop)
         .map_err(|error| error.context(format!("after {zoomed:?} and {panned:?}")))
-}
-
-/// The scene point under a viewer point, for a readout's zoom and offset.
-fn scene_under(state: (f64, f64, f64), at: (f64, f64)) -> (f64, f64) {
-    let (zoom, x, y) = state;
-    ((at.0 - x) / (zoom / 100.0), (at.1 - y) / (zoom / 100.0))
 }
 
 fn viewer_mouse_pan(driver: &Driver<'_>) -> anyhow::Result<()> {
@@ -986,8 +930,6 @@ fn menu_long_press(driver: &Driver<'_>) -> anyhow::Result<()> {
 // Gestures
 // ---------------------------------------------------------------------------
 
-const PAD_IDLE: Rgb = Rgb(222, 230, 252);
-
 /// The pad's middle, and a point of its fill clear of its text.
 fn pad(driver: &Driver<'_>) -> anyhow::Result<(POINT, POINT)> {
     let label = driver.wait("the gesture pad", |driver| {
@@ -1095,9 +1037,6 @@ fn ring_point(driver: &Driver<'_>, button: &str) -> anyhow::Result<POINT> {
         y: centre(rect).y,
     })
 }
-
-/// The ring's dark band.
-const RING: Rgb = Rgb(0, 0, 0);
 
 fn focus_tab_order(driver: &Driver<'_>) -> anyhow::Result<()> {
     driver.text(INITIAL_FOCUS)?;

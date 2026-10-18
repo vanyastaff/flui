@@ -14,6 +14,8 @@
 //! assistive path, which the widgets require through
 //! [`GestureAlternatives`](flui::widgets::GestureAlternatives).
 
+#[cfg(all(target_arch = "wasm32", feature = "agent"))]
+mod agent;
 mod keyed;
 mod painters;
 mod screens;
@@ -86,10 +88,14 @@ fn with_agent(config: AppConfig, app: &flui::android_activity::AndroidApp) -> Ap
 
 /// The browser's entry point: a panic reads as a console error rather than
 /// an opaque `unreachable`, then the gallery mounts into the page's
-/// `#flui-canvas`.
+/// `#flui-canvas`. With the `agent` feature the page also serves its
+/// semantics tree to a browser driver (`src/agent.rs`).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub fn start() {
     console_error_panic_hook::set_once();
+    #[cfg(feature = "agent")]
+    run_app_with_config(Gallery, AppConfig::new().with_dev_agent(agent::PageAgent));
+    #[cfg(not(feature = "agent"))]
     run_app(Gallery);
 }

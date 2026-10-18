@@ -31,30 +31,7 @@ use windows::Win32::UI::Input::Pointer::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{PT_TOUCH, TOUCH_MASK_CONTACTAREA};
 
-/// An sRGB colour read off the screen.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Rgb(pub(super) u8, pub(super) u8, pub(super) u8);
-
-impl Rgb {
-    /// The largest per-channel difference to `other`.
-    pub(super) fn distance(self, other: Self) -> u8 {
-        let channel = |a: u8, b: u8| a.abs_diff(b);
-        channel(self.0, other.0)
-            .max(channel(self.1, other.1))
-            .max(channel(self.2, other.2))
-    }
-
-    /// Within `tolerance` of `other` on every channel.
-    pub(super) fn near(self, other: Self, tolerance: u8) -> bool {
-        self.distance(other) <= tolerance
-    }
-}
-
-impl std::fmt::Display for Rgb {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "#{:02x}{:02x}{:02x}", self.0, self.1, self.2)
-    }
-}
+pub(super) use super::gallery::Rgb;
 
 /// One capture of a screen rectangle, top row first.
 pub(super) struct Capture {

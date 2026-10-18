@@ -1154,23 +1154,22 @@ Basis for the above: source reading at the two commits named (clone grep plus
 shallow, so an older revision containing a `setNeedsDisplay:` call is not ruled
 out, and no Apple documentation was consulted for the API-deprecation claim.
 
-**Trade-off:** this deferral is AppKit-local, and the same defect has a second
+**Trade-off:** this deferral is AppKit-local, and the same defect had a second
 instance on another backend with the opposite sign. Web's `request_redraw`
-dispatches the frame immediately and `WindowCallbacks::drain_events` drains
-synchronously until the queue is empty, so a frame callback that re-arms recurses
-*within* the originating call rather than reaching a browser frame turn — measured
-at 4 frames inside one JS-to-Rust call, with no RAF turn, GPU setup or renderer
-involved (issue #1047, open). AppKit drops the re-arm that never crosses out of
-the display pass; web honours one that never crosses into a future turn. Both are
-the same contract failing: **a redraw request issued from inside a frame request
-must be deferred to the platform's next frame turn, not serviced in place.** The
-macOS half is correct now and the web half is not, which is the cost this entry
-books — the concept lives in `platforms/macos/display_pass.rs` rather than in a
-shared place both backends could hold, so a third backend writing a frame loop
-has to rediscover it. Lifting it to the `WindowCallbacks`/`request_redraw` layer
-is the obvious shape and is not done here: it would edit the web backend, which
-no gate on this host executes, and §Definition-of-Done forbids claiming a fix on
-a path nothing runs.
+dispatched the frame immediately and `WindowCallbacks::drain_events` drains
+synchronously until the queue is empty, so a frame callback that re-armed
+recursed *within* the originating call rather than reaching a browser frame turn;
+in the interaction gallery an animation started from a click (a swiped row
+closing) re-armed every frame at the same frame time and held the page's thread
+for good. Both were the same contract failing: **a redraw request issued from
+inside a frame request must be deferred to the platform's next frame turn, not
+serviced in place.** Web now serves `request_redraw` from its
+`requestAnimationFrame` loop alone, which requests a frame on every animation
+frame (`a_redraw_waits_for_the_next_animation_frame` in `tests/web_browser.rs`,
+run in headless Chrome by `cargo xtask device web-input`, and the gallery's
+screens by `cargo xtask device web-gallery`). The concept still lives per
+backend rather than in a shared place, so a third backend writing a frame loop
+has to rediscover it.
 
 **Replacement coverage:** three tiers, because no single one reaches the claim.
 `display_pass.rs`'s four tests pin the marker (set inside a pass, restored on

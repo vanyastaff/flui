@@ -225,6 +225,14 @@ pub(super) enum Native {
         driver: PathBuf,
         recordings: PathBuf,
     },
+    /// The interaction gallery's page, built with its development agent, driven
+    /// screen by screen over WebDriver BiDi (`device/web_gallery.rs`); its
+    /// captures land in `shots`.
+    WebGallery {
+        page: PathBuf,
+        driver: PathBuf,
+        shots: PathBuf,
+    },
     /// The built Android input probe, packaged, installed and driven over
     /// `adb` (`device/android_input.rs`, any host with the SDK), its
     /// sessions' recordings pulled into `recordings`.
@@ -264,6 +272,11 @@ impl Native {
             } => {
                 super::web_input::run(&root.join(page), &root.join(driver), &root.join(recordings))
             }
+            Self::WebGallery {
+                page,
+                driver,
+                shots,
+            } => super::web_gallery::run(&root.join(page), &root.join(driver), &root.join(shots)),
             Self::AndroidInput {
                 probe,
                 recordings,
@@ -751,6 +764,14 @@ impl fmt::Display for Step {
                     }
                     Native::Chromedriver { driver, .. } => ("fetch-chromedriver", driver),
                     Native::WebInput { page, .. } => ("webdriver-bidi", page),
+                    Native::WebGallery { page, shots, .. } => {
+                        return write!(
+                            f,
+                            "gallery-page {} {}; if rc!=0: echo '{failed}'; exit $rc",
+                            quote(&show(page)),
+                            quote(&show(shots))
+                        );
+                    }
                     Native::AndroidInput {
                         probe,
                         recordings,

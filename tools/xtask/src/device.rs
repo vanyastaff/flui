@@ -19,6 +19,7 @@ mod android_gallery;
 mod android_input;
 mod bidi;
 mod chrome;
+mod gallery;
 mod plan;
 #[cfg(windows)]
 #[expect(
@@ -26,6 +27,7 @@ mod plan;
     reason = "a UI Automation client is COM calls through the `windows` bindings"
 )]
 mod uia;
+mod web_gallery;
 mod web_input;
 #[cfg(windows)]
 #[expect(
@@ -425,6 +427,33 @@ enum DeviceCheck {
         #[arg(long)]
         bless: bool,
     },
+    /// The interaction gallery in a real headless Chrome, every screen
+    /// driven by trusted input and each outcome read through the gallery's
+    /// semantics tree and the page's pixels, on any host that has Chrome.
+    ///
+    /// Fetches the ChromeDriver matching the installed Chrome (as
+    /// `web-input` does), builds `examples/interaction_gallery` for
+    /// wasm32 in release with its `agent` feature, binds it with the locked
+    /// `wasm-bindgen` into `target/web-gallery/pkg/`, serves it on localhost
+    /// and opens it at 1040 by 720 CSS pixels. Each screen is opened from
+    /// the sidebar and driven over WebDriver BiDi with trusted mouse, wheel,
+    /// key and touch input, one step per move, and with Chrome's input
+    /// method over its DevTools path; the host's own mouse and keyboard are
+    /// never used. The checks are the `windows-gallery` list with the
+    /// page's input: swipe actions, pull to refresh (a pull, F5 and Ctrl+R,
+    /// which must not reload the page), the collapsing header, the pager,
+    /// the bottom sheet, zoom and pan (double tap and click, a spread,
+    /// Ctrl+wheel, which must not zoom the page), drag and drop, the
+    /// context menu (right click, long press, Shift+F10 and the menu key),
+    /// the gesture pad and keyboard focus with an input-method composition.
+    /// After each action it reads the outcome from the tree the page's
+    /// agent serves (`globalThis.__flui_agent`) and from pixels of
+    /// `browsingContext.captureScreenshot` sampled where the right and the
+    /// wrong outcome differ. Every check is reported; the run fails if any
+    /// did. Captures land in `target/web-gallery-shots/`.
+    /// `FLUI_GALLERY_CHECKS=<text>` runs only the checks whose name contains
+    /// `<text>` (`focus:`). Exits 2 when the host has no Chrome.
+    WebGallery,
     /// The Android backend on an attached device, driven by Android's own
     /// injection, and the golden native recordings of what it made of it.
     ///
@@ -489,7 +518,7 @@ enum DeviceCheck {
 impl DeviceCheck {
     /// Whether this host is the OS the check needs.
     fn runs_on_this_host(&self) -> bool {
-        if matches!(self, Self::WebInput { .. }) {
+        if matches!(self, Self::WebInput { .. } | Self::WebGallery) {
             // Every host Chrome runs on; the first step says when it has none.
             return true;
         }
@@ -563,6 +592,7 @@ impl DeviceCheck {
             Self::MacosWorkload
             | Self::MacosHotReloadLoop { .. }
             | Self::WebInput { .. }
+            | Self::WebGallery
             | Self::AndroidInput { .. }
             | Self::AndroidGallery => {
                 return None;
@@ -657,6 +687,7 @@ impl DeviceCheck {
                 },
             ],
             Self::WebInput { bless } => web_input_plan(target, *bless),
+            Self::WebGallery => web_gallery_plan(target),
             Self::WindowsInput { bless } => INPUT_SESSIONS
                 .into_iter()
                 .map(|session| session.record(target, *bless))
@@ -925,6 +956,58 @@ fn web_input_plan(target: &Path, bless: bool) -> Vec<Step> {
             run: hold,
             markers: &["NATIVE_RECORDING_HELD=web_bidi_mouse_pen_touch"],
             failure: "web-input FAILED: the browser session no longer replays to its golden (output above)",
+        },
+    ]
+}
+
+/// `web-gallery`: the ChromeDriver, the gallery built for the page with its
+/// driver agent and bound, then every screen driven over WebDriver BiDi.
+fn web_gallery_plan(target: &Path) -> Vec<Step> {
+    let driver = chromedriver_at(target);
+    let page = target.join("web-gallery");
+    vec![
+        Step::Native {
+            check: Native::Chromedriver {
+                cache: target.join("chromedriver"),
+                driver: driver.clone(),
+            },
+            announce: Announce {
+                cannot_verify: "web-gallery CANNOT VERIFY: this host has no Chrome (details above)",
+                failed: "web-gallery FAILED: the ChromeDriver for this Chrome could not be fetched (details above)",
+            },
+        },
+        cargo_build([
+            "-p",
+            "flui-interaction-gallery",
+            "--locked",
+            "--release",
+            "--lib",
+            "--features",
+            "agent",
+            "--target",
+            "wasm32-unknown-unknown",
+        ]),
+        Step::RemoveDir(page.clone()),
+        Step::Run(
+            Run::new(Program::Tool("wasm-bindgen"))
+                .args(["--target", "web", "--out-dir"])
+                .arg(page.join("pkg"))
+                .arg(target.join("wasm32-unknown-unknown/release/flui_interaction_gallery.wasm")),
+        ),
+        Step::Copy {
+            from: PathBuf::from("examples/interaction_gallery/index.html"),
+            to: page.join("index.html"),
+        },
+        Step::Native {
+            check: Native::WebGallery {
+                page,
+                driver,
+                shots: target.join("web-gallery-shots"),
+            },
+            announce: Announce {
+                cannot_verify: "web-gallery CANNOT VERIFY: the gallery page could not be driven (details above)",
+                failed: "web-gallery FAILED: a screen's outcome did not reach the tree or the pixels (summary above)",
+            },
         },
     ]
 }
@@ -1419,6 +1502,7 @@ mod tests {
             ),
             (&["windows-notes"], DeviceCheck::WindowsNotes),
             (&["windows-gallery"], DeviceCheck::WindowsGallery),
+            (&["web-gallery"], DeviceCheck::WebGallery),
             (&["android-gallery"], DeviceCheck::AndroidGallery),
             (
                 &["android-input"],
@@ -1650,6 +1734,30 @@ mod tests {
         );
     }
 
+    /// The page is built with the agent that serves its tree, bound into the
+    /// directory the server roots at, and driven from its own index page.
+    fn web_gallery_binds_the_page_with_its_agent_and_drives_every_screen() {
+        let plan = render(&DeviceCheck::WebGallery);
+        let expected: [fn(&str) -> bool; 6] = [
+            |step| step.starts_with("fetch-chromedriver target/chromedriver/current/chromedriver"),
+            |step| {
+                step == "cargo build -p flui-interaction-gallery --locked --release --lib --features agent --target wasm32-unknown-unknown"
+            },
+            |step| step == "rm -rf target/web-gallery",
+            |step| {
+                step == "wasm-bindgen --target web --out-dir target/web-gallery/pkg target/wasm32-unknown-unknown/release/flui_interaction_gallery.wasm"
+            },
+            |step| {
+                step == "cp examples/interaction_gallery/index.html target/web-gallery/index.html"
+            },
+            |step| step.starts_with("gallery-page target/web-gallery target/web-gallery-shots;"),
+        ];
+        assert_eq!(plan.len(), expected.len(), "{plan:#?}");
+        for (index, (step, holds)) in plan.iter().zip(expected).enumerate() {
+            assert!(holds(step), "step {index}: {step}");
+        }
+    }
+
     /// Runs on any host: the gallery's library is built for the device with
     /// its development agent, then packaged and driven in one native step.
     fn android_gallery_builds_the_library_with_its_agent_and_drives_it() {
@@ -1785,6 +1893,10 @@ mod tests {
                 (
                     "windows_gallery_builds_the_gallery_and_drives_every_screen",
                     windows_gallery_builds_the_gallery_and_drives_every_screen as fn(),
+                ),
+                (
+                    "web_gallery_binds_the_page_with_its_agent_and_drives_every_screen",
+                    web_gallery_binds_the_page_with_its_agent_and_drives_every_screen as fn(),
                 ),
                 (
                     "android_gallery_builds_the_library_with_its_agent_and_drives_it",

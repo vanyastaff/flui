@@ -21,22 +21,33 @@ path = "src/main.rs"
 # The platform accessibility adapter (UI Automation, VoiceOver, TalkBack's
 # bridge). The Windows end-to-end check reads the gallery through it.
 a11y = ["flui/a11y"]
-# The development agent (ADR-0095 §3) on Android, where no platform
-# accessibility tree reaches an automation client: `cargo xtask device
-# android-gallery` reads the gallery's semantics tree through it. Serves
+# The development agent (ADR-0095 §3) where no platform accessibility tree
+# reaches an automation client. On Android `cargo xtask device
+# android-gallery` reads the gallery's semantics tree through it; it serves
 # debug builds only, and only once the driver has written a launch token
-# (see `android_main`).
-agent = ["dep:flui-devtools"]
+# (see `android_main`). On the web (`src/agent.rs`) the page serves the tree
+# as `globalThis.__flui_agent`, which `cargo xtask device web-gallery` reads.
+agent = [
+    "dep:flui-devtools",
+    "dep:flui-protocol",
+    "dep:serde_json",
+    "dep:js-sys",
+    "dep:wasm-bindgen-futures",
+]
 
 [dependencies]
 flui = { path = "../..", version = "=0.2.0-dev" }
 
-[target.'cfg(target_os = "android")'.dependencies]
-flui-devtools = { path = "../../packages/flui-devtools", features = ["agent"], optional = true }
-
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 console_error_panic_hook = "0.1"
+flui-protocol = { workspace = true, features = ["serde"], optional = true }
+serde_json = { workspace = true, optional = true }
+js-sys = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+flui-devtools = { path = "../../packages/flui-devtools", features = ["agent"], optional = true }
 
 [lints]
 workspace = true

@@ -2175,7 +2175,11 @@ dependencies = [
  "console_error_panic_hook",
  "flui",
  "flui-devtools",
+ "flui-protocol",
+ "js-sys",
+ "serde_json",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]
@@ -8102,6 +8106,7 @@ name = "xtask"
 version = "0.2.0-dev"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "cargo_metadata",
  "clap",
  "image",

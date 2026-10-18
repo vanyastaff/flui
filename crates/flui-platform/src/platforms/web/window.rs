@@ -166,6 +166,13 @@ impl WebWindow {
         // Make canvas focusable for keyboard events
         canvas.set_tab_index(0);
 
+        // Every touch on the canvas is the application's: with the default
+        // `touch-action`, the browser claims a touch that moves past its
+        // slop for its own panning or zooming and cancels the pointer, so a
+        // swipe, a drag or a pinch dies a few pixels in. Set inline, so a
+        // page's stylesheet cannot hand the gestures back to the browser.
+        let _ = canvas.style().set_property("touch-action", "none");
+
         // Set page title
         document.set_title(title);
 
@@ -419,12 +426,13 @@ impl PlatformWindow for WebWindow {
         self.state.lock().scale_factor
     }
 
-    fn request_redraw(&self) {
-        let accepting = self.registration.borrow().is_some();
-        if accepting {
-            self.callbacks.dispatch_request_frame();
-        }
-    }
+    /// Served by the page's next animation frame: the platform's
+    /// `requestAnimationFrame` loop dispatches a frame request on every one,
+    /// and the embedder's frame skips when nothing is dirty. Never inside
+    /// this call: a frame that asks for the next one (a running animation)
+    /// would get it at once, at the same frame time, inside its own
+    /// dispatch, in a loop that holds the page's only thread.
+    fn request_redraw(&self) {}
 
     fn is_focused(&self) -> bool {
         self.state.lock().focused

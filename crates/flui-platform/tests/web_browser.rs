@@ -36,6 +36,16 @@ wasm_bindgen_test_configure!(run_in_browser);
 #[wasm_bindgen(inline_js = r#"
 function canvas() { return document.getElementById('flui-canvas'); }
 export function freshCanvas() { canvas()?.remove(); }
+// A canvas the page put in the document, styled as a page would.
+export function pageCanvas() {
+    canvas()?.remove();
+    const element = document.createElement('canvas');
+    element.id = 'flui-canvas';
+    element.style.width = '300px';
+    element.style.height = '200px';
+    document.body.append(element);
+}
+export function touchAction() { return getComputedStyle(canvas()).touchAction; }
 export function canvasOrigin() {
     const rect = canvas().getBoundingClientRect();
     return [rect.left, rect.top];
@@ -166,6 +176,10 @@ export function editorComposition(type) { editor().dispatchEvent(new Composition
 extern "C" {
     #[wasm_bindgen(js_name = freshCanvas)]
     fn fresh_canvas();
+    #[wasm_bindgen(js_name = pageCanvas)]
+    fn page_canvas();
+    #[wasm_bindgen(js_name = touchAction)]
+    fn touch_action() -> String;
     #[wasm_bindgen(js_name = canvasOrigin)]
     fn canvas_origin() -> Vec<f64>;
     fn wheel(ctrl: bool, mode: u32, dx: f64, dy: f64, x: f64, y: f64) -> Vec<f64>;
@@ -405,6 +419,55 @@ fn names(phases: &[(String, f64, f64, u64)]) -> Vec<&str> {
 /// waits on it: its default (page scrolling) is cancelled only when the
 /// application prevents it, and it reaches the canvas's ancestors only when
 /// the application lets it propagate.
+/// A touch that moves on the canvas stays the application's, on a canvas the
+/// backend created and on one the page styled: where `touch-action` lets
+/// it, the browser takes a touch past its slop for its own panning and
+/// cancels the pointer, and a swipe, drag or pinch dies a few pixels in.
+#[wasm_bindgen_test]
+fn the_browser_leaves_every_touch_on_the_canvas_to_the_application() {
+    for (canvas, place) in [
+        ("created by the backend", fresh_canvas as fn()),
+        ("the page's own", page_canvas),
+    ] {
+        place();
+        let platform = WebPlatform::new().expect("a browser platform");
+        let window = platform
+            .open_window(WindowOptions::default())
+            .expect("the page's canvas opens");
+        assert_eq!(touch_action(), "none", "the canvas {canvas}");
+        window.close();
+    }
+}
+
+/// A redraw is served by the page's next animation frame, never inside the
+/// call: a frame that asks for the next one, as a running animation does,
+/// gets it on a later animation frame rather than at once, at the same frame
+/// time, in a loop that holds the page's only thread until the animation
+/// ends, if it ever does.
+#[wasm_bindgen_test]
+async fn a_redraw_waits_for_the_next_animation_frame() {
+    // An animation's frames, each asking for the next; bounded, so a backend
+    // that runs them inline fails here rather than hanging the page.
+    const ANIMATION: usize = 100;
+    let canvas = HostedCanvas::open();
+    let frames = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (counted, window) = (Arc::clone(&frames), Arc::clone(&canvas.window));
+    canvas.window.on_request_frame(Box::new(move || {
+        if counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < ANIMATION {
+            window.request_redraw();
+        }
+    }));
+    canvas.window.request_redraw();
+    let inline = frames.load(std::sync::atomic::Ordering::SeqCst);
+    wait(200).await;
+    let later = frames.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(inline, 0, "frames run inside the request");
+    assert!(
+        (1..ANIMATION).contains(&later),
+        "{later} frames in 200 ms of animation frames"
+    );
+}
+
 #[wasm_bindgen_test]
 fn a_wheel_scroll_is_answered_with_its_dispatch_result() {
     let window = CanvasWindow::open();

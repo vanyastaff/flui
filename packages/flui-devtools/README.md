@@ -152,8 +152,9 @@ a socket path elsewhere) and `FLUI_AGENT_TOKEN` (at least 32 bytes), which the
 tool that launches the app sets. Without them, in a release build, or with a
 short token the server stays inert and logs why once; if the endpoint cannot
 be bound the app runs on without it. Either way the runner is told the server
-does not serve, so no window collects semantics for it. The desktop and iOS runners hand the
-server every window that mounts a root view; Android and web drive no agent.
+does not serve, so no window collects semantics for it. The desktop, iOS and Android runners hand the
+server every window that mounts a root view, and the web runner its page's window
+(where this server has no endpoint to bind and does not serve).
 
 **Framing.** Newline-delimited JSON, one request per line, at most 1 MiB. The
 first line is `{"hello":{"token":"…"}}`, answered with

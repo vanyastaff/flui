@@ -145,8 +145,8 @@ pub struct AppConfig {
     /// a presentation opened into another window's UI runtime, are not handed
     /// over. Every window opened with a clone of this configuration shares
     /// the one hook, so a secondary window is served only when opened with
-    /// the application's configuration. The web runner drives no hook, and
-    /// logs so at start.
+    /// the application's configuration. The web runner does the same for the
+    /// page's one window and never detaches the hook.
     pub dev_agent: Option<DevAgent>,
 
     /// Governs when the platform loop exits once every hosted window has

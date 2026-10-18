@@ -32,13 +32,16 @@ tiny_http = { workspace = true }
 tungstenite = { workspace = true }
 ureq = { workspace = true, features = ["json"] }
 zip = { workspace = true, features = ["deflate-flate2-zlib-rs"] }
+# `cargo xtask device web-gallery`: the page captures, base64 PNG over BiDi;
+# `image` also saves the Windows checks' screen captures as PNG.
+base64 = { workspace = true }
+image = { workspace = true }
 
 # `cargo xtask device windows-a11y`, `windows-input` and `windows-gallery`: a
 # UI Automation client, real input through `SendInput` and synthetic touch
 # (`Win32_UI_Controls`, `Win32_UI_Input_Pointer`), and screen captures
-# (`Win32_Graphics_Gdi`, saved as PNG with `image`).
+# (`Win32_Graphics_Gdi`).
 [target.'cfg(windows)'.dependencies]
-image = { workspace = true }
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

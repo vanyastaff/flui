@@ -417,6 +417,8 @@ ureq = { version = "3.3", default-features = false, features = ["rustls"] }
 tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
 tiny_http = { version = "0.12", default-features = false }
 zip = { version = "8.6.0", default-features = false }
+# `cargo xtask device web-gallery`: the page captures BiDi returns as base64.
+base64 = { version = "0.22", default-features = false, features = ["std"] }
 # === Engine-specific dependencies (NOT in workspace) ===
 # These are ONLY used in flui-engine:
 # - etagere (glyph atlas packing)
