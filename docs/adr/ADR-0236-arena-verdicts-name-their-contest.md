@@ -1,4 +1,4 @@
-# ADR-0230: Arena verdicts name their contest
+# ADR-0236: Arena verdicts name their contest
 
 - **Status:** Accepted
 - **Date:** 2026-10-17
