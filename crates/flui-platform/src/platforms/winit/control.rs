@@ -57,10 +57,10 @@ impl std::fmt::Debug for ControlCommand {
 pub(super) enum ControlSendError {
     Full {
         capacity: usize,
-        rejected: WindowOptions,
+        rejected: Box<WindowOptions>,
     },
     OwnerGone {
-        rejected: WindowOptions,
+        rejected: Box<WindowOptions>,
     },
 }
 
@@ -166,7 +166,9 @@ impl ControlSender {
     ) -> Result<ClaimHandle<OpenWindowResult>, ControlSendError> {
         let admission = self.admission.lock();
         if !*admission {
-            return Err(ControlSendError::OwnerGone { rejected: options });
+            return Err(ControlSendError::OwnerGone {
+                rejected: Box::new(options),
+            });
         }
 
         // The claim slot's wake fires only on abandonment (never on
@@ -216,11 +218,11 @@ impl ControlSender {
                 // next real enqueue.
                 Err(ControlSendError::Full {
                     capacity: CONTROL_CAPACITY,
-                    rejected: rejected.into_options(),
+                    rejected: Box::new(rejected.into_options()),
                 })
             }
             Err(TrySendError::Disconnected(rejected)) => Err(ControlSendError::OwnerGone {
-                rejected: rejected.into_options(),
+                rejected: Box::new(rejected.into_options()),
             }),
         }
     }

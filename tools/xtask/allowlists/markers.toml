@@ -157,17 +157,12 @@ count = 1
 [[allow]]
 path = "crates/flui-platform/src/platforms/headless/platform.rs"
 class = "spec-task"
-count = 5
+count = 4
 
 [[allow]]
 path = "crates/flui-platform/src/platforms/windows/platform.rs"
 class = "spec-task"
 count = 17
-
-[[allow]]
-path = "crates/flui-platform/src/platforms/windows/window.rs"
-class = "spec-task"
-count = 2
 
 [[allow]]
 path = "crates/flui-platform/src/traits/owner.rs"

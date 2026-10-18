@@ -35,10 +35,28 @@ trait depends on `flui-platform-api` instead.
   is built, so a runner may read it once. `dyn HostWindow` has its own
   `HasWindowHandle`/`HasDisplayHandle` impls: without them an `open_window`
   result would not be a `flui_engine::WindowTarget` until upcast.
+- **A window publishes a state snapshot and takes commands (ADR-0237).** There
+  is one window trait. `PlatformWindow::state` returns an immutable
+  `WindowState` with a revision, `apply` takes a `WindowCommand`, and
+  `capabilities` says which commands the window honours: `apply` answers
+  `Unsupported` exactly when the matching capability is `false`, and the
+  capabilities of each backend are what its `apply` carries out today. The
+  snapshot describes what the OS reported, not what a command asked for.
+  Every backend keeps its last snapshot in a `shared::window_state::WindowStateCell`
+  (built like `DisplaySource`): an OS event marks the cell stale, the next read
+  samples the OS with no lock held, and a sample equal to the published one
+  keeps the revision. `on_state_changed` is raised after the publish, outside
+  the cell, only when the revision grew. Win32 and AppKit refresh from their
+  window messages and delegate callbacks, winit from its window events, the
+  Web from the layout, focus and visibility observers; the headless window
+  keeps a model that stands in for the OS (`HostLimits` makes it clamp a size
+  or decline a maximize) and publishes after each command or `simulate_*`
+  call. The iOS window rereads its metrics on each `state` call and does not
+  yet raise `on_state_changed` from its view's metric updates.
 - **The macOS backend enforces the window thread-affinity default
   mechanically.** `PlatformWindow`'s rule is that a method driving a window runs
   on the thread that owns the platform event loop. Every window-driving
-  `PlatformWindow`/`WindowTrait`/`MacOSWindowExtTrait` body on `MacOSWindow`
+  `PlatformWindow`/`MacOSWindowExtTrait` body on `MacOSWindow`
   re-enters the owner lane through `route_on_owner`, so a call from any thread
   is marshaled onto the window's owner lane before any AppKit message is sent.
   Two carve-outs: the class-E raw-handle accessors

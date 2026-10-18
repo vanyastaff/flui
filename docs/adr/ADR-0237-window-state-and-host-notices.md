@@ -1,6 +1,6 @@
 # ADR-0237: A window publishes a state snapshot and takes commands; the host delivers system notices
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-18
 - **Related:** [ADR-0222](ADR-0222-window-appearance-is-a-presentation-observation.md) (the
   payload-free observation shape this follows),

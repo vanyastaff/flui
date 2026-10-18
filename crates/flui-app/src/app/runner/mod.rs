@@ -339,7 +339,7 @@ mod tests {
             let matches_marker = APP_RUNTIME
                 .with(|slot| {
                     slot.borrow()
-                        .with_redraw_window(|w| w.bounds().size == marker_size)
+                        .with_redraw_window(|w| w.state().outer.size == marker_size)
                 })
                 .unwrap_or(false);
             saw_marker_window_cb.store(matches_marker, Ordering::SeqCst);

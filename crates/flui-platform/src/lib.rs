@@ -200,7 +200,6 @@ pub mod storage;
 mod table_test;
 pub mod task;
 pub mod traits;
-pub mod window;
 
 // Re-export configuration types
 // ==================== Platform Detection ====================
@@ -231,7 +230,7 @@ pub use platforms::MacOSPlatform;
 pub use platforms::{
     DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeHaptics,
     FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessDisplayControls,
-    HeadlessExitReevaluation, HeadlessOwnerTurns, HeadlessPlatform, MockWindow,
+    HeadlessExitReevaluation, HeadlessOwnerTurns, HeadlessPlatform, HostLimits, MockWindow,
 };
 // Web platform
 #[cfg(target_arch = "wasm32")]
@@ -257,9 +256,11 @@ pub use traits::{
     DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision, DisplaySnapshot, HostWindow,
     MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities,
     PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow,
-    RefreshPeriod, SessionEndAnswer, SessionEndPhase, WebCapabilities, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowDisplay, WindowEvent, WindowExecutionState,
-    WindowId, WindowMode, WindowOptions, WindowReveal, WindowShowError,
+    RefreshPeriod, SessionEndAnswer, SessionEndPhase, SizeConstraints, WebCapabilities,
+    WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
+    WindowCommandError, WindowControl, WindowDisplay, WindowEvent, WindowExecutionState,
+    WindowGeometry, WindowId, WindowMode, WindowOptions, WindowReveal, WindowRevision,
+    WindowRevisionExhausted, WindowShowError, WindowState,
 };
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.

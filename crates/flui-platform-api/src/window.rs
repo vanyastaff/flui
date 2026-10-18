@@ -1,4 +1,4 @@
-//! Window vocabulary: identity, creation options, modes, lifecycle state and
+//! Window vocabulary: identity, creation options, lifecycle state and
 //! the events a backend reports about its windows.
 //!
 //! These are the values the per-window contract,
@@ -6,7 +6,9 @@
 //! `flui_platform::Platform` that opens windows (which stays in
 //! `flui-platform`, ADR-0082 §2) use in their signatures.
 
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Point, Size};
+
+use crate::{WindowGeometry, WindowMode};
 
 // ==================== Creation ====================
 
@@ -66,6 +68,16 @@ pub struct WindowOptions {
     pub min_size: Option<Size<f64>>,
     /// Maximum window size
     pub max_size: Option<Size<f64>>,
+    /// Initial outer position in global logical pixels; `None` lets the
+    /// system place the window. A backend that cannot place a window ignores
+    /// it, and says so through its [`WindowCapabilities`](crate::WindowCapabilities).
+    pub position: Option<Point<f64>>,
+    /// The mode the window opens in. A backend that cannot enter it opens the
+    /// window in [`WindowMode::Normal`], which its first snapshot shows.
+    pub mode: WindowMode,
+    /// The rectangle the window returns to from a maximized or fullscreen
+    /// opening mode, so a restored maximized window keeps its earlier bounds.
+    pub normal_geometry: Option<WindowGeometry>,
 }
 
 impl Default for WindowOptions {
@@ -79,6 +91,9 @@ impl Default for WindowOptions {
             decorated: true,
             min_size: None,
             max_size: None,
+            position: None,
+            mode: WindowMode::Normal,
+            normal_geometry: None,
         }
     }
 }
@@ -98,87 +113,6 @@ impl WindowId {
     /// Get the raw ID value.
     pub fn as_u64(self) -> u64 {
         self.0
-    }
-}
-
-/// Window display mode with restoration data
-///
-/// Combines window state (normal/minimized/maximized/fullscreen) with the data
-/// needed to restore from each state. This design ensures type-safety:
-/// restoration data is only available when in the corresponding state.
-///
-/// Platform-specific restoration data (e.g., window style bits) should be
-/// stored in the platform's own `WindowContext` or equivalent struct.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// match window_mode {
-///     WindowMode::Normal => println!("Window is in normal state"),
-///     WindowMode::Fullscreen { restore_bounds } => {
-///         println!("Window is fullscreen, can restore to {:?}", restore_bounds);
-///     }
-///     _ => {}
-/// }
-/// ```
-#[derive(Debug, Clone, Copy, Default)]
-pub enum WindowMode {
-    /// Normal windowed state
-    #[default]
-    Normal,
-
-    /// Window is minimized (iconified)
-    Minimized {
-        /// Bounds before minimization for restoration
-        previous: Bounds<i32>,
-    },
-
-    /// Window is maximized
-    Maximized {
-        /// Bounds before maximization for restoration
-        previous: Bounds<i32>,
-    },
-
-    /// Window is in fullscreen mode
-    Fullscreen {
-        /// Bounds before fullscreen for restoration
-        restore_bounds: Bounds<i32>,
-    },
-}
-
-impl WindowMode {
-    /// Check if window is in fullscreen mode
-    #[inline]
-    pub fn is_fullscreen(&self) -> bool {
-        matches!(self, WindowMode::Fullscreen { .. })
-    }
-
-    /// Check if window is minimized
-    #[inline]
-    pub fn is_minimized(&self) -> bool {
-        matches!(self, WindowMode::Minimized { .. })
-    }
-
-    /// Check if window is maximized
-    #[inline]
-    pub fn is_maximized(&self) -> bool {
-        matches!(self, WindowMode::Maximized { .. })
-    }
-
-    /// Check if window is in normal windowed mode
-    #[inline]
-    pub fn is_normal(&self) -> bool {
-        matches!(self, WindowMode::Normal)
-    }
-
-    /// Validate if transition to new mode is allowed
-    ///
-    /// All transitions are currently allowed except transitioning to the same
-    /// state. This method exists as a hook for adding transition
-    /// restrictions in the future.
-    pub fn can_transition_to(&self, new_mode: &WindowMode) -> bool {
-        // All transitions allowed except same state
-        !std::mem::discriminant(self).eq(&std::mem::discriminant(new_mode))
     }
 }
 
@@ -258,17 +192,6 @@ pub enum WindowBackgroundAppearance {
     MicaBackdrop,
     /// Windows 11 Mica Alt backdrop
     MicaAltBackdrop,
-}
-
-/// Window bounds state (windowed, maximized, or fullscreen)
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum WindowBounds {
-    /// Normal windowed mode with specific bounds
-    Windowed(Bounds<f64>),
-    /// Maximized with bounds
-    Maximized(Bounds<f64>),
-    /// Fullscreen with bounds
-    Fullscreen(Bounds<f64>),
 }
 
 /// Failure to apply a cursor to one exact platform window.
@@ -354,51 +277,5 @@ pub enum WindowEvent {
     RedrawRequested {
         /// The window that must be repainted
         window_id: WindowId,
-    },
-
-    /// Window was moved (position in logical pixels)
-    Moved {
-        /// The window that was moved
-        window_id: WindowId,
-        /// New top-left position in logical pixels
-        position: Point<f64>,
-    },
-
-    /// Window was minimized (iconified)
-    Minimized {
-        /// The window that was minimized
-        window_id: WindowId,
-    },
-
-    /// Window was maximized
-    Maximized {
-        /// The window that was maximized
-        window_id: WindowId,
-        /// Maximized client-area size in device pixels
-        size: Size<i32>,
-    },
-
-    /// Window was restored from minimized or maximized state
-    Restored {
-        /// The window that was restored
-        window_id: WindowId,
-        /// Restored client-area size in device pixels
-        size: Size<i32>,
-    },
-
-    /// Window entered fullscreen mode
-    Fullscreen {
-        /// The window that entered fullscreen
-        window_id: WindowId,
-        /// Size of the fullscreen window (monitor size)
-        size: Size<i32>,
-    },
-
-    /// Window exited fullscreen mode
-    ExitFullscreen {
-        /// The window that left fullscreen
-        window_id: WindowId,
-        /// Restored window size
-        size: Size<i32>,
     },
 }

@@ -255,7 +255,7 @@ impl Platform for MacOSPlatform {
         debug_assert_appkit_main_thread("MacOSPlatform::open_window");
         if !self.loop_control.accepts_windows() {
             return Err(OpenWindowError::OwnerGone {
-                rejected: Some(options),
+                rejected: Some(Box::new(options)),
             });
         }
         let window = MacOSWindow::new(options, Arc::clone(&self.windows), self.config.clone())?;

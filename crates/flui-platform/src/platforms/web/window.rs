@@ -7,15 +7,16 @@ use std::{
 };
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::Size;
 use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
 
 use crate::{
-    shared::WindowCallbacks,
+    shared::{WindowCallbacks, window_state::WindowStateCell},
     traits::{
         CursorError, OpenWindowError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance,
-        WindowBounds, WindowId,
+        WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry, WindowId,
+        WindowMode, WindowState,
     },
 };
 
@@ -34,6 +35,73 @@ pub struct WebWindow {
     retire_frame_slot: RefCell<Option<Box<dyn FnOnce()>>>,
     /// The platform's display state, which names the screen this window is on.
     displays: Arc<WebDisplays>,
+    /// The published window state (ADR-0237).
+    snapshot: Arc<WindowStateCell>,
+}
+
+/// What the layout, focus and visibility observers need to republish the
+/// window state after they changed it.
+#[derive(Clone)]
+pub(super) struct StatePublisher {
+    cell: Arc<WindowStateCell>,
+    canvas: web_sys::HtmlCanvasElement,
+    state: Arc<Mutex<WebWindowState>>,
+    callbacks: Arc<WindowCallbacks>,
+    displays: Arc<WebDisplays>,
+}
+
+impl StatePublisher {
+    /// The published state, read from the page again first when something
+    /// invalidated it; `on_state_changed` is raised when that produced a new
+    /// revision.
+    fn current(&self) -> WindowState {
+        let published = self.cell.state_with(|| {
+            sample_state(&self.canvas, &self.state, self.displays.current_display())
+        });
+        if published.changed {
+            self.callbacks.dispatch_state_changed();
+        }
+        published.state
+    }
+
+    /// The window may differ from its published state: read it again.
+    pub(super) fn publish(&self) {
+        self.cell.invalidate();
+        let _ = self.current();
+    }
+}
+
+/// The window as the page reports it now. A canvas has no frame, no global
+/// position and no limits of its own; the layout sets its size.
+fn sample_state(
+    canvas: &web_sys::HtmlCanvasElement,
+    state: &Mutex<WebWindowState>,
+    display: Option<flui_platform_api::DisplayId>,
+) -> WindowState {
+    let (title, size, focused, visible) = {
+        let state = state.lock();
+        (
+            state.title.clone(),
+            Size::new(state.width, state.height),
+            state.focused,
+            state.visible,
+        )
+    };
+    let fullscreen = canvas
+        .owner_document()
+        .is_some_and(|document| document.fullscreen_element().is_some());
+    WindowState::new(WindowGeometry::new(None, size), size)
+        .with_mode(if fullscreen {
+            WindowMode::Fullscreen
+        } else {
+            WindowMode::Normal
+        })
+        .with_visible(visible)
+        .with_focused(focused)
+        .with_title(Some(title))
+        .with_resizable(false)
+        .with_decorated(false)
+        .with_display(display)
 }
 
 struct WebWindowState {
@@ -43,7 +111,6 @@ struct WebWindowState {
     scale_factor: f64,
     focused: bool,
     visible: bool,
-    fullscreen: bool,
 }
 
 // SAFETY: WASM is single-threaded — no data races possible
@@ -186,18 +253,31 @@ impl WebWindow {
             scale_factor,
             focused: effective_focus(&canvas),
             visible: !document.hidden(),
-            fullscreen: false,
         };
 
+        let state = Arc::new(Mutex::new(state));
+        let initial = sample_state(&canvas, &state, displays.current_display());
         Ok(Self {
             id,
             registration: RefCell::new(Some(Registration::new(&canvas, claim))),
             retire_frame_slot: RefCell::new(None),
             canvas,
-            state: Arc::new(Mutex::new(state)),
+            state,
             callbacks: Arc::new(WindowCallbacks::new()),
             displays,
+            snapshot: Arc::new(WindowStateCell::new(initial)),
         })
+    }
+
+    /// The handle by which an observer republishes this window's state.
+    pub(super) fn publisher(&self) -> StatePublisher {
+        StatePublisher {
+            cell: Arc::clone(&self.snapshot),
+            canvas: self.canvas.clone(),
+            state: Arc::clone(&self.state),
+            callbacks: Arc::clone(&self.callbacks),
+            displays: Arc::clone(&self.displays),
+        }
     }
 
     /// A handle for the layout-tracking listeners `super::events` registers:
@@ -211,6 +291,7 @@ impl WebWindow {
             canvas: self.canvas.clone(),
             state: Arc::clone(&self.state),
             callbacks: Arc::clone(&self.callbacks),
+            publisher: self.publisher(),
         }
     }
 
@@ -245,6 +326,7 @@ impl WebWindow {
             state: Arc::clone(&self.state),
             callbacks: Arc::clone(&self.callbacks),
             observed: Cell::new(self.state.lock().focused),
+            publisher: self.publisher(),
         }
     }
 
@@ -258,6 +340,7 @@ impl WebWindow {
             callbacks: Arc::clone(&self.callbacks),
             observed: Cell::new(self.state.lock().visible),
             accepting,
+            publisher: self.publisher(),
         }
     }
 
@@ -306,6 +389,7 @@ pub(super) struct FocusSync {
     state: Arc<Mutex<WebWindowState>>,
     callbacks: Arc<WindowCallbacks>,
     observed: Cell<bool>,
+    publisher: StatePublisher,
 }
 
 impl FocusSync {
@@ -315,8 +399,12 @@ impl FocusSync {
             return;
         }
         let state = Arc::clone(&self.state);
-        self.callbacks
-            .dispatch_focus_observation(focused, move || state.lock().focused = focused);
+        let cell = Arc::clone(&self.publisher.cell);
+        self.callbacks.dispatch_focus_observation(focused, move || {
+            state.lock().focused = focused;
+            cell.invalidate();
+        });
+        self.publisher.publish();
     }
 }
 
@@ -326,6 +414,7 @@ pub(super) struct VisibilitySync {
     callbacks: Arc<WindowCallbacks>,
     observed: Cell<bool>,
     accepting: Rc<Cell<bool>>,
+    publisher: StatePublisher,
 }
 
 impl VisibilitySync {
@@ -336,8 +425,13 @@ impl VisibilitySync {
             return;
         }
         let state = Arc::clone(&self.state);
+        let cell = Arc::clone(&self.publisher.cell);
         self.callbacks
-            .dispatch_visibility_observation(visible, move || state.lock().visible = visible);
+            .dispatch_visibility_observation(visible, move || {
+                state.lock().visible = visible;
+                cell.invalidate();
+            });
+        self.publisher.publish();
     }
 }
 
@@ -346,6 +440,7 @@ pub(super) struct LayoutSync {
     canvas: web_sys::HtmlCanvasElement,
     state: Arc<Mutex<WebWindowState>>,
     callbacks: Arc<WindowCallbacks>,
+    publisher: StatePublisher,
 }
 
 impl LayoutSync {
@@ -370,6 +465,7 @@ impl LayoutSync {
             return;
         }
         apply_backing_size(&self.canvas, width, height, scale_factor);
+        self.publisher.publish();
         self.callbacks
             .dispatch_resize(Size::new(width, height), scale_factor);
         self.callbacks.dispatch_request_frame();
@@ -419,27 +515,51 @@ impl PlatformWindow for WebWindow {
         self.state.lock().visible
     }
 
-    fn bounds(&self) -> Bounds<f64> {
-        let state = self.state.lock();
-        Bounds::new(Point::new(0.0, 0.0), Size::new(state.width, state.height))
+    // ==================== State and commands (ADR-0237) ====================
+
+    fn state(&self) -> WindowState {
+        self.publisher().current()
     }
 
-    fn content_size(&self) -> Size<f64> {
-        self.logical_size()
+    fn capabilities(&self) -> WindowCapabilities {
+        let mut capabilities = WindowCapabilities::none();
+        capabilities.set_title = true;
+        capabilities.fullscreen = true;
+        capabilities
     }
 
-    fn window_bounds(&self) -> WindowBounds {
-        let state = self.state.lock();
-        let bounds = Bounds::new(Point::default(), Size::new(state.width, state.height));
-        if state.fullscreen {
-            WindowBounds::Fullscreen(bounds)
-        } else {
-            WindowBounds::Windowed(bounds)
+    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+        if self.registration.borrow().is_none() {
+            return Err(WindowCommandError::Closed);
         }
-    }
-
-    fn is_fullscreen(&self) -> bool {
-        self.state.lock().fullscreen
+        command.admit(&PlatformWindow::capabilities(self))?;
+        match command {
+            WindowCommand::SetTitle(title) => {
+                self.state.lock().title.clone_from(&title);
+                if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+                    document.set_title(&title);
+                }
+            }
+            WindowCommand::SetMode(WindowMode::Fullscreen) => {
+                let el: &web_sys::Element = self.canvas.as_ref();
+                el.request_fullscreen()
+                    .map_err(|error| WindowCommandError::Backend(format!("{error:?}")))?;
+            }
+            WindowCommand::SetMode(WindowMode::Normal) => {
+                if let Some(document) = self.canvas.owner_document()
+                    && document.fullscreen_element().is_some()
+                {
+                    document.exit_fullscreen();
+                }
+            }
+            // Every other command is refused by `admit` through a capability
+            // this backend leaves `false`.
+            _ => return Err(WindowCommandError::Unsupported),
+        }
+        // The page answers a fullscreen request later, with
+        // `fullscreenchange`; the title is ours to report at once.
+        self.publisher().publish();
+        Ok(())
     }
 
     fn is_active(&self) -> bool {
@@ -462,30 +582,6 @@ impl PlatformWindow for WebWindow {
             return None;
         }
         self.displays.current_display()
-    }
-
-    fn get_title(&self) -> String {
-        self.state.lock().title.clone()
-    }
-
-    fn set_title(&self, title: &str) {
-        self.state.lock().title = title.to_string();
-        if let Some(document) = web_sys::window().and_then(|w| w.document()) {
-            document.set_title(title);
-        }
-    }
-
-    fn toggle_fullscreen(&self) {
-        let is_fullscreen = self.state.lock().fullscreen;
-        if is_fullscreen {
-            if let Some(document) = web_sys::window().and_then(|w| w.document()) {
-                document.exit_fullscreen();
-            }
-        } else {
-            let el: &web_sys::Element = self.canvas.as_ref();
-            let _ = el.request_fullscreen();
-        }
-        self.state.lock().fullscreen = !is_fullscreen;
     }
 
     fn close(&self) {
@@ -517,8 +613,8 @@ impl PlatformWindow for WebWindow {
     fn on_resize(&self, callback: Box<dyn FnMut(Size<f64>, f64) + Send>) {
         self.install_callback(&self.callbacks.on_resize, callback);
     }
-    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
-        self.install_callback(&self.callbacks.on_moved, callback);
+    fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        self.install_callback(&self.callbacks.on_state_changed, callback);
     }
     fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
         self.install_callback(&self.callbacks.on_close, callback);

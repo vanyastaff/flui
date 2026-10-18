@@ -19,14 +19,13 @@ use windows::{
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DestroyWindow, GCLP_HBRBACKGROUND, GWL_STYLE,
                 GWLP_USERDATA, GetClientRect, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW,
-                GetWindowPlacement, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM,
-                IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT,
-                IsZoomed, LoadCursorW, PostMessageW, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
-                SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+                GetWindowPlacement, GetWindowRect, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND,
+                IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
+                IDC_WAIT, LoadCursorW, PostMessageW, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
                 SetClassLongPtrW, SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-                SetWindowTextW, ShowWindow, WINDOWPLACEMENT, WM_CLOSE, WS_EX_APPWINDOW,
-                WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU,
-                WS_THICKFRAME, WS_VISIBLE,
+                SetWindowTextW, ShowWindow, WINDOWPLACEMENT, WM_CLOSE, WS_CAPTION, WS_EX_APPWINDOW,
+                WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
             },
         },
     },
@@ -34,12 +33,14 @@ use windows::{
 };
 
 use super::util::{USER_DEFAULT_SCREEN_DPI, WINDOW_CLASS_NAME, logical_to_device};
+use crate::shared::window_state::WindowStateCell;
 use crate::{
     shared::{PlatformHandlers, WindowCallbacks, hwnd_affinity::UserDataRefusal},
     traits::{
         CursorError, DispatchEventResult, OpenWindowError, PlatformInput, PlatformWindow,
-        WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowExecutionState, WindowId,
-        WindowMode, WindowOptions,
+        WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
+        WindowCommandError, WindowExecutionState, WindowGeometry, WindowId, WindowMode,
+        WindowOptions, WindowState,
     },
 };
 
@@ -49,7 +50,7 @@ pub struct WindowsWindow {
     hwnd: HWND,
 
     /// Window state
-    state: Arc<Mutex<WindowState>>,
+    state: Arc<Mutex<WindowRecord>>,
 
     /// Which native window this wrapper was built for. The callbacks
     /// themselves live in that window's owner-thread context, not here;
@@ -61,6 +62,10 @@ pub struct WindowsWindow {
 
     /// The platform's monitors, by which this window names its display.
     displays: Arc<super::display::WindowsDisplays>,
+
+    /// The published window state (ADR-0237), shared with the window's
+    /// owner-thread context, which refreshes it from the window messages.
+    snapshot: Arc<WindowStateCell>,
 
     /// The context allocation this wrapper installed in `hwnd`'s
     /// `GWLP_USERDATA` slot at creation, kept ONLY as an identity token:
@@ -126,7 +131,7 @@ unsafe impl Send for WindowsWindow {}
 unsafe impl Sync for WindowsWindow {}
 
 /// Mutable window state
-pub(super) struct WindowState {
+pub(super) struct WindowRecord {
     /// Current window bounds (logical pixels)
     pub(super) bounds: Bounds<f64>,
 
@@ -141,6 +146,131 @@ pub(super) struct WindowState {
 
     /// Window title
     title: String,
+}
+
+/// How the window occupies its monitor, with what the way back needs: the
+/// native tracking behind the public [`WindowMode`].
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) enum NativeMode {
+    #[default]
+    Normal,
+    /// Iconified.
+    Minimized,
+    /// Maximized.
+    Maximized,
+    /// Borderless over the whole monitor; `restore_bounds` is the outer
+    /// rectangle in device pixels the window returns to.
+    Fullscreen { restore_bounds: Bounds<i32> },
+}
+
+impl NativeMode {
+    pub(super) fn is_fullscreen(&self) -> bool {
+        matches!(self, Self::Fullscreen { .. })
+    }
+
+    pub(super) fn is_minimized(&self) -> bool {
+        matches!(self, Self::Minimized)
+    }
+
+    pub(super) fn is_maximized(&self) -> bool {
+        matches!(self, Self::Maximized)
+    }
+
+    pub(super) fn is_normal(&self) -> bool {
+        matches!(self, Self::Normal)
+    }
+
+    /// Every transition is allowed except to the same mode.
+    pub(super) fn can_transition_to(&self, next: &Self) -> bool {
+        std::mem::discriminant(self) != std::mem::discriminant(next)
+    }
+
+    fn public(&self) -> WindowMode {
+        match self {
+            Self::Normal => WindowMode::Normal,
+            Self::Minimized => WindowMode::Minimized,
+            Self::Maximized => WindowMode::Maximized,
+            Self::Fullscreen { .. } => WindowMode::Fullscreen,
+        }
+    }
+}
+
+/// The window as Win32 reports it now (ADR-0237). `mode` is the tracking the
+/// owner context keeps from `WM_SIZE`; everything else is read from `hwnd`.
+/// Win32 reports a minimized window at a parking position, so there the
+/// outer rectangle is the last known size with no position.
+pub(super) fn sample_state(
+    hwnd: HWND,
+    record: &Mutex<WindowRecord>,
+    mode: NativeMode,
+    display: Option<flui_platform_api::DisplayId>,
+) -> WindowState {
+    let (scale, visible, focused, title, cached) = {
+        let record = record.lock();
+        (
+            record.scale_factor,
+            record.visible,
+            record.focused,
+            record.title.clone(),
+            record.bounds.size,
+        )
+    };
+    let mut window = RECT::default();
+    let mut client = RECT::default();
+    // SAFETY: both RECTs are stack locals and `&raw mut` gives each call a
+    // valid, correctly sized out-parameter; an `Err` (stale handle) leaves
+    // them defaulted and is answered with the cached size below.
+    let (have_window, have_client, style) = unsafe {
+        (
+            GetWindowRect(hwnd, &raw mut window).is_ok(),
+            GetClientRect(hwnd, &raw mut client).is_ok(),
+            GetWindowLongPtrW(hwnd, GWL_STYLE) as u32,
+        )
+    };
+    let content = if have_client {
+        Size::new(
+            f64::from(client.right - client.left) / scale,
+            f64::from(client.bottom - client.top) / scale,
+        )
+    } else {
+        cached
+    };
+    let outer = if have_window && !mode.is_minimized() {
+        WindowGeometry::new(
+            Some(Point::new(
+                f64::from(window.left) / scale,
+                f64::from(window.top) / scale,
+            )),
+            Size::new(
+                f64::from(window.right - window.left) / scale,
+                f64::from(window.bottom - window.top) / scale,
+            ),
+        )
+    } else {
+        WindowGeometry::new(None, if mode.is_minimized() { cached } else { content })
+    };
+    let normal = match mode {
+        NativeMode::Fullscreen { restore_bounds } => Some(WindowGeometry::new(
+            Some(Point::new(
+                f64::from(restore_bounds.origin.x) / scale,
+                f64::from(restore_bounds.origin.y) / scale,
+            )),
+            Size::new(
+                f64::from(restore_bounds.size.width) / scale,
+                f64::from(restore_bounds.size.height) / scale,
+            ),
+        )),
+        _ => None,
+    };
+    WindowState::new(outer, if mode.is_minimized() { cached } else { content })
+        .with_mode(mode.public())
+        .with_normal_geometry(normal)
+        .with_visible(visible)
+        .with_focused(focused)
+        .with_title(Some(title))
+        .with_resizable(style & WS_THICKFRAME.0 != 0)
+        .with_decorated(style & WS_CAPTION.0 == WS_CAPTION.0)
+        .with_display(display)
 }
 
 impl std::fmt::Debug for WindowsWindow {
@@ -326,7 +456,7 @@ impl WindowsWindow {
             let _ = ClientToScreen(hwnd, &raw mut origin);
 
             let created_style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-            let state = Arc::new(Mutex::new(WindowState {
+            let state = Arc::new(Mutex::new(WindowRecord {
                 bounds: Bounds {
                     origin: Point::new(
                         origin.x as f64 / scale_factor,
@@ -342,6 +472,13 @@ impl WindowsWindow {
                 focused: false,
                 title: options.title.clone(),
             }));
+
+            let snapshot = Arc::new(WindowStateCell::new(sample_state(
+                hwnd,
+                &state,
+                NativeMode::Normal,
+                displays.display_of_window(hwnd),
+            )));
 
             // Create and install the WindowContext for event dispatch
             // BEFORE building the wrapper: the wrapper keeps the pointer as
@@ -363,6 +500,7 @@ impl WindowsWindow {
                 identity,
                 windows: Arc::downgrade(&windows_map),
                 window_state: Arc::downgrade(&state),
+                snapshot: Arc::clone(&snapshot),
                 handlers,
                 exit_policy,
                 displays: Arc::clone(&displays),
@@ -371,7 +509,7 @@ impl WindowsWindow {
                 scale_factor: std::cell::Cell::new(scale_factor),
                 message_clock: super::events::MessageClock::new(),
                 pointer_registry: std::cell::RefCell::default(),
-                mode: std::cell::Cell::new(WindowMode::Normal),
+                mode: std::cell::Cell::new(NativeMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
                 config,
                 is_hovered: std::cell::Cell::new(false),
@@ -397,6 +535,7 @@ impl WindowsWindow {
                 identity,
                 windows_map,
                 displays,
+                snapshot,
                 context: context_ptr,
                 // On the creating (owning) thread, as Win32 subclassing
                 // requires; `hwnd` was validated just above.
@@ -589,6 +728,61 @@ impl WindowsWindow {
         }
     }
 
+    fn show_native(&self, command: windows::Win32::UI::WindowsAndMessaging::SHOW_WINDOW_CMD) {
+        // SAFETY: `ShowWindow` takes `self.hwnd` and a command constant by
+        // value, no pointer arguments. Its return value is the window's
+        // PREVIOUS visibility state, not success/failure, so there is nothing
+        // to check.
+        unsafe {
+            let _ = ShowWindow(self.hwnd, command);
+        }
+    }
+
+    fn set_native_title(&self, title: &str) {
+        // SAFETY: `title_str` is a live, locally-owned `HSTRING` for the
+        // duration of the call; `SetWindowTextW` reads it by reference and
+        // does not retain the pointer past the call.
+        unsafe {
+            let title_str = HSTRING::from(title);
+            if let Err(error) = SetWindowTextW(self.hwnd, &title_str) {
+                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowTextW failed");
+            }
+        }
+        self.state.lock().title = title.to_string();
+    }
+
+    /// Resize the content area to `size`, keeping the window's frame.
+    fn set_inner_size(&self, size: Size<f64>) {
+        let mut window = RECT::default();
+        let mut client = RECT::default();
+        // SAFETY: both RECTs are stack locals and `&raw mut` gives each call a
+        // valid, correctly sized out-parameter; `SetWindowPos` takes `self.hwnd`
+        // and plain integer/flag arguments, with `None` as the documented
+        // no-op z-order handle.
+        unsafe {
+            if GetWindowRect(self.hwnd, &raw mut window).is_err()
+                || GetClientRect(self.hwnd, &raw mut client).is_err()
+            {
+                tracing::warn!(hwnd = ?self.hwnd, "window rectangles unreadable; resize skipped");
+                return;
+            }
+            let scale = self.state.lock().scale_factor;
+            let frame_width = (window.right - window.left) - (client.right - client.left);
+            let frame_height = (window.bottom - window.top) - (client.bottom - client.top);
+            if let Err(error) = SetWindowPos(
+                self.hwnd,
+                None,
+                0,
+                0,
+                logical_to_device(size.width, scale) + frame_width,
+                logical_to_device(size.height, scale) + frame_height,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            ) {
+                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowPos (inner resize) failed");
+            }
+        }
+    }
+
     /// Get current scale factor
     pub fn scale_factor(&self) -> f64 {
         self.state.lock().scale_factor
@@ -609,8 +803,8 @@ impl WindowsWindow {
     /// - Automatically detects the monitor containing the window and fills it
     ///   completely
     /// - Preserves window state (position, size, style) for proper restoration
-    /// - Dispatches `WindowEvent::Fullscreen` and `WindowEvent::ExitFullscreen`
-    ///   events
+    /// - Publishes the new window state (`on_state_changed`) once the window
+    ///   has moved
     ///
     /// # Thread Safety
     /// Callable from any thread, but only effective on the window's owning
@@ -656,12 +850,12 @@ impl WindowsWindow {
             // reads/writes and dead-`hwnd` Win32 calls are sound no-ops,
             // never dangling.
             unsafe {
-                if let WindowMode::Fullscreen { restore_bounds } = current_mode {
+                if let NativeMode::Fullscreen { restore_bounds } = current_mode {
                     // Exit fullscreen - restore previous style and bounds
                     tracing::info!("Exiting fullscreen mode");
 
                     // Validate transition
-                    let candidate = WindowMode::Normal;
+                    let candidate = NativeMode::Normal;
                     if !current_mode.can_transition_to(&candidate) {
                         tracing::warn!("Cannot exit fullscreen: invalid state transition");
                         return;
@@ -689,13 +883,9 @@ impl WindowsWindow {
                     }
 
                     // Update state
-                    ctx.mode.set(WindowMode::Normal);
+                    ctx.mode.set(NativeMode::Normal);
 
-                    // Dispatch ExitFullscreen event
-                    ctx.dispatch_event(crate::traits::WindowEvent::ExitFullscreen {
-                        window_id: ctx.window_id,
-                        size: restore_bounds.size,
-                    });
+                    ctx.publish_window_state(hwnd);
                 } else {
                     // Enter fullscreen - save current state and go borderless on monitor
                     tracing::info!("Entering fullscreen mode");
@@ -721,7 +911,7 @@ impl WindowsWindow {
                     };
 
                     // Validate transition
-                    let candidate = WindowMode::Fullscreen { restore_bounds };
+                    let candidate = NativeMode::Fullscreen { restore_bounds };
                     if !current_mode.can_transition_to(&candidate) {
                         tracing::warn!(
                             "Cannot enter fullscreen: invalid state transition from {:?}",
@@ -766,15 +956,7 @@ impl WindowsWindow {
                     // Update state
                     ctx.mode.set(candidate);
 
-                    // Dispatch Fullscreen event
-                    let size = Size::new(
-                        monitor_rect.right - monitor_rect.left,
-                        monitor_rect.bottom - monitor_rect.top,
-                    );
-                    ctx.dispatch_event(crate::traits::WindowEvent::Fullscreen {
-                        window_id: ctx.window_id,
-                        size,
-                    });
+                    ctx.publish_window_state(hwnd);
                 }
             }
         });
@@ -979,57 +1161,58 @@ impl PlatformWindow for WindowsWindow {
         })?
     }
 
-    // ==================== Query Methods (US2) ====================
+    // ==================== State and commands (ADR-0237) ====================
 
-    fn bounds(&self) -> Bounds<f64> {
-        self.state.lock().bounds
+    fn state(&self) -> WindowState {
+        // The owner context holds the tracking the snapshot needs; off the
+        // owner thread, or once the window is gone, the last published
+        // snapshot is the answer.
+        super::platform::with_window_context(self.hwnd, "state", |ctx| ctx.window_state(self.hwnd))
+            .unwrap_or_else(|| self.snapshot.published())
     }
 
-    fn content_size(&self) -> Size<f64> {
-        // SAFETY: `rect` is a stack-local `RECT` and `&raw mut rect` gives
-        // `GetClientRect` a valid, correctly-sized out-parameter; the `Err`
-        // path (stale/destroyed `hwnd`) is handled by falling back to the
-        // last-known cached bounds rather than reading `rect` uninitialized.
-        unsafe {
-            let mut rect = RECT::default();
-            if GetClientRect(self.hwnd, &raw mut rect).is_ok() {
-                let scale = self.state.lock().scale_factor;
-                Size::new(
-                    (rect.right - rect.left) as f64 / scale,
-                    (rect.bottom - rect.top) as f64 / scale,
-                )
-            } else {
-                self.state.lock().bounds.size
+    fn capabilities(&self) -> WindowCapabilities {
+        let mut capabilities = WindowCapabilities::none();
+        capabilities.set_title = true;
+        capabilities.set_size = true;
+        capabilities.minimize = true;
+        capabilities.maximize = true;
+        capabilities.fullscreen = true;
+        capabilities.activate = true;
+        capabilities.observes_position = true;
+        capabilities.observes_minimized = true;
+        capabilities
+    }
+
+    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+        if !handle_available(super::platform::teardown_route(self.hwnd, self.context)) {
+            return Err(WindowCommandError::Closed);
+        }
+        command.admit(&PlatformWindow::capabilities(self))?;
+        match command {
+            WindowCommand::SetTitle(title) => self.set_native_title(&title),
+            WindowCommand::SetSize(size) => self.set_inner_size(size),
+            WindowCommand::SetMode(WindowMode::Minimized) => self.show_native(SW_MINIMIZE),
+            WindowCommand::SetMode(WindowMode::Maximized) => self.show_native(SW_MAXIMIZE),
+            WindowCommand::SetMode(WindowMode::Fullscreen) => self.set_fullscreen(true),
+            WindowCommand::SetMode(WindowMode::Normal) => {
+                self.set_fullscreen(false);
+                self.show_native(SW_RESTORE);
             }
+            WindowCommand::Show => self.show().map_err(|error| match error {
+                crate::WindowShowError::Closed => WindowCommandError::Closed,
+                crate::WindowShowError::Native { message } => WindowCommandError::Backend(message),
+                _ => WindowCommandError::Unsupported,
+            })?,
+            WindowCommand::Activate => self.activate(),
+            // Every other command is refused by `admit` through a capability
+            // this backend leaves `false`.
+            _ => return Err(WindowCommandError::Unsupported),
         }
-    }
-
-    fn window_bounds(&self) -> WindowBounds {
-        let bounds = self.bounds();
-        let fullscreen = super::platform::with_window_context(self.hwnd, "window_bounds", |ctx| {
-            ctx.mode.get().is_fullscreen()
-        })
-        .unwrap_or(false);
-        if fullscreen {
-            return WindowBounds::Fullscreen(bounds);
-        }
-        if PlatformWindow::is_maximized(self) {
-            WindowBounds::Maximized(bounds)
-        } else {
-            WindowBounds::Windowed(bounds)
-        }
-    }
-
-    fn is_maximized(&self) -> bool {
-        // SAFETY: `IsZoomed` takes `self.hwnd` by value and returns a
-        // `BOOL` — no pointer arguments, no invariant beyond an ordinary
-        // FFI call.
-        unsafe { IsZoomed(self.hwnd).as_bool() }
-    }
-
-    fn is_fullscreen(&self) -> bool {
-        // Delegate to the existing method on WindowsWindow
-        WindowsWindow::is_fullscreen(self)
+        super::platform::with_window_context(self.hwnd, "apply", |ctx| {
+            ctx.publish_window_state(self.hwnd);
+        });
+        Ok(())
     }
 
     fn is_active(&self) -> bool {
@@ -1081,25 +1264,6 @@ impl PlatformWindow for WindowsWindow {
             return None;
         }
         self.displays.display_of_window(self.hwnd)
-    }
-
-    fn get_title(&self) -> String {
-        self.state.lock().title.clone()
-    }
-
-    // ==================== Control Methods (US2) ====================
-
-    fn set_title(&self, title: &str) {
-        // SAFETY: `title_str` is a live, locally-owned `HSTRING` for the
-        // duration of the call; `SetWindowTextW` reads it by reference and
-        // does not retain the pointer past the call.
-        unsafe {
-            let title_str = HSTRING::from(title);
-            if let Err(error) = SetWindowTextW(self.hwnd, &title_str) {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowTextW failed");
-            }
-            self.state.lock().title = title.to_string();
-        }
     }
 
     fn show(&self) -> Result<(), crate::WindowShowError> {
@@ -1174,61 +1338,6 @@ impl PlatformWindow for WindowsWindow {
         unsafe {
             if let Err(error) = SetForegroundWindow(self.hwnd).ok() {
                 tracing::warn!(hwnd = ?self.hwnd, ?error, "SetForegroundWindow failed");
-            }
-        }
-    }
-
-    fn minimize(&self) {
-        // SAFETY: `ShowWindow` takes `self.hwnd` and a command constant by
-        // value, no pointer arguments.
-        //
-        // Return value is the window's PREVIOUS visibility state (nonzero
-        // if it was already visible before this call), not success/failure
-        // — nothing meaningful to check or warn on.
-        unsafe {
-            let _ = ShowWindow(self.hwnd, SW_MINIMIZE);
-        }
-    }
-
-    fn maximize(&self) {
-        // SAFETY: see `minimize` above — same call shape and return-value
-        // semantics (previous visibility, not success/failure).
-        unsafe {
-            let _ = ShowWindow(self.hwnd, SW_MAXIMIZE);
-        }
-    }
-
-    fn restore(&self) {
-        // SAFETY: see `minimize` above — same call shape and return-value
-        // semantics (previous visibility, not success/failure).
-        unsafe {
-            let _ = ShowWindow(self.hwnd, SW_RESTORE);
-        }
-    }
-
-    fn toggle_fullscreen(&self) {
-        WindowsWindow::toggle_fullscreen(self);
-    }
-
-    fn resize(&self, size: Size<f64>) {
-        // SAFETY: `SetWindowPos` takes `self.hwnd` and plain integer/flag
-        // arguments; `None` for the z-order handle is a documented no-op
-        // value, not a null pointer.
-        unsafe {
-            let scale = self.state.lock().scale_factor;
-            let width = logical_to_device(size.width, scale);
-            let height = logical_to_device(size.height, scale);
-
-            if let Err(error) = SetWindowPos(
-                self.hwnd,
-                None,
-                0,
-                0,
-                width,
-                height,
-                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
-            ) {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowPos (PlatformWindow::resize) failed");
             }
         }
     }
@@ -1342,9 +1451,9 @@ impl PlatformWindow for WindowsWindow {
         });
     }
 
-    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
-        self.register("on_moved", move |callbacks| {
-            let previous = callbacks.on_moved.lock().replace(callback);
+    fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        self.register("on_state_changed", move |callbacks| {
+            let previous = callbacks.on_state_changed.lock().replace(callback);
             drop(previous);
         });
     }
@@ -1555,6 +1664,7 @@ impl Clone for WindowsWindow {
             identity: self.identity,
             windows_map: Arc::clone(&self.windows_map),
             displays: Arc::clone(&self.displays),
+            snapshot: Arc::clone(&self.snapshot),
             // Same window, same identity token.
             context: self.context,
             // The clone shares the same window, so it shares the same UIA
@@ -1565,336 +1675,7 @@ impl Clone for WindowsWindow {
     }
 }
 
-// ============================================================================
-// Cross-Platform Window Trait Implementation
-// ============================================================================
-
-use crate::window::{
-    RawWindowHandle as CrossRawWindowHandle, Window as WindowTrait, WindowId as CrossWindowId,
-    WindowState as CrossWindowState,
-};
-
-impl WindowTrait for WindowsWindow {
-    fn id(&self) -> CrossWindowId {
-        CrossWindowId::new(self.hwnd.0 as u64)
-    }
-
-    fn title(&self) -> String {
-        self.state.lock().title.clone()
-    }
-
-    fn set_title(&mut self, title: &str) {
-        // SAFETY: see `PlatformWindow::set_title` above — same
-        // locally-owned `HSTRING` and call shape.
-        unsafe {
-            let title_str = HSTRING::from(title);
-            if let Err(error) = SetWindowTextW(self.hwnd, &title_str) {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowTextW failed");
-            }
-            self.state.lock().title = title.to_string();
-        }
-    }
-
-    fn position(&self) -> Point<f64> {
-        self.state.lock().bounds.origin
-    }
-
-    fn set_position(&mut self, position: Point<f64>) {
-        // SAFETY: `SetWindowPos` takes `self.hwnd` and plain integer/flag
-        // arguments; `None` for the z-order handle is a documented no-op
-        // value, not a null pointer.
-        unsafe {
-            let scale = self.state.lock().scale_factor;
-            let x = logical_to_device(position.x, scale);
-            let y = logical_to_device(position.y, scale);
-
-            if let Err(error) = SetWindowPos(
-                self.hwnd,
-                None,
-                x,
-                y,
-                0,
-                0,
-                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-            ) {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowPos (move) failed");
-            }
-        }
-    }
-
-    fn size(&self) -> Size<f64> {
-        self.state.lock().bounds.size
-    }
-
-    fn set_size(&mut self, size: Size<f64>) {
-        // SAFETY: see `set_position` above — same call shape.
-        unsafe {
-            let scale = self.state.lock().scale_factor;
-            let width = logical_to_device(size.width, scale);
-            let height = logical_to_device(size.height, scale);
-
-            if let Err(error) = SetWindowPos(
-                self.hwnd,
-                None,
-                0,
-                0,
-                width,
-                height,
-                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
-            ) {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowPos (resize) failed");
-            }
-        }
-    }
-
-    fn state(&self) -> CrossWindowState {
-        let placement = self.get_window_placement();
-
-        if placement.showCmd == SW_MINIMIZE.0 as u32 {
-            CrossWindowState::Minimized
-        } else if placement.showCmd == SW_MAXIMIZE.0 as u32 {
-            CrossWindowState::Maximized
-        } else if self.is_fullscreen() {
-            CrossWindowState::Fullscreen
-        } else {
-            CrossWindowState::Normal
-        }
-    }
-
-    fn set_state(&mut self, state: CrossWindowState) {
-        // SAFETY: `ShowWindow` takes `self.hwnd` and a command constant by
-        // value, no pointer arguments; `self.set_fullscreen`/`self.is_fullscreen`
-        // carry their own SAFETY contracts documented where they're defined.
-        //
-        // Every `ShowWindow` return value below is the window's PREVIOUS
-        // visibility state (nonzero if it was already visible before this
-        // call), not success/failure — nothing meaningful to check or warn
-        // on.
-        unsafe {
-            match state {
-                CrossWindowState::Normal => {
-                    if self.is_fullscreen() {
-                        self.set_fullscreen(false);
-                    }
-                    let _ = ShowWindow(self.hwnd, SW_RESTORE);
-                }
-                CrossWindowState::Minimized => {
-                    let _ = ShowWindow(self.hwnd, SW_MINIMIZE);
-                }
-                CrossWindowState::Maximized => {
-                    if self.is_fullscreen() {
-                        self.set_fullscreen(false);
-                    }
-                    let _ = ShowWindow(self.hwnd, SW_MAXIMIZE);
-                }
-                CrossWindowState::Fullscreen => {
-                    self.set_fullscreen(true);
-                }
-            }
-        }
-    }
-
-    fn is_visible(&self) -> bool {
-        self.state.lock().visible
-    }
-
-    fn set_visible(&mut self, visible: bool) {
-        // SAFETY: `ShowWindow` takes `self.hwnd` and a command constant by
-        // value, no pointer arguments. Return value is the window's
-        // PREVIOUS visibility state (nonzero if it was already visible
-        // before this call), not success/failure — nothing meaningful to
-        // check or warn on.
-        unsafe {
-            let cmd = if visible { SW_SHOW } else { SW_HIDE };
-            let _ = ShowWindow(self.hwnd, cmd);
-            self.state.lock().visible = visible;
-        }
-    }
-
-    fn is_resizable(&self) -> bool {
-        // SAFETY: `GetWindowLongPtrW` takes `self.hwnd` and an index
-        // constant, returning a plain `isize` bit pattern — no pointer
-        // arguments, no invariant beyond the ordinary FFI call.
-        unsafe {
-            let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
-            (style & WS_THICKFRAME.0) != 0
-        }
-    }
-
-    fn set_resizable(&mut self, resizable: bool) {
-        // SAFETY: see `is_resizable` above for `GetWindowLongPtrW`;
-        // `SetWindowLongPtrW` is the same shape in reverse (writes a plain
-        // bit pattern, not a pointer); `SetWindowPos` here only re-applies
-        // frame metrics (`SWP_FRAMECHANGED`) with no move/resize, same call
-        // shape as `set_position` above.
-        unsafe {
-            let mut style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
-            if resizable {
-                style |= WS_THICKFRAME.0;
-            } else {
-                style &= !WS_THICKFRAME.0;
-            }
-            SetWindowLongPtrW(self.hwnd, GWL_STYLE, style as isize);
-            if let Err(error) = SetWindowPos(
-                self.hwnd,
-                None,
-                0,
-                0,
-                0,
-                0,
-                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-            ) {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowPos (resizable style refresh) failed");
-            }
-        }
-    }
-
-    fn is_minimizable(&self) -> bool {
-        // SAFETY: see `is_resizable` above — same call shape.
-        unsafe {
-            let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
-            (style & WS_MINIMIZEBOX.0) != 0
-        }
-    }
-
-    fn set_minimizable(&mut self, minimizable: bool) {
-        // SAFETY: see `set_resizable` above — same call shape.
-        unsafe {
-            let mut style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
-            if minimizable {
-                style |= WS_MINIMIZEBOX.0;
-            } else {
-                style &= !WS_MINIMIZEBOX.0;
-            }
-            SetWindowLongPtrW(self.hwnd, GWL_STYLE, style as isize);
-            if let Err(error) = SetWindowPos(
-                self.hwnd,
-                None,
-                0,
-                0,
-                0,
-                0,
-                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-            ) {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowPos (minimizable style refresh) failed");
-            }
-        }
-    }
-
-    fn is_closable(&self) -> bool {
-        // SAFETY: see `is_resizable` above — same call shape.
-        unsafe {
-            let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
-            (style & WS_SYSMENU.0) != 0
-        }
-    }
-
-    fn set_closable(&mut self, closable: bool) {
-        // SAFETY: see `set_resizable` above — same call shape.
-        unsafe {
-            let mut style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
-            if closable {
-                style |= WS_SYSMENU.0;
-            } else {
-                style &= !WS_SYSMENU.0;
-            }
-            SetWindowLongPtrW(self.hwnd, GWL_STYLE, style as isize);
-            if let Err(error) = SetWindowPos(
-                self.hwnd,
-                None,
-                0,
-                0,
-                0,
-                0,
-                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-            ) {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowPos (closable style refresh) failed");
-            }
-        }
-    }
-
-    fn focus(&mut self) {
-        // SAFETY: `SetForegroundWindow` takes `self.hwnd` by value, no
-        // pointer arguments.
-        unsafe {
-            if let Err(error) = SetForegroundWindow(self.hwnd).ok() {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetForegroundWindow failed in focus");
-            }
-        }
-    }
-
-    fn is_focused(&self) -> bool {
-        self.state.lock().focused
-    }
-
-    fn close(&mut self) {
-        // SAFETY: see `PlatformWindow::close` above — same call shape.
-        unsafe {
-            if let Err(error) = DestroyWindow(self.hwnd) {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "DestroyWindow failed");
-            }
-        }
-    }
-
-    fn request_redraw(&mut self) {
-        PlatformWindow::request_redraw(self);
-    }
-
-    fn set_min_size(&mut self, size: Option<Size<f64>>) {
-        // Windows doesn't have a direct API for min/max size
-        // This would need to be handled in WM_GETMINMAXINFO message
-        // For now, store in WindowState for future use
-        tracing::debug!("set_min_size: {:?} (not yet implemented)", size);
-    }
-
-    fn set_max_size(&mut self, size: Option<Size<f64>>) {
-        // Windows doesn't have a direct API for min/max size
-        // This would need to be handled in WM_GETMINMAXINFO message
-        // For now, store in WindowState for future use
-        tracing::debug!("set_max_size: {:?} (not yet implemented)", size);
-    }
-
-    fn scale_factor(&self) -> f64 {
-        self.state.lock().scale_factor
-    }
-
-    fn raw_window_handle(&self) -> CrossRawWindowHandle {
-        // SAFETY: `GetModuleHandleW(None)` queries the current process
-        // image, no pointer arguments — always sound.
-        unsafe {
-            let hinstance = GetModuleHandleW(None)
-                .expect("BUG: GetModuleHandleW(None) cannot fail for the current process image");
-            CrossRawWindowHandle::Windows {
-                hwnd: self.hwnd.0,
-                hinstance: hinstance.0,
-            }
-        }
-    }
-}
-
 impl WindowsWindow {
-    /// Helper to get window placement
-    fn get_window_placement(&self) -> WINDOWPLACEMENT {
-        // SAFETY: `placement` is a stack-local `WINDOWPLACEMENT` with
-        // `length` pre-filled to its own `size_of` as the API requires;
-        // `&raw mut placement` gives `GetWindowPlacement` a valid,
-        // correctly-sized out-parameter regardless of whether the call
-        // succeeds, so returning `placement` on `Err` is safe (it holds the
-        // `Default` values this function seeded, not uninitialized memory) —
-        // callers just get a placement that will not match SW_MINIMIZE or
-        // SW_MAXIMIZE, i.e. a normal-state placement.
-        unsafe {
-            let mut placement = WINDOWPLACEMENT {
-                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-                ..Default::default()
-            };
-            if let Err(error) = GetWindowPlacement(self.hwnd, &raw mut placement) {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "GetWindowPlacement failed");
-            }
-            placement
-        }
-    }
-
     /// Set DWM window attribute
     ///
     /// # Safety

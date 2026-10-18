@@ -22,17 +22,19 @@ use flui_platform_api::text_store::TextStoreHost;
 use parking_lot::Mutex;
 
 use super::display::{DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplays};
+use super::host_limits::HostLimits;
 use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     error::PlatformError,
-    shared::{PlatformHandlers, WindowCallbacks},
+    shared::{PlatformHandlers, WindowCallbacks, window_state::WindowStateCell},
     traits::{
         Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId,
         DisplaySnapshot, HostWindow, OpenWindowError, OwnerPlatform, PendingWindow, Platform,
         PlatformCapabilities, PlatformExecutor, PlatformHaptics, PlatformInput,
         PlatformReadyCallback, PlatformTextInput, PlatformWindow, SessionEndAnswer,
-        SessionEndPhase, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent,
-        WindowId, WindowOpen, WindowOptions,
+        SessionEndPhase, SizeConstraints, WindowAppearance, WindowBackgroundAppearance,
+        WindowCapabilities, WindowCommand, WindowCommandError, WindowEvent, WindowGeometry,
+        WindowId, WindowMode, WindowOpen, WindowOptions, WindowState,
         owner::{DirectOwnerHooks, OwnerHooks, ProxyTransport},
     },
 };
@@ -116,6 +118,12 @@ struct HeadlessState {
     /// [`HeadlessPlatform::with_displays`] and changed through
     /// [`HeadlessDisplayControls`].
     displays: HeadlessDisplays,
+    /// What every window opened from now on honours
+    /// ([`HeadlessPlatform::with_window_capabilities`]).
+    window_capabilities: WindowCapabilities,
+    /// What the host clamps or declines for every window opened from now on
+    /// ([`HeadlessPlatform::with_host_limits`]).
+    host_limits: HostLimits,
 }
 
 impl HeadlessPlatform {
@@ -136,6 +144,8 @@ impl HeadlessPlatform {
             exit_reevaluation_requested: false,
             text_store_host: None,
             displays: HeadlessDisplays::new(vec![DisplaySpec::default()]),
+            window_capabilities: WindowCapabilities::all(),
+            host_limits: HostLimits::none(),
         };
 
         let wake_failure = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -220,6 +230,25 @@ impl HeadlessPlatform {
     #[must_use]
     pub fn with_displays(self, displays: Vec<DisplaySpec>) -> Self {
         self.with_state(|state| state.displays = HeadlessDisplays::new(displays));
+        self
+    }
+
+    /// Make every window this platform opens from now on honour exactly
+    /// `capabilities`, to test a caller against a host that cannot do
+    /// everything. The default is [`WindowCapabilities::all`]. A command whose
+    /// capability is `false` is refused as unsupported and changes nothing.
+    #[must_use]
+    pub fn with_window_capabilities(self, capabilities: WindowCapabilities) -> Self {
+        self.with_state(|state| state.window_capabilities = capabilities);
+        self
+    }
+
+    /// Make the host clamp or decline what windows opened from now on ask
+    /// for, to test that a snapshot reports the outcome and not the request.
+    /// The default imposes nothing.
+    #[must_use]
+    pub fn with_host_limits(self, limits: HostLimits) -> Self {
+        self.with_state(|state| state.host_limits = limits);
         self
     }
 
@@ -464,12 +493,18 @@ fn create_mock_window(
     options: WindowOptions,
 ) -> Arc<dyn HostWindow> {
     let window_id = next_headless_window_id();
+    let display = state.displays.default_window_display();
     let window = MockWindow::new(
         window_id,
         options,
         platform_state,
-        state.text_store_host.clone(),
-        state.displays.default_window_display(),
+        MockWindowHost {
+            text_store_host: state.text_store_host.clone(),
+            display,
+            display_bounds: display.and_then(|id| state.displays.logical_bounds(id)),
+            capabilities: state.window_capabilities,
+            limits: state.host_limits,
+        },
     );
 
     state.windows.push(window.clone());
@@ -512,7 +547,7 @@ impl OwnerHooks for HeadlessDeferredOwnerHooks {
         // caller like this one.
         if !self.signal.accepting() {
             return Err(OpenWindowError::OwnerGone {
-                rejected: Some(options),
+                rejected: Some(Box::new(options)),
             });
         }
         let (slot, handle) = claim_slot::<OpenWindowResult>(Arc::new(|| {}));
@@ -836,6 +871,10 @@ impl HeadlessDeferredWindowOpens {
 pub struct MockWindow {
     id: WindowId,
     state: Arc<Mutex<MockWindowState>>,
+    /// The published snapshot, shared by every clone of this window.
+    window_state: Arc<WindowStateCell>,
+    capabilities: WindowCapabilities,
+    limits: HostLimits,
     callbacks: Arc<WindowCallbacks>,
     text_input: Arc<FakeTextInput>,
     haptics: Arc<FakeHaptics>,
@@ -859,13 +898,27 @@ impl std::fmt::Debug for MockWindow {
         f.debug_struct("MockWindow")
             .field("id", &self.id)
             .field("title", &state.title)
-            .field("bounds", &state.bounds)
+            .field("position", &state.position)
+            .field("size", &state.size)
+            .field("mode", &state.mode)
             .field("scale_factor", &state.scale_factor)
             .field("focused", &state.focused)
             .field("visible", &state.visible)
             .field("callbacks", &self.callbacks)
             .finish_non_exhaustive()
     }
+}
+
+/// What the platform hands a window it opens.
+struct MockWindowHost {
+    text_store_host: Option<TextStoreHostFactory>,
+    /// The display the window opens on; `None` when the platform has none.
+    display: Option<DisplayId>,
+    /// That display's bounds in logical pixels, for a window that opens
+    /// maximized or fullscreen.
+    display_bounds: Option<Bounds<f64>>,
+    capabilities: WindowCapabilities,
+    limits: HostLimits,
 }
 
 /// Mutable state for headless MockWindow
@@ -877,16 +930,22 @@ struct MockWindowState {
     /// Every [`PlatformWindow::set_frame_rate_hint`] the window received, in order.
     frame_rate_hints: Vec<flui_platform_api::FrameRateHint>,
     title: String,
-    bounds: Bounds<f64>,
+    /// The outer top-left corner. This host draws no frame, so the outer
+    /// rectangle and the content area are the same.
+    position: Point<f64>,
+    size: Size<f64>,
+    mode: WindowMode,
+    /// The rectangle the window returns to from a mode other than normal.
+    normal_geometry: Option<WindowGeometry>,
+    constraints: SizeConstraints,
+    resizable: bool,
+    decorated: bool,
     scale_factor: f64,
     focused: bool,
     visible: bool,
     execution: crate::WindowExecutionState,
     safe_area: flui_foundation::geometry::EdgeInsets,
-    maximized: bool,
-    minimized: bool,
     closed: bool,
-    fullscreen: bool,
     hovered: bool,
     modifiers: flui_platform_api::keyboard::Modifiers,
     appearance: WindowAppearance,
@@ -895,29 +954,103 @@ struct MockWindowState {
     display: Option<DisplayId>,
 }
 
-impl Clone for MockWindowState {
-    fn clone(&self) -> Self {
-        Self {
-            pre_present_notifies: self.pre_present_notifies,
-            frame_rate_hints: self.frame_rate_hints.clone(),
-            title: self.title.clone(),
-            bounds: self.bounds,
-            scale_factor: self.scale_factor,
-            focused: self.focused,
-            execution: self.execution,
-            safe_area: self.safe_area,
-            visible: self.visible,
-            maximized: self.maximized,
-            minimized: self.minimized,
-            closed: self.closed,
-            fullscreen: self.fullscreen,
-            hovered: self.hovered,
-            modifiers: self.modifiers,
-            appearance: self.appearance,
-            cursor: self.cursor,
-            display: self.display,
+impl MockWindowState {
+    fn geometry(&self) -> WindowGeometry {
+        WindowGeometry::new(Some(self.position), self.size)
+    }
+
+    /// `size` as the host ends up with it: raised to the window's minimum,
+    /// lowered to its maximum and to the largest window the host allows.
+    fn clamp_size(&self, size: Size<f64>, limits: &HostLimits) -> Size<f64> {
+        let mut size = size;
+        if let Some(min) = self.constraints.min {
+            size.width = size.width.max(min.width);
+            size.height = size.height.max(min.height);
+        }
+        if let Some(max) = self.constraints.max {
+            size.width = size.width.min(max.width);
+            size.height = size.height.min(max.height);
+        }
+        Self::clamp_to_host(size, limits)
+    }
+
+    fn clamp_to_host(size: Size<f64>, limits: &HostLimits) -> Size<f64> {
+        match limits.max_window_size {
+            Some(max) => Size::new(size.width.min(max.width), size.height.min(max.height)),
+            None => size,
         }
     }
+
+    fn remember_normal(&mut self) {
+        if self.mode == WindowMode::Normal {
+            self.normal_geometry = Some(self.geometry());
+        }
+    }
+
+    /// Enter `mode` the way the host does: maximized and fullscreen fill the
+    /// window's display (as far as the host allows), minimized keeps the
+    /// bounds, and normal returns to the remembered rectangle. A host that
+    /// declines maximizing leaves the window as it was.
+    fn enter_mode(
+        &mut self,
+        mode: WindowMode,
+        limits: &HostLimits,
+        display_bounds: Option<Bounds<f64>>,
+    ) {
+        match mode {
+            WindowMode::Normal => {
+                if let Some(normal) = self.normal_geometry.take() {
+                    if let Some(position) = normal.position {
+                        self.position = position;
+                    }
+                    self.size = normal.size;
+                }
+                self.mode = WindowMode::Normal;
+            }
+            WindowMode::Minimized => {
+                self.remember_normal();
+                self.mode = WindowMode::Minimized;
+                self.focused = false;
+            }
+            WindowMode::Maximized if limits.refuses_maximize => {}
+            WindowMode::Maximized | WindowMode::Fullscreen => {
+                self.remember_normal();
+                if let Some(bounds) = display_bounds {
+                    self.position = bounds.origin;
+                    self.size = Self::clamp_to_host(bounds.size, limits);
+                }
+                self.mode = mode;
+            }
+            // `WindowMode` grows; a mode this host does not know changes nothing.
+            _ => {}
+        }
+    }
+}
+
+/// The snapshot the model describes, as this window's capabilities let the
+/// host observe it: no position without `observes_position`, no minimized
+/// mode without `observes_minimized`, and no frame while fullscreen.
+fn sample_window_state(model: &MockWindowState, capabilities: &WindowCapabilities) -> WindowState {
+    let observed = |geometry: WindowGeometry| {
+        WindowGeometry::new(
+            geometry.position.filter(|_| capabilities.observes_position),
+            geometry.size,
+        )
+    };
+    let mode = match model.mode {
+        WindowMode::Minimized if !capabilities.observes_minimized => WindowMode::Normal,
+        mode => mode,
+    };
+    WindowState::new(observed(model.geometry()), model.size)
+        .with_mode(mode)
+        .with_normal_geometry(model.normal_geometry.map(observed))
+        .with_visible(model.visible && !model.closed)
+        .with_focused(model.focused)
+        .with_title(Some(model.title.clone()))
+        .with_constraints(model.constraints)
+        .with_resizable(model.resizable)
+        .with_decorated(model.decorated && model.mode != WindowMode::Fullscreen)
+        .with_display(model.display)
 }
 
 impl MockWindow {
@@ -925,34 +1058,57 @@ impl MockWindow {
         id: WindowId,
         options: WindowOptions,
         platform_state: Weak<Mutex<HeadlessState>>,
-        text_store_host: Option<TextStoreHostFactory>,
-        display: Option<DisplayId>,
+        host: MockWindowHost,
     ) -> Self {
+        let MockWindowHost {
+            text_store_host,
+            display,
+            display_bounds,
+            capabilities,
+            limits,
+        } = host;
+        let mut model = MockWindowState {
+            pre_present_notifies: 0,
+            frame_rate_hints: Vec::new(),
+            title: options.title.clone(),
+            position: options
+                .position
+                .filter(|_| capabilities.restores_position)
+                .unwrap_or_default(),
+            size: options.size,
+            mode: WindowMode::Normal,
+            normal_geometry: None,
+            constraints: SizeConstraints::new(options.min_size, options.max_size),
+            resizable: options.resizable,
+            decorated: options.decorated,
+            scale_factor: 1.0,
+            focused: true,
+            execution: crate::WindowExecutionState::Running,
+            safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
+            visible: options.visible,
+            closed: false,
+            hovered: false,
+            modifiers: flui_platform_api::keyboard::Modifiers::NONE,
+            appearance: WindowAppearance::default(),
+            cursor: CursorIcon::default(),
+            display,
+        };
+        model.size = model.clamp_size(options.size, &limits);
+        if capabilities.permits(&WindowCommand::SetMode(options.mode)) {
+            model.enter_mode(options.mode, &limits, display_bounds);
+        }
+        // A window that opens maximized or fullscreen returns to the rectangle
+        // it had before, which only its opener knows.
+        if model.mode != WindowMode::Normal && options.normal_geometry.is_some() {
+            model.normal_geometry = options.normal_geometry;
+        }
+        let initial = sample_window_state(&model, &capabilities);
         Self {
             id,
-            state: Arc::new(Mutex::new(MockWindowState {
-                pre_present_notifies: 0,
-                frame_rate_hints: Vec::new(),
-                title: options.title.clone(),
-                bounds: Bounds {
-                    origin: Point::default(),
-                    size: options.size,
-                },
-                scale_factor: 1.0,
-                focused: true,
-                execution: crate::WindowExecutionState::Running,
-                safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
-                visible: options.visible,
-                maximized: false,
-                minimized: false,
-                closed: false,
-                fullscreen: false,
-                hovered: false,
-                modifiers: flui_platform_api::keyboard::Modifiers::NONE,
-                appearance: WindowAppearance::default(),
-                cursor: CursorIcon::default(),
-                display,
-            })),
+            state: Arc::new(Mutex::new(model)),
+            window_state: Arc::new(WindowStateCell::new(initial)),
+            capabilities,
+            limits,
             callbacks: Arc::new(WindowCallbacks::new()),
             text_input: Arc::new(FakeTextInput::new()),
             haptics: Arc::new(FakeHaptics::new()),
@@ -961,6 +1117,32 @@ impl MockWindow {
             text_store_host,
             platform_state,
         }
+    }
+
+    /// The window's display bounds in logical pixels, from the platform's
+    /// current displays; `None` when the platform is gone or knows none.
+    fn display_bounds(&self) -> Option<Bounds<f64>> {
+        let display = self.state.lock().display?;
+        self.platform_state
+            .upgrade()?
+            .lock()
+            .displays
+            .logical_bounds(display)
+    }
+
+    /// Publish what the model says now: read it into a snapshot, and raise
+    /// `on_state_changed` after the cell's lock is released when the revision
+    /// grew.
+    fn publish_state(&self) -> WindowState {
+        self.window_state.invalidate();
+        let published = self.window_state.state_with(|| {
+            let model = self.state.lock();
+            sample_window_state(&model, &self.capabilities)
+        });
+        if published.changed {
+            self.callbacks.dispatch_state_changed();
+        }
+        published.state
     }
 
     /// Removes this window from the platform's own tracking and, only once
@@ -1151,12 +1333,25 @@ impl MockWindow {
     }
 
     /// Simulate a resize for testing.
-    /// Fires the registered `on_resize` callback.
+    /// Fires `on_state_changed` when the snapshot differs, then the
+    /// registered `on_resize` callback.
     pub fn simulate_resize(&self, width: f64, height: f64) {
         let size = Size::new(width, height);
-        let scale = self.state.lock().scale_factor;
-        self.state.lock().bounds.size = size;
+        let scale = {
+            let mut state = self.state.lock();
+            state.size = size;
+            state.scale_factor
+        };
+        self.publish_state();
         self.callbacks.dispatch_resize(size, scale);
+    }
+
+    /// Simulate the user (or the OS) moving the window to `position`, outer
+    /// top-left in global logical pixels. Fires `on_state_changed` when the
+    /// snapshot differs.
+    pub fn simulate_move(&self, position: Point<f64>) {
+        self.state.lock().position = position;
+        self.publish_state();
     }
 
     /// Simulate a monitor DPI change for testing: the scale factor moves
@@ -1168,7 +1363,7 @@ impl MockWindow {
         let size = {
             let mut state = self.state.lock();
             state.scale_factor = scale_factor;
-            state.bounds.size
+            state.size
         };
         self.callbacks.dispatch_resize(size, scale_factor);
     }
@@ -1177,6 +1372,7 @@ impl MockWindow {
     /// Fires the registered `on_active_status_change` callback.
     pub fn simulate_focus(&self, focused: bool) {
         self.state.lock().focused = focused;
+        self.publish_state();
         self.callbacks.dispatch_active_status_change(focused);
     }
 
@@ -1212,6 +1408,7 @@ impl MockWindow {
     /// Fires the registered `on_visibility_status_change` callback.
     pub fn simulate_visibility(&self, visible: bool) {
         self.state.lock().visible = visible;
+        self.publish_state();
         self.callbacks.dispatch_visibility_status_change(visible);
     }
 
@@ -1251,6 +1448,7 @@ impl MockWindow {
             }
             state.display = Some(id);
         }
+        self.publish_state();
         self.callbacks.dispatch_display_changed();
         Ok(())
     }
@@ -1322,13 +1520,13 @@ impl PlatformWindow for MockWindow {
     fn physical_size(&self) -> Size<i32> {
         let state = self.state.lock();
         Size::new(
-            (state.bounds.size.width * state.scale_factor) as i32,
-            (state.bounds.size.height * state.scale_factor) as i32,
+            (state.size.width * state.scale_factor) as i32,
+            (state.size.height * state.scale_factor) as i32,
         )
     }
 
     fn logical_size(&self) -> Size<f64> {
-        self.state.lock().bounds.size
+        self.state.lock().size
     }
 
     fn scale_factor(&self) -> f64 {
@@ -1364,33 +1562,77 @@ impl PlatformWindow for MockWindow {
         self.state.lock().visible
     }
 
-    // ==================== Query Methods (US2) ====================
+    // ==================== State and commands (ADR-0237) ====================
 
-    fn bounds(&self) -> Bounds<f64> {
-        self.state.lock().bounds
+    fn state(&self) -> WindowState {
+        self.publish_state()
     }
 
-    fn content_size(&self) -> Size<f64> {
-        self.state.lock().bounds.size
+    fn capabilities(&self) -> WindowCapabilities {
+        self.capabilities
     }
 
-    fn window_bounds(&self) -> WindowBounds {
-        let state = self.state.lock();
-        if state.fullscreen {
-            WindowBounds::Fullscreen(state.bounds)
-        } else if state.maximized {
-            WindowBounds::Maximized(state.bounds)
-        } else {
-            WindowBounds::Windowed(state.bounds)
+    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+        if self.state.lock().closed {
+            return Err(WindowCommandError::Closed);
         }
-    }
-
-    fn is_maximized(&self) -> bool {
-        self.state.lock().maximized
-    }
-
-    fn is_fullscreen(&self) -> bool {
-        self.state.lock().fullscreen
+        command.admit(&self.capabilities)?;
+        let display_bounds = match command {
+            WindowCommand::SetMode(WindowMode::Maximized | WindowMode::Fullscreen) => {
+                self.display_bounds()
+            }
+            _ => None,
+        };
+        let resized = {
+            let mut state = self.state.lock();
+            let before = state.size;
+            match command {
+                WindowCommand::SetTitle(title) => state.title = title,
+                WindowCommand::SetPosition(at) => {
+                    if state.mode == WindowMode::Normal {
+                        state.position = at;
+                    } else if let Some(normal) = state.normal_geometry.as_mut() {
+                        normal.position = Some(at);
+                    }
+                }
+                WindowCommand::SetSize(size) => {
+                    let size = state.clamp_size(size, &self.limits);
+                    if state.mode == WindowMode::Normal {
+                        state.size = size;
+                    } else if let Some(normal) = state.normal_geometry.as_mut() {
+                        normal.size = size;
+                    }
+                }
+                WindowCommand::SetConstraints(constraints) => {
+                    state.constraints = constraints;
+                    if state.mode == WindowMode::Normal {
+                        state.size = state.clamp_size(state.size, &self.limits);
+                    }
+                }
+                WindowCommand::SetResizable(resizable) => state.resizable = resizable,
+                WindowCommand::SetDecorated(decorated) => state.decorated = decorated,
+                WindowCommand::SetMode(mode) => {
+                    state.enter_mode(mode, &self.limits, display_bounds);
+                }
+                WindowCommand::Show => {
+                    if state.mode == WindowMode::Minimized {
+                        state.enter_mode(WindowMode::Normal, &self.limits, None);
+                    }
+                    state.visible = true;
+                }
+                WindowCommand::Hide => state.visible = false,
+                WindowCommand::Activate => state.focused = true,
+                // A command this host does not know is refused by `admit`
+                // through its capability, so none reaches here.
+                _ => {}
+            }
+            (state.size != before).then_some((state.size, state.scale_factor))
+        };
+        self.publish_state();
+        if let Some((size, scale)) = resized {
+            self.callbacks.dispatch_resize(size, scale);
+        }
+        Ok(())
     }
 
     fn is_active(&self) -> bool {
@@ -1433,60 +1675,27 @@ impl PlatformWindow for MockWindow {
         Some(Arc::clone(&self.system_chrome) as Arc<dyn flui_platform_api::PlatformSystemChrome>)
     }
 
-    fn get_title(&self) -> String {
-        self.state.lock().title.clone()
-    }
-
     // ==================== Control Methods (US2) ====================
 
-    fn set_title(&self, title: &str) {
-        self.state.lock().title = title.to_string();
-    }
-
     fn show(&self) -> Result<(), crate::WindowShowError> {
-        let mut state = self.state.lock();
-        if state.closed {
-            return Err(crate::WindowShowError::Closed);
+        {
+            let mut state = self.state.lock();
+            if state.closed {
+                return Err(crate::WindowShowError::Closed);
+            }
+            if state.mode == WindowMode::Minimized {
+                state.enter_mode(WindowMode::Normal, &self.limits, None);
+            }
+            state.visible = true;
+            state.focused = true;
         }
-        state.minimized = false;
-        state.visible = true;
-        state.focused = true;
+        self.publish_state();
         Ok(())
     }
 
     fn activate(&self) {
         self.state.lock().focused = true;
-    }
-
-    fn minimize(&self) {
-        let mut state = self.state.lock();
-        state.minimized = true;
-        state.focused = false;
-    }
-
-    fn maximize(&self) {
-        let mut state = self.state.lock();
-        state.maximized = true;
-        state.fullscreen = false;
-    }
-
-    fn restore(&self) {
-        let mut state = self.state.lock();
-        state.minimized = false;
-        state.maximized = false;
-        state.fullscreen = false;
-    }
-
-    fn toggle_fullscreen(&self) {
-        let mut state = self.state.lock();
-        state.fullscreen = !state.fullscreen;
-        if state.fullscreen {
-            state.maximized = false;
-        }
-    }
-
-    fn resize(&self, size: Size<f64>) {
-        self.state.lock().bounds.size = size;
+        self.publish_state();
     }
 
     fn close(&self) {

@@ -465,6 +465,9 @@ impl From<&AppConfig> for flui_platform::WindowOptions {
             decorated: config.decorations,
             min_size: config.min_size,
             max_size: config.max_size,
+            position: None,
+            mode: flui_platform::WindowMode::Normal,
+            normal_geometry: None,
         }
     }
 }

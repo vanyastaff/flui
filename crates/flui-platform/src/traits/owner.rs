@@ -457,7 +457,7 @@ pub enum OpenWindowError {
         /// The lane's fixed capacity.
         capacity: usize,
         /// The options that could not be enqueued.
-        rejected: WindowOptions,
+        rejected: Box<WindowOptions>,
     },
     /// The event-loop owner is gone. `rejected` is `Some` when refusal
     /// happens at enqueue (the producer can retry without rebuilding
@@ -466,7 +466,7 @@ pub enum OpenWindowError {
     #[error("event-loop owner is gone")]
     OwnerGone {
         /// The options that could not be delivered, if known at refusal.
-        rejected: Option<WindowOptions>,
+        rejected: Option<Box<WindowOptions>>,
     },
     /// The backend could not create the window.
     #[error("the backend could not create the window: {message}")]
@@ -543,13 +543,9 @@ impl PlatformProxy {
     ///
     /// # Errors
     /// See [`ProxySendError`].
-    // The error carries `WindowOptions`, over clippy's size threshold only with 64-bit pointers.
-    #[cfg_attr(
-        target_pointer_width = "64",
-        expect(
-            clippy::result_large_err,
-            reason = "the rejection hands the caller's options back for a retry; a window open is not a hot path"
-        )
+    #[expect(
+        clippy::result_large_err,
+        reason = "the rejection hands the caller's options back for a retry; a window open is not a hot path"
     )]
     pub fn open_window(
         &self,
@@ -833,7 +829,7 @@ impl OwnerHooks for DirectOwnerHooks {
     fn open_owner_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError> {
         if !self.signal.accepting() {
             return Err(OpenWindowError::OwnerGone {
-                rejected: Some(options),
+                rejected: Some(Box::new(options)),
             });
         }
         self.platform.open_window(options).map(WindowOpen::Ready)
@@ -855,13 +851,9 @@ pub(crate) trait ProxyTransport: Send + Sync {
     }
 
     /// Enqueues a window-open request from a worker thread.
-    // The error carries `WindowOptions`, over clippy's size threshold only with 64-bit pointers.
-    #[cfg_attr(
-        target_pointer_width = "64",
-        expect(
-            clippy::result_large_err,
-            reason = "the rejection hands the caller's options back for a retry; a window open is not a hot path"
-        )
+    #[expect(
+        clippy::result_large_err,
+        reason = "the rejection hands the caller's options back for a retry; a window open is not a hot path"
     )]
     fn open_window(
         &self,

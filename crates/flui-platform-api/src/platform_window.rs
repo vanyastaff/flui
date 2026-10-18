@@ -9,13 +9,14 @@
 use std::{any::Any, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Point, Size};
 
 use crate::keyboard::Modifiers;
 use crate::{
     CursorError, DispatchEventResult, DisplayId, PlatformHaptics, PlatformInput, PlatformTextInput,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowExecutionState, WindowId,
-    WindowShowError,
+    WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
+    WindowCommandError, WindowExecutionState, WindowGeometry, WindowId, WindowShowError,
+    WindowState,
 };
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -261,32 +262,63 @@ pub trait PlatformWindow: Send + Sync {
     /// Check if window is visible
     fn is_visible(&self) -> bool;
 
+    // ==================== State and commands (ADR-0237) ====================
+
+    /// The window's state as the operating system reports it now.
+    ///
+    /// An immutable snapshot with a [`WindowRevision`](crate::WindowRevision):
+    /// the revision grows when something differs from the previous call and
+    /// stays when nothing does. The snapshot describes what the OS did, not
+    /// what a command asked for. Call it on the owner thread.
+    ///
+    /// The default derives a snapshot from the required queries and so never
+    /// advances its revision; a window that is a real host window overrides it.
+    fn state(&self) -> WindowState {
+        let size = self.logical_size();
+        WindowState::new(WindowGeometry::new(None, size), size)
+            .with_visible(self.is_visible())
+            .with_focused(self.is_focused())
+            .with_display(self.display_id())
+    }
+
+    /// Which [`WindowCommand`]s [`apply`](Self::apply) carries out.
+    ///
+    /// The default is none: a window that overrides nothing refuses every
+    /// command instead of claiming to have done it.
+    fn capabilities(&self) -> WindowCapabilities {
+        WindowCapabilities::none()
+    }
+
+    /// Request a change to the window.
+    ///
+    /// Accepted means requested: the outcome is visible only in the next
+    /// [`state`](Self::state), because the OS may clamp, delay or refuse it.
+    /// Call it on the owner thread. An implementation begins with
+    /// [`WindowCommand::admit`] against its own
+    /// [`capabilities`](Self::capabilities), so it refuses with
+    /// [`WindowCommandError::Unsupported`] exactly when a capability is
+    /// `false`, and with [`WindowCommandError::InvalidGeometry`] before the OS
+    /// is called.
+    ///
+    /// # Errors
+    /// [`WindowCommandError`]. The default refuses every command as
+    /// unsupported.
+    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+        command.admit(&self.capabilities())?;
+        Err(WindowCommandError::Unsupported)
+    }
+
+    /// Register a callback meaning "[`state`](Self::state) may answer
+    /// differently now".
+    ///
+    /// Called on the owner thread after a new snapshot was published, outside
+    /// any lock the window holds. The callback carries no payload: it re-reads
+    /// `state()` and compares revisions.
+    fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        let _ = callback;
+    }
+
     // ==================== Query Methods (US2) ====================
-
-    /// Get the window bounds (position + size) in logical pixels
-    fn bounds(&self) -> Bounds<f64> {
-        Bounds::default()
-    }
-
-    /// Get the content (client area) size in logical pixels
-    fn content_size(&self) -> Size<f64> {
-        self.logical_size()
-    }
-
-    /// Get the window bounds state (windowed, maximized, or fullscreen)
-    fn window_bounds(&self) -> WindowBounds {
-        WindowBounds::Windowed(self.bounds())
-    }
-
-    /// Check if window is maximized
-    fn is_maximized(&self) -> bool {
-        false
-    }
-
-    /// Check if window is in fullscreen mode
-    fn is_fullscreen(&self) -> bool {
-        false
-    }
 
     /// Check if window is the active (foreground) window
     fn is_active(&self) -> bool {
@@ -354,17 +386,7 @@ pub trait PlatformWindow: Send + Sync {
         None
     }
 
-    /// Get the window title
-    fn get_title(&self) -> String {
-        String::new()
-    }
-
     // ==================== Control Methods (US2) ====================
-
-    /// Set the window title
-    fn set_title(&self, title: &str) {
-        let _ = title;
-    }
 
     /// Show this window, unminimizing it and requesting foreground focus.
     /// Preserves maximized/fullscreen mode and the existing widget tree.
@@ -396,23 +418,6 @@ pub trait PlatformWindow: Send + Sync {
 
     /// Activate (bring to front / focus) the window.
     fn activate(&self) {}
-
-    /// Minimize the window
-    fn minimize(&self) {}
-
-    /// Maximize the window
-    fn maximize(&self) {}
-
-    /// Restore the window from minimized or maximized state
-    fn restore(&self) {}
-
-    /// Toggle fullscreen mode
-    fn toggle_fullscreen(&self) {}
-
-    /// Resize the window to the given logical size
-    fn resize(&self, size: Size<f64>) {
-        let _ = size;
-    }
 
     /// Close and destroy the window — a decision already made, not a
     /// request.
@@ -495,11 +500,6 @@ pub trait PlatformWindow: Send + Sync {
     ///
     /// Called with the new logical size and current scale factor.
     fn on_resize(&self, callback: Box<dyn FnMut(Size<f64>, f64) + Send>) {
-        let _ = callback;
-    }
-
-    /// Register a callback for window move events
-    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
         let _ = callback;
     }
 

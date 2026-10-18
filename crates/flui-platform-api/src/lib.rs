@@ -16,9 +16,12 @@
 //! - the input vocabulary ([`PlatformInput`], [`DispatchEventResult`],
 //!   [`DragDropEvent`] and the conversion helpers);
 //! - the per-window contract [`PlatformWindow`] and the window vocabulary
-//!   ([`WindowId`], [`WindowOptions`], [`WindowMode`], [`WindowEvent`],
+//!   ([`WindowId`], [`WindowOptions`], [`WindowEvent`],
 //!   [`WindowExecutionState`], [`CursorIcon`] and the errors window
-//!   operations return).
+//!   operations return);
+//! - the window state contract: the [`WindowState`] snapshot a window
+//!   publishes, the [`WindowCommand`]s it takes and the
+//!   [`WindowCapabilities`] that say which (ADR-0237).
 //!
 //! No OS, winit, AccessKit or tokio type may appear here (ADR-0082 §1). That
 //! is the point of the crate: naming a contract must not link a backend, so a
@@ -111,6 +114,7 @@ mod target_platform;
 mod text_input;
 pub mod text_store;
 mod window;
+mod window_state;
 
 pub use brightness::Brightness;
 pub use clipboard::{Clipboard, ClipboardItem, InMemoryClipboard};
@@ -153,6 +157,10 @@ pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
 pub use window::{
-    CursorError, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent,
-    WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal, WindowShowError,
+    CursorError, WindowAppearance, WindowBackgroundAppearance, WindowEvent, WindowExecutionState,
+    WindowId, WindowOptions, WindowReveal, WindowShowError,
+};
+pub use window_state::{
+    SizeConstraints, WindowCapabilities, WindowCommand, WindowCommandError, WindowControl,
+    WindowGeometry, WindowMode, WindowRevision, WindowRevisionExhausted, WindowState,
 };

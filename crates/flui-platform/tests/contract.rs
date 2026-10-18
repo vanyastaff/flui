@@ -2225,26 +2225,27 @@ mod native_windows {
         let weak = Arc::downgrade(&window);
         let observations = Arc::new(Mutex::new(Vec::new()));
         let callback_observations = Arc::clone(&observations);
-        window.on_moved(Box::new(move || {
+        window.on_state_changed(Box::new(move || {
             let window = weak.upgrade().expect("live moved window");
             let hwnd = window
                 .as_any()
                 .downcast_ref::<WindowsWindow>()
                 .expect("Win32 backend")
                 .hwnd();
-            let mut origin = POINT::default();
+            let mut rect = windows::Win32::Foundation::RECT::default();
             // SAFETY: the upgraded wrapper owns this HWND on the callback's
-            // creating thread; origin is a live correctly sized out-parameter.
-            assert!(unsafe { ClientToScreen(hwnd, &raw mut origin) }.as_bool());
+            // creating thread; rect is a live correctly sized out-parameter.
+            unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &raw mut rect) }
+                .expect("window rectangle");
             let scale = window.scale_factor();
             let actual = flui_foundation::geometry::Point::new(
-                origin.x as f64 / scale,
-                origin.y as f64 / scale,
+                f64::from(rect.left) / scale,
+                f64::from(rect.top) / scale,
             );
             callback_observations
                 .lock()
                 .expect("move observations")
-                .push((actual, window.bounds().origin));
+                .push((actual, window.state().outer.position));
         }));
         for (x, y) in [(40_000, 100), (200, 150)] {
             observations.lock().expect("move observations").clear();
@@ -2264,10 +2265,14 @@ mod native_windows {
             .expect("native move");
             let values = observations.lock().expect("move observations");
             let &(actual, observed) = values.last().expect("native move delivered");
-            assert_eq!(actual, observed, "callback saw truncated or stale origin");
             assert_eq!(
-                window.bounds().origin,
-                actual,
+                Some(actual),
+                observed,
+                "callback saw truncated or stale origin"
+            );
+            assert_eq!(
+                window.state().outer.position,
+                Some(actual),
                 "getter changed after native move"
             );
         }
@@ -2709,12 +2714,19 @@ mod native_windows {
                 ));
         }));
         for requested in [Size::new(500.0, 360.0), Size::new(440.0, 280.0)] {
-            window.resize(requested);
+            window
+                .apply(flui_platform_api::WindowCommand::SetSize(requested))
+                .expect("the native window resizes");
             let values = observations.lock().expect("resize observations");
             let &(size, scale, observed, physical, observed_scale) =
                 values.last().expect("native resize delivered");
             assert_eq!(size, observed, "getter stale inside resize callback");
             assert_eq!(scale, observed_scale);
+            assert!(
+                (size.width - requested.width).abs() <= 1.0 / scale
+                    && (size.height - requested.height).abs() <= 1.0 / scale,
+                "the command sizes the client area, not the outer frame: asked {requested:?}, got {size:?}"
+            );
             assert_eq!(
                 window.logical_size(),
                 size,

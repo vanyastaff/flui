@@ -32,10 +32,11 @@ pub use flui_platform_api::{
     DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision, DisplaySnapshot, DragDropEvent, Key,
     KeyEvent, Modifiers, PlatformHaptics, PlatformInput, PlatformTextInput, PlatformWindow,
     PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove,
-    RefreshPeriod, ScrollDelta, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowDisplay, WindowEvent, WindowExecutionState, WindowId, WindowMode, WindowOptions,
-    WindowReveal, WindowShowError, delta_offset_from_coords, device_to_logical, logical_to_device,
-    offset_from_coords,
+    RefreshPeriod, ScrollDelta, SizeConstraints, WindowAppearance, WindowBackgroundAppearance,
+    WindowCapabilities, WindowCommand, WindowCommandError, WindowControl, WindowDisplay,
+    WindowEvent, WindowExecutionState, WindowGeometry, WindowId, WindowMode, WindowOptions,
+    WindowReveal, WindowRevision, WindowRevisionExhausted, WindowShowError, WindowState,
+    delta_offset_from_coords, device_to_logical, logical_to_device, offset_from_coords,
 };
 
 // The accessibility capability lives with the semantics tree it publishes
