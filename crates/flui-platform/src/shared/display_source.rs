@@ -27,6 +27,7 @@ pub(crate) struct DisplaySource {
     /// read survives it.
     #[cfg(any(
         windows,
+        target_os = "linux",
         target_os = "macos",
         target_os = "ios",
         target_os = "android",
@@ -36,6 +37,7 @@ pub(crate) struct DisplaySource {
     stale: std::sync::atomic::AtomicBool,
     #[cfg(any(
         windows,
+        target_os = "linux",
         target_os = "macos",
         target_os = "ios",
         target_os = "android",
@@ -51,6 +53,7 @@ impl DisplaySource {
             last: Mutex::new(DisplaySnapshot::empty()),
             #[cfg(any(
                 windows,
+                target_os = "linux",
                 target_os = "macos",
                 target_os = "ios",
                 target_os = "android",
@@ -60,6 +63,7 @@ impl DisplaySource {
             stale: std::sync::atomic::AtomicBool::new(true),
             #[cfg(any(
                 windows,
+                target_os = "linux",
                 target_os = "macos",
                 target_os = "ios",
                 target_os = "android",
@@ -107,6 +111,7 @@ impl DisplaySource {
     /// again.
     #[cfg(any(
         windows,
+        target_os = "linux",
         target_os = "macos",
         target_os = "ios",
         target_os = "android",
@@ -120,6 +125,7 @@ impl DisplaySource {
     /// The last published snapshot, without reading the OS.
     #[cfg(any(
         windows,
+        target_os = "linux",
         target_os = "macos",
         target_os = "ios",
         target_os = "android",
@@ -165,6 +171,7 @@ impl DisplaySource {
     /// As [`snapshot_with`](Self::snapshot_with).
     #[cfg(any(
         windows,
+        target_os = "linux",
         target_os = "macos",
         target_os = "ios",
         target_os = "android",
@@ -197,7 +204,13 @@ impl DisplaySource {
     /// `handle` in a snapshot revision invalidates the snapshot; the same miss
     /// again, however often it repeats, costs nothing until the revision
     /// changes.
-    #[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+    #[cfg(any(
+        windows,
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        test
+    ))]
     pub(crate) fn note_miss(&self, handle: u64) {
         self.note_miss_with(handle, || {});
     }
@@ -210,6 +223,7 @@ impl DisplaySource {
     /// already wake the owner uses `note_miss`.
     #[cfg(any(
         windows,
+        target_os = "linux",
         target_os = "macos",
         target_os = "ios",
         target_os = "android",
@@ -231,6 +245,7 @@ impl DisplaySource {
 /// there are.
 #[cfg(any(
     windows,
+    target_os = "linux",
     target_os = "macos",
     target_os = "ios",
     target_os = "android",
@@ -244,6 +259,7 @@ struct MissLedger {
 
 #[cfg(any(
     windows,
+    target_os = "linux",
     target_os = "macos",
     target_os = "ios",
     target_os = "android",

@@ -273,6 +273,12 @@ console_error_panic_hook = "0.1"
 # use D-Bus, independently of whether the screen-reader bridge is enabled.
 [target.'cfg(target_os = "linux")'.dependencies]
 bitflags = { workspace = true }
+# The display source's protocol clients and descriptor primitives, behind the
+# `wayland` and `x11` features (`winit-backend` enables both on Linux).
+x11rb = { workspace = true, optional = true }
+wayland-client = { workspace = true, optional = true }
+wayland-protocols = { workspace = true, optional = true }
+rustix = { workspace = true, optional = true }
 accesskit_unix = { version = "0.24", optional = true }
 zbus = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
@@ -392,6 +398,10 @@ winit-backend = [
     "dep:crossbeam-channel",
     "dep:ui-events-winit",
     "dep:keyboard-types",
+    # The winit backend takes its Linux display list from the compositor
+    # through these two (the dependencies themselves exist on Linux only).
+    "wayland",
+    "x11",
 ]
 
 # Web platform
@@ -403,9 +413,11 @@ winit-backend = [
 # downstream `Cargo.toml`s, mirroring `desktop`.
 web = []
 
-# Linux display server protocols
-wayland = []
-x11 = []
+# Linux display server protocols: each connects to its compositor to read the
+# outputs and their refresh rates (`platforms::linux::display`). On other
+# targets the features exist and add nothing.
+wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:rustix"]
+x11 = ["dep:x11rb", "dep:rustix"]
 
 # The `unexpected_cfgs` check-cfg declaration for objc 0.2's
 # `cfg(feature = "cargo-clippy")` probes lives in build.rs — Cargo forbids

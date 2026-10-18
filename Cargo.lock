@@ -2238,6 +2238,7 @@ dependencies = [
  "objc2-ui-kit 0.3.2",
  "parking_lot",
  "raw-window-handle",
+ "rustix 1.1.5",
  "static_assertions",
  "tempfile",
  "thiserror 2.0.20",
@@ -2250,11 +2251,14 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
+ "wayland-client",
+ "wayland-protocols",
  "web-sys",
  "web-time",
  "windows 0.62.2",
  "windows-core 0.62.2",
  "winit",
+ "x11rb 0.13.2",
  "zbus",
 ]
 

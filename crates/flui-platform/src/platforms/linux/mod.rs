@@ -11,8 +11,13 @@
 //!
 //! # Current Status
 //!
-//! ⚠️ **NOT IMPLEMENTED** - This is a stub that returns `unimplemented!()` for
-//! all operations.
+//! The platform itself is a stub: `LinuxPlatform::new` and most of the
+//! [`Platform`] methods panic with `unimplemented!()`, and Linux windows come
+//! from the winit backend (`WinitPlatform`). What exists natively is the
+//! [display source](display): the outputs of a Wayland compositor or an X
+//! server, with their refresh rates and a notice when they change. The winit
+//! backend reads its display snapshot from it, and [`LinuxPlatform::is_wayland`]
+//! and [`LinuxPlatform::is_x11`] answer from the same protocol choice.
 //!
 //! # Implementation Roadmap
 //!
@@ -74,6 +79,7 @@
 
 #[cfg(all(target_os = "linux", feature = "a11y"))]
 mod accessibility;
+pub(crate) mod display;
 mod window_ext;
 
 use std::sync::Arc;
@@ -82,6 +88,7 @@ use std::sync::Arc;
 pub use accessibility::UnixAccessibility;
 pub use window_ext::*;
 
+use self::display::protocol::{Environment, Protocol};
 use crate::data_transfer::{DataTransferSource, NullDataTransferSource};
 use crate::error::PlatformError;
 use crate::traits::{
@@ -92,7 +99,8 @@ use crate::traits::{
 /// Linux platform implementation (stub)
 ///
 /// This is a placeholder for future native Linux support (Wayland + X11).
-/// All methods currently return `unimplemented!()`.
+/// Most methods currently panic with `unimplemented!()`; `display_snapshot`
+/// returns an error, `data_transfer` an inert source and `name` its label.
 ///
 /// # Future Implementation
 ///
@@ -123,30 +131,20 @@ impl LinuxPlatform {
         )
     }
 
-    /// Check if running on Wayland
-    ///
-    /// # Panics
-    ///
-    /// Always panics (stub implementation)
-    #[expect(
-        clippy::unimplemented,
-        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
-    )]
+    /// Whether this process will speak Wayland: `WAYLAND_DISPLAY` or
+    /// `WAYLAND_SOCKET` is set and not empty. Wayland wins over X11 when both
+    /// are present (WSLg offers both), as it does in winit.
+    #[must_use]
     pub fn is_wayland() -> bool {
-        unimplemented!("Wayland detection not implemented")
+        Protocol::from_environment(&Environment::current()) == Some(Protocol::Wayland)
     }
 
-    /// Check if running on X11
-    ///
-    /// # Panics
-    ///
-    /// Always panics (stub implementation)
-    #[expect(
-        clippy::unimplemented,
-        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
-    )]
+    /// Whether this process will speak X11: only `DISPLAY` is set and not
+    /// empty. A session with a Wayland socket speaks Wayland, so this is
+    /// `false` there even though an X server may be running.
+    #[must_use]
     pub fn is_x11() -> bool {
-        unimplemented!("X11 detection not implemented")
+        Protocol::from_environment(&Environment::current()) == Some(Protocol::X11)
     }
 }
 
@@ -187,11 +185,13 @@ impl Platform for LinuxPlatform {
     }
 
     fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        // The native display source (`wl_output`, RandR) is not written yet.
-        // That is an error, not an empty snapshot, which would claim the
-        // machine has no display.
+        // This stub owns no display source: the one that exists runs under
+        // the winit backend. An error, not an empty snapshot, which would
+        // claim the machine has no display.
         Err(PlatformError::Displays {
-            message: "the native Linux display source is not implemented".into(),
+            message: "the native Linux platform is not implemented; \
+                      displays are read by the winit backend"
+                .into(),
         })
     }
 
