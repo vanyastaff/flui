@@ -44,6 +44,19 @@ pub(crate) struct ScreenLedger<S> {
     next: Option<u64>,
 }
 
+/// Set the screen identity a window names to `next`. Answers the previous
+/// identity when it differed (the caller owes a display-changed notification
+/// and the forgetting of the old screen's link period), `None` when nothing
+/// changed.
+///
+/// A window that is detached from its scene names no screen: it moves to
+/// `I::default()`, the absent identity.
+#[cfg(any(target_os = "ios", test))]
+pub(crate) fn change_screen<I: Copy + PartialEq>(slot: &mut I, next: I) -> Option<I> {
+    let previous = std::mem::replace(slot, next);
+    (previous != next).then_some(previous)
+}
+
 #[cfg(any(target_os = "ios", test))]
 impl<S: Clone + SameObject> ScreenLedger<S> {
     pub(crate) fn new() -> Self {
@@ -89,7 +102,7 @@ impl<S: Clone + SameObject> ScreenLedger<S> {
 mod tests {
     use flui_platform_api::{DisplayKey, DisplayRegistry};
 
-    use super::{SameObject, ScreenLedger, macos_display_key};
+    use super::{SameObject, ScreenLedger, change_screen, macos_display_key};
 
     const UUID_A: [u8; 16] = [0xA0; 16];
     const UUID_B: [u8; 16] = [0xB0; 16];
@@ -147,6 +160,19 @@ mod tests {
         fn same_object(&self, other: &Self) -> bool {
             self.object == other.object
         }
+    }
+
+    #[test]
+    fn a_detached_window_names_no_screen() {
+        let mut slot = 7u32;
+        // Detaching a window that named a screen clears it and owes a report.
+        assert_eq!(change_screen(&mut slot, u32::default()), Some(7));
+        assert_eq!(slot, 0);
+        // Detaching again changes nothing: no second notification.
+        assert_eq!(change_screen(&mut slot, u32::default()), None);
+        // Re-adopting the same identity is silent; a new one reports the old.
+        assert_eq!(change_screen(&mut slot, 3), Some(0));
+        assert_eq!(change_screen(&mut slot, 3), None);
     }
 
     #[test]

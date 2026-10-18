@@ -41,6 +41,7 @@ use super::display::{IosDisplays, ScreenIdentity};
 use super::events::TouchInputState;
 use super::native_owner::NativeOwner;
 use crate::shared::WindowCallbacks;
+use crate::shared::apple_display_identity::change_screen;
 use crate::shared::apple_os_version::Since;
 use crate::shared::display_link_rate::{
     FrameRatePreference, FrameRateRange, FrameRateRangeProperty, LinkPeriod,
@@ -421,10 +422,10 @@ impl FluiView {
             .ivars()
             .displays
             .identify(MainThreadMarker::from(self), screen);
-        let previous = std::mem::replace(&mut *self.ivars().screen.lock(), identity);
-        if previous == identity {
+        let changed = change_screen(&mut *self.ivars().screen.lock(), identity);
+        let Some(previous) = changed else {
             return;
-        }
+        };
         if let Some(number) = previous.number {
             self.ivars()
                 .displays
@@ -435,6 +436,25 @@ impl FluiView {
         if let Some(link) = link {
             request_frame_rate(&link, &self.ivars().displays, screen);
         }
+        self.ivars().displays.invalidate();
+        self.callbacks().dispatch_display_changed();
+    }
+
+    /// The scene is gone: this window names no screen until it is attached
+    /// again. Forgets the window's link period on the old screen and, if the
+    /// identity was set, tells the owner the display changed. No lock or
+    /// borrow is held across the callback.
+    fn detach_screen(&self) {
+        let changed = change_screen(&mut *self.ivars().screen.lock(), ScreenIdentity::default());
+        let Some(previous) = changed else {
+            return;
+        };
+        if let Some(number) = previous.number {
+            self.ivars()
+                .displays
+                .forget_link_period(number, self.ivars().window_id);
+        }
+        self.ivars().link_period.borrow_mut().forget();
         self.ivars().displays.invalidate();
         self.callbacks().dispatch_display_changed();
     }
@@ -845,6 +865,7 @@ impl IOSWindow {
             .ivars()
             .sampling
             .set(SamplingAdmission::Detached);
+        native.view.detach_screen();
     }
 
     /// Pause or resume the per-frame tick (delegates to the content view's
