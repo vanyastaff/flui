@@ -36,6 +36,7 @@ use std::thread::ThreadId;
 
 use flui_foundation::{ClaimHandle, ClaimOutcome};
 use flui_platform_api::text_store::TextStoreHost;
+use flui_platform_api::{HostNotice, SessionEndAnswer, SessionEndPhase};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 use super::{
@@ -99,6 +100,23 @@ impl OwnerPlatform {
     /// Returns unsupported on backends without this transport, or owner-gone after quit.
     pub fn on_wake(&self, callback: Box<dyn FnMut() + Send>) -> Result<(), WakeRegistrationError> {
         self.hooks.on_wake(callback)
+    }
+
+    /// Install the callback the platform asks at each phase of the user's
+    /// session ending, replacing any earlier one. See
+    /// [`Platform::on_session_end`].
+    pub fn on_session_end(
+        &self,
+        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
+    ) {
+        self.platform.on_session_end(callback);
+    }
+
+    /// Install the callback the platform calls with each system notice other
+    /// than a session end's phases, replacing any earlier one. See
+    /// [`Platform::on_host_notice`].
+    pub fn on_host_notice(&self, callback: Box<dyn FnMut(&HostNotice) + Send>) {
+        self.platform.on_host_notice(callback);
     }
 
     /// Open a window. `Ready` is guaranteed inside `on_ready`; afterwards
@@ -297,6 +315,21 @@ impl SharedPlatform {
     /// Registers a callback for when the application should quit.
     pub fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
         self.platform.on_quit(callback);
+    }
+
+    /// Registers the callback asked at each phase of the user's session
+    /// ending; see [`Platform::on_session_end`].
+    pub fn on_session_end(
+        &self,
+        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
+    ) {
+        self.platform.on_session_end(callback);
+    }
+
+    /// Registers the callback called with each other system notice; see
+    /// [`Platform::on_host_notice`].
+    pub fn on_host_notice(&self, callback: Box<dyn FnMut(&HostNotice) + Send>) {
+        self.platform.on_host_notice(callback);
     }
 
     /// Registers a callback for when the application is reopened (macOS).

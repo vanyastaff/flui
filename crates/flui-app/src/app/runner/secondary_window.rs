@@ -1171,6 +1171,7 @@ fn finish_open_secondary_window(
     }));
     installation.observe_appearance();
     installation.observe_display();
+    installation.observe_window_state();
     let execution = window.execution_state();
     let focused = window.is_focused();
     let visible = window.is_visible();

@@ -241,6 +241,7 @@ pub struct ElementOwner<'a> {
     /// process-global or thread-local state.
     pub(crate) focus_manager: &'a Rc<FocusManager>,
     pub(crate) lifecycle_handle: &'a Option<crate::LifecycleHandle>,
+    pub(crate) window_handle: &'a Option<crate::WindowHandle>,
 
     /// The binding's async task driver, or `None` when no
     /// binding installed one. Cloned into the live `BuildCtx` so a

@@ -10,7 +10,8 @@ use std::{
 };
 
 use flui_platform_api::{
-    Clipboard, ClipboardItem, DisplaySnapshot, WindowEvent, WindowId, WindowOptions,
+    Clipboard, ClipboardItem, DisplaySnapshot, HostNotice, SessionEndAnswer, SessionEndPhase,
+    WindowEvent, WindowId, WindowOptions,
 };
 
 use super::{HostWindow, OpenWindowError, OwnerPlatform, PlatformCapabilities};
@@ -45,38 +46,6 @@ use crate::{
 /// boxed `std::error::Error` rather than committing the signature to any
 /// one error library.
 pub type PlatformReadyCallback = Box<dyn FnOnce(OwnerPlatform) -> Result<(), BootstrapError>>;
-
-/// A phase of the user's session ending, as the platform reports it to
-/// [`Platform::on_session_end`].
-///
-/// On Windows a session end is a query to every top-level window
-/// (`WM_QUERYENDSESSION`), then its outcome (`WM_ENDSESSION`): either the
-/// session ends, and the process is terminated soon after the callback
-/// returns, or it was cancelled, by the user or by another application.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum SessionEndPhase {
-    /// The session is about to end; the answer says whether the application
-    /// asks the user to wait.
-    Query,
-    /// The session end was cancelled; the session goes on.
-    Cancelled,
-    /// The session is ending now; the process will not outlive it for long.
-    Ending,
-}
-
-/// The application's answer to a [`SessionEndPhase`]. Only an answer to
-/// [`SessionEndPhase::Query`] is read; the platform ignores the others.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum SessionEndAnswer {
-    /// Let the session end.
-    Proceed,
-    /// Ask the user to wait: work that cannot be written without a decision
-    /// would be lost. The operating system shows the application as blocking
-    /// and lets the user end the session anyway.
-    Block,
-}
 
 /// Core platform abstraction trait
 ///
@@ -427,6 +396,16 @@ pub trait Platform: Send + Sync + 'static {
     /// A backend without session-end messages never calls it, and the
     /// default implementation drops it unused.
     fn on_session_end(&self, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {
+        let _ = callback;
+    }
+
+    /// Register the callback the platform calls with every system notice other
+    /// than a session end's phases (sleep, wake, session lock, memory
+    /// pressure), replacing any earlier one. It runs on the owner thread.
+    ///
+    /// A backend that observes none of them never calls it, and the default
+    /// implementation drops it unused.
+    fn on_host_notice(&self, callback: Box<dyn FnMut(&HostNotice) + Send>) {
         let _ = callback;
     }
 

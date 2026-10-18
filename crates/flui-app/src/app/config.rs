@@ -1,9 +1,11 @@
 //! Application configuration.
 
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{Point, Size};
 use flui_log::AppIdentity;
 pub use flui_runtime::MotionOverride;
 pub use flui_runtime::presentation::PointerResampling;
+
+use flui_platform::WindowMode;
 
 use super::close_request::CloseRequestHandler;
 use super::dev_agent::DevAgent;
@@ -92,6 +94,14 @@ pub struct AppConfig {
 
     /// Maximum window size.
     pub max_size: Option<Size>,
+
+    /// Initial outer position in global logical pixels; `None` lets the system
+    /// place the window. A platform that cannot place a window ignores it.
+    pub position: Option<Point<f64>>,
+
+    /// The mode the window opens in. A platform that cannot enter it opens the
+    /// window in [`WindowMode::Normal`].
+    pub mode: WindowMode,
 
     /// Whether the window is resizable.
     pub resizable: bool,
@@ -243,6 +253,8 @@ impl Default for AppConfig {
             size: Size::new(800.0, 600.0),
             min_size: None,
             max_size: None,
+            position: None,
+            mode: WindowMode::Normal,
             resizable: true,
             decorations: true,
             show_performance_overlay: false,
@@ -319,6 +331,20 @@ impl AppConfig {
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_max_size(mut self, width: u32, height: u32) -> Self {
         self.max_size = Some(Size::new(width as f64, height as f64));
+        self
+    }
+
+    /// Set the initial outer position, in global logical pixels.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_position(mut self, at: Point<f64>) -> Self {
+        self.position = Some(at);
+        self
+    }
+
+    /// Set the mode the window opens in.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_mode(mut self, mode: WindowMode) -> Self {
+        self.mode = mode;
         self
     }
 
@@ -448,26 +474,25 @@ impl AppConfig {
 
 impl From<&AppConfig> for flui_platform::WindowOptions {
     fn from(config: &AppConfig) -> Self {
-        flui_platform::WindowOptions {
+        // `visible` and `reveal` are not the configuration's to set, so they
+        // keep the options' own defaults: on screen when the window opens
+        // (`AtOpen`). `AfterFirstFrame` is a PROMISE to call
+        // `reveal_after_first_frame`, and this conversion is shared by callers
+        // that keep it (the desktop runner, through `FirstReveal`) and callers
+        // that do not (`run_direct`, the bare `open_secondary_window`). The
+        // paths that keep it opt in at their own open site
+        // (`runner::desktop::rendered_window_options`), so nothing can open a
+        // window at alpha 0 that no one will ever reveal.
+        Self {
             title: config.title.clone(),
             size: config.size,
             resizable: config.resizable,
-            visible: true,
-            // `AtOpen`, the conservative default: `AfterFirstFrame` is a
-            // PROMISE to call `reveal_after_first_frame`, and this
-            // conversion is shared by callers that keep it (the desktop
-            // runner, through `FirstReveal`) and callers that do not
-            // (`run_direct`, the bare `open_secondary_window`). The one
-            // path that keeps it opts in at its own open site —
-            // `runner::desktop::rendered_window_options` — so nothing can
-            // open a window at alpha 0 that no one will ever reveal.
-            reveal: flui_platform::WindowReveal::AtOpen,
             decorated: config.decorations,
             min_size: config.min_size,
             max_size: config.max_size,
-            position: None,
-            mode: flui_platform::WindowMode::Normal,
-            normal_geometry: None,
+            position: config.position,
+            mode: config.mode,
+            ..Self::default()
         }
     }
 }

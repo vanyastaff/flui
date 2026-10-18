@@ -29,14 +29,16 @@ mod platform;
 // here as the same owned vocabulary the public platform boundary carries.
 pub use flui_platform_api::{
     Clipboard, ClipboardItem, CursorError, DispatchEventResult, DisplayId, DisplayIdsExhausted,
-    DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision, DisplaySnapshot, DragDropEvent, Key,
-    KeyEvent, Modifiers, PlatformHaptics, PlatformInput, PlatformTextInput, PlatformWindow,
-    PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove,
-    RefreshPeriod, ScrollDelta, SizeConstraints, WindowAppearance, WindowBackgroundAppearance,
-    WindowCapabilities, WindowCommand, WindowCommandError, WindowControl, WindowDisplay,
-    WindowEvent, WindowExecutionState, WindowGeometry, WindowId, WindowMode, WindowOptions,
-    WindowReveal, WindowRevision, WindowRevisionExhausted, WindowShowError, WindowState,
-    delta_offset_from_coords, device_to_logical, logical_to_device, offset_from_coords,
+    DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision, DisplaySnapshot, DragDropEvent,
+    HostNotice, Key, KeyEvent, MemoryPressureLevel, Modifiers, PlatformHaptics, PlatformInput,
+    PlatformTextInput, PlatformWindow, PointerButton, PointerButtons, PointerEvent, PointerId,
+    PointerKind, PointerMove, RefreshPeriod, ScrollDelta, SessionEndAnswer, SessionEndBlock,
+    SessionEndPhase, SessionEndRequest, SizeConstraints, WindowAppearance,
+    WindowBackgroundAppearance, WindowCapabilities, WindowCommand, WindowCommandError,
+    WindowControl, WindowDisplay, WindowEvent, WindowExecutionState, WindowGeometry, WindowId,
+    WindowMode, WindowOptions, WindowReveal, WindowRevision, WindowRevisionExhausted,
+    WindowShowError, WindowState, delta_offset_from_coords, device_to_logical, logical_to_device,
+    offset_from_coords,
 };
 
 // The accessibility capability lives with the semantics tree it publishes
@@ -55,7 +57,4 @@ pub use owner::{
     OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,
     WaitError, WakeRegistrationError, WindowOpen,
 };
-pub use platform::{
-    PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback, SessionEndAnswer,
-    SessionEndPhase,
-};
+pub use platform::{PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback};

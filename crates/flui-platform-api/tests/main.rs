@@ -6,6 +6,9 @@ mod composition_ledger;
 #[path = "display.rs"]
 mod display;
 
+#[path = "host_notice.rs"]
+mod host_notice;
+
 #[path = "input_vocabulary.rs"]
 mod input_vocabulary;
 

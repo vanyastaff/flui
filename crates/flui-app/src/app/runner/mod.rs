@@ -108,6 +108,25 @@ fn text_store_host_of(
     host::with_owner_platform(|owner| owner.text_store_host(window)).flatten()
 }
 
+/// The control handle of the window presented at `address`, for the thread
+/// that runs the application: the address a [`WindowRequest`](crate::WindowRequest)
+/// delivers names the new window, and this turns it into the handle its
+/// widgets get from `LifecycleContext::window`.
+///
+/// `None` on any other thread, when no presentation is registered at
+/// `address`, and once its window has closed.
+#[must_use]
+pub fn window_handle(
+    address: flui_foundation::PresentationAddress,
+) -> Option<flui_view::WindowHandle> {
+    host::APP_RUNTIME.with(|slot| {
+        let state = slot.try_borrow().ok()?;
+        (state.owner_thread == Some(std::thread::current().id()))
+            .then(|| state.window_commands.handle_for(address))
+            .flatten()
+    })
+}
+
 /// Close the window at `address` programmatically, bypassing its
 /// close-request handler (issue #558).
 ///

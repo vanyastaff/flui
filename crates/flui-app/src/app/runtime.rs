@@ -269,6 +269,14 @@ pub(crate) struct AppRuntime {
     /// One strong logical/native owner, retained by active callback completion.
     pub(super) installed_host: InstalledHost,
     pub(super) owner_turn_wake: Option<Rc<dyn Fn() -> bool>>,
+    /// The commands application code queued for its windows; applied at the
+    /// start of each owner turn.
+    pub(super) window_commands: Rc<super::window_control::WindowCommandQueues>,
+    /// The session end the host is answering: every presentation's subscribers
+    /// hold their blocks on this one request, so the answer to the operating
+    /// system is the aggregate. Kept from the query until the session end is
+    /// cancelled or happens.
+    pub(super) session_end: Option<flui_platform::SessionEndRequest>,
     /// The thread that installed the first UI runtime hosted here; every dispatch
     /// checks against this before touching the registry. Loop-scoped, not
     /// per-UI runtime: every UI runtime this `AppRuntime` ever hosts lives on the same
@@ -411,6 +419,8 @@ impl AppRuntime {
         Self {
             installed_host: InstalledHost::new(),
             owner_turn_wake: None,
+            window_commands: Rc::default(),
+            session_end: None,
             owner_thread: None,
             owner_platform: None,
             owner_install_generation: 0,

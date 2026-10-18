@@ -101,6 +101,7 @@ mod display;
 mod event_time;
 mod haptic_feedback;
 mod haptics;
+mod host_notice;
 mod ime;
 mod input;
 pub mod keyboard;
@@ -130,6 +131,10 @@ pub use display::{
 pub use event_time::EventTime;
 pub use haptic_feedback::HapticFeedback;
 pub use haptics::PlatformHaptics;
+pub use host_notice::{
+    HostNotice, MemoryPressureLevel, SessionEndAnswer, SessionEndBlock, SessionEndPhase,
+    SessionEndRequest,
+};
 pub use ime::ImeEvent;
 pub use input::{
     DispatchEventResult, DragDropEvent, PlatformInput, delta_offset_from_coords, device_to_logical,

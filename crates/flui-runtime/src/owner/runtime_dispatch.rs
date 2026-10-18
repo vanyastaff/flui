@@ -10,7 +10,7 @@ use super::{
 use crate::ui_runtime::UiRuntime;
 
 /// Work belonging to the runtime independently of any presentation's lifetime.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum RuntimeOperation {
     /// Invalidate text and layout after the host font collection changes.
@@ -19,6 +19,8 @@ pub enum RuntimeOperation {
     Background,
     /// Apply the host lifecycle to all presentations in this runtime.
     Lifecycle(AppLifecycleState),
+    /// Deliver a system notice to every presentation in this runtime.
+    HostNotice(flui_platform_api::HostNotice),
     /// Irreversibly stop every presentation in this runtime without removing it.
     Stop,
     /// Reassemble the runtime's mounted presentations at the requested tier.
@@ -249,6 +251,9 @@ impl RuntimeWork {
             Self::Runtime(id, RuntimeOperation::Lifecycle(state)) => {
                 effects.runtime_lifecycle(id, state);
                 runtime.enter(|runtime| runtime.update_host_lifecycle(state));
+            }
+            Self::Runtime(_, RuntimeOperation::HostNotice(notice)) => {
+                runtime.enter(|runtime| runtime.deliver_host_notice(&notice));
             }
             Self::Runtime(_, RuntimeOperation::Stop) => {
                 runtime.enter(UiRuntime::stop_presentations);

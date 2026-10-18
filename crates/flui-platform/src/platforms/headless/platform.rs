@@ -29,8 +29,8 @@ use crate::{
     shared::{PlatformHandlers, WindowCallbacks, window_state::WindowStateCell},
     traits::{
         Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId,
-        DisplaySnapshot, HostWindow, OpenWindowError, OwnerPlatform, PendingWindow, Platform,
-        PlatformCapabilities, PlatformExecutor, PlatformHaptics, PlatformInput,
+        DisplaySnapshot, HostNotice, HostWindow, OpenWindowError, OwnerPlatform, PendingWindow,
+        Platform, PlatformCapabilities, PlatformExecutor, PlatformHaptics, PlatformInput,
         PlatformReadyCallback, PlatformTextInput, PlatformWindow, SessionEndAnswer,
         SessionEndPhase, SizeConstraints, WindowAppearance, WindowBackgroundAppearance,
         WindowCapabilities, WindowCommand, WindowCommandError, WindowEvent, WindowGeometry,
@@ -263,19 +263,25 @@ impl HeadlessPlatform {
         }
     }
 
-    /// Simulate one phase of the user's session ending, as the operating
-    /// system reports it: the callback registered with
-    /// [`Platform::on_session_end`] is asked, on the calling thread, and its
-    /// answer returned; [`SessionEndAnswer::Proceed`] when none is
-    /// registered. Like [`MockWindow::simulate_close`], it may be called from
-    /// inside another callback, as a session end arriving in a nested native
-    /// loop is.
-    ///
-    /// Not yet delivered: the callback is not asked, and every phase answers
-    /// [`SessionEndAnswer::Proceed`].
+    /// Obtain the host-event handle before `run` consumes this platform: the
+    /// handle reports session ends and system notices the way an operating
+    /// system does. See [`HeadlessHostEvents`].
+    #[must_use]
+    pub fn host_events(&self) -> HeadlessHostEvents {
+        HeadlessHostEvents {
+            state: Arc::downgrade(&self.state),
+        }
+    }
+
+    /// Simulate one phase of the user's session ending; see
+    /// [`HeadlessHostEvents::session_end`].
     pub fn simulate_session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
-        let _ = phase;
-        SessionEndAnswer::Proceed
+        self.host_events().session_end(phase)
+    }
+
+    /// Simulate a system notice; see [`HeadlessHostEvents::notice`].
+    pub fn simulate_host_notice(&self, notice: &HostNotice) {
+        self.host_events().notice(notice);
     }
 
     fn with_state<F, R>(&self, f: F) -> R
@@ -433,6 +439,18 @@ impl Platform for HeadlessPlatform {
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
         self.with_state(|state| {
             state.handlers.quit = Some(callback);
+        });
+    }
+
+    fn on_session_end(&self, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {
+        self.with_state(|state| {
+            state.handlers.session_end = Some(callback);
+        });
+    }
+
+    fn on_host_notice(&self, callback: Box<dyn FnMut(&HostNotice) + Send>) {
+        self.with_state(|state| {
+            state.handlers.host_notice = Some(callback);
         });
     }
 
@@ -609,6 +627,67 @@ impl HeadlessOwnerTurns {
                     callback();
                 }
             }
+        }
+    }
+}
+
+/// Reports session ends and system notices to the headless platform's
+/// registered hooks after `run` has consumed it — obtained from
+/// [`HeadlessPlatform::host_events`] before `run`.
+///
+/// Each call runs the hook on the calling thread, outside the platform's state
+/// lock, so the hook may call back into the platform; a hook registered while it
+/// runs replaces it. A hook that panics is dropped with its panic, since a hook
+/// that failed once is not trusted to run again.
+#[derive(Clone)]
+pub struct HeadlessHostEvents {
+    state: Weak<Mutex<HeadlessState>>,
+}
+
+impl std::fmt::Debug for HeadlessHostEvents {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeadlessHostEvents").finish_non_exhaustive()
+    }
+}
+
+impl HeadlessHostEvents {
+    /// One phase of the user's session ending, as the operating system reports
+    /// it: the hook registered with `OwnerPlatform::on_session_end` is asked and
+    /// its answer returned; [`SessionEndAnswer::Proceed`] when none is
+    /// registered or the platform is gone. Like [`MockWindow::simulate_close`],
+    /// it may be called from inside another callback, as a session end arriving
+    /// in a nested native loop is.
+    pub fn session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
+        let Some(state) = self.state.upgrade() else {
+            return SessionEndAnswer::Proceed;
+        };
+        let hook = state.lock().handlers.session_end.take();
+        let Some(mut hook) = hook else {
+            return SessionEndAnswer::Proceed;
+        };
+        let answer = hook(phase);
+        let mut state = state.lock();
+        if state.handlers.session_end.is_none() {
+            state.handlers.session_end = Some(hook);
+        }
+        answer
+    }
+
+    /// A system notice other than a session end's phases: the hook registered
+    /// with `OwnerPlatform::on_host_notice` is called. Nothing happens when
+    /// none is registered or the platform is gone.
+    pub fn notice(&self, notice: &HostNotice) {
+        let Some(state) = self.state.upgrade() else {
+            return;
+        };
+        let hook = state.lock().handlers.host_notice.take();
+        let Some(mut hook) = hook else {
+            return;
+        };
+        hook(notice);
+        let mut state = state.lock();
+        if state.handlers.host_notice.is_none() {
+            state.handlers.host_notice = Some(hook);
         }
     }
 }

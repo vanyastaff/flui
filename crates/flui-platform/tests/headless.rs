@@ -111,7 +111,6 @@ fn the_headless_platform_is_selected_and_its_exit_policy_is_honoured() {
 /// A simulated session end asks the registered callback once per phase, in
 /// order, and returns its answer to the query.
 #[test]
-#[ignore = "contract: a simulated session end reaches the registered callback"]
 fn simulated_session_end_reaches_the_hook() {
     let platform = HeadlessPlatform::new();
     let phases = Arc::new(Mutex::new(Vec::new()));

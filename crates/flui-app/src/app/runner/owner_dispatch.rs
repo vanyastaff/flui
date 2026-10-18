@@ -34,6 +34,16 @@ impl RuntimeDispatcher {
         dispatch_owner_turn(OwnerTurn::Runtime(self, RuntimeOperation::FontsChanged))
     }
 
+    pub(super) fn host_notice(
+        self,
+        notice: flui_platform::HostNotice,
+    ) -> Result<(), DispatchError> {
+        dispatch_owner_turn(OwnerTurn::Runtime(
+            self,
+            RuntimeOperation::HostNotice(notice),
+        ))
+    }
+
     #[cfg(any(test, target_os = "android"))]
     pub(super) fn lifecycle(self, state: AppLifecycleState) -> Result<(), DispatchError> {
         dispatch_owner_turn(OwnerTurn::Runtime(self, RuntimeOperation::Lifecycle(state)))
@@ -174,6 +184,10 @@ pub(in crate::app) enum RuntimeEvent {
     /// refresh period, possibly "unknown". Delivered after every sample and
     /// acted on only when it differs from what the presentation holds.
     DisplayChanged(flui_runtime::owner::DisplayUpdate),
+    /// The window's published state may have changed
+    /// (`PlatformWindow::on_state_changed`); the owner reads it when it
+    /// delivers this.
+    WindowStateChanged,
     /// The pointer entered (`true`) or left (`false`) the window (winit's
     /// `CursorEntered`/`CursorLeft`, via
     /// `PlatformWindow::on_hover_status_change`). Leave sweeps the addressed
@@ -240,6 +254,7 @@ impl RuntimeEvent {
             Self::WindowHover(inside) => WindowObservation::Hover(inside),
             Self::AppearanceChanged(brightness) => WindowObservation::Brightness(brightness),
             Self::DisplayChanged(update) => WindowObservation::Display(update),
+            Self::WindowStateChanged => WindowObservation::State,
         };
         target.observe(observation, host.effects())
     }
@@ -538,7 +553,60 @@ pub(super) fn dispatch_platform_ui_runtime(
     dispatch_owner_turn(OwnerTurn::Presentation(dispatcher, event))
 }
 
+/// Apply the commands application code queued for its windows, when this is the
+/// owner thread and no owner callback is running. Applying one may re-enter the
+/// window procedure, so it never runs inside user code: a call from inside a
+/// callback leaves the queue for the next turn that starts idle.
+pub(super) fn apply_queued_window_commands(owner_thread: std::thread::ThreadId) {
+    if std::thread::current().id() != owner_thread {
+        return;
+    }
+    let Some((queues, host)) = APP_RUNTIME.with(|slot| {
+        slot.try_borrow()
+            .ok()
+            .map(|state| (state.window_commands.clone(), state.installed_host.clone()))
+    }) else {
+        return;
+    };
+    if host.logical().in_callback() {
+        return;
+    }
+    queues.apply_pending();
+}
+
+/// Deliver a system notice to every UI runtime this host runs, each on its own
+/// owner turn.
+pub(super) fn deliver_host_notice(notice: &flui_platform::HostNotice) {
+    let dispatchers = APP_RUNTIME.with(|slot| {
+        let Ok(runtime) = slot.try_borrow() else {
+            return Vec::new();
+        };
+        let Some(owner_thread) = runtime.owner_thread else {
+            return Vec::new();
+        };
+        runtime
+            .installed_host
+            .logical()
+            .runtime_ids()
+            .map(|ids| {
+                ids.into_iter()
+                    .map(|id| RuntimeDispatcher { owner_thread, id })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    });
+    for dispatcher in dispatchers {
+        if let Err(error) = dispatcher.host_notice(notice.clone()) {
+            tracing::debug!(?dispatcher, ?error, "host notice not delivered");
+        }
+    }
+}
+
 fn dispatch_owner_turn(turn: OwnerTurn) -> Result<(), DispatchError> {
+    // Window commands queued by application code apply at the start of the
+    // turn, before its frame and outside the turn's callback guard: a native
+    // call re-enters the window procedure.
+    apply_queued_window_commands(turn.owner_thread());
     let host = current_host(turn.owner_thread())?;
     let _callback = host
         .logical()

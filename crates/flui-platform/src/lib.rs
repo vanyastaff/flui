@@ -230,7 +230,8 @@ pub use platforms::MacOSPlatform;
 pub use platforms::{
     DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeHaptics,
     FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessDisplayControls,
-    HeadlessExitReevaluation, HeadlessOwnerTurns, HeadlessPlatform, HostLimits, MockWindow,
+    HeadlessExitReevaluation, HeadlessHostEvents, HeadlessOwnerTurns, HeadlessPlatform, HostLimits,
+    MockWindow,
 };
 // Web platform
 #[cfg(target_arch = "wasm32")]
@@ -253,10 +254,11 @@ pub use task::{Task, TaskLabel};
 pub use traits::{
     AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem,
     CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, DisplayIdsExhausted,
-    DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision, DisplaySnapshot, HostWindow,
-    MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities,
-    PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow,
-    RefreshPeriod, SessionEndAnswer, SessionEndPhase, SizeConstraints, WebCapabilities,
+    DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision, DisplaySnapshot, HostNotice,
+    HostWindow, MemoryPressureLevel, MobileCapabilities, PathPromptOptions, Platform,
+    PlatformAccessibility, PlatformCapabilities, PlatformExecutor, PlatformHaptics,
+    PlatformReadyCallback, PlatformTextInput, PlatformWindow, RefreshPeriod, SessionEndAnswer,
+    SessionEndBlock, SessionEndPhase, SessionEndRequest, SizeConstraints, WebCapabilities,
     WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
     WindowCommandError, WindowControl, WindowDisplay, WindowEvent, WindowExecutionState,
     WindowGeometry, WindowId, WindowMode, WindowOptions, WindowReveal, WindowRevision,

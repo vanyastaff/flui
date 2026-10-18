@@ -22,6 +22,7 @@ pub(crate) mod raster_lane;
 pub mod runner;
 pub(crate) mod runtime;
 pub(crate) mod storage_host;
+pub(crate) mod window_control;
 pub(crate) mod window_registry;
 // The ui_runtime core lives in the frame runtime (ADR-0083); these aliases keep
 // its `crate::app::…` paths for the runners and the dispatch layer that
@@ -61,9 +62,9 @@ pub use runner::open_secondary_window;
     not(target_arch = "wasm32")
 ))]
 pub use runner::open_window;
-#[cfg(not(target_os = "ios"))]
-pub use runner::request_presentation_close;
 pub use runner::{FontRegistrationError, register_font};
+#[cfg(not(target_os = "ios"))]
+pub use runner::{request_presentation_close, window_handle};
 #[cfg(target_os = "android")]
 pub use runner::{run_app_android, run_app_android_with_config};
 pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};

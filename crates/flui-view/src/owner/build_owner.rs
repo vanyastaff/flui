@@ -545,6 +545,7 @@ pub struct BuildOwner {
     /// created by [`Self::new`] receive a fresh isolated manager.
     focus_manager: Rc<FocusManager>,
     lifecycle_handle: Option<crate::LifecycleHandle>,
+    window_handle: Option<crate::WindowHandle>,
 
     /// The binding's frame-driven async task driver, installed by
     /// whichever binding owns this owner. `None` until then — a tree built with
@@ -751,6 +752,7 @@ impl BuildOwner {
             build_scope_queues: None,
             focus_manager,
             lifecycle_handle: None,
+            window_handle: None,
             async_driver: None,
             post_frame_handle: None,
             text_input_handle: None,
@@ -773,6 +775,17 @@ impl BuildOwner {
     #[doc(hidden)]
     pub fn set_lifecycle_handle(&mut self, handle: crate::LifecycleHandle) {
         self.lifecycle_handle = Some(handle);
+    }
+
+    /// Give the tree's elements the window they are presented in.
+    #[doc(hidden)]
+    pub fn set_window_handle(&mut self, handle: crate::WindowHandle) {
+        self.window_handle = Some(handle);
+    }
+
+    /// Weak window capability, absent for a bare owner or one without a window.
+    pub fn window_handle(&self) -> Option<crate::WindowHandle> {
+        self.window_handle.clone()
     }
 
     /// Weak presentation lifecycle capability, absent for a bare owner.
@@ -1281,6 +1294,7 @@ impl BuildOwner {
             layout_builder_registry: &self.layout_builder_registry,
             focus_manager: &self.focus_manager,
             lifecycle_handle: &self.lifecycle_handle,
+            window_handle: &self.window_handle,
             async_driver: &self.async_driver,
             post_frame_handle: &self.post_frame_handle,
             text_input_handle: &self.text_input_handle,
@@ -1819,6 +1833,7 @@ impl BuildOwner {
                     layout_builder_registry: &self.layout_builder_registry,
                     focus_manager: &self.focus_manager,
                     lifecycle_handle: &self.lifecycle_handle,
+                    window_handle: &self.window_handle,
                     async_driver: &self.async_driver,
                     post_frame_handle: &self.post_frame_handle,
                     text_input_handle: &self.text_input_handle,
@@ -2041,6 +2056,7 @@ impl BuildOwner {
                     layout_builder_registry: &self.layout_builder_registry,
                     focus_manager: &self.focus_manager,
                     lifecycle_handle: &self.lifecycle_handle,
+                    window_handle: &self.window_handle,
                     async_driver: &self.async_driver,
                     post_frame_handle: &self.post_frame_handle,
                     text_input_handle: &self.text_input_handle,
@@ -2468,6 +2484,7 @@ impl BuildOwner {
                 layout_builder_registry: &self.layout_builder_registry,
                 focus_manager: &self.focus_manager,
                 lifecycle_handle: &self.lifecycle_handle,
+                window_handle: &self.window_handle,
                 async_driver: &self.async_driver,
                 post_frame_handle: &self.post_frame_handle,
                 text_input_handle: &self.text_input_handle,
@@ -2679,6 +2696,7 @@ impl BuildOwner {
             layout_builder_registry: &self.layout_builder_registry,
             focus_manager: &self.focus_manager,
             lifecycle_handle: &self.lifecycle_handle,
+            window_handle: &self.window_handle,
             async_driver: &self.async_driver,
             post_frame_handle: &self.post_frame_handle,
             text_input_handle: &self.text_input_handle,

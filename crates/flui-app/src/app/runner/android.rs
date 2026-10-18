@@ -459,6 +459,7 @@ where
         // no-op instead of waking the loop.
         installation.observe_appearance();
         installation.observe_display();
+        installation.observe_window_state();
         installation.observe(flui_runtime::owner::WindowObservation::Metrics {
             size: window.logical_size(),
             scale_factor: window.scale_factor(),
