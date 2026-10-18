@@ -65,8 +65,15 @@ API, a CLI and MCP.
    generational id. Across windows the window part disambiguates, which is the handle table §3 of
    ADR-0095 left open. The app mints every id; clients and the MCP adapter never do.
 5. **Input paths are explicit.** Every action names `semantic`, `synthetic` or `os`. A session has a
-   preferred path. Each result names the path used and its `effect`, and `require` refuses a
-   fallback. For `os` input, `ran` means the app's input journal observed the event; otherwise the
+   preferred path, `synthetic` by default on every target. Each result names the path used and
+   its `effect`, and `require` refuses a fallback. OS input is opt-in and never takes a
+   developer's desktop unasked:
+   - it is announced before the first event (devices and estimated duration);
+   - any input the lane did not inject aborts the run, releases everything and ends it
+     `cannot_verify` (`interrupted_by_user`);
+   - a lane that cannot tell the user's input from its own refuses OS input on a shared desktop;
+   - the session and report name an isolation mode (Windows Sandbox or a second session, Xvfb or a
+     separate seat, an emulator, the Simulator, headless Chrome) or `shared`. For `os` input, `ran` means the app's input journal observed the event; otherwise the
    effect is `may_have_run`. An `Acts` method is never resent on timeout. Input is a typed
    per-device action sequence in BiDi `input.performActions` form (pointer: mouse, touch or pen;
    wheel; keys; text; IME; trackpad). Gestures (`element.tap`, `drag_to`, `pinch`, …) are driver
@@ -88,8 +95,37 @@ API, a CLI and MCP.
    ADR-0081's kind table here rather than reshaping the crate.
 9. **Front ends.** The Rust API (`Driver`, `Window`, `Element`, `expect`), `flui drive` and
    `flui mcp` (MCP revision 2026-07-28) all call the same driver methods. The MCP adapter keeps no
-   handle state, and coordinate-only tools are listed only with `--caps vision`.
-10. **`tools/desktop-mcp` is retired.** It is not generalized: its OS input safety rules,
+   handle state.
+   - Each method has a tier. MCP lists a core set of at most 13 tools by default: launch, close,
+     list windows, read, locate, act, tap, type, keys, scroll into view, wait, capture, audit a screen. The rest
+     sit behind `--caps` groups (`input`, `inspect`, `pixels`, `record`, `perf`, `audit`,
+     `explore`, `layout`, `vision`, the last holding coordinate targets).
+   - After an action, the reading is a snapshot delta by default (appeared, gone, changed against
+     the action's starting revision). The full outline and none are options.
+10. **Checks beyond correctness are methods too.**
+    - `perf.start`/`stop`/`expect`: frame times, dropped and janky frames against the refresh
+      period, input-to-present latency from the journal, per-target budgets. A target without a
+      budget is cannot-verify.
+    - `audit.a11y` and `audit.alternatives`: names, focus order, target size, gesture
+      alternatives. The rules live in `flui-semantics` and `flui-testing` shares them.
+    - `explore.run`/`shrink`: seeded random actions with invariants, and delta-debugging to a
+      minimal trace.
+    - `layout.*` and `audit.layout`: exact geometry facts from the render tree and text layout
+      (boxes, clips, ink bounds, baselines, colours), assertions such as `to_be_centered_in`, a lint
+      for off-centre text, near-miss alignment, uneven gaps, overlap, truncation and contrast, a
+      layout-snapshot golden diffed in numbers, and annotated captures as evidence. Findings come
+      from facts, never from looking at an image.
+    - `audit.screen`: the layout and accessibility audits together, answering what was checked
+      and what was not. A requested check that did not run keeps a report from `pass`.
+    - Scenarios declare the parity rows they prove, and `cargo xtask parity` refuses a ✅ cell in
+      `docs/platform-parity.md` that cites no scenario run.
+11. **OS-lane determinism is a rule.**
+    - A scenario fixes its window size and refuses another.
+    - A lane sends single-step moves separated by explicit pauses, never an interpolated
+      multi-step move.
+    - Each lane declares its replay fidelity (exact positions, or order and kinds only); replay and
+      golden holds compare positions only where the lane is exact.
+12. **`tools/desktop-mcp` is retired.** It is not generalized: its OS input safety rules,
     worker model, UIA backend and error mapping move into `flui-driver`'s Windows lane, and FLUI
     drives FLUI apps only.
 

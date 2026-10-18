@@ -120,7 +120,9 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
 - **R10.** Every action names its input path: `semantic` (a semantics action), `synthetic`
   (platform input injected into the app's own input path) or `os` (real OS input through the
   target's lane). A session sets a default. Each result names the path actually used, and
-  `require` refuses any other path.
+  `require` refuses any other path. The default is `synthetic` on every target. `os` is an
+  explicit opt-in (a session option, `--via os`, or a scenario marked as a certification run), so
+  a developer's routine run never takes their mouse or keyboard.
 - **R11.** Before pointer input to a located element, the driver checks *actionability*: attached,
   visible in the window, stable (same bounds on two consecutive frames), enabled, and receiving
   input (the app's hit-test at the action point reaches that element). Failing within the timeout
@@ -138,6 +140,23 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
 - **R14.** OS input keeps desktop-mcp's safety rules: it requires a target window, re-checks
   foreground and the window under the point before each event, refuses when physical input is
   held, refuses shell hotkeys, and releases everything it pressed, including on failure.
+- **R14a.** An OS-input run on the user's own desktop is announced before it takes input:
+  what it will take (mouse, keyboard, touch) and for about how long. Non-interactive runs print
+  the same line to the report. Any user activity during the run aborts it at once and releases
+  everything, not only held input: a physical mouse move, key, touch or pen event that the lane did
+  not inject. The run's verdict is then *cannot verify*, with "interrupted by user input" as its
+  reason. A lane that cannot tell user input from its own refuses OS input on a shared desktop and
+  requires an isolated one (R14b).
+- **R14b.** Each platform has an **isolation mode** where OS input cannot reach the user's
+  session, and the report names the mode a run used:
+  - Windows: Windows Sandbox or a second interactive user session;
+  - Linux: Xvfb or a separate seat (a nested or headless compositor for Wayland);
+  - macOS: a second user session (fast user switching) or a virtual machine;
+  - Android: an emulator when hardware fidelity is not the point, a phone when it is;
+  - iOS: the Simulator, which is already isolated from the host's input;
+  - Chrome: headless, which is isolated by construction.
+
+  Certification runs that need the real desktop say so in their scenario and are always announced.
 
 ### Reading
 
@@ -146,7 +165,11 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
   budgets and reports `truncated`. The trees link to each other: semantics node to render object
   to element.
 - **R16.** For agents the default reading is the one-line-per-node outline with refs, compact
-  enough for a model's context. Every action can return the snapshot that follows it.
+  enough for a model's context. After an action the default reading is a **snapshot delta**
+  against the tree the action started from: nodes that appeared, nodes that are gone, and nodes
+  whose name, value or state changed, each as an outline line with its ref. The full outline is
+  available on request (`snapshot: full`), and so is none (`snapshot: none`, the Rust API's
+  default).
 - **R17.** On Windows, macOS and Linux the driver also reads the OS accessibility tree and checks
   it against the in-app semantics through the normalized projection (ADR-0095 §4). This shows that
   assistive technology sees what the app publishes.
@@ -198,6 +221,11 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
 - **R28.** One protocol, three front ends: the Rust API, the `flui drive` CLI and the `flui mcp`
   server. All three expose the same operations, with the same names, parameters, results and
   errors, generated from one method table. None can do what the others cannot.
+- **R28a.** MCP lists a **core tool set** by default, 13 tools enough to launch, read,
+  locate, act, type, wait, capture and audit a screen. The other methods are grouped into capability sets the client
+  enables with `--caps <group>`: `input`, `inspect`, `pixels`, `record`, `perf`, `audit`,
+  `explore`, `vision`, `layout`. Every method stays reachable from MCP; tiering only changes what is listed by
+  default, so a model does not choose among 50 tools.
 - **R29.** The MCP server follows MCP revision 2026-07-28. Each tool has an input and output
   schema and honest `readOnlyHint`/`destructiveHint`, and tool failures come back as `isError`
   results with ADR-0080's error object. Handles are explicit and expiring, never session state
@@ -206,7 +234,10 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
   later commands read; handles stay valid across commands because the app owns them.
 - **R31.** The inspector is a FLUI desktop app built on `flui-driver`. It shows the live trees, a
   screenshot with element picking and highlight, element properties, the frame timeline with input
-  and gesture-arena decisions, and opens traces.
+  and gesture-arena decisions, and opens traces. Because the inspector is itself a FLUI app, a
+  FLUI defect can break it. The CLI is the fallback that needs no FLUI rendering: `flui drive`
+  reads every tree as an outline or `--json`, captures to files, and prints traces. The docs say
+  so, and the inspector failing never blocks a driver run.
 
 ### Platform lanes
 
@@ -217,10 +248,19 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
   - macOS: CGEvent posted to the target, AX, ScreenCaptureKit;
   - Linux X11: XTEST, AT-SPI, X11 capture;
   - Linux Wayland: libei through the RemoteDesktop portal, AT-SPI, ScreenCast portal capture;
-  - Android: `adb` input and `uinput` scripts, `uiautomator` for system UI such as the soft
-    keyboard, `screencap`;
+  - Android: `adb` input; `uinput` scripts where the device allows them without root, which is
+    probed per device and reported as a capability, never assumed; `uiautomator` for system UI
+    such as the soft keyboard; `screencap`;
   - iOS Simulator: the simulator's HID channel for touch, keys and buttons, `simctl` capture;
   - Chrome: WebDriver BiDi `input.performActions`, CDP IME composition, `captureScreenshot`.
+- **R32a.** OS-lane runs are **deterministic by rule**:
+  - a scenario fixes its window size (logical size and scale factor), and the run refuses when the
+    OS gives another;
+  - OS-lane pointer moves are single steps separated by explicit pauses, never one interpolated
+    multi-step move; Chrome interpolates such moves, so recordings varied between runs;
+  - each lane documents its **replay fidelity**: whether positions are exact or only the event
+    order and kinds are reproducible. Android resamples moves, so its goldens compare event order
+    only. Replay and golden holds compare positions only where the lane is exact.
 - **R33.** A lane the host cannot run (a locked desktop, no device, no Chrome, an unsupported
   simulator runtime, a portal the user refused) is *cannot verify*, never pass and never a silent
   skip.
@@ -234,7 +274,112 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
   driver scenario that checks at least what it checks today. The per-platform drivers, the Python
   and Swift scripts, the bespoke probes' command channels and `tools/desktop-mcp` are deleted.
 - **R36.** An `interaction_gallery` scenario suite exercises the interaction widgets through each
-  input path on each platform. It is the dogfooding consumer of every lane.
+  input path on each platform. It is the dogfooding consumer of every lane. The first scenario
+  ported is `cargo xtask device windows-gallery`, which the integration branch is building now.
+- **R36a.** Every interactive widget in `examples/interaction_gallery` carries an ADR-0240
+  identifier, and the gallery suite selects by identifier. A test fails when an interactive gallery
+  node has no identifier.
+
+### Performance
+
+- **R37.** The driver measures performance from the app's frame events and input journal over a
+  marked span (`perf.start` … `perf.stop`):
+  - frame times, as percentiles and the worst frame;
+  - dropped and janky frames, against the presentation's refresh period;
+  - input-to-present latency: from an input's journal timestamp to the presentation of the first
+    frame that consumed it.
+- **R37a.** Budgets are assertions, for example "a scroll gesture drops no frames" or "p95
+  input-to-present ≤ 2 refresh periods". A failed budget reports the measured distribution and
+  the worst frames with their phases. Budgets are keyed per target, so a budget for the Galaxy S21
+  does not apply to headless. Headless reports frame counts and phase work, not wall-clock latency.
+
+### Accessibility audit
+
+- **R38.** `audit.a11y` is a driver method and a standard scenario. It checks:
+  - every interactive node has a name;
+  - focus order visits every focusable node, once, in reading order (direction-aware);
+  - interactive targets meet the minimum target size;
+  - every gesture-only interaction has an accessible alternative (a semantics action or a
+    keyboard path).
+
+  The scenario performs each alternative and checks it has the same effect as the gesture. It
+  reuses `flui-testing`'s `assert_gesture_alternatives` and minimum-target checks, which move
+  under the driver so both share one implementation. Findings are typed, with the node's ref and
+  the rule.
+
+### Exploration
+
+- **R39.** `explore.run` performs seeded random actions over the actionable elements of a window:
+  taps, drags, scrolls and text on the elements it finds, through a chosen input path, for N steps
+  or a time budget. After each step it checks these invariants:
+  - no panic or contained frame failure;
+  - no visible enabled element is `not_actionable` unless covered by another app element;
+  - semantics stay consistent (unique refs, parents and children agree, bounds finite);
+  - no injected input stays held after its step.
+
+  A failure stops the run and keeps the trace. The seed replays it exactly, and the run shrinks the
+  failing action list to a minimal trace that still fails.
+
+### Design checks
+
+Agents that build screens in design tools (Figma, pen.dev and the like) then judge the result
+from screenshots. They miss violations a designer sees at once: a label off centre in its button,
+two edges that almost line up, uneven gaps, clipped text, poor contrast. Then they report that
+everything is fine. FLUI knows its own geometry, so the driver checks these facts exactly instead
+of guessing from pixels.
+
+- **R40.** **Layout assertions** over located elements are exact and come from the render tree
+  and text layout, not from pixels:
+  - `to_be_centered_in(container, axis, tolerance)`: the text's ink bounds when the element is
+    text, its box otherwise;
+  - `to_be_aligned_with(others, edge | baseline | centre)`;
+  - `to_have_gap(next, value)`;
+  - `to_be_within(container)`;
+  - `to_not_overlap(other)`;
+  - `to_not_be_clipped` and `to_not_be_truncated`, from the paragraph's overflow and line limit;
+  - `to_have_contrast_at_least(ratio)`, from the painted text colour against the composited
+    background beneath it;
+  - `to_have_size`, and `to_use_text_style`.
+
+  Tolerances are in logical pixels and default to 0.5. A failure reports the measured numbers
+  ("label is 6.0 px right of centre").
+- **R41.** **`audit.layout`** lints a window without assertions written in advance. It reports:
+  - text off centre in a control whose alignment is centre;
+  - near-miss alignment: sibling edges, centres or baselines within 1–4 px of each other but not
+    equal;
+  - uneven gaps in a row or column whose other gaps are equal;
+  - overlap between siblings outside a stack or overlay;
+  - clipped, ellipsized or overflowing text;
+  - content outside the window or the safe area;
+  - text contrast below WCAG 2.2 AA (4.5, or 3 for large text);
+  - interactive targets below the minimum size, shared with R38.
+
+  Each finding carries the node refs, the measured numbers and the rule. The thresholds are
+  configurable per app, and an app can waive a finding on a node by identifier and rule, with a
+  reason.
+- **R42.** A **layout snapshot** is a structured golden of a window: for each node with an
+  identifier, plus role and name for the rest, its rect, text ink bounds and baseline, text style,
+  and the colours it paints. It compares with geometric tolerances and diffs as numbers ("Save:
+  x 320 → 326, colour #1A73E8 → #1967D2"). Font changes that move glyphs by a pixel do not break
+  it the way pixel goldens did. It is the default golden for design work; pixel baselines (R22)
+  stay for raster correctness.
+- **R43.** **Annotated captures** draw bounds, centre lines, baselines, gaps and audit findings
+  over a presented capture, for a person or a vision model to look at. Annotation is evidence for a
+  finding, never the source of one.
+- **R44.** **No pass without evidence.** A report lists every check that ran and every check that
+  was not run, with the reason (capability missing, not requested). A design or screen check passes
+  only when the requested layout, accessibility and pixel or layout-snapshot checks all ran. MCP
+  includes one core tool, `audit_screen`, that runs the layout and accessibility audits on a window
+  and answers findings plus the checked and unchecked lists. An agent's "looks right" is never a
+  verdict.
+
+### Coverage of the parity matrix
+
+- **R45.** Every row of `docs/platform-parity.md` that a driver can exercise has a named
+  scenario. A ✅ cell cites the scenario, the report's date and the host it ran on. A
+  `cargo xtask parity` gate fails when a ✅ cell cites no scenario, or a scenario that does not
+  exist. `flui drive report --parity` prints the rows a run proved, ready to paste. Each
+  `docs/gaps.md` entry names the scenario that will close it, or says why none can.
 
 ## Failure scenarios (mandatory at level 1)
 
@@ -269,6 +414,13 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
   and trace evidence has a size cap with a recorded `gap`. A full disk fails the trace write with
   an error and never corrupts an existing trace.
 
+- **F11 User interrupts an OS run.** The user moves the mouse or types mid-run. The lane
+  stops before its next event, releases everything it pressed, and the run ends *cannot verify*
+  ("interrupted by user input") with the trace kept. It never fails and never continues.
+- **F12 Exploration finds a fault.** The run stops at the first broken invariant, keeps the
+  trace, and shrinks it. A shrink step that no longer fails is discarded. The reported seed and
+  the minimal trace reproduce the failure on replay.
+
 ## Out of scope
 
 - Driving non-FLUI applications. `tools/desktop-mcp` is retired, not generalized (owner decision,
@@ -295,3 +447,26 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
 - **D8.** FLUI apps only; desktop-mcp is retired.
 - **D9.** The spec goes to `main` now. Implementation follows the merge of `interaction/completeness`.
 - **D10.** People get the `flui drive` CLI and an inspector app written in FLUI.
+
+## Review decisions (owner, 2026-10-17, review of the first draft)
+
+- **D11.** OS input does not take over the developer's desktop. `synthetic` is the default path;
+  OS input is opt-in, announced, aborted by any user activity, and runs in an isolation mode where
+  one exists (R10, R14a, R14b).
+- **D12.** Agent ergonomics: MCP lists a core tool set of 13 tools, the rest behind
+  `--caps` groups, and the post-action reading is a snapshot delta (R16, R28a).
+- **D13.** Performance is measured and budgeted: frame times, jank and input-to-present latency
+  (R37, R37a).
+- **D14.** The accessibility audit is a first-class method and scenario (R38).
+- **D15.** Seeded exploration runs with invariants and shrinking (R39).
+- **D16.** OS-lane determinism rules: fixed window size, single-step moves, per-lane replay
+  fidelity (R32a).
+- **D17.** `windows-gallery` is the first scenario ported, and every interactive gallery widget
+  carries an identifier (R36, R36a).
+- **D18.** The driver also serves interface design. Exact layout assertions, a layout lint and
+  layout snapshots catch what screenshot-judging design agents miss, such as text off centre or
+  near-miss alignment (R40–R43).
+- **D19.** No verdict without evidence: reports list what ran and what did not, and MCP's
+  `audit_screen` is a core tool (R44).
+- **D20.** The driver proves the parity matrix: ✅ cells cite scenario runs, and a gate checks
+  them (R45).

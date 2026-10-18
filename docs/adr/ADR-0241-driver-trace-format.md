@@ -26,7 +26,7 @@ versioned header (ADR-0215 §3).
 
    `flui drive trace pack` zips it for transport; readers accept both.
 2. `trace.jsonl` opens with a header:
-   `{"flui_trace": 1, "protocol", "target": {kind, backend, os, app, profile}, "started_unix_ms", "privacy"}`.
+   `{"flui_trace": 1, "protocol", "target": {kind, backend, os, app, profile}, "window": {width, height, scale}, "isolation", "fidelity": {positions: "exact" | "order"}, "seed"?, "started_unix_ms", "privacy"}`.
    Rows are tagged objects:
    - `command{seq, t_ms, method, params}`, with params as the caller wrote them, locators included;
    - `result{seq, t_ms, ok | error, evidence[]}`;
@@ -43,7 +43,9 @@ versioned header (ADR-0215 §3).
 5. The format version is `flui_trace`. A change that is not additive bumps it and names its ADR. A
    reader refuses a newer major version with the version it found.
 6. Replay re-issues commands and compares results modulo volatile fields (handles renumbered by
-   first appearance, times, frame ids). Codegen emits a Rust test from commands and results.
+   first appearance, times, frame ids). It compares input positions only when the header's
+   `fidelity.positions` is `exact`, and otherwise only order and kinds. It refuses a target whose
+   window size differs from the header's. An exploration trace carries its `seed`. Codegen emits a Rust test from commands and results.
    Neither reads raw coordinates when a locator is present.
 
 ## Consequences
