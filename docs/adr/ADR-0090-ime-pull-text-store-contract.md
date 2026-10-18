@@ -6,6 +6,8 @@
   on acceptance: the projection takes an asynchronous lock, not a synchronous one (see §2).
 - **Date:** 2026-09-25
 - **Amended:** 2026-10-11 — current Win32 host/observer wiring is distinguished from pending acceptance and the controller-lock interim.
+- **Amended by:** [ADR-0237](ADR-0237-android-java-view.md) (2026-10-17): the Android row of the
+  platform mapping, and the GameActivity hypothesis in Consequences, rejected.
 - **Superseded-by:** [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md),
   in part: §1's one change notification per session (the owner hears only of committed-text
   changes, after the lock is released), §2's reporting of a failure after a projected grant, §3's
@@ -234,7 +236,7 @@ No backend code exists for any of these yet; this is the shape each backend impl
 | Linux, winit (X11 XIM, Wayland) | Push-only: through `project_ime_event`. The candidate area comes from `rect_for_range` over the composition or the caret. |
 | Linux, native Wayland `text-input-v3` (if a backend bypasses winit) | `set_surrounding_text` takes UTF-8 byte cursor and anchor (at most 4000 bytes), read under a sync read lock; `delete_surrounding_text` → `replace`; `preedit_string` byte cursors are handled as the projection handles them; `done(serial)` is one read-write lock. |
 | Linux, IBus over D-Bus; AT-SPI | IBus counts Unicode scalars, so a scalar↔UTF-16 helper is needed then. AT-SPI `Text` reads through the store. |
-| Android | `InputConnection` maps onto the same verbs. |
+| Android | Amended by [ADR-0237](ADR-0237-android-java-view.md): asynchronous, through `FluiView`. The `InputConnection` answers the input method from a mirror of the store on the Java main thread and never waits for the owner. The owner publishes a generation-tagged snapshot (read under a sync lock, or an async one when the frame transaction refuses it) on focus and on every observer notification; each reported edit is the diff of the mirror against that snapshot (`replace`, then `set_selection` and `set_composition` as the view ended), replayed under an `Async` read-write lock in order; an edit on an older snapshot is dropped, and a refused step publishes a new one. A protected store is mirrored as one bullet per code unit. `complete_composition` commits under an async lock and restarts the input method. Offsets are UTF-16 code units. |
 | Web | A hidden-input bridge implements the same store. |
 
 ### 5. Live evidence stays in exit B1
@@ -275,7 +277,9 @@ set is unverified.
   single-line limit revisited; the store contract is line-agnostic, the rendering is not.
 - Android IME may need GameActivity rather than the current `native-activity`
   (`crates/flui-platform/Cargo.toml:162`); that is a hypothesis to test when the Android backend
-  implements the store, not a decision here.
+  implements the store, not a decision here. **Amended (2026-10-17):** rejected by
+  [ADR-0237](ADR-0237-android-java-view.md); `NativeActivity` stays, and a `flui-platform` view
+  loaded from the native library carries the `InputConnection`.
 - Web has no IME today; a hidden-input bridge would implement this same store.
 
 ## Verification

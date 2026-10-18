@@ -594,22 +594,32 @@ fn every_backend_states_its_availability() {
         ),
         (
             "android 34",
-            table::android(34),
+            table::android(34, true),
+            [Native, Native, Native, Native, Native],
+        ),
+        (
+            "android 34 without FluiView",
+            table::android(34, false),
             [Native, Native, Native, Native, Unavailable],
         ),
         (
             "android 33",
-            table::android(33),
-            [Native, Unavailable, Unavailable, Native, Unavailable],
+            table::android(33, true),
+            [Native, Unavailable, Unavailable, Native, Native],
         ),
         (
             "android 29",
-            table::android(29),
-            [Native, Unavailable, Unavailable, Native, Unavailable],
+            table::android(29, true),
+            [Native, Unavailable, Unavailable, Native, Native],
         ),
         (
             "android 28",
-            table::android(28),
+            table::android(28, true),
+            [Native, Unavailable, Unavailable, Unavailable, Native],
+        ),
+        (
+            "android 23, before startDragAndDrop",
+            table::android(23, true),
             [Native, Unavailable, Unavailable, Unavailable, Unavailable],
         ),
         (

@@ -282,10 +282,39 @@ fn owned_modifiers(meta: android_activity::input::MetaState) -> OwnedModifiers {
     owned
 }
 
-/// Convert an Android `KeyEvent` to a `PlatformInput`.
+/// The key presses an input method's editor action arrives as: `key`
+/// pressed and released at `uptime_ms`, with Shift when `shift`.
+pub(crate) fn editor_action_keys(
+    key: flui_platform_api::keyboard::NamedKey,
+    shift: bool,
+    uptime_ms: i64,
+) -> [PlatformInput; 2] {
+    use flui_platform_api::keyboard::{Code, Key as OwnedKey, KeyEvent, KeyState as OwnedState};
+    let time = EventTime::from_nanos(
+        u64::try_from(uptime_ms)
+            .unwrap_or(0)
+            .saturating_mul(1_000_000),
+    );
+    let modifiers = if shift {
+        OwnedModifiers::SHIFT
+    } else {
+        OwnedModifiers::NONE
+    };
+    [OwnedState::Down, OwnedState::Up].map(|state| {
+        PlatformInput::Keyboard(
+            KeyEvent::new(state, OwnedKey::Named(key), Code::Unidentified, time)
+                .with_modifiers(modifiers),
+        )
+    })
+}
+
+/// Convert an Android `KeyEvent` to a `PlatformInput`. `composing` is whether
+/// the input method composes now: a key it passed on during a composition is
+/// still its own (`shared::android_ime::key_composition`).
 pub fn convert_key_event(
     app: &android_activity::AndroidApp,
     event: &android_activity::input::KeyEvent<'_>,
+    composing: bool,
 ) -> Option<PlatformInput> {
     let action = event.action();
     let state = match action {
@@ -320,7 +349,8 @@ pub fn convert_key_event(
             location,
             modifiers,
             repeat,
-            is_composing: false,
+            is_composing: crate::shared::android_ime::key_composition(composing)
+                == flui_platform_api::keyboard::ImeComposition::Active,
         },
         u64::try_from(event.event_time()).ok()?,
     ))

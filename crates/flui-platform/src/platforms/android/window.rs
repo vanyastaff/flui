@@ -4,6 +4,7 @@
 //! to the native ANativeWindow for size queries and raw-window-handle for GPU
 //! surface creation.
 
+use std::rc::Rc;
 use std::sync::{
     Arc, Weak,
     atomic::{AtomicBool, Ordering},
@@ -16,7 +17,7 @@ use flui_platform_api::input_regions::{InputRegion, InputRegionKind, ProjectedIn
 use parking_lot::Mutex;
 
 use crate::{
-    shared::WindowCallbacks,
+    shared::{WindowCallbacks, owner_slot::OwnerSlot},
     traits::{CursorError, PlatformWindow, WindowExecutionState, WindowId},
 };
 
@@ -44,6 +45,12 @@ pub struct AndroidWindow {
     input_regions: Arc<Mutex<ProjectedInputRegions>>,
     /// The decor view and vibrator haptics play on (ADR-0210).
     haptics: Arc<super::haptics::AndroidHaptics>,
+    /// `FluiView`: the input method's editor, the drop target and the drag
+    /// source (ADR-0237).
+    java_view: Arc<super::java_view::JavaView>,
+    /// The window's text input, on the owner thread only.
+    text_input: Arc<OwnerSlot<Rc<super::text_input::AndroidTextInput>>>,
+    drag_source: Arc<super::drag::AndroidDragSource>,
 }
 
 impl std::fmt::Debug for AndroidWindow {
@@ -60,11 +67,26 @@ impl AndroidWindow {
         app: AndroidApp,
         execution_resumed: Arc<AtomicBool>,
         owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
+        java_view: Arc<super::java_view::JavaView>,
     ) -> Self {
         let callbacks = Arc::new(WindowCallbacks::new());
         callbacks.set_input_capabilities(crate::shared::input_availability::android(
             AndroidApp::sdk_version(),
+            java_view.is_ready(),
         ));
+        let text_input = Arc::new(OwnerSlot::new());
+        if text_input
+            .replace(super::text_input::AndroidTextInput::new(Arc::clone(
+                &java_view,
+            )))
+            .is_err()
+        {
+            tracing::warn!(
+                target: "flui_platform::android",
+                "the window's text input was made off its owner thread"
+            );
+        }
+        let drag_source = Arc::new(super::drag::AndroidDragSource::new(Arc::clone(&java_view)));
         if let Some(signal) = owner_signal.upgrade() {
             callbacks.set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
                 &signal, &callbacks,
@@ -82,7 +104,39 @@ impl AndroidWindow {
             text_sizing: super::text_sizing::Acquisition::new(),
             safe_area: Arc::new(Mutex::new(super::safe_area::Capture::default())),
             input_regions: Arc::default(),
+            java_view,
+            text_input,
+            drag_source,
         }
+    }
+
+    /// The view's installation finished: what the window can do now.
+    pub(crate) fn refresh_capabilities(&self) {
+        self.callbacks
+            .set_input_capabilities(crate::shared::input_availability::android(
+                AndroidApp::sdk_version(),
+                self.java_view.is_ready(),
+            ));
+    }
+
+    /// The window's text input; `None` off the owner thread.
+    pub(crate) fn text_input(&self) -> Option<Rc<super::text_input::AndroidTextInput>> {
+        let input = self.text_input.take()?;
+        let shared = Rc::clone(&input);
+        let _ = self.text_input.restore(input);
+        Some(shared)
+    }
+
+    pub(crate) fn drag_source_of(&self) -> &Arc<super::drag::AndroidDragSource> {
+        &self.drag_source
+    }
+
+    /// The window is going away: its field and its drag are detached.
+    pub(crate) fn retire_java_view(&self) {
+        if let Some(input) = self.text_input() {
+            input.retire();
+        }
+        self.drag_source.retire();
     }
 
     /// Access the callback storage (used by `AndroidPlatform` to dispatch
@@ -216,6 +270,16 @@ impl crate::traits::HostWindow for AndroidWindow {
         self.text_sizing
             .poll(&self.app, &self.owner_signal, self.owner)
     }
+
+    /// The window's input method host (ADR-0090, ADR-0237): `FluiView`'s
+    /// `InputConnection` serves the focused field's store.
+    fn text_store_host(
+        &self,
+        _owner: crate::traits::OwnerThreadToken,
+    ) -> Option<Rc<dyn flui_platform_api::text_store::TextStoreHost>> {
+        self.text_input()
+            .map(|input| input as Rc<dyn flui_platform_api::text_store::TextStoreHost>)
+    }
 }
 
 impl PlatformWindow for AndroidWindow {
@@ -303,6 +367,17 @@ impl PlatformWindow for AndroidWindow {
 
     fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
         Some(Arc::clone(&self.haptics) as Arc<dyn crate::traits::PlatformHaptics>)
+    }
+
+    /// `FluiView.startDragAndDrop`, once the view is installed, from API 24:
+    /// what `InputCapabilities::outgoing_drag` claims.
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform_api::drag::PlatformDragSource>> {
+        (self.java_view.is_ready()
+            && AndroidApp::sdk_version() >= crate::shared::android_drag::DRAG_API)
+            .then(|| {
+                Arc::clone(&self.drag_source)
+                    as Arc<dyn flui_platform_api::drag::PlatformDragSource>
+            })
     }
 
     /// Projects the regions to the surface's pixels and, when the projection changed,

@@ -1,0 +1,689 @@
+//! `FluiView`, the Java side of the Android backend (ADR-0237).
+//!
+//! The view's classes are compiled from `crates/flui-platform/android/java`
+//! into one dex that is part of this library (`android/classes.dex`, checked
+//! against its sources by `cargo xtask android-dex`). At platform start the
+//! dex is loaded on the Java main thread through a class loader parented to
+//! the Activity's: `InMemoryDexClassLoader` from API 26, a `DexClassLoader`
+//! over a read-only copy in the code cache below it. The view's native
+//! methods are bound with `RegisterNatives` on the class that loader
+//! returned (`FindClass` would search the system loader), and one full-window
+//! `FluiView` is laid over the `NativeActivity`'s content. The manifest stays
+//! `NativeActivity` with `hasCode="false"`.
+//!
+//! Threads: every call into the view is posted to the Java main thread, and
+//! every native method the view calls only queues a [`ViewEvent`] for the
+//! owner and wakes it. Neither thread waits for the other. What the system
+//! needs answered at once (a drag's acceptance, a drop's result, the input
+//! method's reads) comes from state the owner published earlier: the drop
+//! feedback the target cached, and the mirror of the focused field.
+
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
+
+use android_activity::AndroidApp;
+use flui_platform_api::DragDropEvent;
+use jni::objects::{JClass, JObject, JObjectArray, JString};
+use jni::refs::Global;
+use jni::sys::{jboolean, jfloat, jint, jlong};
+use jni::{Env, EnvUnowned, JValue, JavaVM, NativeMethod, jni_sig, jni_str};
+use parking_lot::Mutex;
+
+use crate::shared::android_ime::{EditorState, ImeEdit, Mirror, Snapshot};
+use crate::shared::owner_signal::OwnerSignal;
+
+use super::drag::AndroidTransfer;
+
+/// The view's classes, compiled from `android/java` (see the module doc).
+const DEX: &[u8] = include_bytes!("../../../android/classes.dex");
+
+/// The binary name of the view class.
+const VIEW_CLASS: &str = "dev.flui.platform.FluiView";
+
+/// The first API level with `InMemoryDexClassLoader`.
+const IN_MEMORY_DEX_API: i32 = 26;
+
+/// What the view reported, for the owner to deliver.
+pub(super) enum ViewEvent {
+    /// The view's installation finished, whether or not it worked.
+    Installed,
+    /// One input method edit of the focused field.
+    Ime(ImeEdit),
+    /// `performEditorAction(action)`, at `uptime_ms` on the event clock.
+    EditorAction {
+        /// The `EditorInfo.IME_ACTION_*` the input method performed.
+        action: i32,
+        /// `SystemClock.uptimeMillis()` when it did.
+        uptime_ms: i64,
+    },
+    /// `requestCursorUpdates` with this mode.
+    CursorUpdates(i32),
+    /// A drag over the view.
+    Drag(DragDropEvent),
+    /// The drag this view started ended; `result` is whether a target took it.
+    DragEnded {
+        /// `DragEvent.getResult()`.
+        result: bool,
+    },
+}
+
+/// Where the view is in its life.
+enum Install {
+    /// Posted to the Java main thread, not run yet.
+    Pending,
+    /// The view is in the window.
+    Ready(Arc<Global<JObject<'static>>>),
+    /// It could not be installed; the backend runs without it.
+    Failed,
+    /// The platform ended and the view left the window.
+    Detached,
+}
+
+struct State {
+    install: Install,
+    /// The field text the view holds, which each report is diffed against.
+    mirror: Mirror,
+    /// What the view reported, oldest first.
+    events: VecDeque<ViewEvent>,
+    /// The `Box<Weak<JavaView>>` the view holds as its handle, freed on the
+    /// Java main thread once the view no longer names it.
+    handle: Option<usize>,
+}
+
+/// The bridge between the owner thread and `FluiView` (see the module doc).
+pub(crate) struct JavaView {
+    app: AndroidApp,
+    signal: Weak<OwnerSignal>,
+    transfer: Arc<AndroidTransfer>,
+    state: Mutex<State>,
+    /// Whether the input method composes, as the view last reported.
+    composing: AtomicBool,
+    /// The window's scale factor, as the owner last read it, for the view's
+    /// pixel coordinates.
+    scale: AtomicU64,
+}
+
+impl std::fmt::Debug for JavaView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JavaView").finish_non_exhaustive()
+    }
+}
+
+impl JavaView {
+    /// The bridge, with the view's installation posted to the Java main thread.
+    pub(super) fn start(app: AndroidApp, signal: Weak<OwnerSignal>) -> Arc<Self> {
+        let view = Arc::new_cyclic(|this: &Weak<Self>| Self {
+            app,
+            signal,
+            transfer: Arc::new(AndroidTransfer::new(this.clone())),
+            state: Mutex::new(State {
+                install: Install::Pending,
+                mirror: Mirror::default(),
+                events: VecDeque::new(),
+                handle: None,
+            }),
+            composing: AtomicBool::new(false),
+            scale: AtomicU64::new(1.0_f64.to_bits()),
+        });
+        let installing = Arc::clone(&view);
+        view.app
+            .run_on_java_main_thread(Box::new(move || installing.install()));
+        view
+    }
+
+    /// The platform's drag-and-drop transport.
+    pub(super) fn transfer(&self) -> &Arc<AndroidTransfer> {
+        &self.transfer
+    }
+
+    /// Whether the view is in the window.
+    pub(super) fn is_ready(&self) -> bool {
+        matches!(self.state.lock().install, Install::Ready(_))
+    }
+
+    pub(super) fn composing(&self) -> bool {
+        self.composing.load(Ordering::Acquire)
+    }
+
+    pub(super) fn set_composing(&self, composing: bool) {
+        self.composing.store(composing, Ordering::Release);
+    }
+
+    pub(super) fn set_scale(&self, scale: f64) {
+        if scale.is_finite() && scale > 0.0 {
+            self.scale.store(scale.to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    pub(super) fn scale(&self) -> f64 {
+        f64::from_bits(self.scale.load(Ordering::Relaxed))
+    }
+
+    /// Everything the view reported since the last call, oldest first.
+    pub(super) fn take_events(&self) -> VecDeque<ViewEvent> {
+        std::mem::take(&mut self.state.lock().events)
+    }
+
+    /// Queue `event` for the owner and wake it.
+    pub(super) fn push_event(&self, event: ViewEvent) {
+        self.state.lock().events.push_back(event);
+        if let Some(signal) = self.signal.upgrade() {
+            let _ = signal.wake();
+        }
+    }
+
+    pub(super) fn push_drag(&self, event: DragDropEvent) {
+        self.push_event(ViewEvent::Drag(event));
+    }
+
+    /// The view now holds `snapshot`: later reports are diffed against it.
+    pub(super) fn install_mirror(&self, snapshot: &Snapshot) {
+        self.state.lock().mirror.install(snapshot);
+    }
+
+    /// Run `call` with the view on the Java main thread, if it is installed
+    /// by then. Owner calls never wait for it.
+    pub(super) fn post(
+        self: &Arc<Self>,
+        call: impl FnOnce(&mut Env<'_>, &JObject<'_>) -> jni::errors::Result<()> + Send + 'static,
+    ) {
+        self.post_or(move |env, view| call(env, view).map(|()| true), |_| {});
+    }
+
+    /// [`Self::post`] for a call that answers whether it worked: `failed`
+    /// runs on the Java main thread when the view is not installed, the call
+    /// fails, or it answers `false`, so an obligation the call carried is
+    /// still discharged.
+    pub(super) fn post_or(
+        self: &Arc<Self>,
+        call: impl FnOnce(&mut Env<'_>, &JObject<'_>) -> jni::errors::Result<bool> + Send + 'static,
+        failed: impl FnOnce(&Self) + Send + 'static,
+    ) {
+        let this = Arc::clone(self);
+        self.app.run_on_java_main_thread(Box::new(move || {
+            let worked = this.view().is_some_and(|view| {
+                this.attached(|env| call(env, view.as_ref()))
+                    .inspect_err(|error| {
+                        tracing::warn!(target: "flui_platform::android", %error, "a FluiView call failed");
+                    })
+                    .unwrap_or(false)
+            });
+            if !worked {
+                failed(&this);
+            }
+        }));
+    }
+
+    /// The installed view, cloned out of the lock so no JNI call runs under it.
+    pub(super) fn view(&self) -> Option<Arc<Global<JObject<'static>>>> {
+        match &self.state.lock().install {
+            Install::Ready(view) => Some(Arc::clone(view)),
+            _ => None,
+        }
+    }
+
+    /// Run `f` attached to the VM, clearing any exception it leaves.
+    #[expect(unsafe_code, reason = "AndroidApp lends the live VM pointer to JNI")]
+    pub(super) fn attached<T>(
+        &self,
+        f: impl FnOnce(&mut Env<'_>) -> jni::errors::Result<T>,
+    ) -> jni::errors::Result<T> {
+        // SAFETY: `vm_as_ptr` is the process's running VM, which outlives
+        // every `AndroidApp`; `JavaVM` borrows it and destroys nothing.
+        let vm = unsafe { JavaVM::from_raw(self.app.vm_as_ptr().cast()) };
+        vm.attach_current_thread(|env| {
+            let result = f(env);
+            if result.is_err() && env.exception_check() {
+                env.exception_describe();
+                env.exception_clear();
+            }
+            result
+        })
+    }
+
+    /// Load the dex, bind the native methods and lay the view over the
+    /// Activity's content. Java main thread only.
+    fn install(self: Arc<Self>) {
+        let handle = Box::into_raw(Box::new(Arc::downgrade(&self)));
+        let installed = super::preferences::with_activity(&self.app, |env, activity| {
+            install_view(env, activity, handle as jlong).map_err(|error| {
+                tracing::warn!(target: "flui_platform::android", %error, "FluiView was not installed");
+                jni::errors::Error::JniCall(jni::errors::JniError::Unknown)
+            })
+        });
+        let ready = if let Ok(view) = installed {
+            let mut state = self.state.lock();
+            if matches!(state.install, Install::Detached) {
+                drop(state);
+                // The platform ended first: take the view straight out.
+                let _ = self.attached(|env| {
+                    env.call_method(&view, jni_str!("detach"), jni_sig!("()V"), &[])
+                        .map(drop)
+                });
+                free_handle(handle);
+                false
+            } else {
+                state.install = Install::Ready(Arc::new(view));
+                state.handle = Some(handle as usize);
+                true
+            }
+        } else {
+            free_handle(handle);
+            let mut state = self.state.lock();
+            if !matches!(state.install, Install::Detached) {
+                state.install = Install::Failed;
+            }
+            false
+        };
+        tracing::info!(
+            target: "flui_platform::android",
+            ready,
+            api = AndroidApp::sdk_version(),
+            loader = if AndroidApp::sdk_version() >= IN_MEMORY_DEX_API { "in-memory" } else { "code-cache file" },
+            "FluiView installation finished"
+        );
+        self.push_event(ViewEvent::Installed);
+    }
+
+    /// The platform ended: the view leaves the window, stops calling native
+    /// code, and its handle is freed after that, on the Java main thread.
+    pub(super) fn detach(self: &Arc<Self>) {
+        let this = Arc::clone(self);
+        self.app.run_on_java_main_thread(Box::new(move || {
+            let (view, handle) = {
+                let mut state = this.state.lock();
+                let previous = std::mem::replace(&mut state.install, Install::Detached);
+                let view = match previous {
+                    Install::Ready(view) => Some(view),
+                    _ => None,
+                };
+                (view, state.handle.take())
+            };
+            if let Some(view) = view {
+                let _ = this.attached(|env| {
+                    env.call_method(view.as_ref(), jni_str!("detach"), jni_sig!("()V"), &[])
+                        .map(drop)
+                });
+            }
+            if let Some(handle) = handle {
+                free_handle(handle as *mut Weak<JavaView>);
+            }
+        }));
+    }
+
+    /// The view's report of its mirror: the edit it makes, queued for the owner.
+    fn report(&self, generation: u32, state: &EditorState) {
+        let edit = self.state.lock().mirror.report(generation, state);
+        if let Some(edit) = edit {
+            self.set_composing(edit.composes());
+            self.push_event(ViewEvent::Ime(edit));
+        }
+    }
+}
+
+/// Free a handle the view no longer names.
+#[expect(unsafe_code, reason = "the handle is a Box this module leaked")]
+fn free_handle(handle: *mut Weak<JavaView>) {
+    // SAFETY: `handle` came from `Box::into_raw` in `JavaView::install`, and
+    // is freed exactly once: either there, when the view never received it,
+    // or by `detach` after `FluiView.detach()` cleared the view's copy on this
+    // same (Java main) thread, which is the only thread that calls the view's
+    // native methods.
+    drop(unsafe { Box::from_raw(handle) });
+}
+
+#[derive(Debug, thiserror::Error)]
+enum InstallError {
+    #[error("JNI: {0}")]
+    Jni(#[from] jni::errors::Error),
+    #[error("writing the dex to the code cache: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("the dex in the code cache does not match the library's")]
+    Tampered,
+}
+
+/// Load the view class through a loader parented to the Activity's, bind its
+/// native methods and install the view.
+fn install_view(
+    env: &mut Env<'_>,
+    activity: &JObject<'_>,
+    handle: jlong,
+) -> Result<Global<JObject<'static>>, InstallError> {
+    let parent = env
+        .call_method(
+            activity,
+            jni_str!("getClassLoader"),
+            jni_sig!("()Ljava/lang/ClassLoader;"),
+            &[],
+        )?
+        .l()?;
+    let loader = if AndroidApp::sdk_version() >= IN_MEMORY_DEX_API {
+        let bytes = env.byte_array_from_slice(DEX)?;
+        let buffer = env
+            .call_static_method(
+                jni_str!("java/nio/ByteBuffer"),
+                jni_str!("wrap"),
+                jni_sig!("([B)Ljava/nio/ByteBuffer;"),
+                &[JValue::Object(&bytes)],
+            )?
+            .l()?;
+        env.new_object(
+            jni_str!("dalvik/system/InMemoryDexClassLoader"),
+            jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
+            &[JValue::Object(&buffer), JValue::Object(&parent)],
+        )?
+    } else {
+        let cache = env
+            .call_method(
+                activity,
+                jni_str!("getCodeCacheDir"),
+                jni_sig!("()Ljava/io/File;"),
+                &[],
+            )?
+            .l()?;
+        let cache = env
+            .call_method(
+                &cache,
+                jni_str!("getAbsolutePath"),
+                jni_sig!("()Ljava/lang/String;"),
+                &[],
+            )?
+            .l()?;
+        let cache = env.cast_local::<JString<'_>>(cache)?.try_to_string(env)?;
+        let path = code_cache_dex(std::path::Path::new(&cache))?;
+        let path = env.new_string(path.to_string_lossy())?;
+        let optimized = env.new_string(&cache)?;
+        env.new_object(
+            jni_str!("dalvik/system/DexClassLoader"),
+            jni_sig!(
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V"
+            ),
+            &[
+                JValue::Object(&path),
+                JValue::Object(&optimized),
+                JValue::Object(&JObject::null()),
+                JValue::Object(&parent),
+            ],
+        )?
+    };
+    let name = env.new_string(VIEW_CLASS)?;
+    let class = env
+        .call_method(
+            &loader,
+            jni_str!("loadClass"),
+            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
+            &[JValue::Object(&name)],
+        )?
+        .l()?;
+    let class = env.cast_local::<JClass<'_>>(class)?;
+    register_natives(env, &class)?;
+    let view = env
+        .call_static_method(
+            &class,
+            jni_str!("install"),
+            jni_sig!("(Landroid/app/Activity;J)Ldev/flui/platform/FluiView;"),
+            &[JValue::Object(activity), JValue::Long(handle)],
+        )?
+        .l()?;
+    Ok(env.new_global_ref(&view)?)
+}
+
+/// The dex as a read-only file in the code cache, rewritten when what is
+/// there is not byte for byte the library's. The only dynamically loaded
+/// file the backend writes, below API 26.
+fn code_cache_dex(cache: &std::path::Path) -> Result<std::path::PathBuf, InstallError> {
+    let path = cache.join(format!("flui-view-{:016x}.dex", fingerprint(DEX)));
+    if std::fs::read(&path).ok().as_deref() != Some(DEX) {
+        if path.exists() {
+            let mut writable = std::fs::metadata(&path)?.permissions();
+            #[expect(
+                clippy::permissions_set_readonly_false,
+                reason = "the stale copy is replaced, then made read-only again"
+            )]
+            writable.set_readonly(false);
+            std::fs::set_permissions(&path, writable)?;
+        }
+        std::fs::write(&path, DEX)?;
+        let mut readonly = std::fs::metadata(&path)?.permissions();
+        readonly.set_readonly(true);
+        std::fs::set_permissions(&path, readonly)?;
+    }
+    if std::fs::read(&path)? != DEX {
+        return Err(InstallError::Tampered);
+    }
+    Ok(path)
+}
+
+/// FNV-1a over `bytes`: names the copy, so a library with another dex never
+/// reads this one's file.
+fn fingerprint(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+#[expect(unsafe_code, reason = "RegisterNatives takes function pointers")]
+fn register_natives(env: &mut Env<'_>, class: &JClass<'_>) -> jni::errors::Result<()> {
+    // SAFETY: each pointer is an `extern "system"` function below whose
+    // parameters are, in order, the JNI environment, the class (every method
+    // is static), and the arguments the signature next to it names, with the
+    // return type it names.
+    let methods = unsafe {
+        [
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeDrag"),
+                jni_str!("(JIFF[Ljava/lang/String;ZZ)Z"),
+                native_drag as *mut std::ffi::c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeDrop"),
+                jni_str!(
+                    "(JFF[Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;[Ljava/lang/String;)Z"
+                ),
+                native_drop as *mut std::ffi::c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeImeState"),
+                jni_str!("(JLjava/lang/String;IIIII)V"),
+                native_ime_state as *mut std::ffi::c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeImeAction"),
+                jni_str!("(JIJ)V"),
+                native_ime_action as *mut std::ffi::c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeImeCursorUpdates"),
+                jni_str!("(JI)V"),
+                native_ime_cursor_updates as *mut std::ffi::c_void,
+            ),
+        ]
+    };
+    // SAFETY: as above; every method is static, and so receives the class.
+    unsafe { env.register_native_methods(class, &methods) }
+}
+
+/// The bridge a handle names, while it lives.
+#[expect(unsafe_code, reason = "the handle is a Box this module leaked")]
+fn bridge(handle: jlong) -> Option<Arc<JavaView>> {
+    if handle == 0 {
+        return None;
+    }
+    // SAFETY: a non-zero handle is a `Box<Weak<JavaView>>` from
+    // `JavaView::install`. The view passes it only from its own methods on the
+    // Java main thread, and `free_handle` frees it on that thread only after
+    // `FluiView.detach()` set the view's copy to zero, so it is live here.
+    let weak = unsafe { &*(handle as *const Weak<JavaView>) };
+    weak.upgrade()
+}
+
+/// Run a native method's body, containing a panic before it reaches the JVM.
+fn contained<T: Default>(body: impl FnOnce() -> T) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(value) => value,
+        Err(payload) => {
+            // The payload's own Drop may panic: keep it.
+            std::mem::forget(payload);
+            crate::shared::panic_boundary::contain_owner_callback(|| {
+                tracing::error!(target: "flui_platform::android", "a FluiView callback panicked");
+            });
+            T::default()
+        }
+    }
+}
+
+fn strings(env: &mut Env<'_>, array: &JObjectArray<'_>) -> jni::errors::Result<Vec<String>> {
+    if array.is_null() {
+        return Ok(Vec::new());
+    }
+    let len = array.len(env)?;
+    let mut out = Vec::with_capacity(len);
+    for index in 0..len {
+        let element = array.get_element(env, index)?;
+        let text = env.cast_local::<JString<'_>>(element)?;
+        if !text.is_null() {
+            out.push(text.try_to_string(env)?);
+        }
+    }
+    Ok(out)
+}
+
+fn string(env: &Env<'_>, text: &JString<'_>) -> jni::errors::Result<Option<String>> {
+    if text.is_null() {
+        Ok(None)
+    } else {
+        text.try_to_string(env).map(Some)
+    }
+}
+
+extern "system" fn native_drag<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    action: jint,
+    x: jfloat,
+    y: jfloat,
+    mime_types: JObjectArray<'local>,
+    local: jboolean,
+    result: jboolean,
+) -> jboolean {
+    contained(|| {
+        let Some(view) = bridge(handle) else {
+            return false;
+        };
+        let mime_types = env.with_env(|env| strings(env, &mime_types)).into_outcome();
+        let mime_types = match mime_types {
+            jni::Outcome::Ok(types) => types,
+            _ => Vec::new(),
+        };
+        let scale = view.scale();
+        view.transfer.drag(
+            &view,
+            action,
+            (f64::from(x) / scale, f64::from(y) / scale),
+            &mime_types,
+            local,
+            result,
+        )
+    })
+}
+
+extern "system" fn native_drop<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    x: jfloat,
+    y: jfloat,
+    mime_types: JObjectArray<'local>,
+    local: jboolean,
+    text: JString<'local>,
+    html: JString<'local>,
+    uris: JObjectArray<'local>,
+) -> jboolean {
+    contained(|| {
+        let Some(view) = bridge(handle) else {
+            return false;
+        };
+        let read = env
+            .with_env(|env| -> jni::errors::Result<_> {
+                Ok((
+                    strings(env, &mime_types)?,
+                    crate::shared::android_drag::DroppedClip {
+                        text: string(env, &text)?,
+                        html: string(env, &html)?,
+                        uris: strings(env, &uris)?,
+                    },
+                ))
+            })
+            .into_outcome();
+        let jni::Outcome::Ok((mime_types, clip)) = read else {
+            return false;
+        };
+        let scale = view.scale();
+        view.transfer.drop_clip(
+            &view,
+            (f64::from(x) / scale, f64::from(y) / scale),
+            &mime_types,
+            local,
+            &clip,
+        )
+    })
+}
+
+extern "system" fn native_ime_state<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    text: JString<'local>,
+    selection_start: jint,
+    selection_end: jint,
+    composition_start: jint,
+    composition_end: jint,
+    generation: jint,
+) {
+    contained(|| {
+        let Some(view) = bridge(handle) else {
+            return;
+        };
+        let text = env.with_env(|env| string(env, &text)).into_outcome();
+        let jni::Outcome::Ok(text) = text else {
+            return;
+        };
+        let state = EditorState {
+            text: text.unwrap_or_default(),
+            selection_start,
+            selection_end,
+            composition_start,
+            composition_end,
+        };
+        view.report(u32::try_from(generation).unwrap_or(u32::MAX), &state);
+    });
+}
+
+extern "system" fn native_ime_action<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    action: jint,
+    uptime_ms: jlong,
+) {
+    contained(|| {
+        if let Some(view) = bridge(handle) {
+            view.push_event(ViewEvent::EditorAction { action, uptime_ms });
+        }
+    });
+}
+
+extern "system" fn native_ime_cursor_updates<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    mode: jint,
+) {
+    contained(|| {
+        if let Some(view) = bridge(handle) {
+            view.push_event(ViewEvent::CursorUpdates(mode));
+        }
+    });
+}

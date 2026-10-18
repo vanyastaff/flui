@@ -641,7 +641,7 @@ fn android_input(target: &Path, bless: bool) -> Vec<Step> {
             },
             announce: Announce {
                 cannot_verify: "android-input CANNOT VERIFY: no Android SDK, no attached device, or the device could not show the probe (locked) — details above",
-                failed: "android-input FAILED: a session was not flushed, or the gesture exclusion, the preferences or the haptics did not reach the system (details above)",
+                failed: "android-input FAILED: a session was not flushed, the gesture exclusion, the preferences or the haptics did not reach the system, or FluiView did not carry the drag or the keyboard (details above)",
             },
         },
         Step::Probe {
@@ -1345,7 +1345,7 @@ mod tests {
                 &[
                     "cargo ndk -t arm64-v8a build -p flui-platform --locked --example android_input_probe --features native-capture",
                     "rm -rf target/native-recordings/android",
-                    "adb-session target/aarch64-linux-android/debug/examples/libandroid_input_probe.so target/native-recordings/android target/android-input; if rc=2: echo 'android-input CANNOT VERIFY: no Android SDK, no attached device, or the device could not show the probe (locked) — details above'; elif rc!=0: echo 'android-input FAILED: a session was not flushed, or the gesture exclusion, the preferences or the haptics did not reach the system (details above)'; if rc!=0: exit $rc",
+                    "adb-session target/aarch64-linux-android/debug/examples/libandroid_input_probe.so target/native-recordings/android target/android-input; if rc=2: echo 'android-input CANNOT VERIFY: no Android SDK, no attached device, or the device could not show the probe (locked) — details above'; elif rc!=0: echo 'android-input FAILED: a session was not flushed, the gesture exclusion, the preferences or the haptics did not reach the system, or FluiView did not carry the drag or the keyboard (details above)'; if rc!=0: exit $rc",
                     &hold,
                 ],
             );

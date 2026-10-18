@@ -4,7 +4,8 @@
 //! The probe is `crates/flui-platform/examples/android_input_probe.rs`, a
 //! `NativeActivity` library built with `native-capture`. This module packages
 //! it into a debuggable APK with the SDK's build tools (no Gradle: the probe
-//! has no Java), installs it over `adb`, and runs one session per launch so
+//! has no `classes.dex`; `FluiView`'s dex is inside the library), installs it
+//! over `adb`, and runs one session per launch so
 //! each recording starts from a fresh registry:
 //!
 //! 1. `adb shell input`: a touchscreen tap and swipe, a stylus tap and swipe
@@ -26,6 +27,13 @@
 //! settings, changed with `settings put`, must reach `SystemPreferences`;
 //! and a semantic haptic and a pattern must reach the vibrator as touch
 //! vibrations. Every setting is put back.
+//!
+//! A final launch drives `FluiView` (ADR-0237): a system drag the probe
+//! starts from a held touch must drop its text on the probe's own window,
+//! and the device's default keyboard, tapped through the keys its
+//! accessibility tree names, must compose into the probe's field, leave a
+//! hardware Escape to the input method while it composes, commit on space
+//! and send its action key as Enter.
 //!
 //! Exit 0 on PASS, 1 on FAIL, 2 when there is no SDK, no device, or the
 //! device cannot show the probe (locked).
@@ -148,6 +156,13 @@ pub(super) fn run(library: &Path, recordings: &Path, work: &Path) -> anyhow::Res
     passed &= check_preferences(&device)?;
     passed &= check_haptics(&device)?;
     device.key("KEYCODE_F9")?;
+    if device.launch()?.is_none() {
+        println!("android-input: the probe did not reopen its window for FluiView");
+        return Ok(2);
+    }
+    passed &= check_drag_and_drop(&device, screen)?;
+    passed &= check_input_method(&device)?;
+    device.key("KEYCODE_F9")?;
     Ok(u8::from(!passed))
 }
 
@@ -186,6 +201,181 @@ fn check_gesture_exclusion(device: &Device, scale: f64) -> anyhow::Result<bool> 
         );
     }
     Ok(excluded)
+}
+
+/// `FluiView` as the drag source and the drop target (ADR-0237): a touch is
+/// held down, the probe starts a system drag of a text from it
+/// (`startDragAndDrop`, which needs a valid view surface under
+/// `NativeActivity`'s `takeSurface`), the touch moves and lifts over the
+/// probe's own window, whose target accepts a copy. The drop must deliver
+/// the text, and the source must hear the drop.
+fn check_drag_and_drop(device: &Device, screen: Screen) -> anyhow::Result<bool> {
+    let installed = device
+        .read("status.txt")?
+        .is_some_and(|status| status.contains("CAPABILITIES outgoing_drag=Native"));
+    if !installed {
+        println!("android-input FAILED: FluiView was not installed (no outgoing drag capability)");
+        return Ok(false);
+    }
+    let (x, y) = (screen.width / 2, screen.height * 2 / 5);
+    device.shell(&format!("input touchscreen motionevent DOWN {x} {y}"))?;
+    std::thread::sleep(Duration::from_millis(300));
+    let started = device.ask("KEYCODE_F8", "DRAG_START")?;
+    for step in 1..=5 {
+        std::thread::sleep(Duration::from_millis(80));
+        device.shell(&format!(
+            "input touchscreen motionevent MOVE {} {}",
+            x + step * 8,
+            y + step * 60
+        ))?;
+    }
+    device.shell(&format!(
+        "input touchscreen motionevent UP {} {}",
+        x + 40,
+        y + 300
+    ))?;
+    let ended = device.wait_for("DRAG_END")?;
+    let status = device.read("status.txt")?.unwrap_or_default();
+    let dropped = status.lines().rfind(|line| line.starts_with("DROPPED"));
+    println!("android-input: drag {started:?} / {dropped:?} / {ended:?}");
+    let passed = started.as_deref() == Some("DRAG_START Ok(())")
+        && dropped.is_some_and(|line| line.contains("text=Some(\"FLUI drag\")"))
+        && ended
+            .as_deref()
+            .is_some_and(|line| line.starts_with("DRAG_END Dropped"));
+    if !passed {
+        println!(
+            "android-input FAILED: the drag FluiView started did not drop its text on the window"
+        );
+    }
+    Ok(passed)
+}
+
+/// One key of the on-screen keyboard, from a `uiautomator dump`.
+#[derive(Debug, Clone)]
+struct ImeKey {
+    label: String,
+    center: (i32, i32),
+}
+
+/// The keys of the input method's window, by their accessibility labels, in
+/// the dump's (reading) order.
+fn keyboard_keys(dump: &str, package: &str) -> Vec<ImeKey> {
+    let node = regex::Regex::new(r"<node [^>]*>").expect("BUG: a valid pattern");
+    let attribute = |node: &str, name: &str| {
+        let start = node.find(&format!(" {name}=\""))? + name.len() + 3;
+        let end = node[start..].find('"')? + start;
+        Some(node[start..end].to_owned())
+    };
+    node.find_iter(dump)
+        .filter_map(|found| {
+            let node = found.as_str();
+            if attribute(node, "package")? != package {
+                return None;
+            }
+            let label = attribute(node, "content-desc")?;
+            let bounds = attribute(node, "bounds")?;
+            let numbers: Vec<i32> = bounds
+                .split(|c: char| !c.is_ascii_digit())
+                .filter(|part| !part.is_empty())
+                .filter_map(|part| part.parse().ok())
+                .collect();
+            let [left, top, right, bottom] = <[i32; 4]>::try_from(numbers).ok()?;
+            (!label.is_empty()).then(|| ImeKey {
+                label,
+                center: (i32::midpoint(left, right), i32::midpoint(top, bottom)),
+            })
+        })
+        .collect()
+}
+
+/// `FluiView` as the input method's editor (ADR-0237, ADR-0090): the probe
+/// focuses a field, the soft keyboard of the device's default input method
+/// opens on it, three letter keys are tapped (the keyboard composes them), a
+/// hardware Escape arrives while it composes, the space bar commits, and the
+/// action key arrives as Enter. The field's store must hold what the keyboard
+/// shows at each step.
+fn check_input_method(device: &Device) -> anyhow::Result<bool> {
+    if device.ask("KEYCODE_F7", "IME_FOCUSED")?.is_none() {
+        println!("android-input FAILED: the probe did not focus its field");
+        return Ok(false);
+    }
+    std::thread::sleep(Duration::from_millis(1500));
+    let services = device.shell("dumpsys input_method")?;
+    let shown = services.contains("mInputShown=true");
+    let editor = services.contains("inputType=0x1 imeOptions=0x2000006");
+    let ime = device
+        .shell("settings get secure default_input_method")?
+        .trim()
+        .to_owned();
+    let package = ime.split('/').next().unwrap_or_default().to_owned();
+    println!(
+        "android-input: input method {ime}, keyboard shown {shown}, FluiView's EditorInfo {editor}"
+    );
+    device.shell("uiautomator dump --windows /sdcard/flui-ime.xml")?;
+    let keys = keyboard_keys(&device.shell("cat /sdcard/flui-ime.xml")?, &package);
+    let letters: Vec<&ImeKey> = keys
+        .iter()
+        .filter(|key| {
+            let mut chars = key.label.chars();
+            chars.next().is_some_and(char::is_alphabetic) && chars.next().is_none()
+        })
+        .take(3)
+        .collect();
+    let named = |name: &str| keys.iter().find(|key| key.label == name);
+    let (Some(space), Some(action), [_, _, _]) = (named("Space bar"), named("Done"), &letters[..])
+    else {
+        println!(
+            "android-input CANNOT VERIFY: the keyboard of {package} exposes no letter, space and Done keys ({} keys found)",
+            keys.len()
+        );
+        return Ok(shown && editor);
+    };
+    let typed: String = letters.iter().map(|key| key.label.as_str()).collect();
+    for key in &letters {
+        device.shell(&format!("input tap {} {}", key.center.0, key.center.1))?;
+        std::thread::sleep(Duration::from_millis(400));
+    }
+    std::thread::sleep(Duration::from_millis(400));
+    let composing = device.ask("KEYCODE_F5", "IME text=")?;
+    let escape = device.ask("KEYCODE_ESCAPE", "KEY Escape")?;
+    device.shell(&format!("input tap {} {}", space.center.0, space.center.1))?;
+    std::thread::sleep(Duration::from_millis(800));
+    let committed = device.ask("KEYCODE_F5", "IME text=")?;
+    device.shell(&format!(
+        "input tap {} {}",
+        action.center.0, action.center.1
+    ))?;
+    let enter = device.wait_for("KEY Enter")?;
+    let _ = device.ask("KEYCODE_F6", "IME_BLURRED")?;
+    println!("android-input: typed {typed:?}: {composing:?}");
+    println!("android-input: escape while composing: {escape:?}");
+    println!("android-input: space: {committed:?}; action key: {enter:?}");
+    let length = typed.encode_utf16().count();
+    let passed = shown
+        && editor
+        && composing.as_deref()
+            == Some(
+                format!("IME text={typed:?} selection={length}..{length} composition=0..{length}")
+                    .as_str(),
+            )
+        && escape.as_deref() == Some("KEY Escape composition=Active")
+        && committed.as_deref()
+            == Some(
+                format!(
+                    "IME text={:?} selection={1}..{1} composition=none",
+                    format!("{typed} "),
+                    length + 1
+                )
+                .as_str(),
+            )
+        && enter.as_deref() == Some("KEY Enter composition=Inactive");
+    if !passed {
+        println!(
+            "android-input FAILED: the field's store did not follow the keyboard, or Escape was not the input method's"
+        );
+    }
+    Ok(passed)
 }
 
 /// The rectangles of an `SkRegion((l,t,r,b)(l,t,r,b)…)` dump.
@@ -908,6 +1098,23 @@ impl Device {
                     .lines()
                     .rfind(|line| line.starts_with(marker))
                     .map(str::to_owned));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        Ok(None)
+    }
+
+    /// Wait for the probe's newest status line starting with `marker`.
+    fn wait_for(&self, marker: &str) -> anyhow::Result<Option<String>> {
+        let deadline = Instant::now() + ANSWER_WITHIN;
+        while Instant::now() < deadline {
+            if let Some(line) = self.read("status.txt")?.and_then(|status| {
+                status
+                    .lines()
+                    .rfind(|line| line.starts_with(marker))
+                    .map(str::to_owned)
+            }) {
+                return Ok(Some(line));
             }
             std::thread::sleep(Duration::from_millis(100));
         }

@@ -7,9 +7,13 @@
   the Win32 OLE target and source, run on a Windows host within one process; the `Draggable`
   and `DropTarget` widgets, the cursor, Escape and the keyboard and assistive cut, copy and
   paste, run headless; the Web HTML target and source, run in headless Chrome with constructed
-  events. Pending
-  ([tasks](../plans/specs/flui-interaction/completeness/tasks.md)): every other native drag
-  source and target.
+  events; the Android target and source through `FluiView`, run on a device within one app.
+  Pending ([tasks](../plans/specs/flui-interaction/completeness/tasks.md)): every other native
+  drag source and target.
+- **Amended by:** [ADR-0237](ADR-0237-android-java-view.md) (2026-10-17): the Android target is
+  `FluiView.onDragEvent`, answered from the cached feedback; the source is
+  `FluiView.startDragAndDrop` (API 24) with the whole clip at the start; a drag from another app
+  permits a copy; `OnReceiveContentListener` receives only pasted and keyboard text.
 - **Date:** 2026-10-13
 - **Amends:** [ADR-0038](ADR-0038-data-transfer-architecture.md) §2 (several concurrent offers
   and sessions where the platform delivers them), §5 (DnD gains a source side and in-window

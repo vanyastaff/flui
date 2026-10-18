@@ -19,6 +19,10 @@ pub(crate) mod clipboard_lock;
 // `pub` for the same Linux-tested/off-target-consumed reason as
 // `hwnd_affinity` below (consumer: the Android backend).
 pub mod android_motion;
+// `pub` for the same Linux-tested/off-target-consumed reason as
+// `hwnd_affinity` below (consumer: the Android backend's `FluiView`).
+pub mod android_drag;
+pub mod android_ime;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_scroll;
 #[cfg(any(target_os = "android", test))]

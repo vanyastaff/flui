@@ -9,8 +9,8 @@ use anyhow::bail;
 
 use super::exec::{Cmd, Runner, installed, parsed};
 use crate::{
-    change_scope, changelog, docs_links, docs_paths, file_length, fonts, globals, key_vocabulary,
-    markers, module_dag, perf, recording_vocabulary, toolchain, wgsl, workspace,
+    android_dex, change_scope, changelog, docs_links, docs_paths, file_length, fonts, globals,
+    key_vocabulary, markers, module_dag, perf, recording_vocabulary, toolchain, wgsl, workspace,
 };
 
 /// A formatter or linter that is a binary of its own, not a cargo step.
@@ -100,7 +100,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// This crate's own checks, in the order they run: each `cargo xtask`
 /// command line and the command it names. lychee is skippable like
 /// [`TOOLS`], so `--strict` reaches `docs-links` too.
-fn in_process(strict: bool) -> [(&'static str, InProcess); 25] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 26] {
     [
         (
             if strict {
@@ -155,6 +155,9 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 25] {
         ("recording-vocabulary", |args| {
             recording_vocabulary::recording_vocabulary(&parsed(args)?)
         }),
+        ("android-dex", |args| {
+            android_dex::android_dex(&parsed(args)?)
+        }),
         ("perf --self-test", |args| perf::perf(&parsed(args)?)),
         ("changelog --self-test", |args| {
             changelog::changelog(&parsed(args)?)
@@ -205,6 +208,7 @@ mod tests {
                 "key-vocabulary --self-test",
                 "key-vocabulary",
                 "recording-vocabulary",
+                "android-dex",
                 "perf --self-test",
                 "changelog --self-test",
                 "changelog --check",

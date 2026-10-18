@@ -2332,3 +2332,35 @@ real loop, woken by posted mouse moves rather than the system pointer, and
 `ole_drag_drop_contracts` pins the cfg-free half everywhere. Not run: a drag to
 or from another process (Explorer, a browser), a held mouse button, pen or
 touch, and a whole `flui-app` with two runtimes.
+
+### Android's Java side is `FluiView`, loaded from the native library
+
+`platforms::android::java_view` loads `FluiView`'s dex (`android/classes.dex`, compiled from
+`android/java` and checked against it by `cargo xtask android-dex`) on the Java main thread at
+platform start: `InMemoryDexClassLoader` from API 26, a read-only, byte-compared code-cache copy
+through `DexClassLoader` below, either parented to the Activity's loader. The view's native
+methods are bound with `RegisterNatives` on the class that loader returned, and one full-window
+view is laid over the `NativeActivity`'s content (ADR-0237). Every owner-to-view call is posted
+(`JavaView::post`, or `post_or` when a refusal must still discharge an obligation, as a drag the
+view could not start must still end); every native method only queues a `ViewEvent` and wakes the
+owner, which delivers them in order each loop turn, and contains a panic before it reaches the
+JVM. The view holds a `Box<Weak<JavaView>>` as its handle; `detach` clears the view's copy and
+then frees it, both on the Java main thread, the only thread that calls the view's natives.
+
+The window's `TextStoreHost` is `text_input::AndroidTextInput`. The input method edits the
+view's mirror; `shared::android_ime::Mirror` turns each report into one edit against the
+snapshot the view holds, and the host replays it under an async lock, dropping one made on an
+older snapshot than it published last (`replay_current`). A key the native queue delivers while
+the view reports a composition is marked composing (`key_composition`): Android pre-dispatches
+every key to the input method, so such a key is one it passed on. `drag::AndroidTransfer` is the
+platform's one `DataTransferSource`: drags over the view mint offers from their
+`ClipDescription` (`shared::android_drag::offered`) and drops are answered from the cached
+feedback; `drag::AndroidDragSource` serves the whole clip at the start (`clip_parts`) and maps
+`ACTION_DRAG_ENDED` to `OsDragEnd` (`source_end`). Without the view, or below API 24, the
+window reports no drag source and `outgoing_drag()` `Unavailable`.
+
+`android_ime_adapter` and `android_drag_mapping` (`tests/android_ime.rs`,
+`tests/android_drag.rs`) pin the pure halves in Linux CI, with the Android rows of
+`backend_conformance` and `input_capabilities_contracts`. `cargo xtask device android-input`
+runs the JNI half on a device: a drag the probe starts drops on its own window, and the default
+keyboard composes, commits, passes Escape on while composing and sends its action key.

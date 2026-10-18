@@ -16,7 +16,14 @@
 //! - F11 performs one semantic haptic and plays one transient pattern on
 //!   the window's actuator, and writes their outcomes;
 //! - F10 writes the observed `SystemPreferences`;
-//! - F9 quits.
+//! - F9 quits;
+//! - F7 focuses a field (an in-memory text store) on the window's input
+//!   method host, which `FluiView` serves, F6 unfocuses it and F5 writes the
+//!   store's text, selection and composition (`IME ...`);
+//! - F8 starts a system drag of a text through the window's drag source,
+//!   from the touch held down at the time; the window is also a drop target
+//!   that accepts a copy and writes what it received (`DROPPED ...`);
+//! - Escape and Enter are written with the composition they arrived in.
 //!
 //! The window excludes the left screen edge from system gestures from the
 //! start, so the xtask can read the exclusion back from the window manager.
@@ -147,8 +154,19 @@ mod probe {
             )]);
             let delivered: Rc<RefCell<Vec<String>>> = Rc::default();
             let status = ready_status.clone();
+            let view_probe = super::java_view::JavaViewProbe::new(
+                &owner,
+                &window,
+                Rc::new({
+                    let status = status.clone();
+                    move |line: &str| status.line(line)
+                }),
+            );
             let haptics_window = window.clone();
             window.on_input(Box::new(move |input| {
+                if let Some(answer) = view_probe.handle(&input) {
+                    return answer;
+                }
                 match &input {
                     PlatformInput::Pointer(event) => {
                         delivered.borrow_mut().push(format!("{event:?}"));
@@ -244,6 +262,195 @@ mod probe {
             status.line(&format!("RUN_FAILED {error}"));
         }
         drop(recorder.finish());
+    }
+}
+
+/// What the probe does with `FluiView` (ADR-0237): its input method serves a
+/// field the probe focuses, and its drag source and drop target carry a drag
+/// the probe starts.
+#[cfg(all(target_os = "android", debug_assertions))]
+mod java_view {
+    use std::num::{NonZeroU32, NonZeroU64};
+    use std::rc::Rc;
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Waker};
+
+    use flui_foundation::{DragSessionId, UiRuntimeId};
+    use flui_platform::traits::{DispatchEventResult, PlatformInput};
+    use flui_platform::{HostWindow, OwnerPlatform};
+    use flui_platform_api::DragDropEvent;
+    use flui_platform_api::data_transfer::{
+        DataTransferSource, DropFeedback, RepresentationDescriptor, TransferActions,
+        TransferFormat, TransferLimits, TransferPayload,
+    };
+    use flui_platform_api::drag::{DragSessionKey, OsDragRequest, ProcessNonce};
+    use flui_platform_api::keyboard::{Key, KeyState, NamedKey};
+    use flui_platform_api::text_store::{InMemoryTextStore, TextStore, TextStoreHost, Utf16Range};
+
+    /// The text a drag the probe starts carries.
+    pub(super) const DRAGGED: &str = "FLUI drag";
+
+    type Line = Rc<dyn Fn(&str)>;
+
+    pub(super) struct JavaViewProbe {
+        window: Arc<dyn HostWindow>,
+        host: Option<Rc<dyn TextStoreHost>>,
+        store: Rc<InMemoryTextStore>,
+        transfer: Arc<dyn DataTransferSource>,
+        line: Line,
+    }
+
+    impl JavaViewProbe {
+        pub(super) fn new(owner: &OwnerPlatform, window: &Arc<dyn HostWindow>, line: Line) -> Self {
+            let host = owner.text_store_host(window);
+            line(&format!("TEXT_HOST present={}", host.is_some()));
+            Self {
+                window: Arc::clone(window),
+                host,
+                store: InMemoryTextStore::new(""),
+                transfer: owner.shared().data_transfer(),
+                line,
+            }
+        }
+
+        fn report_store(&self) {
+            let composition = self
+                .store
+                .composition()
+                .map(|composition| composition.range)
+                .map_or_else(
+                    || "none".to_owned(),
+                    |range: Utf16Range| format!("{}..{}", range.start().get(), range.end().get()),
+                );
+            let selection = self.store.selection();
+            (self.line)(&format!(
+                "IME text={:?} selection={}..{} composition={composition}",
+                self.store.text(),
+                selection.anchor.get(),
+                selection.active.get(),
+            ));
+        }
+
+        fn start_drag(&self) {
+            let Some(source) = self.window.drag_source() else {
+                (self.line)("DRAG_START unavailable");
+                return;
+            };
+            let key = DragSessionKey::new(
+                ProcessNonce::mint(),
+                UiRuntimeId::new_gen(0, NonZeroU32::MIN),
+                DragSessionId::from_wire(NonZeroU64::MIN),
+            );
+            let line = Rc::clone(&self.line);
+            let request = OsDragRequest {
+                key,
+                pointer: None,
+                representations: vec![
+                    RepresentationDescriptor {
+                        format: TransferFormat::Text,
+                        declared_len: None,
+                    },
+                    key.representation(),
+                ],
+                allowed: TransferActions::COPY,
+                provider: Box::new(|index| match index.0 {
+                    0 => Ok(TransferPayload::Text(DRAGGED.to_owned())),
+                    _ => Err(flui_platform_api::data_transfer::TransferError::SourceGone),
+                }),
+                on_end: Box::new(move |end| line(&format!("DRAG_END {end:?}"))),
+            };
+            (self.line)(&format!("DRAG_START {:?}", source.start(request)));
+        }
+
+        fn dropped(&self, id: flui_foundation::DataTransferId, action: TransferActions) {
+            let text = (0..4u16)
+                .map(flui_platform_api::data_transfer::RepresentationIndex)
+                .find_map(|index| {
+                    let mut request =
+                        std::pin::pin!(self.transfer.request(id, index, TransferLimits::default()));
+                    match request
+                        .as_mut()
+                        .poll(&mut Context::from_waker(Waker::noop()))
+                    {
+                        Poll::Ready(Ok(TransferPayload::Text(text))) => Some(text),
+                        _ => None,
+                    }
+                });
+            (self.line)(&format!("DROPPED action={action:?} text={text:?}"));
+            self.transfer.conclude_drop(id);
+        }
+
+        /// What the probe does with `input`; `None` leaves it to the rest.
+        pub(super) fn handle(&self, input: &PlatformInput) -> Option<DispatchEventResult> {
+            match input {
+                PlatformInput::Keyboard(key) => {
+                    if key.state() != KeyState::Down {
+                        return None;
+                    }
+                    match &key.key {
+                        Key::Named(NamedKey::F7) => {
+                            let host = self.host.as_ref()?;
+                            let store: Rc<dyn TextStore> = self.store.clone();
+                            host.focus_store(Some(store));
+                            (self.line)("IME_FOCUSED");
+                        }
+                        Key::Named(NamedKey::F6) => {
+                            self.host.as_ref()?.focus_store(None);
+                            (self.line)("IME_BLURRED");
+                        }
+                        Key::Named(NamedKey::F5) => self.report_store(),
+                        Key::Named(NamedKey::F8) => self.start_drag(),
+                        Key::Named(named @ (NamedKey::Escape | NamedKey::Enter)) => {
+                            (self.line)(&format!(
+                                "KEY {named:?} composition={:?}",
+                                key.composition
+                            ));
+                            return None;
+                        }
+                        _ => return None,
+                    }
+                    Some(DispatchEventResult::default())
+                }
+                PlatformInput::DragDrop(event) => {
+                    match event {
+                        DragDropEvent::Entered { offer, allowed, .. } => {
+                            let types: Vec<String> = offer
+                                .representations()
+                                .iter()
+                                .map(|descriptor| format!("{:?}", descriptor.format))
+                                .collect();
+                            (self.line)(&format!(
+                                "DRAG_ENTERED allowed={allowed:?} identity={} types={types:?}",
+                                DragSessionKey::from_offer(offer).is_some()
+                            ));
+                            self.transfer.update_drop_feedback(
+                                offer.id(),
+                                DropFeedback {
+                                    accept: Some(TransferActions::COPY),
+                                },
+                            );
+                        }
+                        DragDropEvent::Moved { id, .. } => self.transfer.update_drop_feedback(
+                            *id,
+                            DropFeedback {
+                                accept: Some(TransferActions::COPY),
+                            },
+                        ),
+                        DragDropEvent::Dropped { id, action, .. } => self.dropped(*id, *action),
+                        DragDropEvent::Exited { .. } => (self.line)("DRAG_EXITED"),
+                    }
+                    Some(DispatchEventResult::resolved(true, true))
+                }
+                PlatformInput::Capabilities(capabilities) => {
+                    (self.line)(&format!(
+                        "CAPABILITIES outgoing_drag={:?}",
+                        capabilities.outgoing_drag()
+                    ));
+                    None
+                }
+                _ => None,
+            }
+        }
     }
 }
 

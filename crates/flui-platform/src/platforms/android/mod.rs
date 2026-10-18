@@ -42,11 +42,14 @@
 //! `Resume`: `native_window()` is `None` until then, so a bootstrap that
 //! needs a window has nothing to build a surface from before it.
 
+mod drag;
 mod gesture_exclusion;
 mod haptics;
 pub mod input;
+mod java_view;
 mod preferences;
 mod safe_area;
+mod text_input;
 pub(crate) mod text_sizing;
 pub mod window;
 
@@ -65,7 +68,7 @@ use parking_lot::Mutex;
 pub use window::AndroidWindow;
 
 use crate::{
-    data_transfer::{DataTransferSource, NullDataTransferSource},
+    data_transfer::DataTransferSource,
     error::{BootstrapError, PlatformError},
     redraw_poll::RedrawPoll,
     shared::{PlatformHandlers, owner_signal::OwnerSignal},
@@ -136,6 +139,8 @@ pub struct AndroidPlatform {
     owner_signal: Arc<OwnerSignal>,
     scroll_factors: Mutex<crate::shared::android_scroll::FactorCache>,
     preference_admission: crate::shared::preference_read::ReadAdmission,
+    /// `FluiView`, installed on the Java main thread at start (ADR-0237).
+    java_view: Arc<java_view::JavaView>,
 }
 
 // Opaque on purpose, matching `HeadlessPlatform` and `WinitPlatform`. A
@@ -159,7 +164,9 @@ impl AndroidPlatform {
             waker.wake();
             Ok(())
         }));
+        let java_view = java_view::JavaView::start(app.clone(), Arc::downgrade(&owner_signal));
         Self {
+            java_view,
             app,
             handlers: Arc::new(Mutex::new(PlatformHandlers::new())),
             running: Arc::new(AtomicBool::new(true)),
@@ -217,6 +224,102 @@ impl AndroidPlatform {
         if let Some(window) = window {
             for event in events {
                 window.callbacks().dispatch_input(event);
+            }
+        }
+    }
+
+    /// The loop ended: the window's field and drag are detached, and the view
+    /// stops calling native code and leaves the Activity.
+    fn retire_java_view(&self) {
+        let retiring = self.window.lock().clone();
+        if let Some(retiring) = retiring {
+            retiring.retire_java_view();
+        }
+        self.java_view.detach();
+    }
+
+    /// Deliver what `FluiView` reported since the last turn, in order, on the
+    /// owner thread (ADR-0237).
+    fn deliver_view_events(&self) {
+        let events = self.java_view.take_events();
+        if events.is_empty() {
+            return;
+        }
+        let window = self.window.lock().clone();
+        for event in events {
+            match event {
+                java_view::ViewEvent::Installed => {
+                    if let Some(window) = &window {
+                        window.refresh_capabilities();
+                    }
+                }
+                java_view::ViewEvent::Ime(edit) => {
+                    if let Some(input) = window.as_ref().and_then(|window| window.text_input()) {
+                        input.apply(edit);
+                    }
+                }
+                java_view::ViewEvent::CursorUpdates(mode) => {
+                    if let Some(input) = window.as_ref().and_then(|window| window.text_input()) {
+                        input.cursor_updates(mode);
+                    }
+                }
+                java_view::ViewEvent::EditorAction { action, uptime_ms } => {
+                    if let Some(window) = &window {
+                        let (key, shift) = crate::shared::android_ime::editor_action_key(action);
+                        for input in input::editor_action_keys(key, shift, uptime_ms) {
+                            window.callbacks().dispatch_input(input);
+                        }
+                    }
+                }
+                java_view::ViewEvent::Drag(event) => match &window {
+                    Some(window) => {
+                        window
+                            .callbacks()
+                            .dispatch_input(crate::traits::PlatformInput::DragDrop(event));
+                        window.request_redraw();
+                    }
+                    None => {
+                        if let flui_platform_api::DragDropEvent::Dropped { id, .. } = event {
+                            self.java_view.transfer().conclude_drop(id);
+                        }
+                    }
+                },
+                java_view::ViewEvent::DragEnded { result } => {
+                    if let Some(window) = &window {
+                        window.drag_source_of().finish(result);
+                    }
+                }
+            }
+        }
+    }
+
+    /// A pen tip that touches down inside the focused field hands its stroke
+    /// to the input method's handwriting (API 33+): Android's own initiation
+    /// sees only the stylus events native code leaves unhandled.
+    fn offer_handwriting(window: &AndroidWindow, events: &[crate::traits::PlatformInput]) {
+        use flui_platform_api::pointer::{PenTool, PointerEvent, PointerKind};
+        let api = AndroidApp::sdk_version();
+        if api < crate::shared::android_ime::HANDWRITING_API {
+            return;
+        }
+        for event in events {
+            let crate::traits::PlatformInput::Pointer(PointerEvent::Down(press)) = event else {
+                continue;
+            };
+            let pen = press.pointer.kind == (PointerKind::Pen { tool: PenTool::Tip });
+            if !pen {
+                continue;
+            }
+            let Some(input) = window.text_input() else {
+                return;
+            };
+            if crate::shared::android_ime::starts_handwriting(
+                api,
+                pen,
+                input.field_bounds(),
+                press.sample.position.get(),
+            ) {
+                input.start_handwriting();
             }
         }
     }
@@ -301,6 +404,7 @@ impl AndroidPlatform {
                                 motion_event!(tracing::Level::DEBUG);
                             }
                             let mut any_handled = false;
+                            Self::offer_handwriting(&window, &events);
                             for platform_input in events {
                                 let result = callbacks.dispatch_input(platform_input);
                                 if result.default_prevented {
@@ -314,7 +418,9 @@ impl AndroidPlatform {
                             any_handled
                         }
                         InputEvent::KeyEvent(key) => {
-                            if let Some(platform_input) = input::convert_key_event(&self.app, key) {
+                            if let Some(platform_input) =
+                                input::convert_key_event(&self.app, key, self.java_view.composing())
+                            {
                                 let result = callbacks.dispatch_input(platform_input);
                                 result.default_prevented
                             } else {
@@ -643,6 +749,11 @@ impl Platform for AndroidPlatform {
                 platform.running.store(false, Ordering::Relaxed);
                 continue;
             }
+            let window = platform.window.lock().clone();
+            if let Some(window) = window {
+                platform.java_view.set_scale(window.scale_factor());
+            }
+            platform.deliver_view_events();
             let resumed = platform.execution_resumed.load(Ordering::SeqCst);
             if resumed {
                 platform.process_input_events();
@@ -707,6 +818,7 @@ impl Platform for AndroidPlatform {
         // recreated activity gets a new `android_main`, a new `AndroidApp`,
         // a new platform and a new window (`ANativeActivity_onCreate`
         // spawns one thread per activity).
+        platform.retire_java_view();
         let window = platform.window.lock().take();
         if let Some(window) = window {
             window.revoke_geometry();
@@ -749,9 +861,11 @@ impl Platform for AndroidPlatform {
             self.app.clone(),
             Arc::clone(&self.execution_resumed),
             Arc::downgrade(&self.owner_signal),
+            Arc::clone(&self.java_view),
         ));
         let previous = self.window.lock().replace(Arc::clone(&window));
         if let Some(previous) = previous {
+            previous.retire_java_view();
             previous.revoke_geometry();
             for event in cancelled {
                 previous.callbacks().dispatch_input(event);
@@ -778,8 +892,8 @@ impl Platform for AndroidPlatform {
     }
 
     fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
-        // No Android transport yet (ADR-0038): inert and honest.
-        Arc::new(NullDataTransferSource)
+        // FluiView's drag and drop (ADR-0211, ADR-0237).
+        Arc::clone(self.java_view.transfer()) as Arc<dyn DataTransferSource>
     }
 
     fn name(&self) -> &'static str {

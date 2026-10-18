@@ -73,15 +73,21 @@ pub const fn ios() -> InputCapabilities {
 /// `setSystemGestureExclusionRects` from API 29; a touchpad's two-finger
 /// scroll and pinch arrive as gesture axes from API 34
 /// ([`TOUCHPAD_GESTURES_API`](super::android_motion::TOUCHPAD_GESTURES_API)),
-/// delivered as phased scrolling and `PanZoom`.
+/// delivered as phased scrolling and `PanZoom`. Outgoing drags start through
+/// `FluiView.startDragAndDrop` from API 24
+/// ([`DRAG_API`](super::android_drag::DRAG_API)) once the view is installed
+/// (`java_view`, ADR-0237); without it every drag stays in its window.
 #[must_use]
-pub const fn android(api_level: i32) -> InputCapabilities {
+pub const fn android(api_level: i32, java_view: bool) -> InputCapabilities {
     let mut builder = InputCapabilities::builder().pen(Native);
     if api_level >= ANDROID_GESTURE_EXCLUSION_API {
         builder = builder.input_regions(Native);
     }
     if api_level >= super::android_motion::TOUCHPAD_GESTURES_API {
         builder = builder.precise_scroll(Native).trackpad_gestures(Native);
+    }
+    if java_view && api_level >= super::android_drag::DRAG_API {
+        builder = builder.outgoing_drag(Native);
     }
     builder.build()
 }
@@ -122,8 +128,9 @@ pub const fn winit(session: WinitSession) -> InputCapabilities {
 
 /// When an OS drag session can start on Win32, AppKit, Android and winit: the
 /// drag runs in its window and escalates when the pointer leaves it
-/// (ADR-0211 §2). Win32 starts them through OLE; the other backends report
-/// outgoing drags `Unavailable` until their native session lands.
+/// (ADR-0211 §2). Win32 starts them through OLE and Android through
+/// `startDragAndDrop` (ADR-0237); the other backends report outgoing drags
+/// `Unavailable` until their native session lands.
 pub const DESKTOP_DRAG_START: flui_platform_api::drag::OsDragStart =
     flui_platform_api::drag::OsDragStart::OnLeavingWindow;
 

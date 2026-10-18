@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use flui_foundation::geometry::Point;
 use flui_platform::WindowOptions;
+use flui_platform::shared::android_ime;
 use flui_platform::shared::haptic_degradation::{
     AndroidVibrator, CoreHapticsEngine, PenController, PenWaveform, WebVibration, android_feedback,
     android_pattern, ios_feedback, ios_pattern, macos_feedback, macos_pattern, web_feedback,
@@ -98,6 +99,7 @@ enum KeyDecoder {
     Win32,
     AppKit,
     Web,
+    Android,
 }
 
 const ALL_KINDS: &[PointerKind] = &[PointerKind::Touch, PointerKind::Mouse, PEN];
@@ -151,10 +153,29 @@ fn android() -> Profile {
         clock: ClockShape::Epoch,
         kinds: ALL_KINDS,
         names_devices: true,
-        capabilities: input_availability::android(34),
+        capabilities: input_availability::android(34, true),
         haptics: HapticsTable::Android,
+        drag: Some(input_availability::DESKTOP_DRAG_START),
+        keys: Some(KeyDecoder::Android),
+    }
+}
+
+/// Android below API 24, where `FluiView` has no `startDragAndDrop`: every
+/// drag stays in its window.
+fn android_api_23() -> Profile {
+    Profile {
+        capabilities: input_availability::android(23, true),
         drag: None,
-        keys: None,
+        ..android()
+    }
+}
+
+/// Android whose `FluiView` could not be installed: no outgoing drag.
+fn android_without_view() -> Profile {
+    Profile {
+        capabilities: input_availability::android(34, false),
+        drag: None,
+        ..android()
     }
 }
 
@@ -532,8 +553,10 @@ impl SharedAssembly {
             Step::Pinch(step) => (claimed.trackpad_gestures() != Availability::Unavailable)
                 .then(|| Reading::Pointer(self.pinch(step))),
             Step::Key(step) => self.key_reading(step),
-            Step::ComposingKey(step) => (self.profile.keys == Some(KeyDecoder::Web)
-                && step.key == StepKey::Escape)
+            Step::ComposingKey(step) => (matches!(
+                self.profile.keys,
+                Some(KeyDecoder::Web | KeyDecoder::Android)
+            ) && step.key == StepKey::Escape)
                 .then_some(Reading::ComposingKey {
                     key: NamedKey::Escape,
                 }),
@@ -627,11 +650,14 @@ impl SharedAssembly {
             }
             Reading::ComposingKey { key } => {
                 const ESCAPE_KEY_CODE: u32 = 27;
-                let composing = key_composition(
-                    false,
-                    ESCAPE_KEY_CODE,
-                    !self.faulty(Fault::ComposingKeyFromEventOnly),
-                );
+                // The host composes; the key event itself says nothing does
+                // (WebKit after `compositionend`, and every Android key).
+                let host_composing = !self.faulty(Fault::ComposingKeyFromEventOnly);
+                let composing = if self.profile.keys == Some(KeyDecoder::Android) {
+                    android_ime::key_composition(host_composing)
+                } else {
+                    key_composition(false, ESCAPE_KEY_CODE, host_composing)
+                };
                 [KeyState::Down, KeyState::Up]
                     .into_iter()
                     .map(|state| {
@@ -1019,6 +1045,14 @@ fn android_decoders_conform() {
     assert_backend_conforms(&mut SharedAssembly::new(android()));
 }
 
+fn android_api_23_conforms() {
+    assert_backend_conforms(&mut SharedAssembly::new(android_api_23()));
+}
+
+fn android_without_view_conforms() {
+    assert_backend_conforms(&mut SharedAssembly::new(android_without_view()));
+}
+
 fn web_decoders_conform() {
     assert_backend_conforms(&mut SharedAssembly::new(web()));
 }
@@ -1050,6 +1084,8 @@ fn every_backend_passes_the_conformance_table() {
             ("appkit", appkit_decoders_conform),
             ("uikit", uikit_decoders_conform),
             ("android", android_decoders_conform),
+            ("android below API 24", android_api_23_conforms),
+            ("android without FluiView", android_without_view_conforms),
             ("web", web_decoders_conform),
             ("x11", x11_decoders_conform),
             ("uikit with OS drag", uikit_os_drag_conforms),
@@ -1195,6 +1231,21 @@ const BROKEN: &[BrokenRow] = &[
         "a_key_during_composition_is_the_input_methods",
         Fault::ComposingKeyFromEventOnly,
         web,
+    ),
+    (
+        "a_key_during_composition_is_the_input_methods",
+        Fault::ComposingKeyFromEventOnly,
+        android,
+    ),
+    (
+        "outgoing_drag_is_delivered_as_claimed",
+        Fault::OverclaimedDrag,
+        android_api_23,
+    ),
+    (
+        "a_leaving_backend_escalates_when_the_pointer_leaves_the_window",
+        Fault::WrongDragTiming,
+        android,
     ),
 ];
 

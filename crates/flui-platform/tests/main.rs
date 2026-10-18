@@ -17,8 +17,12 @@
 //! asserts the AppKit main thread, which a bare `cargo test` cannot host
 //! unbundled (ADR-0039; unbundled NSWindow construction aborts the process).
 
+#[path = "android_drag.rs"]
+mod android_drag;
 #[path = "android_exit_path.rs"]
 mod android_exit_path;
+#[path = "android_ime.rs"]
+mod android_ime;
 #[path = "android_motion.rs"]
 mod android_motion;
 #[path = "backend_conformance.rs"]

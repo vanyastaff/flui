@@ -12,6 +12,7 @@ mod table_test;
 mod device;
 mod tasks;
 
+mod android_dex;
 mod bench;
 mod change_scope;
 mod changelog;
@@ -137,6 +138,8 @@ enum Command {
     KeyVocabulary(key_vocabulary::KeyVocabularyArgs),
     /// Check (or --write) the table of variants an input recording carries (ADR-0215 §2).
     RecordingVocabulary(recording_vocabulary::RecordingVocabularyArgs),
+    /// Check (or --write) the Android `FluiView` dex against its Java sources (ADR-0237).
+    AndroidDex(android_dex::AndroidDexArgs),
     /// Validate changelog.d fragments; --write merges them into CHANGELOG.md and deletes them.
     Changelog(changelog::ChangelogArgs),
     /// List missing tools for `ci` / `ci-full`.
@@ -209,6 +212,7 @@ impl Command {
             | Self::Markers(_)
             | Self::KeyVocabulary(_)
             | Self::RecordingVocabulary(_)
+            | Self::AndroidDex(_)
             | Self::Changelog(_)
             | Self::Doctor(_) => return false,
         };
@@ -278,6 +282,7 @@ fn main() -> ExitCode {
         Command::Markers(args) => markers::markers(&args),
         Command::KeyVocabulary(args) => key_vocabulary::key_vocabulary(&args),
         Command::RecordingVocabulary(args) => recording_vocabulary::recording_vocabulary(&args),
+        Command::AndroidDex(args) => android_dex::android_dex(&args),
         Command::Changelog(args) => changelog::changelog(&args),
         Command::Doctor(args) => doctor::doctor(&args),
         Command::BenchCollect(args) => bench::bench_collect(&args),
@@ -356,6 +361,9 @@ mod tests {
         ("key-vocabulary --write", false),
         ("recording-vocabulary", false),
         ("recording-vocabulary --write", false),
+        ("android-dex", false),
+        ("android-dex --rebuild", false),
+        ("android-dex --write", false),
         ("changelog --check", false),
         ("doctor", false),
         ("worktree list", false),
