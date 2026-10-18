@@ -70,6 +70,15 @@ pub mod text_geometry;
 // `pub` for the same Linux-tested/off-target-consumed reason as
 // `hwnd_affinity` above (consumers: the Win32 and AppKit backends).
 pub mod visibility;
+// `pub` for the same Linux-tested/off-target-consumed reason as
+// `hwnd_affinity` above (consumer: the web backend's wheel and gesture events).
+pub mod web_pinch;
+// `pub` for the same Linux-tested/off-target-consumed reason as
+// `hwnd_affinity` above (consumer: the web backend's HTML drag and drop).
+pub mod html_drag_drop;
+// `pub` for the same Linux-tested/off-target-consumed reason as
+// `hwnd_affinity` above (consumer: the web backend's text input).
+pub mod web_text;
 // UIKit consumes this acknowledgement; its transport contract runs on every host.
 pub mod window_installation;
 

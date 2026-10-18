@@ -408,6 +408,14 @@ proc-macro2 = "1"
 syn = "3"
 # Markdown events for `cargo xtask markers`: prose apart from code spans and blocks.
 pulldown-cmark = { version = "0.13", default-features = false }
+
+# BROWSER DRIVER - `cargo xtask device web-input`: fetching the ChromeDriver
+# that matches the installed Chrome (Chrome for Testing archives), the
+# WebDriver BiDi socket, and the localhost page the session loads.
+ureq = { version = "3.3", default-features = false, features = ["rustls"] }
+tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
+tiny_http = { version = "0.12", default-features = false }
+zip = { version = "8.6.0", default-features = false }
 # === Engine-specific dependencies (NOT in workspace) ===
 # These are ONLY used in flui-engine:
 # - etagere (glyph atlas packing)

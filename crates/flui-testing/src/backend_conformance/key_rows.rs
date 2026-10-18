@@ -1,10 +1,11 @@
-//! The key rows (ADR-0216): the keys a context menu's default bindings name
-//! arrive as those logical keys.
+//! The key rows: the keys a context menu's default bindings name arrive as
+//! those logical keys (ADR-0216), and a key during a composition is the input
+//! method's (ADR-0090).
 
 use std::time::Duration;
 
 use flui_platform_api::PlatformInput;
-use flui_platform_api::keyboard::{Key, KeyState, Modifiers, NamedKey};
+use flui_platform_api::keyboard::{ImeComposition, Key, KeyState, Modifiers, NamedKey};
 use flui_runtime::HostInput;
 
 use super::rows::Outcome;
@@ -52,6 +53,45 @@ pub(super) fn menu_keys_arrive_as_the_bindings_name_them<B: BackendUnderTest>(
                     if shift { "held" } else { "up" }
                 ));
             }
+        }
+    }
+    Ok(RowOutcome::Held)
+}
+
+/// Escape pressed while the platform's input method composes arrives, pressed
+/// and released, marked [`ImeComposition::Active`]: the input method's key,
+/// which no shortcut, focus traversal or drag cancellation takes, so it
+/// cancels the composition first.
+pub(super) fn a_key_during_composition_is_the_input_methods<B: BackendUnderTest>(
+    backend: &mut B,
+) -> Outcome {
+    let at = Stamp::coarse(Duration::from_millis(30));
+    let step = KeyStep {
+        key: StepKey::Escape,
+        shift: false,
+        at,
+    };
+    let Some(reading) = backend.reading(Step::ComposingKey(step)) else {
+        return Ok(RowOutcome::NotApplicable(
+            "the backend has no input-method key path the table drives",
+        ));
+    };
+    let events: Vec<_> = backend
+        .decode(reading)
+        .filter_map(|input| match input {
+            HostInput::Platform(PlatformInput::Keyboard(event)) => Some(event),
+            _ => None,
+        })
+        .collect();
+    for state in [KeyState::Down, KeyState::Up] {
+        let Some(event) = events.iter().find(|event| event.state() == state) else {
+            return Err(format!("no {state:?} event among {events:?}"));
+        };
+        if event.composition != ImeComposition::Active {
+            return Err(format!(
+                "Escape {state:?} during a composition arrived as {:?}, not the input method's",
+                event.composition
+            ));
         }
     }
     Ok(RowOutcome::Held)

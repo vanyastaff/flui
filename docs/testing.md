@@ -111,8 +111,11 @@ next to its definition, the `default_pools_started` probe it reads exists only u
 the `testing` feature, and the one execution API an embedder reaches through `flui-app`
 (`DeterministicExecutors`) is a target-independent FIFO that would pass identically on native.
 
-Still compile-only: `flui-platform`'s web backend, which is wasm32-only and has no executing
-coverage at all. See #985.
+`flui-platform`'s web backend needs a DOM, which node does not have, so `wasm-test` leaves it
+alone. Its `web_browser` target runs in headless Chrome instead, through
+`cargo xtask device web-input`: that check fetches the ChromeDriver matching the installed Chrome
+into `target/chromedriver/` and hands it to `wasm-bindgen-test-runner`. CI does not run it; a
+change to the web backend's DOM side runs it locally.
 
 ## Quality Gates
 

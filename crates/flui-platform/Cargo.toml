@@ -239,6 +239,17 @@ web-sys = { version = "0.3", features = [
     "MouseEvent",
     "FocusEvent",
     "UiEvent",
+    # Text input: the hidden editor where the browser has no EditContext
+    "HtmlTextAreaElement",
+    "Node",
+    # HTML drag and drop
+    "DragEvent",
+    "DataTransfer",
+    "DataTransferItem",
+    "DataTransferItemList",
+    "File",
+    "FileList",
+    "Blob",
     # Rendering
     "CanvasRenderingContext2d",
     "DomRect",
@@ -473,6 +484,13 @@ required-features = ["winit-backend"]
 name = "wasm32"
 path = "tests/wasm32.rs"
 
+# The web backend's producer in a real browser: `cargo xtask device web-input`
+# runs it in headless Chrome. Its own target because `cargo xtask wasm-test`
+# runs `wasm32` on node, which has no DOM.
+[[test]]
+name = "web_browser"
+path = "tests/web_browser.rs"
+
 # Nested Cargo stays separate from the native platform contract binary.
 [[test]]
 name = "compiler_guards"
@@ -486,6 +504,12 @@ path = "tests/main.rs"
 [[test]]
 name = "pointer_assembly_allocation"
 path = "tests/pointer_assembly_allocation.rs"
+
+# The page `cargo xtask device web-input` drives: the web backend under a
+# native capture.
+[[example]]
+name = "web_input_probe"
+required-features = ["native-capture"]
 
 [[example]]
 name = "winit_preferences_probe"

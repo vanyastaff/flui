@@ -6,7 +6,8 @@
   and autoscroll frames in the session core, and `Scrollable`'s edge autoscroll, run headless;
   the Win32 OLE target and source, run on a Windows host within one process; the `Draggable`
   and `DropTarget` widgets, the cursor, Escape and the keyboard and assistive cut, copy and
-  paste, run headless. Pending
+  paste, run headless; the Web HTML target and source, run in headless Chrome with constructed
+  events. Pending
   ([tasks](../plans/specs/flui-interaction/completeness/tasks.md)): every other native drag
   source and target.
 - **Date:** 2026-10-13

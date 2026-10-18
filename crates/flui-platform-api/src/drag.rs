@@ -73,6 +73,14 @@ impl ProcessNonce {
         let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
         let local = 0_u8;
         hasher.write_usize(std::ptr::from_ref(&local) as usize);
+        // A browser page has neither: its std seeds `RandomState` with fixed
+        // keys and lays out the same stack, so two pages would mint one nonce
+        // and take each other's drags for their own. The page's generator is
+        // seeded per page.
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        for _ in 0..2 {
+            hasher.write_u64(js_sys::Math::random().to_bits());
+        }
         Self(NonZeroU64::new(hasher.finish()).unwrap_or(NonZeroU64::MIN))
     }
 

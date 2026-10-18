@@ -32,6 +32,8 @@ pub struct WebWindow {
     callbacks: Arc<WindowCallbacks>,
     registration: RefCell<Option<Registration>>,
     retire_frame_slot: RefCell<Option<Box<dyn FnOnce()>>>,
+    drag: RefCell<Option<super::drag::CanvasDrag>>,
+    text: RefCell<Option<Rc<super::text_input::WebTextInput>>>,
 }
 
 struct WebWindowState {
@@ -181,6 +183,8 @@ impl WebWindow {
             id,
             registration: RefCell::new(Some(Registration::new(&canvas, claim))),
             retire_frame_slot: RefCell::new(None),
+            drag: RefCell::new(None),
+            text: RefCell::new(None),
             canvas,
             state: Arc::new(Mutex::new(state)),
             callbacks: Arc::new(WindowCallbacks::new()),
@@ -213,6 +217,7 @@ impl WebWindow {
 
     pub(super) fn install(
         &self,
+        transfer: &Arc<super::drag::WebTransfer>,
         retire_frame_slot: impl FnOnce() + 'static,
     ) -> Result<(), OpenWindowError> {
         let mut registration = self
@@ -220,7 +225,10 @@ impl WebWindow {
             .borrow_mut()
             .take()
             .expect("BUG: newly opened window owns its registration");
-        super::events::register_event_listeners(self, &mut registration)?;
+        let services = super::events::register_event_listeners(self, transfer, &mut registration)?;
+        services.drag.arm();
+        *self.drag.borrow_mut() = Some(services.drag);
+        *self.text.borrow_mut() = Some(services.text);
         *self.registration.borrow_mut() = Some(registration);
         *self.retire_frame_slot.borrow_mut() = Some(Box::new(retire_frame_slot));
         Ok(())
@@ -254,6 +262,14 @@ impl WebWindow {
             return;
         };
         registration.fence();
+        let drag = self.drag.borrow_mut().take();
+        if let Some(drag) = drag {
+            drag.retire();
+        }
+        let text = self.text.borrow_mut().take();
+        if let Some(text) = text {
+            text.retire();
+        }
         let retire_frame_slot = self.retire_frame_slot.borrow_mut().take();
         if let Some(retire) = retire_frame_slot {
             retire();
@@ -363,7 +379,19 @@ impl LayoutSync {
     }
 }
 
-impl crate::traits::HostWindow for WebWindow {}
+impl crate::traits::HostWindow for WebWindow {
+    /// The canvas's `EditContext` or hidden textarea, serving the focused
+    /// field's store; `None` once the window closed.
+    fn text_store_host(
+        &self,
+        _owner: crate::traits::OwnerThreadToken,
+    ) -> Option<Rc<dyn flui_platform_api::text_store::TextStoreHost>> {
+        self.text
+            .borrow()
+            .as_ref()
+            .map(|text| Rc::clone(text) as Rc<dyn flui_platform_api::text_store::TextStoreHost>)
+    }
+}
 
 impl PlatformWindow for WebWindow {
     fn id(&self) -> WindowId {
@@ -477,6 +505,12 @@ impl PlatformWindow for WebWindow {
 
     fn set_background_appearance(&self, _appearance: WindowBackgroundAppearance) {
         // Not applicable for web canvas
+    }
+
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform_api::drag::PlatformDragSource>> {
+        self.drag.borrow().as_ref().map(|drag| {
+            Arc::clone(&drag.source) as Arc<dyn flui_platform_api::drag::PlatformDragSource>
+        })
     }
 
     fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {

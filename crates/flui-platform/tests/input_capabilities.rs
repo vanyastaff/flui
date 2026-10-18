@@ -563,11 +563,13 @@ fn input_after_the_snapshot_attempts_run_out_is_refused() {
 /// Each backend states what it implements, as the code stands; X11 has no
 /// pen, trackpad gestures or outgoing drags (ADR-0213 §1); input regions reach
 /// the OS on iOS, and on Android from API 29 (ADR-0217 §5); an Android
-/// touchpad's scroll and pinch arrive from API 34; Win32 starts OS
-/// drags through OLE (ADR-0211). Columns: pen, precise scroll, trackpad
+/// touchpad's scroll and pinch arrive from API 34; Win32 starts OS drags
+/// through OLE and the web through HTML drags (ADR-0211); the web emulates
+/// trackpad pinch from Control-held wheel events unless the browser has
+/// WebKit gesture events. Columns: pen, precise scroll, trackpad
 /// gestures, input regions, outgoing drags.
 fn every_backend_states_its_availability() {
-    use Availability::{Native, Unavailable};
+    use Availability::{Emulated, Native, Unavailable};
     use flui_platform::shared::input_availability::{self as table, WinitSession};
     let rows = [
         (
@@ -611,9 +613,14 @@ fn every_backend_states_its_availability() {
             [Native, Unavailable, Unavailable, Unavailable, Unavailable],
         ),
         (
-            "web",
-            table::web(),
-            [Native, Unavailable, Unavailable, Unavailable, Unavailable],
+            "web with ctrl+wheel pinch",
+            table::web(false),
+            [Native, Unavailable, Emulated, Unavailable, Native],
+        ),
+        (
+            "web with gesture events",
+            table::web(true),
+            [Native, Unavailable, Native, Unavailable, Native],
         ),
         (
             "winit x11",

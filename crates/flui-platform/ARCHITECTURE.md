@@ -243,6 +243,130 @@ release occurs outside the canvas. Its README describes execution. These are
 browser smoke contracts, not automatically executed CI tests; a wasm compile
 does not prove that they pass. Browser touch-action policy remains page-owned.
 
+### Web events are answered while the browser waits on them
+
+A DOM event's default can be cancelled only inside its listener, so every
+canvas listener that dispatches applies the result there: `propagate: false`
+stops propagation to the canvas's ancestors (never same-target listeners),
+`default_prevented` cancels a cancelable default. Wheel scrolling follows the
+result instead of always cancelling page scroll; the FLUI runtime answers
+pointer input handled, so a FLUI page still never scrolls under its canvas,
+while an embedder whose callback declines lets the page scroll.
+
+A trackpad pinch reaches Chromium and Firefox pages as Control-held wheel
+events and WebKit pages as `gesture*` events (`shared::web_pinch`). A
+Control-held sequence is classified by its first event (a fractional pixel
+`deltaY` with no `deltaX` is a pinch, anything else a scroll) and each step
+continues the sequence as its first was. The step factor inverts Chromium's
+`-100 · ln(scale)` encoding. Control is stripped from the pinch's modifiers,
+since the browser synthesizes it. The End is a deadline on the event
+timeline, the last step plus `PINCH_GAP`, delivered by a registration-owned
+timer or by the next input that passes it, whichever comes first, and stamped
+with the deadline either way. A Control-less wheel ends it at its own time.
+When the application does not prevent the default of a sequence's first
+event, the pinch it started is cancelled and the rest of the sequence reaches
+neither the application nor `preventDefault`, so the browser zooms the page.
+The capability is `Emulated` where ctrl+wheel is the source and `Native` where
+`GestureEvent` exists. WebKit's cumulative scale and degrees become per-step
+factors and clockwise radians; web-sys has no `GestureEvent`, so the crate
+binds its getters. A pen whose browser reports only `tiltX`/`tiltY` (Pointer
+Events 2) keeps them as tilt planes, read through fractional getters.
+
+`web_pinch_table` pins the decoders in Linux CI. `tests/web_browser.rs` runs
+in headless Chrome through `cargo xtask device web-input`:
+`a_wheel_scroll_is_answered_with_its_dispatch_result`,
+`a_ctrl_wheel_pinch_reaches_the_application_as_a_pan_zoom` (End from the
+timer, stamped with the deadline), `a_refused_pinch_is_left_to_the_browser`,
+`webkit_gesture_events_reach_the_application_as_a_pan_zoom` and
+`a_pen_reporting_only_tilt_planes_keeps_its_orientation`. Those events are
+constructed, not trusted: no trackpad, Safari or page zoom has run.
+
+### Web drag and drop is HTML drag and drop, answered in its events
+
+`platforms::web::drag` holds the platform's one `DataTransferSource`,
+`WebTransfer`, and each canvas's `WebDragSource` (ADR-0211 §11). A drag over
+a canvas mints an offer from `DataTransfer.types` and its file items: the
+browser hides the data until the drop, so a hover reads only types, and
+FLUI's session identity travels as a type with its parameters. `dragenter`
+is cancelled when the input callback prevents its default, which makes the
+canvas the drag's target; `dragover` additionally needs the target's cached
+feedback to accept, and its `dropEffect` names the one accepted action. The
+drop copies every string representation out and keeps its files before the
+event returns; requests are then served from memory, a file through
+`Blob.arrayBuffer`. `conclude_drop` and `dragleave` retire the offer.
+
+A browser starts an HTML drag only from its own drag gesture on a draggable
+element and allows no data after `dragstart`. A canvas with a source is
+draggable; its `dragstart` asks synchronously whether the runtime started a
+session on this mouse or pen press, before the browser's drag threshold (a
+long-press trigger, typically), and then stores every representation the
+request names through `setData` and its actions as `effectAllowed`. Otherwise
+the `dragstart` is cancelled and the press continues as pointer input, which
+Chrome keeps delivering, and a session the runtime starts later in that press
+is refused as `DragError::Unavailable` so it stays in its window. A waiting
+session no `dragstart` takes by the release ends `Cancelled`; `dragend`'s
+`dropEffect` is the end it reports. Close restores the canvas's draggable
+attribute and ends a waiting or running session cancelled.
+
+`html_drag_drop_table` pins the mapping in Linux CI. In headless Chrome,
+`an_html_drag_over_the_canvas_is_offered_and_dropped`,
+`a_declined_drag_is_refused_and_its_leave_retires_the_offer`,
+`an_unprevented_dragenter_leaves_the_drag_to_the_page` and
+`dragstart_runs_a_waiting_session_and_refuses_otherwise` use constructed
+`DragEvent`s with a real `DataTransfer`, whose effects a constructed object
+ignores, so the harness supplies them as plain properties. With trusted input
+over WebDriver BiDi (`cargo xtask device web-input`) Chrome itself runs both
+directions within one page: a session started from the press's dispatch
+becomes an HTML drag a page element takes the text of, and a page element's
+drag drops onto the canvas, whose target reads it after the drop. The drag
+source's press listener precedes the dispatching one, since the runtime's
+quiescent point is still inside that dispatch.
+
+### The web window serves the focused field's store to the browser's input method
+
+`platforms::web::text_input::WebTextInput` is the web window's
+`TextStoreHost` (ADR-0090, ADR-0135), reached through
+`OwnerPlatform::text_store_host` as Win32's text services are. The focused
+field's store is mirrored into an `EditContext` on the canvas where the
+browser has one (Chromium; web-sys binds none, so the crate declares it) and
+into a hidden `<textarea>` beside the canvas where it does not. The browser
+edits its copy and reports each edit (`textupdate`, or the textarea's
+`input`, diffed against the text the host last gave it by
+`shared::web_text::diff`); the host applies it to the store under an
+asynchronous lock, the text a composition inserted marked composing until
+`compositionend`. The application's changes reach the copy through the store's
+observer. Offsets are UTF-16 code units throughout. A request the presentation
+makes from inside a store call the host started (focus, completion) waits and
+runs, in order, when that call returns. The browser has no call that commits a
+composition, so `complete_composition` re-attaches the surface, which makes
+the input method let go, and answers `Abandoned` for the caller to commit in
+place; a completion that waited commits in place itself.
+
+A key the input method processes is the input method's: it reaches the window
+marked `ImeComposition::Active` when its event composes, when it carries the
+input method's key code 229 (WebKit dispatches the key that ends a composition
+after `compositionend`, with `isComposing` false), or while the surface
+composes (`shared::web_text::key_composition`). No shortcut, focus traversal
+or drag cancellation takes such a key, and its default stays the input
+method's, so Escape cancels the composition first. A key the application
+handles has its default prevented, so the browser does not also type it into
+the surface.
+
+The textarea belongs to the canvas's focus area: it is named on the canvas's
+claim (`EditorSlot`), focus moving between the two is not a window focus
+change, its keys reach the window through the canvas's `KeyRoute`, focusing
+the canvas forwards focus to it, and detaching gives focus back to the canvas.
+
+`web_text_table` pins the rules in Linux CI, and the conformance table's
+`a_key_during_composition_is_the_input_methods` holds them for the web
+profile. In headless Chrome, `an_edit_context_serves_the_focused_field`,
+`escape_while_the_field_composes_is_the_input_methods` and
+`a_textarea_serves_the_field_without_edit_context` drive constructed events;
+`cargo xtask device web-input` drives Chrome's own input-method path
+(`Input.imeSetComposition` and `Input.insertText` over ChromeDriver's DevTools
+channel, a trusted Escape and key over BiDi) through both surfaces. No OS
+input method, candidate window or soft keyboard has run.
+
 ### Windows preferences have a window-independent owner lifetime
 
 `Platform::preferences` reads text scale, animation preference, high contrast,
@@ -1914,9 +2038,26 @@ pinched or scrolled, in order, with each press's sensors), not by shape: the
 device batches and resamples moves by its frame timing, so their number and
 positions change from run to run.
 
+A browser page has no file system, so `cargo xtask device web-input` splits
+the same steps between the page and the host. The `web_input_probe` example
+opens the web backend under a `Recorder` (the capture, kept installed across
+the event-loop turns the driver's input arrives on) and reports the
+recording as JSON Lines with the pointer events the window delivered and the
+recording's replay; the driver sends trusted mouse, pen and touch input over
+WebDriver BiDi, requires the replay to equal what was delivered (DOM wheel
+scrolls excepted: they have no contact, so the registry never sees them),
+writes the recording on the host and holds it against
+`web_bidi_mouse_pen_touch.jsonl` natively
+(`browser_sessions_hold_against_their_goldens`, given
+`FLUI_NATIVE_RECORDING_FRESH`). Its moves are single steps between pauses
+longer than a frame, and touches move one at a time, since Chrome
+interpolates a move over its action tick and its touch predictions depend on
+timing; the shape is then the same on every run.
+
 `native_recording_contracts` in `tests/native_recording/mod.rs` replays one
 recording per backend (`win32_pointer_info_recordings_decode_to_their_host_input`
-and its AppKit, UIKit, Android, winit and web rows) against hand-computed
+and its AppKit, UIKit, Android, winit and web rows, the web's Chrome capture
+`web_bidi_recording_decodes_to_its_host_input` among them) against hand-computed
 transcripts, writes each back byte for byte, refuses unknown variants, other
 versions, out-of-range values and undeclared devices, and, with the feature,
 pins the capture's journal, session identity, panic containment and reentrant
@@ -1982,7 +2123,12 @@ Haptics' sixteen control points is split into curves that start where the one
 before ended (`ios_pattern_parts`). The engine is created on the first pattern;
 its stopped and reset handlers only record the restart obligation and wake the
 main thread, which restarts it, and a pattern requested meanwhile plays its
-fallback (ADR-0210 §8). The macOS, iOS and Web paths have only been compiled.
+fallback (ADR-0210 §8). The macOS and iOS paths have only been compiled. The
+Web path ran in headless Chrome (`cargo xtask device web-input`): before the
+page's first trusted click `navigator.vibrate` is refused for want of user
+activation and the window's actuator reports `Unavailable` with no
+capabilities; after it a request is `Submitted`. Chrome's own answer is all
+that ran: a headless desktop has no vibration motor.
 
 Android pattern vibrations go to the `Vibrator`, which needs the install-time
 `VIBRATE` permission (the CLI's manifest template declares it). Without it the

@@ -25,7 +25,7 @@ fn recording(text: &str) -> NativeRecording {
 }
 
 /// `inputs` one event per line, in the terms a gesture consumer sees.
-fn transcript(inputs: &[PlatformInput]) -> Vec<String> {
+pub(crate) fn transcript(inputs: &[PlatformInput]) -> Vec<String> {
     inputs.iter().map(line).collect()
 }
 
@@ -269,6 +269,25 @@ fn write_sample(out: &mut String, sample: &PointerSample) {
         let size = size.get();
         write!(out, " size={}x{}", size.width, size.height).expect("BUG: a String accepts writes");
     }
+}
+
+/// The browser sessions `cargo xtask device web-input` drives in Chrome have
+/// no file system to write to (the probe page reports its recordings to the
+/// driver), so the driver writes them to `FLUI_NATIVE_RECORDING_FRESH` and
+/// this row holds each against its golden on the host; without that
+/// directory there is nothing fresh to hold.
+#[cfg(all(debug_assertions, feature = "native-capture"))]
+#[test]
+fn browser_sessions_hold_against_their_goldens() {
+    let Some(directory) = std::env::var_os("FLUI_NATIVE_RECORDING_FRESH") else {
+        eprintln!("no fresh browser recordings: cargo xtask device web-input writes them");
+        return;
+    };
+    let name = "web_bidi_mouse_pen_touch";
+    let path = std::path::Path::new(&directory).join(format!("{name}.jsonl"));
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    capture::hold_against_golden(name, &recording(&text));
 }
 
 /// `text` replays to `expected`, one event per line.
@@ -580,8 +599,44 @@ fn web_recordings_decode_to_their_host_input() {
     );
 }
 
+/// Trusted input Chrome delivered to the web backend over WebDriver BiDi
+/// (`cargo xtask device web-input`): a click, a double click, a drag and a
+/// secondary click of the mouse, a pen stroke with pressure, angles and
+/// twist, and two touches moving and lifting one at a time.
+fn web_bidi_recording_decodes_to_its_host_input() {
+    assert_replays(
+        include_str!("web_bidi_mouse_pen_touch.jsonl"),
+        &[
+            "move p1* mouse [] t=269700000 (100, 100)",
+            "down p1* mouse b1 [1] t=327800000 (100, 100)",
+            "up p1* mouse b1 [] t=329100000 (100, 100)",
+            "down p1* mouse b1 [1] t=932900000 (100, 100)",
+            "up p1* mouse b1 [] t=933400000 (100, 100)",
+            "down p1* mouse b1 [1] t=933800000 (100, 100)",
+            "up p1* mouse b1 [] t=934200000 (100, 100)",
+            "move p1* mouse [] t=1541700000 (120, 120)",
+            "down p1* mouse b1 [1] t=1587400000 (120, 120)",
+            "move p1* mouse [1] t=1588200000 (140, 125)",
+            "move p1* mouse [1] t=1634500000 (160, 130)",
+            "up p1* mouse b1 [] t=1681800000 (160, 130)",
+            "down p1* mouse b2 [2] t=1682700000 (160, 130)",
+            "up p1* mouse b2 [] t=1683300000 (160, 130)",
+            "move p1* mouse [] t=1684300000 (130, 90)",
+            "down p2* pen b1 [1] t=1774500000 (200, 150) pressure=0.500 altitude=1.048 azimuth=0.484 twist=1.571 size=1x1",
+            "move p2* pen [1] t=1821200000 (210, 155) pressure=0.750 altitude=1.048 azimuth=0.484 twist=1.571 size=1x1",
+            "up p2* pen b1 [] t=1868300000 (210, 155) pressure=0.000 altitude=1.571 azimuth=0.000 twist=0.000 size=1x1",
+            "down p3* touch b1 [1] t=1874000000 (300, 200) pressure=0.250 size=20x30",
+            "down p4 touch b1 [1] t=1874000000 (330, 220) pressure=0.250 size=20x30",
+            "move p3* touch [1] t=1915000000 (310, 200) pressure=0.250 size=20x30",
+            "move p4 touch [1] t=1962600000 (320, 230) pressure=0.250 size=20x30",
+            "up p3* touch b1 [] t=2009800000 (310, 200) pressure=0.000 size=1x1",
+            "up p4 touch b1 [] t=2056000000 (320, 230) pressure=0.000 size=1x1",
+        ],
+    );
+}
+
 /// Every checked-in recording, by name.
-const RECORDINGS: [(&str, &str); 12] = [
+const RECORDINGS: [(&str, &str); 13] = [
     (
         "android_input_touch_stylus_mouse",
         include_str!("android_input_touch_stylus_mouse.jsonl"),
@@ -629,6 +684,10 @@ const RECORDINGS: [(&str, &str); 12] = [
     (
         "web_pen_mouse_touch",
         include_str!("web_pen_mouse_touch.jsonl"),
+    ),
+    (
+        "web_bidi_mouse_pen_touch",
+        include_str!("web_bidi_mouse_pen_touch.jsonl"),
     ),
 ];
 
@@ -778,6 +837,10 @@ fn native_recording_contracts() {
         (
             "web_recordings_decode_to_their_host_input",
             web_recordings_decode_to_their_host_input,
+        ),
+        (
+            "web_bidi_recording_decodes_to_its_host_input",
+            web_bidi_recording_decodes_to_its_host_input,
         ),
         (
             "native_recordings_write_back_byte_for_byte",

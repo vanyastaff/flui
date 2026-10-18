@@ -33,6 +33,7 @@ use flui_platform::shared::pointer_assembly::{
     NativeReading, NativeSurface, NativeTime, QpcTicks, ReadingAction, ReadingTime, ScrollPhases,
     ScrollReading, decode,
 };
+use flui_platform::shared::web_text::key_composition;
 use flui_platform::traits::{DispatchEventResult, PlatformInput};
 use flui_platform::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
 use flui_platform_api::EventTime;
@@ -89,12 +90,14 @@ struct Profile {
     keys: Option<KeyDecoder>,
 }
 
-/// A shared key decoder: Win32's virtual-key table, or AppKit's key-code
-/// table.
+/// A shared key decoder: Win32's virtual-key table, AppKit's key-code
+/// table, or the web's rule for a key of the input method (its key names
+/// come from the DOM, not a table).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KeyDecoder {
     Win32,
     AppKit,
+    Web,
 }
 
 const ALL_KINDS: &[PointerKind] = &[PointerKind::Touch, PointerKind::Mouse, PEN];
@@ -160,10 +163,10 @@ fn web() -> Profile {
         clock: ClockShape::Epoch,
         kinds: ALL_KINDS,
         names_devices: false,
-        capabilities: input_availability::web(),
+        capabilities: input_availability::web(false),
         haptics: HapticsTable::Web,
-        drag: None,
-        keys: None,
+        drag: Some(input_availability::WEB_DRAG_START),
+        keys: Some(KeyDecoder::Web),
     }
 }
 
@@ -222,6 +225,8 @@ enum Fault {
     FrozenFocal,
     /// The menu key decodes to no key at all.
     MenuKeyUnidentified,
+    /// A key during a composition is read only from what its event says.
+    ComposingKeyFromEventOnly,
     /// An undecodable position is read as the origin.
     LenientDecode,
     /// A platform cancel is rewritten to `Claimed` after decoding: a reading
@@ -368,6 +373,12 @@ enum Reading {
     Key {
         key: NamedKey,
         shift: bool,
+    },
+    /// A key the window's input method composes through, as WebKit reports
+    /// it after `compositionend`: the event says nothing composes and
+    /// carries the key's own code.
+    ComposingKey {
+        key: NamedKey,
     },
     Scroll {
         reading: ScrollReading,
@@ -521,6 +532,11 @@ impl SharedAssembly {
             Step::Pinch(step) => (claimed.trackpad_gestures() != Availability::Unavailable)
                 .then(|| Reading::Pointer(self.pinch(step))),
             Step::Key(step) => self.key_reading(step),
+            Step::ComposingKey(step) => (self.profile.keys == Some(KeyDecoder::Web)
+                && step.key == StepKey::Escape)
+                .then_some(Reading::ComposingKey {
+                    key: NamedKey::Escape,
+                }),
             _ => None,
         }
     }
@@ -605,6 +621,23 @@ impl SharedAssembly {
                         PlatformInput::Keyboard(
                             KeyEvent::new(state, Key::Named(key), Code::Unidentified, EPOCH)
                                 .with_modifiers(modifiers),
+                        )
+                    })
+                    .collect()
+            }
+            Reading::ComposingKey { key } => {
+                const ESCAPE_KEY_CODE: u32 = 27;
+                let composing = key_composition(
+                    false,
+                    ESCAPE_KEY_CODE,
+                    !self.faulty(Fault::ComposingKeyFromEventOnly),
+                );
+                [KeyState::Down, KeyState::Up]
+                    .into_iter()
+                    .map(|state| {
+                        PlatformInput::Keyboard(
+                            KeyEvent::new(state, Key::Named(key), Code::Unidentified, EPOCH)
+                                .with_composition(composing),
                         )
                     })
                     .collect()
@@ -998,18 +1031,10 @@ fn uikit_os_drag_conforms() {
     assert_backend_conforms(&mut SharedAssembly::new(uikit_os_drag()));
 }
 
-fn web_os_drag_conforms() {
-    assert_backend_conforms(&mut SharedAssembly::new(web_os_drag()));
-}
-
-/// The backends once their native drag sessions land: iOS at lift and the web at
-/// `dragstart`. Win32 starts its OLE session when the pointer leaves the window.
+/// UIKit once its native drag session lands, at lift. The web starts its HTML
+/// drag at `dragstart`; Win32 its OLE session when the pointer leaves the window.
 fn uikit_os_drag() -> Profile {
     with_os_drag(uikit(), input_availability::IOS_DRAG_START)
-}
-
-fn web_os_drag() -> Profile {
-    with_os_drag(web(), input_availability::WEB_DRAG_START)
 }
 
 #[test]
@@ -1028,7 +1053,6 @@ fn every_backend_passes_the_conformance_table() {
             ("web", web_decoders_conform),
             ("x11", x11_decoders_conform),
             ("uikit with OS drag", uikit_os_drag_conforms),
-            ("web with OS drag", web_os_drag_conforms),
         ],
     );
 }
@@ -1155,7 +1179,7 @@ const BROKEN: &[BrokenRow] = &[
     (
         "start_decision_includes_sibling_presentation_with_identity_only_offer",
         Fault::WrongDragTiming,
-        web_os_drag,
+        web,
     ),
     (
         "a_leaving_backend_escalates_when_the_pointer_leaves_the_window",
@@ -1166,6 +1190,11 @@ const BROKEN: &[BrokenRow] = &[
         "menu_keys_arrive_as_the_bindings_name_them",
         Fault::MenuKeyUnidentified,
         win32,
+    ),
+    (
+        "a_key_during_composition_is_the_input_methods",
+        Fault::ComposingKeyFromEventOnly,
+        web,
     ),
 ];
 

@@ -58,6 +58,11 @@ path = "tests/main.rs"
 default = []
 serde = ["dep:serde"]
 
+# A browser page's entropy for `ProcessNonce::mint`: wasm32-unknown-unknown's
+# std has none, so `RandomState` alone mints the same nonce on every page.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys = { workspace = true }
+
 [package.metadata.docs.rs]
 all-features = true
 

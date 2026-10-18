@@ -92,7 +92,18 @@ allow = [
 #   CDLA-Permissive-2.0, a permissive license written for data rather than
 #   code. It comes in through flui-assets' `network` feature (reqwest →
 #   rustls-platform-verifier).
-exceptions = [{ crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] }]
+# - webpki-roots is the same Mozilla store as Rust constants, under the same
+#   license. It comes in through xtask alone (ureq's rustls roots, for
+#   `cargo xtask device web-input` fetching ChromeDriver), never a shipped
+#   crate.
+exceptions = [
+    { crate = "webpki-root-certs", allow = [
+        "CDLA-Permissive-2.0",
+    ] },
+    { crate = "webpki-roots", allow = [
+        "CDLA-Permissive-2.0",
+    ] },
+]
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Bans - Crate restrictions and duplicate detection

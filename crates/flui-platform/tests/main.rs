@@ -34,6 +34,8 @@ mod executor;
 mod file_store;
 #[path = "haptic_degradation.rs"]
 mod haptic_degradation;
+#[path = "html_drag_drop.rs"]
+mod html_drag_drop;
 #[path = "input_capabilities.rs"]
 mod input_capabilities;
 #[path = "input_regions.rs"]
@@ -48,6 +50,10 @@ mod pointer_assembly;
 mod preferences;
 #[path = "text_input_mapping.rs"]
 mod text_input_mapping;
+#[path = "web_pinch.rs"]
+mod web_pinch;
+#[path = "web_text.rs"]
+mod web_text;
 #[path = "window_callback_unwind.rs"]
 #[cfg(not(target_arch = "wasm32"))]
 mod window_callback_unwind;

@@ -40,8 +40,10 @@
 //!   logical keys the default menu bindings name, so a context menu is
 //!   reachable from the keyboard.
 //!
-//! IME event order is a named [`RowGroup`] with no rows yet: the ticket that
-//! builds it adds its rows to the same table.
+//! - **IME** (ADR-0090): a key pressed while the platform's input method
+//!   composes arrives marked as the input method's, so Escape cancels the
+//!   composition before any shortcut, focus traversal or drag cancellation
+//!   sees it.
 //!
 //! A row the backend cannot take part in (the clock rows of a backend with no
 //! performance counter, the trackpad rows of a backend without trackpad
@@ -201,6 +203,9 @@ pub enum Step {
     Pinch(PinchStep),
     /// A key pressed and released.
     Key(KeyStep),
+    /// A key pressed and released while the platform's input method composes
+    /// in the focused field.
+    ComposingKey(KeyStep),
 }
 
 /// A key a step presses.
@@ -211,6 +216,8 @@ pub enum StepKey {
     Menu,
     /// The F10 function key.
     F10,
+    /// The Escape key.
+    Escape,
 }
 
 /// A key pressed and released, with or without Shift held.
@@ -337,7 +344,7 @@ pub enum RowGroup {
     DragAndDrop,
     /// Haptic requests and outcomes (ADR-0210).
     Haptics,
-    /// IME event order; no rows yet.
+    /// Keys and events of the platform's input method.
     Ime,
     /// Keys the framework's default bindings name (ADR-0216).
     Keys,

@@ -11,12 +11,14 @@
 
 mod clipboard;
 mod display;
+mod drag;
 mod events;
 mod executor;
 mod haptics;
 mod platform;
 mod preferences;
 mod registration;
+mod text_input;
 mod window;
 
 pub use platform::WebPlatform;

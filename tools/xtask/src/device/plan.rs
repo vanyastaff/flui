@@ -161,8 +161,8 @@ pub(super) enum Step {
         announce: Option<Announce>,
     },
     /// Runs a check this process performs itself — an OS client API with no
-    /// command-line tool in front of it — and ends the plan with its exit
-    /// code, announced as a driver's is.
+    /// command-line tool in front of it. A pass goes on to the next step; a
+    /// failure ends the plan with its exit code, announced as a driver's is.
     Native { check: Native, announce: Announce },
     /// Ends the plan with 1 after `failure` and the last `tail` lines of
     /// `log` containing `excerpt`, unless each pattern matches a line of
@@ -211,6 +211,16 @@ pub(super) enum Native {
     WindowsInput { probe: PathBuf },
     /// The existing Notes tree through real input and UIA observations.
     WindowsNotes { probe: PathBuf },
+    /// The ChromeDriver matching the installed Chrome, fetched into `cache`
+    /// when missing and placed at `driver` (`device/web_input.rs`).
+    Chromedriver { cache: PathBuf, driver: PathBuf },
+    /// The built `web_input_probe` page driven over WebDriver BiDi
+    /// (`device/web_input.rs`); its recording lands in `recordings`.
+    WebInput {
+        page: PathBuf,
+        driver: PathBuf,
+        recordings: PathBuf,
+    },
     /// The built Android input probe, packaged, installed and driven over
     /// `adb` (`device/android_input.rs`, any host with the SDK), its
     /// sessions' recordings pulled into `recordings`.
@@ -228,6 +238,16 @@ impl Native {
             Self::WindowsA11y { probe } => windows_a11y(&root.join(probe)),
             Self::WindowsInput { probe } => windows_input(&root.join(probe)),
             Self::WindowsNotes { probe } => windows_notes(&root.join(probe)),
+            Self::Chromedriver { cache, driver } => {
+                super::web_input::place_chromedriver(&root.join(cache), &root.join(driver))
+            }
+            Self::WebInput {
+                page,
+                driver,
+                recordings,
+            } => {
+                super::web_input::run(&root.join(page), &root.join(driver), &root.join(recordings))
+            }
             Self::AndroidInput {
                 probe,
                 recordings,
@@ -691,6 +711,8 @@ impl fmt::Display for Step {
                     Native::WindowsA11y { probe } => ("uia-client", probe),
                     Native::WindowsInput { probe } => ("send-input", probe),
                     Native::WindowsNotes { probe } => ("native-notes", probe),
+                    Native::Chromedriver { driver, .. } => ("fetch-chromedriver", driver),
+                    Native::WebInput { page, .. } => ("webdriver-bidi", page),
                     Native::AndroidInput {
                         probe,
                         recordings,

@@ -10,7 +10,7 @@
 
 use flui_platform_api::input_capabilities::{Availability, InputCapabilities};
 
-use Availability::{Native, Unavailable};
+use Availability::{Emulated, Native, Unavailable};
 
 /// The OS session a winit window runs in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -90,10 +90,18 @@ pub const fn android(api_level: i32) -> InputCapabilities {
 pub const ANDROID_GESTURE_EXCLUSION_API: i32 = 29;
 
 /// The web backend: pointer events carry pen input; wheel events have no
-/// phases.
+/// phases. A trackpad pinch arrives as WebKit gesture events where the
+/// browser has them (`gesture_events`), and otherwise is decoded from
+/// Control-held wheel events, which a Control-held mouse wheel can also send
+/// (`shared::web_pinch`). Every canvas starts HTML drags, at `dragstart`
+/// ([`WEB_DRAG_START`]).
 #[must_use]
-pub const fn web() -> InputCapabilities {
-    InputCapabilities::builder().pen(Native).build()
+pub const fn web(gesture_events: bool) -> InputCapabilities {
+    InputCapabilities::builder()
+        .pen(Native)
+        .trackpad_gestures(if gesture_events { Native } else { Emulated })
+        .outgoing_drag(Native)
+        .build()
 }
 
 /// The winit backend in `session`: winit 0.30 reports no pen; touch phases on

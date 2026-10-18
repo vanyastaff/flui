@@ -15,6 +15,8 @@
 //! relative to the repository root, where every step runs.
 
 mod android_input;
+mod bidi;
+mod chrome;
 mod plan;
 #[cfg(windows)]
 #[expect(
@@ -22,6 +24,7 @@ mod plan;
     reason = "a UI Automation client is COM calls through the `windows` bindings"
 )]
 mod uia;
+mod web_input;
 #[cfg(windows)]
 #[expect(
     unsafe_code,
@@ -357,6 +360,37 @@ enum DeviceCheck {
     },
     /// The existing Notes tree driven by real input and current UIA observations.
     WindowsNotes,
+    /// The web backend in a real headless Chrome, on any host that has one.
+    ///
+    /// Fetches the ChromeDriver matching the installed Chrome from the Chrome
+    /// for Testing archives into `target/chromedriver/` (once per Chrome
+    /// version; `CHROMEDRIVER` names one to use instead, `FLUI_CHROME`
+    /// another Chrome), then runs `flui-platform`'s `web_browser` test target
+    /// in headless Chrome through `wasm-bindgen-test-runner`: the producer
+    /// tests that dispatch DOM events at the real window's canvas through the
+    /// public input callback.
+    ///
+    /// Then builds the `web_input_probe` example (the backend under a native
+    /// capture, `native-capture`, debug), binds it with the locked
+    /// `wasm-bindgen` into `target/web-input-probe/`, serves it on localhost
+    /// and drives it over WebDriver BiDi with trusted input: a mouse click,
+    /// double click, drag and secondary click, a pen stroke with pressure,
+    /// angles and twist and two touches, whose recording must replay to what
+    /// the window delivered and, natively, to the shape of its golden
+    /// `web_bidi_mouse_pen_touch.jsonl` (`--bless` writes it instead); the
+    /// Vibration API refused before the first click and played after it;
+    /// an HTML drag the probe starts on a press, dropped on the page, and a
+    /// page element dropped onto the canvas; and Chrome's own input-method
+    /// path (`Input.imeSetComposition`, `Input.insertText` over ChromeDriver's
+    /// DevTools channel) into a focused field through the `EditContext` and
+    /// through the hidden textarea, with a trusted Escape during the
+    /// composition. Exits 2 when the host has no Chrome.
+    WebInput {
+        /// Replace the golden recording with this run's instead of holding
+        /// the run against it.
+        #[arg(long)]
+        bless: bool,
+    },
     /// The Android backend on an attached device, driven by Android's own
     /// injection, and the golden native recordings of what it made of it.
     ///
@@ -395,6 +429,10 @@ enum DeviceCheck {
 impl DeviceCheck {
     /// Whether this host is the OS the check needs.
     fn runs_on_this_host(&self) -> bool {
+        if matches!(self, Self::WebInput { .. }) {
+            // Every host Chrome runs on; the first step says when it has none.
+            return true;
+        }
         if matches!(self, Self::AndroidInput { .. }) {
             // Any host with the SDK drives a device over `adb`.
             return true;
@@ -456,7 +494,10 @@ impl DeviceCheck {
             Self::WindowsNotes => {
                 "Skipping windows-notes on this host: it needs Windows with an interactive desktop; on Windows run: cargo xtask device windows-notes"
             }
-            Self::MacosWorkload | Self::MacosHotReloadLoop { .. } | Self::AndroidInput { .. } => {
+            Self::MacosWorkload
+            | Self::MacosHotReloadLoop { .. }
+            | Self::WebInput { .. }
+            | Self::AndroidInput { .. } => {
                 return None;
             }
         })
@@ -528,6 +569,7 @@ impl DeviceCheck {
                     },
                 },
             ],
+            Self::WebInput { bless } => web_input_plan(target, *bless),
             Self::WindowsInput { bless } => INPUT_SESSIONS
                 .into_iter()
                 .map(|session| session.record(target, *bless))
@@ -667,6 +709,111 @@ impl InputSession {
             failure: "windows-input FAILED or CANNOT VERIFY: an injected session did not replay to what the window delivered, no longer matches its golden, or could not run on this desktop (CANNOT_VERIFY, output above)",
         }
     }
+}
+
+/// The ChromeDriver every `web-input` step after the first names.
+fn chromedriver_at(target: &Path) -> PathBuf {
+    let name = if cfg!(windows) {
+        "chromedriver.exe"
+    } else {
+        "chromedriver"
+    };
+    target.join("chromedriver").join("current").join(name)
+}
+
+/// `web-input`: the ChromeDriver, the browser test target in headless
+/// Chrome, then the probe page driven over WebDriver BiDi and its recording
+/// held against its golden (or, with `bless`, written over it).
+fn web_input_plan(target: &Path, bless: bool) -> Vec<Step> {
+    let driver = chromedriver_at(target);
+    let page = target.join("web-input-probe");
+    let recordings = target.join("native-recordings");
+    let mut hold = Run::new(Program::Cargo)
+        .args([
+            "test",
+            "-p",
+            "flui-platform",
+            "--locked",
+            "--test",
+            "platform_it",
+            "--features",
+            "native-capture",
+            "--",
+            "--exact",
+            "native_recording::browser_sessions_hold_against_their_goldens",
+            "--nocapture",
+        ])
+        .env(
+            "FLUI_NATIVE_RECORDING_FRESH",
+            recordings.display().to_string(),
+        );
+    if bless {
+        hold = hold.env("FLUI_NATIVE_RECORDING_BLESS", "1");
+    }
+    vec![
+        Step::Native {
+            check: Native::Chromedriver {
+                cache: target.join("chromedriver"),
+                driver: driver.clone(),
+            },
+            announce: Announce {
+                cannot_verify: "web-input CANNOT VERIFY: this host has no Chrome (details above)",
+                failed: "web-input FAILED: the ChromeDriver for this Chrome could not be fetched (details above)",
+            },
+        },
+        Step::Run(
+            Run::new(Program::Cargo)
+                .args([
+                    "test",
+                    "-p",
+                    "flui-platform",
+                    "--locked",
+                    "--target",
+                    "wasm32-unknown-unknown",
+                    "--test",
+                    "web_browser",
+                ])
+                .env("CHROMEDRIVER", driver.display().to_string()),
+        ),
+        cargo_build([
+            "-p",
+            "flui-platform",
+            "--locked",
+            "--example",
+            "web_input_probe",
+            "--features",
+            "native-capture",
+            "--target",
+            "wasm32-unknown-unknown",
+        ]),
+        Step::RemoveDir(page.clone()),
+        Step::Run(
+            Run::new(Program::Tool("wasm-bindgen"))
+                .args(["--target", "web", "--out-dir"])
+                .arg(page.clone())
+                .arg(target.join("wasm32-unknown-unknown/debug/examples/web_input_probe.wasm")),
+        ),
+        Step::Copy {
+            from: PathBuf::from("crates/flui-platform/examples/web_input_probe/index.html"),
+            to: page.join("index.html"),
+        },
+        Step::Native {
+            check: Native::WebInput {
+                page,
+                driver,
+                recordings,
+            },
+            announce: Announce {
+                cannot_verify: "web-input CANNOT VERIFY: the probe page could not be driven (details above)",
+                failed: "web-input FAILED: a trusted-input check of the probe page failed (verdicts above)",
+            },
+        },
+        Step::Probe {
+            run: hold,
+            markers: &["NATIVE_RECORDING_HELD=web_bidi_mouse_pen_touch"],
+            failure: "web-input FAILED: the browser session no longer replays to its golden (output above)",
+        },
+    ]
 }
 
 /// What the plans take from the host.
@@ -1144,6 +1291,11 @@ mod tests {
             ),
             (&["ios-sim"], DeviceCheck::IosSim),
             (&["windows-a11y"], DeviceCheck::WindowsA11y),
+            (&["web-input"], DeviceCheck::WebInput { bless: false }),
+            (
+                &["web-input", "--bless"],
+                DeviceCheck::WebInput { bless: true },
+            ),
             (
                 &["windows-input"],
                 DeviceCheck::WindowsInput { bless: false },
@@ -1317,6 +1469,51 @@ mod tests {
         }
     }
 
+    /// The ChromeDriver comes first, then the browser test target with it,
+    /// the probe built and bound for the page, the BiDi session, and its
+    /// recording held against the golden natively; `--bless` writes it.
+    fn web_input_runs_the_browser_tests_then_drives_the_probe() {
+        let probe: Vec<String> = render(&DeviceCheck::WebInput { bless: false });
+        let blessed: Vec<String> = render(&DeviceCheck::WebInput { bless: true });
+        assert_eq!(probe.len(), 8, "{probe:#?}");
+        assert!(
+            probe[0].starts_with("fetch-chromedriver target"),
+            "{}",
+            probe[0]
+        );
+        assert!(
+            probe[1].contains("CHROMEDRIVER=")
+                && probe[1].contains("--target wasm32-unknown-unknown --test web_browser"),
+            "{}",
+            probe[1]
+        );
+        assert!(
+            probe[2].contains("--example web_input_probe --features native-capture"),
+            "{}",
+            probe[2]
+        );
+        assert!(
+            probe[4].starts_with("wasm-bindgen --target web"),
+            "{}",
+            probe[4]
+        );
+        assert!(probe[5].contains("index.html"), "{}", probe[5]);
+        assert!(
+            probe[6].starts_with("webdriver-bidi target"),
+            "{}",
+            probe[6]
+        );
+        let hold = |plan: &[String]| plan.last().cloned().unwrap_or_default();
+        assert!(
+            hold(&probe).contains("native_recording::browser_sessions_hold_against_their_goldens")
+                && hold(&probe).contains("NATIVE_RECORDING_HELD=web_bidi_mouse_pen_touch")
+                && !hold(&probe).contains("FLUI_NATIVE_RECORDING_BLESS"),
+            "{}",
+            hold(&probe)
+        );
+        assert!(hold(&blessed).contains("FLUI_NATIVE_RECORDING_BLESS=1"));
+    }
+
     fn windows_notes_builds_the_shared_tree_and_drives_it() {
         assert_plan(
             &DeviceCheck::WindowsNotes,
@@ -1433,6 +1630,10 @@ mod tests {
                 (
                     "windows_input_records_its_sessions_then_drives_the_counter",
                     windows_input_records_its_sessions_then_drives_the_counter as fn(),
+                ),
+                (
+                    "web_input_runs_the_browser_tests_then_drives_the_probe",
+                    web_input_runs_the_browser_tests_then_drives_the_probe as fn(),
                 ),
                 (
                     "windows_notes_builds_the_shared_tree_and_drives_it",

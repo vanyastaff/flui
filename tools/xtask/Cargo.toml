@@ -26,6 +26,12 @@ tempfile = { workspace = true }
 toml = { workspace = true }
 walkdir = { workspace = true }
 wasmparser = { workspace = true }
+# `cargo xtask device web-input`: the ChromeDriver archive (ureq, zip), the
+# WebDriver BiDi session (tungstenite) and the probe page's server (tiny_http).
+tiny_http = { workspace = true }
+tungstenite = { workspace = true }
+ureq = { workspace = true, features = ["json"] }
+zip = { workspace = true, features = ["deflate-flate2-zlib-rs"] }
 
 # `cargo xtask device windows-a11y` and `windows-input`: a UI Automation
 # client, and real input through `SendInput`.

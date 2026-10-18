@@ -20,7 +20,9 @@ use super::haptic_rows::{
     a_backend_never_queues, a_stale_source_plays_on_the_window_actuator,
     capabilities_match_what_plays, semantic_feedback_reports_a_tier_one_outcome,
 };
-use super::key_rows::menu_keys_arrive_as_the_bindings_name_them;
+use super::key_rows::{
+    a_key_during_composition_is_the_input_methods, menu_keys_arrive_as_the_bindings_name_them,
+};
 use super::{
     BackendUnderTest, ContactAction, ContactStep, PanStep, PinchChange, PinchStep, RowGroup,
     RowOutcome, Stamp, Step, StepPhase,
@@ -46,8 +48,7 @@ macro_rules! row {
     };
 }
 
-/// Every row, in running order. IME rows join the table under their
-/// [`RowGroup`].
+// Every row, in running order.
 pub(super) fn rows<B: BackendUnderTest>() -> Vec<Row<B>> {
     vec![
         row!(PointerAssembly, a_contact_is_one_pointer_from_down_to_up),
@@ -95,6 +96,7 @@ pub(super) fn rows<B: BackendUnderTest>() -> Vec<Row<B>> {
         row!(Haptics, a_stale_source_plays_on_the_window_actuator),
         row!(Haptics, capabilities_match_what_plays),
         row!(Keys, menu_keys_arrive_as_the_bindings_name_them),
+        row!(Ime, a_key_during_composition_is_the_input_methods),
     ]
 }
 
