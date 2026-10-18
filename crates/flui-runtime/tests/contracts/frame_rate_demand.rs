@@ -368,6 +368,27 @@ fn closing_a_presentation_releases_its_delivered_demand() {
     );
 }
 
+fn a_panicking_work_item_keeps_the_delivered_demand_for_the_next_release() {
+    let rig = Rig::new();
+    rig.touch(true);
+    assert_eq!(rig.demands(), [FrameRateDemand::Active]);
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = rig.window.test_callback(
+            Box::new(|_| panic!("scripted work item failure")),
+            &rig.effects,
+        );
+    }));
+    assert!(failed.is_err(), "the work item's failure propagates");
+    rig.touch(false);
+    rig.advance(FRAME_RATE_HOLD);
+    rig.frame();
+    assert_eq!(
+        rig.demands(),
+        [FrameRateDemand::Active, FrameRateDemand::Idle],
+        "the failed item forgot that the window was told Active, so the release never came"
+    );
+}
+
 #[test]
 fn frame_rate_demand_contract() {
     crate::table_test::run_table(
@@ -396,6 +417,10 @@ fn frame_rate_demand_contract() {
             (
                 "closing_a_presentation_releases_its_delivered_demand",
                 closing_a_presentation_releases_its_delivered_demand as fn(),
+            ),
+            (
+                "a_panicking_work_item_keeps_the_delivered_demand_for_the_next_release",
+                a_panicking_work_item_keeps_the_delivered_demand_for_the_next_release as fn(),
             ),
             (
                 "a_demand_whose_delivery_panicked_is_delivered_by_the_next_work_item",

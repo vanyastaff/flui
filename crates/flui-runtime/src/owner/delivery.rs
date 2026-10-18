@@ -755,14 +755,17 @@ impl OwnerCore {
                     } else {
                         Vec::new()
                     };
-                    let demands = if healthy && effects.tracks_frame_rate_demand() {
-                        runtime.frame_rate_demands()
-                    } else {
-                        Vec::new()
-                    };
+                    // An unhealthy item observes nothing, and what it did not
+                    // observe it must not forget: the delivered records stay
+                    // until a healthy item replaces them or the presentation
+                    // retires.
+                    let demands = (healthy && effects.tracks_frame_rate_demand())
+                        .then(|| runtime.frame_rate_demands());
                     lease.return_to_owner(&mut failure, RecoveryState::current(&first_failure));
                     self.state.borrow_mut().claim = DeliveryClaim::Completing;
-                    self.deliver_frame_rate_demands(effects, id, &demands, &mut failure);
+                    if let Some(demands) = demands {
+                        self.deliver_frame_rate_demands(effects, id, &demands, &mut failure);
+                    }
                     for work in frontiers {
                         let frontier = super::TextSizingFrontier::new(self, id, work);
                         if failure.is_some()
