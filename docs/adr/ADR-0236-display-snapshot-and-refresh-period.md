@@ -109,7 +109,22 @@ resume. No backend delivered a display change.
    and released after a short idle hold; below 30 the current rate is read only on configuration
    change and resume. The runtime has no platform edge (ADR-0083): it publishes the demand edge, a
    wake deadline ends the hold on a static screen where no frame runs, and the host app applies the
-   hint to the window, again after the native window is replaced on resume.
+   hint to the window, again after the native window is replaced on resume. The request is a typed
+   `FrameRateHint` (`Default` or `High`) passed to `PlatformWindow::set_frame_rate_hint`, whose
+   default is a no-op: a backend without the capability needs no code, and the system may decline
+   the request.
+10. **One cache serves every native source.** `flui-platform` keeps a `DisplaySource` per platform
+    instance: the id registry, the last published snapshot and a stale flag that any thread may
+    set. `display_snapshot` runs on every owner wake, so a backend with change notifications
+    invalidates the source and reads the OS again only when it is stale; the flag is cleared before
+    the read, so an invalidation that lands during a sample survives it. `snapshot_with_aux`
+    publishes a sample that also yields data a reader resolves against the snapshot (Windows'
+    monitor handles) and commits that data only after the snapshot is published, so a reader never
+    sees data for displays the snapshot lacks. A window on a display the snapshot lacks (a monitor
+    plugged in since) answers no display, never the primary, and `note_miss` invalidates once per
+    snapshot revision however often the miss repeats; `note_miss_with` additionally takes the call
+    that wakes the owner, for a backend whose owner would otherwise sleep until something else wakes
+    it (Android). An unchanged sample answers the previous snapshot with its revision.
 
 ## Consequences
 
@@ -118,7 +133,9 @@ resume. No backend delivered a display change.
 - Native sources are per OS rather than per window backend: the winit backend no longer enumerates
   monitors itself and gets the snapshot from its OS's source. On Linux this is a new display module
   over `wl_output` and `zxdg_output_v1` or RandR, whose parsing is a pure model, designed as the first
-  piece of a native Linux backend.
+  piece of a native Linux backend. The source reads the compositor on a connection of its own and a
+  thread wakes the owner on change, so the winit backend takes its snapshot from it and winit's own
+  monitor list is read nowhere.
 - The Android change source is not a `DisplayManager` listener (it needs a Java class that a
   NativeActivity application does not have): refresh-rate changes come from the NDK choreographer
   callback on API 30 and later, everything else from configuration changes, resume and the existing
