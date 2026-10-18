@@ -125,7 +125,9 @@ impl WinitWindow {
     }
 
     /// Whether the window sits on a monitor the last sample does not hold — a
-    /// monitor that appeared since, which calls for a fresh sample.
+    /// monitor that appeared since, which calls for a fresh sample. Windows has
+    /// no such check: its native source samples again on a miss.
+    #[cfg(not(windows))]
     pub(super) fn on_unsampled_monitor(&self) -> bool {
         self.window
             .current_monitor()
@@ -238,8 +240,13 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn display_id(&self) -> Option<DisplayId> {
-        let monitor = self.window.current_monitor()?;
-        self.displays.id_of(&monitor)
+        #[cfg(windows)]
+        return self.displays.id_of_window(&self.window);
+        #[cfg(not(windows))]
+        {
+            let monitor = self.window.current_monitor()?;
+            self.displays.id_of(&monitor)
+        }
     }
 
     fn pre_present_notify(&self) {

@@ -7,9 +7,9 @@ use windows::{
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
             CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
-            GetWindowLongPtrW, RegisterClassW, SetWindowLongPtrW, UnregisterClassW, WINDOW_STYLE,
-            WM_CLOSE, WM_NCCREATE, WM_NCDESTROY, WM_SETTINGCHANGE, WNDCLASSW, WS_EX_NOACTIVATE,
-            WS_EX_TOOLWINDOW,
+            GetWindowLongPtrW, RegisterClassW, SPI_SETWORKAREA, SetWindowLongPtrW,
+            UnregisterClassW, WINDOW_STYLE, WM_CLOSE, WM_DISPLAYCHANGE, WM_NCCREATE, WM_NCDESTROY,
+            WM_SETTINGCHANGE, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
         },
     },
     core::{PCWSTR, w},
@@ -32,6 +32,25 @@ pub(super) struct Receiver {
 }
 
 impl Receiver {
+    #[cfg(test)]
+    pub(super) fn send_for_test(&self, message: u32, wparam: usize) {
+        let hwnd = self
+            .context
+            .as_ref()
+            .and_then(|context| context.hwnd.get())
+            .expect("live receiver");
+        // SAFETY: this test sends a pointer-free notification only to this
+        // receiver, whose context is retained by the borrowed owner.
+        unsafe {
+            windows::Win32::UI::WindowsAndMessaging::SendMessageW(
+                hwnd,
+                message,
+                Some(WPARAM(wparam)),
+                Some(LPARAM(0)),
+            );
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn send_setting_change(&self) {
         let hwnd = self
@@ -157,6 +176,17 @@ unsafe extern "system" fn procedure(
                 } else if message == WM_SETTINGCHANGE {
                     let invalidation = Arc::clone(&(*context).invalidation);
                     invalidation.notify();
+                    // A work-area change (taskbar moved or resized) alters a
+                    // display's usable bounds, which the snapshot carries.
+                    if wparam.0 == SPI_SETWORKAREA.0 as usize {
+                        invalidation.notify_displays();
+                    }
+                    return;
+                } else if message == WM_DISPLAYCHANGE {
+                    // Only invalidates and wakes: the message can arrive inside
+                    // a COM call of ours, so no sampling happens here.
+                    let invalidation = Arc::clone(&(*context).invalidation);
+                    invalidation.notify_displays();
                     return;
                 } else if message == WM_CLOSE {
                     // This internal receiver is retired by the host, not by

@@ -39,7 +39,7 @@ use windows::{
                 WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT,
                 WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE,
                 WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSDEADCHAR, WM_SYSKEYDOWN,
-                WM_SYSKEYUP, WNDCLASSW,
+                WM_SYSKEYUP, WM_WINDOWPOSCHANGED, WNDCLASSW,
             },
         },
     },
@@ -47,7 +47,7 @@ use windows::{
 };
 
 use super::{
-    display as displays,
+    display::WindowsDisplays,
     text_services::TextServices,
     util::{WINDOW_CLASS_NAME, get_x_lparam, get_y_lparam, hiword, load_cursor_style},
     window::WindowsWindow,
@@ -59,7 +59,6 @@ use crate::{
     executor::BackgroundExecutor,
     shared::{
         PlatformHandlers, WindowCallbacks,
-        display_source::DisplaySource,
         hwnd_affinity::{ContextLedger, UserDataRefusal},
     },
     traits::{
@@ -94,6 +93,10 @@ impl Drop for DeadlineQuery {
 #[cfg(test)]
 #[path = "platform/preference_retry_tests.rs"]
 mod preference_retry_tests;
+
+#[cfg(test)]
+#[path = "platform/display_message_tests.rs"]
+mod display_message_tests;
 
 /// The last deadline the loop delivered. The hook answers with an instant
 /// only, so the same `(hook, instant)` pair is either work no frame has had
@@ -327,6 +330,11 @@ pub(super) struct WindowContext {
     /// Asks the owner to consult the exit policy once this window's
     /// `WM_DESTROY` leaves the platform tracking no window.
     pub exit_policy: super::owner_control::ExitPolicyRequest,
+    /// The platform's monitors: a DPI change invalidates their snapshot.
+    pub displays: Arc<WindowsDisplays>,
+    /// The monitor handle `WM_WINDOWPOSCHANGED` last saw this window on, `0`
+    /// before the first message; a change raises `on_display_changed`.
+    pub last_monitor: std::cell::Cell<isize>,
     /// Per-window callbacks for event delivery, owned by this context and
     /// released by `WM_DESTROY` on the owner thread.
     pub callbacks: WindowCallbacks,
@@ -687,7 +695,7 @@ pub struct WindowsPlatform {
     config: WindowConfiguration,
 
     /// The monitors this platform last sampled and the registry of their ids.
-    displays: DisplaySource,
+    displays: Arc<WindowsDisplays>,
 
     /// Records the owner thread so the thread-affine Win32 operations below
     /// can `debug_assert` their caller (ADR-0039). Bound at construction —
@@ -830,8 +838,12 @@ impl WindowsPlatform {
         // Build owner resources first so any later native creation failure
         // retires its preference subscriptions and receiver through the guard.
         let windows = Arc::new(Mutex::new(HashMap::new()));
-        let owner_control =
-            super::owner_control::OwnerControl::new(owner_identity, Arc::downgrade(&windows))?;
+        let displays = Arc::new(WindowsDisplays::new());
+        let owner_control = super::owner_control::OwnerControl::new(
+            owner_identity,
+            Arc::downgrade(&windows),
+            Arc::clone(&displays),
+        )?;
 
         // SAFETY: `GetModuleHandleW(None)` queries the current process
         // image, no pointer arguments. `CreateWindowExW` here creates the
@@ -876,7 +888,7 @@ impl WindowsPlatform {
             windows,
             background_executor,
             config,
-            displays: DisplaySource::new(),
+            displays,
             affinity: flui_foundation::OwnerAffinity::new(),
             apartment: super::com_apartment::ApartmentHold::new(apartment),
         };
@@ -1514,6 +1526,8 @@ impl WindowsPlatform {
 
                     // Dispatch ScaleFactorChanged event
                     if let Some(ctx) = ctx {
+                        // The display's scale changed, so its snapshot entry did.
+                        ctx.displays.invalidate();
                         ctx.scale_factor.set(new_scale);
                         let mut client = RECT::default();
                         let client_size = GetClientRect(hwnd, &raw mut client).is_ok().then(|| {
@@ -1560,9 +1574,25 @@ impl WindowsPlatform {
                                 );
                             }
                         }
+                        // After the state above is current: the hint wakes the
+                        // owner, which samples the snapshot and re-derives.
+                        ctx.callbacks.dispatch_display_changed();
                     }
 
                     LRESULT(0)
+                }
+
+                WM_WINDOWPOSCHANGED => {
+                    // `WM_MOVE` and `WM_SIZE` come from the default procedure;
+                    // the monitor is checked once the move has landed.
+                    let result = DefWindowProcW(hwnd, msg, wparam, lparam);
+                    if let Some(ctx) = ctx {
+                        let monitor = super::display::nearest_monitor(hwnd);
+                        if ctx.last_monitor.replace(monitor) != monitor {
+                            ctx.callbacks.dispatch_display_changed();
+                        }
+                    }
+                    result
                 }
 
                 WM_MOUSEMOVE => {
@@ -2344,7 +2374,7 @@ impl Platform for WindowsPlatform {
     // ==================== Display Management ====================
 
     fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        displays::sample(&self.displays)
+        self.displays.snapshot()
     }
 
     fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
@@ -2368,9 +2398,7 @@ impl Platform for WindowsPlatform {
         let window = WindowsWindow::new(
             options,
             self.windows.clone(),
-            shares.handlers,
-            shares.frames,
-            shares.exit_policy,
+            shares,
             self.config.clone(),
             self.apartment.share(),
         )?;

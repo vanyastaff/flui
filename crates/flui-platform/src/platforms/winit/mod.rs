@@ -9,6 +9,10 @@
 mod clipboard;
 mod control;
 mod data_transfer;
+#[cfg(not(windows))]
+mod display;
+#[cfg(windows)]
+#[path = "display_windows.rs"]
 mod display;
 mod events;
 mod platform;

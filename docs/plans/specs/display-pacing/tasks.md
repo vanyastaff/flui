@@ -142,8 +142,8 @@ owner_dispatch.rs}`, `crates/flui-runtime/src/owner/presentation_dispatch.rs`,
 `on_display_changed`; winit-на-Windows получает снимок у этого источника; **модуль версий (D-19):**
 `platforms/windows/os_version.rs` — `WindowsBuild` из `RtlGetVersion`, доказательство для флага
 `QDC_VIRTUAL_MODE_AWARE` (сборка ≥ 18362); читатель — вызов `QueryDisplayConfig` этой же задачи.
-Тесты: `windows_build_below_18362_omits_the_virtual_mode_flag`, `windows_display_contract`
-(W, локально) и чистые строки `os_display_classification` (L): `windows_zero_or_one_hz_is_unknown`,
+Тесты: `windows_build_below_18362_omits_the_virtual_mode_flag`, нативные строки `mod native_windows` в
+`crates/flui-platform/tests/contract.rs` и `display_message_tests.rs` в `src` (W, локально) и чистые строки `os_display_classification` (L): `windows_zero_or_one_hz_is_unknown`,
 `rational_refresh_converts_exactly`, `nearest_monitor_resolves_by_native_key` (seam с внедрённым
 перечислением). Падают на основе: окно отвечает основным монитором (`windows/window.rs:1067`–`1085`),
 `WM_DISPLAYCHANGE` не обрабатывается. Файлы: `crates/flui-platform/src/platforms/windows/{display.rs,
@@ -260,13 +260,13 @@ CI (`xrandr`), WSLg на машине владельца. Файлы: `crates/fl
 | R21 | `refresh_interval_metric_recomputes_on_display_change`, `unknown_refresh_period_uses_the_60_hz_fallback`, `period_product_overflow_is_treated_as_unknown`, `non_finite_factor_is_treated_as_unknown`, `display_change_runs_the_dpi_geometry_barrier` | DP3 | L |
 | R22 | структурное свойство, проверяется ревью; строки нет | DP3 | — |
 | R22a | `macos_and_winit_shims_keep_the_period_they_report_today` | DP1 | L |
-| R23 | `windows_display_contract`, `os_display_classification`; прогон | DP4 | L, W |
+| R23 | нативные строки `native_windows` (`tests/contract.rs`) и `display_message_tests.rs`, `os_display_classification`; прогон | DP4 | L, W |
 | R24 | компиляция и типы (`cross-typecheck`), `macos_display_key_is_the_display_uuid` | DP8 | L |
 | R25 | компиляция и типы | DP8 | L |
 | R26 | `android_refresh_value_table`; прогон на S21 | DP5 | L, A |
 | R27 | `web_refresh_estimate_table`; смена масштаба страницы | DP6 | L, B |
 | R28 | строки Linux (модель); Xvfb, WSLg | DP7 | L, X, WSL |
-| R29 | `windows_display_contract`, `winit_window_matches_its_output_by_native_id`, `mirrored_outputs_keep_distinct_ids` | DP4, DP7 | L, W |
+| R29 | нативные строки `native_windows` (`tests/contract.rs`), `winit_window_matches_its_output_by_native_id`, `mirrored_outputs_keep_distinct_ids` | DP4, DP7 | L, W |
 | R30 | `window_display_observation_contract` через внедрение | DP1, DP2 | L |
 | R31 | `no_features_gives_an_empty_snapshot_not_a_panic`; rustdoc `lib.rs` | DP7 | L |
 | R32 | пример `displays.rs` | DP9 | W, A, B, WSL |

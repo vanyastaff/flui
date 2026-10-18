@@ -427,6 +427,22 @@ mod native_windows {
             "repeated_samples_of_the_real_monitors_keep_their_ids",
             repeated_samples_of_the_real_monitors_keep_their_ids,
         ),
+        (
+            "refresh_is_the_rational_active_mode",
+            refresh_is_the_rational_active_mode,
+        ),
+        (
+            "window_display_is_a_display_of_the_snapshot",
+            window_display_is_a_display_of_the_snapshot,
+        ),
+        (
+            "dpi_change_raises_the_display_hint",
+            dpi_change_raises_the_display_hint,
+        ),
+        (
+            "moves_within_one_monitor_raise_no_display_hint",
+            moves_within_one_monitor_raise_no_display_hint,
+        ),
     ];
 
     // The monitors are keyed by their display targets, not the reusable GDI
@@ -449,6 +465,189 @@ mod native_windows {
             first.displays().len(),
             "two monitors share an id"
         );
+    }
+
+    // Each active path's `refreshRate`, read straight from `QueryDisplayConfig`
+    // and paired with its GDI source name, independently of the source under
+    // test.
+    #[expect(unsafe_code, reason = "reading the active display paths")]
+    fn system_path_rates() -> Vec<(String, u32, u32)> {
+        use windows::Win32::Devices::Display::{
+            DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_MODE_INFO,
+            DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME, DisplayConfigGetDeviceInfo,
+            GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig,
+        };
+        let (mut paths, mut modes) = (0u32, 0u32);
+        // SAFETY: both out-pointers are valid `u32`s for the call.
+        let sized = unsafe {
+            GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &raw mut paths, &raw mut modes)
+        };
+        assert_eq!(sized.0, 0, "sizing the display config");
+        let mut path_info = vec![DISPLAYCONFIG_PATH_INFO::default(); paths as usize];
+        let mut mode_info = vec![DISPLAYCONFIG_MODE_INFO::default(); modes as usize];
+        // SAFETY: the buffers hold exactly the counts passed in; active paths
+        // take no topology id.
+        let queried = unsafe {
+            QueryDisplayConfig(
+                QDC_ONLY_ACTIVE_PATHS,
+                &raw mut paths,
+                path_info.as_mut_ptr(),
+                &raw mut modes,
+                mode_info.as_mut_ptr(),
+                None,
+            )
+        };
+        assert_eq!(queried.0, 0, "querying the display config");
+        path_info.truncate(paths as usize);
+        path_info
+            .iter()
+            .map(|path| {
+                let mut name = DISPLAYCONFIG_SOURCE_DEVICE_NAME::default();
+                name.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+                name.header.size = std::mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32;
+                name.header.adapterId = path.sourceInfo.adapterId;
+                name.header.id = path.sourceInfo.id;
+                // SAFETY: the header carries the request type and the struct's
+                // own size; `name` outlives the call.
+                let status = unsafe { DisplayConfigGetDeviceInfo(&raw mut name.header) };
+                assert_eq!(status, 0, "naming the source");
+                let end = name
+                    .viewGdiDeviceName
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(name.viewGdiDeviceName.len());
+                (
+                    String::from_utf16_lossy(&name.viewGdiDeviceName[..end]),
+                    path.targetInfo.refreshRate.Numerator,
+                    path.targetInfo.refreshRate.Denominator,
+                )
+            })
+            .collect()
+    }
+
+    // The snapshot's period is the target's rational rate converted exactly,
+    // not a rounded whole-hertz figure.
+    fn refresh_is_the_rational_active_mode() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let snapshot = platform.display_snapshot().expect("snapshot");
+        let rates = system_path_rates();
+        assert!(!rates.is_empty(), "the system reports an active path");
+        let mut compared = 0;
+        for (gdi_name, numerator, denominator) in rates {
+            let Ok(expected) = flui_platform_api::RefreshPeriod::from_ratio(numerator, denominator)
+            else {
+                continue;
+            };
+            let display = snapshot
+                .displays()
+                .iter()
+                .find(|display| display.name == gdi_name)
+                .unwrap_or_else(|| panic!("{gdi_name} is not in {:?}", snapshot.displays()));
+            assert_eq!(
+                display.refresh_period,
+                Some(expected),
+                "{gdi_name}: {numerator}/{denominator} Hz"
+            );
+            compared += 1;
+        }
+        assert!(compared > 0, "no path carried a rate to compare");
+    }
+
+    fn window_display_is_a_display_of_the_snapshot() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        // The window reads the sample the snapshot took; it samples nothing.
+        let snapshot = platform.display_snapshot().expect("snapshot");
+        let id = window
+            .display_id()
+            .expect("a window on a monitor names its display");
+        assert!(
+            snapshot.get(id).is_some(),
+            "{id:?} is not in {:?}",
+            snapshot.displays()
+        );
+        window.close();
+    }
+
+    #[expect(unsafe_code, reason = "sending WM_DPICHANGED to an owned window")]
+    fn dpi_change_raises_the_display_hint() {
+        use windows::Win32::UI::{HiDpi::GetDpiForWindow, WindowsAndMessaging::WM_DPICHANGED};
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = window
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 backend")
+            .hwnd();
+        let hints = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&hints);
+        window.on_display_changed(Box::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
+        // SAFETY: the window is live on this thread; `rect` outlives the
+        // synchronous send, which is the pointer WM_DPICHANGED's lparam carries.
+        unsafe {
+            let dpi = GetDpiForWindow(hwnd);
+            let mut rect = RECT::default();
+            windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &raw mut rect)
+                .expect("window rect");
+            SendMessageW(
+                hwnd,
+                WM_DPICHANGED,
+                Some(WPARAM(((dpi << 16) | dpi) as usize)),
+                Some(LPARAM((&raw const rect) as isize)),
+            );
+        }
+        assert_eq!(
+            hints.load(Ordering::SeqCst),
+            1,
+            "a DPI change must raise one display hint"
+        );
+        window.close();
+    }
+
+    #[expect(unsafe_code, reason = "moving an owned window")]
+    fn moves_within_one_monitor_raise_no_display_hint() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = window
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 backend")
+            .hwnd();
+        let hints = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&hints);
+        window.on_display_changed(Box::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
+        let move_to = |x: i32, y: i32| {
+            // SAFETY: this live wrapper owns the HWND on its creating thread;
+            // SetWindowPos receives only by-value coordinates and flags.
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    None,
+                    x,
+                    y,
+                    0,
+                    0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                )
+            }
+            .expect("native move");
+        };
+        // The first message seeds the window's monitor.
+        move_to(100, 100);
+        let seeded = hints.load(Ordering::SeqCst);
+        for (x, y) in [(140, 120), (200, 150), (80, 90)] {
+            move_to(x, y);
+        }
+        assert_eq!(
+            hints.load(Ordering::SeqCst),
+            seeded,
+            "a move that stays on one monitor raised a display hint"
+        );
+        window.close();
     }
 
     pub(super) fn run_requested_child() -> bool {

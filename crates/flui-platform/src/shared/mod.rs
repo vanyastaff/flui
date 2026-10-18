@@ -63,13 +63,14 @@ pub mod visibility;
 // period here; `test` keeps the rule checked on every host.
 #[cfg(any(
     target_os = "macos",
-    all(
-        feature = "winit-backend",
-        any(target_os = "windows", target_os = "linux")
-    ),
+    all(feature = "winit-backend", target_os = "linux"),
     test
 ))]
 pub(crate) mod display_period;
+// The Windows display source reads rates and resolves monitors by these rules;
+// `test` keeps them checked on every host.
+#[cfg(any(windows, test))]
+pub(crate) mod windows_display;
 // UIKit consumes this acknowledgement; its transport contract runs on every host.
 pub mod window_installation;
 
