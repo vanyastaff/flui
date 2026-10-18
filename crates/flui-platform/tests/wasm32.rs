@@ -14,6 +14,8 @@ use flui_platform_api::MotionPreference;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::wasm_bindgen_test;
 
+#[path = "wasm32/display.rs"]
+mod display;
 #[path = "wasm32/page_store.rs"]
 mod page_store;
 
