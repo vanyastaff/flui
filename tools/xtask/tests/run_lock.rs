@@ -3,8 +3,10 @@
 //! A separate target: it spawns the built binary, which only an integration
 //! test can name (`CARGO_BIN_EXE_xtask`).
 
+use std::any::Any;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -93,9 +95,32 @@ impl Drop for Reaped {
     }
 }
 
+/// `cargo xtask clean-nested` against `lock_path`, with none of what decides
+/// whom it waits for inherited from the test's own environment (an agent's
+/// shell may carry a host pool).
+fn clean_nested(dir: &Path, lock_path: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+    command
+        .arg("clean-nested")
+        .env("FLUI_XTASK_LOCK_FILE", lock_path)
+        .env("CARGO_TARGET_DIR", dir.join("target"));
+    for key in [
+        "FLUI_XTASK_NO_LOCK",
+        "FLUI_XTASK_LOCK_HELD",
+        "HELI_RUN",
+        "CARGO_MAKEFLAGS",
+        "MAKEFLAGS",
+        "MFLAGS",
+    ] {
+        command.env_remove(key);
+    }
+    command
+}
+
 /// `clean-nested` is heavy (it deletes the nested-test caches) and, pointed
 /// at an empty target directory, deletes nothing: held behind the lock, it
-/// must say so and wait, then finish once the lock is released.
+/// must say so and wait, then finish once the lock is released. A jobserver
+/// it cannot reach (a stale variable, a stopped pool) does not excuse it.
 #[test]
 fn a_heavy_command_waits_for_the_run_lock() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -103,13 +128,11 @@ fn a_heavy_command_waits_for_the_run_lock() {
     let lock = File::create(&lock_path).expect("create the lock file");
     lock.lock().expect("hold the run lock");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .arg("clean-nested")
-        .env("FLUI_XTASK_LOCK_FILE", &lock_path)
-        .env("CARGO_TARGET_DIR", dir.path().join("target"))
-        .env_remove("FLUI_XTASK_NO_LOCK")
-        .env_remove("FLUI_XTASK_LOCK_HELD")
-        .env_remove("HELI_RUN")
+    let child = clean_nested(dir.path(), &lock_path)
+        .env(
+            "CARGO_MAKEFLAGS",
+            "-j --jobserver-auth=flui-xtask-test-stopped-pool",
+        )
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -155,37 +178,97 @@ fn a_heavy_command_waits_for_the_run_lock() {
     assert!(status.success(), "the run proceeds once the lock is free");
 }
 
-/// A heli-scheduled run already shares the host budget. An unrelated heavy
-/// run in another checkout must not force it into FLUI's old host queue.
-#[test]
-fn a_heli_scheduled_command_proceeds_while_another_checkout_holds_the_host_lock() {
-    let dir = tempfile::tempdir().expect("temp dir");
-    let lock_path = dir.path().join("heavy.lock");
-    let lock = File::create(&lock_path).expect("lock file");
-    lock.lock().expect("another checkout holds the lock");
-    let child = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .arg("clean-nested")
-        .env("FLUI_XTASK_LOCK_FILE", &lock_path)
-        .env("CARGO_TARGET_DIR", dir.path().join("target"))
-        .env("HELI_RUN", "r17")
-        .env_remove("FLUI_XTASK_NO_LOCK")
-        .env_remove("FLUI_XTASK_LOCK_HELD")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start the heli-scheduled command");
-    let mut child = Reaped(child);
-    let deadline = Instant::now() + Duration::from_secs(8);
-    loop {
-        if let Some(status) = child.0.try_wait().expect("poll command") {
-            assert!(status.success(), "{status}");
-            break;
+/// A jobserver of the kind a host pool makes on this platform (a named
+/// semaphore on Windows, a FIFO elsewhere), with its `--jobserver-auth`
+/// value; it exists while the returned value lives.
+#[cfg(windows)]
+#[expect(unsafe_code, reason = "creating a named semaphore is a Win32 call")]
+fn live_pool(_dir: &Path) -> (String, impl Sized + use<>) {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::Threading::CreateSemaphoreW;
+    use windows::core::HSTRING;
+    struct Semaphore(HANDLE);
+    impl Drop for Semaphore {
+        fn drop(&mut self) {
+            // SAFETY: the handle was created below and is closed once.
+            let _ = unsafe { CloseHandle(self.0) };
         }
-        assert!(
-            Instant::now() < deadline,
-            "heli run waited behind another checkout's host lock"
-        );
-        std::thread::sleep(Duration::from_millis(20));
     }
-    drop(lock);
+    let name = format!("flui-xtask-run-lock-pool-{}", std::process::id());
+    // SAFETY: no security attributes; the name outlives the call.
+    let handle = unsafe { CreateSemaphoreW(None, 4, 4, &HSTRING::from(&name)) }
+        .expect("create the pool's semaphore");
+    (name, Semaphore(handle))
+}
+
+#[cfg(unix)]
+fn live_pool(dir: &Path) -> (String, impl Sized + use<>) {
+    let fifo = dir.join("pool");
+    let status = Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("run mkfifo");
+    assert!(status.success(), "mkfifo: {status}");
+    (format!("fifo:{}", fifo.display()), ())
+}
+
+/// A run something else already schedules within the host budget (heli
+/// runs it, or it inherits a reachable host pool) must not queue behind an
+/// unrelated heavy run in another checkout. A pool says so in one line.
+#[test]
+fn a_scheduled_command_proceeds_while_another_checkout_holds_the_host_lock() {
+    fn heli_run(command: &mut Command, _dir: &Path) -> (Option<&'static str>, Box<dyn Any>) {
+        command.env("HELI_RUN", "r17");
+        (None, Box::new(()))
+    }
+    fn reachable_pool(command: &mut Command, dir: &Path) -> (Option<&'static str>, Box<dyn Any>) {
+        let (auth, pool) = live_pool(dir);
+        command.env("CARGO_MAKEFLAGS", format!("-j --jobserver-auth={auth}"));
+        (Some("not taking the run lock"), Box::new(pool))
+    }
+    /// Sets how the run is scheduled; what its stderr must say, and what
+    /// must live while it runs.
+    type Schedule = fn(&mut Command, &Path) -> (Option<&'static str>, Box<dyn Any>);
+    let rows: [(&str, Schedule); 2] = [("heli_run", heli_run), ("reachable_pool", reachable_pool)];
+    for (row, schedule) in rows {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let lock_path = dir.path().join("heavy.lock");
+        let lock = File::create(&lock_path).expect("lock file");
+        lock.lock().expect("another checkout holds the lock");
+        let mut command = clean_nested(dir.path(), &lock_path);
+        let (says, _pool) = schedule(&mut command, dir.path());
+        let child = command
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("start the scheduled command");
+        let mut child = Reaped(child);
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let status = loop {
+            if let Some(status) = child.0.try_wait().expect("poll command") {
+                break status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{row}: the run waited behind another checkout's host lock"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let mut stderr = String::new();
+        child
+            .0
+            .stderr
+            .take()
+            .expect("piped stderr")
+            .read_to_string(&mut stderr)
+            .expect("read stderr");
+        assert!(status.success(), "{row}: {status}\n{stderr}");
+        if let Some(says) = says {
+            assert!(
+                stderr.contains(says),
+                "{row}: stderr says `{says}`:\n{stderr}"
+            );
+        }
+        drop(lock);
+    }
 }

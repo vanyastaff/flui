@@ -17,6 +17,11 @@
 //! the lock.
 //! A nonempty `HELI_RUN` also skips it: heli already schedules this run and
 //! its children, so unrelated checkouts must not queue behind this lock.
+//! So does an inherited jobserver this process can reach (a host pool such
+//! as heli's, named by `CARGO_MAKEFLAGS`): every cargo drawing from it is
+//! bounded together, so the run neither waits nor makes others wait, and it
+//! says so in one line. A jobserver it cannot reach (a stale variable, a
+//! stopped pool) does not count, and the run locks as usual.
 //! Without a held lock, this module leaves job and test-thread counts alone.
 //!
 //! On a home directory shared over the network, runs on different machines
@@ -201,6 +206,90 @@ impl Parallelism {
     }
 }
 
+/// Why a heavy run goes ahead without the lock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Unlocked {
+    /// `FLUI_XTASK_NO_LOCK=1`, or heli runs this command (`HELI_RUN`).
+    OptedOut,
+    /// An inherited jobserver this process can reach, by its
+    /// `--jobserver-auth` value: it bounds this run together with every
+    /// other cargo drawing from it.
+    Jobserver(String),
+}
+
+/// The jobserver this process inherited, if it can reach it: the
+/// `--jobserver-auth` (or older `--jobserver-fds`) value of the first of
+/// `CARGO_MAKEFLAGS`, `MAKEFLAGS` and `MFLAGS` that is set, the last such
+/// argument winning, as the `jobserver` crate cargo uses reads them.
+/// `reachable` is asked about that value only.
+fn inherited_jobserver(
+    var: impl Fn(&str) -> Option<OsString>,
+    reachable: impl FnOnce(&str) -> bool,
+) -> Option<String> {
+    let flags = ["CARGO_MAKEFLAGS", "MAKEFLAGS", "MFLAGS"]
+        .into_iter()
+        .find_map(&var)?;
+    let auth = flags
+        .to_str()?
+        .split_ascii_whitespace()
+        .filter_map(|arg| {
+            arg.strip_prefix("--jobserver-auth=")
+                .or_else(|| arg.strip_prefix("--jobserver-fds="))
+        })
+        .next_back()?;
+    reachable(auth).then(|| auth.to_owned())
+}
+
+/// Whether the semaphore a Windows jobserver names exists for this process.
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "opening and closing a named semaphore is a Win32 call"
+)]
+fn jobserver_reachable(auth: &str) -> bool {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenSemaphoreW, SEMAPHORE_MODIFY_STATE, SYNCHRONIZATION_SYNCHRONIZE,
+    };
+    use windows::core::HSTRING;
+    // SAFETY: the name is a valid, NUL-terminated wide string that outlives
+    // the call, and no security attributes are passed.
+    let opened = unsafe {
+        OpenSemaphoreW(
+            SYNCHRONIZATION_SYNCHRONIZE | SEMAPHORE_MODIFY_STATE,
+            false,
+            &HSTRING::from(auth),
+        )
+    };
+    opened.is_ok_and(|handle| {
+        // SAFETY: `handle` was just opened here and is closed exactly once.
+        let _ = unsafe { CloseHandle(handle) };
+        true
+    })
+}
+
+/// Whether a Unix jobserver's FIFO (`fifo:<path>`) or inherited read end
+/// (`<read>,<write>`) is a pipe this process can see.
+#[cfg(unix)]
+fn jobserver_reachable(auth: &str) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    let path = match auth.strip_prefix("fifo:") {
+        Some(path) => PathBuf::from(path),
+        None => match auth.split_once(',') {
+            Some((read, _)) if read.parse::<u32>().is_ok() => {
+                PathBuf::from(format!("/dev/fd/{read}"))
+            }
+            _ => return false,
+        },
+    };
+    std::fs::metadata(path).is_ok_and(|meta| meta.file_type().is_fifo())
+}
+
+#[cfg(not(any(windows, unix)))]
+fn jobserver_reachable(_auth: &str) -> bool {
+    false
+}
+
 /// Where the lock is and whether to take it, read from the environment.
 #[derive(Debug, Clone)]
 pub(crate) struct LockSettings {
@@ -210,7 +299,8 @@ pub(crate) struct LockSettings {
     /// The path falls back to a relative temporary directory, so no two
     /// runs could agree on it.
     unlocated: bool,
-    opted_out: bool,
+    /// Why the run does not take the lock, if it does not.
+    unlocked: Option<Unlocked>,
     held_by: Option<PathBuf>,
     /// What the children get while this process holds the lock.
     parallelism: Parallelism,
@@ -219,14 +309,14 @@ pub(crate) struct LockSettings {
 impl LockSettings {
     /// The settings this process's environment gives.
     pub(crate) fn from_env() -> Self {
-        Self {
-            parallelism: Parallelism::from_env(),
-            ..Self::from_vars(
-                |key| std::env::var_os(key),
-                current_user,
-                std::env::temp_dir,
-            )
+        let var = |key: &str| std::env::var_os(key).filter(|value| !value.is_empty());
+        let mut settings = Self::from_vars(var, current_user, std::env::temp_dir);
+        settings.parallelism = Parallelism::from_env();
+        if settings.unlocked.is_none() {
+            settings.unlocked =
+                inherited_jobserver(var, jobserver_reachable).map(Unlocked::Jobserver);
         }
+        settings
     }
 
     /// The per-user directory the lock file sits in, where other per-user
@@ -291,7 +381,8 @@ impl LockSettings {
             unlocated,
             path,
             rejected,
-            opted_out: set(NO_LOCK).is_some_and(|value| value == "1") || set("HELI_RUN").is_some(),
+            unlocked: (set(NO_LOCK).is_some_and(|value| value == "1") || set("HELI_RUN").is_some())
+                .then_some(Unlocked::OptedOut),
             held_by: set(LOCK_HELD).map(PathBuf::from),
             parallelism: Parallelism::default(),
         }
@@ -304,7 +395,7 @@ impl LockSettings {
             path: path.to_path_buf(),
             rejected: None,
             unlocated: false,
-            opted_out: false,
+            unlocked: None,
             held_by: None,
             parallelism: Parallelism::default(),
         }
@@ -440,14 +531,23 @@ impl HeavyRunLock {
     /// `out` which run that is (best effort, see the module docs).
     ///
     /// Returns without the lock when `settings` opt out, when a parent
-    /// process holds this lock file, or when the lock file cannot be used
+    /// process holds this lock file, when an inherited jobserver schedules
+    /// the run (after a line saying so), or when the lock file cannot be used
     /// (after a warning).
     pub(crate) fn acquire(settings: &LockSettings, me: &Holder, out: &mut dyn Write) -> Self {
         let unheld = Self {
             held: None,
             established: Vec::new(),
         };
-        if settings.opted_out || settings.parent_holds() {
+        if settings.unlocked == Some(Unlocked::OptedOut) || settings.parent_holds() {
+            return unheld;
+        }
+        if let Some(Unlocked::Jobserver(auth)) = &settings.unlocked {
+            let _ = writeln!(
+                out,
+                "xtask: not taking the run lock: the jobserver this run inherited ({auth}) \
+                 bounds it together with every other build drawing from it"
+            );
             return unheld;
         }
         let path = &settings.path;
@@ -641,6 +741,25 @@ mod tests {
         );
     }
 
+    /// This test binary running the test `name` alone, with none of what
+    /// decides whom a run waits for inherited from the test's own
+    /// environment (an agent's shell may carry a host pool).
+    fn this_test(name: &str) -> Command {
+        let mut child = Command::new(std::env::current_exe().expect("test executable"));
+        child.args([name, "--exact"]);
+        for key in [
+            NO_LOCK,
+            "HELI_RUN",
+            LOCK_HELD,
+            "CARGO_MAKEFLAGS",
+            "MAKEFLAGS",
+            "MFLAGS",
+        ] {
+            child.env_remove(key);
+        }
+        child
+    }
+
     /// Set for a child process of [`reentrant_child_does_not_wait`]: take
     /// the lock as `main` would, then exit.
     const CHILD: &str = "FLUI_XTASK_LOCK_TEST_CHILD";
@@ -649,14 +768,8 @@ mod tests {
     /// own lock file is `child_lock`; whether it exits successfully within
     /// `limit` (it is killed otherwise).
     fn child_finishes(child_lock: &Path, limit: Duration) -> bool {
-        let mut child = Command::new(std::env::current_exe().expect("test executable"));
-        child
-            .args(["host_lock::tests::host_lock_contract", "--exact"])
-            .env_remove(NO_LOCK)
-            .env_remove("HELI_RUN")
-            .env_remove(LOCK_HELD)
-            .env(LOCK_FILE, child_lock)
-            .env(CHILD, "1");
+        let mut child = this_test("host_lock::tests::host_lock_contract");
+        child.env(LOCK_FILE, child_lock).env(CHILD, "1");
         mark_child(&mut child);
         let mut child = child.spawn().expect("spawn the child run");
         let started = Instant::now();
@@ -725,7 +838,7 @@ mod tests {
             &mut out,
         );
         let other = acquire_elsewhere(LockSettings {
-            opted_out: true,
+            unlocked: Some(Unlocked::OptedOut),
             ..LockSettings::at(&path)
         });
         other
@@ -838,16 +951,18 @@ mod tests {
         );
     }
 
+    /// An environment holding just `pairs`.
+    fn vars(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<OsString> {
+        move |key: &str| {
+            pairs
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| OsString::from(value))
+        }
+    }
+
     #[test]
     fn settings_come_from_the_environment() {
-        let vars = |pairs: &'static [(&'static str, &'static str)]| {
-            move |key: &str| {
-                pairs
-                    .iter()
-                    .find(|(name, _)| *name == key)
-                    .map(|(_, value)| OsString::from(value))
-            }
-        };
         let alice = || Some("alice".to_owned());
         let tmp = std::env::temp_dir();
         let lock = |dir: PathBuf| dir.join("xtask-heavy.lock");
@@ -984,7 +1099,7 @@ mod tests {
             .collect();
         assert!(wrong.is_empty(), "relative temporary directory: {wrong:?}");
         let user = LockSettings::from_vars(vars(&[]), alice, std::env::temp_dir);
-        assert!(!user.opted_out && user.held_by.is_none() && user.rejected.is_none());
+        assert!(user.unlocked.is_none() && user.held_by.is_none() && user.rejected.is_none());
         let refused = LockSettings::from_vars(
             vars(&[(LOCK_FILE, "relative.lock")]),
             alice,
@@ -996,7 +1111,7 @@ mod tests {
             alice,
             std::env::temp_dir,
         );
-        assert!(set.opted_out && set.parent_holds());
+        assert!(set.unlocked == Some(Unlocked::OptedOut) && set.parent_holds());
         let other = LockSettings::from_vars(
             vars(&[
                 (LOCK_FILE, ABSOLUTE),
@@ -1006,7 +1121,7 @@ mod tests {
             alice,
             std::env::temp_dir,
         );
-        assert!(!other.opted_out && !other.parent_holds());
+        assert!(other.unlocked.is_none() && !other.parent_holds());
     }
 
     /// A `LOCALAPPDATA` and a `HOME` that are absolute on this host, so
@@ -1033,6 +1148,125 @@ mod tests {
     } else {
         "/locks/heavy.lock"
     };
+
+    /// The jobserver a run inherits is read as cargo's `jobserver` crate
+    /// reads it, and counts only when it can be reached.
+    #[test]
+    fn an_inherited_jobserver_counts_only_when_reachable() {
+        /// A row name, the environment, the jobservers that exist, and the
+        /// one the run is scheduled by.
+        type Row = (
+            &'static str,
+            &'static [(&'static str, &'static str)],
+            &'static [&'static str],
+            Option<&'static str>,
+        );
+        const HELI: &str = "-j --jobserver-auth=heli-pool";
+        let rows: [Row; 8] = [
+            ("no_jobserver", &[], &["heli-pool"], None),
+            (
+                "reachable_pool",
+                &[("CARGO_MAKEFLAGS", HELI)],
+                &["heli-pool"],
+                Some("heli-pool"),
+            ),
+            ("stopped_pool", &[("CARGO_MAKEFLAGS", HELI)], &[], None),
+            (
+                "flags_without_a_jobserver",
+                &[("CARGO_MAKEFLAGS", "-j8 -s")],
+                &["heli-pool"],
+                None,
+            ),
+            (
+                "make_flags_when_cargo_s_are_unset",
+                &[("MAKEFLAGS", HELI)],
+                &["heli-pool"],
+                Some("heli-pool"),
+            ),
+            (
+                "cargo_s_flags_win_over_make_s",
+                &[
+                    ("CARGO_MAKEFLAGS", HELI),
+                    ("MAKEFLAGS", "--jobserver-auth=make-pool"),
+                ],
+                &["heli-pool", "make-pool"],
+                Some("heli-pool"),
+            ),
+            (
+                "the_last_argument_wins",
+                &[(
+                    "CARGO_MAKEFLAGS",
+                    "--jobserver-fds=3,4 -j --jobserver-auth=heli-pool",
+                )],
+                &["3,4", "heli-pool"],
+                Some("heli-pool"),
+            ),
+            (
+                "older_fds_spelling",
+                &[("MFLAGS", "--jobserver-fds=3,4")],
+                &["3,4"],
+                Some("3,4"),
+            ),
+        ];
+        let wrong: Vec<String> = rows
+            .iter()
+            .filter_map(|(row, env, existing, want)| {
+                let got = inherited_jobserver(vars(env), |auth| existing.contains(&auth));
+                (got.as_deref() != *want).then(|| format!("{row}: got {got:?}, want {want:?}"))
+            })
+            .collect();
+        assert!(wrong.is_empty(), "inherited jobserver: {wrong:#?}");
+    }
+
+    /// A jobserver this host's kind of pool makes, with its auth value; it
+    /// exists until the returned value is dropped.
+    #[cfg(windows)]
+    #[expect(unsafe_code, reason = "creating a named semaphore is a Win32 call")]
+    fn live_jobserver() -> (String, impl Sized) {
+        use windows::Win32::Foundation::{CloseHandle, HANDLE};
+        use windows::Win32::System::Threading::CreateSemaphoreW;
+        use windows::core::HSTRING;
+        struct Semaphore(HANDLE);
+        impl Drop for Semaphore {
+            fn drop(&mut self) {
+                // SAFETY: the handle was created below and is closed once.
+                let _ = unsafe { CloseHandle(self.0) };
+            }
+        }
+        let name = format!("flui-xtask-jobserver-test-{}", std::process::id());
+        // SAFETY: no security attributes; the name outlives the call.
+        let handle = unsafe { CreateSemaphoreW(None, 1, 1, &HSTRING::from(&name)) }
+            .expect("create a named semaphore");
+        (name, Semaphore(handle))
+    }
+
+    /// A jobserver this host's kind of pool makes, with its auth value; it
+    /// exists until the returned value is dropped.
+    #[cfg(unix)]
+    fn live_jobserver() -> (String, impl Sized) {
+        use std::os::fd::AsRawFd;
+        let (read, write) = std::io::pipe().expect("create a pipe");
+        let auth = format!("{},{}", read.as_raw_fd(), write.as_raw_fd());
+        (auth, (read, write))
+    }
+
+    /// A jobserver counts while it exists and stops counting once it is
+    /// gone, so a stale variable never excuses a run from the lock.
+    #[cfg(any(windows, unix))]
+    #[test]
+    fn a_jobserver_is_reachable_only_while_it_exists() {
+        let (auth, live) = live_jobserver();
+        assert!(jobserver_reachable(&auth), "a live jobserver {auth}");
+        drop(live);
+        assert!(!jobserver_reachable(&auth), "a dropped jobserver {auth}");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let plain = dir.path().join("not-a-fifo");
+        std::fs::write(&plain, "").expect("create a plain file");
+        assert!(
+            !jobserver_reachable(&format!("fifo:{}", plain.display())),
+            "a plain file is no jobserver"
+        );
+    }
 
     /// The fallback directory is one path component, distinct for names that
     /// read the same once sanitized, and fixed by a hash every build agrees
@@ -1170,20 +1404,14 @@ mod tests {
         }
         let dir = tempfile::tempdir().expect("temp dir");
         let report = dir.path().join("report");
-        let status = Command::new(std::env::current_exe().expect("test executable"))
-            .args([
-                "host_lock::tests::the_guarded_run_s_environment_carries_the_parallelism",
-                "--exact",
-            ])
-            .env_remove(NO_LOCK)
-            .env_remove("HELI_RUN")
-            .env_remove(LOCK_HELD)
-            .env_remove("CARGO_BUILD_JOBS")
-            .env("NEXTEST_TEST_THREADS", "3")
-            .env(LOCK_FILE, lock_path(&dir))
-            .env(PARALLEL_REPORT, &report)
-            .status()
-            .expect("run the child");
+        let status =
+            this_test("host_lock::tests::the_guarded_run_s_environment_carries_the_parallelism")
+                .env_remove("CARGO_BUILD_JOBS")
+                .env("NEXTEST_TEST_THREADS", "3")
+                .env(LOCK_FILE, lock_path(&dir))
+                .env(PARALLEL_REPORT, &report)
+                .status()
+                .expect("run the child");
         assert!(status.success(), "the child run: {status}");
         let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         let jobs = if cpus > 2 * SPARE_CPUS {

@@ -168,7 +168,11 @@ when its holder exits, crashed or not. One composite command running another,
 in-process or as a child process, does not wait for itself.
 `FLUI_XTASK_NO_LOCK=1` skips the lock; `--dry-run` never takes it. A nonempty
 `HELI_RUN`, inherited from a heli-managed command, also skips this redundant
-queue and leaves job and test-thread settings to heli. Use separate target
+queue and leaves job and test-thread settings to heli. So does an inherited
+jobserver the run can reach (a host pool such as heli's, named by
+`CARGO_MAKEFLAGS`), which bounds every cargo drawing from it; the run says so
+in one line. A jobserver it cannot reach (a stale variable, a stopped pool)
+does not count, and the run locks as usual. Use separate target
 and build directories per checkout; scheduling does not remove Cargo's own
 directory locks. Do not export `HELI_RUN` manually in a shell profile.
 For source-aware sharing of simultaneous verification requests, use

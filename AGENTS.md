@@ -193,13 +193,20 @@ rather than serializing the suite. A docs-only change needs only `cargo xtask ch
 builds xtask and not the workspace. `rust-toolchain.toml` is the toolchain's source of truth;
 pre-1.0 the MSRV tracks latest stable. xtask commands that build or test the workspace
 (`check-changed`, `test`, `ci`, `gate`, `gpu-test`, …) queue behind one lock for the user on this
-machine; `FLUI_XTASK_NO_LOCK=1` opts out.
+machine, unless a host pool schedules them (below); `FLUI_XTASK_NO_LOCK=1` opts out.
 
 ### Running checks without fighting other runs
 
 Several agents and checkouts often share one machine. Every redundant run slows down every other
 run, and an oversubscribed host makes slow tests look hung.
 
+- **On a host with [heli](https://github.com/vanyastaff/heli)** (`CARGO_MAKEFLAGS` names its pool,
+  `cargo heli status` shows it), every cargo draws from one pool of jobs sized to the machine, so
+  heavy xtask runs don't queue behind the lock; each says so in one line. Run cargo through it:
+  `cargo heli nextest run -p <crate>` while iterating, and
+  `cargo heli exec --verify -- cargo xtask check-changed` before a PR. Identical requests then
+  share one run, a killed shell doesn't kill the run, and `cargo heli log <run> --errors` gives the
+  output back. Under the pool, don't cap jobs or threads by hand.
 - **While iterating, test only what you touched:** `cargo nextest run -p <crate> [<filter>]`.
   Run `cargo xtask check-changed` once, as the last step before a PR. It already runs fmt, clippy
   and nextest, so don't also run them by hand.
@@ -219,12 +226,12 @@ run, and an oversubscribed host makes slow tests look hung.
   instead. `check-changed` skips by itself a run whose tree (untracked files included), merge
   base, toolchain, Cargo configuration, environment and step list already passed
   on this machine, naming the earlier run; `--no-cache` runs it anyway.
-- **One heavy run at a time per host.** `check-changed`, `test`, `ci`, `gate` and `gpu-test` take a
-  host-wide lock and queue behind each other. Don't start a second one in the background to "save
+- **Without a pool, one heavy run at a time per host.** `check-changed`, `test`, `ci`, `gate` and
+  `gpu-test` take a host-wide lock and queue behind each other. Don't start a second one in the background to "save
   time", and don't kill a queued run. A queued `check-changed` overtaken by a newer one of the
   same checkout, asking the same question of a different tree, exits 3 ("superseded"): its tree
   was not verified, and the newer run checks the current one.
-- **Parallelism:** the run holding the lock sets `CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS` to
+- **Parallelism without a pool:** the run holding the lock sets `CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS` to
   the logical CPUs minus 4 for everything it spawns, and prints them; a
   value set in the environment is kept, so don't export one around an xtask command. For
   hand-run cargo on a shared host, cap it: `CARGO_BUILD_JOBS=6` and `NEXTEST_TEST_THREADS=4`.
