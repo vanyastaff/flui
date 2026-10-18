@@ -749,3 +749,51 @@ fn display_pacing_contract() {
         ],
     );
 }
+
+/// The runtime's demand for the display's highest rate reaches the window the
+/// presentation follows, and a native surface that replaces the one it rode on
+/// gets the request again.
+fn hint_is_reapplied_when_the_native_window_is_replaced_after_resume() {
+    use flui_platform_api::FrameRateHint::{Default, High};
+    use flui_runtime::frame_rate_demand::FrameRateDemand;
+
+    let rig = boot();
+    let win = open_window(&rig, Some(LEFT));
+    let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
+    assert_eq!(win.native.frame_rate_hints(), [], "nothing asked yet");
+
+    host.effects()
+        .frame_rate_demand_changed(win.dispatcher.address, FrameRateDemand::Active);
+    assert_eq!(win.native.frame_rate_hints(), [High]);
+
+    // Resume replaced the native window: the request that rode on the old one
+    // is gone, and the host sends the current one again.
+    let _ = dispatch_platform_ui_runtime(
+        win.dispatcher,
+        RuntimeTask::Event(RuntimeEvent::PrimarySurfaceRestored),
+    );
+    assert_eq!(win.native.frame_rate_hints(), [High, High]);
+
+    host.effects()
+        .frame_rate_demand_changed(win.dispatcher.address, FrameRateDemand::Idle);
+    let _ = dispatch_platform_ui_runtime(
+        win.dispatcher,
+        RuntimeTask::Event(RuntimeEvent::PrimarySurfaceRestored),
+    );
+    assert_eq!(
+        win.native.frame_rate_hints(),
+        [High, High, Default, Default],
+        "a released demand is what a replaced window is told, not the last raised one"
+    );
+}
+
+#[test]
+fn frame_rate_hint_contract() {
+    crate::table_test::run_table(
+        "frame_rate_hint_contract",
+        &[(
+            "hint_is_reapplied_when_the_native_window_is_replaced_after_resume",
+            hint_is_reapplied_when_the_native_window_is_replaced_after_resume as fn(),
+        )],
+    );
+}

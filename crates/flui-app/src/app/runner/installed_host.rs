@@ -405,6 +405,14 @@ impl OwnerEffects for HostState {
         finish(first);
     }
 
+    fn frame_rate_demand_changed(
+        &self,
+        address: PresentationAddress,
+        demand: flui_runtime::frame_rate_demand::FrameRateDemand,
+    ) {
+        self.displays.set_frame_rate_demand(address, demand);
+    }
+
     fn after_turn(&self, turn_recovery: RecoveryState) {
         #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
         let _ = turn_recovery;
