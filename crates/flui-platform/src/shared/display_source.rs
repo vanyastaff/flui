@@ -29,11 +29,18 @@ pub(crate) struct DisplaySource {
         windows,
         target_os = "macos",
         target_os = "ios",
+        target_os = "android",
         target_arch = "wasm32",
         test
     ))]
     stale: std::sync::atomic::AtomicBool,
-    #[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+    #[cfg(any(
+        windows,
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "android",
+        test
+    ))]
     misses: Mutex<MissLedger>,
 }
 
@@ -46,11 +53,18 @@ impl DisplaySource {
                 windows,
                 target_os = "macos",
                 target_os = "ios",
+                target_os = "android",
                 target_arch = "wasm32",
                 test
             ))]
             stale: std::sync::atomic::AtomicBool::new(true),
-            #[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+            #[cfg(any(
+                windows,
+                target_os = "macos",
+                target_os = "ios",
+                target_os = "android",
+                test
+            ))]
             misses: Mutex::new(MissLedger::default()),
         }
     }
@@ -95,6 +109,7 @@ impl DisplaySource {
         windows,
         target_os = "macos",
         target_os = "ios",
+        target_os = "android",
         target_arch = "wasm32",
         test
     ))]
@@ -107,6 +122,7 @@ impl DisplaySource {
         windows,
         target_os = "macos",
         target_os = "ios",
+        target_os = "android",
         target_arch = "wasm32",
         test
     ))]
@@ -124,7 +140,13 @@ impl DisplaySource {
     /// # Errors
     /// What `sample` fails with, or [`PlatformError::Displays`] when the
     /// revision space is used up.
-    #[cfg(any(target_os = "macos", target_os = "ios", target_arch = "wasm32", test))]
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "android",
+        target_arch = "wasm32",
+        test
+    ))]
     pub(crate) fn snapshot_with(
         &self,
         sample: impl FnOnce() -> Result<Vec<DisplayInfo>, PlatformError>,
@@ -145,6 +167,7 @@ impl DisplaySource {
         windows,
         target_os = "macos",
         target_os = "ios",
+        target_os = "android",
         target_arch = "wasm32",
         test
     ))]
@@ -174,7 +197,13 @@ impl DisplaySource {
     /// `handle` in a snapshot revision invalidates the snapshot; the same miss
     /// again, however often it repeats, costs nothing until the revision
     /// changes.
-    #[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+    #[cfg(any(
+        windows,
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "android",
+        test
+    ))]
     pub(crate) fn note_miss(&self, handle: u64) {
         let revision = self.last.lock().revision().get();
         if self.misses.lock().first_miss(handle, revision) {
@@ -187,14 +216,26 @@ impl DisplaySource {
 /// windows on displays the snapshot omits ask for one fresh sample per handle
 /// and revision rather than one per owner wake, however many such displays
 /// there are.
-#[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+#[cfg(any(
+    windows,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    test
+))]
 #[derive(Debug, Default)]
 struct MissLedger {
     revision: u64,
     missed: Vec<u64>,
 }
 
-#[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+#[cfg(any(
+    windows,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    test
+))]
 impl MissLedger {
     /// Whether this miss is the first of `handle` in snapshot `revision`.
     fn first_miss(&mut self, handle: u64, revision: u64) -> bool {

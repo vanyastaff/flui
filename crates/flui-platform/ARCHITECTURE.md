@@ -2013,29 +2013,42 @@ is what `AndroidWindow::display_id` answers. The snapshot goes stale on
 `ConfigChanged`, on `Resume` and on the choreographer's refresh-rate callback
 (API 30+: an adaptive 60/120 Hz switch raises no configuration change); each of
 those wakes the owner, whose next wake does the read. Below API 30 the rate is read
-at the first two events only. The callback runs in the app thread's own
-`poll_events`, marks the snapshot stale and wakes the owner; it is taken down
+at the first two events only. The kept snapshot is the shared `DisplaySource`
+cache (`invalidate`, `snapshot_with`); an Activity whose display is absent from
+a sample is `note_miss`ed, which allows one more sample per snapshot revision.
+`getDisplays()` also lists virtual displays, and a display id is never reused
+within a boot, so a re-plugged display gets a new identity. The callback runs in
+the app thread's own `poll_events`, invalidates the source and wakes the owner; it is taken down
 (`AChoreographer_unregisterRefreshRateCallback`) on that thread when the loop
 exits, before the data it points at is freed, and a registration dropped on any
 other thread leaks that data instead of freeing what a late call could reach.
-The idle `poll_events` timeout is the display's period (`idle_wait`), and 16 ms
-while the period is unknown.
+The idle `poll_events` timeout is the display's period, cut short by the time
+left to the next wake deadline (`idle_wait_until`), and 16 ms while the period is
+unknown. The loop does not block until the deadline even though `OwnerSignal`
+wakes the looper: the same iteration samples preferences every 500 ms, settles
+the safe area and consumes redraw requests that set a flag without waking the
+looper, so each of those would wait for the deadline.
 
-`platforms/android/os_version.rs` reads the API level once, when the platform is
+`shared/android_os_version.rs` reads the API level once, when the platform is
 built, and keeps it in the platform (no `static`): `android_get_device_api_level`
 looked up by name, then `__system_property_get("ro.build.version.sdk")`. The
 function is exported by `libc.so` only from API 29 and is an inline function in the
 NDK header below it, so linking it directly would break `minSdk` 23; the property
 reader is exported from API 23. NDK functions newer than `minSdk`
 (`ANativeWindow_setFrameRate`, `AChoreographer_registerRefreshRateCallback`: API
-30) come back as `NdkFn<F>`, a typed handle that exists only when the level and the
-symbol both do, and that keeps the `dlopen` handle of its library alive. Both
+30) come back as `NdkFn<N>`, a typed handle that exists only when the level and the
+symbol both do, and that keeps the `dlopen` handle of its library alive. `N` is a
+marker of the sealed `NdkFunction` trait, which pairs the symbol name, the first
+level and the pointer type taken from the NDK header, so resolving is safe code. Both
 `Build.VERSION.SDK_INT` reads in `preferences.rs` use the same level.
 
 `PlatformWindow::set_frame_rate_hint` is `ANativeWindow_setFrameRate(window, max, DEFAULT)`
 for `High`, with `max` the highest supported-mode rate of the Activity's display, and
 `0.0` for `Default`. The window keeps its last hint and sends it again on
-`InitWindow`, because the request rides on one `ANativeWindow`.
+`InitWindow`, because the request rides on one `ANativeWindow`, and again when a
+sample finds another highest rate for the Activity's display (a `High` hint
+skipped while that rate was unknown). The host also sends its demand on
+`PrimarySurfaceRestored`; the two overlap on a resume and are idempotent.
 
 **Alternatives considered:**
 - `DisplayManager.DisplayListener` — it needs a Java object implementing the

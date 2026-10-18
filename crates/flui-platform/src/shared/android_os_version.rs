@@ -119,38 +119,115 @@ impl AndroidApi {
     }
 }
 
+/// The window and choreographer types the NDK functions take. On Android they
+/// are the NDK's own; the host tests, which have no NDK, get opaque stand-ins.
+#[cfg(target_os = "android")]
+pub(crate) use android_activity::ndk_sys::{AChoreographer, ANativeWindow};
+/// See the Android re-export.
+#[cfg(not(target_os = "android"))]
+#[repr(C)]
+pub(crate) struct ANativeWindow {
+    _opaque: [u8; 0],
+}
+/// See the Android re-export.
+#[cfg(not(target_os = "android"))]
+#[repr(C)]
+pub(crate) struct AChoreographer {
+    _opaque: [u8; 0],
+}
+
+/// `void (*)(int64_t vsyncPeriodNanos, void* data)`.
+pub(crate) type RefreshRateCallback = unsafe extern "C" fn(i64, *mut c_void);
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+/// An NDK function that exists only from some API level: its name, the level
+/// it appeared in and its pointer type.
+///
+/// Sealed: the only implementations are the ones below, which pair each name
+/// with the signature the NDK header declares for it. That pairing is what makes
+/// [`NdkFn::resolve`] safe.
+pub(crate) trait NdkFunction: sealed::Sealed {
+    /// The function's pointer type; pointer-sized.
+    type Pointer: Copy;
+    /// The exported symbol.
+    const NAME: &'static CStr;
+    /// The first API level that has it.
+    const MIN_API: u32;
+}
+
+macro_rules! ndk_function {
+    ($(#[$doc:meta])* $marker:ident, $name:literal, $min_api:literal, $pointer:ty) => {
+        $(#[$doc])*
+        pub(crate) struct $marker;
+        impl sealed::Sealed for $marker {}
+        impl NdkFunction for $marker {
+            type Pointer = $pointer;
+            const NAME: &'static CStr = $name;
+            const MIN_API: u32 = $min_api;
+        }
+    };
+}
+
+ndk_function!(
+    /// `int32_t ANativeWindow_setFrameRate(ANativeWindow*, float, int8_t)`
+    /// (`<android/native_window.h>`).
+    SetFrameRate,
+    c"ANativeWindow_setFrameRate",
+    30,
+    unsafe extern "C" fn(*mut ANativeWindow, f32, i8) -> i32
+);
+ndk_function!(
+    /// `AChoreographer* AChoreographer_getInstance(void)`
+    /// (`<android/choreographer.h>`).
+    ChoreographerInstance,
+    c"AChoreographer_getInstance",
+    30,
+    unsafe extern "C" fn() -> *mut AChoreographer
+);
+ndk_function!(
+    /// `void AChoreographer_registerRefreshRateCallback(AChoreographer*,
+    /// AChoreographer_refreshRateCallback, void*)`.
+    RegisterRefreshRate,
+    c"AChoreographer_registerRefreshRateCallback",
+    30,
+    unsafe extern "C" fn(*mut AChoreographer, RefreshRateCallback, *mut c_void)
+);
+ndk_function!(
+    /// `void AChoreographer_unregisterRefreshRateCallback(AChoreographer*,
+    /// AChoreographer_refreshRateCallback, void*)`.
+    UnregisterRefreshRate,
+    c"AChoreographer_unregisterRefreshRateCallback",
+    30,
+    unsafe extern "C" fn(*mut AChoreographer, RefreshRateCallback, *mut c_void)
+);
+
 /// A function of the NDK, found by name on a system new enough to have it.
 ///
 /// Holds the source of the symbol, so the library the pointer points into is not
-/// unloaded while the handle lives. `F` is the function's pointer type.
-pub(crate) struct NdkFn<F: Copy> {
-    function: F,
+/// unloaded while the handle lives.
+pub(crate) struct NdkFn<N: NdkFunction> {
+    function: N::Pointer,
     /// Keeps the library loaded: a function pointer does not survive `dlclose`.
     _library: Arc<dyn SymbolSource>,
 }
 
-impl<F: Copy> NdkFn<F> {
-    /// Look `name` up in `library`, but only when `api` is at least `min_api`.
-    ///
-    /// # Safety
-    /// `F` must be the pointer type of the C function called `name`: the same
-    /// parameters, return type and `extern "C"` ABI.
-    pub(crate) unsafe fn resolve(
-        library: &Arc<dyn SymbolSource>,
-        api: AndroidApi,
-        min_api: u32,
-        name: &CStr,
-    ) -> Option<Self> {
+impl<N: NdkFunction> NdkFn<N> {
+    /// Look `N` up in `library`, but only when `api` is at least `N::MIN_API`.
+    pub(crate) fn resolve(library: &Arc<dyn SymbolSource>, api: AndroidApi) -> Option<Self> {
         const {
-            assert!(size_of::<F>() == size_of::<*mut c_void>());
+            assert!(size_of::<N::Pointer>() == size_of::<*mut c_void>());
         }
-        if api.level() < min_api {
+        if api.level() < N::MIN_API {
             return None;
         }
-        let address = library.symbol(name)?.as_ptr();
-        // SAFETY: `F` is pointer-sized (asserted above) and, by the caller's
-        // contract, the type of the function at `address`.
-        let function = unsafe { std::mem::transmute_copy::<*mut c_void, F>(&address) };
+        let address = library.symbol(N::NAME)?.as_ptr();
+        // SAFETY: `N::Pointer` is pointer-sized (asserted above) and, because
+        // `NdkFunction` is sealed to the declarations above, the type of the
+        // function that `N::NAME` names.
+        let function = unsafe { std::mem::transmute_copy::<*mut c_void, N::Pointer>(&address) };
         Some(Self {
             function,
             _library: Arc::clone(library),
@@ -158,78 +235,27 @@ impl<F: Copy> NdkFn<F> {
     }
 
     /// The function. The pointer is valid for as long as `self` lives.
-    pub(crate) fn get(&self) -> F {
+    pub(crate) fn get(&self) -> N::Pointer {
         self.function
-    }
-}
-
-/// `int32_t ANativeWindow_setFrameRate(ANativeWindow*, float, int8_t)`; the
-/// window is passed as an untyped pointer.
-pub(crate) type SetFrameRateFn = unsafe extern "C" fn(*mut c_void, f32, i8) -> i32;
-/// `AChoreographer* AChoreographer_getInstance(void)`.
-pub(crate) type ChoreographerInstanceFn = unsafe extern "C" fn() -> *mut c_void;
-/// `void (*)(int64_t vsyncPeriodNanos, void* data)`.
-pub(crate) type RefreshRateCallback = unsafe extern "C" fn(i64, *mut c_void);
-/// `AChoreographer_registerRefreshRateCallback` and its `unregister` twin.
-pub(crate) type RefreshRateRegistrationFn =
-    unsafe extern "C" fn(*mut c_void, RefreshRateCallback, *mut c_void);
-
-/// The first level that has `ANativeWindow_setFrameRate`.
-const SET_FRAME_RATE_API: u32 = 30;
-/// The first level that has the refresh-rate callbacks of `AChoreographer`.
-const REFRESH_RATE_CALLBACK_API: u32 = 30;
-
-/// `ANativeWindow_setFrameRate`, on a system that has it.
-pub(crate) fn set_frame_rate(
-    library: &Arc<dyn SymbolSource>,
-    api: AndroidApi,
-) -> Option<NdkFn<SetFrameRateFn>> {
-    // SAFETY: `SetFrameRateFn` is the NDK declaration of the function (`<android/native_window.h>`).
-    unsafe {
-        NdkFn::resolve(
-            library,
-            api,
-            SET_FRAME_RATE_API,
-            c"ANativeWindow_setFrameRate",
-        )
     }
 }
 
 /// The three `AChoreographer` functions needed to watch the refresh rate, all
 /// or none.
 pub(crate) struct RefreshRateWatch {
-    pub(crate) instance: NdkFn<ChoreographerInstanceFn>,
-    pub(crate) register: NdkFn<RefreshRateRegistrationFn>,
-    pub(crate) unregister: NdkFn<RefreshRateRegistrationFn>,
+    pub(crate) instance: NdkFn<ChoreographerInstance>,
+    pub(crate) register: NdkFn<RegisterRefreshRate>,
+    pub(crate) unregister: NdkFn<UnregisterRefreshRate>,
 }
 
 impl RefreshRateWatch {
     /// Resolve them on a system that has them.
     pub(crate) fn resolve(library: &Arc<dyn SymbolSource>, api: AndroidApi) -> Option<Self> {
-        // SAFETY: each type is the NDK declaration of the function it names
-        // (`<android/choreographer.h>`).
-        unsafe {
-            Some(Self {
-                instance: NdkFn::resolve(
-                    library,
-                    api,
-                    REFRESH_RATE_CALLBACK_API,
-                    c"AChoreographer_getInstance",
-                )?,
-                register: NdkFn::resolve(
-                    library,
-                    api,
-                    REFRESH_RATE_CALLBACK_API,
-                    c"AChoreographer_registerRefreshRateCallback",
-                )?,
-                unregister: NdkFn::resolve(
-                    library,
-                    api,
-                    REFRESH_RATE_CALLBACK_API,
-                    c"AChoreographer_unregisterRefreshRateCallback",
-                )?,
-            })
-        }
+        Some(Self {
+            instance: NdkFn::resolve(library, api)?,
+            register: NdkFn::resolve(library, api)?,
+            unregister: NdkFn::resolve(library, api)?,
+        })
     }
 }
 
@@ -357,7 +383,7 @@ mod tests {
         8
     }
 
-    unsafe extern "C" fn set_frame_rate_stub(_: *mut c_void, _: f32, _: i8) -> i32 {
+    unsafe extern "C" fn set_frame_rate_stub(_: *mut ANativeWindow, _: f32, _: i8) -> i32 {
         0
     }
 
@@ -376,7 +402,7 @@ mod tests {
             set_frame_rate_stub as *const (),
         ));
         assert!(
-            set_frame_rate(&library, AndroidApi::from_level(29)).is_none(),
+            NdkFn::<SetFrameRate>::resolve(&library, AndroidApi::from_level(29)).is_none(),
             "a system below API 30 got a handle to a function it does not have"
         );
     }
@@ -386,8 +412,8 @@ mod tests {
             c"ANativeWindow_setFrameRate",
             set_frame_rate_stub as *const (),
         ));
-        let handle =
-            set_frame_rate(&library, AndroidApi::from_level(30)).expect("API 30 has the function");
+        let handle = NdkFn::<SetFrameRate>::resolve(&library, AndroidApi::from_level(30))
+            .expect("API 30 has the function");
         // SAFETY: the table holds `set_frame_rate_stub`, which ignores its arguments.
         let status = unsafe { (handle.get())(std::ptr::null_mut(), 60.0, 0) };
         assert_eq!(status, 0, "the handle is the function the table named");
@@ -395,7 +421,7 @@ mod tests {
 
     fn a_missing_symbol_gives_no_handle_even_at_api_30() {
         let library = library(FakeSymbols::default());
-        assert!(set_frame_rate(&library, AndroidApi::from_level(34)).is_none());
+        assert!(NdkFn::<SetFrameRate>::resolve(&library, AndroidApi::from_level(34)).is_none());
         assert!(RefreshRateWatch::resolve(&library, AndroidApi::from_level(34)).is_none());
     }
 

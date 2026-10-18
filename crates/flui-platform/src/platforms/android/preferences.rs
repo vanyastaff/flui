@@ -10,7 +10,7 @@ use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform_api::{MotionPreference, TextWeightPreference};
 use jni::{JValue, JavaVM, jni_sig, jni_str, objects::JObject, refs::Global};
 
-use super::super::android_os_version::AndroidApi;
+use crate::shared::android_os_version::AndroidApi;
 use crate::{
     GestureGeometry, GesturePreferences, NativeTouchGeometry, PreferenceQueryError,
     SystemPreferences,

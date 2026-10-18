@@ -90,7 +90,7 @@ impl AndroidWindow {
     pub(crate) fn apply_frame_rate_hint(&self) {
         let hint = *self.frame_rate_hint.lock();
         if let Some(native) = self.app.native_window() {
-            self.displays.request_frame_rate(native.ptr().cast(), hint);
+            self.displays.request_frame_rate(&native, hint);
         }
     }
 

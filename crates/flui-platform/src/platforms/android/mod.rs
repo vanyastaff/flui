@@ -64,17 +64,16 @@ use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 use parking_lot::Mutex;
 pub use window::AndroidWindow;
 
-use super::android_os_version::{AndroidApi, LoadedLibraries, SymbolSource};
-
-/// The API level assumed when the system will not say: the oldest the backend
-/// supports, so nothing newer than it is attempted.
-const FALLBACK_API_LEVEL: u32 = 21;
-
 use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     error::{BootstrapError, PlatformError},
     redraw_poll::RedrawPoll,
-    shared::{PlatformHandlers, android_display::idle_wait, owner_signal::OwnerSignal},
+    shared::{
+        PlatformHandlers,
+        android_display::idle_wait_until,
+        android_os_version::{AndroidApi, LoadedLibraries, SymbolSource},
+        owner_signal::OwnerSignal,
+    },
     traits::{
         Clipboard, DisplaySnapshot, MobileCapabilities, OpenWindowError, OwnerPlatform, Platform,
         PlatformCapabilities, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent,
@@ -82,6 +81,10 @@ use crate::{
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
+
+/// The API level assumed when the system will not say: the backend's `minSdk`,
+/// so nothing newer than it is attempted.
+const FALLBACK_API_LEVEL: u32 = 23;
 
 /// Whether the registered wake-deadline hook's answer means `run`'s loop
 /// should WANT to force a frame dispatch this iteration, even though
@@ -477,7 +480,11 @@ impl Platform for AndroidPlatform {
                     let timeout = if should_render {
                         Duration::ZERO
                     } else {
-                        idle_wait(platform.displays.activity_period())
+                        idle_wait_until(
+                            platform.displays.activity_period(),
+                            wake_deadline
+                                .map(|deadline| deadline.saturating_duration_since(web_time::Instant::now())),
+                        )
                     };
                     platform.app.poll_events(Some(timeout), |event| {
                 if let PollEvent::Main(main_event) = event {
@@ -542,7 +549,12 @@ impl Platform for AndroidPlatform {
                             let window = platform.window.lock().clone();
                             if let Some(w) = window {
                                 w.invalidate_text_sizing();
-                                // The request rode on the window that is gone.
+                                // The request rode on the window that is gone. The
+                                // host sends its demand again on
+                                // `PrimarySurfaceRestored` as well: this one covers
+                                // a window that is replaced without the host
+                                // noticing, that one covers hosts whose windows
+                                // do not remember. Sending twice is idempotent.
                                 w.apply_frame_rate_hint();
                                 w.callbacks().dispatch_surface_status_change(true);
                             }
@@ -800,7 +812,16 @@ impl Platform for AndroidPlatform {
     }
 
     fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        self.displays.snapshot(&self.app)
+        let snapshot = self.displays.snapshot(&self.app)?;
+        if self.displays.take_max_rate_change() {
+            // A `High` hint skipped while the display's highest rate was
+            // unknown (or sent with an older one) is asked again.
+            let window = self.window.lock().clone();
+            if let Some(window) = window {
+                window.apply_frame_rate_hint();
+            }
+        }
+        Ok(snapshot)
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {

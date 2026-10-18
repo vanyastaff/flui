@@ -68,6 +68,21 @@ pub(crate) fn idle_wait(period: Option<RefreshPeriod>) -> Duration {
     period.map_or(FALLBACK_IDLE_WAIT, RefreshPeriod::get)
 }
 
+/// How long the loop blocks when it has nothing to render: [`idle_wait`], cut
+/// short by the time left to the next wall-clock deadline (`None` when there is
+/// none), so a deadline nearer than one frame is not served a frame late.
+///
+/// The loop keeps waking once per period even when the next deadline is far,
+/// instead of blocking until it: the same iteration samples preferences every
+/// 500 ms, settles the safe area and consumes redraw requests that set a flag
+/// without waking the looper.
+pub(crate) fn idle_wait_until(
+    period: Option<RefreshPeriod>,
+    until_deadline: Option<Duration>,
+) -> Duration {
+    until_deadline.map_or_else(|| idle_wait(period), |left| idle_wait(period).min(left))
+}
+
 /// The highest valid rate among `rates`.
 pub(crate) fn max_refresh_hz(rates: impl IntoIterator<Item = f32>) -> Option<f32> {
     rates
@@ -215,6 +230,24 @@ mod tests {
                     the_requested_rate_follows_the_hint as fn(),
                 ),
             ],
+        );
+    }
+
+    #[test]
+    fn idle_wait_is_cut_short_by_the_wake_deadline() {
+        let period = refresh_period(60.0);
+        let wait = |left: Option<Duration>| idle_wait_until(period, left);
+        assert_eq!(wait(None).as_micros(), 16_666, "no deadline: one period");
+        assert_eq!(
+            wait(Some(Duration::from_millis(3))),
+            Duration::from_millis(3),
+            "a deadline nearer than a frame is not served a frame late"
+        );
+        assert_eq!(wait(Some(Duration::ZERO)), Duration::ZERO, "already due");
+        assert_eq!(
+            wait(Some(Duration::from_secs(5))).as_micros(),
+            16_666,
+            "a far deadline does not stretch the wait"
         );
     }
 
