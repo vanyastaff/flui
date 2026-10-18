@@ -536,6 +536,32 @@ impl OwnerCore {
         }
     }
 
+    /// Before a presentation is forgotten, tell the host it no longer wants the
+    /// high refresh rate, if the host was last told it did.
+    pub(super) fn release_frame_rate_demand(
+        &self,
+        effects: &dyn OwnerEffects,
+        address: PresentationAddress,
+        failure: &mut Failure,
+    ) {
+        let delivered = self
+            .state
+            .borrow_mut()
+            .frame_rate_delivered
+            .remove(&address);
+        if delivered != Some(crate::frame_rate_demand::FrameRateDemand::Active) {
+            return;
+        }
+        let released = catch_unwind(AssertUnwindSafe(|| {
+            effects.frame_rate_demand_changed(
+                address,
+                crate::frame_rate_demand::FrameRateDemand::Idle,
+            );
+        }))
+        .err();
+        preserve_first_lifecycle_panic(failure, released, "frame rate demand release");
+    }
+
     fn drain_retired(&self, first_failure: &mut Failure) {
         loop {
             let retired = std::mem::take(&mut *self.retired.borrow_mut());

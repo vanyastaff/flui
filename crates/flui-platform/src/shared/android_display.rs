@@ -93,12 +93,13 @@ pub(crate) fn max_refresh_hz(rates: impl IntoIterator<Item = f32>) -> Option<f32
 
 /// The rate to pass to `ANativeWindow_setFrameRate` for `hint`: the display's
 /// highest rate for [`FrameRateHint::High`], `0.0` ("no preference") for the
-/// default. `None` when a high rate is wanted and the display's highest is not
-/// known, so no request is made rather than a guessed one.
-pub(crate) fn requested_frame_rate(hint: FrameRateHint, max_hz: Option<f32>) -> Option<f32> {
+/// default. A high rate wanted while the display's highest is not known is
+/// `0.0` too: no rate is guessed, and a high request made earlier, when the rate
+/// was known, is withdrawn rather than left in force.
+pub(crate) fn requested_frame_rate(hint: FrameRateHint, max_hz: Option<f32>) -> f32 {
     match hint {
-        FrameRateHint::High => max_hz,
-        _ => Some(0.0),
+        FrameRateHint::High => max_hz.unwrap_or(0.0),
+        _ => 0.0,
     }
 }
 
@@ -190,22 +191,20 @@ mod tests {
     fn the_requested_rate_follows_the_hint() {
         assert_eq!(
             requested_frame_rate(FrameRateHint::High, Some(120.0)),
-            Some(120.0)
+            120.0
         );
         assert_eq!(
             requested_frame_rate(FrameRateHint::High, None),
-            None,
-            "no request is guessed when the highest rate is unknown"
+            0.0,
+            "a highest rate that became unknown withdraws the earlier high request \
+             instead of leaving it in force"
         );
         assert_eq!(
             requested_frame_rate(FrameRateHint::Default, Some(120.0)),
-            Some(0.0),
+            0.0,
             "the default withdraws the request"
         );
-        assert_eq!(
-            requested_frame_rate(FrameRateHint::Default, None),
-            Some(0.0)
-        );
+        assert_eq!(requested_frame_rate(FrameRateHint::Default, None), 0.0);
     }
 
     #[test]

@@ -76,6 +76,10 @@ struct Invalidator {
 impl Invalidator {
     fn raise(&self) {
         self.source.invalidate();
+        self.wake();
+    }
+
+    fn wake(&self) {
         if let Some(owner) = self.owner.upgrade() {
             // A failed wake leaves the owner's own retry debt.
             let _ = owner.wake();
@@ -237,7 +241,12 @@ impl AndroidDisplays {
         if let Some(display_id) = missing_activity {
             // The Activity is on a display this sample does not list: ask for
             // one more sample per snapshot revision, not one per owner wake.
-            self.source.note_miss(u64::from(display_id.unsigned_abs()));
+            // An idle app has no other reason to wake, so the first miss asks
+            // the owner for the turn that samples again.
+            self.source
+                .note_miss_with(u64::from(display_id.unsigned_abs()), || {
+                    self.invalidator.wake();
+                });
         }
         if snapshot.revision() != before {
             log_snapshot(&snapshot, *self.activity.lock(), before.get() == 0);
@@ -270,13 +279,7 @@ impl AndroidDisplays {
             return;
         };
         let max_hz = self.activity.lock().and_then(|activity| activity.max_hz);
-        let Some(rate) = requested_frame_rate(hint, max_hz) else {
-            tracing::debug!(
-                ?hint,
-                "Android: the display's highest rate is unknown; no request"
-            );
-            return;
-        };
+        let rate = requested_frame_rate(hint, max_hz);
         // SAFETY: `window` is a live reference to an `ANativeWindow` for the
         // duration of this call, and the function takes the `ANativeWindow*`, a
         // rate and a compatibility value.

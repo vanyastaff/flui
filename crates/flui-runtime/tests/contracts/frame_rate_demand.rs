@@ -37,6 +37,8 @@ struct Effects {
     tracks: bool,
     /// Makes the next delivery of an edge panic, once.
     panic_next_edge: std::cell::Cell<bool>,
+    /// How many edges the host had been told when the presentation retired.
+    edges_at_retire: std::cell::Cell<Option<usize>>,
 }
 
 impl OwnerEffects for Effects {
@@ -79,7 +81,9 @@ impl OwnerEffects for Effects {
     fn frame(&self, _: PresentationAddress, runtime: &mut UiRuntime) {
         let _ = runtime.pump(&mut SampledClock(self.clock.now()), &mut Sink);
     }
-    fn retire_presentation(&self, _: PresentationAddress, _: Option<PresentationAddress>) {}
+    fn retire_presentation(&self, _: PresentationAddress, _: Option<PresentationAddress>) {
+        self.edges_at_retire.set(Some(self.edges.borrow().len()));
+    }
     fn after_turn(&self, _: flui_runtime::owner::RecoveryState) {}
     fn tracks_frame_rate_demand(&self) -> bool {
         self.tracks
@@ -155,6 +159,7 @@ impl Rig {
                 edges: RefCell::new(Vec::new()),
                 tracks,
                 panic_next_edge: std::cell::Cell::new(false),
+                edges_at_retire: std::cell::Cell::new(None),
             },
             window,
             controller,
@@ -346,6 +351,23 @@ fn a_demand_whose_delivery_panicked_is_delivered_by_the_next_work_item() {
     assert_eq!(rig.demands(), [FrameRateDemand::Active], "and only once");
 }
 
+fn closing_a_presentation_releases_its_delivered_demand() {
+    let rig = Rig::new();
+    rig.touch(true);
+    assert_eq!(rig.demands(), [FrameRateDemand::Active]);
+    rig.window.close(&rig.effects).expect("close");
+    assert_eq!(
+        rig.demands(),
+        [FrameRateDemand::Active, FrameRateDemand::Idle],
+        "the window outlives the presentation and would keep the high rate"
+    );
+    assert_eq!(
+        rig.effects.edges_at_retire.get(),
+        Some(2),
+        "the release reaches the host before it unfollows the window"
+    );
+}
+
 #[test]
 fn frame_rate_demand_contract() {
     crate::table_test::run_table(
@@ -370,6 +392,10 @@ fn frame_rate_demand_contract() {
             (
                 "a_hidden_presentation_releases_at_once_and_is_not_busy",
                 a_hidden_presentation_releases_at_once_and_is_not_busy as fn(),
+            ),
+            (
+                "closing_a_presentation_releases_its_delivered_demand",
+                closing_a_presentation_releases_its_delivered_demand as fn(),
             ),
             (
                 "a_demand_whose_delivery_panicked_is_delivered_by_the_next_work_item",

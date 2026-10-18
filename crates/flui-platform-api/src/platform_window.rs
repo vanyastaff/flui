@@ -619,8 +619,8 @@ pub trait PlatformWindow: Send + Sync {
 
     /// Tell the system which refresh rate this window wants from its display.
     ///
-    /// [`FrameRateHint::High`] asks for the display's highest rate while the
-    /// window animates or is touched; [`FrameRateHint::Default`] withdraws the
+    /// [`FrameRateHint::High`](crate::FrameRateHint::High) asks for the display's highest rate while the
+    /// window animates or is touched; [`FrameRateHint::Default`](crate::FrameRateHint::Default) withdraws the
     /// request and leaves the choice to the system. It is a request, not a
     /// command: the system may keep any rate. A native surface carries the
     /// request, so a host sends the current hint again after the surface was

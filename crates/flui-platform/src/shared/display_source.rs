@@ -197,6 +197,17 @@ impl DisplaySource {
     /// `handle` in a snapshot revision invalidates the snapshot; the same miss
     /// again, however often it repeats, costs nothing until the revision
     /// changes.
+    #[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+    pub(crate) fn note_miss(&self, handle: u64) {
+        self.note_miss_with(handle, || {});
+    }
+
+    /// As [`note_miss`](Self::note_miss), and `wake` runs when this miss is the
+    /// first of its handle in the revision, after the source was invalidated.
+    /// A backend whose owner would otherwise sleep until something else wakes
+    /// it passes the call that asks for an owner turn, so the sample the miss
+    /// owes is not left waiting; a backend with OS change notifications that
+    /// already wake the owner uses `note_miss`.
     #[cfg(any(
         windows,
         target_os = "macos",
@@ -204,10 +215,12 @@ impl DisplaySource {
         target_os = "android",
         test
     ))]
-    pub(crate) fn note_miss(&self, handle: u64) {
+    pub(crate) fn note_miss_with(&self, handle: u64, wake: impl FnOnce()) {
         let revision = self.last.lock().revision().get();
-        if self.misses.lock().first_miss(handle, revision) {
+        let first = self.misses.lock().first_miss(handle, revision);
+        if first {
             self.invalidate();
+            wake();
         }
     }
 }
@@ -377,6 +390,23 @@ mod tests {
         source.note_miss(7);
         counted(&source, &samples);
         assert_eq!(samples.get(), 3, "a new revision allows one retry");
+    }
+
+    #[test]
+    fn a_first_miss_asks_for_an_owner_turn_and_a_repeat_does_not() {
+        let source = DisplaySource::new();
+        let samples = Cell::new(0);
+        counted(&source, &samples);
+        let wakes = Cell::new(0);
+        let miss = |handle| source.note_miss_with(handle, || wakes.set(wakes.get() + 1));
+        miss(7);
+        assert_eq!(wakes.get(), 1, "an idle owner must be woken to sample");
+        miss(7);
+        assert_eq!(wakes.get(), 1, "the same miss in the same revision is free");
+        miss(8);
+        assert_eq!(wakes.get(), 2, "another handle owes its own sample");
+        counted(&source, &samples);
+        assert_eq!(samples.get(), 2, "the sample the wake is for");
     }
 
     #[test]
