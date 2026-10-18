@@ -1069,3 +1069,23 @@ async fn web_pixel_ratio_watch_arms_again_from_resize_and_screen_change() {
     settle().await;
     assert_eq!(window_resize_listeners(), 0);
 }
+
+#[wasm_bindgen_test]
+async fn web_screen_change_keeps_the_period_while_the_current_screen_is_known() {
+    install_probe("granted");
+    let _probe = Probe;
+    let running = Running::start();
+    settle().await;
+    run_frames(0.0, 6.944, 40);
+    settle().await;
+    assert!(near(primary_period(&running.snapshot()), 6.944));
+
+    // With screen access `currentScreen` says whether the window moved. A
+    // `change` of `window.screen` for the same current screen's metrics is not
+    // a move, and the measured period still holds.
+    change_window_screen(1280);
+    settle().await;
+    assert!(near(primary_period(&running.snapshot()), 6.944));
+    running.quit();
+    settle().await;
+}
