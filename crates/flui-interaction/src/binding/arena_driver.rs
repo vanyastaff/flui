@@ -42,7 +42,7 @@ impl ArenaDriver {
             PointerEvent::Cancel(cancel) => {
                 GestureArena::abandon_detached(batch, ContestCancel::Pointer(cancel.reason));
             }
-            _ => unreachable!("terminal sequence requires Up or Cancel"),
+            _ => unreachable!("BUG: a terminal sequence ends with Up or Cancel"),
         }
     }
 

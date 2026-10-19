@@ -117,12 +117,29 @@ impl DataTransferSource for DragDouble {
         let Some(provider) = provider else {
             return TransferRequest::ready(Err(TransferError::StaleOffer(id)));
         };
-        // The provider holds owner-thread state; off the owner thread it is not there.
+        // The provider holds owner-thread state; off the owner thread, or
+        // asked from inside itself, it is not there.
         let Some(mut serve) = provider.take() else {
             return TransferRequest::ready(Err(TransferError::SourceGone));
         };
-        let result = serve(representation);
-        let _ = provider.restore(serve);
+        // A source's failure is contained as the OS contains it: the target
+        // sees the transfer fail, and the provider stays for its next request.
+        let served =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| serve(representation)));
+        if let Err(displaced) = provider.restore(serve) {
+            // The slot is the session's own, so nothing else fills it.
+            std::mem::forget(displaced);
+        }
+        let result = served.unwrap_or_else(|payload| {
+            std::mem::forget(payload);
+            crate::shared::panic_boundary::contain_owner_callback(|| {
+                tracing::error!("the drag's provider panicked; the request fails");
+            });
+            Err(TransferError::SourceGone)
+        });
+        // The last clone of `provider` may be this one, once the target
+        // concluded the drop meanwhile: it retires here, outside every lock.
+        drop(provider);
         let result = result.and_then(|payload| {
             let actual = payload.byte_len();
             if actual > limits.max_bytes {
@@ -150,9 +167,14 @@ impl DataTransferSource for DragDouble {
     }
 
     fn conclude_drop(&self, id: DataTransferId) {
-        let mut inner = self.inner.lock();
-        inner.open.remove(&id);
-        let _ = inner.table.retire(id);
+        let concluded = {
+            let mut inner = self.inner.lock();
+            let _ = inner.table.retire(id);
+            inner.open.remove(&id)
+        };
+        // After the session ended this is the provider's last clone: its
+        // captures are user code, so they retire with no lock held.
+        drop(concluded);
     }
 }
 
@@ -181,14 +203,17 @@ impl PlatformDragSource for HeadlessDragSource {
             on_end,
             ..
         } = request;
-        let mut inner = self.double.inner.lock();
-        if inner.session.is_some() {
-            // One OS session at a time, as on a desktop.
-            return Err(DragError::Unavailable);
-        }
+        // The slots are filled, and dropped on a refusal, before the lock is
+        // taken: their values are user code.
         let slot = Arc::new(OwnerSlot::new());
         let on_end_slot = OwnerSlot::new();
         if slot.replace(provider).is_err() || on_end_slot.replace(on_end).is_err() {
+            return Err(DragError::Unavailable);
+        }
+        let mut inner = self.double.inner.lock();
+        if inner.session.is_some() {
+            // One OS session at a time, as on a desktop.
+            drop(inner);
             return Err(DragError::Unavailable);
         }
         inner.session = Some(Session {
@@ -271,14 +296,15 @@ impl HeadlessDragAndDrop {
     /// Start a drag that comes from another application, offering `payloads` in
     /// order and allowing `allowed`. Its windows see an offer with no FLUI identity.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// When a session is already running.
+    /// [`DragError::Unavailable`] while another session runs: the OS runs one
+    /// at a time.
     pub fn start_foreign(
         &self,
         payloads: Vec<(TransferFormat, TransferPayload)>,
         allowed: TransferActions,
-    ) {
+    ) -> Result<(), DragError> {
         let representations: Vec<RepresentationDescriptor> = payloads
             .iter()
             .map(|(format, payload)| RepresentationDescriptor {
@@ -295,15 +321,14 @@ impl HeadlessDragAndDrop {
                 .cloned()
                 .ok_or(TransferError::Cancelled)
         });
-        assert!(
-            slot.replace(served).is_ok(),
-            "BUG: the double is driven from its owner thread"
-        );
+        if slot.replace(served).is_err() {
+            // The slot was made on this thread: only exhausted slot keys refuse it.
+            return Err(DragError::Unavailable);
+        }
         let mut inner = self.double.inner.lock();
-        assert!(
-            inner.session.is_none(),
-            "an OS drag session is already running"
-        );
+        if inner.session.is_some() {
+            return Err(DragError::Unavailable);
+        }
         inner.session = Some(Session {
             representations: Arc::from(representations),
             allowed,
@@ -311,15 +336,16 @@ impl HeadlessDragAndDrop {
             on_end: None,
             over: None,
         });
+        Ok(())
     }
 
     /// The simulated pointer is over `window` at `position`: the first call
     /// enters it, later ones move, and moving to another window leaves the last.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// When no session is running.
-    pub fn hover(&self, window: WindowId, position: Point<f64>) {
+    /// [`DragError::SessionClosed`] when no session is running.
+    pub fn hover(&self, window: WindowId, position: Point<f64>) -> Result<(), DragError> {
         let (left, event) = {
             let mut inner = self.double.inner.lock();
             let Inner {
@@ -327,25 +353,21 @@ impl HeadlessDragAndDrop {
                 session,
                 open,
             } = &mut *inner;
-            let session = session.as_mut().expect("an OS drag session is running");
+            let session = session.as_mut().ok_or(DragError::SessionClosed)?;
             let allowed = session.allowed;
             let mut left = None;
-            let same = session
-                .over
-                .as_ref()
-                .is_some_and(|over| over.window == window);
-            let event = if same {
-                let over = session.over.as_mut().expect("checked just above");
-                over.position = position;
-                DragDropEvent::Moved {
-                    id: over.offer,
-                    allowed,
-                    position,
-                }
-            } else {
-                {
+            let event =
+                if let Some(over) = session.over.as_mut().filter(|over| over.window == window) {
+                    over.position = position;
+                    DragDropEvent::Moved {
+                        id: over.offer,
+                        allowed,
+                        position,
+                    }
+                } else {
                     if let Some(previous) = session.over.take() {
                         let _ = table.retire(previous.offer);
+                        // Not the provider's last clone: the session holds one.
                         open.remove(&previous.offer);
                         left = Some((previous.window, previous.offer));
                     }
@@ -362,14 +384,14 @@ impl HeadlessDragAndDrop {
                         allowed,
                         position: Some(position),
                     }
-                }
-            };
+                };
             (left, event)
         };
         if let Some((window, id)) = left {
             self.double.deliver(window, DragDropEvent::Exited { id });
         }
         self.double.deliver(window, event);
+        Ok(())
     }
 
     /// The pointer is over no window of the platform.
@@ -384,6 +406,7 @@ impl HeadlessDragAndDrop {
             let over = session.as_mut().and_then(|session| session.over.take());
             over.map(|over| {
                 let _ = table.retire(over.offer);
+                // Not the provider's last clone: the session holds one.
                 open.remove(&over.offer);
                 (over.window, over.offer)
             })
@@ -393,32 +416,27 @@ impl HeadlessDragAndDrop {
         }
     }
 
-    /// The user releases over the window under the pointer. The action is
-    /// resolved from the answer that window cached, as a native backend does;
-    /// when it accepted nothing the drag is cancelled instead. Returns the action.
+    /// The user releases the pointer. Over a window, the action is resolved
+    /// from the answer that window cached, as a native backend resolves it:
+    /// one action the source permits ([`DropFeedback::resolve`]). Over no
+    /// window, or when the window accepted nothing, the drag is cancelled
+    /// instead. Returns the action, `None` when cancelled.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// When no session is running.
-    pub fn drop_here(&self) -> Option<TransferActions> {
-        let (window, id, action, position) = {
+    /// [`DragError::SessionClosed`] when no session is running.
+    pub fn drop_here(&self) -> Result<Option<TransferActions>, DragError> {
+        let over = {
             let inner = self.double.inner.lock();
-            let session = inner
-                .session
-                .as_ref()
-                .expect("an OS drag session is running");
-            let over = session.over.as_ref()?;
-            let action = over.feedback.accept.map(|accept| accept & session.allowed);
-            (
-                over.window,
-                over.offer,
-                action.filter(|action| !action.is_empty()),
-                over.position,
-            )
+            let session = inner.session.as_ref().ok_or(DragError::SessionClosed)?;
+            session.over.as_ref().and_then(|over| {
+                let action = over.feedback.resolve(session.allowed)?;
+                Some((over.window, over.offer, action, over.position))
+            })
         };
-        let Some(action) = action else {
+        let Some((window, id, action, position)) = over else {
             self.cancel();
-            return None;
+            return Ok(None);
         };
         self.double.deliver(
             window,
@@ -429,7 +447,7 @@ impl HeadlessDragAndDrop {
             },
         );
         self.finish(OsDragEnd::Dropped(action));
-        Some(action)
+        Ok(Some(action))
     }
 
     /// The user cancels (Escape): the window under the pointer is left and the

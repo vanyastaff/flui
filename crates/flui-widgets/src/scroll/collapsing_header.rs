@@ -36,12 +36,13 @@ use flui_rendering::pipeline::WeakPipelineCell;
 use flui_view::prelude::StatefulView;
 use flui_view::{BoxedView, BuildContext, IntoView, LifecycleContext, ViewExt, ViewState};
 
+use super::nested::presentation_device_pixel_ratio;
 use super::nested::{
     FlingHandoff, FlingStep, NestedScroll, NestedScrollConnection, ScrollCause, ScrollEndReason,
     ScrollStep,
 };
 use super::scroll_owner::{SharedSnapPolicy, settle_spring, snap_target};
-use super::scrollable::presentation_device_pixel_ratio;
+use super::scroll_physics::rest_slop;
 use super::{ClampingScrollPhysics, ScrollMetrics, ScrollPhysics};
 use crate::interaction::focus_reveal::{FocusRevealScope, RevealTarget, SharedRevealTarget};
 use crate::{
@@ -138,7 +139,7 @@ pub enum HeaderOrder {
 /// one, so its top stays put while its bottom slides under the body; the body
 /// fills the rest. By default a scroll toward the content's end collapses the
 /// header before the content moves, and a scroll toward the start expands it
-/// only once the content is back at its start. [`expand`](Self::expand) with
+/// only once the content is back at its start. [`expands`](Self::expands) with
 /// [`HeaderOrder::BeforeContent`] brings it back on any scroll toward the
 /// start instead.
 ///
@@ -197,7 +198,7 @@ impl CollapsingHeader {
     /// When a scroll toward the content's end collapses the header.
     /// Defaults to [`HeaderOrder::BeforeContent`].
     #[must_use]
-    pub fn collapse(mut self, order: HeaderOrder) -> Self {
+    pub fn collapses(mut self, order: HeaderOrder) -> Self {
         self.collapse = order;
         self
     }
@@ -205,7 +206,7 @@ impl CollapsingHeader {
     /// When a scroll toward the content's start expands the header.
     /// Defaults to [`HeaderOrder::AfterContent`].
     #[must_use]
-    pub fn expand(mut self, order: HeaderOrder) -> Self {
+    pub fn expands(mut self, order: HeaderOrder) -> Self {
         self.expand = order;
         self
     }
@@ -293,7 +294,7 @@ impl HeaderModel {
 
     /// Within half a device pixel of `target`.
     fn rests_on(&self, target: f64) -> bool {
-        (self.offset.get() - target).abs() <= 0.5 / self.device_pixel_ratio().max(1.0)
+        (self.offset.get() - target).abs() <= rest_slop(self.device_pixel_ratio())
     }
 
     fn set_offset(&self, offset: f64) {

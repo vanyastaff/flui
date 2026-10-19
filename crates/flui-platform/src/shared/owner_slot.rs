@@ -7,7 +7,8 @@
 //! sees nothing. That is what lets a window take an input callback that
 //! captures an `Rc`: no other thread can ever run, move or drop it.
 //!
-//! A slot dropped on its owner drops its value there. A slot dropped elsewhere
+//! A slot dropped on its owner drops its value there, unless the drop is part
+//! of an unwind, which retains the value instead. A slot dropped elsewhere
 //! cannot, so its value stays in the owner's table until that thread exits.
 
 use std::any::Any;
@@ -122,7 +123,14 @@ impl<T: 'static> OwnerSlot<T> {
 impl<T: 'static> Drop for OwnerSlot<T> {
     fn drop(&mut self) {
         let value = self.take();
-        super::panic_boundary::contain_owner_callback(|| drop(value));
+        if thread::panicking() {
+            // A slot destroyed by an unwind retains its value: its destructor
+            // is user code, and the failure unwinding stays the only one
+            // (ADR-0127 §2).
+            std::mem::forget(value);
+        } else {
+            super::panic_boundary::contain_owner_callback(|| drop(value));
+        }
     }
 }
 

@@ -122,13 +122,9 @@ pub(super) struct HeadlessState {
     /// What this backend reports implemented ([`HeadlessPlatform::with_input_availability`]).
     input_availability: flui_platform_api::input_capabilities::InputCapabilities,
     /// The attached input devices: presence and device ids from one registry.
-    devices: crate::shared::pointer_assembly::ContactRegistry,
-    /// Simulated devices by the id their events carry.
-    device_labels: Vec<(
-        flui_platform_api::pointer::DeviceId,
-        crate::shared::pointer_assembly::NativeDevice,
-    )>,
-    next_device_label: u64,
+    devices: crate::shared::pointer_assembly::DeviceRegistry,
+    /// Issues each simulated device's native label, never one twice.
+    device_labels: flui_foundation::IdMint<std::num::NonZeroU64>,
     /// The displays this platform reports; replaced by
     /// [`HeadlessPlatform::with_displays`] and changed through
     /// [`HeadlessDisplayControls`].
@@ -167,11 +163,8 @@ impl HeadlessPlatform {
             exit_reevaluation_requested: false,
             text_store_host: None,
             input_availability: default_input_availability(),
-            devices: crate::shared::pointer_assembly::ContactRegistry::new(
-                crate::shared::pointer_assembly::NativeClock::epoch_only(),
-            ),
-            device_labels: Vec::new(),
-            next_device_label: 0,
+            devices: crate::shared::pointer_assembly::DeviceRegistry::default(),
+            device_labels: flui_foundation::IdMint::new(),
             displays: HeadlessDisplays::new(vec![DisplaySpec::default()]),
             window_capabilities: WindowCapabilities::ALL,
             window_policy: HeadlessWindowPolicy::default(),
@@ -279,14 +272,11 @@ impl HeadlessPlatform {
     pub fn with_os_drag(self, timing: flui_platform_api::drag::OsDragStart) -> Self {
         self.with_state(|state| {
             state.drag.enable(timing);
-            state.input_availability =
-                flui_platform_api::input_capabilities::InputCapabilities::builder()
-                    .pen(state.input_availability.pen())
-                    .precise_scroll(state.input_availability.precise_scroll())
-                    .trackpad_gestures(state.input_availability.trackpad_gestures())
-                    .input_regions(state.input_availability.input_regions())
-                    .outgoing_drag(flui_platform_api::input_capabilities::Availability::Native)
-                    .build();
+            state.input_availability = state
+                .input_availability
+                .to_builder()
+                .outgoing_drag(flui_platform_api::input_capabilities::Availability::Native)
+                .build();
         });
         self
     }
@@ -638,19 +628,18 @@ impl HeadlessInputDevices {
         let state = self.state.upgrade()?;
         let (change, windows, present) = {
             let mut state = state.lock();
-            state.next_device_label += 1;
-            let native = crate::shared::pointer_assembly::NativeDevice(state.next_device_label);
+            let label = state.device_labels.next().ok()?;
+            let native = crate::shared::pointer_assembly::NativeDevice(label.get());
             let time = flui_platform_api::EventTime::from_nanos(
                 crate::shared::events::event_timestamp_ns(),
             );
             let change = state.devices.add_device(native, kind, time)?;
-            state.device_labels.push((change.device, native));
             let windows: Vec<_> = state
                 .windows
                 .iter()
                 .map(|w| Arc::clone(&w.callbacks))
                 .collect();
-            (change, windows, state.devices.devices().present())
+            (change, windows, state.devices.present())
         };
         for callbacks in windows {
             callbacks.dispatch_input(PlatformInput::Pointer(PointerEvent::DeviceAdded(change)));
@@ -659,10 +648,11 @@ impl HeadlessInputDevices {
         Some(change.device)
     }
 
-    /// Remove the device `id` named: every open window receives its
-    /// contacts' cancellations and
+    /// Remove the device `id` named: every open window receives
     /// [`DeviceRemoved`](flui_platform_api::pointer::PointerEvent::DeviceRemoved),
-    /// then the capability change. `false` when it was not attached.
+    /// then the capability change. A simulated device has no contacts of its
+    /// own to cancel: a test injects its pointer input already assembled.
+    /// `false` when it was not attached.
     pub fn remove(&self, id: flui_platform_api::pointer::DeviceId) -> bool {
         use flui_platform_api::pointer::PointerEvent;
         let Some(state) = self.state.upgrade() else {
@@ -670,30 +660,25 @@ impl HeadlessInputDevices {
         };
         let (removed, windows, present) = {
             let mut state = state.lock();
-            let Some(index) = state
-                .device_labels
-                .iter()
-                .position(|(device, _)| *device == id)
-            else {
-                return false;
-            };
-            let (_, native) = state.device_labels.remove(index);
             let time = flui_platform_api::EventTime::from_nanos(
                 crate::shared::events::event_timestamp_ns(),
             );
-            let (_, removed) = state.devices.remove_device(native, time);
+            let Some(removed) = state
+                .devices
+                .native(id)
+                .and_then(|native| state.devices.remove_device(native, time))
+            else {
+                return false;
+            };
             let windows: Vec<_> = state
                 .windows
                 .iter()
                 .map(|w| Arc::clone(&w.callbacks))
                 .collect();
-            (removed, windows, state.devices.devices().present())
+            (removed, windows, state.devices.present())
         };
         for callbacks in windows {
-            if let Some(removed) = removed {
-                callbacks
-                    .dispatch_input(PlatformInput::Pointer(PointerEvent::DeviceRemoved(removed)));
-            }
+            callbacks.dispatch_input(PlatformInput::Pointer(PointerEvent::DeviceRemoved(removed)));
             callbacks.set_input_capabilities(callbacks.input_capabilities().with_present(present));
         }
         true
@@ -736,7 +721,7 @@ fn create_mock_window(
     window.callbacks.set_input_capabilities(
         state
             .input_availability
-            .with_present(state.devices.devices().present()),
+            .with_present(state.devices.present()),
     );
     if let Some(signal) = state.owner_signal.upgrade() {
         window

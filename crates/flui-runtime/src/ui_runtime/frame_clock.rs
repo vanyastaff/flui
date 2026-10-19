@@ -526,7 +526,7 @@ impl UiRuntime {
             .flat_map(|presentation| {
                 [
                     flui_interaction::__runtime::next_deadline_snapshot(presentation.gestures())
-                        .map(|deadline| {
+                        .and_then(|deadline| {
                             flui_interaction::__runtime::wake_instant(
                                 presentation.gestures(),
                                 deadline,

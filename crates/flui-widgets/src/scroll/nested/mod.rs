@@ -69,6 +69,7 @@ mod chain;
 mod idle_end;
 mod plane;
 mod snap;
+mod source;
 
 use std::rc::Rc;
 
@@ -83,11 +84,11 @@ use crate::anchored_box::AnchoredBox;
 pub(crate) use chain::{
     Acceptance, ChainNode, Handoff, NestedScrollScope, Participant, ScrollSequence,
 };
-pub(crate) use idle_end::follow_latch;
-pub(crate) use plane::PlaneSource;
+pub(crate) use plane::{PlaneSource, presentation_device_pixel_ratio};
 pub use snap::{
     AnchorSnap, AnchorSnapError, InvalidViewportFraction, PageSnap, SnapPolicy, ViewportFraction,
 };
+pub(crate) use source::SequenceSource;
 
 /// What moved the offset a step carries (ADR-0209 §2).
 ///

@@ -5,6 +5,8 @@
   ADR-0143 and the current code: unlayered `flui-interaction` modules, per-backend pointer
   assembly, and a `PanZoomTransform` that carries pan.
 - **Date:** 2026-10-13
+- **Amended:** 2026-10-19 — the layer table follows the implemented manifest: DnD sessions are
+  the `drag` module beside `gesture`, and `haptics` is layer 5, below `__runtime` and `testing`.
 - **Amends:** [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md): `PanZoomTransform`
   loses its pan component; a two-finger pan is `Scroll` with phases, and translation during a
   pinch is carried by the focal point, updated on every `Update`.
@@ -40,9 +42,10 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
    | 1 | `close`, `containment` (they name `retain`, and modules in one layer name none of each other) |
    | 2 | `pointer`: hit test, interaction lane, router, capture, mouse tracker, `resampler` and `sampling_clock` (out of `processing`), `wheel_preferences`, `InputSequenceId` minting; it consumes the input `flui-runtime` routes from `HostInput` (ADR-0207) and owns no boundary of its own |
    | 2 | `focus` (`focus`, `focus_scope`, `traversal`, moved out of `routing`); `text_input` (`text_input`, `clipboard`) |
-   | 3 | `gesture`: `arena`, `recognizers`, `velocity`, `lsq_solver`, `one_euro` (out of `processing`; `Velocity` by one path), `settings`, `details`, `traits`, `observability`, DnD sessions |
+   | 3 | `gesture`: `arena`, `recognizers`, `velocity`, `lsq_solver`, `one_euro` (out of `processing`; `Velocity` by one path), `settings`, `details`, `traits`, `observability`; `drag` (DnD sessions, over pointer capture and hit testing) |
    | 4 | `binding` |
-   | 5 | `__runtime` (the runtime's terminal-cleanup seam) and `testing` (feature; test builders that drive the binding, so it holds code and is not transparent) |
+   | 5 | `haptics` (a presentation's haptics, on the binding's clock and dispatch) |
+   | 6 | `__runtime` (the runtime's terminal-cleanup seam) and `testing` (feature; test builders that drive the binding, so it holds code and is not transparent) |
    | — | `prelude` is transparent (only `use` items) |
 
    Modules move in mechanical commits; a moved `static` or `thread_local!` keeps its `globals`

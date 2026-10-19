@@ -8,14 +8,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_platform::shared::ole_drag_drop::{
-    DragContinuation, MODAL_FRAME_PACE_MS, NativeFormat, actions_of, answered_action,
-    continue_drag, decode, effect_bits, encode, encode_file_drop, encode_html, encode_text,
-    identity_descriptor, modal_frame_wait_ms, native_format, offer_representations,
-    os_loop_buttons, transfer_format,
+    DragContinuation, MODAL_FRAME_PACE_MS, NativeFormat, actions_of, continue_drag, decode,
+    effect_bits, encode, encode_file_drop, encode_html, encode_text, identity_descriptor,
+    modal_frame_wait_ms, native_format, offer_representations, os_loop_buttons, transfer_format,
 };
 use flui_platform_api::data_transfer::{
-    DropFeedback, Mime, TransferActions, TransferError, TransferFormat, TransferPayload,
-    TransferUri,
+    Mime, TransferActions, TransferError, TransferFormat, TransferPayload, TransferUri,
 };
 use flui_platform_api::drag::IDENTITY_ESSENCE;
 
@@ -23,25 +21,13 @@ const COPY: TransferActions = TransferActions::COPY;
 const MOVE: TransferActions = TransferActions::MOVE;
 const LINK: TransferActions = TransferActions::LINK;
 
-/// Actions and `DROPEFFECT` bits map both ways; a target's answer is one
-/// action the source permits, or a refusal.
-fn effects_map_both_ways_and_an_answer_is_one_permitted_action() {
+/// Actions and `DROPEFFECT` bits map both ways.
+fn effects_map_both_ways() {
     for actions in [COPY, MOVE, LINK, COPY | MOVE, COPY | MOVE | LINK] {
         assert_eq!(actions_of(effect_bits(actions)), actions);
     }
     // DROPEFFECT_SCROLL and unknown bits are no action.
     assert_eq!(actions_of(0x8000_0000 | 0x08), TransferActions::empty());
-    let accept = |accept| DropFeedback { accept };
-    assert_eq!(
-        answered_action(accept(Some(COPY | MOVE)), MOVE | LINK),
-        Some(MOVE)
-    );
-    assert_eq!(
-        answered_action(accept(Some(COPY | MOVE)), COPY | MOVE),
-        Some(COPY)
-    );
-    assert_eq!(answered_action(accept(Some(COPY)), MOVE), None);
-    assert_eq!(answered_action(accept(None), COPY), None);
 }
 
 /// Each transfer format has one clipboard format; a foreign clipboard format
@@ -312,10 +298,7 @@ fn ole_drag_drop_contracts() {
     super::run_table(
         "ole_drag_drop",
         &[
-            (
-                "effects_map_both_ways_and_an_answer_is_one_permitted_action",
-                effects_map_both_ways_and_an_answer_is_one_permitted_action,
-            ),
+            ("effects_map_both_ways", effects_map_both_ways),
             (
                 "formats_map_to_clipboard_formats_and_back",
                 formats_map_to_clipboard_formats_and_back,

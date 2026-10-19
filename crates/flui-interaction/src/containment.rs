@@ -10,13 +10,14 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use crate::retain::Retain;
 
-/// The first panic captured while invoking a resolved pointer route.
+/// The first panic captured while invoking a resolved pointer route, as
+/// [`InteractionDispatchHandle::invoke_pointer_route`](crate::pointer::InteractionDispatchHandle::invoke_pointer_route)
+/// returns it.
 ///
 /// The dispatch owner must finish its mandatory cleanup (close the arena on
 /// Down, sweep on Up, release on Up/Cancel, release an ephemeral route) and
 /// then call [`resume`](Self::resume) so the panic propagates under the
 /// repository panic policy.
-#[doc(hidden)]
 #[must_use = "a captured route panic must be resumed after dispatch cleanup"]
 pub struct RoutePanic {
     payload: Box<dyn Any + Send>,

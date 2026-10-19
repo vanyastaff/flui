@@ -33,10 +33,11 @@
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashSet},
+    num::NonZeroU64,
     rc::Rc,
 };
 
-use flui_foundation::geometry::Offset;
+use flui_foundation::{IdMint, geometry::Offset};
 use smallvec::SmallVec;
 
 pub use super::interaction_lane::{
@@ -297,9 +298,9 @@ struct MouseTrackerInner {
     cursor_owner: CursorOwner,
     /// The cursor a drag shows whatever is hovered, with the token of the
     /// [`CursorOverride`] that set it.
-    cursor_override: Option<(u64, CursorIcon)>,
-    /// The last override token issued.
-    override_tokens: u64,
+    cursor_override: Option<(NonZeroU64, CursorIcon)>,
+    /// Issues override tokens; once exhausted, overrides are inert.
+    override_tokens: IdMint<NonZeroU64>,
 }
 
 impl MouseTrackerInner {
@@ -337,7 +338,9 @@ impl WeakMouseTracker {
 /// which then changes nothing when it is set or dropped.
 pub(crate) struct CursorOverride {
     tracker: std::rc::Weak<RefCell<MouseTrackerInner>>,
-    token: u64,
+    /// `None` when the tracker had no token left to issue: the override
+    /// shows nothing and clears nothing.
+    token: Option<NonZeroU64>,
     pointer: PointerInfo,
 }
 
@@ -350,7 +353,7 @@ impl CursorOverride {
         {
             let mut inner = tracker.borrow_mut();
             match &mut inner.cursor_override {
-                Some((token, shown)) if *token == self.token => *shown = cursor,
+                Some((token, shown)) if Some(*token) == self.token => *shown = cursor,
                 _ => return,
             }
         }
@@ -367,7 +370,7 @@ impl Drop for CursorOverride {
             let mut inner = tracker.borrow_mut();
             if inner
                 .cursor_override
-                .is_none_or(|(token, _)| token != self.token)
+                .is_none_or(|(token, _)| Some(token) != self.token)
             {
                 return;
             }
@@ -416,7 +419,7 @@ impl MouseTracker {
                 cursor_publication: CursorPublication::default(),
                 cursor_owner: CursorOwner::Unobserved,
                 cursor_override: None,
-                override_tokens: 0,
+                override_tokens: IdMint::new(),
             })),
         }
     }
@@ -431,9 +434,10 @@ impl MouseTracker {
     ) -> CursorOverride {
         let token = {
             let mut inner = self.inner.borrow_mut();
-            inner.override_tokens = inner.override_tokens.wrapping_add(1);
-            let token = inner.override_tokens;
-            if !inner.closed {
+            let token = inner.override_tokens.next().ok();
+            if let Some(token) = token
+                && !inner.closed
+            {
                 inner.cursor_override = Some((token, cursor));
             }
             token

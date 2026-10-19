@@ -9,12 +9,12 @@ use std::sync::Arc;
 
 use flui_foundation::{DragSessionId, UiRuntimeId};
 use flui_platform::shared::android_drag::{
-    ClipSource, DRAG_FLAG_GLOBAL, DRAG_FLAG_GLOBAL_URI_READ, DroppedClip, Held, clip_parts,
-    drop_action, held, incoming_allowed, offered, source_end, uri_bytes,
+    ClipSource, DRAG_FLAG_GLOBAL, DRAG_FLAG_GLOBAL_URI_READ, DroppedClip, Held, clip_parts, held,
+    incoming_allowed, offered, source_end, uri_bytes,
 };
 use flui_platform_api::data_transfer::{
-    DropFeedback, Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat,
-    TransferImage, TransferPayload, TransferUri,
+    Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat, TransferImage,
+    TransferPayload, TransferUri,
 };
 use flui_platform_api::drag::{DragSessionKey, OsDragEnd, ProcessNonce};
 
@@ -167,27 +167,6 @@ fn a_foreign_drag_is_a_copy_and_ours_permits_what_it_advertised() {
     );
 }
 
-/// The drop's answer is the target's cached feedback, narrowed to what the
-/// drag permits; none refuses it.
-fn the_drop_takes_the_action_the_target_cached() {
-    let accept = |actions| DropFeedback {
-        accept: Some(actions),
-    };
-    assert_eq!(
-        drop_action(accept(TransferActions::COPY), TransferActions::COPY),
-        Some(TransferActions::COPY)
-    );
-    assert_eq!(
-        drop_action(accept(TransferActions::MOVE), TransferActions::COPY),
-        None,
-        "a move a copy-only drag does not permit"
-    );
-    assert_eq!(
-        drop_action(DropFeedback::default(), TransferActions::COPY),
-        None
-    );
-}
-
 /// A FLUI drag carries its text and HTML in one item and each content URI in
 /// its own; a `file:` URI and bytes stay out, and the identity travels as a
 /// media type of the description alone.
@@ -285,10 +264,6 @@ fn android_drag_mapping() {
             (
                 "a_foreign_drag_is_a_copy_and_ours_permits_what_it_advertised",
                 a_foreign_drag_is_a_copy_and_ours_permits_what_it_advertised,
-            ),
-            (
-                "the_drop_takes_the_action_the_target_cached",
-                the_drop_takes_the_action_the_target_cached,
             ),
             (
                 "a_flui_drag_puts_what_a_clip_can_carry_in_its_clip",

@@ -21,7 +21,7 @@ use flui_widgets::{
 };
 
 use crate::common::LaidOut;
-use crate::nested_scroll::{DEVICES, Probe, Seen, at, fling, mounted, settle, slow};
+use crate::nested_scroll::{DEVICES, Probe, Seen, at, drag, fling, mounted, settle, slow};
 
 /// The header's extents in every row but the degenerate one.
 const COLLAPSED: f64 = 56.0;
@@ -200,7 +200,7 @@ pub(crate) fn collapsing_header_collapses_before_or_after_the_content() {
         );
 
         let mut screen = Screen::new(extents(), |header| {
-            header.collapse(HeaderOrder::AfterContent)
+            header.collapses(HeaderOrder::AfterContent)
         });
         screen.drag_up(device, 200.0);
         assert!(
@@ -228,7 +228,7 @@ pub(crate) fn collapsing_header_collapses_before_or_after_the_content() {
 pub(crate) fn collapsing_header_expands_first_or_last() {
     for device in DEVICES {
         for order in [HeaderOrder::AfterContent, HeaderOrder::BeforeContent] {
-            let mut screen = Screen::new(extents(), |header| header.expand(order));
+            let mut screen = Screen::new(extents(), |header| header.expands(order));
             screen.drag_up(device, 250.0);
             assert!(
                 near(screen.extent(), COLLAPSED),
@@ -608,7 +608,7 @@ pub(crate) fn collapsing_header_with_equal_extents_takes_no_scroll() {
         let fixed = HeaderExtents::new(EXPANDED, EXPANDED).expect("equal extents");
         let mut screen = Screen::new(fixed, |header| {
             header
-                .expand(HeaderOrder::BeforeContent)
+                .expands(HeaderOrder::BeforeContent)
                 .snap_policy(Arc::new(PageSnap::new(ViewportFraction::FULL)))
         });
         screen.drag_up(device, 120.0);
@@ -650,4 +650,40 @@ pub(crate) fn collapsing_header_with_equal_extents_takes_no_scroll() {
         HeaderExtents::new(0.0, 0.0).is_ok(),
         "a header of no extent is admitted"
     );
+}
+
+/// A header within half a device pixel of an extent rests on it, at any
+/// device pixel ratio: three quarters of a logical pixel short of expanded
+/// is expanded at a ratio of one half, where a device pixel is two logical
+/// ones, and is not at a ratio of one.
+pub(crate) fn collapsing_header_rests_within_half_a_device_pixel() {
+    for device in DEVICES {
+        for (ratio, expanded) in [(0.5, true), (1.0, false)] {
+            let mut screen = Screen::new(extents(), |header| header);
+            screen
+                .laid
+                .pipeline_owner()
+                .with_mut(|owner| owner.set_device_pixel_ratio(ratio));
+            screen.laid.enable_semantics();
+            screen.laid.replay(&drag(
+                device,
+                &[at(150.0, 290.0), at(150.0, 270.0), at(150.0, 289.25)],
+                Duration::from_millis(16),
+                Duration::from_millis(300),
+            ));
+            screen.settle();
+            assert_eq!(
+                EXPANDED - screen.extent(),
+                0.75,
+                "{device:?}: the drag leaves the header three quarters short"
+            );
+            let tree = screen.laid.a11y_tree().expect("published semantics");
+            let banner = tree.find(Role::Banner).expect("the header is a banner");
+            assert_eq!(
+                !banner.supports_action(Action::ScrollUp),
+                expanded,
+                "{device:?} at {ratio}: expanded is {expanded}"
+            );
+        }
+    }
 }

@@ -100,6 +100,17 @@ pub enum TransferFormat {
     },
 }
 
+impl TransferFormat {
+    /// Whether this is FLUI's private drag-session identity
+    /// ([`DragSessionKey::representation`](crate::drag::DragSessionKey::representation)),
+    /// whatever its parameters.
+    #[must_use]
+    pub fn is_drag_identity(&self) -> bool {
+        matches!(self, Self::Custom { mime }
+            if mime.as_str().split(';').next() == Some(crate::drag::IDENTITY_ESSENCE))
+    }
+}
+
 /// Stage-1/2 descriptor of one representation: format + size hint, no
 /// payload.
 #[derive(Debug, Clone)]
@@ -146,6 +157,24 @@ pub struct DropFeedback {
     /// The action the target would take on a drop right now, or `None` to
     /// reject.
     pub accept: Option<TransferActions>,
+}
+
+impl DropFeedback {
+    /// The one action this answer takes while the source permits `allowed`:
+    /// the accepted actions the source permits, narrowed to one (copy, then
+    /// move, then link), since every drag protocol reports a single effect.
+    /// `None` refuses the drop.
+    #[must_use]
+    pub fn resolve(self, allowed: TransferActions) -> Option<TransferActions> {
+        let permitted = self.accept? & allowed;
+        [
+            TransferActions::COPY,
+            TransferActions::MOVE,
+            TransferActions::LINK,
+        ]
+        .into_iter()
+        .find(|action| permitted.contains(*action))
+    }
 }
 
 // ============================================================================

@@ -138,10 +138,9 @@ and one entry point. A blocked owner stalls only its runtime, as in Compose, UIK
   nested-pump rows and `a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once`.
 - `latch_and_hover_are_keyed_by_surface_and_device`, `contactless_sequences_get_binding_minted_devices`
   and, in `flui-runtime`, `accessibility_input_reaches_the_semantics_owner`.
-- Static assertions: `GestureBinding: !Send + !Sync`; `HostInput`, `InputSequenceId`,
-  `InputSurface` and `ScrollStep` are `Send + 'static`. trybuild `gesture_binding_stays_on_its_thread`
-  in `crates/flui-interaction/tests/compile_fail/`, and `compile_pass` rows accepting
-  `Rc`-capturing recognizers and scroll connections.
+- Static assertions: `GestureBinding: !Send + !Sync` (`crates/flui-interaction/tests/binding_services.rs`);
+  `HostInput`, `InputSequenceId`, `InputSurface` and `ScrollStep` are `Send + 'static`; and
+  `compile_pass` rows accepting `Rc`-capturing recognizers and scroll connections.
 
 Linux CI runs every row except the Win32 and AppKit nested-pump rows, which run on a native host
 only. Per-thread Win32 runtimes and cross-thread capture are unverified until measured on Windows.
