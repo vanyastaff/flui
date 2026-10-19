@@ -17,8 +17,8 @@
 use std::sync::Arc;
 
 use flui_platform_api::data_transfer::{
-    DropFeedback, Mime, RepresentationDescriptor, TransferActions, TransferFormat, TransferPayload,
-    TransferUri,
+    DropFeedback, Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat,
+    TransferPayload, TransferUri,
 };
 use flui_platform_api::drag::{IDENTITY_ESSENCE, OsDragEnd};
 
@@ -135,6 +135,25 @@ impl HeldUri {
     pub fn payload(&self, bytes: Vec<u8>) -> TransferPayload {
         super::html_drag_drop::payload_of_bytes(&self.format, bytes)
     }
+}
+
+/// What `FluiView.readUri` answered, under `limit`: its `bytes`, or none
+/// when it stopped after `read` bytes. A read that stopped past the limit is
+/// too large, with the bytes it had read as a lower bound of the size; any
+/// other stop (no stream, an error) means the source is gone.
+///
+/// # Errors
+///
+/// [`TransferError::TooLarge`] past the limit, [`TransferError::SourceGone`]
+/// otherwise.
+pub fn uri_bytes(bytes: Option<Vec<u8>>, read: u64, limit: u64) -> Result<Vec<u8>, TransferError> {
+    let actual = bytes
+        .as_ref()
+        .map_or(read, |bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+    if actual > limit {
+        return Err(TransferError::TooLarge { actual, limit });
+    }
+    bytes.ok_or(TransferError::SourceGone)
 }
 
 /// What `source` of `descriptor` holds once `clip` dropped.

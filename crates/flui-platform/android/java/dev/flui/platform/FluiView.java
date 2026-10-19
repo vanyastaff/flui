@@ -497,9 +497,11 @@ public final class FluiView extends View {
 
     /**
      * The bytes behind a content URI of a drop, at most {@code limit} of them;
-     * null when it cannot be read or is larger. Called on a thread of FLUI's.
+     * null when it cannot be read or is larger. {@code read[0]} is how many
+     * bytes it read, past {@code limit} when it stopped there. Called on a
+     * thread of FLUI's.
      */
-    public byte[] readUri(String uri, long limit) {
+    public byte[] readUri(String uri, long limit, long[] read) {
         InputStream stream = null;
         try {
             stream = activity.getContentResolver().openInputStream(Uri.parse(uri));
@@ -508,14 +510,13 @@ public final class FluiView extends View {
             }
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             byte[] chunk = new byte[16384];
-            long total = 0;
-            int read;
-            while ((read = stream.read(chunk)) > 0) {
-                total += read;
-                if (total > limit) {
+            int count;
+            while ((count = stream.read(chunk)) > 0) {
+                read[0] += count;
+                if (read[0] > limit) {
                     return null;
                 }
-                out.write(chunk, 0, read);
+                out.write(chunk, 0, count);
             }
             return out.toByteArray();
         } catch (Exception error) {

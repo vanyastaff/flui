@@ -38,7 +38,7 @@ use parking_lot::Mutex;
 use crate::shared::android_drag::{
     ACTION_DRAG_ENDED, ACTION_DRAG_ENTERED, ACTION_DRAG_EXITED, ACTION_DRAG_LOCATION,
     ACTION_DRAG_STARTED, ClipSource, DroppedClip, Held, clip_parts, drop_action, held,
-    incoming_allowed, offered, source_end,
+    incoming_allowed, offered, source_end, uri_bytes,
 };
 use crate::shared::os_version::Since;
 use crate::shared::os_version::android::{AndroidApi, DragSource};
@@ -355,26 +355,31 @@ fn read_uri(view: &JavaView, uri: &str, limit: u64) -> Result<Vec<u8>, TransferE
     };
     let read = view.attached(|env| {
         let uri = env.new_string(uri)?;
+        let count = env.new_long_array(1)?;
         let bytes = env
             .call_method(
                 target.as_ref(),
                 jni_str!("readUri"),
-                jni_sig!("(Ljava/lang/String;J)[B"),
+                jni_sig!("(Ljava/lang/String;J[J)[B"),
                 &[
                     JValue::Object(&uri),
                     JValue::Long(i64::try_from(limit).unwrap_or(i64::MAX)),
+                    JValue::Object(&count),
                 ],
             )?
             .l()?;
+        let mut read = [0_i64];
+        count.get_region(env, 0, &mut read)?;
+        let read = u64::try_from(read[0]).unwrap_or(0);
         if bytes.is_null() {
-            return Ok(None);
+            return Ok((None, read));
         }
         let bytes = env.cast_local::<jni::objects::JByteArray<'_>>(bytes)?;
-        env.convert_byte_array(&bytes).map(Some)
+        Ok((Some(env.convert_byte_array(&bytes)?), read))
     });
     match read {
-        Ok(Some(bytes)) => Ok(bytes),
-        _ => Err(TransferError::SourceGone),
+        Ok((bytes, read)) => uri_bytes(bytes, read, limit),
+        Err(_) => Err(TransferError::SourceGone),
     }
 }
 

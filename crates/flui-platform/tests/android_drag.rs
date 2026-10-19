@@ -10,11 +10,11 @@ use std::sync::Arc;
 use flui_foundation::{DragSessionId, UiRuntimeId};
 use flui_platform::shared::android_drag::{
     ClipSource, DRAG_FLAG_GLOBAL, DRAG_FLAG_GLOBAL_URI_READ, DroppedClip, Held, clip_parts,
-    drop_action, held, incoming_allowed, offered, source_end,
+    drop_action, held, incoming_allowed, offered, source_end, uri_bytes,
 };
 use flui_platform_api::data_transfer::{
-    DropFeedback, Mime, RepresentationDescriptor, TransferActions, TransferFormat, TransferImage,
-    TransferPayload, TransferUri,
+    DropFeedback, Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat,
+    TransferImage, TransferPayload, TransferUri,
 };
 use flui_platform_api::drag::{DragSessionKey, OsDragEnd, ProcessNonce};
 
@@ -128,6 +128,32 @@ fn a_drop_holds_what_the_clip_carried() {
         document.payload(vec![4]),
         TransferPayload::Custom { mime, bytes }
             if mime.as_str() == "application/pdf" && *bytes == [4]
+    ));
+}
+
+/// A dropped URI read to its end is its bytes; one the view stopped reading
+/// past the limit is too large, with what it had read, and one it could not
+/// read is gone.
+fn a_dropped_uri_read_reports_how_it_ended() {
+    assert!(matches!(uri_bytes(Some(vec![1, 2]), 2, 4), Ok(bytes) if bytes == [1, 2]));
+    let over = uri_bytes(None, 16_384, 10);
+    assert!(
+        matches!(
+            over,
+            Err(TransferError::TooLarge {
+                actual: 16_384,
+                limit: 10
+            })
+        ),
+        "a read stopped past the limit is too large, not gone: {over:?}"
+    );
+    assert!(matches!(
+        uri_bytes(None, 3, 10),
+        Err(TransferError::SourceGone)
+    ));
+    assert!(matches!(
+        uri_bytes(None, 0, 10),
+        Err(TransferError::SourceGone)
     ));
 }
 
@@ -251,6 +277,10 @@ fn android_drag_mapping() {
             (
                 "a_drop_holds_what_the_clip_carried",
                 a_drop_holds_what_the_clip_carried,
+            ),
+            (
+                "a_dropped_uri_read_reports_how_it_ended",
+                a_dropped_uri_read_reports_how_it_ended,
             ),
             (
                 "a_foreign_drag_is_a_copy_and_ours_permits_what_it_advertised",
