@@ -306,7 +306,10 @@ mod appkit_resize_jitter_probe {
                     state.size_index = index;
                 }
                 if let Some(window) = burst_window.upgrade() {
-                    window.resize(Size::new(w as f64, h as f64));
+                    // `apply` routes onto the window's owner thread itself.
+                    let _ = window.apply(flui_platform::WindowCommand::SetSize(Size::new(
+                        w as f64, h as f64,
+                    )));
                 }
                 std::thread::sleep(RESIZE_INTERVAL);
             }

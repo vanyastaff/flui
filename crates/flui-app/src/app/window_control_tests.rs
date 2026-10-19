@@ -346,6 +346,40 @@ fn a_panic_while_applying_neither_wedges_the_walk_nor_loses_the_rest() {
     );
 }
 
+fn a_window_closed_between_the_request_and_the_lookup_has_no_handle() {
+    let window = headless_window(WindowCapabilities::ALL);
+    let rig = rig(&window, 14);
+    assert!(
+        rig.queues.handle_for(address(14)).is_some(),
+        "an open window has one"
+    );
+
+    rig.source.close();
+    assert!(
+        rig.queues.handle_for(address(14)).is_none(),
+        "closed, though its source has not been dropped yet"
+    );
+}
+
+fn a_dead_window_takes_its_queued_commands_with_it() {
+    let window = recording(false, None);
+    let as_platform: Arc<dyn PlatformWindow> = window.clone();
+    let rig = rig(&as_platform, 13);
+    rig.handle.set_title("never applied").expect("accepted");
+    rig.handle.request_close().expect("accepted");
+    drop((window, as_platform));
+
+    rig.queues.apply_pending();
+    let queue = rig.queues.queues.borrow()[0]
+        .0
+        .upgrade()
+        .expect("the source still holds its queue");
+    assert!(
+        queue.pending.borrow().is_empty(),
+        "the batch of a destroyed window is not queued again for every later turn"
+    );
+}
+
 fn subscribers_hear_a_new_state_in_order_and_what_they_ask_waits() {
     let window = headless_window(WindowCapabilities::ALL);
     let rig = rig(&window, 10);
@@ -434,6 +468,14 @@ fn window_handle_contract() {
             (
                 "a_panic_while_applying_neither_wedges_the_walk_nor_loses_the_rest",
                 a_panic_while_applying_neither_wedges_the_walk_nor_loses_the_rest as fn(),
+            ),
+            (
+                "a_window_closed_between_the_request_and_the_lookup_has_no_handle",
+                a_window_closed_between_the_request_and_the_lookup_has_no_handle as fn(),
+            ),
+            (
+                "a_dead_window_takes_its_queued_commands_with_it",
+                a_dead_window_takes_its_queued_commands_with_it as fn(),
             ),
             (
                 "subscribers_hear_a_new_state_in_order_and_what_they_ask_waits",

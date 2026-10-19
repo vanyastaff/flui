@@ -465,6 +465,7 @@ where
     }));
     installation.observe_appearance();
     installation.observe_display();
+    installation.observe_window_state();
     // Register before sampling, so native facts changed during renderer bootstrap
     // cannot be replaced by a synthetic Resumed observation.
     let execution = window.execution_state();

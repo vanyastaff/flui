@@ -2196,7 +2196,13 @@ impl MacOSWindow {
                     if miniaturized {
                         let _: () = msg_send![self.ns_window, deminiaturize: NIL];
                     }
-                    if zoomed && !fullscreen {
+                    // `zoom:` toggles, and leaving full screen or the dock
+                    // changes both flags read above: ask again before deciding
+                    // whether the window is still zoomed.
+                    let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+                    let still_fullscreen = mask.contains(NSWindowStyleMask::FullScreen);
+                    let still_zoomed: bool = msg_send![self.ns_window, isZoomed];
+                    if still_zoomed && !still_fullscreen {
                         let _: () = msg_send![self.ns_window, zoom: NIL];
                     }
                 }

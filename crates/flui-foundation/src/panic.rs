@@ -117,6 +117,14 @@ impl FirstPanic {
         }
     }
 
+    /// The held payload, for a caller that cannot raise it (a native callback
+    /// boundary) and reports it instead. Release it with
+    /// [`retain_opaque_payload`] rather than dropping it.
+    #[must_use]
+    pub fn into_payload(self) -> Option<Box<dyn Any + Send>> {
+        self.0
+    }
+
     /// Raise the held panic, if there is one.
     pub fn resume(self) {
         if let Some(payload) = self.0 {

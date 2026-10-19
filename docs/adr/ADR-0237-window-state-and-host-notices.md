@@ -52,7 +52,12 @@ Web ignored page freeze and GPU context loss.
    validated immediately, queued, and applied on the owner thread at the start of its next turn,
    before the frame, in submission order. Applying them later rather than inline keeps a native
    call that synchronously re-enters the window procedure out of user code. After the window closes
-   the handle answers `Closed`.
+   the handle answers `Closed`. The window-open request delivers the new window's
+   `PresentationAddress`, not the handle: a `WindowHandle` is `!Send` and the request travels
+   through a `Send` future, so the owner thread turns the address into a handle with
+   `flui_app::window_handle(address)`. The window can close between the request's completion and
+   that lookup; the lookup then returns `None`, as it does on another thread or for an unknown
+   address, and the caller treats `None` as a closed window.
 5. **Windows open revealed by their first frame.** Runner-opened windows are shown only after the
    first presented frame, already in their initial mode, with the existing bounded fallback.
    `WindowReveal::AtOpen` stays an explicit choice for direct platform users.

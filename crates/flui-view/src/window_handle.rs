@@ -188,11 +188,14 @@ impl WindowHandle {
         &self,
         callback: impl FnMut(&WindowState) + 'static,
     ) -> Result<(WindowState, WindowSubscription), WindowClosed> {
-        let state = self.open()?.control.state();
+        // Registered first, read second: a state published while the snapshot
+        // is read is delivered to the new subscriber instead of falling between
+        // an old snapshot and a registration that came too late.
         let (_, token) = self
             .states
             .subscribe(Box::new(callback))
             .map_err(|_| WindowClosed)?;
+        let state = self.open()?.control.state();
         Ok((state, WindowSubscription { _token: token }))
     }
 }

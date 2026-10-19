@@ -10,6 +10,7 @@
 //! invalidate them. Putting the marking here, in the dispatch, makes a Wake that
 //! reaches the host without it impossible.
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Weak};
 
 use flui_platform_api::SystemNotice;
@@ -24,18 +25,47 @@ pub(crate) trait StaleOnWake: Send + Sync {
 /// The callback a platform calls with each system notice.
 pub(crate) type SystemNoticeHook = Box<dyn FnMut(SystemNotice) + Send>;
 
-/// A platform's system-notice channel: the host's hook, and what a wake marks
-/// stale before the hook hears of it.
+/// A platform's system-notice channel: the host's hook, what a wake marks
+/// stale before the hook hears of it, and the notices accepted but not yet
+/// heard.
 #[derive(Default)]
 pub(crate) struct SystemNotices {
-    hook: Mutex<Option<SystemNoticeHook>>,
+    state: Mutex<Delivery>,
     cached: Mutex<Vec<Weak<dyn StaleOnWake>>>,
+}
+
+#[derive(Default)]
+struct Delivery {
+    hook: Option<SystemNoticeHook>,
+    /// Accepted, in order, and not yet handed to the hook.
+    pending: VecDeque<SystemNotice>,
+    /// Whether a dispatch is walking `pending` right now.
+    delivering: bool,
+}
+
+/// Ends a walk over the pending notices, however it ends, and gives the hook
+/// back to its slot unless the host replaced it meanwhile.
+struct Walk<'a> {
+    notices: &'a SystemNotices,
+    hook: Option<SystemNoticeHook>,
+}
+
+impl Drop for Walk<'_> {
+    fn drop(&mut self) {
+        let mut state = self.notices.state.lock();
+        if let Some(hook) = self.hook.take()
+            && state.hook.is_none()
+        {
+            state.hook = Some(hook);
+        }
+        state.delivering = false;
+    }
 }
 
 impl SystemNotices {
     /// Install the host's hook, replacing an earlier one.
     pub(crate) fn set_hook(&self, hook: SystemNoticeHook) {
-        let replaced = self.hook.lock().replace(hook);
+        let replaced = self.state.lock().hook.replace(hook);
         drop(replaced);
     }
 
@@ -49,12 +79,15 @@ impl SystemNotices {
     }
 
     /// Deliver `notice` to the host. A wake marks every cache registered with
-    /// [`mark_stale_on_wake`](Self::mark_stale_on_wake) first.
+    /// [`mark_stale_on_wake`](Self::mark_stale_on_wake) first, at once, even
+    /// when the host is busy with an earlier notice.
     ///
-    /// The hook runs with no lock of this channel held, and a notice that
-    /// arrives from inside the hook is delivered after it returns the hook to
-    /// its slot (the hook is out of the slot while it runs, so a nested notice
-    /// finds none and is dropped with a diagnostic rather than recursed into).
+    /// The hook runs with no lock of this channel held. A notice that arrives
+    /// from inside the hook (or while another thread's dispatch is running it)
+    /// is queued behind the one being delivered and heard, in order, as soon as
+    /// the hook returns. A hook that panics keeps its place: the next dispatch
+    /// calls it again, and the notices queued behind the failure are still
+    /// delivered then.
     pub(crate) fn dispatch(&self, notice: SystemNotice) {
         if notice == SystemNotice::Wake {
             let live: Vec<Arc<dyn StaleOnWake>> = self
@@ -67,13 +100,47 @@ impl SystemNotices {
                 cache.mark_stale();
             }
         }
-        let Some(mut hook) = self.hook.lock().take() else {
-            return;
+        {
+            let mut state = self.state.lock();
+            state.pending.push_back(notice);
+            if state.delivering {
+                return;
+            }
+            state.delivering = true;
+        }
+        let mut walk = Walk {
+            notices: self,
+            hook: None,
         };
-        hook(notice);
-        let mut slot = self.hook.lock();
-        if slot.is_none() {
-            *slot = Some(hook);
+        loop {
+            let next = {
+                let mut state = self.state.lock();
+                let Some(notice) = state.pending.pop_front() else {
+                    return;
+                };
+                if let Some(hook) = state.hook.take() {
+                    Some((notice, hook))
+                } else {
+                    // Nobody to tell: what was accepted has no listener.
+                    state.pending.clear();
+                    None
+                }
+            };
+            let Some((notice, hook)) = next else {
+                return;
+            };
+            walk.hook = Some(hook);
+            if let Some(hook) = walk.hook.as_mut() {
+                hook(notice);
+            }
+            // Back to its slot between notices, so a replacement installed
+            // meanwhile is not displaced.
+            let mut state = self.state.lock();
+            if let Some(hook) = walk.hook.take()
+                && state.hook.is_none()
+            {
+                state.hook = Some(hook);
+            }
         }
     }
 }
@@ -177,6 +244,62 @@ mod tests {
         notices.dispatch(SystemNotice::Wake);
         assert!(displays.is_stale(), "the display source reads the OS again");
         assert!(window.is_stale(), "the window state reads the OS again");
+    }
+
+    #[test]
+    fn a_hook_that_panics_keeps_its_place_and_the_queue_behind_it() {
+        use std::sync::Mutex as StdMutex;
+
+        let notices = SystemNotices::default();
+        let heard = Arc::new(StdMutex::new(Vec::new()));
+        let log = Arc::clone(&heard);
+        let mut first = true;
+        notices.set_hook(Box::new(move |notice| {
+            log.lock().expect("log").push(notice);
+            assert!(
+                !std::mem::take(&mut first),
+                "the first notice fails the hook"
+            );
+        }));
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            notices.dispatch(SystemNotice::Sleep);
+        }));
+        assert!(outcome.is_err(), "the hook's panic reaches the dispatcher");
+
+        notices.dispatch(SystemNotice::SessionLocked);
+        assert_eq!(
+            *heard.lock().expect("log"),
+            [SystemNotice::Sleep, SystemNotice::SessionLocked],
+            "the hook was not lost with the unwind"
+        );
+    }
+
+    #[test]
+    fn a_notice_from_inside_the_hook_is_heard_after_it_in_order() {
+        use std::sync::Mutex as StdMutex;
+
+        let notices = Arc::new(SystemNotices::default());
+        let heard = Arc::new(StdMutex::new(Vec::new()));
+        let (log, again) = (Arc::clone(&heard), Arc::clone(&notices));
+        notices.set_hook(Box::new(move |notice| {
+            log.lock().expect("log").push(("start", notice));
+            if notice == SystemNotice::Sleep {
+                again.dispatch(SystemNotice::Wake);
+                log.lock().expect("log").push(("end", notice));
+            }
+        }));
+
+        notices.dispatch(SystemNotice::Sleep);
+        assert_eq!(
+            *heard.lock().expect("log"),
+            [
+                ("start", SystemNotice::Sleep),
+                ("end", SystemNotice::Sleep),
+                ("start", SystemNotice::Wake),
+            ],
+            "a nested notice is queued, not dropped and not recursed into"
+        );
     }
 
     #[test]

@@ -330,6 +330,31 @@ fn closing_writes_the_held_placement_without_waiting_for_the_interval() {
     assert_eq!(stored.offset, Some(Point::new(250.0, 90.0)));
 }
 
+fn a_flush_keeps_going_until_storage_holds_the_newest_placement() {
+    let fixture = Fixture::new();
+    let barrier = fixture.storage.hold_commits();
+    // The throttle handed the first position to storage, which has not answered;
+    // the window then moved on.
+    fixture.observe(&at(100.0, 80.0), Duration::ZERO);
+    fixture.observe(&at(250.0, 90.0), Duration::from_millis(10));
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        barrier.commit();
+    });
+
+    let storage = fixture.storage.clone();
+    let now = fixture.after(Duration::from_millis(20));
+    settle(&[Rc::new(fixture.recorder)], now, FLUSH_BUDGET);
+
+    let stored = WindowPlacement::from_bytes(&storage.contents(&NAME).expect("stored"))
+        .expect("a placement");
+    assert_eq!(
+        stored.offset,
+        Some(Point::new(250.0, 90.0)),
+        "the answer to the older write is not the end of the flush"
+    );
+}
+
 fn several_windows_share_one_budget_when_the_session_ends() {
     let budget = Duration::from_millis(150);
     let storage = MemoryStorage::new();
@@ -439,6 +464,10 @@ fn placement_recorder() {
             (
                 "closing_writes_the_held_placement_without_waiting_for_the_interval",
                 closing_writes_the_held_placement_without_waiting_for_the_interval as fn(),
+            ),
+            (
+                "a_flush_keeps_going_until_storage_holds_the_newest_placement",
+                a_flush_keeps_going_until_storage_holds_the_newest_placement as fn(),
             ),
             (
                 "several_windows_share_one_budget_when_the_session_ends",

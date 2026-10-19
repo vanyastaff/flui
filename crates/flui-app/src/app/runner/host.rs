@@ -335,20 +335,24 @@ fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::S
                     .and_then(|mut state| state.session_end.replace(request.clone()))
             });
             drop(displaced);
-            let delivery = super::owner_dispatch::deliver_host_notice(&HostNotice::SessionEnding(
-                request.clone(),
-            ));
+            // A subscriber that panics still gets the platform its answer, and
+            // the book still closes: the panic is contained here, a native
+            // callback boundary, and reported.
+            let delivery = deliver_contained(&HostNotice::SessionEnding(request.clone()));
             let answer = request.answer();
-            if delivery.is_complete() {
-                answer
-            } else {
-                tracing::warn!(
-                    queued = delivery.queued,
-                    refused = delivery.refused,
-                    "a session end arrived while the owner was busy; its subscribers could not \
-                     run before the answer, so the session is allowed to end"
-                );
-                SessionEndAnswer::Proceed
+            match delivery {
+                Some(delivery) if delivery.is_complete() => answer,
+                Some(delivery) => {
+                    tracing::warn!(
+                        queued = delivery.queued,
+                        refused = delivery.refused,
+                        "a session end arrived while the owner was busy; its subscribers could \
+                         not run before the answer, so the session is allowed to end"
+                    );
+                    SessionEndAnswer::Proceed
+                }
+                // A panicking subscriber counts as "proceed" (R25).
+                None => SessionEndAnswer::Proceed,
             }
         }
         SessionEndPhase::Cancelled | SessionEndPhase::Ending => {
@@ -363,12 +367,31 @@ fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::S
             } else {
                 HostNotice::SessionEnded
             };
-            super::owner_dispatch::deliver_host_notice(&notice);
+            deliver_contained(&notice);
             SessionEndAnswer::Proceed
         }
         // A phase this host does not know asks for nothing.
         _ => SessionEndAnswer::Proceed,
     }
+}
+
+/// Deliver a session-end notice to every runtime, containing a subscriber's
+/// panic: the callers answer a native callback (`WM_QUERYENDSESSION`), where an
+/// unwind would abort the process or skip the answer. The first panic is
+/// reported and `None` is returned; otherwise how the notice was delivered.
+fn deliver_contained(
+    notice: &flui_platform::HostNotice,
+) -> Option<super::owner_dispatch::NoticeDelivery> {
+    let mut failure = flui_foundation::panic::FirstPanic::new();
+    let delivery = failure.contain(|| super::owner_dispatch::deliver_host_notice(notice));
+    if let Some(payload) = failure.into_payload() {
+        tracing::error!(
+            panic = flui_foundation::panic::payload_text(&*payload),
+            "a session-end subscriber panicked; the session end is answered regardless"
+        );
+        flui_foundation::panic::retain_opaque_payload(payload);
+    }
+    delivery
 }
 
 /// Give the UI runtime's primary presentation the control of its window, so

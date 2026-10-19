@@ -49,15 +49,17 @@ impl WindowQueue {
         if batch.is_empty() {
             return;
         }
+        // A window that is gone takes its commands with it: they are dropped,
+        // not given back to a queue no turn can ever apply them from.
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
         // From here the batch is owned by a guard that gives back whatever is
         // still unapplied if a command panics: the rest waits for the next
         // turn instead of being lost with the unwind.
         let mut batch = UnappliedBatch {
             queue: self,
             rest: batch,
-        };
-        let Some(window) = self.window.upgrade() else {
-            return;
         };
         while let Some(work) = batch.rest.pop_front() {
             match work {
@@ -139,7 +141,9 @@ impl WindowCommandQueues {
     pub(crate) fn handle_for(&self, address: PresentationAddress) -> Option<WindowHandle> {
         self.queues.borrow().iter().find_map(|(queue, handle)| {
             let queue = queue.upgrade()?;
-            (queue.address == address).then(|| handle.clone())
+            // A source that closed keeps its queue until it is dropped; its
+            // handle answers closed, and a closed window has no handle to give.
+            (queue.address == address && handle.capabilities().is_ok()).then(|| handle.clone())
         })
     }
 

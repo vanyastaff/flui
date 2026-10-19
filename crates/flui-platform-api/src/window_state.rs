@@ -255,8 +255,8 @@ impl WindowState {
 /// A backend reports exactly what it does today: a capability is `true` only
 /// when [`apply`](crate::PlatformWindow::apply) carries the command out, and
 /// `false` exactly when it answers [`WindowCommandError::Unsupported`]. Fields
-/// are public so a backend can start from [`none`](Self::none) or
-/// [`all`](Self::all) and set the difference.
+/// are public so a backend can start from [`NONE`](Self::NONE) or
+/// [`ALL`](Self::ALL) and set the difference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 #[expect(

@@ -182,6 +182,39 @@ fn a_query_that_arrives_while_the_owner_is_busy_proceeds_and_closes_the_book() {
     assert_eq!(rig.events.session_end_releases(), 0);
 }
 
+fn a_panicking_subscriber_still_gets_the_platform_answered_and_the_book_closed() {
+    let rig = boot();
+    let win = open_window();
+    let seen: Rc<RefCell<Option<flui_platform::SessionEndRequest>>> = Rc::default();
+    let kept = Rc::clone(&seen);
+    let _subscription = win
+        .lifecycle
+        .subscribe_notices(move |notice| {
+            if let HostNotice::SessionEnding(request) = notice {
+                *kept.borrow_mut() = Some(request.clone());
+                panic!("a subscriber fails");
+            }
+        })
+        .expect("an open presentation");
+
+    assert_eq!(
+        rig.events.session_end(SessionEndPhase::Query),
+        SessionEndAnswer::Proceed,
+        "a panicking subscriber counts as proceed, and the platform is answered"
+    );
+    let request = seen.borrow_mut().take().expect("the subscriber ran");
+    assert_eq!(
+        request.block("late").map(|_| ()),
+        Err(SessionEndBlockError::Answered),
+        "the book closed with the answer"
+    );
+    assert_eq!(
+        rig.events.session_end(SessionEndPhase::Query),
+        SessionEndAnswer::Proceed,
+        "the platform's callback survived the failure"
+    );
+}
+
 struct Counting(Arc<AtomicUsize>);
 
 impl ReclaimMemory for Counting {
@@ -251,6 +284,11 @@ fn host_notices() {
             (
                 "a_query_that_arrives_while_the_owner_is_busy_proceeds_and_closes_the_book",
                 a_query_that_arrives_while_the_owner_is_busy_proceeds_and_closes_the_book as fn(),
+            ),
+            (
+                "a_panicking_subscriber_still_gets_the_platform_answered_and_the_book_closed",
+                a_panicking_subscriber_still_gets_the_platform_answered_and_the_book_closed
+                    as fn(),
             ),
             (
                 "the_shared_memory_is_reclaimed_once_however_many_windows_there_are",

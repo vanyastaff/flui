@@ -108,6 +108,34 @@ fn the_headless_platform_is_selected_and_its_exit_policy_is_honoured() {
     flui_headless_env_var_selects_the_headless_platform();
 }
 
+/// A session-end callback that panics is not lost with the unwind: the next
+/// simulated phase still reaches it.
+#[test]
+fn a_panicking_session_end_hook_keeps_its_place() {
+    let platform = HeadlessPlatform::new();
+    let calls = Arc::new(Mutex::new(0));
+    let counted = Arc::clone(&calls);
+    platform.on_session_end(Box::new(move |_| {
+        let call = {
+            let mut calls = counted.lock().expect("calls");
+            *calls += 1;
+            *calls
+        };
+        assert!(call > 1, "the first call fails");
+        SessionEndAnswer::Block
+    }));
+
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        platform.simulate_session_end(SessionEndPhase::Query)
+    }));
+    assert!(outcome.is_err(), "the hook's panic reaches the caller");
+    assert_eq!(
+        platform.simulate_session_end(SessionEndPhase::Query),
+        SessionEndAnswer::Block,
+        "the callback is still registered"
+    );
+}
+
 /// A simulated session end asks the registered callback once per phase, in
 /// order, and returns its answer to the query.
 #[test]

@@ -201,6 +201,69 @@ fn the_handle_goes_closed_with_its_window_and_does_not_keep_it_alive() {
     );
 }
 
+/// A control whose first read of the state is overtaken: while it answers, the
+/// host publishes a newer state, as an owner turn that interleaves with a
+/// subscription would.
+struct Overtaken {
+    host: Rc<RefCell<Option<Rc<WindowSource>>>>,
+    reads: Cell<usize>,
+}
+
+impl WindowControl for Overtaken {
+    fn state(&self) -> WindowState {
+        let size = Size::new(320.0, 240.0);
+        let first = WindowState::new(WindowGeometry::new(None, size), size);
+        if self.reads.replace(self.reads.get() + 1) == 0 {
+            let newer = first
+                .successor(first.clone().with_title(Some("newer".to_owned())))
+                .expect("a change publishes");
+            let host = self.host.borrow().clone().expect("the host is wired");
+            host.publish(newer);
+            host.drain();
+        }
+        first
+    }
+    fn capabilities(&self) -> WindowCapabilities {
+        WindowCapabilities::ALL
+    }
+    fn submit(&self, _: WindowCommand) -> Result<(), WindowCommandError> {
+        Ok(())
+    }
+    fn request_close(&self) {}
+}
+
+#[test]
+fn a_state_published_while_subscribing_is_not_lost() {
+    let host = Rc::new(RefCell::new(None));
+    let source = Rc::new(WindowSource::new(Overtaken {
+        host: Rc::clone(&host),
+        reads: Cell::new(0),
+    }));
+    *host.borrow_mut() = Some(Rc::clone(&source));
+    let handle = source.handle();
+
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&heard);
+    let (returned, _subscription) = handle
+        .subscribe(move |state| seen.borrow_mut().push(state.revision.get()))
+        .expect("open");
+
+    let newest_known = heard
+        .borrow()
+        .last()
+        .copied()
+        .unwrap_or_else(|| returned.revision.get());
+    assert_eq!(
+        newest_known,
+        1,
+        "the subscriber is told of the state published during the subscription \
+         (heard {:?}, returned revision {})",
+        heard.borrow(),
+        returned.revision.get()
+    );
+    host.borrow_mut().take();
+}
+
 #[test]
 fn notices_arrive_once_in_order_and_are_not_replayed() {
     let source = LifecycleSource::new();

@@ -243,7 +243,7 @@ impl HeadlessPlatform {
 
     /// Make every window this platform opens from now on honour exactly
     /// `capabilities`, to test a caller against a host that cannot do
-    /// everything. The default is [`WindowCapabilities::all`]. A command whose
+    /// everything. The default is [`WindowCapabilities::ALL`]. A command whose
     /// capability is `false` is refused as unsupported and changes nothing.
     #[must_use]
     pub fn with_window_capabilities(self, capabilities: WindowCapabilities) -> Self {
@@ -678,15 +678,17 @@ impl HeadlessHostEvents {
             return SessionEndAnswer::Proceed;
         };
         let hook = state.lock().handlers.session_end.take();
-        let Some(mut hook) = hook else {
+        let Some(hook) = hook else {
             return SessionEndAnswer::Proceed;
         };
-        let answer = hook(phase);
-        let mut state = state.lock();
-        if state.handlers.session_end.is_none() {
-            state.handlers.session_end = Some(hook);
-        }
-        answer
+        // The hook goes back to its slot however the call ends: a hook that
+        // panics is not lost with the unwind.
+        let mut taken = TakenSessionHook {
+            state: &state,
+            hook: Some(hook),
+        };
+        let hook = taken.hook.as_mut().expect("BUG: the hook was just taken");
+        hook(phase)
     }
 
     /// A system notice other than a session end's phases: the hook registered
@@ -710,6 +712,24 @@ impl HeadlessHostEvents {
         self.state
             .upgrade()
             .map_or(0, |state| state.lock().session_end_releases)
+    }
+}
+
+/// The session-end hook while it runs: back in the platform's slot when this
+/// drops, unless the host registered another meanwhile.
+struct TakenSessionHook<'a> {
+    state: &'a Arc<Mutex<HeadlessState>>,
+    hook: Option<Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>>,
+}
+
+impl Drop for TakenSessionHook<'_> {
+    fn drop(&mut self) {
+        let mut state = self.state.lock();
+        if let Some(hook) = self.hook.take()
+            && state.handlers.session_end.is_none()
+        {
+            state.handlers.session_end = Some(hook);
+        }
     }
 }
 
