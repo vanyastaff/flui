@@ -266,11 +266,22 @@ impl WindowSource {
     /// that its state may have changed; the report carries no payload, so a
     /// repeated report costs nothing.
     pub fn publish_current(&self) {
-        let state = self.shared.control.state();
-        if self.published.replace(Some(state.revision)) != Some(state.revision) {
-            self.publish(state);
+        if self.queue_current().is_some() {
             self.drain();
         }
+    }
+
+    /// Queue the window's current state for the subscribers when its revision
+    /// is new, without delivering it, and return that state. A host that acts
+    /// on the new state itself does so before calling [`Self::drain`], so the
+    /// subscribers' code runs after the host's own bookkeeping.
+    pub fn queue_current(&self) -> Option<WindowState> {
+        let state = self.shared.control.state();
+        if self.published.replace(Some(state.revision)) == Some(state.revision) {
+            return None;
+        }
+        self.publish(state.clone());
+        Some(state)
     }
 
     /// Deliver queued states in FIFO order. Nested drains defer to the active

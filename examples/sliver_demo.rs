@@ -16,8 +16,8 @@ use std::rc::Rc;
 
 use flui::material::{FlexibleSpaceBar, SliverAppBar, Theme, ThemeData};
 use flui::widgets::{
-    ColoredBox, CustomScrollView, MediaQuery, MediaQueryData, Padding, ScrollController,
-    Scrollable, SizedBox, SliverToBoxAdapter, Text, Viewport,
+    ColoredBox, CustomScrollView, MediaQuery, MediaQueryData, Padding, Scrollable, SizedBox,
+    SliverToBoxAdapter, Text, Viewport,
 };
 use flui_foundation::geometry::EdgeInsets;
 use flui_painting::styling::Color;
@@ -67,18 +67,20 @@ pub fn tree(offset: f64) -> impl IntoView {
 
 /// The LIVE tree: the same slivers behind a gesture-driven [`Scrollable`]
 /// (drag and fling; the collapsing bar reacts to the shared position).
+///
+/// The `Scrollable` owns its position: this root builds again whenever an
+/// enclosing scope does (a drag's start gives the scroll view the keyboard
+/// focus), and a controller made here would be a different one each time,
+/// which moves the view to a fresh position and cancels the drag in progress.
 fn live_tree() -> impl IntoView {
-    let controller = ScrollController::new();
     let slivers = demo_slivers();
     Theme::new(
         ThemeData::light(),
         MediaQuery::new(
             MediaQueryData::default(),
-            Scrollable::new()
-                .controller(controller)
-                .viewport_builder(Rc::new(move |position| {
-                    Viewport::new(slivers.clone()).position(position).boxed()
-                })),
+            Scrollable::new().viewport_builder(Rc::new(move |position| {
+                Viewport::new(slivers.clone()).position(position).boxed()
+            })),
         ),
     )
 }

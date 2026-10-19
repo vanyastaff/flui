@@ -1,0 +1,19 @@
+{"flui_native_recording":1,"backend":"win32","epoch_ns":1000000000,"uptime_ns":0,"counter":{"count":0,"frequency":10000000},"provenance":"hand-written from the callback order IDirectManipulationViewportEventHandler documents; no precision touchpad was attached to the host that wrote it","devices":[]}
+{"row":"viewport","viewport":{"status":"running"},"time":{"tick_ms":{"tick":1,"observed_ms":1}},"counter":10000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport","viewport":{"content":[1.0,0.0,-1.0]},"time":{"tick_ms":{"tick":2,"observed_ms":2}},"counter":20000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport","viewport":{"content":[1.0,0.0,-6.0]},"time":{"tick_ms":{"tick":4,"observed_ms":4}},"counter":40000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport","viewport":{"content":[1.0,0.0,-12.0]},"time":{"tick_ms":{"tick":6,"observed_ms":6}},"counter":60000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport","viewport":{"content":[1.0,3.0,-21.0]},"time":{"tick_ms":{"tick":8,"observed_ms":8}},"counter":80000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport","viewport":{"status":"inertia"},"time":{"tick_ms":{"tick":10,"observed_ms":10}},"counter":100000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport","viewport":{"content":[1.0,4.5,-28.5]},"time":{"tick_ms":{"tick":12,"observed_ms":12}},"counter":120000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport","viewport":{"content":[1.0,4.5,-33.0]},"time":{"tick_ms":{"tick":14,"observed_ms":14}},"counter":140000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport","viewport":{"status":"ready"},"time":{"tick_ms":{"tick":16,"observed_ms":16}},"counter":160000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport","viewport":{"content":[1.0,0.0,0.0]},"time":{"tick_ms":{"tick":17,"observed_ms":17}},"counter":170000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport","viewport":{"status":"running"},"time":{"tick_ms":{"tick":40,"observed_ms":40}},"counter":400000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport","viewport":{"content":[1.100000023841858,2.0,0.0]},"time":{"tick_ms":{"tick":42,"observed_ms":42}},"counter":420000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport","viewport":{"content":[1.25,4.0,1.0]},"time":{"tick_ms":{"tick":44,"observed_ms":44}},"counter":440000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport","viewport":{"status":"ready"},"time":{"tick_ms":{"tick":46,"observed_ms":46}},"counter":460000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport","viewport":{"content":[1.0,0.0,0.0]},"time":{"tick_ms":{"tick":47,"observed_ms":47}},"counter":470000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport","viewport":{"status":"running"},"time":{"tick_ms":{"tick":60,"observed_ms":60}},"counter":600000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport","viewport":{"content":[1.0,0.0,-9.0]},"time":{"tick_ms":{"tick":62,"observed_ms":62}},"counter":620000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport_abandoned","time":{"tick_ms":{"tick":63,"observed_ms":63}},"counter":630000,"position":[300.0,240.0],"scale":1.5}

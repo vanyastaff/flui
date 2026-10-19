@@ -159,7 +159,7 @@ impl MediaQuery {
     pub fn new(data: MediaQueryData, child: impl IntoView) -> Self {
         Self {
             data,
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 

@@ -179,6 +179,8 @@ pub use close_guard::{CloseChanged, CloseGuard, CloseHold, CloseReason, PendingC
 // The host's registry of published document bytes and the owner-notify
 // channel; reached through `__runtime`
 mod flush_registry;
+mod haptics_mode;
+pub use haptics_mode::HapticsMode;
 mod owner_notify;
 // Binding
 pub use binding::{

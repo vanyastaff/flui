@@ -31,6 +31,8 @@ mod async_driver;
 mod controller_restart;
 #[path = "first_frame_deferral.rs"]
 mod first_frame_deferral;
+#[path = "gesture_alternatives.rs"]
+mod gesture_alternatives;
 #[path = "headless_host.rs"]
 mod headless_host;
 #[path = "layout_builder_seam.rs"]
@@ -45,14 +47,21 @@ mod mount_bootstrap;
 mod multi_presentation_clock;
 #[path = "owner_scope.rs"]
 mod owner_scope;
+mod ownership_table;
 #[path = "pointer_script_replay.rs"]
 mod pointer_script_replay;
 #[path = "post_frame_after_layout.rs"]
 mod post_frame_after_layout;
+#[path = "recording.rs"]
+mod recording;
+#[path = "recording_vocabulary.rs"]
+mod recording_vocabulary;
 #[path = "runtime_driver.rs"]
 mod runtime_driver;
 #[path = "runtime_input_lifecycle.rs"]
 mod runtime_input_lifecycle;
+#[path = "scripts.rs"]
+mod scripts;
 #[path = "self_rescheduling_local_post_frame.rs"]
 mod self_rescheduling_local_post_frame;
 #[path = "text_store_kit.rs"]

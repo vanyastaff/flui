@@ -45,6 +45,9 @@ smallvec = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 
+# The drag session table (ADR-0211 §6).
+slab = { workspace = true }
+
 [dev-dependencies]
 # `log_capture::disarm_interest_cache`, which this crate's tracing-capturing
 # tests call so a sibling test cannot poison their callsites' cached interest.
@@ -128,8 +131,49 @@ tier-kind = "internal"
 order = 4
 # Process-global state, checked by `cargo xtask globals` (ADR-0097).
 globals = [
-    { item = "routing::focus_scope::NEXT_FOCUS_NODE_ID", grant = "ADR-0097", class = "counter", reason = "Focus node identities, advanced by try_update with permanent exhaustion refusal" },
-    { item = "routing::interaction_lane::ACTIVE_LANES", exit = "ADR-0091", reason = "the owner thread's stack of active interaction lanes" },
-    { item = "routing::interaction_lane::LOCAL_LANES", exit = "ADR-0091", reason = "the owner thread's registry of local interaction lanes" },
-    { item = "routing::interaction_lane::NEXT_LANE_ID", grant = "ADR-0097", class = "counter", reason = "lane IDs, advanced by `try_update` through a reference so exhaustion is an error" },
+    { item = "focus::focus_scope::NEXT_FOCUS_NODE_ID", grant = "ADR-0097", class = "counter", reason = "Focus node identities, advanced by try_update with permanent exhaustion refusal" },
+    { item = "pointer::interaction_lane::ACTIVE_LANES", exit = "ADR-0091", reason = "the owner thread's stack of active interaction lanes" },
+    { item = "pointer::interaction_lane::LOCAL_LANES", exit = "ADR-0091", reason = "the owner thread's registry of local interaction lanes" },
+    { item = "pointer::interaction_lane::NEXT_LANE_ID", grant = "ADR-0097", class = "counter", reason = "lane IDs, advanced by `try_update` through a reference so exhaustion is an error" },
 ]
+
+[package.metadata.flui.modules]
+# The top-level modules of src/lib.rs, bottom to top (`cargo xtask module-dag`, ADR-0217 §1).
+# Production code names a module only in a lower layer; modules in one layer name none of each
+# other. Row N is ADR-0217's layer N. The runtime's cleanup seam and the test builders sit above
+# the binding they close and drive.
+layers = [
+    [
+        "events",
+        "ids",
+        "retain",
+    ],
+    [
+        "close",
+        "containment",
+    ],
+    [
+        "pointer",
+        "focus",
+        "text_input",
+    ],
+    [
+        "gesture",
+        "drag",
+    ],
+    [
+        "binding",
+    ],
+    [
+        "haptics",
+    ],
+    [
+        "__runtime",
+        "testing",
+    ],
+]
+# Modules of `use` items only: a path through them counts as a path to what they re-export.
+transparent = ["prelude"]
+# A refused edge, legal until the change in the ADR named by `exit` removes it:
+# { from = "<module>", to = "<module>", exit = "ADR-NNNN", since = "YYYY-MM-DD", reason = "..." }
+exceptions = []

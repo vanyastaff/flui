@@ -1,3 +1,4 @@
+use flui_runtime::HostInput;
 use flui_runtime::owner::RuntimeOperation;
 #[cfg(all(test, not(target_os = "android")))]
 use flui_scheduler::AppLifecycleState;
@@ -225,7 +226,7 @@ impl RuntimeEvent {
         address: flui_foundation::PresentationAddress,
         target: &flui_runtime::owner::PresentationDispatcher,
     ) -> Result<flui_runtime::owner::Delivery, flui_runtime::owner::DispatchError> {
-        use flui_runtime::owner::WindowObservation;
+        use flui_runtime::owner::{Delivery, InputOutcome, WindowObservation};
         #[cfg(not(any(test, target_os = "android", target_os = "ios")))]
         let _ = address;
         let observation = match self {
@@ -249,7 +250,12 @@ impl RuntimeEvent {
             Self::DisplayChanged(update) => WindowObservation::Display(update),
             Self::WindowStateChanged => WindowObservation::State,
         };
-        target.observe(observation, host.effects())
+        target
+            .dispatch(HostInput::Window(observation), host.effects())
+            .map(|outcome| match outcome {
+                InputOutcome::Queued => Delivery::Queued,
+                InputOutcome::Handled | InputOutcome::Unhandled => Delivery::Driven,
+            })
     }
 }
 
@@ -530,13 +536,20 @@ fn dispatch_platform_input(
         let result = host
             .logical()
             .presentation_dispatcher(dispatcher.address)
-            .and_then(|target| target.input(input, host.effects()))
+            .and_then(|target| target.dispatch(HostInput::Platform(input), host.effects()))
             .map_err(DispatchError::from);
         super::fonts::announce_font_change();
         result
     });
     let default_prevented = !matches!(outcome, Ok(flui_runtime::owner::InputOutcome::Unhandled));
     flui_platform::DispatchEventResult::resolved(false, default_prevented)
+}
+
+/// A delivered frame's vsync on the event timeline: the host's reading of the
+/// process event epoch when the frame is admitted. No backend reports the
+/// display's own vsync timestamp yet.
+pub(super) fn frame_vsync() -> flui_platform_api::EventTime {
+    flui_platform_api::EventTime::from_nanos(flui_platform::shared::events::event_timestamp_ns())
 }
 
 pub(super) fn dispatch_platform_ui_runtime(
@@ -692,7 +705,7 @@ fn dispatch_owner_turn_delivery(
                     }
                     host.logical()
                         .frame_dispatcher(dispatcher.address)
-                        .and_then(|frame| frame.deliver(host.effects()))
+                        .and_then(|frame| frame.deliver(frame_vsync(), host.effects()))
                 }
                 RuntimeTask::ClosePresentation(id) => {
                     let address = flui_foundation::PresentationAddress {

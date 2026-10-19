@@ -9,7 +9,6 @@ use flui_foundation::Listenable;
 use flui_foundation::geometry::Matrix4;
 use flui_rendering::view::ScrollPosition;
 use flui_widgets::interaction::TransformationController;
-use flui_widgets::scroll::RefreshController;
 use flui_widgets::text::TextEditingController;
 use flui_widgets::widget_state::{WidgetState, WidgetStates, WidgetStatesController};
 
@@ -54,12 +53,6 @@ pub fn transformation_controller_relays_keep_failure_custody() {
     relay_sees_the_enclosing_failure(&*listenable, || {
         controller.set_value(Matrix4::translation(1.0, 0.0, 0.0));
     });
-}
-
-pub fn refresh_controller_relays_keep_failure_custody() {
-    let controller = RefreshController::new();
-    let listenable = controller.listenable();
-    relay_sees_the_enclosing_failure(&*listenable, || controller.finish());
 }
 
 pub fn scroll_position_relays_keep_failure_custody() {

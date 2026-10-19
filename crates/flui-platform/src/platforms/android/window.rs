@@ -4,6 +4,7 @@
 //! to the native ANativeWindow for size queries and raw-window-handle for GPU
 //! surface creation.
 
+use std::rc::Rc;
 use std::sync::{
     Arc, Weak,
     atomic::{AtomicBool, Ordering},
@@ -13,6 +14,7 @@ use android_activity::AndroidApp;
 use android_activity::ndk::configuration::UiModeNight;
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{EdgeInsets, Point, Size};
+use flui_platform_api::input_regions::{InputRegion, InputRegionKind, ProjectedInputRegions};
 use flui_platform_api::{
     DisplayId, FrameRateHint, WindowAppearance, WindowCapabilities, WindowCommand,
     WindowCommandError, WindowGeometry, WindowState,
@@ -20,7 +22,13 @@ use flui_platform_api::{
 use parking_lot::Mutex;
 
 use crate::{
-    shared::{WindowCallbacks, os_version::android::AndroidApi, window_state::WindowStateCell},
+    shared::{
+        WindowCallbacks,
+        input_availability::AndroidInputApis,
+        os_version::android::{AndroidApi, DragSource, GestureExclusion, TouchpadGestures},
+        owner_slot::OwnerSlot,
+        window_state::WindowStateCell,
+    },
     traits::{CursorError, PlatformWindow, WindowExecutionState, WindowId},
 };
 
@@ -44,6 +52,16 @@ pub struct AndroidWindow {
     geometry_live: Arc<AtomicBool>,
     text_sizing: Arc<super::text_sizing::Acquisition>,
     safe_area: Arc<Mutex<super::safe_area::Capture>>,
+    /// The exclusion rectangles last handed to the decor view, as projected.
+    input_regions: Arc<Mutex<ProjectedInputRegions>>,
+    /// The decor view and vibrator haptics play on (ADR-0210).
+    haptics: Arc<super::haptics::AndroidHaptics>,
+    /// `FluiView`: the input method's editor, the drop target and the drag
+    /// source (ADR-0247).
+    java_view: Arc<super::java_view::JavaView>,
+    /// The window's text input, on the owner thread only.
+    text_input: Arc<OwnerSlot<Rc<super::text_input::AndroidTextInput>>>,
+    drag_source: Arc<super::drag::AndroidDragSource>,
     system_chrome: Arc<super::system_chrome::AndroidSystemChrome>,
     /// The platform's API level, for the safe-area gates.
     api: AndroidApi,
@@ -71,9 +89,34 @@ impl AndroidWindow {
         app: AndroidApp,
         activity: Arc<ActivityFlags>,
         owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
+        java_view: Arc<super::java_view::JavaView>,
         displays: Arc<super::display::AndroidDisplays>,
         api: AndroidApi,
     ) -> Self {
+        let callbacks = Arc::new(WindowCallbacks::new());
+        callbacks.set_input_capabilities(input_capabilities(api, java_view.is_ready()));
+        let text_input = Arc::new(OwnerSlot::new());
+        if text_input
+            .replace(super::text_input::AndroidTextInput::new(
+                Arc::clone(&java_view),
+                api,
+            ))
+            .is_err()
+        {
+            tracing::warn!(
+                target: "flui_platform::android",
+                "the window's text input was made off its owner thread"
+            );
+        }
+        let drag_source = Arc::new(super::drag::AndroidDragSource::new(
+            Arc::clone(&java_view),
+            api,
+        ));
+        if let Some(signal) = owner_signal.upgrade() {
+            callbacks.set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
+                &signal, &callbacks,
+            ));
+        }
         let system_chrome = Arc::new(super::system_chrome::AndroidSystemChrome::new(
             app.clone(),
             api,
@@ -82,7 +125,10 @@ impl AndroidWindow {
             &app, &displays, &activity,
         )));
         Self {
-            callbacks: Arc::new(WindowCallbacks::new()),
+            haptics: Arc::new(super::haptics::AndroidHaptics::new(app.clone(), api)),
+            appearance: Arc::new(Mutex::new(night_mode(&app))),
+            app,
+            callbacks,
             redraw_requested: Arc::new(AtomicBool::new(true)),
             activity,
             owner: std::thread::current().id(),
@@ -90,13 +136,15 @@ impl AndroidWindow {
             geometry_live: Arc::new(AtomicBool::new(true)),
             text_sizing: super::text_sizing::Acquisition::new(),
             safe_area: Arc::new(Mutex::new(super::safe_area::Capture::default())),
+            input_regions: Arc::default(),
+            java_view,
+            text_input,
+            drag_source,
             system_chrome,
-            api,
-            appearance: Arc::new(Mutex::new(night_mode(&app))),
             displays,
             frame_rate_hint: Arc::new(Mutex::new(FrameRateHint::Default)),
             snapshot,
-            app,
+            api,
         }
     }
 
@@ -116,6 +164,32 @@ impl AndroidWindow {
         if std::mem::replace(&mut *self.appearance.lock(), appearance) != appearance {
             self.callbacks.dispatch_appearance_changed();
         }
+    }
+
+    /// The view's installation finished: what the window can do now.
+    pub(crate) fn refresh_capabilities(&self) {
+        self.callbacks
+            .set_input_capabilities(input_capabilities(self.api, self.java_view.is_ready()));
+    }
+
+    /// The window's text input; `None` off the owner thread.
+    pub(crate) fn text_input(&self) -> Option<Rc<super::text_input::AndroidTextInput>> {
+        let input = self.text_input.take()?;
+        let shared = Rc::clone(&input);
+        let _ = self.text_input.restore(input);
+        Some(shared)
+    }
+
+    pub(crate) fn drag_source_of(&self) -> &Arc<super::drag::AndroidDragSource> {
+        &self.drag_source
+    }
+
+    /// The window is going away: its field and its drag are detached.
+    pub(crate) fn retire_java_view(&self) {
+        if let Some(input) = self.text_input() {
+            input.retire();
+        }
+        self.drag_source.retire();
     }
 
     /// Access the callback storage (used by `AndroidPlatform` to dispatch
@@ -241,6 +315,18 @@ impl AndroidWindow {
     }
 }
 
+/// What the window's input can do at `api`, with `FluiView` installed or not.
+fn input_capabilities(
+    api: AndroidApi,
+    java_view: bool,
+) -> flui_platform_api::input_capabilities::InputCapabilities {
+    crate::shared::input_availability::android(AndroidInputApis {
+        gesture_exclusion: api.since::<GestureExclusion>().is_some(),
+        touchpad_gestures: api.since::<TouchpadGestures>().is_some(),
+        drag_source: java_view && api.since::<DragSource>().is_some(),
+    })
+}
+
 /// The native window's size in pixels, `(0, 0)` while there is none.
 fn native_extent(app: &AndroidApp) -> (i32, i32) {
     if let Some(native_window) = app.native_window() {
@@ -321,6 +407,16 @@ impl crate::traits::HostWindow for AndroidWindow {
         }
         self.text_sizing
             .poll(&self.app, &self.owner_signal, self.owner)
+    }
+
+    /// The window's input method host (ADR-0090, ADR-0247): `FluiView`'s
+    /// `InputConnection` serves the focused field's store.
+    fn text_store_host(
+        &self,
+        _owner: crate::traits::OwnerThreadToken,
+    ) -> Option<Rc<dyn flui_platform_api::text_store::TextStoreHost>> {
+        self.text_input()
+            .map(|input| input as Rc<dyn flui_platform_api::text_store::TextStoreHost>)
     }
 }
 
@@ -438,6 +534,54 @@ impl PlatformWindow for AndroidWindow {
 
     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
         Err(CursorError::Unsupported)
+    }
+
+    fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
+        Some(Arc::clone(&self.haptics) as Arc<dyn crate::traits::PlatformHaptics>)
+    }
+
+    /// `FluiView.startDragAndDrop`, once the view is installed, from API 24:
+    /// what `InputCapabilities::outgoing_drag` claims.
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform_api::drag::PlatformDragSource>> {
+        (self.java_view.is_ready() && self.api.since::<DragSource>().is_some()).then(|| {
+            Arc::clone(&self.drag_source) as Arc<dyn flui_platform_api::drag::PlatformDragSource>
+        })
+    }
+
+    /// Projects the regions to the surface's pixels and, when the projection changed,
+    /// hands the exclusion rectangles to the decor view on the Java main thread. The
+    /// native surface fills the decor view, so both share one pixel space. Before API 29
+    /// the OS has no such call and the capability reports `Unavailable`.
+    fn set_input_regions(&self, regions: &[InputRegion]) {
+        if self.api.since::<GestureExclusion>().is_none() {
+            return;
+        }
+        let scale = self.scale_factor();
+        let rects: Vec<[i32; 4]> = {
+            let mut projection = self.input_regions.lock();
+            let Some(sent) = projection.update(regions, scale, None) else {
+                return;
+            };
+            sent.iter()
+                .filter(|region| region.kind() == InputRegionKind::SystemGestureExclusion)
+                .map(|region| {
+                    let rect = region.rect();
+                    [rect.left(), rect.top(), rect.right(), rect.bottom()]
+                })
+                .collect()
+        };
+        let app = self.app.clone();
+        // Posted in call order to the main looper, so the last projection is the one the
+        // view keeps.
+        self.app.run_on_java_main_thread(Box::new(move || {
+            if let Err(error) = super::gesture_exclusion::apply(&app, &rects) {
+                tracing::warn!(
+                    target: "flui_platform::android",
+                    %error,
+                    "system gesture exclusion rectangles were not applied"
+                );
+            }
+        }));
     }
 
     // ==================== Callback Registration ====================

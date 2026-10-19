@@ -58,7 +58,7 @@ That gate checks direct edges only. It cannot say what must never be reachable, 
 already contains what it cannot see:
 
 - `flui-interaction` depends on `flui-platform` (`crates/flui-interaction/Cargo.toml:31`) for one
-  import (`crates/flui-interaction/src/text_input.rs:27`, `use flui_platform::traits::PlatformTextInput;`).
+  import (`crates/flui-interaction/src/text_input/mod.rs:27`, `use flui_platform::traits::PlatformTextInput;`).
   `flui-platform`'s default feature `desktop = ["dep:winit"]`
   (`crates/flui-platform/Cargo.toml:300,303`) then puts winit, and on Windows the `windows`
   crate, into the normal graph of every crate above interaction. On this host

@@ -1,52 +1,60 @@
 //! [`Scrollable`] — gesture-driven interactive scroll widget.
 //!
 //! `Scrollable` composes:
-//! - A [`GestureDetector`] that translates pan events into offset mutations on
-//!   the [`ScrollController`].
+//! - A [`GestureDetector`] whose drag runs on the scroll axis and turns its
+//!   motion into steps of the nested scroll channel.
 //! - A [`SingleChildScrollView`] as the layout/paint host, sharing the
 //!   controller's `ScrollPosition` (not a pushed pixel value).
+//!
+//! # One offset primitive (ADR-0209)
+//!
+//! Every change of the offset is a step of an input sequence dispatched
+//! through the scrollable's nested scroll chain ([`crate::scroll::nested`]):
+//! a drag (`UserInput`, under the contact's sequence), a wheel or trackpad
+//! packet (`UserInput` or `Momentum`, under the binding's latch), an
+//! assistive scroll action (`UserInput`), a fling or a settle
+//! (`SideEffect`, under the sequence that released it), and a controller
+//! jump, animation or reveal (`Programmatic`). The mounted scrollable's
+//! `ScrollOwner` (`scroll_owner.rs`) is that chain's leaf for its own input,
+//! and a participant of the chains of the scrollables inside it.
 //!
 //! # Scrolling is a layout event, not a build event
 //!
 //! `RenderViewport` subscribes to the offset and marks itself needing layout
 //! (`crates/flui-objects/src/sliver/viewport.rs`), so a scroll re-lays out the
-//! viewport and rebuilds nothing. `Scrollable` used to *also* wrap the whole
-//! viewport in an `AnimatedBuilder` on the controller's notify, which
-//! re-created every sliver view — and every delegate closure — on every
-//! `set_pixels`. The one thing that genuinely needed the notify is servicing
-//! an `animate_to`/`jump_to` command, which is now a listener installed
+//! viewport and rebuilds nothing. The one thing that needs the controller's
+//! notify is servicing an `animate_to`/`jump_to` command, a listener installed
 //! alongside the fling ones (`install_command_listener`).
 //!
-//! # Fling ballistic simulation
+//! # Runs
 //!
-//! On `on_pan_end`, a `ScrollPhysics` ballistic simulation is started via
-//! `AnimationController::animate_with`. The fling controller is registered
-//! with the ambient [`VsyncScope`] in `init_state` so the binding ticks it
-//! each frame deterministically; a value listener on the controller pushes the
-//! current pixel position into the [`ScrollController`] each tick.
+//! A release starts a `ScrollPhysics` ballistic simulation (or a spring to a
+//! [`SnapPolicy`] target) on the scrollable's one
+//! `AnimationController`, registered with the ambient [`VsyncScope`] so the
+//! binding ticks it each frame. Each tick is a step of the sequence that
+//! released it. A run that reaches a hard extent with velocity to spare
+//! offers the residual to the chain above (`post_fling`), and an accepting
+//! scrollable runs it under the same sequence.
 //!
-//! `on_pan_start` halts any in-flight fling via `stop()`, so grabbing a
-//! scrolling list feels physically correct.
+//! A drag start halts any run, so grabbing a moving list stops it; a press on
+//! a moving list holds it (ADR-0208 rule 4).
 //!
 //! # Gesture orientation
 //!
-//! `on_pan_update`/`on_pan_end` orient the drag delta and fling velocity by
-//! the resolved [`AxisDirection`] (see [`Scrollable::axis_direction`]), not
-//! the bare [`Axis`] alone: a horizontal `Scrollable` under an RTL ambient
+//! Drag deltas and fling velocities are oriented by the resolved
+//! [`AxisDirection`] (see [`Scrollable::axis_direction`]), not the bare
+//! [`Axis`] alone: a horizontal `Scrollable` under an RTL ambient
 //! `Directionality` resolves `RightToLeft` and flips the sign relative to
 //! the default `LeftToRight` case.
 //!
 //! # `animate_to` servicing (ADR-0037)
 //!
 //! [`ScrollController::animate_to`]/[`jump_to`](ScrollController::jump_to)
-//! don't drive the fling controller directly — they queue a command (see
+//! don't drive the animation controller directly — they queue a command (see
 //! `scroll_controller.rs`'s module docs) that this widget services from a
-//! listener on the controller's own notify, via
-//! [`ScrollController::service_pending_command`]. Reusing the SAME
-//! `AnimationController` the ballistic fling above drives means `on_pan_start`
-//! cancels a running `animate_to` for free — it stops whichever of the two
-//! (fling or curve-driven tween) happens to be active — and `jump_to` queues
-//! an explicit cancel for the same reason.
+//! listener on the controller's own notify. Reusing the one
+//! `AnimationController` means a drag start cancels a running `animate_to`
+//! for free, and `jump_to` queues an explicit cancel for the same reason.
 //!
 //! # One position per controller
 //!
@@ -54,459 +62,56 @@
 //! position per controller).
 
 use std::cell::{Cell, RefCell};
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, DrivenController, StatusSubscription, Vsync,
-    curves,
 };
-use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::{Axis, Point, Rect, Vec2};
 use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::{PipelineOwner, WeakPipelineCell};
-use flui_rendering::view::{ScrollDirection, ScrollPosition, ViewportOffset};
+use flui_rendering::view::{ScrollDirection, ScrollPosition};
 use flui_view::prelude::StatefulView;
-use flui_view::{
-    BoxedView, BuildContext, BuildContextExt, Child, InheritedView, IntoView, LifecycleContext,
-    View, ViewExt, ViewState, impl_inherited_view,
-};
+use flui_view::{BoxedView, BuildContext, Child, IntoView, LifecycleContext, ViewExt, ViewState};
 
 use crate::animated::VsyncScope;
+use crate::interaction::focus_reveal::{
+    FocusRevealScope, RevealTarget, SharedRevealTarget, reveal_distance,
+};
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
-use crate::scroll::scroll_physics::BoundaryResolvedSimulation;
-use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
-use crate::{GestureArenaScope, GestureDetector, Listener, Semantics, SingleChildScrollView};
-use flui_interaction::routing::EventPropagation;
+use crate::scroll::drag_autoscroll::{DragAutoscroll, DragAutoscrollAnchor};
+use crate::scroll::nested::{NestedScrollScope, OverscrollBehavior, ScrollCause, ScrollDevice};
+use crate::scroll::scroll_owner::{
+    MoveOutcome, OwnerConfig, OwnerEnv, ScrollOwner, SharedSnapPolicy,
+};
+use crate::scroll::{
+    ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics, SnapPolicy,
+};
+use crate::support::command_modifiers;
+use crate::{
+    DragSlot, Focus, GestureArenaScope, GestureDetector, Listener, Semantics, SingleChildScrollView,
+};
+use flui_interaction::focus::{FocusNode, FocusNodeRegistration, KeyEventResult};
+use flui_interaction::pointer::EventPropagation;
+use flui_interaction::{HoldGestureRecognizer, PointerEvent, PointerKindSet};
+use flui_platform_api::keyboard::{
+    Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, NamedKey,
+};
 use flui_platform_api::{
     WheelPreferences, WheelStep,
     keyboard::Modifiers,
-    pointer::{ScrollEvent, ScrollPrecision, ScrollUnit},
+    pointer::{ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit},
 };
 use flui_rendering::semantics::{Reveal, ScrollUnit as SemanticsScrollUnit};
 use flui_scheduler::PostFrameHandle;
 
+use super::anchored_drag::AnchoredLeaf;
 use super::scroll_position_scope::ScrollPositionScope;
-
-/// A mounted scroll owner, shared with exact-run animation continuations.
-/// The parent is the owner observed at admission, never a later replacement.
-#[derive(Debug)]
-pub(crate) struct FlingEndpoint {
-    ballistic_motion: Rc<super::nested::BallisticSlot>,
-    channel_sequence: Cell<Option<flui_foundation::InputSequenceId>>,
-    controller: ScrollController,
-    fling: AnimationController,
-    /// The physics of the latest build; a rebuild replaces it in place, so a
-    /// new physics value never withdraws an active contact.
-    physics: RefCell<SharedScrollPhysics>,
-    axis: Axis,
-    reversed: bool,
-    parent: Option<Weak<FlingEndpoint>>,
-    alive: Cell<bool>,
-}
-
-impl FlingEndpoint {
-    /// The current physics, cloned out so a physics callback that rebuilds
-    /// this owner never meets a held borrow.
-    fn physics(&self) -> SharedScrollPhysics {
-        Arc::clone(&self.physics.borrow())
-    }
-
-    pub(crate) fn start_nested(
-        self: &Rc<Self>,
-        step: &super::nested::FlingStep,
-        mounted: &Cell<bool>,
-        continuation: super::nested::ScrollContinuation,
-    ) -> super::nested::FlingHandoff {
-        use super::nested::{BallisticMotion, FlingHandoff};
-        let velocity = match self.axis {
-            Axis::Horizontal => step.available.pixels_per_second.dx,
-            Axis::Vertical => step.available.pixels_per_second.dy,
-        } * if self.reversed { 1.0 } else { -1.0 };
-        let position = self.controller.position();
-        let metrics =
-            ScrollMetrics::from(&position).with_device_pixel_ratio(step.device_pixel_ratio);
-        let generation = self.fling.run_generation();
-        let is_current = || {
-            mounted.get()
-                && self.alive.get()
-                && continuation.is_current()
-                && self.fling.run_generation() == generation
-                && self.controller.pixels() == metrics.pixels
-        };
-        if velocity != 0.0 {
-            let allowed = self
-                .physics()
-                .apply_boundary_conditions(&metrics, metrics.pixels + velocity.signum());
-            if !is_current() || !allowed.is_finite() || allowed == metrics.pixels {
-                return FlingHandoff::Declined;
-            }
-        }
-        let simulation = self
-            .physics()
-            .create_ballistic_simulation(&metrics, velocity);
-        let Some(simulation) = simulation else {
-            return FlingHandoff::Declined;
-        };
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        if !is_current() {
-            recovery.retire(simulation);
-            recovery.finish();
-            return FlingHandoff::Declined;
-        }
-        recovery.run(|| position.set_is_scrolling(true));
-        if !is_current() || recovery.has_failure() {
-            recovery.retire(simulation);
-            recovery.finish();
-            return FlingHandoff::Declined;
-        }
-        recovery.run(|| {
-            position.set_user_scroll_direction(if velocity > 0.0 {
-                ScrollDirection::Reverse
-            } else {
-                ScrollDirection::Forward
-            });
-        });
-        if !is_current() || recovery.has_failure() {
-            recovery.retire(simulation);
-            recovery.finish();
-            return FlingHandoff::Declined;
-        }
-        let motion = BallisticMotion::new(
-            continuation.clone(),
-            self.fling.clone(),
-            simulation,
-            metrics.pixels,
-            self.axis,
-            self.reversed,
-        );
-        let outgoing = self.ballistic_motion.install(motion.clone());
-        let mut future = None;
-        recovery.run(|| {
-            future = self.fling.animate_with(motion.simulation()).ok();
-        });
-        recovery.retire(outgoing);
-        let Some(future) = future else {
-            let outgoing = self
-                .ballistic_motion
-                .take_if(|current| std::ptr::eq(current, Rc::as_ptr(&motion)));
-            recovery.retire(outgoing);
-            recovery.retire(motion);
-            recovery.finish();
-            return FlingHandoff::Declined;
-        };
-        motion.admitted();
-        recovery.retire(motion);
-        recovery.finish();
-        FlingHandoff::Accepted(future)
-    }
-
-    pub(crate) fn flush_nested(
-        &self,
-        continuation: &super::nested::ScrollContinuation,
-        recovery: &mut flui_foundation::panic::PanicRecovery,
-    ) {
-        let motion = self
-            .ballistic_motion
-            .current()
-            .filter(|motion| motion.owns(continuation));
-        if let Some(motion) = motion {
-            motion.flush_held(recovery);
-            recovery.retire(motion);
-        }
-    }
-
-    pub(crate) fn stop_nested(
-        &self,
-        continuation: &super::nested::ScrollContinuation,
-        recovery: &mut flui_foundation::panic::PanicRecovery,
-    ) {
-        let motion = self
-            .ballistic_motion
-            .take_if(|motion| motion.owns(continuation));
-        if let Some(motion) = motion {
-            motion.stop(recovery);
-            recovery.retire(motion);
-        }
-    }
-
-    pub(crate) fn permits_nested_transfer(
-        &self,
-        velocity: flui_foundation::geometry::Vec2,
-        device_pixel_ratio: f64,
-    ) -> bool {
-        let velocity = match self.axis {
-            Axis::Horizontal => velocity.x,
-            Axis::Vertical => velocity.y,
-        } * if self.reversed { 1.0 } else { -1.0 };
-        self.physics()
-            .boundary_velocity(
-                &ScrollMetrics::from(&self.controller.position())
-                    .with_device_pixel_ratio(device_pixel_ratio),
-                velocity,
-            )
-            .is_some()
-    }
-
-    fn start(self: &Rc<Self>, velocity: f64, device_pixel_ratio: f64) -> bool {
-        if !self.alive.get() {
-            return false;
-        }
-        let position = self.controller.position();
-        let metrics = ScrollMetrics::from(&position).with_device_pixel_ratio(device_pixel_ratio);
-        let generation = self.fling.run_generation();
-        let is_current = || {
-            self.alive.get()
-                && self.fling.run_generation() == generation
-                && self.controller.pixels() == metrics.pixels
-        };
-        // Determine transfer policy before owning a returned simulation. A
-        // failing custom callback must not unwind through its arbitrary Drop.
-        let remaining = self.physics().boundary_velocity(&metrics, velocity);
-        if !is_current() {
-            return true;
-        }
-        let Some(simulation) = self
-            .physics()
-            .create_ballistic_simulation(&metrics, velocity)
-        else {
-            return false;
-        };
-        if !is_current() {
-            return true;
-        }
-        position.set_is_scrolling(true);
-        if !is_current() {
-            return true;
-        }
-        position.set_user_scroll_direction(if velocity > 0.0 {
-            ScrollDirection::Reverse
-        } else {
-            ScrollDirection::Forward
-        });
-        // Activity observers may jump, replace the owner or start another run.
-        if !is_current() {
-            return true;
-        }
-        let simulation = BoundaryResolvedSimulation::new(simulation, self.physics(), metrics);
-        let Ok(future) = self.fling.animate_with(simulation) else {
-            return false;
-        };
-        if let Some(remaining) = remaining {
-            let owner = Rc::downgrade(self);
-            let generation = self.fling.run_generation();
-            let edge = if remaining > 0.0 {
-                metrics.max_scroll_extent
-            } else {
-                metrics.min_scroll_extent
-            };
-            future.when_complete_or_cancel(move |result| {
-                let Some(owner) = owner.upgrade() else {
-                    return;
-                };
-                if result.is_ok()
-                    && owner.alive.get()
-                    && owner.fling.run_generation() == generation
-                    && owner.controller.pixels() == edge
-                {
-                    // A same-pixel jump still queues an authoritative Cancel
-                    // even though no position notify services it. The run's
-                    // completion was published before those pixel listeners,
-                    // so honor their accepted command before old handoff work.
-                    if let Some(command) = owner.controller.take_pending_command() {
-                        owner.controller.service_command(command, &owner.fling);
-                        return;
-                    }
-                    let physical = if owner.reversed {
-                        remaining
-                    } else {
-                        -remaining
-                    };
-                    owner.transfer(physical, device_pixel_ratio);
-                }
-            });
-        }
-        true
-    }
-
-    fn transfer(&self, physical_velocity: f64, device_pixel_ratio: f64) {
-        let mut parent = self.parent.as_ref().and_then(Weak::upgrade);
-        while let Some(owner) = parent {
-            // A retired link must not retarget an accepted impulse into a
-            // replacement occupying the same place in the view tree.
-            if !owner.alive.get() {
-                return;
-            }
-            let velocity = if owner.reversed {
-                physical_velocity
-            } else {
-                -physical_velocity
-            };
-            if owner.axis == self.axis {
-                let metrics = ScrollMetrics::from(&owner.controller.position())
-                    .with_device_pixel_ratio(device_pixel_ratio);
-                let generation = owner.fling.run_generation();
-                // Ask the owner's real boundary policy whether motion in this
-                // direction is admitted. Bouncing at an extent remains willing;
-                // a hard clamp at the same extent is skipped.
-                let proposed = metrics.pixels + velocity.signum();
-                let allowed = owner
-                    .physics()
-                    .apply_boundary_conditions(&metrics, proposed);
-                if !owner.alive.get()
-                    || owner.fling.run_generation() != generation
-                    || owner.controller.pixels() != metrics.pixels
-                {
-                    return;
-                }
-                if allowed.is_finite()
-                    && allowed != metrics.pixels
-                    && owner.start(velocity, device_pixel_ratio)
-                {
-                    return;
-                }
-            }
-            parent = owner.parent.as_ref().and_then(Weak::upgrade);
-        }
-    }
-}
-
-impl super::nested::NestedScrollConnection for FlingEndpoint {
-    fn sequence_started(&self, sequence: flui_foundation::InputSequenceId) {
-        self.channel_sequence.set(Some(sequence));
-        let _ = self.fling.stop();
-    }
-
-    fn sequence_ended(
-        &self,
-        sequence: flui_foundation::InputSequenceId,
-        reason: super::nested::ScrollEndReason,
-    ) {
-        if self.channel_sequence.get() != Some(sequence) {
-            return;
-        }
-        self.channel_sequence.set(None);
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        let motion = self
-            .ballistic_motion
-            .take_if(|motion| motion.belongs_to(sequence));
-        if let Some(motion) = motion {
-            motion.stop(&mut recovery);
-            recovery.retire(motion);
-        } else if reason != super::nested::ScrollEndReason::Released
-            && !self.fling.status().is_directional()
-        {
-            recovery.run(|| {
-                let _ = self.fling.stop();
-            });
-        }
-        recovery.run(|| {
-            if self.channel_sequence.get().is_none() && !self.fling.status().is_directional() {
-                self.controller.position().set_is_scrolling(false);
-            }
-        });
-        recovery.finish();
-    }
-}
-
-impl FlingEndpoint {
-    pub(crate) fn consume_nested(
-        &self,
-        step: &super::nested::ScrollStep,
-        mounted: &Cell<bool>,
-    ) -> flui_foundation::geometry::Vec2 {
-        use flui_foundation::geometry::Vec2;
-        if !mounted.get() || !self.alive.get() || self.channel_sequence.get() != Some(step.sequence)
-        {
-            return Vec2::ZERO;
-        }
-        let raw = match self.axis {
-            Axis::Horizontal => step.available.x,
-            Axis::Vertical => step.available.y,
-        };
-        if raw == 0.0 {
-            return Vec2::ZERO;
-        }
-        let sign = if self.reversed { 1.0 } else { -1.0 };
-        let position = self.controller.position();
-        let pixels = position.pixels();
-        let generation = self.fling.run_generation();
-        let is_current = || {
-            mounted.get()
-                && self.alive.get()
-                && self.channel_sequence.get() == Some(step.sequence)
-                && self.fling.run_generation() == generation
-                && position.pixels() == pixels
-        };
-        let metrics =
-            ScrollMetrics::from(&position).with_device_pixel_ratio(step.device_pixel_ratio);
-        let proposed = pixels + raw * sign;
-        if !proposed.is_finite() {
-            return Vec2::ZERO;
-        }
-        let allowed = if step.cause == super::nested::ScrollCause::SideEffect {
-            self.physics()
-                .apply_ballistic_boundary_conditions(&metrics, proposed)
-        } else {
-            self.physics().apply_boundary_conditions(&metrics, proposed)
-        };
-        if !is_current() {
-            return Vec2::ZERO;
-        }
-        // The dispatcher accounts for the displacement this operation accepted,
-        // even if a pixel observer synchronously replaces or moves the owner.
-        let consumed = ((allowed - pixels) * sign).clamp(raw.min(0.0), raw.max(0.0));
-        if !allowed.is_finite() || !consumed.is_finite() {
-            return Vec2::ZERO;
-        }
-        if consumed == 0.0 {
-            return Vec2::ZERO;
-        }
-        position.set_is_scrolling(true);
-        if !is_current() {
-            return Vec2::ZERO;
-        }
-        position.set_user_scroll_direction(if raw * sign > 0.0 {
-            ScrollDirection::Reverse
-        } else {
-            ScrollDirection::Forward
-        });
-        if !is_current() {
-            return Vec2::ZERO;
-        }
-        self.controller.set_pixels(pixels + consumed * sign);
-        match self.axis {
-            Axis::Horizontal => Vec2::new(consumed, 0.0),
-            Axis::Vertical => Vec2::new(0.0, consumed),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct FlingScope {
-    endpoint: Rc<FlingEndpoint>,
-    child: BoxedView,
-}
-
-impl InheritedView for FlingScope {
-    type Data = Rc<FlingEndpoint>;
-
-    fn data(&self) -> &Self::Data {
-        &self.endpoint
-    }
-
-    fn child(&self) -> &dyn View {
-        &self.child
-    }
-
-    fn update_should_notify(&self, old: &Self) -> bool {
-        !Rc::ptr_eq(&self.endpoint, &old.endpoint)
-    }
-}
-
-impl_inherited_view!(FlingScope);
+use crate::anchored_box::AnchoredBox;
 
 /// Authored logical distances used to resolve wheel input.
 ///
@@ -609,12 +214,23 @@ pub type ViewportBuilder = Rc<dyn Fn(ScrollPosition) -> BoxedView>;
 /// [`Listenable`]: flui_foundation::Listenable
 #[derive(Clone, StatefulView)]
 pub struct Scrollable {
-    /// The shared position + notification hub.
-    controller: ScrollController,
+    /// The shared position + notification hub, when the application holds
+    /// it; `None` uses one the state keeps for its lifetime, so a rebuild
+    /// of a parent never swaps the position under a drag.
+    controller: Option<ScrollController>,
     wheel_distances: WheelScrollDistances,
-    overscroll: super::nested::OverscrollBehavior,
     /// An authored boundary / fling policy; `None` uses the owner's default.
     physics: Option<SharedScrollPhysics>,
+    /// Where a release comes to rest, when not where the physics coasts.
+    snap: Option<SharedSnapPolicy>,
+    /// Whether this scrollable's remainder goes up its scroll chain.
+    overscroll: OverscrollBehavior,
+    /// The pointer kinds whose drags and presses this scrollable admits.
+    devices: PointerKindSet,
+    /// What assistive technology reads for the scroll view.
+    semantic_label: Option<String>,
+    /// Take the keyboard focus when mounted.
+    autofocus: bool,
     /// The axis along which the child scrolls.
     scroll_direction: Axis,
     /// Overrides the resolved [`AxisDirection`] used to orient gesture
@@ -635,6 +251,9 @@ pub struct Scrollable {
     /// keeps the `SingleChildScrollView`-over-`child` fast path. See
     /// [`Scrollable::viewport_builder`].
     viewport_builder: Option<ViewportBuilder>,
+    /// Set when an [`AnchoredDrag`](super::AnchoredDrag) drives this
+    /// scrollable: see [`Scrollable::anchored`].
+    anchored: Option<AnchoredLeaf>,
 }
 
 impl std::fmt::Debug for Scrollable {
@@ -644,7 +263,12 @@ impl std::fmt::Debug for Scrollable {
             .field("axis_direction", &self.axis_direction)
             .field("controller", &self.controller)
             .field("physics", &self.physics)
+            .field("snap", &self.snap)
+            .field("overscroll", &self.overscroll)
+            .field("devices", &self.devices)
+            .field("autofocus", &self.autofocus)
             .field("has_viewport_builder", &self.viewport_builder.is_some())
+            .field("anchored", &self.anchored.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -652,29 +276,28 @@ impl std::fmt::Debug for Scrollable {
 impl Default for Scrollable {
     fn default() -> Self {
         Self {
-            controller: ScrollController::new(),
+            controller: None,
             wheel_distances: WheelScrollDistances::default(),
-            overscroll: super::nested::OverscrollBehavior::Auto,
             physics: None,
+            snap: None,
+            overscroll: OverscrollBehavior::Auto,
+            devices: PointerKindSet::all(),
+            semantic_label: None,
+            autofocus: false,
             scroll_direction: Axis::Vertical,
             axis_direction: None,
             child: Child::empty(),
             viewport_builder: None,
+            anchored: None,
         }
     }
 }
 
 impl Scrollable {
-    /// Control whether unconsumed motion may reach an enclosing scroll owner.
-    #[must_use]
-    pub fn overscroll_behavior(mut self, behavior: super::nested::OverscrollBehavior) -> Self {
-        self.overscroll = behavior;
-        self
-    }
-
-    /// A new vertical `Scrollable` with clamping physics and a fresh
-    /// `ScrollController`. Call `.controller(...)` to share the position with
-    /// a [`Scrollbar`](super::Scrollbar) or to read the offset programmatically.
+    /// A new vertical `Scrollable` with clamping physics and a position of
+    /// its own, which it keeps across rebuilds for as long as it is mounted.
+    /// Call `.controller(...)` to share the position with a
+    /// [`Scrollbar`](super::Scrollbar) or to read the offset programmatically.
     pub fn new() -> Self {
         Self::default()
     }
@@ -684,7 +307,7 @@ impl Scrollable {
     /// to the same controller.
     #[must_use]
     pub fn controller(mut self, controller: ScrollController) -> Self {
-        self.controller = controller;
+        self.controller = Some(controller);
         self
     }
 
@@ -704,6 +327,59 @@ impl Scrollable {
     #[must_use]
     pub fn physics(mut self, physics: SharedScrollPhysics) -> Self {
         self.physics = Some(physics);
+        self
+    }
+
+    /// Settle every release on the target `policy` picks — a page, an
+    /// anchor — instead of where the physics would coast (ADR-0209 §9).
+    /// A snapping scrollable keeps its fling: no residual goes up its chain.
+    #[must_use]
+    pub fn snap_policy(mut self, policy: SharedSnapPolicy) -> Self {
+        self.snap = Some(policy);
+        self
+    }
+
+    /// Whether drag remainders and fling residuals this scrollable and the
+    /// scrollables inside it leave go on up the nested scroll chain
+    /// (default [`OverscrollBehavior::Auto`]) or stop here
+    /// ([`OverscrollBehavior::Contain`]).
+    #[must_use]
+    pub fn overscroll_behavior(mut self, behavior: OverscrollBehavior) -> Self {
+        self.overscroll = behavior;
+        self
+    }
+
+    /// Admit only drags and presses of these pointer kinds (default: all). A
+    /// refused contact never reaches this scrollable's arena, so a pen that
+    /// draws beside a finger that scrolls leaves the scrollable alone. Wheel
+    /// and trackpad scrolling, keys, assistive actions and the controller are
+    /// not contacts and are unaffected.
+    #[must_use]
+    pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
+        self.devices = devices;
+        self
+    }
+
+    /// What assistive technology reads for the scroll view, in place of
+    /// nothing.
+    #[must_use]
+    pub fn semantic_label(mut self, label: impl Into<String>) -> Self {
+        self.semantic_label = Some(label.into());
+        self
+    }
+
+    /// Take the keyboard focus when mounted, so the scroll keys work without a
+    /// click first (default `false`).
+    ///
+    /// A focused scrollable, or one holding the focus in its subtree, scrolls
+    /// by the arrow keys along its axis, PageUp/PageDown and Space/Shift+Space
+    /// by a page, and Home/End to its extents. Each key press is a sequence
+    /// from the keyboard device in the nested scroll chain; a scrollable at
+    /// the end of its range lets the key bubble to the enclosing one. It is
+    /// not a Tab stop, and a drag on it takes the focus.
+    #[must_use]
+    pub fn autofocus(mut self, autofocus: bool) -> Self {
+        self.autofocus = autofocus;
         self
     }
 
@@ -757,6 +433,17 @@ impl Scrollable {
         self.viewport_builder = Some(builder);
         self
     }
+
+    /// Drive this scrollable as an [`AnchoredDrag`](super::AnchoredDrag)'s
+    /// bounded leaf: its offset is the drag's, `leaf` hears every move and
+    /// learns the owner. The composed content is not a scroll view, so no
+    /// wheel, drop autoscroll, scroll semantics or position scope; the arrow
+    /// keys along the axis move to the next anchor the way they point.
+    #[must_use]
+    pub(crate) fn anchored(mut self, leaf: AnchoredLeaf) -> Self {
+        self.anchored = Some(leaf);
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -778,12 +465,16 @@ struct WheelMotion {
 /// are never clamped. A value listener on the controller pushes the live pixel
 /// position into the [`ScrollController`] each tick.
 pub struct ScrollableState {
-    ballistic_motion: Rc<super::nested::BallisticSlot>,
-    nested_dispatcher: Rc<RefCell<Option<Rc<super::nested::NestedScrollDispatcher>>>>,
-    nested_contact: Rc<RefCell<Option<ScrollContact>>>,
     recognizer_owner: Rc<()>,
     /// Stable policy identity across ordinary default-config rebuilds.
     default_physics: SharedScrollPhysics,
+    /// The node arrow, page, space, Home and End keys reach this scrollable
+    /// through, when it or something inside it has the focus.
+    focus: Rc<FocusNode>,
+    /// Ends the keyboard sequence a held key began when the key is cancelled
+    /// instead of released here: focus moved to another unit meanwhile, or
+    /// the window lost activation.
+    _key_cancel: FocusNodeRegistration,
     /// The scroll controller from the current view configuration. Kept in
     /// state so the fling listener (installed by
     /// [`install_fling_listener`](ScrollableState::install_fling_listener))
@@ -805,7 +496,18 @@ pub struct ScrollableState {
     fling_clock: Option<Vsync>,
     /// Owner-local accepted wheel work, independent of the displayed pixels.
     wheel_motion: Rc<RefCell<Option<Rc<WheelMotion>>>>,
-    fling_endpoint: RefCell<Option<Rc<FlingEndpoint>>>,
+    /// This scrollable's place in the nested scroll channel, for the
+    /// current configuration (`scroll_owner.rs`).
+    owner: Rc<RefCell<Option<Rc<ScrollOwner>>>>,
+    /// The drop receiver that autoscrolls this scrollable while a drag
+    /// hovers near its edges, registered by the anchor around the viewport.
+    autoscroll: Rc<DragAutoscroll>,
+    /// What every owner reads from the lifecycle: the arena and presets.
+    env: Rc<OwnerEnv>,
+    /// The hold a press on a moving scrollable joins its arena with
+    /// (ADR-0208 rule 4), created with the arena in
+    /// `init_state`/`did_change_dependencies`.
+    hold: Option<Rc<HoldGestureRecognizer>>,
     /// Value-listener ID on `fling_controller` that pushes pixels into
     /// `scroll_controller` each tick. Installed by
     /// [`install_fling_listener`](ScrollableState::install_fling_listener)
@@ -819,7 +521,7 @@ pub struct ScrollableState {
     fling_status_subscription: Option<StatusSubscription>,
     /// Listener ID on the *scroll* controller that services an
     /// `animate_to`/`jump_to`-queued command
-    /// ([`ScrollController::service_pending_command`]). Installed by
+    /// (`ScrollOwner::service_pending_command`). Installed by
     /// [`install_command_listener`](ScrollableState::install_command_listener)
     /// alongside the fling listeners, re-run on `did_update_view` so a
     /// controller swap moves it, removed in `dispose`.
@@ -844,13 +546,8 @@ pub struct ScrollableState {
     /// `did_change_dependencies`; a release reads its device pixel ratio so
     /// the ballistic run rests within half a device pixel.
     pipeline: Option<WeakPipelineCell>,
-}
-
-#[derive(Clone)]
-struct ScrollContact {
-    sequence: flui_foundation::InputSequenceId,
-    device: super::nested::ScrollDevice,
-    dispatcher: Rc<super::nested::NestedScrollDispatcher>,
+    /// This scrollable as the reveal scope of the focus inside it.
+    reveal: Rc<ScrollReveal>,
 }
 
 /// The device pixel ratio of the presentation `pipeline` belongs to, read at
@@ -881,24 +578,36 @@ impl StatefulView for Scrollable {
         // Unboundedness is a constructor fact (#1183), not a bound value —
         // `without_ticker_bounds` now REJECTS a wide-open pair. No ticker:
         // `Vsync` drives this controller once registered below.
+        let owner = Rc::new(RefCell::new(None));
         let fling_controller = AnimationController::builder(Duration::from_millis(1))
             .debug_label("Scrollable.fling")
             .behavior(flui_animation::AnimationBehavior::Preserve)
             .unbounded()
             .build_on(None);
+        let focus = FocusNode::with_debug_label("Scrollable");
+        let cancelled = Rc::clone(&owner);
+        let key_cancel = focus.register_on_key_cancel(Rc::new(move |press: &KeyEvent| {
+            let owner: Option<Rc<ScrollOwner>> = cancelled.borrow().clone();
+            if let Some(owner) = owner {
+                owner.key_released(press.code);
+            }
+        }));
 
         ScrollableState {
-            ballistic_motion: Rc::default(),
-            nested_dispatcher: Rc::new(RefCell::new(None)),
-            nested_contact: Rc::new(RefCell::new(None)),
+            _key_cancel: key_cancel,
             recognizer_owner: Rc::new(()),
             default_physics: Arc::new(ClampingScrollPhysics::new()),
-            scroll_controller: self.controller.clone(),
+            focus: Rc::clone(&focus),
+            reveal: Rc::new(ScrollReveal::new(focus)),
+            scroll_controller: self.controller.clone().unwrap_or_default(),
             stop_hook: None,
             fling_controller,
             fling_clock: None,
             wheel_motion: Rc::new(RefCell::new(None)),
-            fling_endpoint: RefCell::new(None),
+            autoscroll: Rc::new(DragAutoscroll::new(Rc::clone(&owner))),
+            owner,
+            env: Rc::new(OwnerEnv::default()),
+            hold: None,
             fling_listener_id: None,
             fling_status_subscription: None,
             post_frame: None,
@@ -931,54 +640,87 @@ impl ScrollableState {
         }
     }
 
-    fn endpoint(
+    /// The owner serving `view`'s configuration under the chain above
+    /// `ctx`: the current one when nothing it was created for changed, a
+    /// new one otherwise, retiring the old into it. A new physics or snap
+    /// policy value is taken in place, so a build that allocates one every
+    /// time keeps its owner; a retirement hands the work in progress to the
+    /// successor and calls no participant, so it may run here, in `build`.
+    fn owner(
         &self,
         view: &Scrollable,
         physics: &SharedScrollPhysics,
         axis_direction: AxisDirection,
         ctx: &dyn BuildContext,
-    ) -> Rc<FlingEndpoint> {
-        let parent = ctx.get::<FlingScope, _>(|scope| Rc::downgrade(&scope.endpoint));
-        let existing = self.fling_endpoint.borrow().clone();
-        if let Some(endpoint) = &existing {
-            let same_parent = match (&endpoint.parent, &parent) {
-                (None, None) => true,
-                (Some(old), Some(new)) => Weak::ptr_eq(old, new),
-                _ => false,
-            };
-            if endpoint
-                .controller
-                .position()
-                .ptr_eq(&view.controller.position())
-                && endpoint.axis == view.scroll_direction
-                && endpoint.reversed == axis_direction.is_reversed()
-                && same_parent
-            {
-                endpoint.physics.replace(Arc::clone(physics));
-                return Rc::clone(endpoint);
-            }
-            endpoint.alive.set(false);
-        }
-        let endpoint = Rc::new(FlingEndpoint {
-            ballistic_motion: self.ballistic_motion.clone(),
-            channel_sequence: Cell::new(None),
-            controller: view.controller.clone(),
+    ) -> Rc<ScrollOwner> {
+        let config = OwnerConfig {
+            controller: self.scroll_controller.clone(),
             fling: self.fling_controller.controller().clone(),
-            physics: RefCell::new(Arc::clone(physics)),
+            physics: physics.clone(),
+            snap: view.snap.clone(),
             axis: view.scroll_direction,
             reversed: axis_direction.is_reversed(),
-            parent,
-            alive: Cell::new(true),
-        });
-        let outgoing = self.fling_endpoint.replace(Some(Rc::clone(&endpoint)));
-        drop(outgoing);
-        endpoint
+            overscroll: view.overscroll,
+            parent: NestedScrollScope::parent_of(ctx),
+        };
+        let existing = self.owner.borrow().clone();
+        if let Some(owner) = existing.as_ref().filter(|owner| owner.serves(&config)) {
+            owner.set_physics(config.physics);
+            owner.set_snap(config.snap);
+            return Rc::clone(owner);
+        }
+        let owner = ScrollOwner::new(config, Rc::clone(&self.env));
+        let outgoing = self.owner.replace(Some(Rc::clone(&owner)));
+        if let Some(outgoing) = outgoing {
+            outgoing.retire_into(&owner);
+        }
+        // A command queued before any owner served the controller — an
+        // `animate_to` before mount, or across a controller swap — already
+        // fired its notify with nobody to service it, and nothing guarantees
+        // another one.
+        owner.service_pending_command();
+        owner
     }
 
-    fn retire_endpoint(&mut self) {
-        if let Some(endpoint) = self.fling_endpoint.get_mut().take() {
-            endpoint.alive.set(false);
+    fn retire_owner(&mut self) {
+        let outgoing = self.owner.borrow_mut().take();
+        if let Some(owner) = outgoing {
+            owner.retire();
         }
+    }
+
+    /// The hold a press on this scrollable joins with while it moves
+    /// (ADR-0208 rule 4): the press stops the motion, starts its contact
+    /// sequence, and never becomes a tap of the content under it. When the
+    /// hold ends without this scrollable's own drag taking over, the
+    /// position settles through its physics from rest, so a pager stopped
+    /// between pages still lands on one.
+    fn hold_recognizer(&self, arena: flui_interaction::GestureArena) -> Rc<HoldGestureRecognizer> {
+        let fling = self.fling_controller.controller().clone();
+        let wheel_motion = Rc::clone(&self.wheel_motion);
+        let held = Rc::clone(&self.owner);
+        let released = Rc::clone(&self.owner);
+        let pipeline = self.pipeline.clone();
+        HoldGestureRecognizer::builder(arena)
+            .on_hold(move |details| {
+                wheel_motion.borrow_mut().take();
+                let owner = held.borrow().clone();
+                match owner {
+                    Some(owner) => owner.hold(details.sequence, details.kind),
+                    None => {
+                        let _ = fling.stop();
+                    }
+                }
+            })
+            .on_release(move |end| {
+                let owner = released.borrow().clone();
+                if let Some(owner) = owner
+                    && !owner.hold_ended(end, presentation_device_pixel_ratio(pipeline.as_ref()))
+                {
+                    owner.controller().position().set_is_scrolling(false);
+                }
+            })
+            .build()
     }
 
     /// Installs the binding's post-frame capability on the scroll
@@ -1009,27 +751,21 @@ impl ScrollableState {
     /// whatever `self.scroll_controller` currently is.
     fn install_stop_hook(&mut self) {
         let fling = self.fling_controller.controller().clone();
-        let ballistic = self.ballistic_motion.clone();
         let hook: super::scroll_controller::StopHook = Rc::new(move || {
-            let generation = fling.run_generation();
-            let motion = ballistic.take();
-            let mut recovery = flui_foundation::panic::PanicRecovery::new();
-            if let Some(motion) = motion {
-                motion.preempt(&mut recovery);
-                if fling.run_generation() == generation {
-                    recovery.run(|| {
-                        let _ = fling.stop();
-                    });
-                }
-                recovery.retire(motion);
-            } else {
-                recovery.run(|| {
-                    let _ = fling.stop();
-                });
-            }
-            recovery.finish();
+            let _ = fling.stop();
         });
-        self.scroll_controller.set_stop_hook(hook.clone());
+        // A jump is a programmatic step through the owner's chain, and
+        // waits while a pass of that chain runs.
+        let owner = Rc::clone(&self.owner);
+        let jump: super::scroll_controller::JumpHook = Rc::new(move |target| {
+            let owner = owner.borrow().clone();
+            owner.is_some_and(|owner| owner.jump(target))
+        });
+        let owner = Rc::clone(&self.owner);
+        let in_pass: super::scroll_controller::PassHook =
+            Rc::new(move || owner.borrow().as_ref().is_some_and(|owner| owner.in_pass()));
+        self.scroll_controller
+            .set_stop_hook(hook.clone(), jump, in_pass);
         self.stop_hook = Some(hook);
     }
 
@@ -1037,7 +773,7 @@ impl ScrollableState {
         if let Some(hook) = self.stop_hook.take()
             && self.scroll_controller.clear_stop_hook(&hook)
         {
-            self.scroll_controller.clear_pending_command();
+            self.scroll_controller.retire_pending_command();
         }
     }
 
@@ -1057,17 +793,15 @@ impl ScrollableState {
         if let Some(id) = self.fling_listener_id.take() {
             self.fling_controller.controller().remove_listener(id);
         }
-        let fling_ref = self.fling_controller.controller().clone();
-        let scroll_ref = self.scroll_controller.clone();
-        let ballistic = self.ballistic_motion.clone();
+        let owner = Rc::clone(&self.owner);
         let listener_id = self
             .fling_controller
             .controller()
             .add_listener(std::rc::Rc::new(move || {
-                if let Some(motion) = ballistic.current() {
-                    motion.tick();
-                } else {
-                    scroll_ref.set_pixels(fling_ref.value());
+                // Each tick is a step of the sequence the run belongs to.
+                let owner = owner.borrow().clone();
+                if let Some(owner) = owner {
+                    owner.tick();
                 }
             }));
         self.fling_listener_id = Some(listener_id);
@@ -1088,10 +822,10 @@ impl ScrollableState {
     fn install_command_listener(&mut self) {
         self.remove_command_listener();
         let scroll_ref = self.scroll_controller.clone();
-        let fling_ref = self.fling_controller.controller().clone();
+        let owner = Rc::clone(&self.owner);
         let listenable = self.scroll_controller.listenable();
         let listener_id = listenable.add_listener(std::rc::Rc::new(move || {
-            scroll_ref.service_pending_command(&fling_ref);
+            service_pending_command(&owner, &scroll_ref);
         }));
         self.command_listener = Some((listenable, listener_id));
         // Drain once on install. A command queued before this listener existed
@@ -1102,8 +836,7 @@ impl ScrollableState {
         // already held, it notifies nothing at all and the command waits
         // forever. The `AnimatedBuilder` this replaced serviced the queue on
         // its initial build, which covered the same case implicitly.
-        self.scroll_controller
-            .service_pending_command(self.fling_controller.controller());
+        service_pending_command(&self.owner, &self.scroll_controller);
     }
 
     /// Detach the command listener from whichever listenable it was installed
@@ -1153,15 +886,20 @@ impl ViewState<Scrollable> for ScrollableState {
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.post_frame = ctx.post_frame_handle();
         self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
+        self.env.plane.set_pipeline(self.pipeline.clone());
         self.install_flush_handle(ctx);
         self.bind_vsync(ctx);
+        let arena = GestureArenaScope::of(ctx);
+        *self.env.arena.borrow_mut() = Some(arena.clone());
+        *self.env.settings.borrow_mut() = GestureArenaScope::settings_or_default_of(ctx);
+        self.hold = Some(self.hold_recognizer(arena));
     }
 
     fn build(&self, view: &Scrollable, ctx: &dyn BuildContext) -> impl IntoView {
         let wheel_preferences = GestureArenaScope::wheel_preferences_of(ctx);
         let wheel_distances = view.wheel_distances;
-        let scroll_controller = view.controller.clone();
-        let a11y_controller = view.controller.clone();
+        let scroll_controller = self.scroll_controller.clone();
+        let a11y_controller = self.scroll_controller.clone();
         let physics = view
             .physics
             .as_ref()
@@ -1177,7 +915,26 @@ impl ViewState<Scrollable> for ScrollableState {
         let axis_direction = view.axis_direction.unwrap_or_else(|| {
             axis_direction_from_axis_reverse_and_directionality(ctx, scroll_direction, false)
         });
-        let endpoint = self.endpoint(view, &physics, axis_direction, ctx);
+        let owner = self.owner(view, &physics, axis_direction, ctx);
+        let anchored = view.anchored.is_some();
+        let admission = view
+            .anchored
+            .as_ref()
+            .and_then(|leaf| leaf.admission.clone());
+        let cancelled = view
+            .anchored
+            .as_ref()
+            .and_then(|leaf| leaf.cancelled.clone());
+        let motion = view.anchored.as_ref().map(|leaf| {
+            *leaf.slot.owner.borrow_mut() = Rc::downgrade(&owner);
+            Rc::clone(&leaf.motion)
+        });
+        // The hook a user callback may replace runs after this borrow ends.
+        let outgoing = self.env.motion.replace(motion);
+        drop(outgoing);
+        let devices = view.devices;
+        let snap = view.snap.clone();
+        let semantic_label = view.semantic_label.clone();
         let child = view.child.clone();
         let viewport_builder = view.viewport_builder.clone();
         let fling_controller = self.fling_controller.controller().clone();
@@ -1196,14 +953,12 @@ impl ViewState<Scrollable> for ScrollableState {
             // `Arc`-counted handle (no refcount bump at call time).
             let fling_stop = fling_controller.clone();
             let wheel_drag = Rc::clone(&self.wheel_motion);
-            let ctrl_update = scroll_controller.clone();
-            let phys_update = physics.clone();
-            let endpoint_fling = Rc::clone(&endpoint);
+            let owner_start = Rc::clone(&owner);
+            let focus_pan = Rc::clone(&self.focus);
+            let owner_update = Rc::clone(&owner);
+            let owner_end = Rc::clone(&owner);
+            let owner_lost = Rc::clone(&owner);
             let pipeline_fling = self.pipeline.clone();
-            let nested_start = self.nested_dispatcher.clone();
-            let contact = self.nested_contact.clone();
-            let contact_start = contact.clone();
-            let contact_update = contact.clone();
 
             // Position mode, not `.offset(pixels)`: the composed viewport's
             // offset IS this controller's shared `ScrollPosition`, so a
@@ -1211,7 +966,13 @@ impl ViewState<Scrollable> for ScrollableState {
             // and `RenderViewport::perform_layout`'s committed content
             // extents flush back into the same position — see
             // `ScrollPosition`'s docs and `Viewport::position`.
-            let scroll_view: BoxedView = if let Some(build_viewport) = &viewport_builder {
+            let scroll_view: BoxedView = if let Some(build_viewport) = &viewport_builder
+                && anchored
+            {
+                // An anchored drag's content is no scroll view: nothing
+                // inside it scrolls with this position.
+                build_viewport(scroll_controller.position())
+            } else if let Some(build_viewport) = &viewport_builder {
                 // Custom composition: the closure owns injecting the shared
                 // position into whatever it builds. The scope re-publishes
                 // that same position to the built subtree, so content INSIDE
@@ -1236,162 +997,89 @@ impl ViewState<Scrollable> for ScrollableState {
             // Scrollable uses HitTestBehavior::Opaque so the
             // gesture area fires regardless of whether the child content is
             // itself hittable (e.g. an empty SizedBox).
-            let position_start = ctrl_update.position();
-            let position_update = ctrl_update.position();
-            let position_end = ctrl_update.position();
-            let gestures = GestureDetector::new()
+            let position_start = scroll_controller.position();
+            let position_end = scroll_controller.position();
+            let mut gestures = GestureDetector::new();
+            if let Some(admission) = admission {
+                gestures = gestures.admission(admission);
+            }
+            let gestures = gestures
                 .recognizer_owner(Rc::clone(&self.recognizer_owner))
-                .drag_pointer_strategy(flui_interaction::DragPointerStrategy::ContinueWithRemaining)
-                .behavior(HitTestBehavior::Opaque)
-                .on_pan_start(move |_cx, details| {
-                    let incoming = details.sequence.zip(nested_start.borrow().clone()).map(
-                        |(sequence, dispatcher)| ScrollContact {
-                            sequence,
-                            device: super::nested::ScrollDevice::Pointer {
-                                kind: details.kind,
-                                device: details.device,
-                            },
-                            dispatcher,
-                        },
-                    );
-                    let outgoing = contact_start.replace(incoming);
-                    if let Some(outgoing) = outgoing {
-                        outgoing
-                            .dispatcher
-                            .end(outgoing.sequence, super::nested::ScrollEndReason::Preempted);
-                    }
-                    wheel_drag.borrow_mut().take();
-                    let current = contact_start.borrow().clone();
-                    if let Some(current) = current {
-                        if Some(current.sequence) != details.sequence {
-                            return;
-                        }
-                        current.dispatcher.dispatch(
-                            current.sequence,
-                            current.device,
-                            super::nested::ScrollCause::UserInput,
-                            flui_foundation::geometry::Point::new(
-                                details.global_position.dx,
-                                details.global_position.dy,
-                            ),
-                            flui_foundation::geometry::Vec2::ZERO,
-                        );
-                        let current = contact_start.borrow().as_ref().is_some_and(|active| {
-                            active.sequence == current.sequence
-                                && Rc::ptr_eq(&active.dispatcher, &current.dispatcher)
-                        });
-                        if current {
-                            position_start.set_is_scrolling(true);
-                        }
-                    } else {
-                        let _ = fling_stop.stop();
-                        position_start.set_is_scrolling(true);
-                    }
+                // An anchored drag is hit where its moved child is painted,
+                // which its content makes opaque; a scroll view over its
+                // whole box.
+                .behavior(if anchored {
+                    HitTestBehavior::DeferToChild
+                } else {
+                    HitTestBehavior::Opaque
                 })
-                .on_pan_update(move |_cx, details| {
-                    let current = contact_update.borrow().clone();
-                    if let Some(current) = current {
-                        current.dispatcher.dispatch(
-                            current.sequence,
-                            current.device,
-                            super::nested::ScrollCause::UserInput,
-                            flui_foundation::geometry::Point::new(
-                                details.global_position.dx,
-                                details.global_position.dy,
-                            ),
-                            flui_foundation::geometry::Vec2::new(
-                                details.global_delta.dx,
-                                details.global_delta.dy,
-                            ),
-                        );
-                        return;
-                    }
-                    // A downward/rightward finger drag
-                    // (positive delta on the scroll axis) moves the viewport
-                    // toward the axis's START, so the offset DECREASES — but
-                    // only for a NOT-reversed `AxisDirection` (`down`/`right`).
-                    // For a reversed one (`up`/`left`, e.g. `RightToLeft`
-                    // under RTL `Directionality`) the sign flips before the
-                    // `pixels - delta` below.
-                    //
-                    // `apply_boundary_conditions` enforces the physics limits
-                    // (hard clamp or spring resistance) before committing.
-                    let raw_delta = match scroll_direction {
+                // The drag claims a contact only past its own axis's slop, so
+                // a scrollable inside one on the other axis shares the
+                // contact's motion by axis.
+                .drag(match scroll_direction {
+                    Axis::Vertical => DragSlot::vertical(),
+                    Axis::Horizontal => DragSlot::horizontal(),
+                }
+                .pointer_strategy(flui_interaction::DragPointerStrategy::ContinueWithRemaining)
+                .allowed_devices(devices)
+                .on_start(move |_cx, details| {
+                    wheel_drag.borrow_mut().take();
+                    // A drag on a scrollable gives it the keys.
+                    let _ = focus_pan.request_focus();
+                    // The contact's sequence: the one a press on the moving
+                    // scrollable already began, or a new one that preempts
+                    // whatever motion the scrollable drives.
+                    owner_start.begin_contact(details.sequence, details.kind, details.device);
+                    // Grab: halt any in-flight run so the list stops at the
+                    // finger's contact position.
+                    let _ = fling_stop.stop();
+                    // AFTER the stop: stopping fires the status listener,
+                    // which marks the position idle — the grab that begins a
+                    // new drag must win that ordering, or a fling-into-drag
+                    // hand-off would flicker the activity signal off.
+                    position_start.set_is_scrolling(true);
+                })
+                .on_update(move |_cx, details| {
+                    let finger = match scroll_direction {
                         Axis::Vertical => details.delta.dy,
                         Axis::Horizontal => details.delta.dx,
                     };
-                    let signed_delta = if axis_direction.is_reversed() {
-                        -raw_delta
-                    } else {
-                        raw_delta
-                    };
-                    // The user's direction, for activity subscribers (a
-                    // floating header's snap decision): a positive signed
-                    // delta moves the offset toward the start — Forward.
-                    if signed_delta > 0.0 {
-                        position_update.set_user_scroll_direction(ScrollDirection::Forward);
-                    } else if signed_delta < 0.0 {
-                        position_update.set_user_scroll_direction(ScrollDirection::Reverse);
-                    }
-                    let proposed = ctrl_update.pixels() - signed_delta;
-                    let metrics = ScrollMetrics::from(&ctrl_update.position());
-                    let clamped = phys_update.apply_boundary_conditions(&metrics, proposed);
-                    ctrl_update.set_pixels(clamped);
-                })
-                .on_pan_end(move |_cx, details| {
-                    let outgoing = contact.borrow_mut().take();
-                    if let Some(outgoing) = outgoing {
-                        if details.reason == flui_interaction::GestureEndReason::Cancelled {
-                            outgoing.dispatcher.recover_cancelled(
-                                outgoing.sequence,
-                                flui_foundation::geometry::Point::new(
-                                    details.global_position.dx,
-                                    details.global_position.dy,
-                                ),
-                                presentation_device_pixel_ratio(pipeline_fling.as_ref()),
-                            );
-                        } else {
-                            let velocity = details.global_fling_velocity().pixels_per_second;
-                            outgoing.dispatcher.release(
-                                outgoing.sequence,
-                                flui_foundation::geometry::Point::new(
-                                    details.global_position.dx,
-                                    details.global_position.dy,
-                                ),
-                                flui_foundation::geometry::Vec2::new(velocity.dx, velocity.dy),
-                                presentation_device_pixel_ratio(pipeline_fling.as_ref()),
-                            );
-                        }
+                    if finger == 0.0 {
                         return;
                     }
-                    // Pointer velocity is in "screen coordinates": positive dy/dx
-                    // = finger moving down/right. For a NOT-reversed axis
-                    // direction the scroll offset increases when the finger
-                    // moves the opposite way, so we negate; for a reversed one
-                    // (`up`/`left`) the two negations cancel.
-                    let admitted_velocity =
-                        if details.reason == flui_interaction::GestureEndReason::Cancelled {
-                            0.0
-                        } else {
-                            match scroll_direction {
-                                Axis::Vertical => details.fling_velocity().pixels_per_second.dy,
-                                Axis::Horizontal => details.fling_velocity().pixels_per_second.dx,
-                            }
-                        };
-                    let fling_velocity_px_per_sec = if axis_direction.is_reversed() {
-                        admitted_velocity
+                    owner_update.drag(
+                        owner_update.finger_to_physical(finger),
+                        Point::new(details.local_position.dx, details.local_position.dy),
+                    );
+                })
+                .on_end(move |_cx, details| {
+                    // Pointer velocity is in "screen coordinates": positive
+                    // dy/dx = finger moving down/right; the content follows the
+                    // finger, so the offset moves against it.
+                    let completed = details.reason != flui_interaction::GestureEndReason::Cancelled;
+                    let finger = if completed {
+                        match scroll_direction {
+                            Axis::Vertical => details.fling_velocity().pixels_per_second.dy,
+                            Axis::Horizontal => details.fling_velocity().pixels_per_second.dx,
+                        }
                     } else {
-                        -admitted_velocity
+                        0.0
                     };
-                    if !endpoint_fling.start(
-                        fling_velocity_px_per_sec,
+                    if !owner_end.drag_ended(
+                        completed,
+                        owner_end.finger_to_physical(finger),
                         presentation_device_pixel_ratio(pipeline_fling.as_ref()),
                     ) {
-                        // No ballistic run: the release IS the end of
-                        // scrolling.
+                        // No run: the release IS the end of scrolling.
                         position_end.set_is_scrolling(false);
                     }
+                    // After the drag's own settle: an anchored drag's host may
+                    // replace it with a return.
+                    if !completed && let Some(cancelled) = &cancelled {
+                        cancelled();
+                    }
                 })
+                .on_cancel(move |_cx| owner_lost.drag_lost()))
                 .child(scroll_view);
 
             // Wheel / trackpad scrolling has no drag semantics: no slop or
@@ -1412,214 +1100,365 @@ impl ViewState<Scrollable> for ScrollableState {
             let post_frame_wheel = post_frame.clone();
             let fling_wheel = fling_controller.clone();
             let wheel_motion = Rc::clone(&self.wheel_motion);
+            let owner_wheel = Rc::clone(&owner);
             let listener = Listener::new()
-                .on_scroll_claim(move |dispatch: flui_interaction::ScrollDispatch<'_>| {
-                    let data = dispatch.local;
-                    // Deliberately modifier-agnostic: a ctrl+wheel tick over a
-                    // plain list scrolls like any other. The ctrl+wheel-zooms contract needs no
-                    // decline here: a chord-gated zoom consumer sits INSIDE
-                    // the scrollable, and the leaf-first claim walk asks it
-                    // first.
-                    let axis_delta = wheel_axis_delta(
-                        scroll_direction,
-                        data,
-                        ctrl_wheel.position().viewport_dimension(),
-                        &wheel_preferences.snapshot(),
-                        wheel_distances,
-                    );
-                    // Platform deltas arrive already normalized —
-                    // positive = content scrolls down (each backend converts its native axes
-                    // and units at its own boundary). Only the reversed-axis
-                    // flip the drag arms use applies here.
-                    let mut delta = axis_delta;
-                    if axis_direction.is_reversed() {
-                        delta = -delta;
-                    }
-                    if delta == 0.0 || !delta.is_finite() {
-                        return EventPropagation::Continue;
-                    }
-                    let position = ctrl_wheel.position();
-                    let pixels = ctrl_wheel.pixels();
-                    let notched = data.precision == ScrollPrecision::Notched;
-                    let accepted = wheel_motion.borrow().clone();
-                    let base = if notched {
-                        accepted
-                            .filter(|motion| {
-                                motion.generation.get().is_none_or(|generation| {
-                                    generation == fling_wheel.run_generation()
-                                        && fling_wheel.status().is_directional()
+                .on_scroll_claim(move |data: &ScrollEvent| {
+                    let handled = (|| {
+                        // A wheel does not drag to an anchor: it scrolls what
+                        // encloses the anchored drag.
+                        if anchored {
+                            return EventPropagation::Continue;
+                        }
+                        // Deliberately modifier-agnostic: a ctrl+wheel tick over a
+                        // plain list scrolls like any other. The ctrl+wheel-zooms contract needs no
+                        // decline here: a chord-gated zoom consumer sits INSIDE
+                        // the scrollable, and the leaf-first claim walk asks it
+                        // first.
+                        let axis_delta = wheel_axis_delta(
+                            scroll_direction,
+                            data,
+                            ctrl_wheel.position().viewport_dimension(),
+                            &wheel_preferences.snapshot(),
+                            wheel_distances,
+                        );
+                        // Platform deltas arrive already normalized —
+                        // positive = content scrolls down (each backend converts its native axes
+                        // and units at its own boundary). Only the reversed-axis
+                        // flip the drag arms use applies here.
+                        let mut delta = axis_delta;
+                        if axis_direction.is_reversed() {
+                            delta = -delta;
+                        }
+                        if delta == 0.0 || !delta.is_finite() {
+                            return EventPropagation::Continue;
+                        }
+                        let position = ctrl_wheel.position();
+                        let pixels = ctrl_wheel.pixels();
+                        let notched = data.precision == ScrollPrecision::Notched;
+                        let accepted = wheel_motion.borrow().clone();
+                        let base = if notched {
+                            accepted
+                                .filter(|motion| {
+                                    motion.generation.get().is_none_or(|generation| {
+                                        generation == fling_wheel.run_generation()
+                                            && fling_wheel.status().is_directional()
+                                    })
                                 })
-                            })
-                            .map_or(pixels, |motion| motion.target)
-                    } else {
-                        pixels
-                    };
-                    let proposed = base + delta;
-                    if !proposed.is_finite() {
-                        return EventPropagation::Continue;
-                    }
-                    let target =
-                        proposed.clamp(position.min_scroll_extent(), position.max_scroll_extent());
-                    tracing::trace!(
-                        delta,
-                        target,
-                        pixels = ctrl_wheel.pixels(),
-                        "pointer-scroll tick"
-                    );
-                    if target == base {
-                        return EventPropagation::Continue;
-                    }
-                    // Commit admission before callbacks. A nested tick inherits
-                    // this destination and replaces its owner; the older handler
-                    // then stops without overwriting the newer accepted work.
-                    let motion = Rc::new(WheelMotion {
-                        target,
-                        generation: Cell::new(None),
-                    });
-                    *wheel_motion.borrow_mut() = Some(Rc::clone(&motion));
-                    let is_current = || {
-                        wheel_motion
-                            .borrow()
-                            .as_ref()
-                            .is_some_and(|current| Rc::ptr_eq(current, &motion))
-                    };
-                    // A wheel tick interrupts whatever animation is driving
-                    // the position — otherwise the fling controller's value
-                    // listener overwrites the wheel write on its next tick
-                    // (the same cancel the drag-grab and `jump_to` paths do).
-                    let _ = fling_wheel.stop();
-                    if !is_current() {
-                        return EventPropagation::Stop;
-                    }
-                    if notched {
-                        // Start at the displayed position, never at the previous
-                        // destination or a stale programmatic animation value.
-                        fling_wheel.set_value(pixels);
+                                .map_or(pixels, |motion| motion.target)
+                        } else {
+                            pixels
+                        };
+                        let proposed = base + delta;
+                        if !proposed.is_finite() {
+                            return EventPropagation::Continue;
+                        }
+                        let target = proposed
+                            .clamp(position.min_scroll_extent(), position.max_scroll_extent());
+                        tracing::trace!(
+                            delta,
+                            target,
+                            pixels = ctrl_wheel.pixels(),
+                            "pointer-scroll tick"
+                        );
+                        let pointer = data.position.get();
+                        let pointer = Point::new(pointer.x, pointer.y);
+                        let device = ScrollDevice::Pointer {
+                            kind: data.pointer.kind,
+                            device: data.pointer.device,
+                        };
+                        let cause = match data.phase {
+                            Some(
+                                ScrollPhase::MomentumBegan
+                                | ScrollPhase::MomentumChanged
+                                | ScrollPhase::MomentumEnded,
+                            ) => ScrollCause::Momentum,
+                            _ => ScrollCause::UserInput,
+                        };
+                        if target == base {
+                            // At its extent the leaf still carries the packet to
+                            // a participant above it (a collapsing header), which
+                            // has no claim of its own.
+                            return if owner_wheel.wheel_at_extent(device, cause, delta, pointer) {
+                                EventPropagation::Stop
+                            } else {
+                                EventPropagation::Continue
+                            };
+                        }
+                        // Commit admission before callbacks. A nested tick inherits
+                        // this destination and replaces its owner; the older handler
+                        // then stops without overwriting the newer accepted work.
+                        let motion = Rc::new(WheelMotion {
+                            target,
+                            generation: Cell::new(None),
+                        });
+                        *wheel_motion.borrow_mut() = Some(Rc::clone(&motion));
+                        let is_current = || {
+                            wheel_motion
+                                .borrow()
+                                .as_ref()
+                                .is_some_and(|current| Rc::ptr_eq(current, &motion))
+                        };
+                        // The packet is a step of the binding's latch for this
+                        // source; a new latch preempts the motion of the last one.
+                        let Some(sequence) = owner_wheel.wheel_sequence(device) else {
+                            wheel_motion.borrow_mut().take();
+                            return EventPropagation::Continue;
+                        };
+                        sequence.aim(pointer);
                         if !is_current() {
                             return EventPropagation::Stop;
                         }
-                        let started = fling_wheel.animate_to_curved(
-                            target,
-                            Some(Duration::from_millis(150)),
-                            Rc::new(curves::EASE_OUT),
-                        );
-                        if is_current() {
-                            if started.is_ok() && fling_wheel.status().is_directional() {
-                                motion.generation.set(Some(fling_wheel.run_generation()));
-                                position.set_is_scrolling(true);
-                                if !is_current() {
-                                    return EventPropagation::Stop;
-                                }
-                                position.set_user_scroll_direction(if delta > 0.0 {
-                                    ScrollDirection::Reverse
-                                } else {
-                                    ScrollDirection::Forward
-                                });
-                            } else {
-                                wheel_motion.borrow_mut().take();
-                            }
+                        // A wheel tick interrupts whatever animation is driving
+                        // the position — otherwise the controller's run would
+                        // overwrite the wheel write on its next tick (the same
+                        // cancel the drag-grab and `jump_to` paths do).
+                        owner_wheel.halt(&sequence);
+                        let _ = fling_wheel.stop();
+                        if !is_current() {
+                            return EventPropagation::Stop;
                         }
-                        return EventPropagation::Stop;
-                    }
-                    // The wheel pulse: direction is only recordable
-                    // while an activity is live, so raise first.
-                    position.set_is_scrolling(true);
-                    if !is_current() {
-                        return EventPropagation::Stop;
-                    }
-                    position.set_user_scroll_direction(if delta > 0.0 {
-                        ScrollDirection::Reverse
-                    } else {
-                        ScrollDirection::Forward
-                    });
-                    if !is_current() {
-                        return EventPropagation::Stop;
-                    }
-                    position.set_pixels(target);
-                    if !is_current() {
-                        return EventPropagation::Stop;
-                    }
-                    wheel_motion.borrow_mut().take();
-                    match &post_frame_wheel {
-                        Some(post_frame) => {
-                            let pulse_end = position.clone();
-                            let motion_end = fling_wheel.clone();
-                            if post_frame
-                                .schedule(move |_timing| {
-                                    // A subsequent notch may have started after
-                                    // this immediate tick but before the frame.
-                                    if !motion_end.status().is_directional() {
-                                        pulse_end.set_is_scrolling(false);
+                        if notched {
+                            // Start at the displayed position, never at the previous
+                            // destination or a stale programmatic animation value.
+                            fling_wheel.set_value(pixels);
+                            if !is_current() {
+                                return EventPropagation::Stop;
+                            }
+                            let started = owner_wheel.animate_wheel(
+                                &sequence,
+                                target,
+                                Duration::from_millis(150),
+                            );
+                            if is_current() {
+                                if started {
+                                    motion.generation.set(Some(fling_wheel.run_generation()));
+                                    position.set_is_scrolling(true);
+                                    if !is_current() {
+                                        return EventPropagation::Stop;
                                     }
-                                })
-                                .is_err()
-                            {
-                                position.set_is_scrolling(false);
+                                    position.set_user_scroll_direction(if delta > 0.0 {
+                                        ScrollDirection::Reverse
+                                    } else {
+                                        ScrollDirection::Forward
+                                    });
+                                } else {
+                                    wheel_motion.borrow_mut().take();
+                                }
                             }
+                            return EventPropagation::Stop;
                         }
-                        // No post-frame capability (a bare harness without
-                        // the binding wiring): end the pulse synchronously
-                        // rather than leaving the activity stuck live. The
-                        // layout that consumes the pixels then sees an Idle
-                        // direction — degraded, not wrong: it matches a
-                        // plain programmatic jump.
-                        None => position.set_is_scrolling(false),
-                    }
-                    EventPropagation::Stop
+                        // The wheel pulse: direction is only recordable
+                        // while an activity is live, so raise first.
+                        position.set_is_scrolling(true);
+                        if !is_current() {
+                            return EventPropagation::Stop;
+                        }
+                        position.set_user_scroll_direction(if delta > 0.0 {
+                            ScrollDirection::Reverse
+                        } else {
+                            ScrollDirection::Forward
+                        });
+                        if !is_current() {
+                            return EventPropagation::Stop;
+                        }
+                        owner_wheel.wheel_step(&sequence, cause, target);
+                        if !is_current() {
+                            return EventPropagation::Stop;
+                        }
+                        wheel_motion.borrow_mut().take();
+                        match &post_frame_wheel {
+                            Some(post_frame) => {
+                                let pulse_end = position.clone();
+                                let motion_end = fling_wheel.clone();
+                                if post_frame
+                                    .schedule(move |_timing| {
+                                        // A subsequent notch may have started after
+                                        // this immediate tick but before the frame.
+                                        if !motion_end.status().is_directional() {
+                                            pulse_end.set_is_scrolling(false);
+                                        }
+                                    })
+                                    .is_err()
+                                {
+                                    position.set_is_scrolling(false);
+                                }
+                            }
+                            // No post-frame capability (a bare harness without
+                            // the binding wiring): end the pulse synchronously
+                            // rather than leaving the activity stuck live. The
+                            // layout that consumes the pixels then sees an Idle
+                            // direction — degraded, not wrong: it matches a
+                            // plain programmatic jump.
+                            None => position.set_is_scrolling(false),
+                        }
+                        EventPropagation::Stop
+                    })();
+                    // Moved or not, the packet tells the sequence this leaf
+                    // leads for its latch where the latch ends.
+                    owner_wheel.wheel_latch();
+                    handled
                 })
-                .child(gestures);
-            let move_to = semantic_scroll_mover(
-                &a11y_controller,
-                physics,
-                fling_controller.clone(),
-                post_frame,
-                self.pipeline.clone(),
-            );
-            let (viewport_semantics, position_semantics) = scroll_semantics(
-                a11y_controller,
-                scroll_direction,
-                axis_direction.is_reversed(),
-                move_to,
-                fling_controller,
-                // AccessKit's item: a line when scrolling vertically, a character
-                // when scrolling horizontally.
-                match scroll_direction {
-                    Axis::Vertical => wheel_distances.line,
-                    Axis::Horizontal => wheel_distances.character,
-                },
-            );
-            super::nested::NestedScroll::owner(
-                endpoint.clone(),
-                scroll_direction,
-                view.overscroll,
-                self.nested_dispatcher.clone(),
-            )
-            .child(FlingScope {
-                endpoint,
-                child: viewport_semantics
-                    .child(position_semantics.child(listener))
-                    .boxed(),
-            })
+                .child(if anchored {
+                    // An anchored drag is no drop autoscroll target.
+                    gestures.boxed()
+                } else {
+                    DragAutoscrollAnchor::new(Rc::clone(&self.autoscroll), Child::some(gestures))
+                        .boxed()
+                });
+            // A press joins as a hold only while the scrollable moves.
+            let listener = match &self.hold {
+                Some(hold) => {
+                    let moving = fling_controller;
+                    listener.recognizer_when(hold, move |dispatch| {
+                        moving.is_animating()
+                            && match dispatch.local {
+                                PointerEvent::Down(down) => {
+                                    devices == PointerKindSet::all()
+                                        || devices.contains_kind(down.pointer.kind)
+                                }
+                                _ => true,
+                            }
+                    })
+                }
+                None => listener,
+            };
+            let a11y_position = a11y_controller.position();
+            let key_item_step = match scroll_direction {
+                Axis::Vertical => wheel_distances.line,
+                Axis::Horizontal => wheel_distances.character,
+            };
+            // The scrollable's own plane: its deltas and its pointer are
+            // local to this box.
+            let listener = AnchoredBox::new(self.env.plane.anchor(), listener);
+            let content: BoxedView = if anchored {
+                // The anchored drag publishes its own adjustable node, and
+                // is no reveal scope: it is not a view onto its content.
+                self.reveal.configure(None, ctx);
+                listener.boxed()
+            } else {
+                let move_to = semantic_scroll_mover(
+                    Rc::clone(&owner),
+                    &a11y_controller,
+                    post_frame,
+                    self.pipeline.clone(),
+                );
+                self.reveal.configure(
+                    Some(RevealMove {
+                        move_to: Rc::clone(&move_to),
+                        controller: a11y_controller.clone(),
+                        axis: scroll_direction,
+                        reversed: axis_direction.is_reversed(),
+                    }),
+                    ctx,
+                );
+                let (viewport_semantics, position_semantics) = scroll_semantics(
+                    a11y_controller,
+                    scroll_direction,
+                    axis_direction.is_reversed(),
+                    move_to,
+                    semantic_label,
+                    // AccessKit's item: a line when scrolling vertically, a
+                    // character when scrolling horizontally.
+                    match scroll_direction {
+                        Axis::Vertical => wheel_distances.line,
+                        Axis::Horizontal => wheel_distances.character,
+                    },
+                );
+                let reveal: SharedRevealTarget = Rc::clone(&self.reveal) as SharedRevealTarget;
+                FocusRevealScope::new(
+                    reveal,
+                    viewport_semantics.child(position_semantics.child(listener)),
+                )
+                .boxed()
+            };
+            let scope = NestedScrollScope::new(Rc::clone(owner.node()), content);
+            let key_snap = snap;
+            let key_owner = Rc::clone(&owner);
+            let key_pipeline = self.pipeline.clone();
+            let key_position = a11y_position;
+            let key_post_frame = self.post_frame.clone();
+            Focus::new(scope)
+                .focus_node(Rc::clone(&self.focus))
+                .autofocus(view.autofocus)
+                .can_request_focus(true)
+                // No stop of traversal, and no semantics of its own: an
+                // anchored drag's stop is the row of its gesture
+                // alternatives, around it.
+                .skip_traversal(true)
+                .include_semantics(false)
+                .on_key_event(move |_cx, event| {
+                    let pipeline = key_pipeline.as_ref();
+                    if event.state() == KeyState::Up {
+                        key_owner.key_released(event.code);
+                        return KeyEventResult::Ignored;
+                    }
+                    if event.composition == ImeComposition::Active {
+                        return KeyEventResult::Ignored;
+                    }
+                    let position = key_owner.controller().position();
+                    let target = if anchored {
+                        anchored_key_target(
+                            event,
+                            scroll_direction,
+                            axis_direction.is_reversed(),
+                            &position,
+                            key_snap.as_deref(),
+                        )
+                    } else {
+                        key_target(
+                            event,
+                            scroll_direction,
+                            axis_direction.is_reversed(),
+                            key_item_step,
+                            &position,
+                            key_snap.as_deref(),
+                        )
+                    };
+                    let Some(target) = target else {
+                        return KeyEventResult::Ignored;
+                    };
+                    let outcome = key_owner.key_scroll(
+                        event.code,
+                        event.repeat() == KeyRepeat::AutoRepeat,
+                        target,
+                        presentation_device_pixel_ratio(pipeline),
+                    );
+                    match outcome {
+                        MoveOutcome::Unmoved => KeyEventResult::Ignored,
+                        MoveOutcome::Moved => {
+                            end_scroll_pulse(&key_position, key_post_frame.as_ref());
+                            KeyEventResult::Handled
+                        }
+                        MoveOutcome::Settling => KeyEventResult::Handled,
+                    }
+                })
         }
     }
 
-    fn did_update_view(&mut self, _old_view: &Scrollable, new_view: &Scrollable) {
+    fn did_update_view(&mut self, old_view: &Scrollable, new_view: &Scrollable) {
+        // Without a controller of its own, a rebuild keeps the position this
+        // state made; one taken away from the application gets a fresh one.
+        let incoming = match (&new_view.controller, &old_view.controller) {
+            (Some(controller), _) => controller.clone(),
+            (None, None) => return,
+            (None, Some(_)) => ScrollController::new(),
+        };
         if self
             .scroll_controller
             .position()
-            .ptr_eq(&new_view.controller.position())
+            .ptr_eq(&incoming.position())
         {
             return;
         }
         // Stop the retired trajectory while its listeners still target the
         // old position; its metrics must never drive the incoming position.
-        self.retire_endpoint();
+        self.retire_owner();
         self.wheel_motion.borrow_mut().take();
         let _ = self.fling_controller.controller().stop();
         self.scroll_controller.position().set_is_scrolling(false);
         self.remove_command_listener();
         self.detach_stop_hook();
-        self.scroll_controller = new_view.controller.clone();
+        self.scroll_controller = incoming;
         self.recognizer_owner = Rc::new(());
         self.install_fling_listener();
         self.install_fling_status_listener();
@@ -1628,7 +1467,9 @@ impl ViewState<Scrollable> for ScrollableState {
     }
 
     fn dispose(&mut self) {
-        self.retire_endpoint();
+        self.retire_owner();
+        self.reveal.motion.borrow_mut().take();
+        self.reveal.parent.borrow_mut().take();
         self.wheel_motion.borrow_mut().take();
         // An unmount mid-drag or mid-ballistic-run must not leave the shared
         // position claiming a scroll is underway — end the activity FIRST,
@@ -1661,52 +1502,250 @@ impl ViewState<Scrollable> for ScrollableState {
 /// the last line before the step stays on screen after it.
 const A11Y_SCROLL_STEP: f64 = 0.8;
 
-/// The one movement every semantic scroll goes through: clamp to the extents,
-/// stop any fling, and settle through the physics as a drag release would.
+/// The release speed, logical px/s, a key stands for when it asks a snap
+/// policy for the next target: a flick, faster than any policy's tolerance.
+const SNAP_KEY_FLICK: f64 = 1000.0;
+
+/// The one movement every semantic scroll goes through: an assistive scroll
+/// action (`UserInput` from the assistive device) or a reveal
+/// (`Programmatic`) dispatched through the owner's chain, clamped to the
+/// extents, then settling through the physics as a release from rest would.
 fn semantic_scroll_mover(
+    owner: Rc<ScrollOwner>,
     controller: &ScrollController,
-    physics: SharedScrollPhysics,
-    fling: AnimationController,
     post_frame: Option<PostFrameHandle>,
     pipeline: Option<WeakPipelineCell>,
-) -> Rc<dyn Fn(f64)> {
-    let movement_controller = controller.clone();
-    Rc::new(move |target| {
-        let position = movement_controller.position();
-        if !target.is_finite() {
+) -> Rc<dyn Fn(f64, ScrollCause)> {
+    let position = controller.position();
+    Rc::new(move |target, cause| {
+        let outcome = owner.move_to(
+            target,
+            cause,
+            presentation_device_pixel_ratio(pipeline.as_ref()),
+        );
+        if outcome != MoveOutcome::Moved {
             return;
         }
-        let target = target.clamp(position.min_scroll_extent(), position.max_scroll_extent());
-        let old = movement_controller.pixels();
-        if target == old {
-            return;
-        }
-        let _ = fling.stop();
-        position.set_is_scrolling(true);
-        position.set_user_scroll_direction(if target > old {
-            ScrollDirection::Reverse
-        } else {
-            ScrollDirection::Forward
-        });
-        position.set_pixels(target);
-        let metrics = ScrollMetrics::from(&position)
-            .with_device_pixel_ratio(presentation_device_pixel_ratio(pipeline.as_ref()));
-        if let Some(simulation) = physics.create_ballistic_simulation(&metrics, 0.0) {
-            let simulation =
-                BoundaryResolvedSimulation::new(simulation, Arc::clone(&physics), metrics);
-            let _ = fling.animate_with(simulation);
-        } else if let Some(post_frame) = &post_frame {
-            let pulse_end = position.clone();
-            if post_frame
-                .schedule(move |_| pulse_end.set_is_scrolling(false))
-                .is_err()
-            {
-                position.set_is_scrolling(false);
-            }
-        } else {
-            position.set_is_scrolling(false);
-        }
+        // Moved without a settle run: end the activity after the frame that
+        // lays the new offset out.
+        end_scroll_pulse(&position, post_frame.as_ref());
     })
+}
+
+/// How a scroll view moves to reveal: the semantic mover and the
+/// orientation it moves in, from the current configuration.
+#[derive(Clone)]
+struct RevealMove {
+    move_to: Rc<dyn Fn(f64, ScrollCause)>,
+    controller: ScrollController,
+    axis: Axis,
+    reversed: bool,
+}
+
+/// A scrollable as the reveal scope of the focus inside it
+/// (`focus_reveal.rs`): it moves its offset until the rectangle shows in its
+/// viewport, by the programmatic step a semantic reveal takes through the
+/// chain, then hands what of the rectangle lies in its viewport to the
+/// scope above. The viewport's geometry is the scrollable's own focus node,
+/// whose `Focus` wraps the whole scroll view.
+struct ScrollReveal {
+    viewport: Rc<FocusNode>,
+    motion: RefCell<Option<RevealMove>>,
+    parent: RefCell<Option<SharedRevealTarget>>,
+}
+
+impl ScrollReveal {
+    fn new(viewport: Rc<FocusNode>) -> Self {
+        Self {
+            viewport,
+            motion: RefCell::new(None),
+            parent: RefCell::new(None),
+        }
+    }
+
+    /// Take the configuration of a build: how to move (none for a scrollable
+    /// that is not a scroll view) and the scope above.
+    fn configure(&self, motion: Option<RevealMove>, ctx: &dyn BuildContext) {
+        let parent = FocusRevealScope::of(ctx);
+        let outgoing = (self.motion.replace(motion), self.parent.replace(parent));
+        drop(outgoing);
+    }
+}
+
+impl RevealTarget for ScrollReveal {
+    fn reveal(&self, rect: Rect<f64>) {
+        let motion = self.motion.borrow().clone();
+        let parent = self.parent.borrow().clone();
+        let viewport = self.viewport.rect();
+        let mut shown = rect;
+        if let Some(motion) = motion
+            && viewport.width() > 0.0
+            && viewport.height() > 0.0
+        {
+            let distance = match motion.axis {
+                Axis::Vertical => {
+                    reveal_distance(rect.top(), rect.bottom(), viewport.top(), viewport.bottom())
+                }
+                Axis::Horizontal => {
+                    reveal_distance(rect.left(), rect.right(), viewport.left(), viewport.right())
+                }
+            };
+            if distance != 0.0 && distance.is_finite() {
+                let before = motion.controller.pixels();
+                (motion.move_to)(
+                    before + if motion.reversed { -distance } else { distance },
+                    ScrollCause::Programmatic,
+                );
+                // What actually moved, clamped to the extents: the content
+                // moved against the offset, or with it when reversed.
+                let moved = motion.controller.pixels() - before;
+                let shift = if motion.reversed { moved } else { -moved };
+                if shift.is_finite() {
+                    shown = shown.translate(match motion.axis {
+                        Axis::Vertical => Vec2::new(0.0, shift),
+                        Axis::Horizontal => Vec2::new(shift, 0.0),
+                    });
+                }
+            }
+            // The enclosing scope reveals what shows here, not the parts
+            // this viewport clips.
+            shown = shown.intersect(&viewport).unwrap_or(viewport);
+        }
+        if let Some(parent) = parent {
+            parent.reveal(shown);
+        }
+    }
+}
+
+/// End the scroll activity of a move that started no run, after the frame
+/// that lays its offset out.
+fn end_scroll_pulse(position: &ScrollPosition, post_frame: Option<&PostFrameHandle>) {
+    let Some(post_frame) = post_frame else {
+        position.set_is_scrolling(false);
+        return;
+    };
+    let pulse_end = position.clone();
+    if post_frame
+        .schedule(move |_| pulse_end.set_is_scrolling(false))
+        .is_err()
+    {
+        position.set_is_scrolling(false);
+    }
+}
+
+/// Where a scroll key takes a scrollable along `axis`, or `None` for a key
+/// it does not scroll by. Arrow keys follow the axis and the resolved
+/// orientation (`reversed` includes RTL); PageUp, PageDown and Space move a
+/// page of the viewport along a vertical axis; Home and End go to the extents.
+///
+/// A scrollable with a `snap` policy turns the policy's pages instead: every
+/// arrow along the axis, PageUp, PageDown and Space (on either axis) is a
+/// nominal flick toward the next target in that direction, so the key lands
+/// where a release would. Along a horizontal axis PageDown and Space go to
+/// the next target in reading order whatever the direction, since targets are
+/// laid out in reading order.
+fn key_target(
+    event: &KeyEvent,
+    axis: Axis,
+    reversed: bool,
+    item_step: f64,
+    position: &ScrollPosition,
+    snap: Option<&dyn SnapPolicy>,
+) -> Option<f64> {
+    let commands = command_modifiers(event.modifiers);
+    let shifted = commands == Modifiers::SHIFT;
+    if !(commands.is_empty() || shifted && event.code == Code::Space) {
+        return None;
+    }
+    let page = (position.viewport_dimension() * A11Y_SCROLL_STEP).max(0.0);
+    let pixels = position.extents_snapshot().pixels;
+    // `forward`: the way the offset grows.
+    let step = |forward: bool, distance: f64| {
+        Some(match snap {
+            Some(snap) => next_snap_target(position, snap, forward),
+            None => pixels + if forward { distance } else { -distance },
+        })
+    };
+    let item = item_step.min(page.max(1.0));
+    let named = match &event.key {
+        Key::Named(named) => Some(*named),
+        _ => None,
+    };
+    // Page keys on a horizontal axis ignore the reading direction.
+    let page_reversed = axis == Axis::Vertical && reversed;
+    match (axis, named) {
+        (Axis::Vertical, Some(NamedKey::ArrowDown))
+        | (Axis::Horizontal, Some(NamedKey::ArrowRight)) => step(!reversed, item),
+        (Axis::Vertical, Some(NamedKey::ArrowUp))
+        | (Axis::Horizontal, Some(NamedKey::ArrowLeft)) => step(reversed, item),
+        (axis, Some(NamedKey::PageDown)) if axis == Axis::Vertical || snap.is_some() => {
+            step(!page_reversed, page)
+        }
+        (axis, Some(NamedKey::PageUp)) if axis == Axis::Vertical || snap.is_some() => {
+            step(page_reversed, page)
+        }
+        (axis, _) if event.code == Code::Space && (axis == Axis::Vertical || snap.is_some()) => {
+            step(shifted == page_reversed, page)
+        }
+        (_, Some(NamedKey::Home)) => Some(position.min_scroll_extent()),
+        (_, Some(NamedKey::End)) => Some(position.max_scroll_extent()),
+        _ => None,
+    }
+}
+
+/// The target after the one a release from `position` would rest on, the way
+/// the offset grows (`forward`) or back: from where a release would rest, so
+/// a scrollable that came to rest a hair off its page still turns a whole one.
+fn next_snap_target(position: &ScrollPosition, snap: &dyn SnapPolicy, forward: bool) -> f64 {
+    let mut metrics = ScrollMetrics::from(position);
+    metrics.pixels = snap.target(&metrics, 0.0);
+    let flick = if forward {
+        SNAP_KEY_FLICK
+    } else {
+        -SNAP_KEY_FLICK
+    };
+    snap.target(&metrics, flick)
+}
+
+/// Where an arrow key along `axis` moves an anchored drag: the next anchor
+/// the way the arrow points, or `None` for any other key. `reversed` is the
+/// scroll orientation the drag's offset is mapped through; an arrow moves the
+/// dragged content, not the view, so it is read the other way round.
+fn anchored_key_target(
+    event: &KeyEvent,
+    axis: Axis,
+    reversed: bool,
+    position: &ScrollPosition,
+    snap: Option<&dyn SnapPolicy>,
+) -> Option<f64> {
+    let snap = snap?;
+    if !command_modifiers(event.modifiers).is_empty() {
+        return None;
+    }
+    let Key::Named(named) = &event.key else {
+        return None;
+    };
+    let toward_end = match (axis, named) {
+        (Axis::Vertical, NamedKey::ArrowDown) | (Axis::Horizontal, NamedKey::ArrowRight) => true,
+        (Axis::Vertical, NamedKey::ArrowUp) | (Axis::Horizontal, NamedKey::ArrowLeft) => false,
+        _ => return None,
+    };
+    Some(next_snap_target(position, snap, toward_end == reversed))
+}
+
+/// Service a command `controller` queued through the owner serving it. With
+/// none yet, the command waits: the build that creates the owner services
+/// it.
+fn service_pending_command(
+    owner: &RefCell<Option<Rc<ScrollOwner>>>,
+    controller: &ScrollController,
+) {
+    let current = owner.borrow().clone();
+    if let Some(owner) = current
+        && owner.controller().position().ptr_eq(&controller.position())
+    {
+        owner.service_pending_command();
+    }
 }
 
 /// Native range adjustment and directional actions share the gesture activity and physics path.
@@ -1716,14 +1755,17 @@ fn scroll_semantics(
     controller: ScrollController,
     axis: Axis,
     reversed: bool,
-    move_to: Rc<dyn Fn(f64)>,
-    fling: AnimationController,
+    move_to: Rc<dyn Fn(f64, ScrollCause)>,
+    label: Option<String>,
     item_step: f64,
 ) -> (Semantics, Semantics) {
-    let semantics = Semantics::new()
+    let mut semantics = Semantics::new()
         .container(true)
         .role(crate::SemanticsRole::ScrollView)
         .scroll_source(controller.position(), axis, reversed);
+    if let Some(label) = label {
+        semantics = semantics.label(label);
+    }
     // AccessKit only admits native value writes on adjustable control roles.
     let adjustment = Semantics::new()
         .container(true)
@@ -1740,7 +1782,10 @@ fn scroll_semantics(
                 SemanticsScrollUnit::Item => item_step.min(page),
                 _ => page,
             };
-            move_to(controller.pixels() + if increase { delta } else { -delta });
+            move_to(
+                controller.pixels() + if increase { delta } else { -delta },
+                ScrollCause::UserInput,
+            );
         })
     };
     let reveal = Rc::clone(&move_to);
@@ -1782,23 +1827,17 @@ fn scroll_semantics(
         }
         // A target larger than the viewport already exposing both edges
         // stays put; otherwise move the nearest obscured edge into view.
-        let delta = if start < viewport_start && end > viewport_end {
-            0.0
-        } else if start < viewport_start {
-            start - viewport_start
-        } else if end > viewport_end {
-            end - viewport_end
-        } else {
-            0.0
-        };
-        let _ = fling.stop();
-        reveal(reveal_controller.pixels() + if reversed { -delta } else { delta });
+        let delta = reveal_distance(start, end, viewport_start, viewport_end);
+        reveal(
+            reveal_controller.pixels() + if reversed { -delta } else { delta },
+            ScrollCause::Programmatic,
+        );
     });
     let set = move_to;
     let increase = Rc::clone(&step);
     let decrease = Rc::clone(&step);
     let adjustment = adjustment
-        .on_set_numeric_value(move |_cx, value| set(value))
+        .on_set_numeric_value(move |_cx, value| set(value, ScrollCause::UserInput))
         .on_increment(move |_cx| increase(true, SemanticsScrollUnit::Page))
         .on_decrement(move |_cx| decrease(false, SemanticsScrollUnit::Page));
     let forward = Rc::clone(&step);
@@ -1821,7 +1860,7 @@ fn scroll_semantics(
 /// nothing from it, so an enclosing horizontal one can. A device that already
 /// reports horizontal motion (a trackpad, a tilt wheel, or macOS, which swaps
 /// the axes itself) is passed through unchanged.
-fn wheel_axis_delta(
+pub(crate) fn wheel_axis_delta(
     axis: Axis,
     data: &ScrollEvent,
     viewport_dimension: f64,

@@ -609,7 +609,13 @@ impl LifecycleContext for ElementBuildContext {
     fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle> {
         self.owner.read().clipboard_handle().cloned()
     }
-
+    fn haptics(&self) -> Option<flui_interaction::HapticsHandle> {
+        let handle = self.owner.read().haptics_handle().cloned()?;
+        Some(crate::haptics_mode::scoped(self, handle))
+    }
+    fn drag_and_drop(&self) -> Option<flui_interaction::drag::DragAndDrop> {
+        self.owner.read().drag_and_drop().cloned()
+    }
     fn texture_registry(&self) -> Option<flui_rendering::layer::TextureRegistry> {
         self.owner.read().texture_registry().cloned()
     }
@@ -708,6 +714,10 @@ pub(crate) struct BuildCapabilities {
     pub(crate) text_input_handle: Option<flui_interaction::TextInputHandle>,
     /// The presentation's plain-text clipboard.
     pub(crate) clipboard_handle: Option<flui_interaction::ClipboardHandle>,
+    /// The presentation's haptics.
+    pub(crate) haptics_handle: Option<flui_interaction::HapticsHandle>,
+    /// The presentation's drag-and-drop.
+    pub(crate) drag_and_drop: Option<flui_interaction::drag::DragAndDrop>,
     /// The presentation's external textures.
     pub(crate) texture_registry: Option<flui_rendering::layer::TextureRegistry>,
     /// The UI runtime's byte storage.
@@ -1053,7 +1063,13 @@ impl LifecycleContext for BuildCtx<'_> {
     fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle> {
         self.capabilities.clipboard_handle.clone()
     }
-
+    fn haptics(&self) -> Option<flui_interaction::HapticsHandle> {
+        let handle = self.capabilities.haptics_handle.clone()?;
+        Some(crate::haptics_mode::scoped(self, handle))
+    }
+    fn drag_and_drop(&self) -> Option<flui_interaction::drag::DragAndDrop> {
+        self.capabilities.drag_and_drop.clone()
+    }
     fn texture_registry(&self) -> Option<flui_rendering::layer::TextureRegistry> {
         self.capabilities.texture_registry.clone()
     }

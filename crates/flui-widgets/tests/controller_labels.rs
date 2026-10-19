@@ -10,10 +10,10 @@ use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_view::{BoxedView, View, ViewExt};
 use flui_widgets::{
-    ActivityIndicator, AnimatedAlign, AnimatedContainer, AnimatedOpacity, AnimatedPadding,
-    AnimatedRotation, AnimatedSize, Center, ColoredBox, DismissDirection, Dismissible,
-    InteractiveViewer, MotionBuilder, RefreshController, RefreshIndicator, ScrollController,
-    SizedBox, VsyncScope,
+    ActivityIndicator, Alternative, AnimatedAlign, AnimatedContainer, AnimatedOpacity,
+    AnimatedPadding, AnimatedRotation, AnimatedSize, Center, ColoredBox, ControlSpec,
+    DismissDirection, Dismissible, GestureAlternatives, InteractiveViewer, MotionBuilder,
+    RefreshIndicator, RefreshIntent, SizedBox, VsyncScope,
 };
 use tracing::Subscriber;
 use tracing_subscriber::Layer;
@@ -176,7 +176,8 @@ fn interactive_viewer() {
         |vsync| {
             scoped(
                 vsync,
-                InteractiveViewer::new().child(SizedBox::new(300.0, 300.0)),
+                InteractiveViewer::new(crate::common::viewer_alternatives())
+                    .child(SizedBox::new(300.0, 300.0)),
             )
         },
         300.0,
@@ -195,15 +196,19 @@ fn refresh_indicator() {
         |vsync| {
             scoped(
                 vsync,
-                RefreshIndicator::new()
-                    .controller(RefreshController::new())
-                    .scroll_controller(ScrollController::new())
-                    .child(SizedBox::new(300.0, 5000.0)),
+                RefreshIndicator::new(
+                    SizedBox::new(300.0, 5000.0),
+                    GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+                        RefreshIntent::command("Refresh"),
+                        SizedBox::new(24.0, 24.0),
+                    )))
+                    .expect("one labelled command"),
+                ),
             )
         },
         300.0,
     );
-    assert_eq!(labels, ["RefreshIndicator.fling"]);
+    assert_eq!(labels, ["RefreshIndicator.settle"]);
 }
 
 fn dismissible() {
@@ -211,13 +216,18 @@ fn dismissible() {
         |vsync| {
             scoped(
                 vsync,
-                Dismissible::new(ColoredBox::new(Color::rgb(10, 20, 30)))
-                    .direction(DismissDirection::Horizontal),
+                Dismissible::new(
+                    ColoredBox::new(Color::rgb(10, 20, 30)),
+                    crate::common::dismiss_alternatives(),
+                )
+                .direction(DismissDirection::Horizontal),
             )
         },
         300.0,
     );
-    assert_eq!(labels, ["Dismissible.move"]);
+    // The drag settles through its scrollable; the collapse has a controller
+    // of its own once the card is out.
+    assert_eq!(labels, ["Scrollable.fling"]);
 }
 
 #[test]

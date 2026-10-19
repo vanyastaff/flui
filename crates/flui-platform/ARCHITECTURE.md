@@ -285,6 +285,20 @@ older sent timestamps, epoch rebasing and saturation: there is no public API
 that advances the OS uptime by 49.7 days. These checks do not establish physical
 mouse delivery, pen/touch translation, or other backend clocks.
 
+### A Win32 mouse is one pointer whichever message carries it
+
+Under `EnableMouseInPointer` a mouse's presses arrive as `WM_POINTER` with the
+mouse's pointer id, but a cursor moved by `SetCursorPos` (or a host that keeps
+the legacy route) arrives as `WM_MOUSEMOVE`, and the wheel always arrives as
+`WM_MOUSEWHEEL`/`WM_MOUSEHWHEEL`. Every one of them reads as the one reserved
+mouse contact (`MOUSE_CONTACT` in `events.rs`), so a consumer sees the hover, the
+presses and the scrolls of one pointer. The injected recording
+`win32_sent_mouse_and_wheel.jsonl` pins it: run on a Windows host, its live
+session (`a_captured_native_mouse_session_replays_to_what_it_delivered`) fails
+against the golden when a `WM_POINTER` mouse id is its own contact. A wheel turn
+goes through the window's registry (`ContactRegistry::wheel`) only so the native
+capture journals it; it belongs to no contact sequence.
+
 ### Win32 pointer readings keep counter resolution
 
 `POINTER_INFO.dwTime` advances with the ~15.6 ms system tick, so a coalesced
@@ -331,6 +345,133 @@ loss and recovery, fractional pointer/wheel positions, and a trusted drag whose
 release occurs outside the canvas. Its README describes execution. These are
 browser smoke contracts, not automatically executed CI tests; a wasm compile
 does not prove that they pass. Browser touch-action policy remains page-owned.
+
+### Web events are answered while the browser waits on them
+
+A DOM event's default can be cancelled only inside its listener, so every
+canvas listener that dispatches applies the result there: `propagate: false`
+stops propagation to the canvas's ancestors (never same-target listeners),
+`default_prevented` cancels a cancelable default. Wheel scrolling follows the
+result instead of always cancelling page scroll; the FLUI runtime answers
+pointer input handled, so a FLUI page still never scrolls under its canvas,
+while an embedder whose callback declines lets the page scroll.
+
+A trackpad pinch reaches Chromium and Firefox pages as Control-held wheel
+events and WebKit pages as `gesture*` events (`shared::web_pinch`). A
+Control-held sequence is classified by its first event (a fractional pixel
+`deltaY` with no `deltaX` is a pinch, anything else a scroll) and each step
+continues the sequence as its first was. The step factor inverts Chromium's
+`-100 · ln(scale)` encoding. Control is stripped from the pinch's modifiers,
+since the browser synthesizes it. The End is a deadline on the event
+timeline, the last step plus `PINCH_GAP`, delivered by a registration-owned
+timer or by the next input that passes it, whichever comes first, and stamped
+with the deadline either way. A Control-less wheel ends it at its own time.
+When the application does not prevent the default of a sequence's first
+event, the pinch it started is cancelled and the rest of the sequence reaches
+neither the application nor `preventDefault`, so the browser zooms the page.
+The capability is `Emulated` where ctrl+wheel is the source and `Native` where
+`GestureEvent` exists. WebKit's cumulative scale and degrees become per-step
+factors and clockwise radians; web-sys has no `GestureEvent`, so the crate
+binds its getters. A pen whose browser reports only `tiltX`/`tiltY` (Pointer
+Events 2) keeps them as tilt planes, read through fractional getters.
+
+`web_pinch_table` pins the decoders in Linux CI. `tests/web_browser.rs` runs
+in headless Chrome through `cargo xtask device web-input`:
+`a_wheel_scroll_is_answered_with_its_dispatch_result`,
+`a_ctrl_wheel_pinch_reaches_the_application_as_a_pan_zoom` (End from the
+timer, stamped with the deadline), `a_refused_pinch_is_left_to_the_browser`,
+`webkit_gesture_events_reach_the_application_as_a_pan_zoom` and
+`a_pen_reporting_only_tilt_planes_keeps_its_orientation`. Those events are
+constructed, not trusted: no trackpad, Safari or page zoom has run.
+
+### Web drag and drop is HTML drag and drop, answered in its events
+
+`platforms::web::drag` holds the platform's one `DataTransferSource`,
+`WebTransfer`, and each canvas's `WebDragSource` (ADR-0211 §11). A drag over
+a canvas mints an offer from `DataTransfer.types` and its file items: the
+browser hides the data until the drop, so a hover reads only types, and
+FLUI's session identity travels as a type with its parameters. `dragenter`
+is cancelled when the input callback prevents its default, which makes the
+canvas the drag's target; `dragover` additionally needs the target's cached
+feedback to accept, and its `dropEffect` names the one accepted action. The
+drop copies every string representation out and keeps its files before the
+event returns; requests are then served from memory, a file through
+`Blob.arrayBuffer`. `conclude_drop` and `dragleave` retire the offer.
+
+A browser starts an HTML drag only from its own drag gesture on a draggable
+element and allows no data after `dragstart`. A canvas with a source is
+draggable; its `dragstart` asks synchronously whether the runtime started a
+session on this mouse or pen press, before the browser's drag threshold (a
+long-press trigger, typically), and then stores every representation the
+request names through `setData` and its actions as `effectAllowed`. Otherwise
+the `dragstart` is cancelled and the press continues as pointer input, which
+Chrome keeps delivering, and a session the runtime starts later in that press
+is refused as `DragError::Unavailable` so it stays in its window. A waiting
+session no `dragstart` takes by the release ends `Cancelled`; `dragend`'s
+`dropEffect` is the end it reports. A provider that panics at `dragstart` is
+contained and reported (`shared::html_drag_drop::serve_stored`), its session
+ends `Cancelled` and the `dragstart` is cancelled, since no `dragend` follows a
+refused drag. Close restores the canvas's draggable attribute and ends a
+waiting or running session cancelled.
+
+`html_drag_drop_table` pins the mapping in Linux CI. In headless Chrome,
+`an_html_drag_over_the_canvas_is_offered_and_dropped`,
+`a_declined_drag_is_refused_and_its_leave_retires_the_offer`,
+`an_unprevented_dragenter_leaves_the_drag_to_the_page` and
+`dragstart_runs_a_waiting_session_and_refuses_otherwise` use constructed
+`DragEvent`s with a real `DataTransfer`, whose effects a constructed object
+ignores, so the harness supplies them as plain properties. With trusted input
+over WebDriver BiDi (`cargo xtask device web-input`) Chrome itself runs both
+directions within one page: a session started from the press's dispatch
+becomes an HTML drag a page element takes the text of, and a page element's
+drag drops onto the canvas, whose target reads it after the drop. The drag
+source's press listener precedes the dispatching one, since the runtime's
+quiescent point is still inside that dispatch.
+
+### The web window serves the focused field's store to the browser's input method
+
+`platforms::web::text_input::WebTextInput` is the web window's
+`TextStoreHost` (ADR-0090, ADR-0135), reached through
+`OwnerPlatform::text_store_host` as Win32's text services are. The focused
+field's store is mirrored into an `EditContext` on the canvas where the
+browser has one (Chromium; web-sys binds none, so the crate declares it) and
+into a hidden `<textarea>` beside the canvas where it does not. The browser
+edits its copy and reports each edit (`textupdate`, or the textarea's
+`input`, diffed against the text the host last gave it by
+`shared::web_text::diff`); the host applies it to the store under an
+asynchronous lock, the text a composition inserted marked composing until
+`compositionend`. The application's changes reach the copy through the store's
+observer. Offsets are UTF-16 code units throughout. A request the presentation
+makes from inside a store call the host started (focus, completion) waits and
+runs, in order, when that call returns. The browser has no call that commits a
+composition, so `complete_composition` re-attaches the surface, which makes
+the input method let go, and answers `Abandoned` for the caller to commit in
+place; a completion that waited commits in place itself.
+
+A key the input method processes is the input method's: it reaches the window
+marked `ImeComposition::Active` when its event composes, when it carries the
+input method's key code 229 (WebKit dispatches the key that ends a composition
+after `compositionend`, with `isComposing` false), or while the surface
+composes (`shared::web_text::key_composition`). No shortcut, focus traversal
+or drag cancellation takes such a key, and its default stays the input
+method's, so Escape cancels the composition first. A key the application
+handles has its default prevented, so the browser does not also type it into
+the surface.
+
+The textarea belongs to the canvas's focus area: it is named on the canvas's
+claim (`EditorSlot`), focus moving between the two is not a window focus
+change, its keys reach the window through the canvas's `KeyRoute`, focusing
+the canvas forwards focus to it, and detaching gives focus back to the canvas.
+
+`web_text_table` pins the rules in Linux CI, and the conformance table's
+`a_key_during_composition_is_the_input_methods` holds them for the web
+profile. In headless Chrome, `an_edit_context_serves_the_focused_field`,
+`escape_while_the_field_composes_is_the_input_methods` and
+`a_textarea_serves_the_field_without_edit_context` drive constructed events;
+`cargo xtask device web-input` drives Chrome's own input-method path
+(`Input.imeSetComposition` and `Input.insertText` over ChromeDriver's DevTools
+channel, a trusted Escape and key over BiDi) through both surfaces. No OS
+input method, candidate window or soft keyboard has run.
 
 ### The Windows display snapshot is cached and invalidated, not sampled per turn
 
@@ -1234,23 +1375,22 @@ Basis for the above: source reading at the two commits named (clone grep plus
 shallow, so an older revision containing a `setNeedsDisplay:` call is not ruled
 out, and no Apple documentation was consulted for the API-deprecation claim.
 
-**Trade-off:** this deferral is AppKit-local, and the same defect has a second
+**Trade-off:** this deferral is AppKit-local, and the same defect had a second
 instance on another backend with the opposite sign. Web's `request_redraw`
-dispatches the frame immediately and `WindowCallbacks::drain_events` drains
-synchronously until the queue is empty, so a frame callback that re-arms recurses
-*within* the originating call rather than reaching a browser frame turn — measured
-at 4 frames inside one JS-to-Rust call, with no RAF turn, GPU setup or renderer
-involved (issue #1047, open). AppKit drops the re-arm that never crosses out of
-the display pass; web honours one that never crosses into a future turn. Both are
-the same contract failing: **a redraw request issued from inside a frame request
-must be deferred to the platform's next frame turn, not serviced in place.** The
-macOS half is correct now and the web half is not, which is the cost this entry
-books — the concept lives in `platforms/macos/display_pass.rs` rather than in a
-shared place both backends could hold, so a third backend writing a frame loop
-has to rediscover it. Lifting it to the `WindowCallbacks`/`request_redraw` layer
-is the obvious shape and is not done here: it would edit the web backend, which
-no gate on this host executes, and §Definition-of-Done forbids claiming a fix on
-a path nothing runs.
+dispatched the frame immediately and `WindowCallbacks::drain_events` drains
+synchronously until the queue is empty, so a frame callback that re-armed
+recursed *within* the originating call rather than reaching a browser frame turn;
+in the interaction gallery an animation started from a click (a swiped row
+closing) re-armed every frame at the same frame time and held the page's thread
+for good. Both were the same contract failing: **a redraw request issued from
+inside a frame request must be deferred to the platform's next frame turn, not
+serviced in place.** Web now serves `request_redraw` from its
+`requestAnimationFrame` loop alone, which requests a frame on every animation
+frame (`a_redraw_waits_for_the_next_animation_frame` in `tests/web_browser.rs`,
+run in headless Chrome by `cargo xtask device web-input`, and the gallery's
+screens by `cargo xtask device web-gallery`). The concept still lives per
+backend rather than in a shared place, so a third backend writing a frame loop
+has to rediscover it.
 
 **Replacement coverage:** three tiers, because no single one reaches the claim.
 `display_pass.rs`'s four tests pin the marker (set inside a pass, restored on
@@ -2131,6 +2271,491 @@ sparse terabyte without reading it; on Windows only, a read-only target
 (both `Busy`, reached through code 5 and the probe). `sync_all` matters only on
 power loss, which no test causes; a killed process (`taskkill /F`) and two
 processes on one directory are left to the dated native run.
+
+### Every backend assembles pointers through one registry
+
+Backends copy each native event into a plain `shared::pointer_assembly::NativeReading`
+(no `windows::*`, `objc2`, JNI or DOM type) and `decode` it against a
+`ContactRegistry` (ADR-0217 §3). The registry keys a contact by surface, device
+label and contact label; mints pointer and device identities in order and refuses
+permanently after the last; keeps a mouse's contact for the life of its device on
+the surface; returns a lifted pen to hovering on the same identity until the
+platform's leave, so its `Enter` and `Leave` pair up (a touch ends at `Up` or a
+cancel and then delivers the `Leave` for an `Enter` it delivered, after which the
+platform's own leave is a silent orphan; a hovering pen whose label returns as
+another kind leaves first); drives touch and pen sequences by their contact (a barrel button
+changes within it, or while the pen hovers) and mouse sequences by any held
+button; counts clicks only from OS settings a backend supplies (Win32 today, AppKit
+reports its own count, winit reports none); folds trackpad components into one
+`PanZoomAccumulator` session; and chooses each sequence's clock when it starts:
+the performance counter when the device and the host report one, otherwise the
+coarse stamp, after which that device stays on the coarse stamp. Stamps within a
+sequence never run backwards. A reading is measured completely before anything is
+committed: an undecodable one cancels its open contact as `InvalidInput`, an orphan
+(a release, leave, cancel, touch move or gesture update for no open contact) emits
+nothing, and both log a diagnostic. `MoveBatch` stamps a native batch's coalesced
+readings on the contact's clock in order and fails the whole batch on one bad
+reading; a failing prediction is only dropped. The reading that began the current
+press sequence stays on the contact for a native drag start. Decoding allocates
+nothing per event once contacts are open; a coalesced batch allocates the
+vocabulary's sample buffer.
+
+`pointer_assembly_contracts` in `tests/pointer_assembly.rs` pins label reuse after
+Up, primary admission, the mouse cursor's identity and cancellation, the pen
+contact rule, a lifted pen's hover until its leave, an entered touch's leave at its end, the originating reading, device hot-plug, identity exhaustion, click
+counting across the OS interval and rectangle, gesture accumulation including the
+session end, move batching, undecodable and orphan readings, a press before any
+position, and clock rebasing, wrap, saturation, monotonic order and per-device
+choice; `pointer_assembly_allocates_nothing_per_event` in
+`tests/pointer_assembly_allocation.rs` counts allocations over every per-event
+path with a positive control. The backends' own rows (Win32
+`native_pointer_decoding_contracts`, winit `pointer_translation_tests`, AppKit
+`native_pinch_and_rotation_share_one_cumulative_gesture`, UIKit
+`native_touch_readings_keep_sensor_presence_and_pen_angles`, Android
+`android_motion_translation`) pin only the copy into readings. Scroll phases
+go through the shared `ScrollPhases` grammar, and a two-finger pan is a phased
+scroll on every backend, winit's `PanGesture` included; a pinch's translation is
+its focal point, which every `Update` refreshes (ADR-0217 §4;
+`two_finger_pan_is_phased_scroll_on_every_backend`,
+`pan_zoom_carries_only_scale_and_rotation`, `winit_pan_gesture_is_a_phased_scroll`).
+
+### Android motion events decode through a cfg-free translation
+
+`platforms/android/input.rs` only copies each `MotionEvent` out of the NDK
+into plain facts (`shared::android_motion::Motion`: source, action, buttons,
+and each pointer's tool, axes and history) and discovers its device's motion
+ranges through Java; `shared::android_motion::AndroidMotion` turns the facts
+into readings, so Linux CI runs what the device runs
+(`android_motion_translation` in `tests/android_motion.rs`). Two decisions are
+the translation's own:
+
+- Android ends a hover with `ACTION_HOVER_EXIT` at the instant a pen or a
+  cursor goes down and starts it again with `ACTION_HOVER_ENTER` when it lifts.
+  The exit is held: a press from the same device at the same time continues the
+  hovering contact, so a pen keeps one pointer identity from hover through
+  contact and back, as on Win32 and UIKit; any other event, or an owner turn
+  `EXIT_GRACE` (40 ms) after it, delivers it as a leave, since the press can
+  reach the queue a turn after its exit and a pen leaving range sends nothing
+  more. An enter for a contact still open is a move.
+  (`a_pen_keeps_its_identity_from_hover_through_contact`,
+  `an_exit_no_press_continues_is_a_leave`.)
+- A touchpad in pointer mode reports finger tools from `SOURCE_MOUSE`. Its
+  hovering finger is the cursor and is delivered as the mouse; its gestures
+  arrive as fake fingers around the cursor and are never touches. A press
+  whose first pointer carries `AXIS_GESTURE_PINCH_SCALE_FACTOR` opens a pinch,
+  delivered as `PanZoom` scale about the cursor; one without opens a
+  two-finger scroll, delivered as phased `Scroll` from the cursor by
+  `AXIS_GESTURE_SCROLL_*_DISTANCE`, already in the owned sign; one with
+  `AXIS_GESTURE_SWIPE_FINGER_COUNT` is a three- or four-finger swipe, which the
+  system navigates with and FLUI does not translate; a press with a button
+  held is a click. The axes stand in for `getClassification`, which
+  `android-activity`'s event wrapper does not expose; both arrived in API 34,
+  where the availability table starts reporting precise scrolling and
+  trackpad gestures. (`a_touchpad_pinch_is_pan_zoom_about_its_cursor`,
+  `a_touchpad_scroll_is_phased_from_its_cursor`,
+  `touchpad_clicks_swipes_and_touches_stay_what_they_are`.)
+
+Android has no counterpart to `PointerRevision`: a `MotionEvent` carries no
+estimated properties to revise, so the backend never emits `Revise`.
+`cargo xtask device android-input` holds the translation on a device (see the
+native recording section below).
+
+### A native recording is the journal of one pointer registry
+
+A native recording (ADR-0215 §4) holds what a backend hands the shared
+decoder, not OS structures: a header with the backend, the clock anchors
+(epoch, uptime, performance-counter count and frequency) and the registry's
+setup (reserved contact, first identities, click settings), then one row per
+registry call — a reading, a coalesced batch, a device hot-plug, a surface or
+contact cancel. Replaying the rows through the same calls reproduces the
+backend's `PlatformInput` on any host, so Linux CI exercises Win32 QPC
+stamping, AppKit and UIKit uptime clocks, Android history batches and DOM
+predictions. The format is the `HostInput` recording's framing (JSON Lines, a
+major version, unknown fields skipped, an unknown variant a typed error); its
+codec lives in `tests/native_recording/codec.rs`, so serde never enters the
+backend graph. The header declares every device label its rows read, with the
+kinds they read it as, and the reader refuses a row that names another.
+
+Recordings are captured in debug builds with the `native-capture` feature:
+`shared::pointer_assembly::capture::capture` installs a sink on a thread, and
+every registry created there while it is installed — a backend window's
+included — reports each call before acting on it. A registry reports to the
+capture installed when it was created, identified by session rather than by
+index, for as long as that capture's guard lives; the sink runs with its own
+reentrant calls skipped, and a panicking sink is dropped and leaves the
+registry unchanged. A call made on the registry from outside a reading is
+journaled by its caller: a mouse wheel turn (`ContactRegistry::wheel`), a
+scroll step from an open contact with its phase already resolved
+(`ContactRegistry::scroll`: Android's wheel and two-finger scroll), and a
+touchpad viewport's callback or abandonment (`TouchpadAssembler`), whose
+pinch readings are decoded unjournaled because replaying the viewport row
+derives them again. The codec reads every number back to the bits it was
+written from (serde_json's `float_roundtrip`): a cumulative pinch scale read
+one ulp off replays a different transform than the device delivered.
+
+On a Windows host `cargo xtask device windows-input` records the injected
+goldens: each child row of the native window contract
+(`a_captured_native_pointer_session_replays_to_what_it_delivered` for a touch
+and a pen from `InjectSyntheticPointerInput`,
+`a_captured_native_mouse_session_replays_to_what_it_delivered` for mouse buttons
+and wheels from `SendInput`) checks that its journal replays to exactly what the
+window delivered, then holds it against its checked-in golden by shape
+(`native_recording::capture::hold_against_golden`: the replayed events with
+times left out and positions in device pixels). `FLUI_NATIVE_RECORDING_DIR`
+also writes the fresh recording there, and `FLUI_NATIVE_RECORDING_BLESS`
+(`--bless`) writes it over the golden. On another host, install `capture` on
+the owner thread before the backend opens its windows.
+
+On a host with the Android SDK and a device, `cargo xtask device
+android-input` does that on the device: `examples/android_input_probe.rs` is a
+`NativeActivity` library that installs the capture before `AndroidPlatform`
+creates its registry and shares the test codec and sink
+(`tests/native_recording/journal.rs`) through `#[path]`. Each session, in a
+fresh launch, is injected by the system (`adb shell input`, and `uinput`
+devices the real `InputReader` reads: a pen with pressure, tilt and hover, a
+touchpad in pointer mode), and the probe writes its journal and the `Debug`
+of every pointer event its window delivered. The host test
+`pulled_device_recordings_replay_to_what_they_delivered` requires the replay
+to equal what the device delivered exactly, then holds the recording against
+its golden by grammar (`capture::grammar`: who entered, pressed, moved,
+pinched or scrolled, in order, with each press's sensors), not by shape: the
+device batches and resamples moves by its frame timing, so their number and
+positions change from run to run.
+
+A browser page has no file system, so `cargo xtask device web-input` splits
+the same steps between the page and the host. The `web_input_probe` example
+opens the web backend under a `Recorder` (the capture, kept installed across
+the event-loop turns the driver's input arrives on) and reports the
+recording as JSON Lines with the pointer events the window delivered and the
+recording's replay; the driver sends trusted mouse, pen and touch input over
+WebDriver BiDi, requires the replay to equal what was delivered (DOM wheel
+scrolls excepted: they have no contact, so the registry never sees them),
+writes the recording on the host and holds it against
+`web_bidi_mouse_pen_touch.jsonl` natively
+(`browser_sessions_hold_against_their_goldens`, given
+`FLUI_NATIVE_RECORDING_FRESH`). Its moves are single steps between pauses
+longer than a frame, and touches move one at a time, since Chrome
+interpolates a move over its action tick and its touch predictions depend on
+timing; the shape is then the same on every run.
+
+`native_recording_contracts` in `tests/native_recording/mod.rs` replays one
+recording per backend (`win32_pointer_info_recordings_decode_to_their_host_input`
+and its AppKit, UIKit, Android, winit and web rows, the web's Chrome capture
+`web_bidi_recording_decodes_to_its_host_input` among them) against hand-computed
+transcripts, writes each back byte for byte, refuses unknown variants, other
+versions, out-of-range values and undeclared devices, and, with the feature,
+pins the capture's journal, session identity, panic containment and reentrant
+release and replacement.
+
+### A window's input waits behind its capability snapshot
+
+`WindowCallbacks` owns the ADR-0213 §3 feed: a backend sets the initial
+`InputCapabilities` (its availability table from `shared::input_availability`
+with the presence its device registry reports) when it builds the window, and
+`set_input_callback` commits the registration before delivering that snapshot,
+then the input held while no snapshot had been delivered. Input admitted before
+the first registration is held, not dropped; its native default is not
+suppressed, since nothing claims it yet. A pass delivers only the entries it
+started with and contains a callback panic itself: a failed snapshot stays at
+the head (three failed passes per registration, then held until re-registration
+or close), a failed ordinary entry is not re-delivered, and the tail keeps its
+order. Remaining work is resumed by an owner turn the backend's `OwnerSignal`
+schedules (`OwnerSignal::input_wake`), so an idle application still drains it.
+The feed holds at most 256 entries, as many as the runtime holds while it waits
+for a tree: past that the oldest ordinary input is evicted (a queue of
+capability changes only gives its head to the snapshot's baseline), so a window
+whose callback is never registered keeps only its newest input. Once a
+registration's snapshot has failed its passes nothing can deliver, so new input
+is refused with the default result, keeping its platform default, until the
+callback is registered again; the first loss is reported once.
+The rows of `input_capabilities_contracts` in `tests/input_capabilities.rs` pin
+the order, retries, the bound and the refusal
+(`input_held_before_any_registration_is_bounded`,
+`input_after_the_snapshot_attempts_run_out_is_refused`), reentrant admission
+and a replaced callback whose capture panics. Presence changes reach a window from the headless device handle and the
+winit backend's registry; the native Win32, AppKit, UIKit, Android and web
+backends report their initial table without presence changes yet.
+
+### Every backend's haptics table is a pure function
+
+`shared::haptic_degradation` holds each backend's ADR-0210 §7 row as a cfg-free
+function from the device's facts (OS version, API level, primitives, pen
+waveforms) to the native call and its `HapticOutcome`; the native backends call
+it, and Linux CI runs every row (`haptic_degradation_table`). A source the backend
+does not know plays on the window's actuator (`actuator_for`,
+`stale_haptic_source_plays_on_the_window_actuator`), and the conformance table's
+haptics rows hold every backend to that and to its claimed capabilities. Where a
+backend can only step between values, a step takes the lower of its two ends, so
+no table raises an intensity.
+
+Where an Android 36 device has envelopes, the whole pattern plays as one
+`BasicEnvelopeBuilder` envelope: silent steps join the events, and a continuous
+event ramps to its first point in one millisecond, the shortest step an envelope
+takes, then holds it. A pattern of continuous events plays exactly; one with
+transients reports `Approximated`, because a transient becomes a 10 ms pulse in
+the envelope: the public `Composition` takes only primitives, so no single
+effect mixes the two. Transient-only patterns are compositions of primitives
+chosen by sharpness and intensity; overlapping events, and devices without
+envelopes, take the amplitude waveform. Composition delays count from the
+previous primitive's end, so the backend subtracts the durations API 31 reports.
+
+iOS plays tier 1 through the view-bound generators from 17.5 and the view-less
+ones before, and patterns exactly through Core Haptics. Each event is its own
+`CHHapticPattern`, started at its time on the engine's clock, because a
+parameter curve scales every event of its pattern; a curve longer than Core
+Haptics' sixteen control points is split into curves that start where the one
+before ended (`ios_pattern_parts`). The engine is created on the first pattern;
+its stopped and reset handlers only record the restart obligation and wake the
+main thread, which restarts it, and a pattern requested meanwhile plays its
+fallback (ADR-0210 §8). The macOS and iOS paths have only been compiled. The
+Web path ran in headless Chrome (`cargo xtask device web-input`): before the
+page's first trusted click `navigator.vibrate` is refused for want of user
+activation and the window's actuator reports `Unavailable` with no
+capabilities; after it a request is `Submitted`. Chrome's own answer is all
+that ran: a headless desktop has no vibration motor.
+
+Android tier 1 posts `performHapticFeedback` to the Java main thread, which
+owns the decor view, and the owner waits at most 8 ms for its answer
+(`android_feedback_outcome`): `false` (feedback off for the view or the system,
+or no window) reports `Suppressed`, a JNI failure `Unavailable`, and `true` the
+table's outcome. An answer later than the wait keeps the table's outcome, since
+the posted call still plays; the bound keeps a busy Java thread, or one blocked
+on the native thread in a lifecycle callback, from stalling the owner.
+
+Android pattern vibrations go to the `Vibrator`, which needs the install-time
+`VIBRATE` permission (the CLI's manifest template declares it). Without it the
+backend reads the vibrator as offering nothing, so its patterns report
+`FallsBack` and play their fallback through `performHapticFeedback`, which needs
+no permission, rather than claiming what the vibrator would refuse. Every
+pattern carries the touch usage, `VibrationAttributes.USAGE_TOUCH` from API 33
+and sonification audio attributes before it (`android_vibration_usage`), so the
+touch-feedback setting and intensity govern it. On a Galaxy S21 (Android 15,
+amplitude control, no primitives) `cargo xtask device android-input` plays the
+semantic feedback and a continuous swell as touch vibrations of the probe, and
+a two-tap pattern falls back, as the table says. Android 15 also files a short
+effect sent without attributes as touch, so the usage is not observable there;
+`haptic_degradation_table` pins it.
+
+A Win32 window has no actuator of its own (`InputHapticsManager` is
+unpublished), so it plays on the pen in range of it (ADR-0210 §5): the pen a
+request names while the window's pointer registry holds it open, touching or
+hovering, otherwise the pen read most recently (`ContactRegistry::pen_contact`,
+`a_pen_in_range_is_its_haptic_contact`). Its pointer id gives the
+`SimpleHapticsController` through `PenDevice::GetFromPointerId`, read on each
+request since the pen behind a pointer is the OS's; with no pen in range, or no
+controller, both tiers report `Unavailable`. The controller's calls come from
+`pen_timeline`, which hands a continuous waveform its length where the
+controller takes a play duration and stops it at its end otherwise
+(`haptic_degradation_table`'s `pen_timeline` row), and a per-window worker
+thread, in the multithreaded apartment, makes each at its time; a newer request
+replaces what is left of an older one, and dropping the window's actuator stops
+what still plays. The worker's mailbox holds one request: one the worker has not
+taken while a controller call stalls (a Bluetooth pen's HID write leaving range)
+is replaced unplayed, and a waveform reached more than two frames after its time
+is skipped, so feedback never plays late in a burst
+(`a_stalled_pen_worker_plays_only_the_newest_request_and_never_late`). `a_window_without_a_haptic_pen_in_range_reports_unavailable`
+drives a real window on a Windows host, with no pen and with a pen pointer the
+OS has no pen device for; no haptic pen has played through it yet.
+
+### Win32 precision touchpads are DirectManipulation viewports
+
+`WM_POINTER` reports a touchpad's contacts but not a two-finger pan, its
+inertia or a pinch. Each Win32 window owns a manual-update
+DirectManipulation viewport over its client area, created beside its text
+services from the platform's COM apartment; a window whose viewport does not
+initialise reports `precise_scroll` and `trackpad_gestures` `Unavailable`
+(`input_availability::windows`), otherwise `Native`. The system offers a
+contact in `DM_POINTERHITTEST` to the window under it; only a `PT_TOUCHPAD`
+pointer is handed to the viewport, so touch and pen stay raw `WM_POINTER`
+contacts. The viewport's handler only appends a plain `ViewportReading`
+(status or content transform) to a queue; `Update` runs it synchronously and
+the window drains the queue afterwards, so no user code runs inside a COM
+callback. The viewport is shared as `Rc<ComViewport>` and every COM call runs
+with no `RefCell` borrow of the window's touchpad held. Delivery goes through
+a per-window outbox: an input callback that runs a nested message loop (a
+dialog, a menu) can pump again from its `WM_TIMER` or `WM_PAINT`, and that
+nested pump appends behind what the outer pump has not delivered yet, so the
+outermost delivery keeps decode order (a nested `Changed` never overtakes the
+outer one, a cancellation never precedes the steps it ends).
+
+`shared::direct_manipulation` is the cfg-free decoder, replayed from a
+checked-in recording on Linux CI. A manipulation is a pan or a pinch, decided
+by whichever passes its slop first (2 device pixels of translation, 2% of
+scale), since a pinch's centroid drift is not a scroll. A pan is phased
+`Scroll` (device pixels, positive when the offset grows, so fingers moving up
+scroll down); `Inertia` ends the finger phase and starts
+`ScrollPhase::Momentum*`; `Ready` ends everything and asks the window to
+return the content to the origin, and the content update that causes arrives
+while nothing is open and is not input. A pinch is `PanZoom` on a trackpad
+contact at the cursor; the viewport is not configured for rotation, which a
+touchpad does not report. A pinch whose fingers lift with the centroid moving
+ends at `Inertia`, and the coast that follows publishes nothing but is still
+reset at `Ready`, so scale never accumulates across pinches. A status that is
+not `Running`, `Inertia` or `Ready` (`Disabled`, `Suspended`) cancels what is
+open. Every reset re-anchors the decoder at the origin, so the next
+manipulation is measured from where the reset put the content even when the
+window discarded the reset's own content update (a paused window does).
+
+Pumping is the window's own: `WM_PAINT` pumps a running or coasting viewport
+before the frame callback, `WM_TIMER` (8 ms, clamped by the system) paces a
+manipulation no frame serves and still fires inside menu and drag loops, and
+a pump that delivered input invalidates the window so the next step is drawn
+without the application asking for a frame. A resting viewport has no timer
+and costs a frame nothing. `WM_ENTERSIZEMOVE` pauses the viewport (open
+phases are cancelled, the content reset, contacts declined, the timer
+stopped) and `WM_EXITSIZEMOVE` resumes it. A
+failing `Update`, or `WM_DESTROY`, cancels what is open and releases the
+viewport (disable, remove the handler, abandon, deactivate) before the
+window's callbacks go; the COM apartment outlives its interfaces. The
+viewport's content rectangle is far larger than the window so the system
+never rubber-bands a manipulation.
+
+The decoder rows (`direct_manipulation_contracts`), the recording and the
+capability table run everywhere. On Windows,
+`touchpad_viewport_initialises_and_survives_its_messages` initialises a real
+viewport and sends it its messages, and the in-crate rows
+`the_window_pumps_paces_and_pauses_its_viewport` and
+`destroying_the_window_cancels_what_is_open_before_it_closes` drive a real
+window's pump, frame request, pacing timer, nested delivery, size-and-move
+pause and teardown with readings appended to the viewport's own queue. No
+precision touchpad has driven a manipulation: that run is
+`docs/platform-parity.md`'s condition for ✅.
+
+The recording `win32_direct_manipulation.jsonl` is a regular native recording:
+the codec's `viewport` row carries one viewport callback (a status or the
+content's scale and offset) with the cursor, scale and clocks of its frame, its
+`viewport_abandoned` row one abandonment (the window or its viewport going
+away, or a size-and-move pause), and `native_recording_contracts` replays them
+through the same `TouchpadAssembler` and the same registry (the pinch is the
+registry's gesture reading). Its header's `provenance` says it was written by
+hand from the documented callback order. The capture journals both calls as
+these rows (`a_captured_registry_journals_the_recording_it_replays`), so a
+`native-capture` run of the window on a precision touchpad records the golden
+that certifies it; no injector reaches the touchpad, so that run needs the
+hardware.
+
+Hardware verification still owed (the Windows device run, on a machine with a
+precision touchpad; none of these has run):
+
+1. Sign convention: two fingers moving up scroll the content down (scroll
+   offset grows, `dy > 0`), moving left gives `dx > 0`, with Windows'
+   "scrolling direction" setting flipped both ways; the viewport must not apply
+   that setting a second time.
+2. Slop and mode choice: a slow two-finger pan never starts a pinch, a pinch
+   whose fingers drift never scrolls, and the first scroll step is not lost.
+3. Inertia feel: a flick coasts as `MomentumBegan`, `MomentumChanged`,
+   `MomentumEnded` at frame cadence with no stall at the first step, a touch
+   during the coast ends it (`MomentumEnded`) and begins a new pan, and the
+   8 ms timer plus the self-invalidation keep frames coming with an otherwise
+   idle application.
+4. Reset: after `Ready` the next manipulation starts from the origin (no
+   jump), at 100%, 150% and 200% display scale and after a window resize.
+5. Modal-loop pause: starting a window drag or resize with a manipulation
+   open cancels it (`Cancelled` or `MomentumEnded`), contacts during the loop
+   are declined, and scrolling works again after `WM_EXITSIZEMOVE`.
+6. Contact routing: with two windows, the manipulation reaches only the window
+   under the cursor; touch and pen contacts never reach the viewport; unplugging
+   the touchpad mid-pan cancels it.
+7. Capabilities: `precise_scroll` and `trackpad_gestures` read `Native` on
+   such a machine and `Unavailable` when DirectManipulation cannot start.
+
+### Win32 drag and drop runs `DoDragDrop` on the owner window's next turn and paces frames from a thread
+
+The platform owns one `OleTransfer`, its only `DataTransferSource`. Every window
+registers an `IDropTarget` with `RegisterDragDrop` as it is created (after its
+text services, so OLE needs the apartment `OleInitialize` entered, not a bare
+`CoInitializeEx`) and revokes it in `WM_DESTROY`, leaving a drag still over it
+first. A drag entering a window mints an offer in the transfer's table, keeps
+the drag's `IDataObject` in an owner slot for lazy fetches until the target
+concludes the drop or the drag leaves, and answers `DragEnter`/`DragOver` from
+the feedback the window cached, narrowed to one permitted action. The drop's
+action is that cached answer; a refused drop leaves instead. Formats map one to
+one (`CF_UNICODETEXT`, CF_HTML, `CF_HDROP`, `PNG` and a registered format per
+media type); the session identity travels as the format registered under its
+bare media type, with its parameters in the data, because Win32 cannot register
+a format per session. The cfg-free mapping, the byte layouts, the effect mapping
+and the drop source's decision live in `shared::ole_drag_drop`.
+
+A window's drag source starts the session the runtime asks for, but not inside
+the call. The host calls it once its outermost runtime callback ends, which is
+still inside the window's own callback drain; a modal loop there would queue the
+source window's input and frames until the drag ended. So the start records the
+request (one at a time; a second is refused with `DragError::Unavailable`) and
+posts `START_DRAG` to the owner window, whose procedure runs `DoDragDrop` on a
+fresh turn of the message loop; a request whose message never runs is told
+`Cancelled` when the platform goes. `DoDragDrop`'s loop follows the mouse
+alone, and a pen or touch contact the window takes as `WM_POINTER` is never
+promoted to mouse input, so it sets no mouse button in the key state the loop
+reads: a start whose contact is a pen or touch (by the window's pointer
+registry), or with no mouse button held, is refused with
+`DragError::Unavailable` and the drag stays in its window (ADR-0211 §11,
+`a_drag_the_os_loop_cannot_carry_stays_in_its_window`, the pure rule
+`os_loop_buttons`). The drop source drops when the buttons held at the start
+are released and cancels on Escape or on another button.
+
+`DoDragDrop`'s loop waits for input and for messages other threads send, and
+nothing else: while the pointer rests it dispatches no posted message, timer or
+paint, so the main loop's deadline delivery and a `WM_TIMER` would both stall.
+A pacing thread sends `MODAL_FRAME` to the owner window instead, which the
+loop's wait does dispatch; the owner delivers a due wake deadline as the main
+loop would (once per frame generation), sends `WM_PAINT` to every invalidated
+window with `UpdateWindow`, and answers how long to wait. The session's
+callbacks run with no `RefCell` borrow or lock held across a COM call or a
+dispatch: the provider is leased out of the data object while it runs, so a
+fetch from inside it is refused rather than reentered, and every COM method
+contains a panic as `E_UNEXPECTED`.
+
+A drag that leaves its window on the window's mouse capture asks
+`PlatformWindow::window_at` what is under the pointer before it escalates: the
+point goes to the screen with `ClientToScreen`, `WindowFromPoint` and
+`GetAncestor(GA_ROOT)` honour the desktop's stacking order, and only a window
+whose context this thread reaches is the process's own; a point over its frame
+rather than its client area, over another application's window, or past the
+device coordinate range answers `Outside`. The runtime then reaches a sibling
+window of its own without starting `DoDragDrop` (ADR-0211 §2).
+
+`ole_drag_and_drop_on_real_windows` runs on a Windows host: the registration,
+OLE's calls on a window's registered target (answers, drop, fetches of every
+format, a refusal, a provider fetching from inside itself, a window its drag
+callback closes), the deferred start through a real `DoDragDrop`, a second
+window's frames while the loop rests, a drop into a FLUI window through the
+real loop, woken by posted mouse moves rather than the system pointer, and
+`window_at` across two placed real windows.
+`ole_drag_drop_contracts` pins the cfg-free half everywhere. Not run: a drag to
+or from another process (Explorer, a browser), a held mouse button, pen or
+touch, and a whole `flui-app` with two runtimes.
+
+### Android's Java side is `FluiView`, loaded from the native library
+
+`platforms::android::java_view` loads `FluiView`'s dex (`android/classes.dex`, compiled from
+`android/java` and checked against it by `cargo xtask android-dex`) on the Java main thread at
+platform start: `InMemoryDexClassLoader` from API 26, a read-only, byte-compared code-cache copy
+through `DexClassLoader` below, either parented to the Activity's loader. The view's native
+methods are bound with `RegisterNatives` on the class that loader returned, and one full-window
+view is laid over the `NativeActivity`'s content (ADR-0247). Every owner-to-view call is posted
+(`JavaView::post`, or `post_or` when a refusal must still discharge an obligation, as a drag the
+view could not start must still end); every native method only queues a `ViewEvent` and wakes the
+owner, which delivers them in order each loop turn, and contains a panic before it reaches the
+JVM. The view holds a `Box<Weak<JavaView>>` as its handle; `detach` clears the view's copy and
+then frees it, both on the Java main thread, the only thread that calls the view's natives.
+
+The window's `TextStoreHost` is `text_input::AndroidTextInput`. The input method edits the
+view's mirror; `shared::android_ime::Mirror` turns each report into one edit against the
+snapshot the view holds, and the host replays it under an async lock, dropping one made on an
+older snapshot than it published last (`replay_current`). A key the native queue delivers while
+the view reports a composition is marked composing (`key_composition`): Android pre-dispatches
+every key to the input method, so such a key is one it passed on. `drag::AndroidTransfer` is the
+platform's one `DataTransferSource`: drags over the view mint offers from their
+`ClipDescription` (`shared::android_drag::offered`) and drops are answered from the cached
+feedback; `drag::AndroidDragSource` serves the whole clip at the start (`clip_parts`) and maps
+`ACTION_DRAG_ENDED` to `OsDragEnd` (`source_end`). Without the view, or below API 24, the
+window reports no drag source and `outgoing_drag()` `Unavailable`.
+
+`android_ime_adapter` and `android_drag_mapping` (`tests/android_ime.rs`,
+`tests/android_drag.rs`) pin the pure halves in Linux CI, with the Android rows of
+`backend_conformance` and `input_capabilities_contracts`. `cargo xtask device android-input`
+runs the JNI half on a device: a drag the probe starts drops on its own window, and the default
+keyboard composes, commits, passes Escape on while composing and sends its action key.
 
 ### The platform names the data roots; the Web keeps values in IndexedDB
 

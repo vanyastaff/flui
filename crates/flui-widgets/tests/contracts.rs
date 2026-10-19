@@ -4,6 +4,28 @@
 
 use crate::common::cases::run_cases;
 
+/// Input regions: what a window hands the OS for `SystemGestureExclusion`, mapped from
+/// layout through transforms and clips, and re-sent only when its projection changed.
+#[test]
+fn input_regions() {
+    run_cases(
+        "input_regions",
+        &[
+            ("system_gesture_exclusion::input_regions_reach_the_os_only_when_changed", crate::system_gesture_exclusion::input_regions_reach_the_os_only_when_changed as fn()),
+            ("system_gesture_exclusion::a_transformed_region_reports_its_bounding_box", crate::system_gesture_exclusion::a_transformed_region_reports_its_bounding_box),
+            ("system_gesture_exclusion::a_clipped_region_reports_the_intersection", crate::system_gesture_exclusion::a_clipped_region_reports_the_intersection),
+            ("system_gesture_exclusion::a_region_beyond_the_window_is_clamped_to_it", crate::system_gesture_exclusion::a_region_beyond_the_window_is_clamped_to_it),
+            ("system_gesture_exclusion::a_region_in_a_scrolled_list_item_reports_the_scrolled_rect", crate::system_gesture_exclusion::a_region_in_a_scrolled_list_item_reports_the_scrolled_rect),
+            ("system_gesture_exclusion::a_scale_change_resends_unchanged_logical_regions", crate::system_gesture_exclusion::a_scale_change_resends_unchanged_logical_regions),
+            ("system_gesture_exclusion::a_display_change_at_equal_scale_resends_regions", crate::system_gesture_exclusion::a_display_change_at_equal_scale_resends_regions),
+            ("system_gesture_exclusion::a_display_appearing_or_vanishing_resends_regions", crate::system_gesture_exclusion::a_display_appearing_or_vanishing_resends_regions),
+            ("system_gesture_exclusion::fractional_region_edges_round_outward", crate::system_gesture_exclusion::fractional_region_edges_round_outward),
+            ("system_gesture_exclusion::a_degenerate_transform_drops_the_region_with_a_diagnostic", crate::system_gesture_exclusion::a_degenerate_transform_drops_the_region_with_a_diagnostic),
+            ("system_gesture_exclusion::a_region_crossing_the_perspective_horizon_is_dropped", crate::system_gesture_exclusion::a_region_crossing_the_perspective_horizon_is_dropped),
+        ],
+    );
+}
+
 /// Navigator failure paths: panicking hooks and factories, mismatched result types,
 /// undeliverable results, and every re-entrant push or observer callback that must not
 /// deadlock the history lock.
@@ -41,10 +63,9 @@ fn callback_failure_containment() {
         &[
             ("editable_text::event_cx::a_refused_write_in_on_changed_is_reported_not_panicked", crate::editable_text::event_cx::a_refused_write_in_on_changed_is_reported_not_panicked as fn()),
             ("focus::event_cx::a_refused_write_in_a_focus_edge_is_reported_not_panicked", crate::focus::event_cx::a_refused_write_in_a_focus_edge_is_reported_not_panicked),
-            ("gesture_detector::event_cx::a_panicking_assistive_action_does_not_discard_the_fifo_tail", crate::gesture_detector::event_cx::a_panicking_assistive_action_does_not_discard_the_fifo_tail),
+            ("gesture_detector::event_cx::a_panicking_assistive_action_leaves_the_next_one_deliverable", crate::gesture_detector::event_cx::a_panicking_assistive_action_leaves_the_next_one_deliverable),
             ("listener::event_cx::a_refused_write_in_a_pointer_callback_is_reported_not_panicked", crate::listener::event_cx::a_refused_write_in_a_pointer_callback_is_reported_not_panicked),
             ("raw_button::a_refused_write_in_a_press_is_reported_not_panicked", crate::raw_button::a_refused_write_in_a_press_is_reported_not_panicked),
-            ("draggable_events::a_refused_write_in_a_target_callback_is_reported_not_panicked", crate::draggable_events::a_refused_write_in_a_target_callback_is_reported_not_panicked),
             ("semantics::a_refused_write_in_an_action_handler_is_reported_not_panicked", crate::semantics::a_refused_write_in_an_action_handler_is_reported_not_panicked),
             ("semantics::an_action_invoked_outside_its_ui_runtime_is_dropped_with_a_warning", crate::semantics::an_action_invoked_outside_its_ui_runtime_is_dropped_with_a_warning),
             ("text_field_widget::raw_text_field_callbacks_write_through_the_forwarded_cx", crate::text_field_widget::raw_text_field_callbacks_write_through_the_forwarded_cx),
@@ -71,10 +92,8 @@ fn reactivity_and_dependencies() {
             ("signals_legal_shapes::the_accepted_shapes_compile_and_run", crate::signals_legal_shapes::the_accepted_shapes_compile_and_run),
             ("editable_text::event_cx::typing_writes_through_on_changed_and_rebuilds_its_reader", crate::editable_text::event_cx::typing_writes_through_on_changed_and_rebuilds_its_reader),
             ("gesture_detector::event_cx::a_tap_writes_a_signal_and_rebuilds_its_reader", crate::gesture_detector::event_cx::a_tap_writes_a_signal_and_rebuilds_its_reader),
-            ("gesture_detector::event_cx::repeated_assistive_taps_are_delivered_once_each_and_keep_making_progress", crate::gesture_detector::event_cx::repeated_assistive_taps_are_delivered_once_each_and_keep_making_progress),
-            ("gesture_detector::event_cx::repeated_assistive_long_presses_are_delivered_once_each_and_keep_making_progress", crate::gesture_detector::event_cx::repeated_assistive_long_presses_are_delivered_once_each_and_keep_making_progress),
-            ("draggable_events::a_drop_writes_through_the_targets_on_accept_before_the_draggable_completes", crate::draggable_events::a_drop_writes_through_the_targets_on_accept_before_the_draggable_completes),
-            ("draggable_events::a_drag_leaving_a_target_writes_through_on_leave_and_on_move", crate::draggable_events::a_drag_leaving_a_target_writes_through_on_leave_and_on_move),
+            ("gesture_detector::event_cx::repeated_assistive_taps_run_once_each_in_their_dispatch", crate::gesture_detector::event_cx::repeated_assistive_taps_run_once_each_in_their_dispatch),
+            ("gesture_detector::event_cx::repeated_assistive_long_presses_run_once_each_in_their_dispatch", crate::gesture_detector::event_cx::repeated_assistive_long_presses_run_once_each_in_their_dispatch),
             ("semantics::an_action_handler_writes_a_signal_and_rebuilds_its_reader", crate::semantics::an_action_handler_writes_a_signal_and_rebuilds_its_reader),
             ("media_query_fields::a_size_only_change_rebuilds_size_and_whole_readers_only", crate::media_query_fields::a_size_only_change_rebuilds_size_and_whole_readers_only),
             ("media_query_fields::a_text_scale_change_relayouts_a_preserved_text_subtree", crate::media_query_fields::a_text_scale_change_relayouts_a_preserved_text_subtree),
@@ -82,6 +101,34 @@ fn reactivity_and_dependencies() {
             ("localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl", crate::localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl),
             ("hot_reload_state::perform_reassemble_rebuilds_in_place_and_preserves_state", crate::hot_reload_state::perform_reassemble_rebuilds_in_place_and_preserves_state),
             ("layout_builder::layout_builder_constraint_change_rebuilds_in_the_same_frame", crate::layout_builder::layout_builder_constraint_change_rebuilds_in_the_same_frame),
+        ],
+    );
+}
+
+/// Drag and drop on the sessions (ADR-0211): `Draggable` and `DropTarget` within the
+/// window and out of it, their keyboard and assistive paths, and what a drag survives.
+#[test]
+fn drag_and_drop() {
+    run_cases(
+        "drag_and_drop",
+        &[
+            ("drag_and_drop::a_drag_drops_on_the_target_that_accepted_its_last_move", crate::drag_and_drop::a_drag_drops_on_the_target_that_accepted_its_last_move as fn()),
+            ("drag_and_drop::a_drag_leaving_the_window_escalates_to_the_os_when_it_may_reach_it", crate::drag_and_drop::a_drag_leaving_the_window_escalates_to_the_os_when_it_may_reach_it),
+            ("drag_and_drop::escape_cancels_a_drag_in_its_window", crate::drag_and_drop::escape_cancels_a_drag_in_its_window),
+            ("drag_and_drop::cut_and_paste_by_keyboard_drop_like_a_drag", crate::drag_and_drop::cut_and_paste_by_keyboard_drop_like_a_drag),
+            ("drag_and_drop::a_target_removed_mid_drag_takes_no_drop", crate::drag_and_drop::a_target_removed_mid_drag_takes_no_drop),
+            ("drag_and_drop::unmounting_the_source_mid_drag_cancels_it", crate::drag_and_drop::unmounting_the_source_mid_drag_cancels_it),
+            ("drag_and_drop::a_panicking_drop_callback_ends_the_drag_cancelled_and_the_next_drops", crate::drag_and_drop::a_panicking_drop_callback_ends_the_drag_cancelled_and_the_next_drops),
+            ("drag_and_drop::a_paste_drops_at_the_targets_reading_start_corner", crate::drag_and_drop::a_paste_drops_at_the_targets_reading_start_corner),
+            ("drag_and_drop::the_cursor_shows_what_a_drop_would_do", crate::drag_and_drop::the_cursor_shows_what_a_drop_would_do),
+            ("drag_and_drop::spring_loading_fires_once_per_hover", crate::drag_and_drop::spring_loading_fires_once_per_hover),
+            ("drag_and_drop::a_long_press_trigger_lifts_after_the_hold", crate::drag_and_drop::a_long_press_trigger_lifts_after_the_hold),
+            ("drag_and_drop::a_drag_reports_to_the_callbacks_it_started_with", crate::drag_and_drop::a_drag_reports_to_the_callbacks_it_started_with),
+            ("drag_and_drop::autoscroll_finds_the_target_scrolled_under_a_resting_pointer", crate::drag_and_drop::autoscroll_finds_the_target_scrolled_under_a_resting_pointer),
+            ("drag_and_drop::unmounting_a_target_releases_its_receiver", crate::drag_and_drop::unmounting_a_target_releases_its_receiver),
+            ("drag_and_drop::a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag", crate::drag_and_drop::a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag),
+            ("drag_and_drop::the_alternatives_perform_the_transfer_the_drag_would", crate::drag_and_drop::the_alternatives_perform_the_transfer_the_drag_would),
+            ("drag_and_drop::draggable_reads_admission_profiles_and_retires_authored_owners", crate::drag_and_drop::draggable_reads_admission_profiles_and_retires_authored_owners),
         ],
     );
 }
@@ -141,6 +188,7 @@ fn text_editing() {
             ("editable_text_clipboard::select_all_without_a_focused_text_field_leaves_the_key_unconsumed", crate::editable_text_clipboard::select_all_without_a_focused_text_field_leaves_the_key_unconsumed),
             ("editable_text_clipboard::select_all_defers_to_an_active_composition_and_recovers_after_commit", crate::editable_text_clipboard::select_all_defers_to_an_active_composition_and_recovers_after_commit),
             ("text_field::focused_character_key_inserts_into_controller", crate::text_field::focused_character_key_inserts_into_controller),
+            ("text_field_widget::a_press_on_a_field_takes_no_focus_back_once_focus_moves_on", crate::text_field_widget::a_press_on_a_field_takes_no_focus_back_once_focus_moves_on),
             ("text_field::unfocused_field_does_not_receive_key_events", crate::text_field::unfocused_field_does_not_receive_key_events),
             ("text::an_enclosing_default_text_style_styles_a_bare_run", crate::text::an_enclosing_default_text_style_styles_a_bare_run),
             ("text::media_text_scaling_changes_the_laid_out_text", crate::text::media_text_scaling_changes_the_laid_out_text),
@@ -185,16 +233,19 @@ fn pointer_and_gesture_recognition() {
             ("pointer_vocabulary::viewer_focal_fling_advances_then_stops_on_new_input", crate::pointer_vocabulary::viewer_focal_fling_advances_then_stops_on_new_input),
             ("pointer_vocabulary::viewer_reports_scale_velocity_separately_from_focal_velocity", crate::pointer_vocabulary::viewer_reports_scale_velocity_separately_from_focal_velocity),
             ("listener::presentation_resampling_uses_the_owner_frame_clock", crate::listener::presentation_resampling_uses_the_owner_frame_clock as fn()),
-            ("gesture_detector::exclusive_drag_callbacks_have_one_arena_winner", crate::gesture_detector::exclusive_drag_callbacks_have_one_arena_winner),
+            ("gesture_detector::pan_claim_region_keeps_the_pan_from_an_enclosing_drag", crate::gesture_detector::pan_claim_region_keeps_the_pan_from_an_enclosing_drag),
+            ("gesture_detector::recognizers_follow_a_changed_arena_scope", crate::gesture_detector::recognizers_follow_a_changed_arena_scope),
+            ("gesture_detector::drag_and_transform_slots_carry_their_locks", crate::gesture_detector::drag_and_transform_slots_carry_their_locks),
+            ("gesture_detector::a_composition_past_the_delay_ceiling_is_reported", crate::gesture_detector::a_composition_past_the_delay_ceiling_is_reported),
+            ("gesture_detector::drag_and_transform_slots_split_one_contact_from_two", crate::gesture_detector::drag_and_transform_slots_split_one_contact_from_two),
             ("gesture_detector::binding_admits_distinct_drag_sequences_when_pointer_ids_are_reused", crate::gesture_detector::binding_admits_distinct_drag_sequences_when_pointer_ids_are_reused),
             ("gesture_detector::drag_motion_retains_root_units_under_scale_and_rotation", crate::gesture_detector::drag_motion_retains_root_units_under_scale_and_rotation),
             ("gesture_detector::a_detector_in_a_composed_scope_preserves_double_tap_timing", crate::gesture_detector::a_detector_in_a_composed_scope_preserves_double_tap_timing),
             ("pointer_vocabulary::viewer_native_pan_moves_the_scene_under_the_focal_point", crate::pointer_vocabulary::viewer_native_pan_moves_the_scene_under_the_focal_point as fn()),
+            ("pointer_vocabulary::viewer_keeps_a_pinch_whose_focal_point_leaves_it", crate::pointer_vocabulary::viewer_keeps_a_pinch_whose_focal_point_leaves_it as fn()),
             ("pointer_vocabulary::viewer_native_session_reports_one_start_and_one_terminal", crate::pointer_vocabulary::viewer_native_session_reports_one_start_and_one_terminal),
             ("pointer_vocabulary::viewer_pan_transitions_to_pinch_without_contact_count_jumps", crate::pointer_vocabulary::viewer_pan_transitions_to_pinch_without_contact_count_jumps),
             ("pointer_vocabulary::scroll_claim_preserves_owned_source_units_and_phase", crate::pointer_vocabulary::scroll_claim_preserves_owned_source_units_and_phase as fn()),
-            ("pointer_vocabulary::scroll_sequence_completion_follows_binding_phases_and_clock", crate::pointer_vocabulary::scroll_sequence_completion_follows_binding_phases_and_clock),
-            ("pointer_vocabulary::native_pan_zoom_identity_survives_packets_and_refuses_pointer_reuse", crate::pointer_vocabulary::native_pan_zoom_identity_survives_packets_and_refuses_pointer_reuse),
             ("pointer_vocabulary::pointer_delivery_preserves_source_and_sample_families", crate::pointer_vocabulary::pointer_delivery_preserves_source_and_sample_families),
             ("pointer_vocabulary::page_scroll_resolves_against_the_actual_viewport", crate::pointer_vocabulary::page_scroll_resolves_against_the_actual_viewport),
             ("pointer_vocabulary::viewer_raw_detents_zoom_without_stealing_plain_scrolls", crate::pointer_vocabulary::viewer_raw_detents_zoom_without_stealing_plain_scrolls),
@@ -203,6 +254,14 @@ fn pointer_and_gesture_recognition() {
             ("pointer_vocabulary::viewer_unstarted_pinch_updates_remain_independent_steps", crate::pointer_vocabulary::viewer_unstarted_pinch_updates_remain_independent_steps),
             ("pointer_vocabulary::viewer_extreme_zoom_reports_the_finite_applied_change", crate::pointer_vocabulary::viewer_extreme_zoom_reports_the_finite_applied_change),
             ("pointer_vocabulary::viewer_page_overflow_and_empty_viewport_recover", crate::pointer_vocabulary::viewer_page_overflow_and_empty_viewport_recover),
+            ("interactive_viewer::viewer_keys_pan_and_zoom_from_the_focused_row", crate::interactive_viewer::viewer_keys_pan_and_zoom_from_the_focused_row),
+            ("interactive_viewer::viewer_assistive_actions_zoom_and_pan", crate::interactive_viewer::viewer_assistive_actions_zoom_and_pan),
+            ("interactive_viewer::viewer_double_tap_zooms_about_the_tap_and_back_out_at_the_maximum", crate::interactive_viewer::viewer_double_tap_zooms_about_the_tap_and_back_out_at_the_maximum),
+            ("interactive_viewer::viewer_degenerate_geometry_and_bounds_publish_finite_transforms", crate::interactive_viewer::viewer_degenerate_geometry_and_bounds_publish_finite_transforms),
+            ("interactive_viewer::viewer_rebuild_from_its_update_callback_keeps_the_gesture", crate::interactive_viewer::viewer_rebuild_from_its_update_callback_keeps_the_gesture),
+            ("interactive_viewer::viewer_pinch_past_the_scale_bounds_stretches_and_snaps_back", crate::interactive_viewer::viewer_pinch_past_the_scale_bounds_stretches_and_snaps_back),
+            ("interactive_viewer::viewer_contact_gives_it_the_keys", crate::interactive_viewer::viewer_contact_gives_it_the_keys),
+            ("interactive_viewer::viewer_key_sequence_ends_when_focus_moves_before_the_release", crate::interactive_viewer::viewer_key_sequence_ends_when_focus_moves_before_the_release),
             ("gesture_detector::clearing_pan_callbacks_mid_drag_still_finishes_the_drag", crate::gesture_detector::clearing_pan_callbacks_mid_drag_still_finishes_the_drag as fn()),
             ("gesture_detector::mounted_drag_policy_replaces_targets_before_cancellation_and_recovers", crate::gesture_detector::mounted_drag_policy_replaces_targets_before_cancellation_and_recovers),
             ("gesture_detector::authored_settings_replace_active_owners_and_preserve_equal_profiles", crate::gesture_detector::authored_settings_replace_active_owners_and_preserve_equal_profiles),
@@ -218,19 +277,72 @@ fn pointer_and_gesture_recognition() {
             ("gesture_detector::viewer_reports_cancelled_then_completed_interactions", crate::gesture_detector::viewer_reports_cancelled_then_completed_interactions as fn()),
             ("gesture_detector::gesture_detector_fires_on_tap_for_a_down_up_on_the_child", crate::gesture_detector::gesture_detector_fires_on_tap_for_a_down_up_on_the_child as fn()),
             ("gesture_detector::gesture_detector_recognizes_a_pan_and_suppresses_the_tap", crate::gesture_detector::gesture_detector_recognizes_a_pan_and_suppresses_the_tap),
+            ("gesture_detector::a_vertical_drag_slot_claims_only_vertical_motion", crate::gesture_detector::a_vertical_drag_slot_claims_only_vertical_motion),
+            ("gesture_detector::two_contacts_released_together_fire_on_multi_tap", crate::gesture_detector::two_contacts_released_together_fire_on_multi_tap),
+            ("gesture_detector::a_pressure_contact_starts_peaks_and_ends_a_force_press", crate::gesture_detector::a_pressure_contact_starts_peaks_and_ends_a_force_press),
+            ("gesture_detector::scoped_position_smoothing_reaches_drag_slot_updates", crate::gesture_detector::scoped_position_smoothing_reaches_drag_slot_updates),
             ("gesture_detector_advanced::double_tap_combined_with_tap_fires_double_tap_once_and_tap_never", crate::gesture_detector_advanced::double_tap_combined_with_tap_fires_double_tap_once_and_tap_never),
             ("gesture_detector_advanced::long_press_fires_when_held_past_the_deadline", crate::gesture_detector_advanced::long_press_fires_when_held_past_the_deadline),
             ("absorb_pointer::absorbing_true_blocks_the_tap_from_reaching_a_child_gesture_detector", crate::absorb_pointer::absorbing_true_blocks_the_tap_from_reaching_a_child_gesture_detector),
+            ("hit_slop::overlapping_slops_go_to_the_nearest_edge_then_the_topmost", crate::hit_slop::overlapping_slops_go_to_the_nearest_edge_then_the_topmost),
+            ("hit_slop::a_visual_hit_beats_a_neighbours_slop", crate::hit_slop::a_visual_hit_beats_a_neighbours_slop),
+            ("hit_slop::slop_does_not_leave_its_composited_layer", crate::hit_slop::slop_does_not_leave_its_composited_layer),
+            ("hit_slop::slop_does_not_cross_an_overlay_entry", crate::hit_slop::slop_does_not_cross_an_overlay_entry),
+            ("hit_slop::content_shape_rejects_the_corners_of_a_circle", crate::hit_slop::content_shape_rejects_the_corners_of_a_circle),
+            ("hit_slop::min_target_defaults_to_the_settings_preset", crate::hit_slop::min_target_defaults_to_the_settings_preset),
+            ("hit_slop::min_target_follows_a_live_settings_update", crate::hit_slop::min_target_follows_a_live_settings_update),
+            ("hit_slop::slop_takes_the_gap_between_items_in_their_own_layers", crate::hit_slop::slop_takes_the_gap_between_items_in_their_own_layers),
+            ("hit_slop::a_modal_barrier_blocks_slop_on_both_sides", crate::hit_slop::a_modal_barrier_blocks_slop_on_both_sides),
             ("listener::listener_routes_down_and_up_to_their_own_callbacks", crate::listener::listener_routes_down_and_up_to_their_own_callbacks),
+            ("listener::a_press_on_a_list_row_reaches_the_listeners_above_the_list", crate::listener::a_press_on_a_list_row_reaches_the_listeners_above_the_list),
             ("listener::listener_capture_retains_one_target_and_drop_delivers_loss", crate::listener::listener_capture_retains_one_target_and_drop_delivers_loss),
             ("listener::listener_unmount_preserves_one_captured_contact_terminal", crate::listener::listener_unmount_preserves_one_captured_contact_terminal),
             ("listener::listener_admission_keeps_terminal_delivery_and_weak_ownership", crate::listener::listener_admission_keeps_terminal_delivery_and_weak_ownership),
             ("listener::listener_raw_observer_panic_still_delivers_the_recognizer_event", crate::listener::listener_raw_observer_panic_still_delivers_the_recognizer_event),
+            ("listener::a_revision_reaches_listeners_and_never_recognizers", crate::listener::a_revision_reaches_listeners_and_never_recognizers),
             ("listener::custom_recognizer_competes_through_a_listener", crate::listener::custom_recognizer_competes_through_a_listener),
-            ("draggable_events::unmounting_a_target_releases_its_slot", crate::draggable_events::unmounting_a_target_releases_its_slot),
-            ("draggable_events::draggable_reads_admission_profiles_and_retires_authored_owners", crate::draggable_events::draggable_reads_admission_profiles_and_retires_authored_owners),
             ("back_gesture::release_matrix_fling_and_slow_release", crate::back_gesture::release_matrix_fling_and_slow_release),
             ("page_route::back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_strip", crate::page_route::back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_strip),
+        ],
+    );
+}
+
+/// A focused field rebuilt under its key keeps the focus; one that is really
+/// removed hands it, in the frame that removed it and without any input, to
+/// the next field in order (else the first) in one edge that never passes
+/// through `None` while a field remains.
+///
+/// Red-check: drop the settling step from the runtime's frame — the removed
+/// field stays primary until the next input, and the removal rows fail.
+#[test]
+fn focus_survives_rebuild_and_moves_on_removal() {
+    run_cases(
+        "focus_survives_rebuild_and_moves_on_removal",
+        &[
+            (
+                "focus::rebuild_with_the_same_keys_keeps_focus",
+                crate::focus::rebuild_with_the_same_keys_keeps_focus as fn(),
+            ),
+            (
+                "focus::removal_moves_focus_to_the_next_field",
+                crate::focus::removal_moves_focus_to_the_next_field,
+            ),
+            (
+                "focus::removing_the_last_field_moves_focus_to_the_first",
+                crate::focus::removing_the_last_field_moves_focus_to_the_first,
+            ),
+            (
+                "focus::reload_of_every_key_publishes_one_edge",
+                crate::focus::reload_of_every_key_publishes_one_edge,
+            ),
+            (
+                "focus::removing_every_field_releases_focus",
+                crate::focus::removing_every_field_releases_focus,
+            ),
+            (
+                "focus::the_successor_rebuilds_in_the_frame_that_moved_focus",
+                crate::focus::the_successor_rebuilds_in_the_frame_that_moved_focus,
+            ),
         ],
     );
 }
@@ -258,6 +370,8 @@ fn focus_actions_and_shortcuts() {
             ("focus::spatial_tab_preserves_geometric_ties_and_row_boundaries", crate::focus::spatial_tab_preserves_geometric_ties_and_row_boundaries as fn()),
             ("focus::platform_focus_requests_the_mounted_node_and_rejects_disabled_focus", crate::focus::platform_focus_requests_the_mounted_node_and_rejects_disabled_focus as fn()),
             ("focus::an_adopted_external_node_ignores_the_old_elements_focus_action", crate::focus::an_adopted_external_node_ignores_the_old_elements_focus_action as fn()),
+            ("focus::a_focus_keeps_its_subtree_when_it_stops_being_focusable", crate::focus::a_focus_keeps_its_subtree_when_it_stops_being_focusable as fn()),
+            ("focus::the_first_focus_gain_does_not_rebuild_the_app_under_a_drag", crate::focus::the_first_focus_gain_does_not_rebuild_the_app_under_a_drag as fn()),
             ("actions::the_nearest_enabled_action_wins_and_receives_the_payload", crate::actions::the_nearest_enabled_action_wins_and_receives_the_payload as fn()),
             ("actions::callback_action_writes_through_the_key_events_cx", crate::actions::callback_action_writes_through_the_key_events_cx),
             ("actions::a_refused_write_in_a_callback_action_is_reported_not_panicked", crate::actions::a_refused_write_in_a_callback_action_is_reported_not_panicked),
@@ -275,6 +389,79 @@ fn focus_actions_and_shortcuts() {
             ("focus::a_focus_widget_attaches_under_the_nearest_scope_and_unmount_releases", crate::focus::a_focus_widget_attaches_under_the_nearest_scope_and_unmount_releases),
             ("focus::tab_traversal_follows_geometry_not_attach_order", crate::focus::tab_traversal_follows_geometry_not_attach_order),
             ("focus::event_cx::replacing_a_focused_node_delivers_a_writable_loss_and_new_gain", crate::focus::event_cx::replacing_a_focused_node_delivers_a_writable_loss_and_new_gain),
+        ],
+    );
+}
+
+/// Keyboard focus through the default bindings: activation matches a click once per
+/// press, the navigation keys reach their intents, the focus ring follows the input
+/// modality, a retired node's request is inert, and a failing callback leaves the
+/// keyboard working.
+#[test]
+fn keyboard_focus_contracts() {
+    run_cases(
+        "keyboard_focus_contracts",
+        &[
+            (
+                "keyboard_focus::activation::keyboard_activation_matches_click",
+                crate::keyboard_focus::activation::keyboard_activation_matches_click as fn(),
+            ),
+            (
+                "keyboard_focus::activation::navigation_keys_reach_back_and_dismiss_once",
+                crate::keyboard_focus::activation::navigation_keys_reach_back_and_dismiss_once,
+            ),
+            (
+                "keyboard_focus::activation::keys_typed_in_a_field_stay_in_the_field",
+                crate::keyboard_focus::activation::keys_typed_in_a_field_stay_in_the_field,
+            ),
+            (
+                "keyboard_focus::activation::a_space_released_after_tab_activates_nothing",
+                crate::keyboard_focus::activation::a_space_released_after_tab_activates_nothing,
+            ),
+            (
+                "keyboard_focus::activation::keyboard_continues_after_callback_panic",
+                crate::keyboard_focus::activation::keyboard_continues_after_callback_panic,
+            ),
+            (
+                "keyboard_focus::modality::focus_indicator_follows_input_modality",
+                crate::keyboard_focus::modality::focus_indicator_follows_input_modality,
+            ),
+            (
+                "keyboard_focus::requests::stale_focus_request_is_inert",
+                crate::keyboard_focus::requests::stale_focus_request_is_inert,
+            ),
+            (
+                "keyboard_focus::routes::first_tab_enters_the_current_route",
+                crate::keyboard_focus::routes::first_tab_enters_the_current_route,
+            ),
+            (
+                "keyboard_focus::routes::push_moves_focus_into_the_new_route",
+                crate::keyboard_focus::routes::push_moves_focus_into_the_new_route,
+            ),
+            (
+                "keyboard_focus::routes::late_autofocus_does_not_override_the_restored_focus",
+                crate::keyboard_focus::routes::late_autofocus_does_not_override_the_restored_focus,
+            ),
+            (
+                "keyboard_focus::routes::pop_restores_the_opening_element",
+                crate::keyboard_focus::routes::pop_restores_the_opening_element,
+            ),
+            (
+                "keyboard_focus::routes::keys_during_transition_reach_only_the_top_route",
+                crate::keyboard_focus::routes::keys_during_transition_reach_only_the_top_route,
+            ),
+            (
+                "keyboard_focus::routes::back_keys_pop_only_the_current_page",
+                crate::keyboard_focus::routes::back_keys_pop_only_the_current_page,
+            ),
+            (
+                "keyboard_focus::routes::back_keys_pop_the_enclosing_navigator_at_a_nested_root",
+                crate::keyboard_focus::routes::back_keys_pop_the_enclosing_navigator_at_a_nested_root,
+            ),
+            (
+                "raw_button::raw_button_activates_from_the_keyboard",
+                crate::raw_button::raw_button_activates_from_the_keyboard,
+            ),
         ],
     );
 }
@@ -331,25 +518,10 @@ fn scroll_physics_and_activity() {
             ("scroll::retiring_scroll_curves_preserves_newer_reentrant_commands", crate::scroll::retiring_scroll_curves_preserves_newer_reentrant_commands),
             ("scroll::stopping_scroll_motion_preserves_commands_admitted_by_activity_observers", crate::scroll::stopping_scroll_motion_preserves_commands_admitted_by_activity_observers),
             ("scroll::scrollable_accessibility_ranges_follow_the_actual_axis", crate::scroll::scrollable_accessibility_ranges_follow_the_actual_axis),
+            ("scroll::hover_holds_while_a_touch_scroll_is_latched", crate::scroll::hover_holds_while_a_touch_scroll_is_latched),
             ("scroll::constrained_sliver_updates_layout_without_replacing_the_child", crate::scroll::constrained_sliver_updates_layout_without_replacing_the_child),
             ("scroll::cross_axis_sliver_tracks_reconcile_weights_and_publish_child_semantics", crate::scroll::cross_axis_sliver_tracks_reconcile_weights_and_publish_child_semantics),
             ("scroll::terminal_scroll_motion_uses_the_admitted_fling_profile", crate::scroll::terminal_scroll_motion_uses_the_admitted_fling_profile as fn()),
-            ("scroll::terminal_refresh_motion_uses_the_admitted_fling_profile", crate::scroll::terminal_refresh_motion_uses_the_admitted_fling_profile),
-            ("scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes", crate::scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes as fn()),
-            ("scroll::nested_fling_same_controller_rebuild_preserves_accepted_handoff", crate::scroll::nested_fling_same_controller_rebuild_preserves_accepted_handoff),
-            ("scroll::nested_fling_parent_boundary_policy_receives_presentation_pixel_ratio", crate::scroll::nested_fling_parent_boundary_policy_receives_presentation_pixel_ratio),
-            ("scroll::nested_fling_projects_reversed_child_and_preserves_orthogonal_and_bounce_policy", crate::scroll::nested_fling_projects_reversed_child_and_preserves_orthogonal_and_bounce_policy),
-            ("scroll::replacing_parent_invalidates_old_fling_handoff_and_next_gesture_recovers", crate::scroll::replacing_parent_invalidates_old_fling_handoff_and_next_gesture_recovers),
-            ("scroll::nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_progress", crate::scroll::nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_progress),
-            ("scroll::nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_recovers", crate::scroll::nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_recovers),
-            ("scroll::nested_fling_custom_physics_failure_and_retirement_preserve_first_and_recover", crate::scroll::nested_fling_custom_physics_failure_and_retirement_preserve_first_and_recover),
-            ("scroll::nested_fling_skips_saturated_parent_and_reentrant_jump_retires_transfer", crate::scroll::nested_fling_skips_saturated_parent_and_reentrant_jump_retires_transfer),
-            ("scroll::nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent", crate::scroll::nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent),
-            ("scroll::show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse", crate::scroll::show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse),
-            ("scroll::show_on_screen_walks_nested_axes_and_replacement_uses_current_geometry", crate::scroll::show_on_screen_walks_nested_axes_and_replacement_uses_current_geometry),
-            ("scroll::show_on_screen_failure_continues_live_ancestors_and_fresh_requests_recover", crate::scroll::show_on_screen_failure_continues_live_ancestors_and_fresh_requests_recover),
-            ("scroll::show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers", crate::scroll::show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers),
-            ("scroll::show_on_screen_sibling_reentry_delivers_last_target_without_stale_motion", crate::scroll::show_on_screen_sibling_reentry_delivers_last_target_without_stale_motion),
             ("scroll::nested_scroll_sequence_keeps_its_first_consumptive_target", crate::scroll::nested_scroll_sequence_keeps_its_first_consumptive_target as fn()),
             ("scroll::scroll_latch_survives_focal_motion_and_releases_on_cancel", crate::scroll::scroll_latch_survives_focal_motion_and_releases_on_cancel),
             ("scroll::phase_less_scroll_latch_expires_on_owner_clock_inactivity", crate::scroll::phase_less_scroll_latch_expires_on_owner_clock_inactivity),
@@ -362,19 +534,10 @@ fn scroll_physics_and_activity() {
             ("scroll::scrollbar_thumb_stays_inside_short_tracks_and_drag_remains_bounded", crate::scroll::scrollbar_thumb_stays_inside_short_tracks_and_drag_remains_bounded as fn()),
             ("scroll::dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_tick", crate::scroll::dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_tick),
             ("scroll::cancelling_an_in_range_scroll_ends_activity_without_coasting", crate::scroll::cancelling_an_in_range_scroll_ends_activity_without_coasting as fn()),
-            ("scroll::refresh_indicator_drag_scrolls_without_rebuilding", crate::scroll::refresh_indicator_drag_scrolls_without_rebuilding),
-            ("scroll::refresh_motion_notifies_activity_through_release_and_recovery", crate::scroll::refresh_motion_notifies_activity_through_release_and_recovery),
-            ("scroll::refresh_without_vsync_ends_activity_after_release_and_cancel", crate::scroll::refresh_without_vsync_ends_activity_after_release_and_cancel),
             ("scroll::replacing_vsync_releases_old_seats_and_drives_fresh_contacts", crate::scroll::replacing_vsync_releases_old_seats_and_drives_fresh_contacts),
             ("scroll::replacing_a_scroll_position_cancels_its_contact_and_recovers", crate::scroll::replacing_a_scroll_position_cancels_its_contact_and_recovers),
-            ("scroll::a_failed_refresh_notification_releases_activity_and_recovers", crate::scroll::a_failed_refresh_notification_releases_activity_and_recovers),
             ("scroll::a_repeated_frame_does_not_cancel_viewer_inertia", crate::scroll::a_repeated_frame_does_not_cancel_viewer_inertia),
-            ("scroll::refresh_indicator_rebuilds_only_on_a_phase_change", crate::scroll::refresh_indicator_rebuilds_only_on_a_phase_change),
-            ("scroll::a_refresh_style_rebuilds_its_indicator_as_the_pull_grows", crate::scroll::a_refresh_style_rebuilds_its_indicator_as_the_pull_grows),
-            ("scroll::a_refresh_completed_by_a_listener_allows_the_next_pull", crate::scroll::a_refresh_completed_by_a_listener_allows_the_next_pull),
-            ("scroll::refresh_controller_replacement_rebinds_the_retained_indicator", crate::scroll::refresh_controller_replacement_rebinds_the_retained_indicator),
             ("scroll::cancelling_bouncing_overscroll_settles_without_release_velocity", crate::scroll::cancelling_bouncing_overscroll_settles_without_release_velocity as fn()),
-            ("scroll::cancelling_a_threshold_refresh_pull_does_not_refresh", crate::scroll::cancelling_a_threshold_refresh_pull_does_not_refresh as fn()),
             ("scroll::bouncing_lower_edge_preserves_outward_direction", crate::scroll::bouncing_lower_edge_preserves_outward_direction as fn()),
             ("scroll::bouncing_upper_edge_preserves_outward_direction", crate::scroll::bouncing_upper_edge_preserves_outward_direction as fn()),
             ("scroll::bouncing_stationary_input_preserves_overscroll", crate::scroll::bouncing_stationary_input_preserves_overscroll as fn()),
@@ -382,11 +545,6 @@ fn scroll_physics_and_activity() {
             ("scroll::a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook", crate::scroll::a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook as fn()),
             ("scroll::a_same_position_scrollable_rebuild_preserves_motion", crate::scroll::a_same_position_scrollable_rebuild_preserves_motion as fn()),
             ("scroll::retiring_one_scrollable_preserves_a_later_owners_jump_hook", crate::scroll::retiring_one_scrollable_preserves_a_later_owners_jump_hook as fn()),
-            ("scroll::a_fast_gesture_while_refreshing_does_not_start_a_fling", crate::scroll::a_fast_gesture_while_refreshing_does_not_start_a_fling as fn()),
-            ("scroll::incremental_pulls_refresh_once_and_finish_allows_the_next_gesture", crate::scroll::incremental_pulls_refresh_once_and_finish_allows_the_next_gesture as fn()),
-            ("scroll::reversing_a_pull_consumes_it_before_scrolling_content", crate::scroll::reversing_a_pull_consumes_it_before_scrolling_content as fn()),
-            ("scroll::a_refresh_scroll_controller_swap_retires_the_old_fling_and_drives_the_new_position", crate::scroll::a_refresh_scroll_controller_swap_retires_the_old_fling_and_drives_the_new_position as fn()),
-            ("scroll::rebuilding_refresh_content_with_the_same_position_preserves_its_fling", crate::scroll::rebuilding_refresh_content_with_the_same_position_preserves_its_fling as fn()),
             (
                 "scroll::shift_wheel_scrolls_the_horizontal_axis",
                 crate::scroll::shift_wheel_scrolls_the_horizontal_axis as fn(),
@@ -439,6 +597,10 @@ fn scroll_physics_and_activity() {
             (
                 "scroll::bouncing_fling_into_the_edge_overscrolls_and_returns",
                 crate::scroll::bouncing_fling_into_the_edge_overscrolls_and_returns,
+            ),
+            (
+                "scroll::a_fresh_physics_each_build_keeps_the_fling_and_its_bounce",
+                crate::scroll::a_fresh_physics_each_build_keeps_the_fling_and_its_bounce,
             ),
             (
                 "scroll::clamping_fling_into_the_edge_rests_on_it",
@@ -622,11 +784,13 @@ fn animation_and_visibility() {
             ("dismissible::cancelling_a_fully_slid_card_restores_it_without_dismissal", crate::dismissible::cancelling_a_fully_slid_card_restores_it_without_dismissal as fn()),
             ("dismissible::a_cancelled_horizontal_dismiss_restores_the_card", crate::dismissible::a_cancelled_horizontal_dismiss_restores_the_card as fn()),
             ("dismissible::a_cancelled_vertical_dismiss_restores_the_card", crate::dismissible::a_cancelled_vertical_dismiss_restores_the_card as fn()),
+            ("dismissible::a_vertical_dismissible_leaves_a_horizontal_drag_to_its_ancestor", crate::dismissible::a_vertical_dismissible_leaves_a_horizontal_drag_to_its_ancestor),
             ("dismissible::a_dismissible_release_keeps_finger_speed_on_any_width", crate::dismissible::a_dismissible_release_keeps_finger_speed_on_any_width as fn()),
             ("dismissible::dismissible_slides_without_rebuilding_per_frame", crate::dismissible::dismissible_slides_without_rebuilding_per_frame as fn()),
             ("dismissible::dismissal_updates_follow_owner_lifetime", crate::dismissible::dismissal_updates_follow_owner_lifetime as fn()),
             ("dismissible::a_dismissible_collapses_its_laid_out_size", crate::dismissible::a_dismissible_collapses_its_laid_out_size as fn()),
             ("dismissible::resize_delivery_keeps_accepted_ticks_before_completion", crate::dismissible::resize_delivery_keeps_accepted_ticks_before_completion as fn()),
+            ("dismissible::a_dismissible_goes_out_only_where_its_direction_and_threshold_allow", crate::dismissible::a_dismissible_goes_out_only_where_its_direction_and_threshold_allow),
             ("animated_size::animated_size_interpolates_to_a_new_child_size_over_frames", crate::animated_size::animated_size_interpolates_to_a_new_child_size_over_frames as fn()),
             ("animated_size::an_active_size_run_migrates_between_registries", crate::animated_size::an_active_size_run_migrates_between_registries),
             ("animated_size::animated_size_defaults_to_a_critically_damped_spring", crate::animated_size::animated_size_defaults_to_a_critically_damped_spring),
@@ -837,6 +1001,7 @@ fn layout_and_render_object_wiring() {
             ("composition::nested_padding_accumulates_insets_through_levels", crate::composition::nested_padding_accumulates_insets_through_levels),
             ("custom_multi_child_layout::custom_multi_child_layout_mounts_render_object_and_positions_layout_id_children", crate::custom_multi_child_layout::custom_multi_child_layout_mounts_render_object_and_positions_layout_id_children),
             ("child_type_swap::a_replaced_root_render_object_is_laid_out_in_the_frame_it_is_mounted", crate::child_type_swap::a_replaced_root_render_object_is_laid_out_in_the_frame_it_is_mounted),
+            ("unchanged_child::a_child_handed_back_unchanged_is_built_only_when_something_it_reads_changes", crate::unchanged_child::a_child_handed_back_unchanged_is_built_only_when_something_it_reads_changes),
             ("component_child_ordering::component_child_keeps_slot_order_before_a_render_sibling", crate::component_child_ordering::component_child_keeps_slot_order_before_a_render_sibling),
             ("parent_data_ancestry::expanded_under_stack_panics_at_attach_with_ancestry_diagnostic", crate::parent_data_ancestry::expanded_under_stack_panics_at_attach_with_ancestry_diagnostic),
             ("layer_inspection::the_composited_tree_exposes_parent_child_shape_not_just_a_flat_list", crate::layer_inspection::the_composited_tree_exposes_parent_child_shape_not_just_a_flat_list),
@@ -912,12 +1077,280 @@ fn relay_failure_custody() {
                 crate::listenable_relays::transformation_controller_relays_keep_failure_custody,
             ),
             (
-                "listenable_relays::refresh_controller_relays_keep_failure_custody",
-                crate::listenable_relays::refresh_controller_relays_keep_failure_custody,
-            ),
-            (
                 "listenable_relays::scroll_position_relays_keep_failure_custody",
                 crate::listenable_relays::scroll_position_relays_keep_failure_custody,
+            ),
+        ],
+    );
+}
+
+/// The nested scroll channel (ADR-0209): one offset primitive shared along an owner-local
+/// chain — latch per axis, remainder rule, fling hand-off under the releasing sequence,
+/// preemption, the participant contract, snapping — each row scripted for touch and mouse;
+/// with the fling hand-off and reveal witnesses ADR-0169 left.
+#[test]
+fn nested_scroll_channel() {
+    run_cases(
+        "nested_scroll_channel",
+        &[
+            ("nested_scroll::list_in_pager_shares_deltas_by_axis", crate::nested_scroll::list_in_pager_shares_deltas_by_axis as fn()),
+            ("nested_scroll::steps_carry_the_focal_point_and_the_device_pixel_ratio", crate::nested_scroll::steps_carry_the_focal_point_and_the_device_pixel_ratio),
+            ("nested_scroll::each_participant_is_offered_the_step_in_its_own_plane", crate::nested_scroll::each_participant_is_offered_the_step_in_its_own_plane),
+            ("nested_scroll::edge_at_start_latches_ancestor_on_every_preset", crate::nested_scroll::edge_at_start_latches_ancestor_on_every_preset),
+            ("nested_scroll::mid_drag_transfer_relatches_only_at_edge_within_the_sequence", crate::nested_scroll::mid_drag_transfer_relatches_only_at_edge_within_the_sequence),
+            ("nested_scroll::channel_latch_ends_exactly_when_binding_mints_a_new_sequence", crate::nested_scroll::channel_latch_ends_exactly_when_binding_mints_a_new_sequence),
+            ("nested_scroll::an_idle_wheel_sequence_ends_at_its_latch_deadline", crate::nested_scroll::an_idle_wheel_sequence_ends_at_its_latch_deadline),
+            ("nested_scroll::fling_handoff_inherits_sequence_across_three_levels", crate::nested_scroll::fling_handoff_inherits_sequence_across_three_levels),
+            ("nested_scroll::momentum_never_offers_post_fling", crate::nested_scroll::momentum_never_offers_post_fling),
+            ("nested_scroll::new_touch_preempts_handed_off_fling", crate::nested_scroll::new_touch_preempts_handed_off_fling),
+            ("nested_scroll::new_wheel_or_assistive_scroll_preempts_handed_off_fling", crate::nested_scroll::new_wheel_or_assistive_scroll_preempts_handed_off_fling),
+            ("nested_scroll::user_input_preempts_programmatic_scroll", crate::nested_scroll::user_input_preempts_programmatic_scroll),
+            ("nested_scroll::a_participant_declining_programmatic_scrolls_hears_none_of_them", crate::nested_scroll::a_participant_declining_programmatic_scrolls_hears_none_of_them),
+            ("nested_scroll::anchor_correction_bypasses_the_channel", crate::nested_scroll::anchor_correction_bypasses_the_channel),
+            ("nested_scroll::participant_result_is_clamped", crate::nested_scroll::participant_result_is_clamped),
+            ("nested_scroll::a_step_that_is_not_finite_is_dropped_at_the_channel", crate::nested_scroll::a_step_that_is_not_finite_is_dropped_at_the_channel),
+            ("nested_scroll::a_participant_cannot_dispatch_input_into_its_own_chain", crate::nested_scroll::a_participant_cannot_dispatch_input_into_its_own_chain),
+            ("nested_scroll::requests::a_jump_from_a_participant_lands_when_the_pass_returns", crate::nested_scroll::requests::a_jump_from_a_participant_lands_when_the_pass_returns),
+            ("nested_scroll::requests::a_jump_from_a_position_listener_never_nests_inside_a_step", crate::nested_scroll::requests::a_jump_from_a_position_listener_never_nests_inside_a_step),
+            ("nested_scroll::requests::requests_made_in_one_pass_keep_the_latest", crate::nested_scroll::requests::requests_made_in_one_pass_keep_the_latest),
+            ("nested_scroll::requests::a_landing_jump_preempts_the_run_and_keeps_live_input", crate::nested_scroll::requests::a_landing_jump_preempts_the_run_and_keeps_live_input),
+            ("nested_scroll::requests::a_jump_asked_before_a_participant_panics_still_lands", crate::nested_scroll::requests::a_jump_asked_before_a_participant_panics_still_lands),
+            ("nested_scroll::requests::a_jump_feedback_loop_is_bounded_and_keeps_its_target", crate::nested_scroll::requests::a_jump_feedback_loop_is_bounded_and_keeps_its_target),
+            ("nested_scroll::requests::a_jump_pending_across_an_unmount_writes_the_position", crate::nested_scroll::requests::a_jump_pending_across_an_unmount_writes_the_position),
+            ("nested_scroll::caught::a_remainder_catches_a_springing_ancestor_and_moves_it_once", crate::nested_scroll::caught::a_remainder_catches_a_springing_ancestor_and_moves_it_once),
+            ("nested_scroll::caught::an_outward_remainder_leaves_the_spring_running", crate::nested_scroll::caught::an_outward_remainder_leaves_the_spring_running),
+            ("nested_scroll::caught::a_new_contact_holds_a_springing_ancestor_until_the_inner_drag_takes_it", crate::nested_scroll::caught::a_new_contact_holds_a_springing_ancestor_until_the_inner_drag_takes_it),
+            ("nested_scroll::caught::a_caught_ancestor_settles_at_release_with_the_latched_velocity", crate::nested_scroll::caught::a_caught_ancestor_settles_at_release_with_the_latched_velocity),
+            ("nested_scroll::caught::a_caught_ancestor_settles_when_the_sequence_ends_without_release", crate::nested_scroll::caught::a_caught_ancestor_settles_when_the_sequence_ends_without_release),
+            ("nested_scroll::caught::a_caught_ancestor_touched_directly_follows_its_own_contact", crate::nested_scroll::caught::a_caught_ancestor_touched_directly_follows_its_own_contact),
+            ("nested_scroll::caught::a_caught_ancestor_retired_mid_drag_is_settled_by_its_successor", crate::nested_scroll::caught::a_caught_ancestor_retired_mid_drag_is_settled_by_its_successor),
+            ("nested_scroll::a_fresh_ancestor_physics_mid_drag_keeps_taking_the_remainder", crate::nested_scroll::a_fresh_ancestor_physics_mid_drag_keeps_taking_the_remainder),
+            ("nested_scroll::a_new_chain_above_keeps_the_leaf_run", crate::nested_scroll::a_new_chain_above_keeps_the_leaf_run),
+            ("nested_scroll::participant_panic_consumes_all_and_next_sequence_recovers", crate::nested_scroll::participant_panic_consumes_all_and_next_sequence_recovers),
+            ("nested_scroll::contained_scrollable_keeps_its_remainder", crate::nested_scroll::contained_scrollable_keeps_its_remainder),
+            ("nested_scroll::snap_policy_targets", crate::nested_scroll::snap_policy_targets),
+            ("interactive_viewer::photo_in_pager_hands_pan_remainder_to_pager", crate::interactive_viewer::photo_in_pager_hands_pan_remainder_to_pager),
+            ("interactive_viewer::photo_in_rtl_pager_turns_toward_the_reading_end", crate::interactive_viewer::photo_in_rtl_pager_turns_toward_the_reading_end),
+            ("interactive_viewer::viewer_inertia_is_a_side_effect_of_the_releasing_sequence", crate::interactive_viewer::viewer_inertia_is_a_side_effect_of_the_releasing_sequence),
+            ("interactive_viewer::plain_wheel_pans_the_viewer_then_leaves_its_edge_to_the_list", crate::interactive_viewer::plain_wheel_pans_the_viewer_then_leaves_its_edge_to_the_list),
+            ("interactive_viewer::viewer_pan_past_its_boundary_stretches_and_snaps_back", crate::interactive_viewer::viewer_pan_past_its_boundary_stretches_and_snaps_back),
+            ("interactive_viewer::viewer_fling_into_its_boundary_overshoots_and_settles", crate::interactive_viewer::viewer_fling_into_its_boundary_overshoots_and_settles),
+            ("refresh_indicator::pull_past_threshold_refreshes_once", crate::refresh_indicator::pull_past_threshold_refreshes_once),
+            ("refresh_indicator::pull_released_short_settles_back", crate::refresh_indicator::pull_released_short_settles_back),
+            ("refresh_indicator::a_refresh_style_rebuilds_its_indicator_as_the_pull_grows", crate::refresh_indicator::a_refresh_style_rebuilds_its_indicator_as_the_pull_grows),
+            ("refresh_indicator::pull_to_refresh_ignores_wheel_and_momentum_and_resets_on_loss", crate::refresh_indicator::pull_to_refresh_ignores_wheel_and_momentum_and_resets_on_loss),
+            ("refresh_indicator::refresh_during_refresh_is_refused", crate::refresh_indicator::refresh_during_refresh_is_refused),
+            ("refresh_indicator::refresh_completion_arrives_on_the_next_frame", crate::refresh_indicator::refresh_completion_arrives_on_the_next_frame),
+            ("refresh_indicator::unmount_mid_refresh_cancels_it", crate::refresh_indicator::unmount_mid_refresh_cancels_it),
+            ("refresh_indicator::horizontal_pull_refreshes_from_the_left_edge", crate::refresh_indicator::horizontal_pull_refreshes_from_the_left_edge),
+            ("refresh_indicator::horizontal_pull_refreshes_from_the_reading_start_under_rtl", crate::refresh_indicator::horizontal_pull_refreshes_from_the_reading_start_under_rtl),
+            ("refresh_indicator::a_replaced_configuration_takes_over_the_refresh", crate::refresh_indicator::a_replaced_configuration_takes_over_the_refresh),
+            ("refresh_indicator::a_first_command_without_the_refresh_intent_is_reported", crate::refresh_indicator::a_first_command_without_the_refresh_intent_is_reported),
+            ("anchored_drag::anchored_drag_settles_on_anchors_by_release_and_fling", crate::anchored_drag::anchored_drag_settles_on_anchors_by_release_and_fling),
+            ("anchored_drag::anchored_drag_reads_offsets_toward_the_reading_end", crate::anchored_drag::anchored_drag_reads_offsets_toward_the_reading_end),
+            ("anchored_drag::anchored_drag_refuses_degenerate_anchor_sets", crate::anchored_drag::anchored_drag_refuses_degenerate_anchor_sets),
+            ("anchored_drag::anchored_drag_follows_anchors_replaced_mid_drag", crate::anchored_drag::anchored_drag_follows_anchors_replaced_mid_drag),
+            ("anchored_drag::anchored_drag_unmount_mid_drag_rests_on_the_nearest_anchor", crate::anchored_drag::anchored_drag_unmount_mid_drag_rests_on_the_nearest_anchor),
+            ("anchored_drag::anchored_drag_assistive_and_key_steps_move_between_anchors", crate::anchored_drag::anchored_drag_assistive_and_key_steps_move_between_anchors),
+            ("anchored_drag::anchored_drag_plays_a_haptic_on_each_new_anchor", crate::anchored_drag::anchored_drag_plays_a_haptic_on_each_new_anchor),
+            ("anchored_drag::anchored_drag_is_a_bounded_leaf_and_a_participant", crate::anchored_drag::anchored_drag_is_a_bounded_leaf_and_a_participant),
+            ("anchored_drag::anchored_drag_is_no_drop_autoscroll_target", crate::anchored_drag::anchored_drag_is_no_drop_autoscroll_target),
+            ("anchored_drag::anchored_drag_is_a_tab_stop_and_a_named_slider", crate::anchored_drag::anchored_drag_is_a_tab_stop_and_a_named_slider),
+            ("anchored_drag::anchored_drag_offset_listenable_follows_every_move", crate::anchored_drag::anchored_drag_offset_listenable_follows_every_move),
+            ("swipe_actions::swipe_actions_reveal_settle_and_perform_a_tapped_action", crate::swipe_actions::swipe_actions_reveal_settle_and_perform_a_tapped_action),
+            ("swipe_actions::swipe_actions_full_swipe_performs_the_first_action_on_release", crate::swipe_actions::swipe_actions_full_swipe_performs_the_first_action_on_release),
+            ("swipe_actions::swipe_actions_mirror_right_to_left", crate::swipe_actions::swipe_actions_mirror_right_to_left),
+            ("swipe_actions::swipe_rows_in_a_vertical_list_share_contacts_by_axis", crate::swipe_actions::swipe_rows_in_a_vertical_list_share_contacts_by_axis),
+            ("swipe_actions::swipe_actions_leave_the_system_edges_to_the_os", crate::swipe_actions::swipe_actions_leave_the_system_edges_to_the_os),
+            ("swipe_actions::swipe_actions_unmounted_mid_swipe_perform_nothing", crate::swipe_actions::swipe_actions_unmounted_mid_swipe_perform_nothing),
+            ("swipe_actions::a_panicking_swipe_action_leaves_the_row_closed", crate::swipe_actions::a_panicking_swipe_action_leaves_the_row_closed),
+            ("swipe_actions::a_cancelled_swipe_returns_where_it_began", crate::swipe_actions::a_cancelled_swipe_returns_where_it_began),
+            ("swipe_actions::swipe_actions_refuse_rows_without_distinct_actions", crate::swipe_actions::swipe_actions_refuse_rows_without_distinct_actions),
+            ("collapsing_header::collapsing_header_collapses_before_or_after_the_content", crate::collapsing_header::collapsing_header_collapses_before_or_after_the_content),
+            ("collapsing_header::collapsing_header_expands_first_or_last", crate::collapsing_header::collapsing_header_expands_first_or_last),
+            ("collapsing_header::collapsing_header_inherits_the_fling_across_its_collapse", crate::collapsing_header::collapsing_header_inherits_the_fling_across_its_collapse),
+            ("collapsing_header::collapsing_header_snaps_to_an_extent", crate::collapsing_header::collapsing_header_snaps_to_an_extent),
+            ("collapsing_header::collapsing_header_reveals_focused_row_from_tab_and_assistive_request", crate::collapsing_header::collapsing_header_reveals_focused_row_from_tab_and_assistive_request),
+            ("collapsing_header::collapsing_header_is_a_banner_assistive_scrolls_expand_and_collapse", crate::collapsing_header::collapsing_header_is_a_banner_assistive_scrolls_expand_and_collapse),
+            ("collapsing_header::collapsing_header_with_equal_extents_takes_no_scroll", crate::collapsing_header::collapsing_header_with_equal_extents_takes_no_scroll),
+            ("nested_scroll::scroll_channel_data_is_send", crate::nested_scroll::scroll_channel_data_is_send),
+            ("nested_scroll::reveal_and_assistive_scroll_go_through_the_chain", crate::nested_scroll::reveal_and_assistive_scroll_go_through_the_chain),
+            ("nested_scroll::a_nested_reveal_moves_each_ancestor_in_a_sequence_of_its_own", crate::nested_scroll::a_nested_reveal_moves_each_ancestor_in_a_sequence_of_its_own),
+            ("nested_scroll::connection_defaults_take_nothing", crate::nested_scroll::connection_defaults_take_nothing),
+            ("nested_scroll::fling_residual_survives_a_participant_taking_part_of_it", crate::nested_scroll::fling_residual_survives_a_participant_taking_part_of_it),
+            ("nested_scroll::a_run_short_of_the_edge_of_a_long_list_hands_nothing_on", crate::nested_scroll::a_run_short_of_the_edge_of_a_long_list_hands_nothing_on),
+            ("nested_scroll::shared_connection_hears_a_sequence_once", crate::nested_scroll::shared_connection_hears_a_sequence_once),
+            ("nested_scroll::keyboard_scrolls_through_the_channel_as_its_own_sequence", crate::nested_scroll::keyboard_scrolls_through_the_channel_as_its_own_sequence),
+            ("nested_scroll::a_held_scroll_key_ends_its_sequence_when_its_release_goes_elsewhere", crate::nested_scroll::a_held_scroll_key_ends_its_sequence_when_its_release_goes_elsewhere),
+            ("nested_scroll::drag_autoscroll_dispatches_side_effect_deltas", crate::nested_scroll::drag_autoscroll_dispatches_side_effect_deltas),
+            ("nested_scroll::drag_autoscroll_from_past_an_edge_moves_by_its_step", crate::nested_scroll::drag_autoscroll_from_past_an_edge_moves_by_its_step),
+            ("nested_scroll::a_remainder_moves_an_overscrolled_ancestor_only_toward_its_range", crate::nested_scroll::a_remainder_moves_an_overscrolled_ancestor_only_toward_its_range),
+            ("nested_scroll::keyboard_bubbles_to_the_enclosing_scrollable_and_follows_the_axis", crate::nested_scroll::keyboard_bubbles_to_the_enclosing_scrollable_and_follows_the_axis),
+            ("nested_scroll::dragging_a_scrollable_gives_it_the_scroll_keys", crate::nested_scroll::dragging_a_scrollable_gives_it_the_scroll_keys),
+            ("scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes", crate::scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes),
+            ("scroll::nested_fling_same_controller_rebuild_preserves_accepted_handoff", crate::scroll::nested_fling_same_controller_rebuild_preserves_accepted_handoff),
+            ("scroll::nested_fling_parent_boundary_policy_receives_presentation_pixel_ratio", crate::scroll::nested_fling_parent_boundary_policy_receives_presentation_pixel_ratio),
+            ("scroll::nested_fling_projects_reversed_child_and_preserves_orthogonal_and_bounce_policy", crate::scroll::nested_fling_projects_reversed_child_and_preserves_orthogonal_and_bounce_policy),
+            ("scroll::replacing_parent_invalidates_old_fling_handoff_and_next_gesture_recovers", crate::scroll::replacing_parent_invalidates_old_fling_handoff_and_next_gesture_recovers),
+            ("scroll::nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_progress", crate::scroll::nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_progress),
+            ("scroll::nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_recovers", crate::scroll::nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_recovers),
+            ("scroll::nested_fling_custom_physics_failure_and_retirement_preserve_first_and_recover", crate::scroll::nested_fling_custom_physics_failure_and_retirement_preserve_first_and_recover),
+            ("scroll::nested_fling_skips_saturated_parent_and_reentrant_jump_retires_transfer", crate::scroll::nested_fling_skips_saturated_parent_and_reentrant_jump_retires_transfer),
+            ("scroll::nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent", crate::scroll::nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent),
+            ("scroll::show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse", crate::scroll::show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse),
+            ("scroll::show_on_screen_walks_nested_axes_and_replacement_uses_current_geometry", crate::scroll::show_on_screen_walks_nested_axes_and_replacement_uses_current_geometry),
+            ("scroll::show_on_screen_failure_continues_live_ancestors_and_fresh_requests_recover", crate::scroll::show_on_screen_failure_continues_live_ancestors_and_fresh_requests_recover),
+            ("scroll::show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers", crate::scroll::show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers),
+            ("scroll::show_on_screen_sibling_reentry_delivers_last_target_without_stale_motion", crate::scroll::show_on_screen_sibling_reentry_delivers_last_target_without_stale_motion),
+        ],
+    );
+}
+
+/// Every gesture of a behavioural widget reached by assistive technology,
+/// the keyboard and one pointer (ADR-0216): the input-path matrix rows.
+#[test]
+fn gesture_alternatives() {
+    run_cases(
+        "gesture_alternatives",
+        &[
+            (
+                "gesture_alternatives::dismissible_with_a_visible_control",
+                crate::gesture_alternatives::dismissible_with_a_visible_control as fn(),
+            ),
+            (
+                "gesture_alternatives::dismissible_with_a_context_menu",
+                crate::gesture_alternatives::dismissible_with_a_context_menu,
+            ),
+            (
+                "gesture_alternatives::swipe_actions_with_visible_controls",
+                crate::gesture_alternatives::swipe_actions_with_visible_controls,
+            ),
+            (
+                "gesture_alternatives::swipe_actions_with_a_presented_menu",
+                crate::gesture_alternatives::swipe_actions_with_a_presented_menu,
+            ),
+            (
+                "gesture_alternatives::swipe_actions_with_the_plain_context_menu",
+                crate::gesture_alternatives::swipe_actions_with_the_plain_context_menu,
+            ),
+            (
+                "gesture_alternatives::interactive_viewer_with_zoom_controls",
+                crate::gesture_alternatives::interactive_viewer_with_zoom_controls,
+            ),
+            (
+                "gesture_alternatives::interactive_viewer_with_pan_controls",
+                crate::gesture_alternatives::interactive_viewer_with_pan_controls,
+            ),
+            (
+                "gesture_alternatives::page_view_with_page_controls",
+                crate::gesture_alternatives::page_view_with_page_controls,
+            ),
+            (
+                "gesture_alternatives::anchored_drag_with_anchor_controls",
+                crate::gesture_alternatives::anchored_drag_with_anchor_controls,
+            ),
+            (
+                "gesture_alternatives::page_view_with_buttons_beside_it",
+                crate::gesture_alternatives::page_view_with_buttons_beside_it,
+            ),
+            (
+                "gesture_alternatives::a_companion_link_follows_its_registrations",
+                crate::gesture_alternatives::a_companion_link_follows_its_registrations,
+            ),
+            (
+                "gesture_alternatives::a_companion_command_must_perform_an_intent_its_link_carries",
+                crate::gesture_alternatives::a_companion_command_must_perform_an_intent_its_link_carries,
+            ),
+            (
+                "gesture_alternatives::unfulfilled_companion_alternatives_are_reported",
+                crate::gesture_alternatives::unfulfilled_companion_alternatives_are_reported,
+            ),
+            (
+                "gesture_alternatives::every_preset_opens_the_menu_by_its_pointer_trigger",
+                crate::gesture_alternatives::every_preset_opens_the_menu_by_its_pointer_trigger,
+            ),
+            (
+                "gesture_alternatives::labels_name_one_action_each",
+                crate::gesture_alternatives::labels_name_one_action_each,
+            ),
+            (
+                "gesture_alternatives::reserved_keys_are_not_bound",
+                crate::gesture_alternatives::reserved_keys_are_not_bound,
+            ),
+            (
+                "gesture_alternatives::controls_follow_the_reading_direction",
+                crate::gesture_alternatives::controls_follow_the_reading_direction,
+            ),
+            (
+                "gesture_alternatives::the_revealed_menu_control_names_its_target",
+                crate::gesture_alternatives::the_revealed_menu_control_names_its_target,
+            ),
+            (
+                "gesture_alternatives::an_unanswered_intent_and_a_reserved_key_are_reported",
+                crate::gesture_alternatives::an_unanswered_intent_and_a_reserved_key_are_reported,
+            ),
+            (
+                "refresh_indicator::refresh_indicator_with_a_visible_control",
+                crate::refresh_indicator::refresh_indicator_with_a_visible_control,
+            ),
+            (
+                "drag_and_drop::draggable_and_drop_target_by_every_path",
+                crate::drag_and_drop::draggable_and_drop_target_by_every_path,
+            ),
+            (
+                "context_menu_area::context_menu_area",
+                crate::context_menu_area::context_menu_area,
+            ),
+            (
+                "context_menu_area::context_menu_area_right_to_left",
+                crate::context_menu_area::context_menu_area_right_to_left,
+            ),
+        ],
+    );
+}
+
+/// The theme-free context menu: where each trigger opens it, the keys inside
+/// it, what closes it and what assistive technology reads.
+#[test]
+fn context_menu_area() {
+    run_cases(
+        "context_menu_area",
+        &[
+            (
+                "context_menu_area::the_menu_opens_where_its_trigger_points",
+                crate::context_menu_area::the_menu_opens_where_its_trigger_points as fn(),
+            ),
+            (
+                "context_menu_area::arrow_keys_home_and_end_move_between_items",
+                crate::context_menu_area::arrow_keys_home_and_end_move_between_items,
+            ),
+            (
+                "context_menu_area::escape_and_an_outside_tap_close_the_menu_and_restore_focus",
+                crate::context_menu_area::escape_and_an_outside_tap_close_the_menu_and_restore_focus,
+            ),
+            (
+                "context_menu_area::the_menu_closes_when_its_area_unmounts",
+                crate::context_menu_area::the_menu_closes_when_its_area_unmounts,
+            ),
+            (
+                "context_menu_area::a_missing_navigator_is_reported",
+                crate::context_menu_area::a_missing_navigator_is_reported,
+            ),
+            (
+                "context_menu_area::items_read_in_the_area_direction",
+                crate::context_menu_area::items_read_in_the_area_direction,
+            ),
+            (
+                "context_menu_area::a_panicking_item_leaves_no_menu_open",
+                crate::context_menu_area::a_panicking_item_leaves_no_menu_open,
+            ),
+            (
+                "context_menu_area::a_held_press_moved_past_the_slop_closes_the_menu_and_drags",
+                crate::context_menu_area::a_held_press_moved_past_the_slop_closes_the_menu_and_drags,
+            ),
+            (
+                "context_menu_area::assistive_technology_reads_a_menu_of_menu_items",
+                crate::context_menu_area::assistive_technology_reads_a_menu_of_menu_items,
             ),
         ],
     );

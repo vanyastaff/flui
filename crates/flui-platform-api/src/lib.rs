@@ -14,7 +14,9 @@
 //! - the text store an input method pulls from ([`TextStore`] and the rest of
 //!   [`text_store`], ADR-0090);
 //! - the input vocabulary ([`PlatformInput`], [`DispatchEventResult`],
-//!   [`DragDropEvent`] and the conversion helpers);
+//!   [`DragDropEvent`] and the conversion helpers) and the handle-less input capabilities
+//!   ([`input_capabilities`], ADR-0213);
+//! - the two haptic tiers, their requests and outcomes ([`haptics`], ADR-0210);
 //! - the per-window contract [`PlatformWindow`] and the window vocabulary
 //!   ([`WindowId`], [`WindowOptions`], [`WindowEvent`],
 //!   [`WindowExecutionState`], [`CursorIcon`] and the errors window
@@ -98,12 +100,15 @@ mod brightness;
 mod clipboard;
 pub mod data_transfer;
 mod display;
+pub mod drag;
 mod event_time;
 mod haptic_feedback;
-mod haptics;
+pub mod haptics;
 mod host_notice;
 mod ime;
 mod input;
+pub mod input_capabilities;
+pub mod input_regions;
 pub mod keyboard;
 mod locale;
 mod placement;
@@ -144,12 +149,13 @@ pub use input::{
 pub use keyboard::{Code, Key, KeyEvent, KeyState, Location, Modifiers, NamedKey};
 pub use locale::{InvalidLocale, Locale};
 pub use placement::{PlacementError, ResolvedPlacement, WindowPlacement};
-pub use platform_window::PlatformWindow;
+pub use platform_window::{PlatformWindow, WindowAt};
 pub use pointer::{
-    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
-    PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo,
-    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
-    PointerSample, ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
+    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenSqueeze,
+    PenSqueezePhase, PenTool, PointerButton, PointerButtons, PointerCancel, PointerEvent,
+    PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress,
+    PointerRelease, PointerRevision, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
+    ScrollPhase, ScrollPrecision, ScrollUnit,
 };
 pub use preferences::{
     Distance, DurationScale, FlingSpeeds, GestureGeometry, GesturePreferences, InvalidPreference,

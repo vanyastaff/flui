@@ -557,7 +557,7 @@ struct PartialTextFrame {
     hit_test: std::rc::Rc<std::cell::RefCell<Option<flui_interaction::HitTestHandle>>>,
     pending_sizing: flui_painting::TextSizing,
     controller: flui_widgets::TextEditingController,
-    focus: std::rc::Rc<flui_interaction::routing::FocusNode>,
+    focus: std::rc::Rc<flui_interaction::focus::FocusNode>,
     rebuild: std::rc::Rc<std::cell::RefCell<Option<flui_view::RebuildHandle>>>,
     store: std::rc::Rc<std::cell::RefCell<Option<std::rc::Rc<dyn flui_platform_api::TextStore>>>>,
     grant: std::rc::Rc<std::cell::RefCell<Option<ImeGeometryRead>>>,
@@ -681,7 +681,7 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
     let store = Rc::new(RefCell::new(None));
     let grant = Rc::new(RefCell::new(None));
     let lock_outcome = Rc::new(RefCell::new(None));
-    let focus = flui_interaction::routing::FocusNode::new();
+    let focus = flui_interaction::focus::FocusNode::new();
     runtime
         .attach_root_widget_with_size(
             &PartialTextFrame {
@@ -723,8 +723,12 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
         .as_ref()
         .expect("actual lifecycle hit-test handle")
         .clone();
-    let initial_hit =
-        runtime.enter(|_| hit_test.hit_test_at(flui_foundation::geometry::Offset::new(1.0, 1.0)));
+    let initial_hit = runtime.enter(|_| {
+        hit_test.hit_test_at(
+            flui_foundation::geometry::Offset::new(1.0, 1.0),
+            flui_platform_api::pointer::PointerKind::Touch,
+        )
+    });
     assert!(
         !initial_hit
             .expect("complete presentation exposes its hit-test geometry")
@@ -809,8 +813,12 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
         fallback_rect,
         "parked traversal must preserve the caller's fallback instead of reading partial layout"
     );
-    let unavailable_hit =
-        runtime.enter(|_| hit_test.hit_test_at(flui_foundation::geometry::Offset::new(1.0, 1.0)));
+    let unavailable_hit = runtime.enter(|_| {
+        hit_test.hit_test_at(
+            flui_foundation::geometry::Offset::new(1.0, 1.0),
+            flui_platform_api::pointer::PointerKind::Touch,
+        )
+    });
     assert!(
         matches!(
             unavailable_hit,
@@ -829,8 +837,12 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
         "replacement completion restores actual focus geometry"
     );
     assert!(restored_focus_rect.width() > 0.0 && restored_focus_rect.height() > 0.0);
-    let recovered_hit =
-        runtime.enter(|_| hit_test.hit_test_at(flui_foundation::geometry::Offset::new(1.0, 1.0)));
+    let recovered_hit = runtime.enter(|_| {
+        hit_test.hit_test_at(
+            flui_foundation::geometry::Offset::new(1.0, 1.0),
+            flui_platform_api::pointer::PointerKind::Touch,
+        )
+    });
     assert!(
         !recovered_hit
             .expect("replacement layout restores hit-test geometry")
@@ -1076,7 +1088,7 @@ fn animated_preparation_retains_its_tick(failing_deadline: bool) {
     let samples = Rc::new(RefCell::new(Vec::new()));
     let recorded = Rc::clone(&samples);
     let sampled = animation.clone();
-    let focus = flui_interaction::routing::FocusNode::new();
+    let focus = flui_interaction::focus::FocusNode::new();
     let field_focus = Rc::clone(&focus);
     let controller = flui_widgets::TextEditingController::with_text("abcd");
     let post_frame = Rc::new(RefCell::new(None));
@@ -1231,7 +1243,7 @@ fn animated_preparation_retains_its_tick(failing_deadline: bool) {
             runtime.gestures().arena().clone(),
         )
         .settings(
-            flui_interaction::settings::GestureSettings::touch_defaults()
+            flui_interaction::gesture::GestureSettings::default()
                 .with_long_press_timeout(Duration::from_millis(10)),
         )
         .on_long_press_start(move |_| {
@@ -1471,7 +1483,7 @@ fn pending_editable() -> PendingEditable {
 
     let mut clock = flui_foundation::ManualClock::new();
     let (mut runtime, host) = prepared_runtime(&clock);
-    let focus = flui_interaction::routing::FocusNode::new();
+    let focus = flui_interaction::focus::FocusNode::new();
     let post_frame = Rc::new(RefCell::new(None));
     runtime
         .attach_root_widget_with_size(
@@ -1521,17 +1533,17 @@ fn pending_editable() -> PendingEditable {
 }
 
 struct UnknownRetainedDeadline {
-    due: web_time::Instant,
+    due: flui_platform_api::EventTime,
     effects: std::rc::Rc<std::cell::Cell<usize>>,
     fail_query: bool,
 }
 
-impl flui_interaction::arena::GestureArenaMember for UnknownRetainedDeadline {
-    fn accept_gesture(&self, _: flui_platform_api::PointerId) {}
+impl flui_interaction::gesture::GestureArenaMember for UnknownRetainedDeadline {
+    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
 
-    fn reject_gesture(&self, _: flui_platform_api::PointerId) {}
+    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 
-    fn deadline(&self) -> Option<web_time::Instant> {
+    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         if self.fail_query {
             self.effects.set(self.effects.get() + 1);
             std::panic::panic_any("unknown retained deadline discovery");
@@ -1539,7 +1551,7 @@ impl flui_interaction::arena::GestureArenaMember for UnknownRetainedDeadline {
         Some(self.due)
     }
 
-    fn poll_deadline(&self, _: web_time::Instant) {
+    fn poll_deadline(&self, _: flui_platform_api::EventTime) {
         self.effects.set(self.effects.get() + 1);
         std::panic::panic_any("unknown retained deadline progress");
     }
@@ -1609,7 +1621,7 @@ fn retained_deadline_failure_case(background: bool, fail_query: bool) {
     })));
     let effects = Rc::new(Cell::new(0));
     let member = Rc::new(UnknownRetainedDeadline {
-        due: clock.now(),
+        due: crate::event_at(&clock, clock.now()),
         effects: Rc::clone(&effects),
         fail_query,
     });
@@ -2058,13 +2070,13 @@ fn a_lazy_child_adds_a_frontier_without_reentering_the_root_or_partial_paint() {
 struct PreparedSibling {
     animation: std::rc::Rc<std::cell::RefCell<Option<flui_animation::AnimationController>>>,
     post_frame: std::rc::Rc<std::cell::RefCell<Option<flui_scheduler::PostFrameHandle>>>,
-    focus: std::rc::Rc<flui_interaction::routing::FocusNode>,
+    focus: std::rc::Rc<flui_interaction::focus::FocusNode>,
 }
 
 struct PreparedSiblingState {
     animation: std::rc::Rc<std::cell::RefCell<Option<flui_animation::AnimationController>>>,
     post_frame: std::rc::Rc<std::cell::RefCell<Option<flui_scheduler::PostFrameHandle>>>,
-    focus: std::rc::Rc<flui_interaction::routing::FocusNode>,
+    focus: std::rc::Rc<flui_interaction::focus::FocusNode>,
     controller: flui_widgets::TextEditingController,
     driven: Option<flui_animation::DrivenController>,
 }
@@ -2155,7 +2167,7 @@ fn a_sibling_animation_admission_replaces_ready_text_before_geometry_publication
             &PreparedSibling {
                 animation: Rc::clone(&animation_slot),
                 post_frame: Rc::new(RefCell::new(None)),
-                focus: flui_interaction::routing::FocusNode::new(),
+                focus: flui_interaction::focus::FocusNode::new(),
             },
             400.0,
             400.0,
@@ -2428,7 +2440,7 @@ fn authority_report_case(late: bool, replace: bool, retained: bool) {
             &PreparedSibling {
                 animation: Rc::clone(&primary_animation),
                 post_frame: Rc::new(RefCell::new(None)),
-                focus: flui_interaction::routing::FocusNode::new(),
+                focus: flui_interaction::focus::FocusNode::new(),
             },
             400.0,
             400.0,
@@ -2722,7 +2734,7 @@ fn sampling_report_replacement_case(late_preparation: bool) {
             &PreparedSibling {
                 animation: Rc::clone(&animation_slot),
                 post_frame: Rc::new(RefCell::new(None)),
-                focus: flui_interaction::routing::FocusNode::new(),
+                focus: flui_interaction::focus::FocusNode::new(),
             },
             400.0,
             400.0,
@@ -2931,7 +2943,7 @@ fn a_waiting_presentation_does_not_suspend_sibling_animation_completion_or_ime()
     let id = runtime.install_presentation(sibling);
     let animation_slot = Rc::new(RefCell::new(None));
     let post_frame = Rc::new(RefCell::new(None));
-    let focus = flui_interaction::routing::FocusNode::new();
+    let focus = flui_interaction::focus::FocusNode::new();
     runtime
         .attach_root_widget_with_size_to(
             id,

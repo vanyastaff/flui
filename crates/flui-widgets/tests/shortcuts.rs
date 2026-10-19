@@ -9,7 +9,7 @@ pub(crate) mod intent_tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use flui_interaction::routing::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_platform_api::{
         EventTime,
         keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Modifiers},
@@ -163,7 +163,7 @@ pub(crate) mod tab_tests {
     use std::cell::Cell;
     use std::rc::{Rc, Weak};
 
-    use flui_interaction::routing::{
+    use flui_interaction::focus::{
         FocusAttachment, FocusDetachOutcome, FocusNode, FocusScopeNode, FocusTraversalPolicy,
         ReadingOrderPolicy,
     };
@@ -489,7 +489,7 @@ pub(crate) mod activation_tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    use flui_interaction::routing::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_platform_api::{
         EventTime,
         keyboard::{Code, Key, KeyEvent, KeyState, NamedKey},
@@ -502,6 +502,15 @@ pub(crate) mod activation_tests {
     fn key_down(key: Key) -> KeyEvent {
         KeyEvent::new(
             KeyState::Down,
+            key,
+            Code::Unidentified,
+            EventTime::from_nanos(0),
+        )
+    }
+
+    fn key_up(key: Key) -> KeyEvent {
+        KeyEvent::new(
+            KeyState::Up,
             key,
             Code::Unidentified,
             EventTime::from_nanos(0),
@@ -527,18 +536,24 @@ pub(crate) mod activation_tests {
         let manager = harness.focus_manager();
         let _ = button.request_focus();
 
-        for key in [
-            Key::Named(NamedKey::Enter),
-            Key::character(" "),
-            Key::Named(NamedKey::Select),
-        ] {
+        for key in [Key::Named(NamedKey::Enter), Key::Named(NamedKey::Select)] {
             assert!(
                 manager
                     .dispatch_key_event(&key_down(key.clone()))
                     .is_handled(),
                 "{key:?} is consumed"
             );
+            let _ = manager.dispatch_key_event(&key_up(key));
         }
+        // Space activates on its release.
+        let _ = manager.dispatch_key_event(&key_down(Key::character(" ")));
+        assert_eq!(runs.get(), 2, "Space's key-down does not activate");
+        assert!(
+            manager
+                .dispatch_key_event(&key_up(Key::character(" ")))
+                .is_handled(),
+            "Space's release is consumed"
+        );
         assert_eq!(runs.get(), 3, "each key activated the control once");
     }
 }
@@ -549,7 +564,7 @@ pub(crate) mod activation_tests {
 pub(crate) mod event_cx_tests {
     use std::rc::Rc;
 
-    use flui_interaction::routing::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_platform_api::{
         EventTime,
         keyboard::{Code, Key, KeyEvent, KeyState, Modifiers},

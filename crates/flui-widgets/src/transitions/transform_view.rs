@@ -11,11 +11,11 @@ use flui_view::{BoxedView, RenderObjectContext, RenderView, View, impl_render_vi
 /// Carries the transition's motion (whose proxy the transition's state owns)
 /// and the two settings a rebuild may change.
 #[derive(Clone)]
-pub(super) struct AnimatedTransformView {
-    pub(super) motion: TransformMotion,
-    pub(super) transform_hit_tests: bool,
-    pub(super) text_direction: TextDirection,
-    pub(super) child: BoxedView,
+pub(crate) struct AnimatedTransformView {
+    pub(crate) motion: TransformMotion,
+    pub(crate) transform_hit_tests: bool,
+    pub(crate) text_direction: TextDirection,
+    pub(crate) child: BoxedView,
 }
 
 impl std::fmt::Debug for AnimatedTransformView {

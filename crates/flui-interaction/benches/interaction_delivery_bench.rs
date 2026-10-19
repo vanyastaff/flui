@@ -8,9 +8,10 @@ use std::{cell::Cell, hint::black_box, rc::Rc};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::geometry::Offset;
 use flui_interaction::events::{PointerButtons, PointerEvent, PointerKind, make_move_event_for_id};
-use flui_interaction::routing::{
-    DeviceId, FocusManager, FocusNode, FocusRequestOutcome, MouseTracker, PointerMotionKind,
-    PointerRouteHandler, PointerRouter,
+use flui_interaction::focus::{FocusManager, FocusNode, FocusRequestOutcome};
+use flui_interaction::ids::DeviceId;
+use flui_interaction::pointer::{
+    MouseTracker, PointerMotionKind, PointerRouteHandler, PointerRouter,
 };
 use flui_interaction::{CursorIcon, HitTestEntry, HitTestResult, PointerId, RenderId};
 
@@ -98,8 +99,8 @@ fn bench_cursor_changes(c: &mut Criterion) {
             if ambient {
                 // Returning owned hit geometry matches the public refresh contract;
                 // its one-entry path clone is intentionally included in this row.
-                tracker.update_all_devices(|_| text.clone());
-                tracker.update_all_devices(|_| arrow.clone());
+                tracker.update_all_devices(|_, _| text.clone());
+                tracker.update_all_devices(|_, _| arrow.clone());
             } else {
                 tracker.update_with_motion(&events[0], PointerMotionKind::Hover, &text);
                 tracker.update_with_motion(&events[1], PointerMotionKind::Hover, &arrow);

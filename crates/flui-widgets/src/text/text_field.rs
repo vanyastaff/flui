@@ -1,5 +1,5 @@
 //! [`RawTextField`] — an [`EditableText`] with a plain border decoration and
-//! tap-to-focus behavior, for callers with no `Theme` ancestor.
+//! press-to-focus behavior, for callers with no `Theme` ancestor.
 //!
 //! The themed text field lives in
 //! [`flui_material::TextField`](https://docs.rs/flui-material) (M3
@@ -34,7 +34,7 @@ use flui_painting::styling::Color;
 use flui_painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration};
 use flui_view::prelude::*;
 
-use crate::interaction::GestureDetector;
+use crate::interaction::Listener;
 use crate::layout::Padding;
 use crate::paint::DecoratedBox;
 use crate::support::ref_callback;
@@ -45,9 +45,9 @@ use crate::text::editable_text::{EditableText, SubmitCallback, TextChanged};
 // RawTextField
 // ============================================================================
 
-/// A plain decorated, tap-to-focus single-line text input field — wraps
+/// A plain decorated, press-to-focus single-line text input field — wraps
 /// [`EditableText`] with a fixed [`DecoratedBox`] border and a
-/// [`GestureDetector`] that requests focus on tap. See the module docs: this
+/// [`Listener`] that requests focus when a pointer presses it. See the module docs: this
 /// is a theme-free stand-in, not the Material `TextField` — prefer
 /// `flui_material::TextField` whenever a `Theme` ancestor is available.
 ///
@@ -265,9 +265,13 @@ impl ViewState<RawTextField> for RawTextFieldState {
         let padded = Padding::new(view.content_padding).child(editable);
         let decorated = DecoratedBox::new(field_border_decoration()).child(padded);
 
+        // The press focuses the field, as the press on its text does. A tap
+        // would not: the field's double-tap holds a tap for the double-tap
+        // time, and a focus it requested then would take the focus back from
+        // wherever the keyboard moved it meanwhile.
         let focus_node = Rc::clone(&self.focus_node);
-        GestureDetector::new()
-            .on_tap(move |_cx| {
+        Listener::new()
+            .on_pointer_down(move |_cx, _dispatch| {
                 let _ = focus_node.request_focus();
             })
             .child(decorated)

@@ -92,6 +92,8 @@ pub mod app;
 mod async_builders;
 pub mod clip;
 mod container;
+// `ContextMenuArea` (ADR-0216); re-exported from the crate root.
+mod context_menu;
 pub mod controls;
 pub mod flex;
 pub mod form;
@@ -125,6 +127,7 @@ pub mod router;
 pub mod scroll;
 pub mod semantics;
 pub mod stack;
+mod swipe;
 pub mod text;
 pub mod transitions;
 mod value_listenable_builder;
@@ -172,6 +175,7 @@ pub use async_builders::{
     SnapshotBuilder, Stream, StreamBuilder, StreamFactory,
 };
 pub use container::Container;
+pub use context_menu::{ContextMenuArea, ContextMenuAreaState};
 pub use controls::{
     ActivityArc, ActivityIndicator, ActivityIndicatorState, Disclosure, DisclosureState,
     ExpansionState, Slider, SliderState,
@@ -191,23 +195,26 @@ pub use image::{
 #[cfg(feature = "network-images")]
 pub use image::{NetworkImage, NetworkImageKey};
 pub use interaction::{
-    AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, AnimatedCrossFade,
-    AnimatedCrossFadeState, ButtonActivateIntent, CallbackAction, CallbackShortcuts,
-    CopySelectionTextIntent, CrossFadeState, DefaultFocusTraversal, DefaultFocusTraversalState,
-    DirectionalFocusAction, DirectionalFocusIntent, DismissDirection, DismissDirectionCallback,
-    DismissUpdateCallback, DismissUpdateDetails, Dismissible, DismissibleState, DragPosition,
-    DragTarget, DragTargetAccept, DragTargetBuilder, DragTargetDetails, DragTargetLeave,
-    DragTargetMove, DragTargetSlot, DragTargetState, DragTargetWillAccept, Draggable,
-    DraggableCanceledDetails, DraggableDetails, DraggableState, ErasedDragData, ExcludeFocus,
-    Focus, FocusChangeHandler, FocusRoot, FocusRootState, FocusScope, FocusScopeState, FocusState,
-    FocusTraversalGroup, FocusTraversalGroupState, GestureArenaScope, GestureDetector,
-    GestureDetectorState, Intent, InteractionEndDetails, InteractionStartDetails,
-    InteractionUpdateDetails, InteractiveViewer, InteractiveViewerState, Listener, MetaData,
-    MouseRegion, NextFocusAction, NextFocusIntent, Offstage, PanAxis, PasteTextIntent,
-    PreviousFocusAction, PreviousFocusIntent, RawButton, SelectAllTextIntent, ShortcutCallback,
-    Shortcuts, ShortcutsState, SingleActivator, TransformationController, Visibility,
-    VisibilityGate, WheelScaleGate,
+    AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, ActivationPressIntent,
+    Alternative, AlternativeKind, AnimatedCrossFade, AnimatedCrossFadeState, BackIntent,
+    ButtonActivateIntent, CallbackAction, CallbackShortcuts, CommandAppearance, CommandHandle,
+    CompanionGap, CompanionLink, CompanionRegistration, CompanionSpec, ContactAdmission,
+    ContentShape, ControlPlacement, ControlSpec, CopySelectionTextIntent, CrossFadeState,
+    DefaultFocusRingStyle, DefaultFocusTraversal, DefaultFocusTraversalState,
+    DirectionalFocusAction, DirectionalFocusIntent, DismissIntent, DragAnchor, DragCommands,
+    Draggable, DraggableState, DropCommands, DropHover, DropTarget, DropTargetState, ExcludeFocus,
+    Focus, FocusChangeHandler, FocusRing, FocusRingStyle, FocusRoot, FocusRootState, FocusScope,
+    FocusScopeState, FocusState, FocusTraversalGroup, FocusTraversalGroupState,
+    GestureAlternatives, GestureAlternativesError, GestureAlternativesState, GestureArenaScope,
+    GestureCommand, GestureDetector, GestureDetectorState, GestureRecognizerFactory, HitSlop,
+    Intent, Listener, MenuCause, MenuItem, MenuPresenter, MenuRequest, MenuSpec, MetaData,
+    MouseRegion, NextFocusAction, NextFocusIntent, Offstage, PanClaimRegion, PasteTextIntent,
+    PreviousFocusAction, PreviousFocusIntent, RawButton, RawGestureDetector,
+    RawGestureDetectorState, RecognizerContext, SelectAllTextIntent, ShortcutCallback, Shortcuts,
+    ShortcutsState, ShowContextMenuIntent, SingleActivator, SystemGestureExclusion,
+    TransformationController, Visibility, VisibilityGate,
 };
+pub use interaction::{DragSlot, ForcePressSlot, MultiTapCount, MultiTapCountError, TransformSlot};
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,
     CustomSingleChildLayout, FittedBox, Flow, FractionalTranslation, FractionallySizedBox,
@@ -223,6 +230,8 @@ pub use motion::{
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.
 pub use flui_objects::OverflowBoxFit;
+// `HitShape` configures `ContentShape`.
+pub use flui_objects::HitShape;
 // `TableColumnWidth`/`TableCellVerticalAlignment` configure `Table`/`TableCell`;
 // `TableBorder` configures `Table::border`. Re-exported here so widget authors
 // need only import from `flui_widgets`.
@@ -260,30 +269,41 @@ pub use physical_model::{PhysicalModel, PhysicalShape};
 pub use router::{
     Routable, RouteParseError, RoutePath, Router, RouterError, RouterHandle, RouterState,
 };
-pub use scroll::nested::{
-    FlingHandoff, FlingStep, NestedScroll, NestedScrollConnection, OverscrollBehavior, ScrollCause,
-    ScrollDevice, ScrollEndReason, ScrollStep,
-};
+pub use scroll::{AnchorIntent, PageIntent};
 pub use scroll::{
-    AnimatedGrid, AnimatedList, BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView,
-    GridView, InvalidSliverCrossAxisExtent, InvalidWheelScrollDistance, ListView,
-    OverScrollHeaderStretchConfiguration, PageController, PageScrollPhysics, PageView,
+    AnchorSnap, AnchorSnapError, AnchoredDrag, AnchoredDragController, AnchoredDragState,
+    AnchorsError, AnimatedGrid, AnimatedList, BouncingScrollPhysics, ClampingScrollPhysics,
+    CollapsingHeader, CollapsingHeaderState, CustomScrollView, DraggableAnchors,
+    DraggableAnchorsBuilder, FlingHandoff, FlingStep, GridView, HeaderExtents, HeaderExtentsError,
+    HeaderOrder, InvalidSliverCrossAxisExtent, InvalidViewportFraction, InvalidWheelScrollDistance,
+    ListView, NestedScroll, NestedScrollConnection, NestedScrollState,
+    OverScrollHeaderStretchConfiguration, OverscrollBehavior, PageController, PageSnap, PageView,
     PageViewState, RefreshController, RefreshIndicator, RefreshIndicatorBuilder,
-    RefreshIndicatorPhase, RefreshIndicatorState, RefreshIndicatorStyle, ScrollController,
-    ScrollMetrics, ScrollPhysics, Scrollable, Scrollbar, SharedScrollPhysics,
+    RefreshIndicatorPhase, RefreshIndicatorState, RefreshIndicatorStyle, RefreshIntent,
+    ScrollCause, ScrollController, ScrollDevice, ScrollEndReason, ScrollMetrics, ScrollPhysics,
+    ScrollStep, Scrollable, Scrollbar, SharedScrollPhysics, SharedSnapPolicy,
     ShrinkWrappingViewport, SingleChildScrollView, SliverAnimatedList, SliverAnimatedListState,
     SliverChildBuilderDelegate, SliverConstrainedCrossAxis, SliverCrossAxisGroup,
     SliverCrossAxisItem, SliverFillRemaining, SliverFillRemainingAndOverscroll,
     SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
     SliverIgnorePointer, SliverList, SliverMainAxisGroup, SliverOffstage, SliverOpacity,
     SliverPadding, SliverPersistentHeader, SliverPersistentHeaderDelegate, SliverToBoxAdapter,
-    StretchTriggerSignal, Viewport, WheelScrollDistances,
+    SnapPolicy, StretchTriggerSignal, Viewport, ViewportFraction, WheelScrollDistances,
 };
 pub use scroll::{FloatingHeaderSnapConfiguration, ScrollPositionScope};
+pub use scroll::{
+    InteractionEndDetails, InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer,
+    InteractiveViewerState, PanAxis, PanIntent, WheelScaleGate, ZoomIntent,
+};
 pub use semantics::{
     ExcludeSemantics, IndexedSemantics, MergeSemantics, Semantics, SliverSemantics,
 };
 pub use stack::{IndexedStack, Positioned, Stack};
+pub use swipe::{
+    DismissDirection, DismissDirectionCallback, DismissThreshold, DismissThresholdError,
+    DismissUpdateCallback, DismissUpdateDetails, Dismissible, DismissibleState, SwipeAction,
+    SwipeActions, SwipeActionsError, SwipeActionsState, SwipeAlternative, SwipeEdge,
+};
 pub use text::{
     AnimatedDefaultTextStyle, DefaultTextStyle, EditableText, EditableTextState, RawTextField,
     RawTextFieldState, RichText, SubmitCallback, Text, TextEditingController,
@@ -310,7 +330,7 @@ pub use wrap::Wrap;
 // of the prelude glob: their names collide with `std`'s `column!`/`row!`, so
 // they must be imported explicitly (`use flui_widgets::{column, row};`), which
 // shadows the std macros — a glob import would be ambiguous instead.
-pub use flui_view::{column, row};
+pub use flui_view::{HapticsMode, column, row};
 
 // Flex/stack configuration enums consumed by `Row`/`Column`/`Flex`/`Stack`
 // (re-exported from the `flui-objects` catalog, their home beside
@@ -343,7 +363,7 @@ pub use flui_rendering::hit_testing::{
 // composing a custom scrollable directly on `Viewport` needs to name this
 // type without reaching past `flui-widgets` into `flui-rendering`.
 pub use flui_rendering::view::ScrollPosition;
-// Drag details surfaced by `GestureDetector`'s `on_pan_*` callbacks.
+// Details a `GestureDetector` drag slot hands its callbacks.
 pub use flui_interaction::{
     DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason,
     PanZoomEvent, TapDetails,
@@ -378,27 +398,28 @@ pub mod prelude {
         AutovalidateMode, BackdropFilter, BackdropGroup, Baseline, Brightness,
         ButtonActivateIntent, CallbackAction, CallbackShortcuts, Center, ClipOval, ClipPath,
         ClipRRect, ClipRSuperellipse, ClipRect, ColoredBox, Column, ConstrainedBox, Container,
-        CopySelectionTextIntent, CustomMultiChildLayout, CustomPaint, CustomScrollView,
-        CustomSingleChildLayout, DecoratedBox, DefaultFocusTraversal, DefaultFocusTraversalState,
-        DefaultTextStyle, DefaultWidgetsLocalizations, Directionality, Disclosure, DisclosureState,
-        DragTarget, Draggable, EditableText, EditableTextState, ExcludeFocus, ExcludeSemantics,
-        Expanded, ExpansionState, FittedBox, Flex, FlexFit, Flexible, FlightDirection, Flow, Focus,
-        FocusRoot, FocusScope, FocusTraversalGroup, Form, FormField, FormFieldHandle, FormHandle,
-        FractionalTranslation, FractionallySizedBox, FutureBuilder, GestureArenaScope,
-        GestureDetector, GridView, Hero, HeroController, HeroMode, Icon, IconData, IconTheme,
-        IconThemeData, IgnoreBaseline, IgnorePointer, Image, ImagePlacement, ImageProvider,
-        ImageRepeat, IndexedSemantics, IndexedStack, InheritedTheme, Intent, IntrinsicHeight,
-        IntrinsicWidth, LayoutBuilder, LayoutId, LimitedBox, ListBody, ListView, Listener,
-        Localizations, LocalizationsDelegate, MediaQuery, MediaQueryData, MergeSemantics,
-        MouseRegion, Navigator, NavigatorHandle, NextFocusAction, NextFocusIntent, Offstage,
-        Opacity, OverflowBox, OverflowBoxFit, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle,
-        Padding, PageController, PageRoute, PageScrollPhysics, PageView, PasteTextIntent,
-        PhysicalModel, PhysicalShape, PopScope, PopupRoute, Positioned, PreferredSize,
-        PreferredSizeView, PreviousFocusAction, PreviousFocusIntent, RawButton, RawTextField,
-        RawTextFieldState, RawTextFormField, RepaintBoundary, RichText, RotatedBox, Routable,
-        RoutePath, Router, RouterHandle, Row, SafeArea, ScrollController, Scrollable, Scrollbar,
-        SelectAllTextIntent, Semantics, Shortcuts, ShrinkWrappingViewport, SimpleRoute,
-        SingleActivator, SingleChildScrollView, SizedBox, SizedOverflowBox, Slider, SliderState,
+        ContentShape, CopySelectionTextIntent, CustomMultiChildLayout, CustomPaint,
+        CustomScrollView, CustomSingleChildLayout, DecoratedBox, DefaultFocusTraversal,
+        DefaultFocusTraversalState, DefaultTextStyle, DefaultWidgetsLocalizations, Directionality,
+        Disclosure, DisclosureState, DragSlot, Draggable, DropTarget, EditableText,
+        EditableTextState, ExcludeFocus, ExcludeSemantics, Expanded, ExpansionState, FittedBox,
+        Flex, FlexFit, Flexible, FlightDirection, Flow, Focus, FocusRoot, FocusScope,
+        FocusTraversalGroup, Form, FormField, FormFieldHandle, FormHandle, FractionalTranslation,
+        FractionallySizedBox, FutureBuilder, GestureArenaScope, GestureDetector, GridView, Hero,
+        HeroController, HeroMode, HitShape, HitSlop, Icon, IconData, IconTheme, IconThemeData,
+        IgnoreBaseline, IgnorePointer, Image, ImagePlacement, ImageProvider, ImageRepeat,
+        IndexedSemantics, IndexedStack, InheritedTheme, Intent, IntrinsicHeight, IntrinsicWidth,
+        LayoutBuilder, LayoutId, LimitedBox, ListBody, ListView, Listener, Localizations,
+        LocalizationsDelegate, MediaQuery, MediaQueryData, MergeSemantics, MouseRegion, Navigator,
+        NavigatorHandle, NextFocusAction, NextFocusIntent, Offstage, Opacity, OverflowBox,
+        OverflowBoxFit, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle, Padding,
+        PageController, PageRoute, PageView, PanClaimRegion, PasteTextIntent, PhysicalModel,
+        PhysicalShape, PopScope, PopupRoute, Positioned, PreferredSize, PreferredSizeView,
+        PreviousFocusAction, PreviousFocusIntent, RawButton, RawTextField, RawTextFieldState,
+        RawTextFormField, RepaintBoundary, RichText, RotatedBox, Routable, RoutePath, Router,
+        RouterHandle, Row, SafeArea, ScrollController, Scrollable, Scrollbar, SelectAllTextIntent,
+        Semantics, Shortcuts, ShrinkWrappingViewport, SimpleRoute, SingleActivator,
+        SingleChildScrollView, SizedBox, SizedOverflowBox, Slider, SliderState,
         SliverChildBuilderDelegate, SliverFadeTransition, SliverFillRemaining,
         SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
         SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,

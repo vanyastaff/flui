@@ -29,7 +29,10 @@
 //! # Rectangles
 //!
 //! A node's bounds are its published AccessKit bounds, with every ancestor's
-//! transform applied, scaled to physical pixels and covered by whole pixels.
+//! transform applied. The published root already scales by the owner's
+//! device pixel ratio, so the bounds are taken back to logical pixels by that
+//! ratio, scaled to physical pixels by the placement's and covered by whole
+//! pixels: the ratio is applied once.
 //! They are measured from the window's drawing surface, so they are reported
 //! as [`Node::surface_rect`] and `rect`, which is screen pixels, is left out:
 //! the UI runtime knows no window position.
@@ -422,6 +425,9 @@ fn wire_actions(node: &NodeRef<'_>) -> Vec<ActionName> {
 struct Walk<'q> {
     query: &'q ReadQuery,
     placement: Placement,
+    /// The ratio the owner scales its published root by, which every
+    /// AccessKit bounding box already carries.
+    published_ratio: f64,
     remaining: usize,
     truncated: bool,
     /// Whether the node AccessKit is told is focused really claims focus:
@@ -431,8 +437,17 @@ struct Walk<'q> {
 
 impl Walk<'_> {
     fn rect(&self, node: &NodeRef<'_>) -> Option<Rect> {
+        // The published root's transform scales by the owner's ratio, so the
+        // box is in its physical pixels: back to logical, then covered at the
+        // placement's ratio, so the ratio is applied once.
         let bounds = node.bounding_box()?;
-        let logical = LogicalRect::from_ltrb(bounds.x0, bounds.y0, bounds.x1, bounds.y1);
+        let unscale = self.published_ratio.recip();
+        let logical = LogicalRect::from_ltrb(
+            bounds.x0 * unscale,
+            bounds.y0 * unscale,
+            bounds.x1 * unscale,
+            bounds.y1 * unscale,
+        );
         let device = device_rect_covering(logical, self.placement.device_pixel_ratio);
         Some(Rect {
             x: device.left(),
@@ -587,6 +602,7 @@ impl SemanticsOwner {
             let mut walk = Walk {
                 query,
                 placement,
+                published_ratio: self.device_pixel_ratio(),
                 remaining: query.max_nodes.unwrap_or(usize::MAX),
                 truncated: false,
                 root_claims_focus,

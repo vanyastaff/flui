@@ -13,7 +13,7 @@ use windows::Win32::{
     },
 };
 
-use super::{platform::WindowContext, window::placement_of};
+use super::{platform::WindowContext, window_placement::placement_of};
 
 impl WindowContext {
     /// The app's size limits as outer sizes at the window's current DPI, or
@@ -55,7 +55,7 @@ impl WindowContext {
         // The frame the window adds around its content at this DPI, measured
         // for the style given, not the rectangle it has.
         let (frame_width, frame_height) =
-            super::window::outer_size(style, ex_style, dpi, (0, 0)).unwrap_or((0, 0));
+            super::window_placement::outer_size(style, ex_style, dpi, (0, 0)).unwrap_or((0, 0));
         Some(track_limits(
             constraints.min,
             constraints.max,

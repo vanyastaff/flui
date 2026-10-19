@@ -114,6 +114,11 @@ impl WidgetHost {
             .dispatch(PlatformInput::Pointer(event.clone()));
     }
 
+    /// Deliver a key event through the UI runtime's input path.
+    pub(super) fn dispatch_key(&self, event: flui_platform_api::keyboard::KeyEvent) {
+        self.ui_runtime.dispatch(PlatformInput::Keyboard(event));
+    }
+
     /// The shallowest mounted element of `view_type` below the harness root
     /// (the UI runtime's root scopes above it are never a caller's view), with its
     /// depth.
@@ -179,6 +184,10 @@ impl WidgetHost {
 
     pub(super) fn ui_runtime(&self) -> &HeadlessHost {
         &self.ui_runtime
+    }
+
+    pub(super) fn ui_runtime_mut(&mut self) -> &mut HeadlessHost {
+        &mut self.ui_runtime
     }
 
     pub(super) fn pipeline(&self) -> &PipelineCell {

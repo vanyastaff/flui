@@ -6,7 +6,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, WS_MAXIMIZE,
 };
 
-use super::window::{NativeMode, WindowsWindow, restore_rectangle};
+use super::window::{NativeMode, WindowsWindow};
+use super::window_placement::restore_rectangle;
 
 impl WindowsWindow {
     /// Bring the window back to its normal mode from any other: a minimized or

@@ -1,7 +1,8 @@
 //! One reading of a pointer's position and sensors.
 
 use super::value::{
-    ContactSize, PenOrientation, PointerPosition, Pressure, TangentialPressure, Twist,
+    ContactSize, HoverDistance, PenOrientation, PointerPosition, Pressure, TangentialPressure,
+    Twist,
 };
 use crate::EventTime;
 
@@ -42,8 +43,12 @@ pub struct PointerSample {
     pub tangential_pressure: Option<TangentialPressure>,
     /// The pen's reported altitude and/or azimuth, or `None` when neither is reported.
     pub orientation: Option<PenOrientation>,
-    /// The pen's rotation about its own axis, or `None` when the device does not report it.
+    /// The pen's rotation about its own axis (its roll), or `None` when the device does not
+    /// report it.
     pub twist: Option<Twist>,
+    /// A hovering pen's distance from the surface, or `None` when the device does not report
+    /// it (or the pen touches and the device reports no distance then).
+    pub hover_distance: Option<HoverDistance>,
     /// The contact's extent, or `None` when the device does not report it.
     pub contact_size: Option<ContactSize>,
 }
@@ -59,6 +64,7 @@ impl PointerSample {
             tangential_pressure: None,
             orientation: None,
             twist: None,
+            hover_distance: None,
             contact_size: None,
         }
     }
@@ -95,6 +101,15 @@ impl PointerSample {
     pub const fn with_twist(self, twist: Twist) -> Self {
         Self {
             twist: Some(twist),
+            ..self
+        }
+    }
+
+    /// This reading with the pen hovering `distance` from the surface.
+    #[must_use]
+    pub const fn with_hover_distance(self, distance: HoverDistance) -> Self {
+        Self {
+            hover_distance: Some(distance),
             ..self
         }
     }

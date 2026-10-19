@@ -34,6 +34,8 @@ pub struct WebWindow {
     callbacks: Arc<WindowCallbacks>,
     registration: RefCell<Option<Registration>>,
     retire_frame_slot: RefCell<Option<Box<dyn FnOnce()>>>,
+    drag: RefCell<Option<super::drag::CanvasDrag>>,
+    text: RefCell<Option<Rc<super::text_input::WebTextInput>>>,
     /// The platform's display state, which names the screen this window is on.
     displays: Arc<WebDisplays>,
     /// The published window state (ADR-0237).
@@ -251,6 +253,13 @@ impl WebWindow {
         // Make canvas focusable for keyboard events
         canvas.set_tab_index(0);
 
+        // Every touch on the canvas is the application's: with the default
+        // `touch-action`, the browser claims a touch that moves past its
+        // slop for its own panning or zooming and cancels the pointer, so a
+        // swipe, a drag or a pinch dies a few pixels in. Set inline, so a
+        // page's stylesheet cannot hand the gestures back to the browser.
+        let _ = canvas.style().set_property("touch-action", "none");
+
         // Set page title
         document.set_title(title);
 
@@ -270,6 +279,8 @@ impl WebWindow {
             id,
             registration: RefCell::new(Some(Registration::new(&canvas, claim))),
             retire_frame_slot: RefCell::new(None),
+            drag: RefCell::new(None),
+            text: RefCell::new(None),
             canvas,
             state,
             callbacks: Arc::new(WindowCallbacks::new()),
@@ -316,6 +327,7 @@ impl WebWindow {
 
     pub(super) fn install(
         &self,
+        transfer: &Arc<super::drag::WebTransfer>,
         retire_frame_slot: impl FnOnce() + 'static,
     ) -> Result<(), OpenWindowError> {
         let mut registration = self
@@ -323,7 +335,10 @@ impl WebWindow {
             .borrow_mut()
             .take()
             .expect("BUG: newly opened window owns its registration");
-        super::events::register_event_listeners(self, &mut registration)?;
+        let services = super::events::register_event_listeners(self, transfer, &mut registration)?;
+        services.drag.arm();
+        *self.drag.borrow_mut() = Some(services.drag);
+        *self.text.borrow_mut() = Some(services.text);
         *self.registration.borrow_mut() = Some(registration);
         *self.retire_frame_slot.borrow_mut() = Some(Box::new(retire_frame_slot));
         Ok(())
@@ -368,6 +383,14 @@ impl WebWindow {
             return;
         };
         registration.fence();
+        let drag = self.drag.borrow_mut().take();
+        if let Some(drag) = drag {
+            drag.retire();
+        }
+        let text = self.text.borrow_mut().take();
+        if let Some(text) = text {
+            text.retire();
+        }
         let retire_frame_slot = self.retire_frame_slot.borrow_mut().take();
         if let Some(retire) = retire_frame_slot {
             retire();
@@ -512,7 +535,19 @@ impl LayoutSync {
     }
 }
 
-impl crate::traits::HostWindow for WebWindow {}
+impl crate::traits::HostWindow for WebWindow {
+    /// The canvas's `EditContext` or hidden textarea, serving the focused
+    /// field's store; `None` once the window closed.
+    fn text_store_host(
+        &self,
+        _owner: crate::traits::OwnerThreadToken,
+    ) -> Option<Rc<dyn flui_platform_api::text_store::TextStoreHost>> {
+        self.text
+            .borrow()
+            .as_ref()
+            .map(|text| Rc::clone(text) as Rc<dyn flui_platform_api::text_store::TextStoreHost>)
+    }
+}
 
 /// What every browser window honours, known before one exists
 /// (`Platform::window_capabilities`).
@@ -549,12 +584,13 @@ impl PlatformWindow for WebWindow {
         self.state.lock().scale_factor
     }
 
-    fn request_redraw(&self) {
-        let accepting = self.registration.borrow().is_some();
-        if accepting {
-            self.callbacks.dispatch_request_frame();
-        }
-    }
+    /// Served by the page's next animation frame: the platform's
+    /// `requestAnimationFrame` loop dispatches a frame request on every one,
+    /// and the embedder's frame skips when nothing is dirty. Never inside
+    /// this call: a frame that asks for the next one (a running animation)
+    /// would get it at once, at the same frame time, inside its own
+    /// dispatch, in a loop that holds the page's only thread.
+    fn request_redraw(&self) {}
 
     fn is_focused(&self) -> bool {
         self.state.lock().focused
@@ -644,6 +680,16 @@ impl PlatformWindow for WebWindow {
         // Not applicable for web canvas
     }
 
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform_api::drag::PlatformDragSource>> {
+        self.drag.borrow().as_ref().map(|drag| {
+            Arc::clone(&drag.source) as Arc<dyn flui_platform_api::drag::PlatformDragSource>
+        })
+    }
+
+    fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
+        Some(Arc::new(super::haptics::WebHaptics))
+    }
+
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
         self.canvas
             .style()
@@ -655,9 +701,13 @@ impl PlatformWindow for WebWindow {
 
     fn on_input(
         &self,
-        callback: Box<dyn FnMut(crate::traits::PlatformInput) -> crate::DispatchEventResult + Send>,
+        callback: Box<dyn FnMut(crate::traits::PlatformInput) -> crate::DispatchEventResult>,
     ) {
-        self.install_callback(&self.callbacks.on_input, callback);
+        if self.registration.borrow().is_some() {
+            self.callbacks.set_input_callback(callback);
+        } else {
+            crate::shared::panic_boundary::contain_owner_callback(|| drop(callback));
+        }
     }
     fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
         self.install_callback(&self.callbacks.on_request_frame, callback);

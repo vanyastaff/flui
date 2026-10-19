@@ -4,7 +4,9 @@ use crate::common::{lay_out_animated, tight};
 use flui_animation::Vsync;
 use flui_foundation::geometry::Offset;
 use flui_painting::styling::Color;
-use flui_widgets::{ColoredBox, DismissDirection, Dismissible, GestureDetector, VsyncScope};
+use flui_widgets::{
+    ColoredBox, DismissDirection, DismissThreshold, Dismissible, GestureDetector, VsyncScope,
+};
 use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -72,28 +74,29 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
                 let capture = (generation == 1).then(|| reach.upgrade()).flatten();
                 let delivered = Rc::clone(&delivered);
                 let first = Rc::clone(&first);
-                Dismissible::new(ColoredBox::new(Color::rgb(10, 20, 30)))
-                    .direction(DismissDirection::Horizontal)
-                    .on_update(move |cx, details| {
-                        let _keep_alive = &capture;
-                        assert!(
-                            !first.replace(false) || !matches!(delivery, UpdateDelivery::Panicking),
-                            "intentional dismissal update panic"
-                        );
-                        delivered.borrow_mut().push((generation, details.progress));
-                        count
-                            .update(cx, |value| *value += 1)
-                            .expect("update callback has a live writable signal");
-                    })
-                    .boxed()
+                Dismissible::new(
+                    ColoredBox::new(Color::rgb(10, 20, 30)),
+                    crate::common::dismiss_alternatives(),
+                )
+                .direction(DismissDirection::Horizontal)
+                .on_update(move |cx, details| {
+                    let _keep_alive = &capture;
+                    assert!(
+                        !first.replace(false) || !matches!(delivery, UpdateDelivery::Panicking),
+                        "intentional dismissal update panic"
+                    );
+                    delivered.borrow_mut().push((generation, details.progress));
+                    count
+                        .update(cx, |value| *value += 1)
+                        .expect("update callback has a live writable signal");
+                })
+                .boxed()
             })
         };
         let vsync = Vsync::new();
-        let mut app = lay_out_animated(
-            VsyncScope::new(vsync.clone(), probe.view()),
-            tight(200.0, 200.0),
-            vsync,
-        );
+        // A new root view is how the scope hands its probe to build again.
+        let root = || VsyncScope::new(vsync.clone(), probe.view());
+        let mut app = lay_out_animated(root(), tight(200.0, 200.0), vsync.clone());
         drop(capture);
         app.dispatch_pointer_down(20.0, 20.0);
         for x in [40.0, 60.0, 80.0, 100.0] {
@@ -120,11 +123,11 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
             UpdateDelivery::Ordered => app.tick(),
             UpdateDelivery::Replaced => {
                 generation.set(2);
-                app.pump();
+                app.pump_widget(root());
             }
             UpdateDelivery::Unmounted => {
                 show.set(false);
-                app.pump();
+                app.pump_widget(root());
             }
             UpdateDelivery::Panicking => {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.tick()));
@@ -140,7 +143,9 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
                     show.set(false);
                 }
                 let (result, log) = flui_testing::log_capture::capture(|| {
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.pump()))
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        app.pump_widget(root());
+                    }))
                 });
                 let reports: Vec<_> = log
                     .records()
@@ -167,42 +172,43 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
                     // Queued updates own the retired event source until their
                     // final post-frame callback drops it. Its capture failure
                     // follows scheduler propagation, not lifecycle substitution.
+                    // The updates are accepted when the frame publishes the
+                    // moves, after the competing sibling: the sibling fails
+                    // first and the updates are its accepted tail.
+                    let first = if matches!(delivery, UpdateDelivery::CaptureUnmountedCompeting) {
+                        "competing post-frame callback panic"
+                    } else {
+                        "intentional dismissal capture retirement panic"
+                    };
                     let payload = result.expect_err("post-frame retirement propagates");
-                    assert_eq!(
-                        payload.downcast_ref::<&str>().copied(),
-                        Some("intentional dismissal capture retirement panic")
-                    );
+                    assert_eq!(payload.downcast_ref::<&str>().copied(), Some(first));
                     assert!(
                         reports.is_empty(),
                         "unmount did not substitute an actor: {log}"
                     );
                 }
-                assert_eq!(retired.get(), 1, "the last capture retires exactly once");
                 assert_eq!(
                     app.count_elements_by_view_type::<Dismissible>(),
                     0,
                     "the retired or substituted actor cannot deliver accepted updates: {log}"
                 );
                 if matches!(delivery, UpdateDelivery::CaptureUnmountedCompeting) {
-                    assert_eq!(
-                        sibling_retired.get(),
-                        0,
-                        "first failure precedes its accepted tail"
-                    );
+                    assert_eq!(sibling_retired.get(), 1);
+                    assert_eq!(retired.get(), 0, "first failure precedes its accepted tail");
                     assert!(!healthy_tail.get());
                     let result =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.tick()));
-                    let payload = result.expect_err("the accepted sibling runs on the next frame");
+                    let payload = result.expect_err("the accepted updates run on the next frame");
                     assert_eq!(
                         payload.downcast_ref::<&str>().copied(),
-                        Some("competing post-frame callback panic")
+                        Some("intentional dismissal capture retirement panic")
                     );
-                    assert_eq!(sibling_retired.get(), 1);
                     assert!(
-                        !healthy_tail.get(),
-                        "the second failure preserves its own tail"
+                        healthy_tail.get(),
+                        "the healthy tail accepted before the updates ran"
                     );
                 }
+                assert_eq!(retired.get(), 1, "the last capture retires exactly once");
                 app.tick();
                 if matches!(delivery, UpdateDelivery::CaptureUnmountedCompeting) {
                     assert!(
@@ -257,7 +263,7 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
         ) {
             generation.set(2);
             show.set(true);
-            app.pump();
+            app.pump_widget(root());
             app.dispatch_pointer_cancel();
             app.dispatch_pointer_down(20.0, 20.0);
             for x in [40.0, 60.0, 80.0, 100.0] {
@@ -289,6 +295,7 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
         let updates = Rc::clone(&progress);
         let mut card = Dismissible::new(
             SizedBox::new(200.0, 200.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            crate::common::dismiss_alternatives(),
         )
         .direction(if vertical {
             DismissDirection::Vertical
@@ -297,7 +304,6 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
         })
         .background(ColoredBox::new(Color::rgb(80, 90, 100)))
         .secondary_background(ColoredBox::new(Color::rgb(110, 120, 130)))
-        .movement_duration(Duration::from_secs(1))
         .on_update(move |_, details| updates.borrow_mut().push(details.progress));
         for direction in [
             DismissDirection::StartToEnd,
@@ -305,7 +311,7 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
             DismissDirection::Up,
             DismissDirection::Down,
         ] {
-            card = card.dismiss_threshold(direction, 1.0);
+            card = card.dismiss_threshold(direction, DismissThreshold::NEVER);
         }
         let root = GestureArenaScope::new(
             binding.arena().clone(),
@@ -328,22 +334,30 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
             Duration::from_millis(10),
         );
         let mut release_position = script
-            .events()
+            .pointer_events()
             .last()
             .expect("drag ends with release")
             .position;
-        for (index, mut event) in script.events().iter().copied().enumerate() {
+        for (index, mut event) in script.pointer_events().iter().copied().enumerate() {
             if event.phase == flui_testing::PointerPhase::Up {
                 event.position = release_position;
             }
             event.at = if index == 0 {
                 Duration::ZERO
+            } else if event.phase == flui_testing::PointerPhase::Up {
+                // Held still before lifting: the release settles back from
+                // rest instead of flinging the card out against its
+                // threshold.
+                Duration::from_millis(200)
             } else {
                 Duration::from_millis(10)
             };
-            binding.replay(&PointerScript::new("one drag event").with(event));
+            binding.replay_event(event);
             binding.pump_frame(Duration::ZERO);
-            if (3..=5).contains(&index) {
+            // The row's menu long press competes for the finger, so the drag
+            // takes the contact at its slop and the background mounts on the
+            // third move; every frame after that only slides.
+            if (4..=5).contains(&index) {
                 assert_eq!(
                     binding.last_frame_report().build.elements_built,
                     0,
@@ -356,7 +370,7 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
                 } else {
                     event.position.dx -= sign * 160.0;
                 }
-                binding.replay(&PointerScript::new("cross the origin").with(event));
+                binding.replay_event(event);
                 binding.pump_frame(Duration::ZERO);
                 let expected = if sign > 0.0 {
                     Color::rgb(110, 120, 130)
@@ -376,7 +390,7 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
                     event.position.dx -= sign * 16.0;
                 }
                 release_position = event.position;
-                binding.replay(&PointerScript::new("continue on the other side").with(event));
+                binding.replay_event(event);
                 binding.pump_frame(Duration::ZERO);
                 assert_eq!(
                     binding.last_frame_report().build.elements_built,
@@ -431,13 +445,16 @@ fn dismissal_release_uses_profile(direction: DismissDirection) {
                 .try_with_fling_velocity(min, max)
                 .expect("valid fling range")
         };
-        let source = flui_interaction::settings::GestureSettingsSource::new(profile(min, max));
+        let source = flui_interaction::gesture::GestureSettingsSource::new(profile(min, max));
         let dismissed = Rc::new(Cell::new(0));
         let recorder = Rc::clone(&dismissed);
-        let card = Dismissible::new(ColoredBox::new(Color::rgb(10, 20, 30)))
-            .direction(direction)
-            .resize_duration(None)
-            .on_dismissed(move |_, _| recorder.set(recorder.get() + 1));
+        let card = Dismissible::new(
+            ColoredBox::new(Color::rgb(10, 20, 30)),
+            crate::common::dismiss_alternatives(),
+        )
+        .direction(direction)
+        .resize_duration(None)
+        .on_dismissed(move |_, _| recorder.set(recorder.get() + 1));
         let vsync = Vsync::new();
         let mut laid = lay_out_animated(
             VsyncScope::new(
@@ -491,7 +508,7 @@ fn cancelled_card(direction: DismissDirection, end: f64) {
     let child = GestureDetector::new()
         .on_tap(move |_| on_tap.set(on_tap.get() + 1))
         .child(ColoredBox::new(Color::rgb(10, 20, 30)));
-    let card = Dismissible::new(child)
+    let card = Dismissible::new(child, crate::common::dismiss_alternatives())
         .direction(direction)
         .resize_duration(None)
         .on_dismissed(move |_, _| on_dismiss.set(on_dismiss.get() + 1));
@@ -502,12 +519,16 @@ fn cancelled_card(direction: DismissDirection, end: f64) {
     );
     let horizontal = direction == DismissDirection::Horizontal;
     let (x, y) = if horizontal { (end, 20.0) } else { (20.0, end) };
-    let card_target = laid.find_by_render_type("RenderDecoratedBox");
+    // The card is the first decorated box; the alternatives' control follows it.
+    let card_target = laid.find_all_by_render_type("RenderDecoratedBox")[0];
     assert!(
-        laid.hit_test_pointer(Offset::new(20.0, 20.0))
-            .path()
-            .iter()
-            .any(|entry| entry.target == card_target)
+        laid.hit_test_pointer(
+            Offset::new(20.0, 20.0),
+            flui_interaction::events::PointerKind::Touch
+        )
+        .path()
+        .iter()
+        .any(|entry| entry.target == card_target)
     );
     let (slop_x, slop_y) = if horizontal {
         (40.0, 20.0)
@@ -522,7 +543,10 @@ fn cancelled_card(direction: DismissDirection, end: f64) {
     laid.pump();
     assert!(
         !laid
-            .hit_test_pointer(Offset::new(20.0, 20.0))
+            .hit_test_pointer(
+                Offset::new(20.0, 20.0),
+                flui_interaction::events::PointerKind::Touch
+            )
             .path()
             .iter()
             .any(|entry| entry.target == card_target),
@@ -531,7 +555,10 @@ fn cancelled_card(direction: DismissDirection, end: f64) {
     if end > 200.0 {
         assert!(
             !laid
-                .hit_test_pointer(Offset::new(199.0, 20.0))
+                .hit_test_pointer(
+                    Offset::new(199.0, 20.0),
+                    flui_interaction::events::PointerKind::Touch
+                )
                 .path()
                 .iter()
                 .any(|entry| entry.target == card_target),
@@ -564,6 +591,40 @@ fn cancelled_card(direction: DismissDirection, end: f64) {
         laid.pump_for(Duration::from_millis(16));
     }
     assert_eq!(dismissed.get(), 1, "next completed gesture still dismisses");
+}
+
+/// A vertical card's drag runs on its axis: a horizontal drag across it
+/// reaches the enclosing pan instead of starting the dismissal.
+pub(crate) fn a_vertical_dismissible_leaves_a_horizontal_drag_to_its_ancestor() {
+    use flui_widgets::{DragSlot, SizedBox};
+    let outer_starts = Rc::new(Cell::new(0));
+    let started = Rc::clone(&outer_starts);
+    let vsync = Vsync::new();
+    let card = Dismissible::new(
+        SizedBox::new(200.0, 200.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        crate::common::dismiss_alternatives(),
+    )
+    .direction(DismissDirection::Vertical)
+    .resize_duration(None);
+    let laid = lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            GestureDetector::new()
+                .drag(DragSlot::pan().on_start(move |_, _| started.set(started.get() + 1)))
+                .child(card),
+        ),
+        tight(200.0, 200.0),
+        vsync,
+    );
+    laid.dispatch_pointer_down(20.0, 100.0);
+    laid.dispatch_pointer_move(60.0, 100.0);
+    laid.dispatch_pointer_move(120.0, 100.0);
+    laid.dispatch_pointer_up(120.0, 100.0);
+    assert_eq!(
+        outer_starts.get(),
+        1,
+        "the horizontal motion belongs to the enclosing pan"
+    );
 }
 
 pub(crate) fn a_cancelled_horizontal_dismiss_restores_the_card() {
@@ -615,6 +676,7 @@ pub(crate) fn a_returning_dismissible_migrates_between_registries() {
         let card = Dismissible::new(
             flui_widgets::SizedBox::new(200.0, 200.0)
                 .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            crate::common::dismiss_alternatives(),
         )
         .direction(if vertical {
             DismissDirection::Vertical
@@ -662,8 +724,8 @@ pub(crate) fn a_returning_dismissible_migrates_between_registries() {
     }
 }
 
-/// The card's speed, in px/s, just after a release at 1500 px/s on a card
-/// `width` px wide.
+/// The card's speed, in px/s, just after a release on a card `width` px
+/// wide: 1500 px/s outward, or 1000 px/s back toward rest.
 fn release_speed(width: f64, reverse: bool, maximum: Option<f64>, vertical: bool) -> f64 {
     let painted_x = |laid: &crate::common::LaidOut| painted_card_axis(laid, vertical);
     let vsync = Vsync::new();
@@ -675,6 +737,7 @@ fn release_speed(width: f64, reverse: bool, maximum: Option<f64>, vertical: bool
     let card = Dismissible::new(
         flui_widgets::SizedBox::new(size.width, size.height)
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        crate::common::dismiss_alternatives(),
     )
     .direction(if vertical {
         DismissDirection::Vertical
@@ -707,6 +770,9 @@ fn release_speed(width: f64, reverse: bool, maximum: Option<f64>, vertical: bool
     laid.dispatch_pointer_down(start_x, start_y);
     // 15 px every 10 ms: 1500 px/s to the right.
     let mut x = 10.0;
+    // A reverse release goes 240 px out and comes back 120 px at 1000 px/s.
+    // The drag stops at the card's extent, so the narrowest card comes back
+    // from its 150 px edge and stays on that side.
     for _ in 0..if reverse { 12 } else { 5 } {
         x += if reverse { 20.0 } else { 15.0 };
         let (px, py) = point(x);
@@ -714,7 +780,7 @@ fn release_speed(width: f64, reverse: bool, maximum: Option<f64>, vertical: bool
     }
     if reverse {
         for _ in 0..12 {
-            x -= 15.0;
+            x -= 10.0;
             let (px, py) = point(x);
             laid.dispatch_pointer_move_after(px, py, Duration::from_millis(10));
         }
@@ -762,9 +828,9 @@ pub(crate) fn a_dismissible_release_keeps_finger_speed_on_any_width() {
             (150.0, false, Some(f64::INFINITY)),
         ] {
             let speed = release_speed(width, reverse, maximum, vertical);
-            let expected = if reverse { -1500.0 } else { 1500.0 };
+            let expected = if reverse { -1000.0 } else { 1500.0 };
             assert!(
-                (speed - expected).abs() <= 0.1 * 1500.0,
+                (speed - expected).abs() <= 0.1 * expected.abs(),
                 "a {width} px card (maximum {maximum:?}, vertical {vertical}) left at {speed} px/s after a {expected} px/s release"
             );
         }
@@ -790,6 +856,7 @@ fn exercise_collapse_registry(migrate: bool, fail_wake: bool) {
     let vsync = Vsync::new();
     let card = Dismissible::new(
         flui_widgets::SizedBox::new(150.0, 100.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        crate::common::dismiss_alternatives(),
     )
     .background(ColoredBox::new(color))
     .on_dismissed(move |_, _| output.set(output.get() + 1));
@@ -951,6 +1018,7 @@ pub(crate) fn resize_delivery_keeps_accepted_ticks_before_completion() {
                 Dismissible::new(
                     flui_widgets::SizedBox::new(150.0, 100.0)
                         .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+                    crate::common::dismiss_alternatives(),
                 )
                 .on_resize(move |_| {
                     resize_output.borrow_mut().push((generation, "resize"));
@@ -966,11 +1034,9 @@ pub(crate) fn resize_delivery_keeps_accepted_ticks_before_completion() {
             })
         };
         let vsync = Vsync::new();
-        let mut laid = lay_out_animated(
-            VsyncScope::new(vsync.clone(), probe.view()),
-            tight(150.0, 100.0),
-            vsync.clone(),
-        );
+        // A new root view is how the scope hands its probe to build again.
+        let root = || VsyncScope::new(vsync.clone(), probe.view());
+        let mut laid = lay_out_animated(root(), tight(150.0, 100.0), vsync.clone());
         laid.dispatch_pointer_down(10.0, 50.0);
         for step in 1..=12 {
             laid.dispatch_pointer_move_after(
@@ -984,11 +1050,12 @@ pub(crate) fn resize_delivery_keeps_accepted_ticks_before_completion() {
         delivered.borrow_mut().clear();
         panic_pending.set(panicking);
 
-        // Pointer moves spent 120ms. The initial pump anchored the 300ms
-        // collapse there. Accept two non-final samples and then completion
-        // without letting a build consume the intervening notifications.
+        // The row came to rest out in the release frame and starts its 300ms
+        // collapse after it, so the collapse is anchored at the next tick.
+        // Accept two non-final samples and then completion without letting a
+        // build consume the intervening notifications.
         let mut clock = MotionClock::new();
-        for millis in [170, 220, 420] {
+        for millis in [170, 220, 470] {
             vsync.tick_all(&clock.frame(Duration::from_millis(millis)));
         }
         assert!(
@@ -998,11 +1065,11 @@ pub(crate) fn resize_delivery_keeps_accepted_ticks_before_completion() {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match delivery {
             UpdateDelivery::Replaced => {
                 generation.set(2);
-                laid.pump();
+                laid.pump_widget(root());
             }
             UpdateDelivery::Unmounted => {
                 show.set(false);
-                laid.pump();
+                laid.pump_widget(root());
             }
             _ => laid.tick(),
         }));
@@ -1036,6 +1103,188 @@ pub(crate) fn resize_delivery_keeps_accepted_ticks_before_completion() {
             delivered.borrow().len(),
             expected.len(),
             "recovery cannot repeat delivery"
+        );
+    }
+}
+
+/// A card goes out only where its direction and threshold let it: a hard
+/// fling that carries it to its extent against a threshold of `1.0` settles
+/// back, a right-to-left card goes out toward its reading end to the left,
+/// and a touch going down in the window's system-gesture strip leaves the
+/// card to the operating system's edge swipe.
+pub(crate) fn a_dismissible_goes_out_only_where_its_direction_and_threshold_allow() {
+    use flui_painting::typography::TextDirection;
+    use flui_widgets::Directionality;
+    let card = |dismissed: &Rc<std::cell::RefCell<Vec<DismissDirection>>>| {
+        let dismissed = Rc::clone(dismissed);
+        Dismissible::new(
+            ColoredBox::new(Color::rgb(10, 20, 30)),
+            crate::common::dismiss_alternatives(),
+        )
+        .resize_duration(None)
+        .on_dismissed(move |_, direction| dismissed.borrow_mut().push(direction))
+    };
+    let settle = |laid: &mut crate::common::LaidOut| {
+        for _ in 0..90 {
+            laid.pump_for(Duration::from_millis(16));
+        }
+    };
+
+    let dismissed = Rc::default();
+    let vsync = Vsync::new();
+    let held = card(&dismissed)
+        .dismiss_threshold(DismissDirection::StartToEnd, DismissThreshold::NEVER)
+        .dismiss_threshold(DismissDirection::EndToStart, DismissThreshold::NEVER);
+    let mut laid = lay_out_animated(
+        VsyncScope::new(vsync.clone(), held),
+        tight(200.0, 200.0),
+        vsync,
+    );
+    // Right, then swung hard back across rest: the release flings the card
+    // on toward the reading start, where its threshold keeps it in.
+    let fling = [116.0, 132.0, 148.0, 164.0, 180.0, 20.0, 4.0]
+        .into_iter()
+        .fold(
+            flui_testing::TouchScript::new("swing").down(1, Offset::new(100.0, 100.0)),
+            |script, x| {
+                script
+                    .wait(Duration::from_millis(10))
+                    .move_to(1, Offset::new(x, 100.0))
+            },
+        )
+        .up(1)
+        .build()
+        .expect("one whole contact");
+    laid.replay(&fling);
+    settle(&mut laid);
+    assert!(
+        dismissed.borrow().is_empty(),
+        "a threshold of 1.0 keeps the flung card in"
+    );
+    assert!(
+        painted_card_axis(&laid, false).abs() < 0.5,
+        "and it settled back"
+    );
+
+    // A threshold is a fraction of the extent: anything else is refused
+    // where it is made, never stored and then ignored.
+    for refused in [f64::NAN, -0.1, 1.5, f64::INFINITY] {
+        let error = DismissThreshold::new(refused).expect_err("outside 0.0..=1.0");
+        assert_eq!(error.fraction().is_nan(), refused.is_nan());
+    }
+    // A threshold for the axis holds both of its sides: released slowly at
+    // 45 % of the extent, past the default but short of 0.9, the card
+    // returns on either side.
+    for sign in [1.0, -1.0] {
+        let dismissed = Rc::default();
+        let vsync = Vsync::new();
+        let held = card(&dismissed).dismiss_threshold(
+            DismissDirection::Horizontal,
+            DismissThreshold::new(0.9).expect("0.9 is a fraction of the extent"),
+        );
+        let mut laid = lay_out_animated(
+            VsyncScope::new(vsync.clone(), held),
+            tight(200.0, 200.0),
+            vsync,
+        );
+        laid.dispatch_pointer_down(100.0, 100.0);
+        for step in 1..=18 {
+            laid.dispatch_pointer_move_after(
+                100.0 + sign * f64::from(step) * 5.0,
+                100.0,
+                Duration::from_millis(32),
+            );
+        }
+        laid.pump_for(Duration::from_millis(200));
+        laid.dispatch_pointer_up(100.0 + sign * 90.0, 100.0);
+        settle(&mut laid);
+        assert!(
+            dismissed.borrow().is_empty(),
+            "side {sign}: a 45 % release under an axis threshold of 0.9 keeps the card in"
+        );
+    }
+
+    let dismissed = Rc::default();
+    let vsync = Vsync::new();
+    let mut laid = lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            Directionality::new(
+                TextDirection::Rtl,
+                card(&dismissed).direction(DismissDirection::StartToEnd),
+            ),
+        ),
+        tight(200.0, 200.0),
+        vsync,
+    );
+    laid.dispatch_pointer_down(150.0, 100.0);
+    for step in 1..=8 {
+        laid.dispatch_pointer_move_after(
+            150.0 + f64::from(step) * 5.0,
+            100.0,
+            Duration::from_millis(16),
+        );
+    }
+    laid.dispatch_pointer_up(190.0, 100.0);
+    settle(&mut laid);
+    assert!(
+        painted_card_axis(&laid, false).abs() < 0.5 && dismissed.borrow().is_empty(),
+        "toward the reading start the card does not move"
+    );
+    laid.dispatch_pointer_down(150.0, 100.0);
+    for step in 1..=12 {
+        laid.dispatch_pointer_move_after(
+            150.0 - f64::from(step) * 12.0,
+            100.0,
+            Duration::from_millis(16),
+        );
+    }
+    laid.dispatch_pointer_up(6.0, 100.0);
+    settle(&mut laid);
+    assert_eq!(
+        *dismissed.borrow(),
+        [DismissDirection::StartToEnd],
+        "toward the reading end, to the left, it goes out"
+    );
+
+    for (touch, moved) in [(true, false), (false, true)] {
+        let farthest = Rc::new(Cell::new(0.0_f64));
+        let vsync = Vsync::new();
+        let tracked = Rc::clone(&farthest);
+        let view = card(&Rc::default()).on_update(move |_, details| {
+            tracked.set(tracked.get().max(details.progress));
+        });
+        let mut laid = lay_out_animated(
+            VsyncScope::new(vsync.clone(), view),
+            tight(200.0, 200.0),
+            vsync,
+        );
+        let path = (1..=6).map(|step| Offset::new(6.0 + f64::from(step) * 10.0, 100.0));
+        let script = if touch {
+            path.fold(
+                flui_testing::TouchScript::new("edge").down(1, Offset::new(6.0, 100.0)),
+                |script, point| script.wait(Duration::from_millis(16)).move_to(1, point),
+            )
+            .wait(Duration::from_millis(16))
+            .up(1)
+            .build()
+        } else {
+            path.fold(
+                flui_testing::MouseScript::new("edge").press(Offset::new(6.0, 100.0)),
+                |script, point| script.wait(Duration::from_millis(16)).move_to(point),
+            )
+            .wait(Duration::from_millis(16))
+            .release()
+            .build()
+        }
+        .expect("one whole contact");
+        laid.replay(&script);
+        settle(&mut laid);
+        assert_eq!(
+            farthest.get() > 0.1,
+            moved,
+            "touch {touch}: a contact from the window's edge strip moved the card {}",
+            farthest.get()
         );
     }
 }

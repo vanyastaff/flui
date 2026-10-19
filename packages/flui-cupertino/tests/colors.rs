@@ -78,7 +78,7 @@ impl View for RetainedChild {
 
 impl ProxyView for RetainedChild {
     fn child(&self) -> &dyn View {
-        &*self.0.0
+        &self.0
     }
 }
 

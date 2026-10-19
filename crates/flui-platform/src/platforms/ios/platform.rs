@@ -56,9 +56,8 @@ use parking_lot::Mutex;
 use crate::error::PlatformError;
 use crate::shared::{PlatformHandlers, system_notice::SystemNotices};
 use crate::traits::{
-    Clipboard, DisplaySnapshot, MobileCapabilities, OpenWindowError, OwnerPlatform, Platform,
-    PlatformCapabilities, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent,
-    WindowId, WindowOptions,
+    Clipboard, DisplaySnapshot, OpenWindowError, OwnerPlatform, Platform, PlatformExecutor,
+    PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId, WindowOptions,
     owner::{DirectOwnerHooks, OwnerHooks},
 };
 
@@ -133,7 +132,6 @@ pub struct IOSPlatform {
     deadline: Mutex<Option<(Arc<()>, web_time::Instant)>>,
     background_executor: Arc<IOSExecutor>,
     clipboard: Arc<IOSClipboard>,
-    capabilities: MobileCapabilities,
     displays: Arc<super::display::IosDisplays>,
     /// Marks `displays` stale and wakes the owner on screen and scene
     /// notifications; main-thread owned like `preferences`.
@@ -213,7 +211,6 @@ impl IOSPlatform {
             deadline: Mutex::new(None),
             background_executor: Arc::new(IOSExecutor),
             clipboard: Arc::new(IOSClipboard::new()),
-            capabilities: MobileCapabilities::ios(),
             displays,
             _screen_observer: NativeOwner::new(screen_observer, marker),
             notices: Arc::default(),
@@ -492,10 +489,6 @@ impl Platform for IOSPlatform {
 
     fn data_transfer(&self) -> Arc<dyn crate::data_transfer::DataTransferSource> {
         Arc::new(crate::data_transfer::NullDataTransferSource)
-    }
-
-    fn capabilities(&self) -> &dyn PlatformCapabilities {
-        &self.capabilities
     }
 
     fn name(&self) -> &'static str {

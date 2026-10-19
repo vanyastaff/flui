@@ -55,11 +55,6 @@
 - `DragUpdateDetails::new` takes the actual global delta after the local delta.
   Drag and multi-drag updates expose that root movement; drag ends expose raw
   root velocity and `global_fling_velocity()` with the admitted fling policy.
-- `Listener::on_scroll_claim` receives `ScrollDispatch`, with explicit `local`
-  and `global` packets, sequence, source and cause. `on_scroll_sequence` uses
-  the same selected target and also receives typed completion. A standalone
-  route has no binding sequence; native pan/zoom dispatch now carries one when
-  admitted by the binding.
 
 - Lazy render implementors must install declared member totals through
   `LazyMultiBoxRender::set_semantic_set_size`; counts remain separate from slot

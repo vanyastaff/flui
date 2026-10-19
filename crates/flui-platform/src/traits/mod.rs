@@ -15,7 +15,6 @@
 //! };
 //! ```
 
-mod capabilities;
 mod host_window;
 // The owner-thread capability (ADR-0039): `OwnerPlatform`, `PlatformProxy`,
 // `PendingWindow`, and their typed errors. `pub(crate)` (not private): the
@@ -45,9 +44,6 @@ pub use flui_platform_api::{
 // The accessibility capability lives with the semantics tree it publishes
 // (ADR-0082 §2); re-exported here at its old path for the backends and the
 // composition root.
-pub use capabilities::{
-    DesktopCapabilities, MobileCapabilities, PlatformCapabilities, WebCapabilities,
-};
 pub use flui_platform_api::keyboard::NamedKey;
 pub use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,

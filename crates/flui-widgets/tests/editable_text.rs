@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use flui_interaction::routing::FocusNode;
+use flui_interaction::focus::FocusNode;
 use flui_objects::RenderEditable;
 use flui_platform_api::{
     EventTime,
@@ -21,7 +21,7 @@ pub(crate) mod native_actions {
     use std::rc::Rc;
     use std::time::Duration;
 
-    use flui_interaction::routing::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_rendering::pipeline::PipelineCell;
     use flui_testing::a11y::Role;
     use flui_testing::{
@@ -1395,7 +1395,7 @@ pub(crate) mod text_store {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use flui_interaction::routing::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_platform_api::text_store::{
         LockGrant, LockOutcome, LockTiming, Selection, TextStore, TextStoreEdit, TextStoreError,
         TextStoreRead, Utf16Offset,
@@ -2358,7 +2358,7 @@ pub(crate) mod text_store {
 pub(crate) mod event_cx {
     use std::rc::Rc;
 
-    use flui_interaction::routing::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_view::prelude::*;
     use flui_widgets::{EditableText, TextEditingController};
 

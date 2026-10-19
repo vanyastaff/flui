@@ -180,16 +180,14 @@ pub(crate) fn animated_size_completion_writes_a_signal_after_build() {
         })
     };
     let vsync = Vsync::new();
-    let mut app = lay_out_animated(
-        VsyncScope::new(vsync.clone(), probe.view()),
-        loose(200.0),
-        vsync,
-    );
+    // A new root view is how the scope hands its probe to build again.
+    let root = || VsyncScope::new(vsync.clone(), probe.view());
+    let mut app = lay_out_animated(root(), loose(200.0), vsync.clone());
     assert_eq!(probe.value(), Ok(0), "mount does not complete a run");
 
     for (target, completions) in [(100.0, 1), (40.0, 2)] {
         side.set(target);
-        app.pump();
+        app.pump_widget(root());
         assert_eq!(probe.value(), Ok(completions - 1));
         let ((), log) = flui_testing::log_capture::capture(|| {
             for _ in 0..8 {
@@ -249,13 +247,11 @@ pub(crate) fn size_completion_keeps_owner_event_order_and_lifetime() {
             })
         };
         let registry = Vsync::new();
-        let mut app = lay_out_animated(
-            VsyncScope::new(registry.clone(), probe.view()),
-            loose(200.0),
-            registry.clone(),
-        );
+        // A new root view is how the scope hands its probe to build again.
+        let root = || VsyncScope::new(registry.clone(), probe.view());
+        let mut app = lay_out_animated(root(), loose(200.0), registry.clone());
         side.set(100.0);
-        app.pump();
+        app.pump_widget(root());
         let mut clock = MotionClock::new();
         for millis in [20, 120] {
             registry.tick_all(&clock.frame(Duration::from_millis(millis)));
@@ -275,7 +271,7 @@ pub(crate) fn size_completion_keeps_owner_event_order_and_lifetime() {
                 "unmounted" => mounted.set(false),
                 _ => {}
             }
-            app.pump();
+            app.pump_widget(root());
         }));
         assert_eq!(result.is_err(), delivery == "panicking");
         if let Err(payload) = result {
@@ -300,7 +296,7 @@ pub(crate) fn size_completion_keeps_owner_event_order_and_lifetime() {
             assert!((width(&app) - 100.0).abs() < 1.0);
             let before = probe.value().expect("mounted signal");
             side.set(40.0);
-            app.pump();
+            app.pump_widget(root());
             for millis in [140, 240] {
                 registry.tick_all(&clock.frame(Duration::from_millis(millis)));
             }
@@ -514,13 +510,11 @@ pub(crate) fn a_spring_finishing_before_layout_completes_once() {
         })
     };
     let registry = Vsync::new();
-    let mut app = lay_out_animated(
-        VsyncScope::new(registry.clone(), probe.view()),
-        loose(200.0),
-        registry.clone(),
-    );
+    // A new root view is how the scope hands its probe to build again.
+    let root = || VsyncScope::new(registry.clone(), probe.view());
+    let mut app = lay_out_animated(root(), loose(200.0), registry.clone());
     side.set(100.0);
-    app.pump();
+    app.pump_widget(root());
     // The registry runs the spring to rest without an intervening layout.
     let mut clock = MotionClock::new();
     let mut millis = 20;
@@ -613,13 +607,11 @@ pub(crate) fn a_size_and_motion_change_together_complete_one_resize() {
         })
     };
     let registry = Vsync::new();
-    let mut app = lay_out_animated(
-        VsyncScope::new(registry.clone(), probe.view()),
-        loose(200.0),
-        registry,
-    );
+    // A new root view is how the scope hands its probe to build again.
+    let root = || VsyncScope::new(registry.clone(), probe.view());
+    let mut app = lay_out_animated(root(), loose(200.0), registry.clone());
     side.set(100.0);
-    app.pump();
+    app.pump_widget(root());
     for _ in 0..3 {
         app.pump_for(FRAME);
     }
@@ -631,7 +623,7 @@ pub(crate) fn a_size_and_motion_change_together_complete_one_resize() {
         duration: Duration::from_micros(100),
         curve: ArcCurve::new(curves::LINEAR),
     };
-    app.pump();
+    app.pump_widget(root());
     for _ in 0..6 {
         app.pump_for(FRAME);
     }

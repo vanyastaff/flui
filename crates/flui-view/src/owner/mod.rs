@@ -21,6 +21,7 @@ mod global_key_scope;
 mod inherited_dependencies;
 mod keep_alive;
 mod layout_builder;
+mod presentation_capabilities;
 mod rebuild_handle;
 mod recovered_panic;
 

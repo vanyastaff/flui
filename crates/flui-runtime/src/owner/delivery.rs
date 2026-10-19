@@ -163,13 +163,19 @@ impl FrameDispatcher {
         core.deliver(RuntimeWork::SurfaceRestored(self.address), effects)
     }
 
-    /// Admit a real frame delivery. Nested calls join the same owner FIFO.
+    /// Admit a real frame delivery, [`HostInput::Frame`](crate::HostInput::Frame)
+    /// with its `vsync` on the event timeline. Nested calls join the same owner
+    /// FIFO.
     ///
     /// # Errors
     /// Refuses an expired host or exact presentation, or an active publication.
-    pub fn deliver(&self, effects: &dyn OwnerEffects) -> Result<Delivery, DispatchError> {
+    pub fn deliver(
+        &self,
+        vsync: flui_platform_api::EventTime,
+        effects: &dyn OwnerEffects,
+    ) -> Result<Delivery, DispatchError> {
         let core = self.owner.upgrade().ok_or(DispatchError::OwnerGone)?;
-        core.deliver(RuntimeWork::Frame(self.address), effects)
+        core.deliver(RuntimeWork::Frame(self.address, vsync), effects)
     }
 }
 
@@ -459,6 +465,82 @@ impl OwnerCore {
             let incoming = RecoveryState::current(first);
             lease.return_to_owner(first, incoming);
         }
+    }
+
+    /// Start the OS drag sessions resident runtimes decided on (ADR-0211 §7).
+    ///
+    /// Runs once the outermost callback has finished, so no dispatch, borrow,
+    /// lease or frame is in progress. Each runtime is checked out only to take
+    /// its requests and, later, to hear refusals; it is resident while a
+    /// window's start runs, because a backend may run the OS's modal loop
+    /// inside the start and deliver this runtime's input and frames from it.
+    pub(super) fn enter_pending_os_drags(self: &Rc<Self>, first: &mut Failure) {
+        let ids: Vec<_> = {
+            let state = self.state.borrow();
+            if state.closed || state.claim != DeliveryClaim::Idle {
+                return;
+            }
+            state
+                .runtimes
+                .iter()
+                .filter(|entry| match &entry.residence {
+                    Residence::Resident(runtime) => runtime.has_pending_os_drags(),
+                    _ => false,
+                })
+                .map(|entry| entry.id)
+                .collect()
+        };
+        for id in ids {
+            let Ok(lease) = RuntimeLease::checkout_runtime(self, id) else {
+                continue;
+            };
+            let taken = catch_unwind(AssertUnwindSafe(|| {
+                lease
+                    .runtime
+                    .as_deref()
+                    .expect("BUG: an active lease owns its runtime")
+                    .take_os_drag_starts()
+            }));
+            let incoming = RecoveryState::current(first);
+            lease.return_to_owner(first, incoming);
+            let entries = match taken {
+                Ok(entries) => entries,
+                Err(failure) => {
+                    preserve_first_lifecycle_panic(first, Some(failure), "OS drag admission");
+                    continue;
+                }
+            };
+            let mut refused = Vec::new();
+            for entry in entries {
+                match catch_unwind(AssertUnwindSafe(|| entry.start())) {
+                    Ok(Some(refusal)) => refused.push(refusal),
+                    Ok(None) => {}
+                    Err(failure) => {
+                        preserve_first_lifecycle_panic(first, Some(failure), "OS drag start");
+                    }
+                }
+            }
+            if refused.is_empty() {
+                continue;
+            }
+            // A start's modal loop may have closed the runtime meanwhile; its
+            // sessions went with it.
+            let Ok(lease) = RuntimeLease::checkout_runtime(self, id) else {
+                continue;
+            };
+            let told = catch_unwind(AssertUnwindSafe(|| {
+                lease
+                    .runtime
+                    .as_deref()
+                    .expect("BUG: an active lease owns its runtime")
+                    .os_drags_refused(refused);
+            }))
+            .err();
+            preserve_first_lifecycle_panic(first, told, "OS drag refusal");
+            let incoming = RecoveryState::current(first);
+            lease.return_to_owner(first, incoming);
+        }
+        self.drain_retired(first);
     }
 
     pub(super) fn continue_work(self: &Rc<Self>, effects: &dyn OwnerEffects) {

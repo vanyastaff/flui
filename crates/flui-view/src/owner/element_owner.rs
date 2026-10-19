@@ -262,6 +262,12 @@ pub struct ElementOwner<'a> {
     /// `BuildCtx` the same way `text_input_handle` is.
     pub(crate) clipboard_handle: &'a Option<flui_interaction::ClipboardHandle>,
 
+    /// The presentation's haptics, threaded the same way.
+    pub(crate) haptics_handle: &'a Option<flui_interaction::HapticsHandle>,
+
+    /// The presentation's drag-and-drop, threaded the same way.
+    pub(crate) drag_and_drop: &'a Option<flui_interaction::drag::DragAndDrop>,
+
     /// The presentation's external textures, threaded the same way.
     pub(crate) texture_registry: &'a Option<flui_rendering::layer::TextureRegistry>,
 

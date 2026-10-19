@@ -99,6 +99,66 @@ impl From<FocusNodeId> for NonZeroU64 {
 pub use flui_platform_api::pointer::DeviceId;
 
 // ============================================================================
+// InputSurface - the routing root of an input stream
+// ============================================================================
+
+/// The routing root an input stream arrives on: a presentation's window, or a
+/// surface embedded in it (ADR-0207 §5).
+///
+/// Contact sequences, hover, move coalescing and wheel and pan-zoom latches are
+/// keyed by the surface, never by a process-wide "current pointer". A contact
+/// stays with the surface that admitted its Down: the rest of the sequence is
+/// delivered there wherever the platform reports it.
+///
+/// ```rust
+/// use flui_interaction::{GestureBinding, InputSurface};
+///
+/// let binding = GestureBinding::new();
+/// let embedded = binding.embed_surface()?;
+/// assert_ne!(embedded, InputSurface::Window);
+/// # Ok::<(), flui_interaction::SurfaceIdsExhausted>(())
+/// ```
+///
+/// The set is closed, as ADR-0207 §5 states it: a new kind of routing root
+/// would change every owner keyed by the surface and the recording format, so
+/// matches over it stay exhaustive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum InputSurface {
+    /// The window of the presentation that owns the binding.
+    Window,
+    /// A surface embedded in that window, minted by
+    /// [`GestureBinding::embed_surface`](crate::GestureBinding::embed_surface).
+    Embedded(EmbeddedSurfaceId),
+}
+
+/// Identity of a surface embedded in a presentation's window.
+///
+/// Minted only by [`GestureBinding::embed_surface`](crate::GestureBinding::embed_surface),
+/// never reused within that binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EmbeddedSurfaceId(NonZeroU64);
+
+impl EmbeddedSurfaceId {
+    #[inline]
+    pub(crate) const fn new(id: NonZeroU64) -> Self {
+        Self(id)
+    }
+
+    /// The raw value, for diagnostics and recording rows; there is no
+    /// conversion back.
+    #[must_use]
+    pub const fn get(self) -> NonZeroU64 {
+        self.0
+    }
+}
+
+/// A binding minted every embedded-surface identity it can represent; it
+/// refuses permanently instead of reissuing one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("embedded input surface identities are exhausted")]
+pub struct SurfaceIdsExhausted;
+
+// ============================================================================
 // RegionId - Identifier for mouse regions
 // ============================================================================
 

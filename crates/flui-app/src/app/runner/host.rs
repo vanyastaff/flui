@@ -293,6 +293,11 @@ pub(super) fn build_ui_runtime(
     if let Some(storage) = runtime_storage() {
         host = host.with_storage(storage);
     }
+    if let Some(transfer) = APP_RUNTIME.with(|slot| slot.borrow().data_transfer()) {
+        host = host
+            .with_data_transfer(transfer.source)
+            .with_process_nonce(transfer.nonce);
+    }
     if let Some(preferences) = preferences {
         host = host.with_preferences(preferences);
     }
@@ -559,6 +564,7 @@ pub(crate) fn install_owner_platform(
     // The platform clipboard (ADR-0038 §9) is installed with the owner, so
     // every ui_runtime a runner builds afterwards finds it (`runtime_clipboard`).
     let clipboard = owner.shared().clipboard();
+    let data_transfer = owner.shared().data_transfer();
     let (previous, previous_owner_turn_wake, previous_host, previous_clipboard) =
         APP_RUNTIME.with(|slot| {
             let mut state = slot.borrow_mut();
@@ -566,7 +572,11 @@ pub(crate) fn install_owner_platform(
                 .owner_install_generation
                 .checked_add(1)
                 .expect("BUG: owner install generation exhausted");
-            let previous_clipboard = state.set_platform_clipboard(clipboard);
+            // The displaced source retires with the clipboard, outside this borrow.
+            let previous_clipboard = (
+                state.set_platform_clipboard(clipboard),
+                state.set_platform_data_transfer(data_transfer),
+            );
             let previous_host =
                 std::mem::replace(&mut state.installed_host, super::InstalledHost::new());
             let previous_owner_turn_wake = state.owner_turn_wake.replace(owner_turn_wake);

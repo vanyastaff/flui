@@ -532,6 +532,28 @@ empty text, decorated fields and override removal.
 The widgets text-editing contract table checks actual editing and pointer
 selection through the viewport, including RTL and obscured text.
 
+### A content shape is the hit area, not a filter over the child
+
+`RenderContentShape` takes the hit anywhere inside its `HitShape`, even where
+its child paints nothing, and rejects everything outside it without testing the
+child. A shape that only filtered the child's own hits would leave a circular
+button with a transparent icon padding unhittable between the glyph and the
+rim. It clips nothing and opens no layer, unlike `RenderClipOval`, which also
+hit-tests by shape. `harness_content_shape_rounded_rect_is_the_hit_area` pins
+the hit through a child that ignores pointers;
+`harness_content_shape_oval_rejects_the_corners_of_its_box` pins the corners.
+
+`RenderHitSlop` does not hit-test its area itself; it reports the area and the
+pipeline resolves it (flui-rendering ARCHITECTURE.md, "Expanded hit areas are
+resolved after the visual walk"). Its area is the box grown by the insets, then
+grown symmetrically to the minimum target per axis; a negative or non-finite
+input counts as zero so the area never shrinks below the box. The minimum is a
+`MinTarget`: an authored length, or the scope's `GestureSettingsProvider`,
+read on every hit test so a live host update needs no rebuild (the provider is
+owner-local data, not a callback). An absorbing `RenderAbsorbPointer` reports
+`blocks_hit_slop`, so no area takes a point that landed on a barrier.
+`harness_hit_slop_min_target_centres_on_the_child` pins the growth.
+
 ## Thread safety
 
 No locks. Catalog objects are mutated on the UI runtime's layout/paint thread

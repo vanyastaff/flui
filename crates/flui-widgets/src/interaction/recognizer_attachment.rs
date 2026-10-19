@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
 use flui_interaction::{
-    CancelOutcome, GestureArenaMember, GestureRecognizer, PointerDispatch, PointerId,
+    CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer, PointerDispatch,
 };
 
 pub(crate) struct RecognizerAttachment<R> {
@@ -35,8 +35,8 @@ impl<R> RecognizerAttachment<R> {
 
 impl<R: GestureRecognizer> GestureArenaMember for RecognizerAttachment<R> {
     // Only the current owner joins the arena for a contact.
-    fn accept_gesture(&self, _: PointerId) {}
-    fn reject_gesture(&self, _: PointerId) {}
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, _: GestureContest) {}
 }
 
 impl<R: GestureRecognizer> GestureRecognizer for RecognizerAttachment<R> {
@@ -55,5 +55,12 @@ impl<R: GestureRecognizer> GestureRecognizer for RecognizerAttachment<R> {
     fn cancel(&self) -> CancelOutcome {
         self.owner()
             .map_or(CancelOutcome::Idle, |owner| owner.cancel())
+    }
+
+    fn allowed_devices(&self) -> flui_interaction::PointerKindSet {
+        self.owner()
+            .map_or(flui_interaction::PointerKindSet::all(), |owner| {
+                owner.allowed_devices()
+            })
     }
 }

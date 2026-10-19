@@ -12,13 +12,12 @@ use wasm_bindgen::prelude::*;
 use flui_platform_api::{SessionEndAnswer, SessionEndPhase};
 
 use crate::{
-    data_transfer::{DataTransferSource, NullDataTransferSource},
+    data_transfer::DataTransferSource,
     error::PlatformError,
     shared::{PlatformHandlers, WindowCallbacks, owner_signal::OwnerSignal},
     traits::{
         Clipboard, DisplaySnapshot, HostWindow, OpenWindowError, OwnerPlatform, Platform,
-        PlatformCapabilities, PlatformExecutor, PlatformReadyCallback, WebCapabilities,
-        WindowEvent, WindowId, WindowOptions,
+        PlatformExecutor, PlatformReadyCallback, WindowEvent, WindowId, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
@@ -51,6 +50,8 @@ struct WebState {
     handlers: PlatformHandlers,
     background_executor: Arc<WebExecutor>,
     clipboard: Arc<WebClipboard>,
+    /// The one HTML drag-and-drop transport every canvas shares.
+    transfer: Arc<super::drag::WebTransfer>,
     is_running: bool,
     /// Window callbacks for RAF loop frame dispatch.
     /// Set when `open_window` creates the single browser window.
@@ -79,6 +80,7 @@ impl WebPlatform {
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(WebExecutor::new()),
             clipboard: Arc::new(WebClipboard::new()),
+            transfer: Arc::default(),
             is_running: false,
             window_callbacks: None,
             owner: Weak::new(),
@@ -385,9 +387,14 @@ impl Platform for WebPlatform {
 
         // Store window callbacks in state so the RAF loop can dispatch frames
         let callbacks = window.callbacks().clone();
+        callbacks.set_input_capabilities(crate::shared::input_availability::web(
+            super::events::has_gesture_events(),
+        ));
+        callbacks.set_input_wake(OwnerSignal::callbacks_wake(&self.signal, &callbacks));
         let retiring = Arc::clone(&callbacks);
         let state = Arc::downgrade(&self.state);
-        window.install(move || {
+        let transfer = self.with_state(|s| Arc::clone(&s.transfer));
+        window.install(&transfer, move || {
             let removed = state.upgrade().and_then(|state| {
                 let mut state = state.lock();
                 if state
@@ -429,14 +436,9 @@ impl Platform for WebPlatform {
     }
 
     fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
-        // The web transport (navigator.clipboard, HTML5 DnD) needs its own
-        // design (ADR-0038 §8) — until then this is inert and honest, not a
-        // degraded fake over the write-cache clipboard.
-        Arc::new(NullDataTransferSource)
-    }
-
-    fn capabilities(&self) -> &dyn PlatformCapabilities {
-        &WebCapabilities
+        // HTML drag and drop; `clipboard_offer` stays `None`, since the
+        // clipboard reads only its own writes.
+        self.with_state(|s| Arc::clone(&s.transfer)) as Arc<dyn DataTransferSource>
     }
 
     fn name(&self) -> &'static str {

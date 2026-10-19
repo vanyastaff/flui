@@ -9,7 +9,7 @@ use std::{
 };
 
 use flui_foundation::{ManualClock, TextSize};
-use flui_interaction::arena::GestureArenaMember;
+use flui_interaction::gesture::GestureArenaMember;
 use flui_painting::{TextSizing, TextSizingAdmissionError};
 use flui_runtime::{
     sink::{FrameSink, SubmitVerdict},
@@ -32,11 +32,11 @@ impl FrameSink for Sink {
 struct FailingQuery(Rc<Cell<usize>>);
 
 impl GestureArenaMember for FailingQuery {
-    fn accept_gesture(&self, _: flui_interaction::PointerId) {}
+    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
 
-    fn reject_gesture(&self, _: flui_interaction::PointerId) {}
+    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
 
-    fn deadline(&self) -> Option<web_time::Instant> {
+    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         self.0.set(self.0.get() + 1);
         std::panic::panic_any("captured attempt deadline query");
     }

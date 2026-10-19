@@ -268,7 +268,9 @@ impl BindingRuntime for WidgetsBinding {
         marker: &FramePhaseMarker<T>,
         finalize_phase: T,
     ) {
-        self.draw_frame_impl(|| marker.set_at_frame_boundary(finalize_phase));
+        self.draw_frame_impl(crate::binding::BuildPass::FrameEntry, || {
+            marker.set_at_frame_boundary(finalize_phase);
+        });
     }
 
     fn lifecycle_source(&self) -> &LifecycleSource {

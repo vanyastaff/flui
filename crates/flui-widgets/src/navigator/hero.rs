@@ -717,7 +717,7 @@ impl HeroScope {
     pub fn new(registry: HeroRegistry, child: impl IntoView) -> Self {
         Self {
             registry: Terminal::new(registry),
-            child: Terminal::new(BoxedView(Box::new(child.into_view()))),
+            child: Terminal::new(BoxedView::new(child.into_view())),
         }
     }
 
@@ -1091,7 +1091,7 @@ impl Hero {
     pub fn new(tag: impl ViewKey, child: impl IntoView) -> Self {
         Self {
             tag: Terminal::new(HeroTag::new(tag)),
-            child: Terminal::new(BoxedView(Box::new(child.into_view()))),
+            child: Terminal::new(BoxedView::new(child.into_view())),
             rect_factory: None,
             shuttle_builder: None,
             placeholder: None,
@@ -1161,9 +1161,7 @@ impl Hero {
         V: IntoView,
     {
         self.shuttle_builder = Some(Rc::new(move |animation, direction, from, to| {
-            BoxedView(Box::new(
-                builder(animation, direction, from, to).into_view(),
-            ))
+            BoxedView::new(builder(animation, direction, from, to).into_view())
         }));
         self
     }
@@ -1182,7 +1180,7 @@ impl Hero {
         V: IntoView,
     {
         self.placeholder = Some(Rc::new(move |size| {
-            BoxedView(Box::new(builder(size).into_view()))
+            BoxedView::new(builder(size).into_view())
         }));
         self
     }
@@ -1402,7 +1400,7 @@ impl HeroMode {
     pub fn new(child: impl IntoView) -> Self {
         Self {
             enabled: true,
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 

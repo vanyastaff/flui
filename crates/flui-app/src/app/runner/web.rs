@@ -22,7 +22,6 @@ where
     use parking_lot::Mutex;
 
     tracing::info!("Starting web platform via flui-platform");
-    crate::app::dev_agent::log_undriven(&config, "web");
 
     // Platform init is an environment failure (unsupported browser, missing
     // wasm feature, driver problem), not a `BUG:` invariant — see the
@@ -99,6 +98,7 @@ where
         // desktop bootstrap.
         ui_runtime.set_frame_failure_handler(config.frame_failure_handler.clone());
         ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
+        config.install_input_tap(&ui_runtime);
 
         let logical = window.logical_size();
         let attach = ui_runtime.enter(|ui_runtime| {
@@ -112,6 +112,13 @@ where
             tracing::error!("Root widget attach failed: {:?}", e);
             return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
         }
+        // Vended while the ui_runtime is still ours, as on the desktop: an
+        // installation that fails drops it, and the hook is handed only a
+        // window that finished installing.
+        let agent_window = config
+            .dev_agent
+            .as_ref()
+            .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
         // The browser takes a canvas's WebGL context away whenever it reclaims
         // GPU memory, often from a tab nobody sees, where no animation frame
         // would notice. The loss wakes the owner, whose next turn rebuilds the
@@ -130,7 +137,8 @@ where
                 wake();
             }));
         }
-        let installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
+        let mut installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
+        installation.dev_agent(config.dev_agent.zip(agent_window));
         owner_platform_installed(|owner| {
             installation.submit_web(
                 super::frame_driver::FrameDriver::Web(WebFrameDriver {
@@ -159,7 +167,18 @@ where
         install_owner_platform(owner)?;
         super::host::install_configured_executors(&config);
         super::host::install_host_storage(&config);
+        // Attached before the page's one window opens, as a desktop loop
+        // attaches before its first. A failed bootstrap drops the attachment,
+        // which detaches the hook.
+        let agent = config
+            .dev_agent
+            .as_ref()
+            .and_then(crate::app::dev_agent::DevAgent::attach);
         bootstrap_web(root, config)?;
+        // The loop this attachment spans is the page's, which outlives this
+        // callback and never ends while the page lives (the host stays
+        // resident for the same reason, above): the hook stays attached.
+        std::mem::forget(agent);
         tracing::info!("Web platform ready");
         Ok(())
     }));

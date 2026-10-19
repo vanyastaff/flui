@@ -457,7 +457,7 @@ pub(super) fn overlay_entry_identity_exhaustion_preserves_existing_entries() {
     let counter = AtomicU64::new(u64::MAX - 1);
     let entry = || {
         OverlayEntry::new_allocated(
-            |_| BoxedView(Box::new(crate::SizedBox::new(10.0, 10.0))),
+            |_| BoxedView::new(crate::SizedBox::new(10.0, 10.0)),
             || OverlayEntryId::from_counter(&counter),
         )
     };
@@ -488,7 +488,7 @@ pub(super) fn overlay_entry_identity_exhaustion_preserves_existing_entries() {
             OverlayEntry::new_allocated(
                 move |_| {
                     capture.observe();
-                    BoxedView(Box::new(crate::SizedBox::new(10.0, 10.0)))
+                    BoxedView::new(crate::SizedBox::new(10.0, 10.0))
                 },
                 || OverlayEntryId::from_counter(&counter),
             )
@@ -530,7 +530,7 @@ pub(super) fn overlay_entry_identity_exhaustion_preserves_existing_entries() {
     let capture = BuilderCapture(Rc::clone(&healthy_drops));
     let healthy = OverlayEntry::new(move |_| {
         capture.observe();
-        BoxedView(Box::new(crate::SizedBox::new(1.0, 1.0)))
+        BoxedView::new(crate::SizedBox::new(1.0, 1.0))
     });
     independent.insert(&healthy, &InsertPosition::Top);
     assert!(healthy.is_attached());

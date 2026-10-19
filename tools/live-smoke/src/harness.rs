@@ -8,7 +8,7 @@ use x11rb::connection::Connection;
 use x11rb::protocol::shape::{self, ConnectionExt as ShapeConnectionExt};
 use x11rb::protocol::xproto::{
     AtomEnum, ClientMessageEvent, ClipOrdering, ConnectionExt, CreateWindowAux, EventMask,
-    ImageFormat, Window, WindowClass,
+    ImageFormat, MapState, Window, WindowClass,
 };
 use x11rb::protocol::xtest::ConnectionExt as XTestConnectionExt;
 use x11rb::rust_connection::RustConnection;
@@ -180,7 +180,10 @@ fn run_checks(app: &mut Child, app_log: &std::path::Path) -> Result<()> {
     // Check 1: the window appears.
     let window = wait_for_window(&conn, root, app)?;
     eprintln!("live-smoke: launch OK (window {window:#x})");
-    // Let the first frames land before the baseline capture.
+    // Windows open hidden and are revealed after their first presented frame,
+    // so wait for the reveal before capturing: `GetImage` on an unmapped
+    // window fails with `Match`. Then let the first frames land.
+    wait_for_viewable(&conn, window, app)?;
     std::thread::sleep(Duration::from_secs(2));
 
     // Check 2: a drag scrolls — captured pixels must change.
@@ -527,7 +530,7 @@ fn check_occlusion_gating(
     //    motion promptly. Timestamps on this backend are RECEIPT times, not
     //    input times — winit's `CursorMoved` carries no timestamp, so
     //    `flui_platform`'s winit `pointer_state` stamps
-    //    `PROCESS_START.elapsed()` when the event reaches FLUI. A stalled
+    //    `event_epoch().elapsed()` when the event reaches FLUI. A stalled
     //    loop therefore corrupts the velocity samples even though every
     //    motion was delivered and applied, and `VelocityTracker` answers
     //    with `Offset::ZERO`: either a delivery gap crosses its 40 ms
@@ -908,5 +911,28 @@ fn wait_for_exit(app: &mut Child, timeout: Duration) -> Result<Option<std::proce
             return Ok(None);
         }
         std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// Poll until `window` is viewable: the first presented frame reveals it, and
+/// a software raster can take longer than any fixed sleep. Fails early if the
+/// app dies first.
+fn wait_for_viewable(conn: &RustConnection, window: Window, app: &mut Child) -> Result<()> {
+    let deadline = Instant::now() + WINDOW_TIMEOUT;
+    loop {
+        if let Some(status) = app.try_wait()? {
+            bail!("launch check FAILED: the app exited before its window was shown, with {status}");
+        }
+        if conn.get_window_attributes(window)?.reply()?.map_state == MapState::VIEWABLE {
+            return Ok(());
+        }
+        if Instant::now() > deadline {
+            bail!(
+                "launch check FAILED: the window was not shown within {}s of appearing \
+                 (its first frame never revealed it)",
+                WINDOW_TIMEOUT.as_secs()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
 }

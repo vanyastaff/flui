@@ -13,7 +13,7 @@ use flui_view::BoxedView;
 use flui_view::prelude::*;
 use flui_widgets::{ColoredBox, ListView, PageController, PageView, SizedBox};
 
-use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, tight};
+use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, pager_alternatives, tight};
 
 const PAGE: f64 = 300.0;
 
@@ -28,7 +28,7 @@ fn pages() -> Vec<BoxedView> {
 }
 
 fn page_view(controller: &PageController) -> PageView {
-    PageView::new(pages()).controller(controller.clone())
+    PageView::new(pages(), pager_alternatives()).controller(controller.clone())
 }
 
 fn mounted(probe: &SignalProbe) -> LaidOut {
@@ -359,9 +359,10 @@ fn assistive_page_scroll_settles_on_a_page() {
     for _ in 0..100 {
         app.pump_for(std::time::Duration::from_millis(16));
     }
+    let page = controller.page().expect("page");
     assert!(
-        (controller.page().expect("page") - 1.0).abs() < 1e-6,
-        "page physics settles the assistive step"
+        (page - 1.0).abs() < 1e-6,
+        "page physics settles the assistive step, at page {page}"
     );
     assert!(!controller.scroll_controller().position().is_scrolling());
 }

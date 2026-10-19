@@ -106,7 +106,7 @@ impl View for StaticChild {
 
 impl ProxyView for StaticChild {
     fn child(&self) -> &dyn View {
-        &*self.inner.0
+        &self.inner
     }
 }
 

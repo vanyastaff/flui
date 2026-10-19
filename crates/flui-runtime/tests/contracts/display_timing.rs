@@ -9,14 +9,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::PresentationAddress;
-use flui_interaction::processing::DEFAULT_SAMPLE_PERIOD;
+use flui_interaction::pointer::DEFAULT_SAMPLE_PERIOD;
 use flui_platform_api::{
     DisplayKey, DisplayRegistry, GestureGeometry, PlatformWindow, PreferenceQueryError,
     RefreshPeriod, WindowDisplay,
 };
 use flui_runtime::owner::{
-    Delivery, DisplayUpdate, OwnerEffects, OwnerHost, PresentationDispatcher, WindowObservation,
+    DisplayUpdate, InputOutcome, OwnerEffects, OwnerHost, PresentationDispatcher, WindowObservation,
 };
+
+use crate::HostInputExt as _;
 use flui_runtime::presentation::PresentationWindow;
 use flui_runtime::pump::SampledClock;
 use flui_runtime::ui_runtime::{DEFAULT_REFRESH_PERIOD, RuntimeHostServices, UiRuntime};
@@ -217,7 +219,7 @@ impl Rig {
                 WindowObservation::Display(DisplayUpdate::new(display)),
                 &self.effects,
             ),
-            Ok(Delivery::Driven)
+            Ok(InputOutcome::Handled)
         );
     }
 
@@ -249,7 +251,7 @@ impl Rig {
         self.owner
             .frame_dispatcher(self.address)
             .expect("frame authority")
-            .deliver(&self.effects)
+            .deliver(crate::VSYNC, &self.effects)
             .expect("frame");
         self.read(|runtime, _| runtime.scheduler().janky_frame_count())
     }

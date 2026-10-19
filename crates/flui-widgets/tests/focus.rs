@@ -2,9 +2,10 @@
 //! attachment, autofocus, focus-change callbacks, exclusion and
 //! geometry-ordered traversal.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
-use flui_interaction::routing::{FocusNode, FocusScopeNode};
+use flui_interaction::focus::{FocusNode, FocusScopeNode};
 use flui_view::ViewExt;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
@@ -370,9 +371,225 @@ pub(crate) fn a_focus_widget_attaches_under_the_nearest_scope_and_unmount_releas
         !scope.as_focus_node().is_attached(),
         "unmount detached the widget scope"
     );
+    // Disposal publishes nothing; the frame's settling step moves the focus
+    // to a successor, and with no candidate left it releases it.
     assert!(
         manager.primary_focus().is_none(),
         "a disposed focused widget releases the primary focus"
+    );
+}
+
+/// A keyed focusable field: its key keeps its element, and so its widget-owned
+/// focus node, across a rebuild that reorders the fields.
+#[derive(Clone)]
+struct Field {
+    key: flui_foundation::ValueKey<&'static str>,
+    on_focus_change: Option<FocusChangeHandler>,
+}
+
+impl Field {
+    fn new(name: &'static str) -> Self {
+        Self {
+            key: flui_foundation::ValueKey::new(name),
+            on_focus_change: None,
+        }
+    }
+}
+
+impl View for Field {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateless(self)
+    }
+    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+        Some(&self.key)
+    }
+}
+
+impl StatelessView for Field {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        let mut focus = Focus::new(SizedBox::new(10.0, 10.0)).debug_label(self.key.value());
+        if let Some(handler) = &self.on_focus_change {
+            let handler = Rc::clone(handler);
+            focus = focus.on_focus_change(move |cx, focused| handler(cx, focused));
+        }
+        focus
+    }
+}
+
+/// The fields of one screen, top to bottom.
+#[derive(Clone)]
+struct Fields(Vec<&'static str>);
+
+impl View for Fields {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateless(self)
+    }
+}
+
+impl StatelessView for Fields {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        flui_widgets::Column::new(
+            self.0
+                .iter()
+                .map(|&name| Field::new(name).into_view().boxed())
+                .collect::<Vec<_>>(),
+        )
+    }
+}
+
+/// Where focus is after `after` replaces `before` with the field named
+/// `focused` in focus, and every focus edge the replacement published, by
+/// debug label.
+type Edge = (Option<String>, Option<String>);
+
+fn focus_after_rebuild(
+    before: &[&'static str],
+    focused: &str,
+    after: &[&'static str],
+) -> (Option<String>, Vec<Edge>) {
+    let label = |node: Option<Rc<FocusNode>>| node.and_then(|n| n.debug_label().map(String::from));
+    let mut harness = mount(Fields(before.to_vec()));
+    let manager = harness.focus_manager();
+    while label(manager.primary_focus()).as_deref() != Some(focused) {
+        assert!(manager.focus_next(), "Tab reaches {focused}");
+    }
+    let edges = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = Rc::clone(&edges);
+    let _listener = manager.add_listener(Rc::new(move |old, new| {
+        seen.borrow_mut().push((label(old), label(new)));
+    }));
+    harness.swap_root(Fields(after.to_vec()));
+    let edges = edges.borrow().clone();
+    (label(manager.primary_focus()), edges)
+}
+
+pub(crate) fn rebuild_with_the_same_keys_keeps_focus() {
+    let (focused, edges) = focus_after_rebuild(&["a", "b", "c"], "b", &["c", "a", "b"]);
+    assert_eq!(focused.as_deref(), Some("b"));
+    assert!(edges.is_empty(), "no edge for a kept field: {edges:?}");
+}
+
+pub(crate) fn removal_moves_focus_to_the_next_field() {
+    let (focused, edges) = focus_after_rebuild(&["a", "b", "c"], "b", &["a", "c"]);
+    assert_eq!(focused.as_deref(), Some("c"));
+    assert_eq!(
+        edges,
+        [(Some("b".to_owned()), Some("c".to_owned()))],
+        "one edge, never through None"
+    );
+}
+
+pub(crate) fn removing_the_last_field_moves_focus_to_the_first() {
+    let (focused, edges) = focus_after_rebuild(&["a", "b", "c"], "c", &["a", "b"]);
+    assert_eq!(focused.as_deref(), Some("a"));
+    assert_eq!(edges, [(Some("c".to_owned()), Some("a".to_owned()))]);
+}
+
+pub(crate) fn reload_of_every_key_publishes_one_edge() {
+    let (focused, edges) = focus_after_rebuild(&["a", "b", "c"], "b", &["d", "e", "f"]);
+    assert!(
+        matches!(focused.as_deref(), Some("d" | "e" | "f")),
+        "focus lands on a reloaded field, got {focused:?}"
+    );
+    assert_eq!(edges.len(), 1, "one edge for the whole reload: {edges:?}");
+    assert_eq!(edges[0].0.as_deref(), Some("b"));
+    assert_eq!(edges[0].1, focused);
+}
+
+pub(crate) fn removing_every_field_releases_focus() {
+    let (focused, edges) = focus_after_rebuild(&["a", "b"], "a", &[]);
+    assert_eq!(focused, None);
+    assert_eq!(edges, [(Some("a".to_owned()), None)]);
+}
+
+/// The successor's focus callback writes state; the frame that removed the
+/// focused field rebuilds that state's reader before it paints, once: when
+/// that rebuild removes the successor too, the next frame moves focus on.
+pub(crate) fn the_successor_rebuilds_in_the_frame_that_moved_focus() {
+    use crate::common::{ProbeSignals, SignalProbe};
+    use std::cell::Cell;
+
+    let show_first = Rc::new(Cell::new(true));
+    let shown = Rc::clone(&show_first);
+    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        let mut second = Field::new("b");
+        // Only the gain writes: teardown's loss arrives after the owner closed.
+        second.on_focus_change = Some(Rc::new(move |cx, focused| {
+            if focused {
+                count
+                    .set(cx, 1)
+                    .expect("the focus edge may write the probe signal");
+            }
+        }));
+        let mut fields = Vec::new();
+        if shown.get() {
+            fields.push(Field::new("a").into_view().boxed());
+        }
+        fields.push(second.into_view().boxed());
+        flui_widgets::Column::new(fields)
+    });
+    let mut harness = mount(probe.view());
+    let manager = harness.focus_manager();
+    assert!(manager.focus_next());
+    assert_eq!(probe.reads(), [0]);
+
+    show_first.set(false);
+    harness.swap_root(probe.view());
+    assert_eq!(
+        probe.reads(),
+        [0, 0, 1],
+        "one frame: the removal's build, then the successor's rebuild"
+    );
+
+    // The successor's rebuild removes the successor itself: the frame has had
+    // its one repeat, so focus leaves it only in the next frame.
+    let label = |node: Option<Rc<FocusNode>>| node.and_then(|n| n.debug_label().map(String::from));
+    let (show_a, show_b) = (Rc::new(Cell::new(true)), Rc::new(Cell::new(true)));
+    let (shown_a, shown_b) = (Rc::clone(&show_a), Rc::clone(&show_b));
+    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        let mut fields = Vec::new();
+        if shown_a.get() {
+            fields.push(Field::new("a").into_view().boxed());
+        }
+        if shown_b.get() {
+            let mut second = Field::new("b");
+            let hide = Rc::clone(&shown_b);
+            second.on_focus_change = Some(Rc::new(move |cx, focused| {
+                if focused && hide.replace(false) {
+                    count
+                        .set(cx, 1)
+                        .expect("the focus edge may write the probe signal");
+                }
+            }));
+            fields.push(second.into_view().boxed());
+        }
+        fields.push(Field::new("c").into_view().boxed());
+        flui_widgets::Column::new(fields)
+    });
+    let mut harness = mount(probe.view());
+    let manager = harness.focus_manager();
+    assert!(manager.focus_next());
+    assert_eq!(label(manager.primary_focus()).as_deref(), Some("a"));
+    let edges = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = Rc::clone(&edges);
+    let _listener = manager.add_listener(Rc::new(move |old, new| {
+        seen.borrow_mut().push((label(old), label(new)));
+    }));
+    let pair = |old: &str, new: &str| (Some(old.to_owned()), Some(new.to_owned()));
+
+    show_a.set(false);
+    harness.swap_root(probe.view());
+    assert!(!show_b.get(), "the successor's focus callback removed it");
+    assert_eq!(
+        *edges.borrow(),
+        [pair("a", "b")],
+        "the frame repeats once: the successor's own removal waits"
+    );
+    harness.tick();
+    assert_eq!(
+        *edges.borrow(),
+        [pair("a", "b"), pair("b", "c")],
+        "the next frame moves focus on"
     );
 }
 
@@ -685,7 +902,7 @@ pub(crate) mod event_cx {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use flui_interaction::routing::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_view::prelude::*;
     use flui_widgets::SizedBox;
     use flui_widgets::interaction::Focus;
@@ -876,4 +1093,159 @@ pub(crate) fn an_adopted_external_node_ignores_the_old_elements_focus_action() {
         !node.has_primary_focus(),
         "the old element focused a node another owner adopted"
     );
+}
+
+/// Counts how often its state is created, which is how often the subtree
+/// under it was torn down and mounted again.
+#[derive(Clone, StatefulView)]
+struct MountProbe {
+    mounts: Rc<Cell<usize>>,
+}
+
+struct MountProbeState {
+    mounts: Rc<Cell<usize>>,
+}
+
+impl std::fmt::Debug for MountProbe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MountProbe")
+    }
+}
+
+impl StatefulView for MountProbe {
+    type State = MountProbeState;
+
+    fn create_state(&self) -> Self::State {
+        MountProbeState {
+            mounts: Rc::clone(&self.mounts),
+        }
+    }
+}
+
+impl ViewState<MountProbe> for MountProbeState {
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
+        self.mounts.set(self.mounts.get() + 1);
+    }
+
+    fn build(&self, _view: &MountProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(10.0, 10.0)
+    }
+}
+
+/// Whether a `Focus` can take focus changes nothing about the elements under
+/// it: a popup route that makes the page below unfocusable, or an owner that
+/// disables one field, must not tear the subtree down and mount it again
+/// (which cancels a gesture in flight under it).
+///
+/// Red-check: wrap the child in `Semantics` only while the node can take
+/// focus — the probe mounts a second time on every row.
+pub(crate) fn a_focus_keeps_its_subtree_when_it_stops_being_focusable() {
+    let own = FocusNode::with_debug_label("own flag");
+    let page = FocusScopeNode::new();
+    type Flip = Box<dyn Fn(bool)>;
+    let rows: [(&str, Flip, Rc<Cell<usize>>, BoxedView); 2] = {
+        let (own_mounts, page_mounts) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+        let own_flip = Rc::clone(&own);
+        let page_flip = Rc::clone(&page);
+        [
+            (
+                "the node's own flag",
+                Box::new(move |can| own_flip.set_can_request_focus(can)),
+                Rc::clone(&own_mounts),
+                Focus::new(MountProbe { mounts: own_mounts })
+                    .focus_node(Rc::clone(&own))
+                    .into_view()
+                    .boxed(),
+            ),
+            (
+                "the page's scope above it",
+                Box::new(move |can| page_flip.as_focus_node().set_can_request_focus(can)),
+                Rc::clone(&page_mounts),
+                FocusScope::with_external_node(
+                    Rc::clone(&page),
+                    Focus::new(MountProbe {
+                        mounts: page_mounts,
+                    }),
+                )
+                .into_view()
+                .boxed(),
+            ),
+        ]
+    };
+    for (name, flip, mounts, view) in rows {
+        let mut harness = mount(view);
+        assert_eq!(mounts.get(), 1, "{name}: mounted once");
+        for can in [false, true, false] {
+            flip(can);
+            harness.tick();
+            assert_eq!(
+                mounts.get(),
+                1,
+                "{name}: the subtree survives can_request_focus = {can}"
+            );
+        }
+    }
+}
+
+/// A stateless root that makes its scroll controller inside `build`.
+#[derive(Clone, Debug, StatelessView)]
+struct ControllerInBuild;
+
+impl StatelessView for ControllerInBuild {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        use flui_widgets::{ListView, ScrollController, Scrollable, Text};
+
+        Scrollable::new()
+            .controller(ScrollController::new())
+            .viewport_builder(Rc::new(|position| {
+                let rows: Vec<_> = (0..40)
+                    .map(|row| {
+                        SizedBox::height(50.0)
+                            .child(Text::new(format!("row {row}")))
+                            .into_view()
+                            .boxed()
+                    })
+                    .collect();
+                ListView::new(50.0, rows)
+                    .position(position)
+                    .into_view()
+                    .boxed()
+            }))
+    }
+}
+
+/// The first focus gain, which a drag's start causes by focusing its scroll
+/// view, flips `has_focus` on every enclosing scope. They update their
+/// dependents and nothing else: a root that makes a scroll controller in
+/// `build` is not built again under the drag, so its position is the one the
+/// contact moves and every step of a held drag paints new content.
+///
+/// Red-check: have an element's update rebuild its child whether or not the
+/// child's view is the one it already holds — the frames freeze after the
+/// first step.
+pub(crate) fn the_first_focus_gain_does_not_rebuild_the_app_under_a_drag() {
+    use crate::common::{lay_out, tight};
+
+    let mut laid = lay_out(ControllerInBuild, tight(400.0, 300.0));
+    let row_top = |laid: &crate::common::LaidOut| {
+        let row = laid.find_text("row 3").expect("the fourth row is in view");
+        laid.absolute_offset(row).dy
+    };
+    laid.dispatch_pointer_down(200.0, 250.0);
+    let mut previous = row_top(&laid);
+    for step in 1..=8 {
+        laid.dispatch_pointer_move(200.0, 250.0 - 15.0 * f64::from(step));
+        laid.tick();
+        let top = row_top(&laid);
+        if step > 1 {
+            assert!(
+                top < previous,
+                "step {step} of the held drag left the row at {top}, where step {} had it at \
+                 {previous}",
+                step - 1
+            );
+        }
+        previous = top;
+    }
+    laid.dispatch_pointer_up(200.0, 130.0);
 }

@@ -7,6 +7,8 @@ use std::rc::Rc;
 use flui_platform_api::{DisplayKey, DisplayRegistry, RefreshPeriod, WindowDisplay};
 use flui_runtime::owner::{DisplayUpdate, WindowObservation};
 
+use crate::HostInputExt as _;
+
 fn display(registry: &DisplayRegistry, key: u64, period_ms: Option<u64>) -> WindowDisplay {
     WindowDisplay::new(
         registry.mint(&DisplayKey::Injected(key)).expect("id"),
@@ -23,7 +25,9 @@ fn applied_after_pending(updates: &[Option<WindowDisplay>]) -> Option<WindowDisp
     {
         let _callback = owner.begin_callback(&effects).expect("native callback");
         for _ in 0..32 {
-            frame.deliver(&effects).expect("consume callback budget");
+            frame
+                .deliver(crate::VSYNC, &effects)
+                .expect("consume callback budget");
         }
         for update in updates {
             effects

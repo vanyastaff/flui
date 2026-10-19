@@ -20,6 +20,29 @@ use crate::{
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
+/// What lies under a point given in one window's coordinates, as
+/// [`PlatformWindow::window_at`] answers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum WindowAt {
+    /// The content of a window of the same platform instance is topmost there:
+    /// `window` (the asking window itself included) at `position`, in that
+    /// window's logical pixels.
+    Window {
+        /// The window whose content is under the point.
+        window: WindowId,
+        /// The point in that window's logical pixels.
+        position: Point<f64>,
+    },
+    /// No window content of this platform instance is under the point: the
+    /// desktop, another application's window, a window frame, or a point no
+    /// display can hold.
+    Outside,
+    /// The backend cannot place its windows on one desktop (Wayland, the web,
+    /// mobile), so it cannot tell.
+    Unknown,
+}
+
 /// Trait for platform window abstraction
 ///
 /// Provides a minimal interface for window operations, enabling
@@ -400,6 +423,50 @@ pub trait PlatformWindow: Send + Sync {
         None
     }
 
+    /// Get this window's OS drag source, if the backend can start OS drag
+    /// sessions (ADR-0211). `None` for backends without one; their
+    /// [`InputCapabilities::outgoing_drag`](crate::input_capabilities::InputCapabilities::outgoing_drag)
+    /// says `Unavailable`, and a drag that needs the OS stays in-window.
+    fn drag_source(&self) -> Option<Arc<dyn crate::drag::PlatformDragSource>> {
+        None
+    }
+
+    /// Which window's content is topmost under `position`, given in this
+    /// window's logical pixels and possibly outside it, honouring the stacking
+    /// order of every window on the desktop. A drag on this window's pointer
+    /// capture uses it to reach the other windows of its process without an OS
+    /// session (ADR-0211 §2).
+    ///
+    /// Owner thread only. The default, for a backend that cannot place its
+    /// windows on one desktop, answers [`WindowAt::Unknown`].
+    fn window_at(&self, position: Point<f64>) -> WindowAt {
+        let _ = position;
+        WindowAt::Unknown
+    }
+
+    /// Hand the OS this window's input regions, in window-logical pixels (ADR-0217 §5).
+    ///
+    /// The framework calls it on every composited frame with the window's whole set,
+    /// whether or not it changed. The backend projects the set to device pixels with the
+    /// window's current scale through
+    /// [`ProjectedInputRegions`](crate::input_regions::ProjectedInputRegions) and updates
+    /// the OS only when the projection, the scale or the display changed, so no caller-side
+    /// comparison can hide a scale or display change from it.
+    ///
+    /// A scale change or a move to another display need not composite a frame, so the
+    /// framework also re-sends the last set when the presentation's pixel ratio changes
+    /// when a published [`state`](Self::state) puts the window somewhere else: another
+    /// position, display or frame. A backend whose window can change displays at an equal
+    /// scale must publish that state and raise [`on_state_changed`](Self::on_state_changed),
+    /// or the OS keeps the previous display's projection until the next composited frame.
+    ///
+    /// A backend whose OS honours no input region keeps this default, which ignores the set,
+    /// and reports [`InputCapabilities::input_regions`](crate::input_capabilities::InputCapabilities::input_regions)
+    /// as `Unavailable`. Owner thread only.
+    fn set_input_regions(&self, regions: &[crate::input_regions::InputRegion]) {
+        let _ = regions;
+    }
+
     // ==================== Control Methods (US2) ====================
 
     /// Show this window, unminimizing it and requesting foreground focus.
@@ -498,7 +565,12 @@ pub trait PlatformWindow: Send + Sync {
     ///
     /// The callback receives a `PlatformInput` and returns a
     /// `DispatchEventResult` indicating whether the event was consumed.
-    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
+    ///
+    /// It need not be `Send` (ADR-0082 §4): a backend stores it for the
+    /// window's owner thread only, refuses a registration from any other
+    /// thread (dropping the callback on the thread that made it), and runs
+    /// and drops it on the owner, so it may capture an `Rc`.
+    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
         let _ = callback;
     }
 

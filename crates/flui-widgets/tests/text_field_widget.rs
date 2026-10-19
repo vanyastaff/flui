@@ -49,3 +49,33 @@ pub(crate) fn raw_text_field_callbacks_write_through_the_forwarded_cx() {
         .is_handled();
     assert_eq!(probe.value(), Ok(101), "on_submitted wrote");
 }
+
+/// A press focuses the field at once, and the press's tap, which the
+/// field's double-tap holds for the double-tap time, takes no focus back
+/// from wherever focus moved meanwhile (Tab to the next control).
+pub(crate) fn a_press_on_a_field_takes_no_focus_back_once_focus_moves_on() {
+    use std::time::Duration;
+
+    let field = FocusNode::with_debug_label("pressed field");
+    let next = FocusNode::with_debug_label("next control");
+    let view = flui_widgets::Column::new(vec![
+        RawTextField::new(TextEditingController::with_text("hello"))
+            .focus_node(Rc::clone(&field))
+            .boxed(),
+        flui_widgets::Focus::new(flui_widgets::SizedBox::new(100.0, 40.0))
+            .focus_node(Rc::clone(&next))
+            .boxed(),
+    ]);
+    let mut laid = crate::common::lay_out(view, crate::common::tight(300.0, 300.0));
+    laid.dispatch_pointer_down(150.0, 8.0);
+    assert!(field.has_primary_focus(), "the press focused the field");
+    laid.dispatch_pointer_up(150.0, 8.0);
+    let _ = next.request_focus();
+    for _ in 0..40 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert!(
+        next.has_primary_focus(),
+        "the focus stays where it moved after the press"
+    );
+}

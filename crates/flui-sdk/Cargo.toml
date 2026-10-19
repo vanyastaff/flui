@@ -46,9 +46,17 @@ trybuild = { workspace = true }
 # Path-only, so `cargo package` drops it: the published SDK never names the
 # facade.
 flui = { path = "../..", default-features = false }
+# The headless widget harness that mounts the custom recognizer in
+# `tests/surface/custom_recognizer.rs`; a dev edge only, like the packages'.
+flui-testing = { workspace = true }
 
 [features]
 animation-diagnostics = ["flui-animation/diagnostics"]
+# Additive. Re-exports the handle-less input capabilities
+# (`platform::input_capabilities`) and the second haptic tier with its requests
+# and outcomes (`platform::haptics`) until every backend passes its conformance
+# rows (ADR-0213 §5, ADR-0210 §9); flui-platform-api builds them regardless.
+unstable-input = []
 
 # Tier K, order 5: above every spine crate it re-exports (`flui-view` 1,
 # `flui-widgets` 3) and below the hosts. Evolving (ADR-0081 §3): its own

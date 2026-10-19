@@ -55,6 +55,9 @@ pub mod execution;
 pub mod frame_failure;
 pub mod frame_rate_demand;
 pub mod held_input;
+mod host_input;
+mod input_record;
+mod input_tap;
 pub mod lifecycle_state;
 mod media_query_root;
 mod overlay_style;
@@ -76,3 +79,12 @@ pub mod ui_runtime;
 #[cfg(test)]
 mod table_test;
 pub use flui_animation::MotionOverride;
+pub use host_input::HostInput;
+pub use input_record::{
+    DeadlineRow, DecisionRow, InputRecord, InputRow, PreferencesRow, RecordedMember,
+    RecordedSequence, RecordedSurface, RecordingStart, RecordingWindow,
+};
+pub use input_tap::{
+    INPUT_TAP_TARGET, InputTap, InputTapFactory, InputTapHandle, InputTaps, RecordingIncomplete,
+    TapFailure, TapFailureSite,
+};

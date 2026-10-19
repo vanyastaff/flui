@@ -1,6 +1,6 @@
 //! [`TextField`] — the Material single-line text field: an
 //! [`EditableText`] wrapped directly in an [`InputDecorator`], with live
-//! focus/enabled/error plumbing and a tap target spanning the whole
+//! focus/enabled/error plumbing and a press target spanning the whole
 //! decorated area.
 //!
 //! The field composes a raw [`EditableText`] and [`InputDecorator`] inline,
@@ -82,18 +82,21 @@
 //! style. The per-state resolution table and the `TextField.style` override
 //! are both named deferrals — this substrate always renders `bodyLarge` verbatim.
 //!
-//! # Tap-to-focus over the whole decorated area
+//! # Press-to-focus over the whole decorated area
 //!
-//! A [`GestureDetector`] wraps the composed [`InputDecorator`] (not just the
-//! inner [`EditableText`]), so the
-//! *entire* decorated box (fill, underline, label/hint rows) is a valid tap
-//! target, not just the text-content rect. `GestureDetector`'s default
+//! A [`Listener`] wraps the composed [`InputDecorator`] (not just the
+//! inner [`EditableText`]), so a press anywhere in the
+//! *entire* decorated box (fill, underline, label/hint rows) focuses the
+//! field, not just one on the text-content rect. It focuses on the press, as
+//! the text does, never on a tap: the field's double-tap holds a tap for the
+//! double-tap time, and focus requested then would take the focus back from
+//! wherever the keyboard moved it meanwhile. `Listener`'s default
 //! [`flui_sdk::widgets::HitTestBehavior::DeferToChild`] is sufficient here
 //! because `InputDecorator`'s own inner `MouseRegion` defaults to
 //! [`flui_sdk::widgets::HitTestBehavior::Opaque`] and spans the full decorated
 //! rect, so every point within it already resolves a hit for the outer
-//! detector to defer to. The helper/error line below the container is
-//! outside that rect and ignores pointers, so it is not a tap target.
+//! listener to defer to. The helper/error line below the container is
+//! outside that rect and ignores pointers, so a press there focuses nothing.
 //!
 //! # DEFERRED (v1)
 //!
@@ -115,7 +118,7 @@ use flui_sdk::foundation::notifier::Listenable;
 use flui_sdk::interaction::{FocusNode, FocusSubscription};
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{EditableText, GestureDetector, SubmitCallback, TextEditingController};
+use flui_sdk::widgets::{EditableText, Listener, SubmitCallback, TextEditingController};
 
 use crate::input_decorator::{InputDecoration, InputDecorator};
 use crate::theme::Theme;
@@ -486,8 +489,12 @@ impl ViewState<TextField> for MaterialTextFieldState {
 
         let focus_node = Rc::clone(&self.focus_node);
 
-        GestureDetector::new()
-            .on_tap(move |_cx| {
+        // The press focuses the field, as the press on its text does. A tap
+        // would not: the field's double-tap holds a tap for the double-tap
+        // time, and a focus it requested then would take the focus back from
+        // wherever the keyboard moved it meanwhile.
+        Listener::new()
+            .on_pointer_down(move |_cx, _dispatch| {
                 let _ = focus_node.request_focus();
             })
             .child(

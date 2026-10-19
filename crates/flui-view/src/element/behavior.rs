@@ -137,6 +137,8 @@ where
             post_frame_handle: owner.post_frame_handle.clone(),
             text_input_handle: owner.text_input_handle.clone(),
             clipboard_handle: owner.clipboard_handle.clone(),
+            haptics_handle: owner.haptics_handle.clone(),
+            drag_and_drop: owner.drag_and_drop.clone(),
             texture_registry: owner.texture_registry.clone(),
             storage: owner.storage.clone(),
             flush_registry: owner.flush_registry.clone(),
@@ -665,6 +667,11 @@ pub struct StatefulBehavior<V: StatefulView> {
     /// The persistent state for this element.
     pub state: V::State,
     initialized: bool,
+    /// The view `create_state` saw, held while a parent updates this element
+    /// before its first build. `did_update_view` then runs right after
+    /// `init_state`, so a state never observes an update before its
+    /// initialization and still learns of every configuration change.
+    pending_update: Option<V>,
 }
 
 impl<V: StatefulView> StatefulBehavior<V> {
@@ -673,6 +680,7 @@ impl<V: StatefulView> StatefulBehavior<V> {
         Self {
             state: view.create_state(),
             initialized: false,
+            pending_update: None,
         }
     }
 
@@ -740,6 +748,21 @@ where
                 std::panic::resume_unwind(payload);
             }
             self.initialized = true;
+            if let Some(old_view) = self.pending_update.take() {
+                let update = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    self.state.did_update_view(&old_view, core.view());
+                }));
+                if let Err(payload) = update {
+                    owner.record_armed_lifecycle_panic(
+                        core.self_id(),
+                        TypeId::of::<V>(),
+                        LifecycleHook::Update,
+                        payload.as_ref(),
+                        "updating StatefulElement after its init_state",
+                    );
+                    std::panic::resume_unwind(payload);
+                }
+            }
         }
 
         if !super::behavior_commons::should_build_with_trace(core, "StatefulBehavior") {
@@ -896,6 +919,15 @@ where
         old_view: &V,
         _owner: &mut crate::ElementOwner<'_>,
     ) {
+        // A parent can rebuild this element between its mount and its first
+        // build (`init_state` runs in the build drain, not at mount). Keep the
+        // view the state was created from; the first build delivers the update.
+        if !self.initialized {
+            if self.pending_update.is_none() {
+                self.pending_update = Some(old_view.clone());
+            }
+            return;
+        }
         // `core.view()` is already the freshly-swapped-in configuration here.
         self.state.did_update_view(old_view, core.view());
     }

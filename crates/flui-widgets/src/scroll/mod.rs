@@ -10,14 +10,19 @@
 //! [`ScrollController`], and optionally wrap them in a [`Scrollbar`] for a
 //! visual position indicator.
 
+mod anchored_drag;
 mod animated_list;
+mod collapsing_header;
 mod custom_scroll_view;
+mod drag_autoscroll;
 mod grid_view;
+mod interactive_viewer;
 mod list_view;
 pub mod nested;
 mod page_view;
 mod refresh_indicator;
 mod scroll_controller;
+mod scroll_owner;
 mod scroll_physics;
 mod scroll_position_scope;
 mod scrollable;
@@ -39,21 +44,39 @@ mod sliver_persistent_header;
 mod sliver_to_box_adapter;
 mod viewport;
 
+pub use anchored_drag::{
+    AnchorIntent, AnchoredDrag, AnchoredDragController, AnchoredDragState, AnchorsError,
+    DraggableAnchors, DraggableAnchorsBuilder,
+};
 pub use animated_list::{AnimatedGrid, AnimatedList, SliverAnimatedList, SliverAnimatedListState};
+pub use collapsing_header::{
+    CollapsingHeader, CollapsingHeaderState, HeaderExtents, HeaderExtentsError, HeaderOrder,
+};
 pub use custom_scroll_view::CustomScrollView;
 pub use flui_objects::InvalidSliverCrossAxisExtent;
 pub use grid_view::GridView;
+pub use interactive_viewer::{
+    InteractionEndDetails, InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer,
+    InteractiveViewerState, PanAxis, PanIntent, WheelScaleGate, ZoomIntent,
+};
 pub use list_view::ListView;
-pub use page_view::{PageController, PageScrollPhysics, PageView, PageViewState};
+pub use nested::{
+    AnchorSnap, AnchorSnapError, FlingHandoff, FlingStep, InvalidViewportFraction, NestedScroll,
+    NestedScrollConnection, NestedScrollState, OverscrollBehavior, PageSnap, ScrollCause,
+    ScrollDevice, ScrollEndReason, ScrollStep, SnapPolicy, ViewportFraction,
+};
+pub use page_view::{PageController, PageIntent, PageView, PageViewState};
 pub use refresh_indicator::{
     RefreshController, RefreshIndicator, RefreshIndicatorBuilder, RefreshIndicatorPhase,
-    RefreshIndicatorState, RefreshIndicatorStyle,
+    RefreshIndicatorState, RefreshIndicatorStyle, RefreshIntent,
 };
 pub use scroll_controller::ScrollController;
+pub use scroll_owner::SharedSnapPolicy;
 pub use scroll_physics::{
     BouncingScrollPhysics, ClampingScrollPhysics, ScrollMetrics, ScrollPhysics, SharedScrollPhysics,
 };
 pub use scroll_position_scope::ScrollPositionScope;
+use scrollable::wheel_axis_delta;
 pub use scrollable::{InvalidWheelScrollDistance, Scrollable, WheelScrollDistances};
 pub use scrollbar::Scrollbar;
 pub use single_child_scroll_view::SingleChildScrollView;

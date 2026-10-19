@@ -12,9 +12,8 @@ use flui_interaction::events::{
     make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
     pointer::ScrollUnit,
 };
-use flui_interaction::processing::{
-    PointerEventResampler, SamplingClock, VelocityEstimator, VelocityTracker,
-};
+use flui_interaction::gesture::{VelocityEstimator, VelocityTracker};
+use flui_interaction::pointer::{PointerEventResampler, SamplingClock};
 use flui_interaction::{
     DEFAULT_MAX_FLING_VELOCITY, GestureBinding, GestureSettings, GestureSettingsError,
     HitTestResult, PointerId, PointerRouteHandler, Velocity, VelocityEstimate,
@@ -500,7 +499,12 @@ fn inverted_fling_range_is_rejected() {
 }
 
 fn invalid_settings_are_rejected() {
-    let base = GestureSettings::mouse_defaults;
+    let base = || {
+        GestureSettings::preset(
+            flui_platform_api::TargetPlatform::Unknown,
+            flui_platform_api::pointer::PointerKind::Mouse,
+        )
+    };
     let invalid = |field, value| Err(GestureSettingsError::InvalidValue { field, value });
     assert_eq!(
         base().try_with_touch_slop(-1.0),
@@ -529,7 +533,7 @@ fn invalid_settings_are_rejected() {
         50.0,
         8000.0,
     );
-    assert_eq!(built, Ok(GestureSettings::touch_defaults()));
+    assert_eq!(built, Ok(GestureSettings::default()));
     let rejected = GestureSettings::try_new(
         18.0,
         18.0,
@@ -1628,13 +1632,13 @@ proptest! {
 
 fn pinch_scale_is_finite_and_positive() {
     use flui_interaction::events::{PanZoomEvent, PanZoomPhase, PanZoomTransform};
-    use flui_interaction::{EventPropagation, HitTestEntry, routing::InteractionLane};
+    use flui_interaction::{EventPropagation, HitTestEntry, pointer::InteractionLane};
 
     // The old upstream pinch fractions NaN/-1/-3/inf imply these invalid
     // cumulative scales. Checked transport refuses them before routing.
     for scale in [f64::NAN, 0.0, -2.0, f64::INFINITY] {
         assert!(
-            PanZoomTransform::try_new(Offset::ZERO, scale, 0.0).is_err(),
+            PanZoomTransform::try_new(scale, 0.0).is_err(),
             "invalid cumulative scale {scale}"
         );
     }
@@ -1660,9 +1664,7 @@ fn pinch_scale_is_finite_and_positive() {
             flui_platform_api::EventTime::from_nanos(1_000),
             PointerPosition::try_new(flui_foundation::geometry::Point::ZERO)
                 .expect("finite focal position"),
-            PanZoomPhase::Update(
-                PanZoomTransform::try_new(Offset::ZERO, 1.25, 0.0).expect("valid zoom"),
-            ),
+            PanZoomPhase::Update(PanZoomTransform::try_new(1.25, 0.0).expect("valid zoom")),
         ));
         GestureBinding::new().handle_pointer_event_with_result(&event, &path);
     });

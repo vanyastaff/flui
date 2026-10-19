@@ -35,7 +35,6 @@ pub(super) struct InstallationWindow {
     window: Option<Arc<dyn PlatformWindow>>,
     closed: Arc<AtomicBool>,
     published: bool,
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
     agent: Option<(
         crate::app::dev_agent::DevAgent,
         flui_view::dev_agent::AgentWindow,
@@ -48,7 +47,6 @@ impl InstallationWindow {
             window: Some(window),
             closed: Arc::new(AtomicBool::new(false)),
             published: false,
-            #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
             agent: None,
         }
     }
@@ -69,7 +67,6 @@ impl InstallationWindow {
         self.published = true;
     }
 
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
     pub(super) fn notify_opened(&mut self) {
         if let Some((agent, window)) = self.agent.take() {
             agent.window_opened(window);
@@ -93,7 +90,6 @@ impl Drop for InstallationWindow {
             failure,
             "installation window retirement",
         );
-        #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
         {
             let agent = self.agent.take();
             let failure =
@@ -174,7 +170,6 @@ impl WindowInstall {
         self.native.text_sizing = Some(sizing);
     }
 
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
     pub(super) fn dev_agent(
         &mut self,
         agent: Option<(

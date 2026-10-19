@@ -231,7 +231,7 @@ impl Dialog {
             constraints: None,
             role: SemanticsRole::Dialog,
             labelled_by: None,
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 
@@ -413,14 +413,14 @@ impl AlertDialog {
     /// Sets the title, shown above the content in `TextTheme.headlineSmall`.
     #[must_use]
     pub fn title(mut self, title: impl IntoView) -> Self {
-        self.title = Some(BoxedView(Box::new(title.into_view())));
+        self.title = Some(BoxedView::new(title.into_view()));
         self
     }
 
     /// Sets the content, shown below the title in `TextTheme.bodyMedium`.
     #[must_use]
     pub fn content(mut self, content: impl IntoView) -> Self {
-        self.content = Some(BoxedView(Box::new(content.into_view())));
+        self.content = Some(BoxedView::new(content.into_view()));
         self
     }
 

@@ -30,7 +30,7 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use flui_interaction::routing::{FocusManager, FocusNode, KeyEventResult, NodeContext};
+use flui_interaction::focus::{FocusManager, FocusNode, KeyEventResult, NodeContext};
 use flui_view::element::ElementKind;
 use flui_view::impl_inherited_view;
 use flui_view::prelude::*;
@@ -47,6 +47,17 @@ use crate::support::{RefCallback, ref_callback};
 /// struct SaveIntent;
 /// impl Intent for SaveIntent {}
 /// ```
+///
+/// A behavioural widget's gesture performs an `Intent`, never a bare
+/// callback, so its keyboard, assistive-technology and single-pointer paths
+/// can perform the same one ([`GestureCommand`](crate::GestureCommand),
+/// ADR-0216): passing a closure where an intent is expected is a compile
+/// error that says so.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not an `Intent`",
+    label = "a gesture performs an `Intent`, not a callback",
+    note = "declare the operation as a type (`struct Archive; impl Intent for Archive {{}}`) and bind what it does with `Actions`, so its key, assistive-technology and pointer paths perform the same intent"
+)]
 pub trait Intent: Any {}
 
 /// What an [`Action::invoke`] did, threaded through to
@@ -207,6 +218,12 @@ impl ErasedAction {
         (self.is_enabled)(intent)
     }
 
+    /// Invoke outside a key dispatch: a gesture, a control's press, an
+    /// assistive-technology action.
+    pub(crate) fn invoke(&self, cx: &mut EventCx<'_>, intent: &dyn Any) -> ActionOutcome {
+        (self.invoke)(cx, intent)
+    }
+
     /// Invoke inside the key event's dispatch, then report what the key
     /// dispatch should do — **one** call, so the key result cannot disagree
     /// with what actually ran.
@@ -257,7 +274,7 @@ impl Actions {
     pub fn new(child: impl IntoView) -> Self {
         Self {
             own: Vec::new(),
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 
@@ -385,8 +402,8 @@ impl_inherited_view!(ActionChainProvider);
 // Activation intents (ADR-0079)
 // ============================================================================
 
-/// "Activate the focused control" — what `WidgetsApp` binds Enter, Space and
-/// Select to. A control answers it with an
+/// "Activate the focused control" — what the default bindings send for Enter
+/// and Select on key-down and for Space on its release. A control answers it with an
 /// [`Actions`] binding around its `Focus`; nothing answers it at the root, so
 /// an unclaimed activation key keeps bubbling.
 #[derive(Debug, Clone, Copy, Default)]
@@ -399,6 +416,45 @@ impl Intent for ActivateIntent {}
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ButtonActivateIntent;
 impl Intent for ButtonActivateIntent {}
+
+/// "The activation key went down" — Space's key-down, whose release is the
+/// [`ActivateIntent`].
+///
+/// A control answers it by consuming the key-down (and may show itself
+/// pressed until the activation or a focus change), so the press and the
+/// release that activates belong to the same control. A control that does
+/// not answer it lets the key-down bubble; its activation still comes with
+/// the release.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ActivationPressIntent;
+impl Intent for ActivationPressIntent {}
+
+/// "Go back one page" — Alt+Left and `BrowserBack` (Cmd+[ and `BrowserBack`
+/// on Apple platforms), and the mouse's back button.
+///
+/// A navigator answers it by popping its current page; with nothing to pop it
+/// declines, and the key reaches the host.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BackIntent;
+impl Intent for BackIntent {}
+
+/// "Dismiss what is on top" — Escape.
+///
+/// Only a dismissible surface (a modal route, a menu) answers it; a text field
+/// consumes it without effect, so Escape typed into a field closes nothing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DismissIntent;
+impl Intent for DismissIntent {}
+
+/// "Show the focused item's context menu" — the Menu key and Shift+F10
+/// outside Apple platforms, which have no menu key.
+///
+/// A [`GestureAlternatives`](crate::GestureAlternatives) whose single-pointer
+/// alternative is a context menu answers it by opening that menu; with
+/// nothing answering it, the key reaches the host.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ShowContextMenuIntent;
+impl Intent for ShowContextMenuIntent {}
 
 // ============================================================================
 // Focus traversal intents (ADR-0026)
@@ -498,10 +554,11 @@ impl Action<DirectionalFocusIntent> for DirectionalFocusAction {
     }
 }
 
-/// Copy or cut the focused field's selection.
+/// Copy or cut the focused field's selection, or the focused draggable item.
 /// [`DefaultFocusTraversal`](super::shortcuts::DefaultFocusTraversal)
 /// binds Ctrl+C/Ctrl+X (Cmd on Apple platforms); an `EditableText` answers it
-/// on its own focus node.
+/// on its own focus node, and a [`Draggable`](crate::Draggable) by holding its
+/// items for a paste.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopySelectionTextIntent {
     /// Write the selection to the clipboard and keep it.
@@ -511,8 +568,9 @@ pub enum CopySelectionTextIntent {
 }
 impl Intent for CopySelectionTextIntent {}
 
-/// Paste the clipboard's text over the focused field's selection,
-/// bound to Ctrl+V (Cmd+V on Apple platforms).
+/// Paste the clipboard's text over the focused field's selection, or the
+/// held drag into the focused [`DropTarget`](crate::DropTarget); bound to
+/// Ctrl+V (Cmd+V on Apple platforms).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PasteTextIntent;
 impl Intent for PasteTextIntent {}

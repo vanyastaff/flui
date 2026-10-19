@@ -2,66 +2,24 @@
 
 Crate-level design notes for `flui_interaction`: subsystems, ownership, mapping decisions, thread safety, friction and outstanding refactors.
 
-## Input identity survives pointer reuse
-
-The binding mints `InputSequenceId` before resolving a contact's user route and
-seeds it into the exact arena generation before admitting recognizers. A
-preexisting competition is never retagged. Contact snapshots copy this identity;
-an accepted drag start exposes it together with the backend's optional device
-identity. Standalone raw arena competitions have no binding identity and report
-`None`. The binding permanently refuses new admission on identity exhaustion,
-preserving any earlier cleanup failure before diagnostics.
-`binding_admits_distinct_drag_sequences_when_pointer_ids_are_reused` exercises
-real mounted input, release, cancellation and reuse. Channel lifetime, fling and
-contactless sources remain governed by
-[ADR-0209](../../../docs/adr/ADR-0209-nested-scroll-connection.md).
-
-### Native scroll admission and completion
-
-The same binding identity mint admits wheel streams. `ScrollDispatch` retains
-the native packet in local and presentation coordinates, its optional admitted
-identity, actual device metadata and direct/momentum cause. Raw hit-result
-dispatch has no binding identity. Consumers read `local` explicitly; the wrapper
-does not forward native fields through `Deref`.
-
-`Listener::on_scroll_sequence` receives deltas and completion through the same
-selected `ScrollTarget` cell. Binding withdrawal precedes terminal callbacks,
-preemption, cancellation, focus loss and device removal. No completion is a
-fabricated zero-delta native packet. Unregistered targets stay inert. Replacement
-handlers receive the old identity explicitly and can reject an unrelated end.
-
-`GestureSettings::with_scroll_sequence_timeouts` configures owner-clock recovery
-for phase-less bursts and phased streams whose backend omits End. The defaults
-are 500 ms and 2 s, respectively; these are framework recovery policy rather
-than measurements of operating-system behavior. Native timestamps remain
-unchanged. Binding deadline observations include this demand in the runtime
-wake gate without executing a callback or clock query from a scheduling getter.
-
-A completion attempted outside its exact owner lane retains data-only delivery
-debt and an already-due scheduling observation. It runs once after lane return.
-A callback panic counts as delivered and is never replayed; the remaining
-accepted completions still run and preserve the first failure. Active admission
-and deferred completion share the binding's bounded source budget. Silent
-teardown withdraws both without invoking user code.
-
-`scroll_claim_preserves_owned_source_units_and_phase`,
-`scroll_target_delta_is_localized_as_a_vector`,
-`scroll_sequence_completion_follows_binding_phases_and_clock`,
-`scroll_completion_withdraws_before_reentry_and_recovers_from_failure`,
-`scroll_completion_waits_for_its_lane_and_preserves_competing_failures` and
-`contactless_scroll_deadlines_reach_the_runtime_wake_gate` cover these contracts
-through mounted widgets, public binding/lane entry and the real runtime.
-
 ## Subsystems
 
-| Subsystem | One-paragraph description |
-|---|---|
-| `arena` | Owner-local conflict resolution between competing recognizers. Per-pointer members are `Weak<dyn GestureArenaMember>` in an inline-four `SmallVec`. Generational slots keep held competitions separate across pointer-ID reuse. Eager acceptors win when the arena closes; each notification upgrades its weak participant immediately before invoking it. |
-| `recognizers` | Ten recognizer types (tap, double tap, long press, drag, scale, force press, multi-tap, multi-drag, eager, tap-and-drag) and drag-axis builders. Each implements the open `GestureRecognizer` and `GestureArenaMember` traits. Builders configure immutable callbacks before returning `Rc` ownership. `ArenaMembership` names an exact weak allocation; `PrimaryContact` owns one admitted sequence, its settings snapshot, identity and deadline. `RecognizerSet` shares ordered weak attachments with listeners. |
-| `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with a 100-event pressure threshold, preserved sequence boundaries and 1 ms minimum sample interval), standalone OneEuro filters, the crate-internal `lsq_solver` (used by `VelocityTracker` only) and `sampling_clock`. |
-| `routing` | Event dispatch infrastructure: `PointerRouter`, the presentation-owned `FocusManager` (`FocusManager::new` returns an `Rc<Self>`; there is no thread-local focus state), `FocusScopeNode` / reading-order Tab traversal, `MouseTracker` (enter/exit/hover), hit testing, the `InteractionLane` that resolves and invokes pointer routes, and the `TransformGuard` stack-RAII for the transform stack. Route resolution on Down and cached-route invocation on every Move/Up are on the per-pointer hot path (`benches/pointer_route_bench.rs`). |
-| `binding` | `GestureBinding` — owner-local glue that hosts the arena, resolves and retains the Down hit route, coalesces/resamples Moves, and runs route → arena lifecycle ordering. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
-| `observability` | `GestureEvent` gives typed event names; `SPAN_RECOGNIZER` and `SPAN_ARENA` name spans, and `pointer_event_kind` describes a pointer event for tracing. Rejection and terminal tracking commit local withdrawal before diagnostics, because subscribers can reenter or panic. The app installs the subscriber. |
+The top-level modules are layers ([ADR-0217](../../../docs/adr/ADR-0217-interaction-module-layers-and-pointer-assembly.md) §1):
+a module names only modules in a lower layer, and modules in one layer name none of each other.
+`[package.metadata.flui.modules]` in the manifest declares them and `cargo xtask module-dag`
+checks them with no exceptions. Each public item has one module path; the crate root and
+`prelude` re-export the common ones.
+
+| Layer | Module | One-paragraph description |
+|---|---|---|
+| 0 | `events`, `ids`, `retain`; `close`, `containment` | The owned input vocabulary and identities. `retain` decides what a failure path keeps rather than destroys; `close` holds the terminal close policy (`CloseMode`, `CloseTombstone`, `ClosePanic`) every owner shares; `containment` holds `RoutePanic`, the first failure of a synchronous dispatch phase, kept until mandatory cleanup finishes. |
+| 1 | `pointer` | Pointer delivery: hit testing, the `InteractionLane` that resolves and invokes pointer routes, `PointerRouter`, `PointerCapture`, `MouseTracker` (enter/exit/hover), the `TransformGuard` stack-RAII, `PointerEventResampler` (frame-rate adaptation with a 100-event pressure threshold, preserved sequence boundaries and 1 ms minimum sample interval), its `SamplingClock`, and wheel preferences. Route resolution on Down and cached-route invocation on every Move/Up are on the per-pointer hot path (`benches/pointer_route_bench.rs`). |
+| 1 | `focus` | The presentation-owned `FocusManager` (`FocusManager::new` returns an `Rc<Self>`; there is no thread-local focus state), `FocusScopeNode` / reading-order Tab traversal and directional traversal. |
+| 1 | `text_input` | `TextInputOwner` and the `TextInputHandle` a text widget attaches through, and `ClipboardHandle`. |
+| 2 | `gesture` | The arena: owner-local conflict resolution between competing recognizers, per-pointer members as `Weak<dyn GestureArenaMember>` in an inline-four `SmallVec`, generational slots that keep held competitions separate across pointer-ID reuse, eager acceptors that win when the arena closes. Eleven recognizer types (tap, double tap, long press, hold, swipe, drag, scale, force press, multi-tap, multi-drag, tap-and-drag) and drag-axis builders, each implementing the open `GestureRecognizer` and `GestureArenaMember` traits; `ArenaMembership` names an exact weak allocation, `PrimaryContact` owns one admitted sequence, `RecognizerSet` shares ordered weak attachments with listeners. `GestureSettings`, the callback details, `DragAxis`, `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate) and its crate-internal `lsq_solver`, One Euro filters (applied by every position-publishing recognizer after acceptance when settings select a tuning; slop, arena and velocity read raw samples), and observability: `GestureEvent` names events, `SPAN_RECOGNIZER` and `SPAN_ARENA` name spans; rejection and terminal tracking commit local withdrawal before diagnostics, because subscribers can reenter or panic. |
+| 2 | `drag` | Drag-and-drop sessions (ADR-0211). One `DragOwner` per UI runtime holds `DragSessions` (a `Slab` of entries behind `Rc<RefCell<..>>`, borrowed only for short reads and writes, never across a receiver, observer, provider or platform call). A `DragSession` runs in its window on the contact's pointer capture and hit test (its presentation's tree, attached with each presentation's window and hit test, unless the source passes its own). Leaving the window, it asks the window what is under the pointer (`PlatformWindow::window_at`): over another presentation of the runtime it stays on the same capture and hit-tests that tree, leaving the last window's receivers before the next one's enter, and the sibling-presentation reason to escalate applies only where the backend cannot place its windows. When the pointer leaves for anything else, or at the start on an `AtStart` backend, the pure `plan_os_session` (`flui-platform-api`) decides whether it becomes an OS session, and the request waits in the table until the host enters it at its outermost quiescent point. The identity `(ProcessNonce, UiRuntimeId, DragSessionId)` rides in a private representation of the offer; only the source runtime's table turns it back into the Rust value. `DropTracker` keeps the per-receiver contract (one enter, moves, then exactly one leave or drop; drop only to the receiver that accepted the last move), and a dropped offer is concluded with the OS once every request made from it has resolved. A receiver is one registration, its lane ticket holding that receiver: a ticket unregistered or given another receiver mid-hover leaves the old one at the next move or tick, and it never spring-loads or takes the drop. `DragOwner::tick` runs spring-loading that came due (an undated hover asks for a turn at once) and one autoscroll frame, asking receivers innermost first until one answers `Autoscroll::Scrolling`. A presentation reaches its runtime's drags through `DragAndDrop`, the lifecycle capability the `Draggable` and `DropTarget` widgets acquire: it starts drags that leave through its window, and a mouse or pen drag shows on its cursor what a drop would do (grabbing over nothing or a target that would move it, copy and alias badges, no-drop over a target that declines) through an override of the presentation's `MouseTracker`, because hover is frozen while the drag owns the contact; the override goes when the session ends or the OS takes it. A keyboard or assistive cut or copy is a held session no pointer moves, at most one per runtime; a paste resolves the receiver its target's ticket names, enters it and drops on it as a release would, as a move for a cut and a copy for a copy. `DragOwner::cancel_on_escape` cancels a presentation's in-window and held sessions, which the runtime calls for Escape before focus sees the key. A release whose receivers panic still concludes the session, cancelled, before the panic propagates. After an autoscroll frame that scrolled, an in-window session hit-tests again where its pointer rests. |
+| 3 | `binding` | `GestureBinding` — the owner-local composition root (ADR-0217 §2) over `pub(crate)` services that hold no reference to it or to each other: `PointerSequences` (admitted contacts and their Down routes, captures, resamplers, refusals), `MoveCoalescer`, `ScrollSequences`, `PanZoomSequences`, `MouseTracker`, `ArenaDriver` (close on Down, sweep on Up, abandon on Cancel) and `CloseCoordinator`. Every service is keyed by `InputSurface` (the window, or a surface minted by `embed_surface`); a contact stays with the surface that admitted its Down. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
+| above | `__runtime`, `testing` | The runtime's terminal-cleanup seam over every owner above (hidden; no semver promise), and the `testing` feature's synthetic event builders. |
 
 ## Ownership and synchronization
 
@@ -155,6 +113,19 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   `resolved_route_move_invocation_allocates_no_heap_after_setup` pins unchanged-time
   measured Sample/Stop delivery without allocation after admission and the
   saturated source enqueue allocation bound.
+- **A wheel packet's dispatch says when its latch ends (ADR-0209 §5).** The
+  binding's `ScrollSequences` latch a source's packets until it idles past
+  the preset's time; with each packet it publishes, beside the latch's
+  sequence, `ScrollLatchEnd::IdleAt` (the packet's time plus the idle) or
+  `WithThisPacket` for an end phase, read through
+  `GestureArena::dispatched_latch_end` and restored with the dispatched
+  sequence when a nested dispatch returns. The latch itself still lapses
+  lazily, on the next packet; a consumer that must end its own sequence on
+  time arms `GestureArena::register_deadline`, a deadline source that joins
+  no contest, so the owner wakes and polls it like a recognizer's. The
+  binding's and the consumer's ends agree because both read the same owner
+  clock and compare the same instant. `flui-widgets`'
+  `an_idle_wheel_sequence_ends_at_its_latch_deadline` pins it.
 - **The binding owns mounted gesture progression.** `GestureBinding` admits
   at most 32 simultaneous contacts, retains each admitted Down route, closes
   its arena after routing Down, and sweeps or abandons its exact generation on
@@ -288,6 +259,20 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   Containment ends at each opaque payload; its own double-panicking destructor
   cannot be rescued by the framework path.
 
+- **Gesture observers hear decisions after the operation, in passes.** The
+  arena queues a `GestureObservation` when it commits a decision, only while an
+  observer is registered, and delivers the queue when its outermost operation
+  returns or, for a binding's arena, when the outermost binding dispatch returns
+  (including a failed one: committed decisions are facts). A pass delivers what
+  was queued at its start, each observation to the observers registered when it
+  began; reentrant observations wait for the next pass, which a stored window
+  wake schedules. Each call is contained, the first failure of a pass is the
+  one reported, and outgoing observers are destroyed after the call in flight,
+  a destructor failure contained apart from it. Handles name an id that is
+  never reissued; registration refuses at the terminal value.
+  `gesture_observer_delivery_contract` pins these rows, and
+  `arena_decisions_allocate_nothing_for_observation_without_observers` the
+  unsubscribed budget.
 - **Focus node identities are never reissued.** The allocator admits its final nonzero identity once and then refuses every new `FocusNode` with a panic, permanently, even after that panic is caught. Wrapping would hand a retired identity, and the focus authority it names, to a new node; refusing keeps every attached node's requests and listeners intact.
 - **Configure before sharing; cancel before releasing.** Builders return `Rc`
   recognizers whose callbacks are immutable. Explicit `cancel` delivers an
@@ -341,7 +326,7 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   `resolved_route_move_invocation_allocates_no_heap_after_setup` pins owning
   Sample/Stop delivery, raised-time filtering and saturated admission with 199
   delivered measured readings plus the newest predictions.
-- **`TapButton` is a typed enum, not integer button constants.** `TapButton` (`src/recognizers/tap.rs`) maps pointer buttons explicitly through `from_pointer_button`, so the type system enforces the choice. It is `#[non_exhaustive]` so a future fourth button slot can be added without breaking downstream.
+- **`TapButton` is a typed enum, not integer button constants.** `TapButton` (`src/gesture/recognizers/tap.rs`) maps pointer buttons explicitly through `from_pointer_button`, so the type system enforces the choice. It is `#[non_exhaustive]` so a future fourth button slot can be added without breaking downstream.
 - **Weak arena membership.** The inline-four member list stores weak identities,
   not lifetime ownership. Dead members withdraw; queued verdicts recheck
   liveness at each invocation. `gesture_arena_bench` measures empty and busy
@@ -350,6 +335,94 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   The generated operation sequences in
   `arena_settles_every_member_exactly_once` assert terminal verdict uniqueness
   and settlement across pointer reuse.
+- **A verdict names its contest, not its pointer (ADR-0246).** A contest a
+  hold kept past its Up settles while the same pointer ID's next contact is
+  down, so `accept_gesture` and `reject_gesture` receive the `GestureContest`
+  they settle and a member that outlives one contact compares it with its
+  entry's (`PrimaryContact::tracks_contest`). Sweeping a contest ends only the
+  `Sequenced` successors that contest carried. The `gesture_lifecycle_matrix`
+  rows `a_held_earlier_contest_cannot_end_the_next_contact` and
+  `a_swept_earlier_generation_keeps_the_next_contacts_successors` pin both.
+- **One ownership table decides a moving contact (ADR-0208).** Drag, multi-drag,
+  tap-and-drag and scale admit with a `MotionRole` (axial, free, channel leaf) and claims through
+  `GestureArenaEntry::claim_motion` with the root-space displacement since
+  Down; the arena then picks the owner among every moving member, not the
+  first claimant. A channel leaf keeps the contact from its ancestors, except a
+  two-contact scale on a contact it holds alone, whose role is dormant there; the
+  members inside the innermost leaf are inner claimants, which the leaf meets as a
+  free member, so a list in a viewer owns its axis; a free member yields to an
+  axial member taking at least cos 45° (exact at 45°, compared squared); the
+  larger axial component wins and a tie goes to the innermost member. A
+  `PanClaim` region, carried by the arena handle
+  (`GestureArena::with_pan_claim`), intersects the axes an axial member outside
+  it may take, stopping at that member's own region. `allowed_devices` refuses
+  a Down in `RecognizerSet` before any rule runs. An accepted drag starts only
+  once its contact crossed its own slop: a lone drag that wins by default holds
+  until then and starts from Down, so the motion up to the slop still reaches
+  its first update. `assert_ownership_table` (`flui-testing`) runs every cell
+  for touch and mouse; `claimed_contact_cancels_every_other_listener_once`,
+  `allowed_devices_refuse_other_kinds_before_the_arena` and
+  `pan_claim_region_keeps_the_pan_from_an_enclosing_drag` pin the edges.
+- **Composition is a tree.** A branch handle composes again into a child
+  node that holds its parent strongly; a member's relation to another is
+  found on their common ancestors, so a fallback nested anywhere under a
+  `RequireFailure` second branch waits for that node's first branch.
+  `Sequenced` is one arena member: its successors never win the arena, fail
+  with their hold, and stay admitted (carried, outside the resolved slot) when
+  the hold wins a continuing contact, until `SequencedBranch::hand_off` or the
+  contact's end rejects them. Each node budgets its wait in the handle's
+  settings (double-tap interval for `RequireFailure`, the authored long press
+  for `Sequenced`, before floors); a path past `max_resolution_delay` for any
+  pointer kind is `CompositionError::DelayCeilingExceeded`. The
+  `gesture_lifecycle_matrix` rows
+  `nested_composition_waits_on_an_enclosing_preferred_branch`,
+  `sequenced_hold_hands_its_won_contact_to_the_successor`,
+  `sequenced_successor_fails_with_its_hold`,
+  `unhanded_successor_is_rejected_when_its_contact_ends` and
+  `composition_refuses_a_path_past_the_delay_ceiling` pin them.
+- **A hold is an admission kind, not a widget rule (ADR-0208 rule 4).** A
+  member admitted through `ArenaMembership::holding_contact` rejects, on its
+  admission, every member of the contact admitted without a motion role or
+  a hold, and the arena refuses such members joining after it; moving
+  members still compete and take the contact from the hold. Hit testing is
+  untouched: the tap under a flinging list is admitted, then loses.
+  `HoldGestureRecognizer` reports the hold and its end (`HoldEnd::Lifted`,
+  `Yielded`, `Cancelled`); `Scrollable` attaches one only while its motion
+  runs and settles from rest on release.
+  `hold_on_down_beats_tap_and_long_press_not_drag` pins the rule, the widget
+  rows of `assert_ownership_table` the pager.
+- **Hover freezes while a moving member owns a contact (ADR-0208 rule 6).** A
+  verdict that gives a continuing contact to a member with a motion role,
+  by claim or as the lone member, latches it until its terminal event; a
+  claimed trackpad pan-zoom session latches too. While
+  `GestureBinding::is_hover_frozen` holds, moves record each source's
+  position without entering, exiting or changing the cursor, and the frame
+  driver skips its ambient refresh; the first refresh after the latch
+  hit-tests where the pointer went. Raw `Listener` hover callbacks are not
+  frozen. `hover_freezes_while_a_scroll_is_latched` and the `flui-widgets`
+  row `hover_holds_while_a_touch_scroll_is_latched` pin it.
+- **Locks are recognizer configuration (ADR-0208 §4).** `AxisLock::Rails`
+  rails a free drag or a scale's focal motion that starts within 22.5° of an
+  axis (tan 22.5° = √2 − 1, compared without a square root) for touch and
+  touchpad; a scale under rails publishes no focal motion until the slop
+  picks the axis, then the whole travel on it. `TransformLock` pins rotation
+  or scale at identity in a scale that began as a pan: the first move past
+  any slop decides, and a turn is measured as the arc the angle sweeps at
+  the span, against the span slop. Rotation has no recognizer of its own.
+  `SwipeGestureRecognizer` is an axial member that fires on a fling-fast
+  release; `SwipeStart::FromEdge` restricts the direction, and the region
+  the recognizer is attached to decides where a swipe may start, since a
+  recognizer does not know its region's size. `axis_and_transform_locks`
+  and `swipe_recognizer` (`recognizer_api`) pin them.
+- **A claimed contact cancels the rest of its route.** An arena admission
+  records the route target that fed it (`PointerDispatch` carries it on Down).
+  When a member that asked for a continuing contact wins, that target becomes
+  the contact's delivery target and every other target owes one
+  `Cancel(CancelReason::Claimed)`, settled by the binding after the dispatch
+  that reached the verdict. A lone member's default win claims nothing, so a
+  raw `Listener` beside a lone recognizer keeps the contact; a hold whose win
+  carries successors defers the claim to the hand-off.
+  `unclaimed_wins_cancel_no_listener` pins both.
 - **Gesture extension points are open.** External recognizers implement the same
   dyn-compatible `GestureRecognizer` and `GestureArenaMember` traits as built-ins.
   Arbitration and deadlines use one path, with no marker-trait bridge losing
@@ -413,7 +486,7 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   session. `binding_input_contract_matrix` covers both observation paths,
   competing observation failure and subsequent Update/End recovery.
 - **Focus scope identity is explicit.** A `FocusScopeNode` owns an inner `FocusNode`, and that backing node carries a `Weak<FocusScopeNode>` owner link. This keeps enclosing-scope lookup, focused-child history, and `FocusManager::focus_next` / `focus_previous` rooted in the same tree instead of relying on a parallel manager structure. `descendants_are_focusable=false` gates descendant requests; a true-to-false transition evicts focus held by the node or its subtree while leaving the node eligible for a later explicit request. FLUI clears primary focus to `None` rather than selecting a previously focused child.
-- **`processing::lsq_solver` is crate-internal.** `VelocityTracker` is its only user; the resampler interpolates linearly and does not fit a polynomial.
+- **`gesture`'s `lsq_solver` is crate-internal.** `VelocityTracker` is its only user; the resampler interpolates linearly and does not fit a polynomial.
 - **Observability is crate-public.** `pub mod observability` exports stable `GestureEvent` spellings, component-name constants, and `pointer_event_kind`. `flui-app` configures a generic subscriber; gesture-specific devtools consumption requires its own integration. `stable_recognizer_observability_kinds_reach_the_subscriber` pins admission and dispatch fields through public recognizer calls.
 - **Synchronous FIFO reentrant-focus queue vs six different reference shapes, none of them adopted as-is.** Surveyed in [`.rust-studio/specs/1040-ordered-focus-notifications/survey.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/.rust-studio/specs/1040-ordered-focus-notifications/survey.md) (issue #1040). Six engines/frameworks solve "a focus listener changes focus again" six different ways:
   - **Flutter** (`focus_manager.dart`, `FocusManager.applyFocusChangesIfNeeded` / `_markedForFocus` / `_markNextFocus`): defers every `requestFocus`/`unfocus` to a microtask (`_markNeedsUpdate` → `scheduleMicrotask`) and collapses every request made before that microtask runs into one `_markedForFocus` slot — last request wins, and `_markNextFocus` clears the pending mark outright when a request names the already-current node. Chronological by construction and every listener sees a coherent order, at the cost of up to one frame of lag and a reentrant chain that livelocks across microtasks (still yielding frames, so it never hangs the caller). The deferral traces to flutter/flutter#9074 (2017): *"Focus notifications trigger[ed] by tree mutations are now delayed by one frame, which is necessary to handle certain complex tree mutations"* — reentrancy safety is a side effect of that motive, not the reason it was built.
@@ -423,7 +496,7 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   - **Masonry/Xilem** (`masonry_core/src/passes/update.rs`, `run_update_focus_pass`): `request_focus` writes a pending `next_focused_widget` slot; the update pass commits it and delivers `FocusChanged` to the old and new widget — last-wins, applied in a pass after event handling, the same family of solutions as Flutter's.
   - **Qt** (widgets): fully synchronous nested dispatch — `setFocus` called from inside `focusInEvent` simply recurses, and `QApplication::focusChanged` fires per change with no engine-side reentrancy bound at all; the escape hatch it gives a handler is `QFocusEvent::reason()`, so code can recognize and decline to react to a focus change it caused itself. Real infinite-focus-loop reports exist in the wild for exactly this shape.
 
-  FLUI's synchronous `request_focus`/`unfocus` cannot defer admission to an unavailable microtask. `FocusManager` queues reentrant requests and revalidates them immediately before applying each FIFO entry: attached, focusable, and still owned by this manager. Each application commits state, publishes node observers, then publishes manager observers. A shared containment accumulator completes every committed round and drains accepted requests before propagating the first listener failure; a competing failure does not erase delivery debt. This preserves chronological edges without recursive application or transaction rollback. The public `caught_callback_failures_leave_captures_with_their_owner` table pins node and manager origins, queued request/unfocus ordering, competing failures, observer replacement, and healthy recovery. `finish_node_replacement` participates in the same ordering, publishing a manager edge only when primary identity changes. Terminal `close` retains its distinct policy: commit terminal state first, stop final node notifications after failure, and omit manager publication while an ordinary notification is in flight. The synchronous drain remains bounded to 32 committed applications per outermost call; it warns once and cancels the remaining tail (`ping_pong_listeners_are_bounded_and_warned`). Dispatch snapshots name listener registrations and recheck membership before invocation, so removal takes effect immediately and newly added listeners wait for a later snapshot.
+  FLUI's synchronous `request_focus`/`unfocus` cannot defer admission to an unavailable microtask. `FocusManager` queues reentrant requests and revalidates them immediately before applying each FIFO entry: attached, focusable, and still owned by this manager. Each application commits state, publishes node observers, then publishes manager observers. A shared containment accumulator completes every committed round and drains accepted requests before propagating the first listener failure; a competing failure does not erase delivery debt. This preserves chronological edges without recursive application or transaction rollback. The public `caught_callback_failures_leave_captures_with_their_owner` table pins node and manager origins, queued request/unfocus ordering, competing failures, observer replacement, and healthy recovery. `finish_node_replacement` participates in the same ordering, publishing a manager edge only when primary identity changes; a `replace_node` requested while a notification is in flight is refused with `FocusTreeError::NotificationInFlight` before any mutation, in every build (`nested_replacement_publishes_no_stale_edge`), so the completion always enters at depth zero. The ordering itself is pinned by `reentrant_request_during_notification_is_applied_after_and_published_in_order` in `tests/focus_keys.rs`. Terminal `close` retains its distinct policy: commit terminal state first, stop final node notifications after failure, and omit manager publication while an ordinary notification is in flight. The synchronous drain remains bounded to 32 committed applications per outermost call; it warns once and cancels the remaining tail (`ping_pong_listeners_are_bounded_and_warned`). Dispatch snapshots name listener registrations and recheck membership before invocation, so removal takes effect immediately and newly added listeners wait for a later snapshot.
 
 - **Committed focus notifications finish before propagating failure.** Node and manager observers share one containment accumulator across the outer request and its accepted FIFO tail. Every still-registered observer in each round runs, even after an earlier observer panics; callback snapshots and canceled queued nodes retire outside borrows and preserve the first failure. Diagnostic subscribers are contained by the same accumulator. Reentrant registration changes affect subsequent snapshots, and a removed listener is skipped. The public `caught_callback_failures_leave_captures_with_their_owner` table pins node-only failures, competing manager failures, node/manager competition, self-replacement, queued requests, canceled-target retirement, diagnostic failures, and the next healthy focus operation. Terminal close notifications retain their separate stop-on-failure policy. The depth guard restores only depth: it neither cancels accepted debt nor executes user code on an unexpected unwind.
 
@@ -524,13 +597,12 @@ in [PERFORMANCE.md](PERFORMANCE.md#trace-provenance-and-replay).
 
 ## Observability
 
-The observability substrate lives at [`crate::observability`](../src/observability.rs) (re-exported at
-the crate root as `flui_interaction::observability::*` and the three
-`GestureEvent` / `SPAN_RECOGNIZER` / `SPAN_ARENA` / `pointer_event_kind`
-items). Arena admission and resolution emit tracing spans and typed gesture
-events. Configure your subscriber at
-the app boundary; the crate does not install one. Filter via
-`RUST_LOG=flui_interaction::arena=debug,flui_interaction::recognizers=trace`.
+The observability substrate lives in [`gesture`](../src/gesture/observability.rs) (exported as
+`flui_interaction::gesture::{GestureEvent, SPAN_RECOGNIZER, SPAN_ARENA, pointer_event_kind}` and
+re-exported at the crate root). Arena admission and resolution emit tracing spans and typed
+gesture events. Configure your subscriber at the app boundary; the crate does not install one.
+Tracing targets are module paths. Filter via
+`RUST_LOG=flui_interaction::gesture::arena=debug,flui_interaction::gesture::recognizers=trace`.
 
 ## Friction log
 
@@ -563,8 +635,9 @@ Subsystem-level companions:
 ## Accepted drag terminal reason
 
 Drag updates preserve both coordinate spaces: `delta` is the receiving node's
-axis-projected movement, and `global_delta` comes from consecutive samples of
-the same active contact before local transformation. Selecting a remaining
+axis-projected movement, and `global_delta` comes from consecutive raw samples
+of the same active contact before local transformation (position smoothing
+shapes only the published positions and `delta`). Selecting a remaining
 finger therefore does not fabricate motion between two different fingers.
 Local and root velocity trackers have separate event timelines; historical
 root samples never advance the local sample clock. `global_velocity` retains
@@ -709,6 +782,88 @@ Rejection cannot reinstate a terminal owner. The row
 seven rejection paths, healthy destructor reentry, ordinary retirement failure
 and subsequent independent-owner key delivery.
 
+## Focus causes, held keys, traversal units and orphaned focus
+
+Every focus transition carries a `FocusCause`. `Traversal` and `Assistive` put
+the presentation in keyboard modality, `Programmatic` leaves it alone, a first
+key-down that is not a modifier sets it and `note_pointer_input` clears it;
+`FocusNode::has_visible_focus` is primary focus in keyboard modality. A
+modifier alone does not count: Alt on its way to Alt+Tab, or Shift held before
+a click, says nothing about how the user moves focus. A modality change
+notifies the primary node's listeners under the notification-depth guard, so
+an indicator can follow it (`keyboard_focus_contracts`).
+
+The key ledger in `focus/key_ledger.rs` sits between the global handlers, which
+still see every event, and the focus walk. It records, per held key (physical
+`Code`, or the logical key when the code is `Unidentified`), the traversal unit
+that had primary focus at key-down, the key-down itself and the node its walk
+started from, before any handler runs; a repeat or release reaches the walk
+only while that unit still has primary focus. A release clears the record.
+One that arrives after focus moved to another unit is no key event anywhere:
+a root binding resolving at the primary focus (Space-up activating) and the
+nodes of a covered route never hear it. Instead every node on the recorded
+node's path, while that node is still in the tree, hears its
+`KeyCancelHandler` with the key-down, so what the press began (a keyboard
+scroll) ends; every handler runs even after one panics, and the first panic
+propagates (`a_release_after_focus_moved_only_cancels_its_press`). The cancel
+channel is apart from the key handler on purpose: no binding can mistake a
+cancellation for a release. A key-down that moved focus by traversal rebinds the
+record to the new unit after the walk, so a held Tab keeps moving; one that
+moved focus programmatically (Enter opening a page) does not, so its repeats
+never reach the new page's field (`key_repeats_follow_their_key_down`). A key
+the input method was composing with, or `NamedKey::Process`, is recorded as the
+method's and none of its events reach the walk. A handler panic leaves the
+record as the key-down made it. `forget_pressed_keys` clears the ledger for the
+runtime's window deactivation and cancels each held press the walk took the
+same way; closing the manager clears it without telling anyone. `dispatch_pointer_back` delivers a pointer's
+back button (X1) as `NamedKey::BrowserBack` with `Code::Unidentified`, held
+under its own ledger identity so it neither ends nor is ended by a keyboard's
+Back key, and, being a pointer press, without changing the modality.
+
+`FocusNode::register_traversal_entry` makes a node a traversal unit: one Tab
+candidate whose descendants are not candidates (`traversal_candidates` prunes
+them for scopes and policy groups alike). Traversal from inside a unit starts
+from the outermost unit below the enclosing scope, scope history records that
+unit, and landing on a unit — by Tab, `set_first_focus` or a deferred first
+focus — asks its entry. The entry is user code run with no borrow held; a
+target outside the unit, a `Pending` or `Unit` answer, or a panic lands on the
+unit itself, and the panic propagates after focus has moved
+(`traversal_unit_contracts`). No framework widget registers an entry yet; the
+focusable `ListView` of `docs/plans/specs/focus-keyboard/design.md` is its
+planned production caller.
+
+`FocusScopeNode::set_provisional_first_focus` is `set_first_focus` for a scope
+entered for the first time: it also marks the focus it lands on as a guess.
+The mark is cleared by any non-programmatic focus move inside the scope (the
+user chose), by a later `set_first_focus` (a restore is final), and by
+`take_provisional_first_focus`, which an `autofocus` widget calls to replace
+the guess once. The navigator uses it for a pushed route's first entry
+(`flui-widgets` ARCHITECTURE §40, `push_moves_focus_into_the_new_route`).
+
+Removing the subtree that holds primary focus runs no user code: removal comes
+from a widget's dispose, inside reconciliation. It records an orphan marker —
+the enclosing scopes, the outermost surviving unit, and the scope's Tab
+candidates after the removed subtree in tree order — and leaves the primary on
+the removed node. The first marker of a frame stands. `settle_orphaned_focus`
+then publishes one edge: to the removed node if it was put back, to the
+surviving unit's entry, to the next recorded candidate still in the scope,
+else the scope's first candidate, or, when the scope itself went, to what the
+nearest surviving scope remembers, else its first candidate — never parked on
+a scope; `None` only when no candidate remains. Tree order stands in for reading order here because the removed
+node's geometry provider is gone by the time the removal is seen. Any committed
+transition clears the marker, so an explicit request replaces the successor,
+and key dispatch and traversal settle before they read the primary. The runtime calls it once
+per frame after build and layout settle, before paint, so the edge lands in the
+frame that removed the node (`focus_transition_contracts`; through a mounted
+tree, `focus_survives_rebuild_and_moves_on_removal`).
+
+A node its widget created for itself is marked through
+`__runtime::mark_widget_owned`. Once that widget detaches it — through its own
+attachment, also after an ancestor's removal unbound it, but not when a newer
+attachment mounted it again — or replaces it, the node is retired: a request
+answers `FocusRequestOutcome::Stale` and nothing waits for an attachment. An
+application's node detached with its host still answers `Queued`.
+
 ## Text-input retirement and deferred delivery
 
 Text-input ownership, session admission and IME enablement commit before outgoing
@@ -745,6 +900,16 @@ owner removes its callbacks from its locks before dropping them. In preserving
 mode, the callbacks still owned are retained rather than dropped
 ([ADR-0127](../../../docs/adr/ADR-0127-exceptional-path-retention.md)); a healthy
 close, and a later call that a closed owner rejects, drop them normally.
+
+`GestureBinding` closes in two steps. Closing sets a flag; the state each
+service retires leaves it through `drain(&self)` (`RefCell::take`) only once no
+dispatch of that binding is on the stack — at once when it is idle, otherwise
+when the outermost dispatch returns. A close a callback requests withdraws the
+arena's and the pointer router's authority immediately, so the rest of that
+dispatch reaches no further handler, and defers member rejection, route release
+and capture loss to the drain. Callbacks the drain runs execute with every
+service borrow released; input they dispatch is refused and a close they request
+is settled after the drain (`a_closed_binding_drains_services_after_dispatch`).
 
 ## Terminal drag ownership
 

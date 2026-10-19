@@ -5,7 +5,6 @@ use crate::presentation::PresentationState;
 use crate::renderer_binding::RenderingBinding;
 use flui_animation::Vsync;
 use flui_foundation::PresentationId;
-use flui_platform_api::HapticFeedback;
 use flui_rendering::binding::RendererBinding as _;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -389,18 +388,14 @@ impl UiRuntime {
             .set_performance_overlay(enabled);
     }
 
-    /// Perform haptic feedback on this presentation's window. See the
-    /// retired `AppBinding::perform_haptic_feedback`'s doc.
-    #[expect(
-        dead_code,
-        reason = "no production caller yet, and this specific forwarding \
-                  wrapper is untested (the haptics tests exercise \
-                  PresentationState::perform_haptic_feedback directly)"
-    )]
-    pub(crate) fn perform_haptic_feedback(&self, feedback: HapticFeedback) {
-        self.presentations
-            .primary()
-            .perform_haptic_feedback(feedback);
+    /// The primary presentation's haptics handle, as its widgets acquire it
+    /// through `LifecycleContext::haptics` outside any `HapticsMode`.
+    ///
+    /// An accepted host observation that system haptics are off suppresses
+    /// both tiers; an unobserved setting plays them (ADR-0212 §1).
+    #[must_use]
+    pub fn haptics(&self) -> flui_interaction::HapticsHandle {
+        self.presentations.primary().haptics().handle()
     }
 
     /// Apply a new device pixel ratio to presentation `id`'s render pipeline,
@@ -456,6 +451,10 @@ impl UiRuntime {
             .renderer()
             .root_pipeline_owner()
             .with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
+        // The logical regions are unchanged, but their device pixels are not; a scale
+        // change need not composite a frame, so the backend re-projects them now
+        // (ADR-0217 §5).
+        presentation.republish_input_regions();
         true
     }
 
@@ -477,6 +476,7 @@ impl UiRuntime {
                 || flui_interaction::__runtime::has_pending_deadlines_snapshot(
                     presentation.gestures(),
                 )
+                || presentation.haptics().has_pending_delivery()
                 || presentation
                     .frame_rate_hold()
                     .is_some_and(|due| presentation.clock().now() >= due)
@@ -524,13 +524,27 @@ impl UiRuntime {
             .filter(|presentation| !presentation.closing_requested.get())
             .flat_map(|presentation| {
                 [
-                    flui_interaction::__runtime::next_deadline_snapshot(presentation.gestures()),
+                    flui_interaction::__runtime::next_deadline_snapshot(presentation.gestures())
+                        .map(|deadline| {
+                            flui_interaction::__runtime::wake_instant(
+                                presentation.gestures(),
+                                deadline,
+                            )
+                        }),
                     presentation.gesture_geometry.borrow().next_wake(),
                     presentation.text_preparation.borrow().next_wake(),
+                    presentation.haptics().next_wake(),
                     presentation.frame_rate_hold(),
                 ]
             })
             .flatten()
+            .chain(self.drag.next_deadline().map(|deadline| {
+                // A drag's spring-loading deadline is an event time; wakes are instants.
+                let epoch = flui_foundation::MonotonicClock::epoch(&self.clock);
+                epoch
+                    .checked_add(std::time::Duration::from_nanos(deadline.as_nanos()))
+                    .unwrap_or(epoch)
+            }))
             .min()
     }
 }

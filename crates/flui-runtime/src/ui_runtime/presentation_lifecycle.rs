@@ -43,7 +43,8 @@ impl UiRuntime {
     /// Adopt presentation `id`'s whole window state at once (execution,
     /// focus, visibility), as a window reports it when it is shown, and
     /// deliver what it changes. Cancels the pointer sequences of a
-    /// presentation that loses focus or stops running.
+    /// presentation that loses focus or stops running; one that is not
+    /// focused forgets its held keys.
     pub fn synchronize_window_snapshot(
         &self,
         id: PresentationId,
@@ -70,10 +71,13 @@ impl UiRuntime {
         if focused {
             for other in self.presentations.iter() {
                 if other.id() != id && other.window_focused.replace(false) {
+                    other.focus_manager().forget_pressed_keys();
                     cancel.push(other.id());
                 }
             }
             self.notify_presentation_focus_gained(id);
+        } else {
+            presentation.focus_manager().forget_pressed_keys();
         }
         if !focused || !visible || execution != flui_platform_api::WindowExecutionState::Running {
             cancel.push(id);
@@ -99,6 +103,7 @@ impl UiRuntime {
             return;
         }
         let changed = presentation.window_execution.replace(state) != state;
+        presentation.sync_haptics_visibility();
         self.reconcile_lifecycle(
             if changed && state != flui_platform_api::WindowExecutionState::Running {
                 vec![id]
@@ -109,7 +114,8 @@ impl UiRuntime {
     }
 
     /// Record presentation `id`'s window focus. Focus is exclusive within
-    /// the UI runtime: gaining it takes it from every sibling.
+    /// the UI runtime: gaining it takes it from every sibling. A window that
+    /// loses it forgets its held keys: their releases go to another window.
     pub fn update_window_focus(&self, id: PresentationId, focused: bool) {
         if self.host_lifecycle.get() == HostLifecycle::Stopping {
             return;
@@ -124,10 +130,13 @@ impl UiRuntime {
         if focused {
             for other in self.presentations.iter() {
                 if other.id() != id && other.window_focused.replace(false) {
+                    other.focus_manager().forget_pressed_keys();
                     cancel.push(other.id());
                 }
             }
             self.notify_presentation_focus_gained(id);
+        } else {
+            presentation.focus_manager().forget_pressed_keys();
         }
         if presentation.window_focused.replace(focused) && !focused {
             cancel.push(id);
@@ -167,21 +176,45 @@ impl UiRuntime {
         let Some(presentation) = self.presentations.get(id) else {
             return false;
         };
-        presentation.widgets().set_window_handle(window.handle());
+        let handle = window.handle();
+        presentation.window_placement.set(
+            handle
+                .state()
+                .ok()
+                .map(|state| crate::presentation::ContentPlacement::of(&state)),
+        );
+        presentation.widgets().set_window_handle(handle);
         *presentation.window_control.borrow_mut() = Some(std::rc::Rc::new(window));
         true
     }
 
     /// The window of presentation `id` reported that its state may have
     /// changed: deliver the new state to the subscribers of its handle.
-    pub(crate) fn publish_window_state(&self, id: PresentationId) {
-        let window = self
+    ///
+    /// A state that puts the content somewhere else is the window moving:
+    /// its gesture geometry and input regions follow
+    /// ([`Self::window_moved`]) and `moved` runs, both before any subscriber
+    /// does.
+    pub(crate) fn publish_window_state(&self, id: PresentationId, moved: impl FnOnce()) {
+        let Some(window) = self
             .presentations
             .get(id)
-            .and_then(|presentation| presentation.window_control.borrow().clone());
-        if let Some(window) = window {
-            window.publish_current();
+            .and_then(|presentation| presentation.window_control.borrow().clone())
+        else {
+            return;
+        };
+        let Some(state) = window.queue_current() else {
+            return;
+        };
+        let placement = Some(crate::presentation::ContentPlacement::of(&state));
+        let placed_elsewhere = self.presentations.get(id).is_some_and(|presentation| {
+            presentation.window_placement.replace(placement) != placement
+        });
+        if placed_elsewhere {
+            self.window_moved(id);
+            moved();
         }
+        window.drain();
     }
 
     /// Deliver a system notice to every presentation's subscribers

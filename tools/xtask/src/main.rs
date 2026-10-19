@@ -12,6 +12,7 @@ mod table_test;
 mod device;
 mod tasks;
 
+mod android_dex;
 mod bench;
 mod change_scope;
 mod changelog;
@@ -28,6 +29,7 @@ mod module_dag;
 mod perf;
 mod platform_floor;
 mod ratchet;
+mod recording_vocabulary;
 mod testing;
 mod toolchain;
 mod wasm;
@@ -132,6 +134,10 @@ enum Command {
     Testing(testing::TestingArgs),
     /// Check (or --write) the W3C key tables generated from keyboard-types (ADR-0089 §4).
     KeyVocabulary(key_vocabulary::KeyVocabularyArgs),
+    /// Check (or --write) the table of variants an input recording carries (ADR-0215 §2).
+    RecordingVocabulary(recording_vocabulary::RecordingVocabularyArgs),
+    /// Check (or --write) the Android `FluiView` dex against its Java sources (ADR-0247).
+    AndroidDex(android_dex::AndroidDexArgs),
     /// Check (or --write) the floors generated from platform-support.toml (ADR-0244).
     PlatformFloor(platform_floor::PlatformFloorArgs),
     /// Validate changelog.d fragments; --write merges them into CHANGELOG.md and deletes them.
@@ -195,6 +201,8 @@ fn main() -> ExitCode {
         Command::Markers(args) => markers::markers(&args),
         Command::Testing(args) => testing::testing(&args),
         Command::KeyVocabulary(args) => key_vocabulary::key_vocabulary(&args),
+        Command::RecordingVocabulary(args) => recording_vocabulary::recording_vocabulary(&args),
+        Command::AndroidDex(args) => android_dex::android_dex(&args),
         Command::PlatformFloor(args) => platform_floor::platform_floor(&args),
         Command::Changelog(args) => changelog::changelog(&args),
         Command::Doctor(args) => doctor::doctor(&args),

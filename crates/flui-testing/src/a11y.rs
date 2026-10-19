@@ -187,6 +187,48 @@ impl A11yTree {
         )
     }
 
+    /// The single node with `role` whose label equals `label`: how a script
+    /// finds the control it drives, as assistive technology would.
+    ///
+    /// # Errors
+    ///
+    /// As [`find`](Self::find).
+    pub fn find_by_role_and_label(
+        &self,
+        role: Role,
+        label: &str,
+    ) -> Result<A11yNode<'_>, A11yQueryError> {
+        self.exactly_one(
+            || A11yQuery::RoleAndLabel(role, label.to_owned()),
+            self.nodes()
+                .filter(|node| node.role() == role && node.label() == Some(label)),
+        )
+    }
+
+    /// Where an AccessKit adapter places `node`: its bounds under its own
+    /// transform and every ancestor's, in physical pixels relative to the
+    /// window's client area. `None` for a node without bounds.
+    #[must_use]
+    pub fn window_bounds(&self, node: &A11yNode<'_>) -> Option<A11yRect> {
+        let mut rect = node.raw().bounds()?;
+        if let Some(transform) = node.raw().transform() {
+            rect = transform.transform_rect_bbox(rect);
+        }
+        let mut current = node.id();
+        while let Some((parent, parent_node)) = self
+            .update
+            .nodes
+            .iter()
+            .find(|(_, candidate)| candidate.children().contains(&current))
+        {
+            if let Some(transform) = parent_node.transform() {
+                rect = transform.transform_rect_bbox(rect);
+            }
+            current = *parent;
+        }
+        Some(rect)
+    }
+
     fn exactly_one<'a>(
         &'a self,
         query: impl FnOnce() -> A11yQuery,
@@ -385,6 +427,8 @@ pub enum A11yQuery {
     Role(Role),
     /// Match on an exact [`A11yNode::label`].
     Label(String),
+    /// Match on both a role and an exact label.
+    RoleAndLabel(Role, String),
 }
 
 impl fmt::Display for A11yQuery {
@@ -392,6 +436,9 @@ impl fmt::Display for A11yQuery {
         match self {
             Self::Role(role) => write!(f, "role == {role:?}"),
             Self::Label(label) => write!(f, "label == {label:?}"),
+            Self::RoleAndLabel(role, label) => {
+                write!(f, "role == {role:?} and label == {label:?}")
+            }
         }
     }
 }

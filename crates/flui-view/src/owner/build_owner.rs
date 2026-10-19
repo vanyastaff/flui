@@ -581,6 +581,14 @@ pub struct BuildOwner {
     /// The presentation's external textures. `None` only on a bare owner.
     pub(crate) texture_registry: Option<flui_rendering::layer::TextureRegistry>,
 
+    /// The presentation's haptics. `None` only on a bare owner; a UI runtime
+    /// installs one over its presentation's haptics host.
+    pub(crate) haptics_handle: Option<flui_interaction::HapticsHandle>,
+
+    /// The presentation's drag-and-drop. `None` only on a bare owner; a UI
+    /// runtime installs one over its runtime's drag sessions.
+    pub(crate) drag_and_drop: Option<flui_interaction::drag::DragAndDrop>,
+
     /// The UI runtime's byte storage. `None` on a bare owner and under a UI runtime
     /// that has none, which `LifecycleContext::storage` reports as such.
     pub(crate) storage: Option<std::sync::Arc<dyn flui_platform_api::Storage>>,
@@ -757,6 +765,8 @@ impl BuildOwner {
             post_frame_handle: None,
             text_input_handle: None,
             clipboard_handle: None,
+            haptics_handle: None,
+            drag_and_drop: None,
             texture_registry: None,
             storage: None,
             flush_registry: None,
@@ -829,45 +839,6 @@ impl BuildOwner {
     /// any more.
     pub fn set_post_frame_handle(&mut self, handle: flui_scheduler::PostFrameHandle) {
         self.post_frame_handle = Some(handle);
-    }
-
-    /// Install the binding's IME/text-input attach-detach capability.
-    ///
-    /// Called during `UiRuntime` construction with the weak handle minted by that
-    /// presentation's `TextInputOwner`. `HeadlessBinding` installs none, so
-    /// headless-tree tests observe `LifecycleContext::text_input_handle() == None`
-    /// honestly rather than accepting attaches nobody delivers events to.
-    pub fn set_text_input_handle(&mut self, handle: flui_interaction::TextInputHandle) {
-        self.text_input_handle = Some(handle);
-    }
-
-    /// Install the presentation's plain-text clipboard.
-    ///
-    /// Called during presentation construction with a handle over the
-    /// UI runtime's platform clipboard, so `LifecycleContext::clipboard_handle`
-    /// answers `Some` under every UI runtime.
-    pub fn set_clipboard_handle(&mut self, handle: flui_interaction::ClipboardHandle) {
-        self.clipboard_handle = Some(handle);
-    }
-
-    /// Install the presentation's external-texture registry, which
-    /// `LifecycleContext::texture_registry` hands to widgets.
-    pub fn set_texture_registry(&mut self, registry: flui_rendering::layer::TextureRegistry) {
-        self.texture_registry = Some(registry);
-    }
-
-    /// The presentation's external-texture registry, if one was installed.
-    #[must_use]
-    pub fn texture_registry(&self) -> Option<&flui_rendering::layer::TextureRegistry> {
-        self.texture_registry.as_ref()
-    }
-
-    /// Install the UI runtime's byte storage.
-    ///
-    /// Called during presentation construction when the UI runtime has storage,
-    /// so `LifecycleContext::storage` answers `Some` under it.
-    pub fn set_storage(&mut self, storage: std::sync::Arc<dyn flui_platform_api::Storage>) {
-        self.storage = Some(storage);
     }
 
     /// Install the binding's owner-local interaction dispatch handle (ADR-0027).
@@ -991,6 +962,21 @@ impl BuildOwner {
     #[must_use]
     pub fn clipboard_handle(&self) -> Option<&flui_interaction::ClipboardHandle> {
         self.clipboard_handle.as_ref()
+    }
+
+    /// The presentation's haptics handle, if one was installed. Widgets
+    /// acquire it through `LifecycleContext::haptics`, which applies the
+    /// enclosing `HapticsMode`.
+    #[must_use]
+    pub fn haptics_handle(&self) -> Option<&flui_interaction::HapticsHandle> {
+        self.haptics_handle.as_ref()
+    }
+
+    /// The presentation's drag-and-drop, if one was installed. Widgets
+    /// acquire it through `LifecycleContext::drag_and_drop`.
+    #[must_use]
+    pub fn drag_and_drop(&self) -> Option<&flui_interaction::drag::DragAndDrop> {
+        self.drag_and_drop.as_ref()
     }
 
     /// The UI runtime's byte storage, if one was installed.
@@ -1299,6 +1285,8 @@ impl BuildOwner {
             post_frame_handle: &self.post_frame_handle,
             text_input_handle: &self.text_input_handle,
             clipboard_handle: &self.clipboard_handle,
+            haptics_handle: &self.haptics_handle,
+            drag_and_drop: &self.drag_and_drop,
             texture_registry: &self.texture_registry,
             storage: &self.storage,
             flush_registry: &self.flush_registry,
@@ -1588,7 +1576,7 @@ impl BuildOwner {
         self.dirty_reasons.remove(&failed);
         self.pending_dependency_changes.remove(&failed);
         let mut element_owner = self.element_owner_mut();
-        tree.replace_child_with(parent, slot, recovery_view.0.as_ref(), &mut element_owner);
+        tree.replace_child_with(parent, slot, &recovery_view, &mut element_owner);
         element_owner.commit_staged_lifecycle_panic(staged);
     }
 
@@ -1838,6 +1826,8 @@ impl BuildOwner {
                     post_frame_handle: &self.post_frame_handle,
                     text_input_handle: &self.text_input_handle,
                     clipboard_handle: &self.clipboard_handle,
+                    haptics_handle: &self.haptics_handle,
+                    drag_and_drop: &self.drag_and_drop,
                     texture_registry: &self.texture_registry,
                     storage: &self.storage,
                     flush_registry: &self.flush_registry,
@@ -2061,6 +2051,8 @@ impl BuildOwner {
                     post_frame_handle: &self.post_frame_handle,
                     text_input_handle: &self.text_input_handle,
                     clipboard_handle: &self.clipboard_handle,
+                    haptics_handle: &self.haptics_handle,
+                    drag_and_drop: &self.drag_and_drop,
                     texture_registry: &self.texture_registry,
                     storage: &self.storage,
                     flush_registry: &self.flush_registry,
@@ -2489,6 +2481,8 @@ impl BuildOwner {
                 post_frame_handle: &self.post_frame_handle,
                 text_input_handle: &self.text_input_handle,
                 clipboard_handle: &self.clipboard_handle,
+                haptics_handle: &self.haptics_handle,
+                drag_and_drop: &self.drag_and_drop,
                 texture_registry: &self.texture_registry,
                 storage: &self.storage,
                 flush_registry: &self.flush_registry,
@@ -2701,6 +2695,8 @@ impl BuildOwner {
             post_frame_handle: &self.post_frame_handle,
             text_input_handle: &self.text_input_handle,
             clipboard_handle: &self.clipboard_handle,
+            haptics_handle: &self.haptics_handle,
+            drag_and_drop: &self.drag_and_drop,
             texture_registry: &self.texture_registry,
             storage: &self.storage,
             flush_registry: &self.flush_registry,
@@ -3860,7 +3856,7 @@ mod tests {
     /// A refused admission leaves the caller's focus manager, even its last
     /// strong reference, open with its nodes still focusable.
     fn exhausted_owner_tag_refusal_retains_the_supplied_focus_manager() {
-        use flui_interaction::routing::FocusNode;
+        use flui_interaction::focus::FocusNode;
         let manager = FocusManager::new();
         let node = FocusNode::with_debug_label("survives-refusal");
         let _attachment = manager

@@ -4,8 +4,12 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::events::{PointerKind, make_down_event, make_up_event};
-use flui_interaction::routing::{FocusNode, KeyEventResult};
+use flui_interaction::events::pointer::PointerButton;
+use flui_interaction::events::{
+    Code, Key, KeyState, NamedKey, PointerKind, make_down_event, make_down_event_with_button,
+    make_up_event, make_up_event_with_button,
+};
+use flui_interaction::focus::{FocusNode, KeyEventResult};
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::{Signal, SignalWriteExt};
@@ -284,6 +288,45 @@ pub(crate) fn focus_loss_drops_a_held_open_contact_before_it_replays() {
     assert_eq!(log.cancels.get(), 0);
 }
 
+/// A hover an embedded surface reported before the first commit is held,
+/// then replays to that surface: the window's own hover stays untouched.
+pub(crate) fn a_held_embedded_hover_replays_to_its_surface() {
+    let (ui_runtime, id, _log) = listener_ui_runtime(true);
+    let presentation = ui_runtime.presentations.get(id).expect("installed");
+    let embedded = presentation
+        .gestures()
+        .embed_surface()
+        .expect("a surface identity");
+    let mut hover = flui_interaction::events::make_move_event_for_id(
+        flui_interaction::PointerId::try_from(3_u64).expect("nonzero"),
+        Offset::new(4.0, 6.0),
+        PointerKind::Mouse,
+    )
+    .expect("finite test position");
+    let flui_interaction::PointerEvent::Move(update) = &mut hover else {
+        unreachable!("the move helper builds a move")
+    };
+    update.buttons = flui_interaction::events::pointer::PointerButtons::NONE;
+    let pointer = update.pointer;
+    ui_runtime.enter(|ui_runtime| {
+        ui_runtime.handle_input_on(id, embedded, PlatformInput::Pointer(hover));
+    });
+    assert!(
+        !presentation.held_pointer_input().borrow().is_empty(),
+        "the hover waits for the first commit"
+    );
+    commit_and_count_open_routes(&ui_runtime, id);
+    presentation.gestures().flush_pending_moves();
+    assert_eq!(
+        presentation
+            .gestures()
+            .mouse_tracker()
+            .source_position(&pointer),
+        None,
+        "the replayed hover reached the embedded surface, not the window"
+    );
+}
+
 /// A host pause (the app is backgrounded mid-touch) cancels the same way:
 /// the held Down is gone once the app resumes and commits.
 pub(crate) fn host_pause_drops_a_held_open_contact_before_it_replays() {
@@ -334,4 +377,196 @@ pub(crate) fn host_pause_cancels_a_routed_contact_with_a_delivered_cancel() {
 
     assert_eq!(gestures(), 0);
     assert_eq!((log.cancels.get(), log.ups.get()), (1, 0));
+}
+
+/// What a focused node's key handler received: key, code and state.
+type KeyLog = Rc<std::cell::RefCell<Vec<(Key, Code, KeyState)>>>;
+
+/// A primary presentation whose only focusable node is focused, logs every
+/// key that reaches it and handles it; its window shown, running and focused.
+fn keyboard_ui_runtime() -> (UiRuntime, PresentationId, Rc<FocusNode>, KeyLog) {
+    let ui_runtime = UiRuntime::for_test();
+    let id = ui_runtime.presentation_id();
+    let node = FocusNode::with_debug_label("key-log");
+    let log = KeyLog::default();
+    let seen = Rc::clone(&log);
+    ui_runtime
+        .attach_root_widget(
+            &Focus::new(SizedBox::new(40.0, 40.0))
+                .focus_node(Rc::clone(&node))
+                .on_key_event(move |_, event| {
+                    seen.borrow_mut()
+                        .push((event.key.clone(), event.code, event.state()));
+                    KeyEventResult::Handled
+                }),
+        )
+        .expect("root attaches");
+    ui_runtime.synchronize_window_snapshot(
+        id,
+        flui_platform_api::WindowExecutionState::Running,
+        true,
+        true,
+    );
+    ui_runtime.enter(|ui_runtime| ui_runtime.render_frame(&mut ScriptedSink::always_presents()));
+    let _ = node.request_focus();
+    (ui_runtime, id, node, log)
+}
+
+fn deliver(ui_runtime: &UiRuntime, id: PresentationId, input: PlatformInput) {
+    ui_runtime.enter(|ui_runtime| {
+        ui_runtime.handle_input_addressed(id, input);
+    });
+}
+
+fn mouse_button(
+    ui_runtime: &UiRuntime,
+    id: PresentationId,
+    state: KeyState,
+    button: PointerButton,
+) {
+    let at = Offset::new(4.0, 6.0);
+    let event = match state {
+        KeyState::Down => make_down_event_with_button(at, PointerKind::Mouse, button),
+        KeyState::Up => make_up_event_with_button(at, PointerKind::Mouse, button),
+    };
+    deliver(
+        ui_runtime,
+        id,
+        PlatformInput::Pointer(event.expect("finite test position")),
+    );
+}
+
+fn key(code: Code, key: Key, state: KeyState, repeat: bool) -> PlatformInput {
+    PlatformInput::Keyboard(
+        KeyEventBuilder::new(code)
+            .with_key(key)
+            .with_state(state)
+            .with_repeat(repeat)
+            .build(),
+    )
+}
+
+/// The mouse's back button (X1) reaches the focused node as a
+/// `BrowserBack` press and release, without a physical key code, and it is a
+/// pointer press: it does not make focus visible.
+pub(crate) fn the_back_button_is_a_back_key() {
+    let (ui_runtime, id, node, log) = keyboard_ui_runtime();
+    mouse_button(&ui_runtime, id, KeyState::Down, PointerButton::BACK);
+    mouse_button(&ui_runtime, id, KeyState::Up, PointerButton::BACK);
+    let back = Key::Named(NamedKey::BrowserBack);
+    assert_eq!(
+        *log.borrow(),
+        [
+            (back.clone(), Code::Unidentified, KeyState::Down),
+            (back, Code::Unidentified, KeyState::Up),
+        ]
+    );
+    assert!(!node.has_visible_focus(), "a pointer button shows no focus");
+
+    log.borrow_mut().clear();
+    mouse_button(&ui_runtime, id, KeyState::Down, PointerButton::PRIMARY);
+    mouse_button(&ui_runtime, id, KeyState::Up, PointerButton::PRIMARY);
+    assert!(log.borrow().is_empty(), "only the back button is a key");
+}
+
+/// The back button is its own held key: releasing it does not end a held
+/// keyboard `BrowserBack` key, whose repeats keep reaching the node — also
+/// when the platform could not place that key physically.
+pub(crate) fn the_back_button_is_held_apart_from_the_back_key() {
+    for code in [Code::BrowserBack, Code::Unidentified] {
+        let (ui_runtime, id, _node, log) = keyboard_ui_runtime();
+        let back = Key::Named(NamedKey::BrowserBack);
+        deliver(
+            &ui_runtime,
+            id,
+            key(code, back.clone(), KeyState::Down, false),
+        );
+        mouse_button(&ui_runtime, id, KeyState::Down, PointerButton::BACK);
+        mouse_button(&ui_runtime, id, KeyState::Up, PointerButton::BACK);
+        deliver(
+            &ui_runtime,
+            id,
+            key(code, back.clone(), KeyState::Down, true),
+        );
+        assert_eq!(
+            log.borrow().last(),
+            Some(&(back, code, KeyState::Down)),
+            "the {code:?} key's repeat still reaches the node"
+        );
+        assert_eq!(log.borrow().len(), 4);
+    }
+}
+
+/// A pointer press hides the focus a key showed.
+pub(crate) fn a_pointer_press_hides_keyboard_focus() {
+    let (ui_runtime, id, node, _log) = keyboard_ui_runtime();
+    deliver(
+        &ui_runtime,
+        id,
+        key(Code::KeyA, Key::character("a"), KeyState::Down, false),
+    );
+    assert!(node.has_visible_focus(), "a key shows focus");
+    mouse_button(&ui_runtime, id, KeyState::Down, PointerButton::PRIMARY);
+    assert!(!node.has_visible_focus(), "a pointer press hides it");
+}
+
+/// A window that loses activation forgets its held keys: their repeats and
+/// release after it returns went to another window first, and reach nothing.
+pub(crate) fn deactivation_forgets_held_keys() {
+    held_enter_after(|ui_runtime, id| {
+        ui_runtime.update_window_focus(id, false);
+        ui_runtime.update_window_focus(id, true);
+    });
+}
+
+/// The same, when the host reports the loss as a whole-window snapshot.
+pub(crate) fn an_unfocused_snapshot_forgets_held_keys() {
+    held_enter_after(|ui_runtime, id| {
+        let running = flui_platform_api::WindowExecutionState::Running;
+        ui_runtime.synchronize_window_snapshot(id, running, false, true);
+        ui_runtime.synchronize_window_snapshot(id, running, true, true);
+    });
+}
+
+/// The same, when a sibling window gaining focus takes it (`update_window_focus`).
+pub(crate) fn a_sibling_gaining_focus_forgets_held_keys() {
+    held_enter_after(|ui_runtime, id| {
+        let sibling = ui_runtime.install_second_presentation_for_test();
+        ui_runtime.update_window_focus(sibling, true);
+        ui_runtime.update_window_focus(id, true);
+    });
+}
+
+/// The same, when the sibling's gain arrives as a window snapshot.
+pub(crate) fn a_sibling_snapshot_forgets_held_keys() {
+    held_enter_after(|ui_runtime, id| {
+        let sibling = ui_runtime.install_second_presentation_for_test();
+        let running = flui_platform_api::WindowExecutionState::Running;
+        ui_runtime.synchronize_window_snapshot(sibling, running, true, true);
+        ui_runtime.synchronize_window_snapshot(id, running, true, true);
+    });
+}
+
+/// Hold Enter, run `deactivate`, then send Enter's repeat and release: the
+/// node saw only the key-down.
+fn held_enter_after(deactivate: impl FnOnce(&mut UiRuntime, PresentationId)) {
+    let (mut ui_runtime, id, _node, log) = keyboard_ui_runtime();
+    let enter = Key::Named(NamedKey::Enter);
+    deliver(
+        &ui_runtime,
+        id,
+        key(Code::Enter, enter.clone(), KeyState::Down, false),
+    );
+    deactivate(&mut ui_runtime, id);
+    deliver(
+        &ui_runtime,
+        id,
+        key(Code::Enter, enter.clone(), KeyState::Down, true),
+    );
+    deliver(
+        &ui_runtime,
+        id,
+        key(Code::Enter, enter.clone(), KeyState::Up, false),
+    );
+    assert_eq!(*log.borrow(), [(enter, Code::Enter, KeyState::Down)]);
 }

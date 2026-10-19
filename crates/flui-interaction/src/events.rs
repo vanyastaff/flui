@@ -24,6 +24,41 @@ pub use pointer::{
     PointerRole, PointerSample, PointerSignal, ScrollDelta, ScrollEvent,
 };
 
+/// The interaction clock: `clock`'s current reading on the event timeline
+/// (ADR-0207 §2).
+///
+/// Every arena and recognizer deadline is an [`EventTime`](flui_platform_api::EventTime)
+/// compared with this reading, so a recording replays to the same decisions
+/// once the clock is driven to its arrival times.
+pub(crate) fn interaction_now(
+    clock: &dyn flui_foundation::MonotonicClock,
+) -> flui_platform_api::EventTime {
+    let elapsed = clock.now().saturating_duration_since(clock.epoch());
+    flui_platform_api::EventTime::from_nanos(u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX))
+}
+
+/// `instant` on `clock`'s event timeline: the inverse of [`instant_at`], for
+/// a runtime that samples its frame clock once and hands the reading down.
+pub(crate) fn event_time_of(
+    clock: &dyn flui_foundation::MonotonicClock,
+    instant: web_time::Instant,
+) -> flui_platform_api::EventTime {
+    let elapsed = instant.saturating_duration_since(clock.epoch());
+    flui_platform_api::EventTime::from_nanos(u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX))
+}
+
+/// The instant `time` names on `clock`'s timeline, for consumers that keep
+/// [`web_time::Instant`]s (velocity samples, wake scheduling).
+pub(crate) fn instant_at(
+    clock: &dyn flui_foundation::MonotonicClock,
+    time: flui_platform_api::EventTime,
+) -> web_time::Instant {
+    let epoch = clock.epoch();
+    epoch
+        .checked_add(core::time::Duration::from_nanos(time.as_nanos()))
+        .unwrap_or(epoch)
+}
+
 /// Extract the contact metadata when this event describes a contact.
 #[must_use]
 pub(crate) fn pointer_info(event: &PointerEvent) -> Option<&PointerInfo> {
@@ -41,6 +76,10 @@ pub(crate) fn pointer_info(event: &PointerEvent) -> Option<&PointerInfo> {
         | PointerEvent::ScrollInertiaCancel(data) => Some(&data.pointer),
         PointerEvent::Scroll(data) => Some(&data.pointer),
         PointerEvent::PanZoom(data) => Some(data.pointer()),
+        PointerEvent::Revise(data) => Some(&data.pointer),
+        PointerEvent::PenSqueeze(data) => Some(&data.pointer),
+        // Device lifecycle names a device, not a contact; a variant added
+        // later carries no contact until it is named above.
         _ => None,
     }
 }
@@ -56,6 +95,9 @@ fn pointer_sample(event: &PointerEvent) -> Option<&PointerSample> {
             Some(&data.sample)
         }
         PointerEvent::Move(data) => Some(data.current()),
+        PointerEvent::Revise(data) => Some(&data.sample),
+        PointerEvent::PenSqueeze(data) => data.hover.as_ref(),
+        // The others carry a position without sensors, or none.
         _ => None,
     }
 }
@@ -78,6 +120,9 @@ pub(crate) fn event_time(event: &PointerEvent) -> Option<flui_platform_api::Even
         | PointerEvent::Leave(data)
         | PointerEvent::ScrollInertiaCancel(data) => data.time,
         PointerEvent::DeviceAdded(data) | PointerEvent::DeviceRemoved(data) => data.time,
+        PointerEvent::Revise(data) => data.sample.time,
+        PointerEvent::PenSqueeze(data) => data.time,
+        // A variant added later has no known time until it is named here.
         _ => return None,
     })
 }
@@ -324,7 +369,7 @@ pub fn make_pinch_gesture_event(
         PointerKind::Trackpad,
     );
     let position = test_sample(position)?.position;
-    let value = PanZoomTransform::try_new(Offset::ZERO, 1.0 + fraction, 0.0)?;
+    let value = PanZoomTransform::try_new(1.0 + fraction, 0.0)?;
     Ok(PointerEvent::PanZoom(PanZoomEvent::new(
         pointer,
         EventTime::from_nanos(0),

@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Haptic patterns play on the Vibrator, which needs this install-time
+         permission; semantic feedback goes through the view without it. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- No resources: the platform's default launcher icon applies. Add a
          `res/` and an `android:icon` when the app has its own. -->
     <application

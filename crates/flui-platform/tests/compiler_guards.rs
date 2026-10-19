@@ -5,6 +5,7 @@ mod trybuild_ui {
     fn ui_tests() {
         let cases = trybuild::TestCases::new();
         cases.pass("tests/ui_pass/owner_and_shared_authority.rs");
+        cases.pass("tests/ui_pass/input_callback_captures_rc.rs");
         cases.compile_fail("tests/ui/owner_platform_is_not_send.rs");
         cases.compile_fail("tests/ui/owner_thread_token_is_private.rs");
         cases.compile_fail("tests/ui/owner_thread_token_has_no_default.rs");

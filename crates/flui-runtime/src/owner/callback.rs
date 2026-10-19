@@ -93,8 +93,9 @@ impl Drop for OwnerCallback<'_> {
         }
         // Keep the physical callback active through completion and its wake:
         // synchronous reentry must not acquire a fresh delivery budget.
-        let _reset = CallbackReset(Rc::clone(&self.core));
-        let mut first_failure = if std::thread::panicking() {
+        let reset = CallbackReset(Rc::clone(&self.core));
+        let panicking = std::thread::panicking();
+        let mut first_failure = if panicking {
             self.core.state.borrow_mut().callback_remaining = 0;
             None
         } else {
@@ -102,6 +103,14 @@ impl Drop for OwnerCallback<'_> {
         };
         self.core
             .post_continuation(self.effects, &mut first_failure);
+        drop(reset);
+        // The callback is over: this is the outermost quiescent point, where
+        // the OS drag sessions decided during it start (ADR-0211 §7). A start
+        // that runs the OS's modal loop delivers native callbacks from inside
+        // it, and each is a fresh outermost callback with its own budget.
+        if !panicking && first_failure.is_none() {
+            self.core.enter_pending_os_drags(&mut first_failure);
+        }
         finish_retirement(first_failure);
     }
 }

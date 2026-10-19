@@ -464,6 +464,56 @@ same-presentation replacement inside the actual getter and diagnostic. Mounted
 inherited values, tap recognition and a hold deadline distinguish the latest
 geometry/timing publication from stale healthy or panicking continuations.
 
+### Host input is one value on one timeline
+
+A presentation accepts `HostInput::{Platform, Window, Frame { vsync }, Accessibility}`
+and nothing else (ADR-0207 §1). The owner FIFO admits it through
+`PresentationDispatcher::dispatch` (frames also through the frame driver's
+`FrameDispatcher::deliver`, which admits the same `Frame` work), so platform input,
+window observations, frames and AT requests share one order. The runtime unwraps
+it: platform input to the gesture binding (`dispatch_pointer_on`, whose sequence id
+is traced), focus and text owners, a window observation to metrics and lifecycle,
+a frame's vsync to the next render's motion sampling, and an AT request — decoded
+on the owner thread, after the adapter's thread only transported it — to the
+semantics owner with an assistive sequence id the binding minted. The adapter's
+off-thread requests reach the owner through the command inbox as the same
+`Accessibility` input. A window's latest `InputCapabilities` are kept per
+presentation (`UiRuntime::input_capabilities`) for the lifecycle capability that
+will expose them. The window payload is the runtime's normalized
+`WindowObservation`, not `flui_platform_api::WindowEvent`, which keys raw window
+events by native id. `owner_input_contract`'s
+`accessibility_input_reaches_the_semantics_owner` pins the AT arm.
+
+### Recorded input is emitted where it is applied
+
+While a tap is registered (`UiRuntime::input_taps`, ADR-0215 §1) the runtime
+emits an `InputRecord` per applied input from the methods that apply it —
+`handle_input_addressed`, `apply_window_observation` (and the merged pending
+window state, one row per value), `note_frame_vsync` and `dispatch_accessibility`
+— so the owner FIFO and a headless host record the same rows. Each row is
+admitted after its dispatch committed (a dispatch panic is recorded, then
+resumed), followed by the arena decisions a `GestureObserver` on each presentation's
+arena reported during it, each stamped with the time its arena committed it
+(`a_decision_row_carries_its_commit_time`); decisions made inside a frame
+follow its frame row when the pump ends. Pointer input a presentation holds for
+its committed tree carries its row with the held event (`HeldInputRow`): the
+frame's replay admits it after the verdicts reached before that dispatch, with
+the input's arrival and the dispatch's sequence; a dispatch that fails still
+admits it, in no sequence, before the failure resumes. Dropped undispatched,
+wherever the held queue drops it, it admits itself as `Queued` with no
+sequence, which replay skips. An applied preference revision is a
+`Preferences` row.
+Without a tap nothing is cloned and no arena is observed. Delivery is a batched pass over owned rows
+with no runtime or registry borrow held: rows a tap admits reentrantly wait for
+the next pass, which an owner wake starts. Every call is contained; the first
+failure is kept, a lost row becomes a pending `Gap` count delivered in a second
+contained call or before the next row, and an outgoing tap is retired after the
+failure is reported, so its destructor's panic never comes first. Finishing (the
+handle's `finish`, or the registry's drop for a tap installed for the runtime's
+life) delivers the pending gap and the `End` row, or reports
+`RecordingIncomplete`. Handles are generation-bound and generations are never
+reused. `input_tap_delivery_contract` pins each of these.
+
 ### Observing input follows its presentation's accepted motion
 
 Keyboard and IME drain a frozen measured motion prefix before dispatch without
@@ -543,6 +593,42 @@ The binding commits this drain before emitting its optional diagnostic.
 `a_cancel_failure_precedes_a_pause_diagnostic_failure_and_recovers` verify
 the actual diagnostic is delivered, stale motion is gone despite its panic,
 the first terminal failure remains authoritative and new input recovers.
+
+### Focus leaves a removed node between layout and paint
+
+A presentation segment runs build, then the build-during-layout fixpoint
+(`WidgetsBinding::settle_layout_with_builders`), then
+`FocusManager::settle_orphaned_focus` with no tree borrow held, then paint
+(`run_settled_frame`). Removal records an orphan marker inside reconciliation
+and runs no user code, so the one focus edge to the successor is published
+here, in the frame that removed the node, and never through `None` while a
+candidate remains. When that edge moved the primary, the segment rebuilds
+(`rebuild_within_frame`, which keeps the frame's recovered-panic records) and
+settles layout exactly once more before paint; what the listeners dirty beyond
+that waits for the next frame. When that repeat itself removed the new focus,
+the segment asks for the next frame (`FocusManager::has_orphaned_focus`), which
+moves it on; nothing else may ask for one. Settling after paint would show a frame with
+focus on a node that is gone; settling inside the fixpoint would run listeners
+under the binding's write lock. `focus_survives_rebuild_and_moves_on_removal`
+pins the edges, and its row
+`the_successor_rebuilds_in_the_frame_that_moved_focus` the single repeat (a loop
+would publish the second edge in the same frame) and the frame it asks for.
+
+### A pointer press is focus input
+
+`dispatch_pointer_event_entered` — live and replayed held input alike — calls
+`FocusManager::note_pointer_input` on a button press (a `Down` or a
+`ButtonChange::Pressed`) before routing it, so focus a click moves is not shown.
+After routing, the back button (X1) going down or up is delivered to the same
+presentation's focus as the `BrowserBack` key through
+`FocusManager::dispatch_pointer_back`, which holds it apart from every keyboard
+key. The three steps are contained separately and the first panic resumes.
+A window that loses activation (`update_window_focus`, a window snapshot, or a
+sibling taking focus) forgets its held keys: their releases go elsewhere. The
+`addressed_input_routing` rows `the_back_button_is_a_back_key`,
+`the_back_button_is_held_apart_from_the_back_key`,
+`a_pointer_press_hides_keyboard_focus` and `deactivation_forgets_held_keys`
+pin each.
 
 ### The frame runtime is a crate below the hosts
 
@@ -895,6 +981,34 @@ later reports without reentering the original checkout. `owner_sampling_contract
 pins this public owner path with query, tracing, handler and earlier-operation
 failures in competition.
 
+### Frame-aligned haptics resolve with a painted frame
+
+Each presentation owns a `HapticsHost` (ADR-0210 §4) on its gesture clock,
+playing on its window's actuator through a weak reference, with the platform
+row's deadline factor and the window's current refresh period. A frame the sink
+reports `Presented` plays the queued requests whose deadline has not passed; a
+frame that paints nothing, one the backend found no damage in (`NoPresent`: the
+screen keeps the previous frame) and one it could not show (`NotShown`) present
+nothing, so their requests wait for a later presented frame or resolve to
+`Suppressed` at their deadline, as the ADR wants feedback only with the change it
+confirms. Resolution runs no user
+code: outcomes wait in the mailbox, and the observer runs in the
+`HapticDelivery` sampling stage, under the presentation's failure custody, on
+frame and background owner turns alike. The host's next wake (the first time
+after the earliest deadline, or now while a delivery pass is due) joins
+`next_wake`, so recovery and expiry need no unrelated input. Hiding, occluding or
+suspending the window drains the queue; the accepted haptics preference reaches
+every presentation, including one opened later, and turning haptics off drains
+its queue the same way; closing runs one final delivery
+pass, or, after a failure, withdraws the observers without running them. Any
+number of observers register through `HapticsHandle::observe`; each outcome
+reaches every one of them once, and leaves the mailbox when all have it. **Tests:** `frame_presented_widget_haptics_follow_the_presentation`,
+`haptics_preference_suppresses_both_tiers`,
+`frame_aligned_haptics_play_only_with_a_presented_frame`, and the queue's own rows in
+`flui-interaction` (`frame_presented_haptics_play_with_the_frame` and the
+mailbox rows ADR-0210 names, with `several_observers_each_receive_every_outcome_once`
+and `removing_an_observer_releases_the_head_it_held`).
+
 ### A presentation stores its display; every pacing reader reads that one value
 
 The host derives which display a window is on (and its refresh period) and delivers
@@ -914,13 +1028,12 @@ reports nothing. The scheduler's frame budget is set to the shortest interval am
 runtime's presentations in the pump's preparation, before the frame begins, because the
 frame copies the budget's target when it starts
 (`jank_is_judged_against_the_current_period`,
-`shared_frame_budget_uses_the_shortest_period`). `scaled_refresh_interval` is the metric
-ADR-0212 multiplies: the product runs through `Duration::try_from_secs_f64`, a product
-that overflows for the display's own period is treated as that period being unknown, and
-a factor that is not finite and positive is unknown
-(`period_product_overflow_is_treated_as_unknown`,
-`non_finite_factor_is_treated_as_unknown`). No tick or media-query field carries the
-period: nothing in animation or interaction reads it from there.
+`shared_frame_budget_uses_the_shortest_period`). The presentation shares its stored
+`WindowDisplay` with its haptics host, whose frame deadline is ADR-0212's metric:
+`flui_interaction::haptic_frame_deadline` multiplies the display's period by the
+preset's factor, and a period that is unknown or whose product overflows uses the 60 Hz
+fallback with a diagnostic (`unknown_refresh_period_uses_the_60_hz_fallback`). No tick or
+media-query field carries the period: nothing in animation reads it from there.
 
 ## Exceptional terminal presentation ownership
 

@@ -30,8 +30,8 @@ use objc2_foundation::{
 };
 use objc2_quartz_core::{CADisplayLink, CAFrameRateRange};
 use objc2_ui_kit::{
-    UIHoverGestureRecognizer, UIScreen, UITouch, UITouchType, UITraitCollection,
-    UITraitEnvironment, UIUserInterfaceStyle, UIView, UIViewController, UIWindow, UIWindowScene,
+    UIHoverGestureRecognizer, UIRectEdge, UIScreen, UITouch, UITouchType, UITraitCollection,
+    UITraitEnvironment, UIUserInterfaceStyle, UIView, UIWindow, UIWindowScene,
 };
 
 use flui_foundation::geometry::{EdgeInsets, Size};
@@ -43,6 +43,7 @@ use flui_platform_api::{
 use super::display::{IosDisplays, ScreenIdentity};
 use super::events::TouchInputState;
 use super::native_owner::NativeOwner;
+use super::status_bar::FluiViewController;
 use crate::shared::WindowCallbacks;
 use crate::shared::apple_display_identity::change_screen;
 use crate::shared::display_link_rate::{
@@ -681,9 +682,22 @@ struct WindowMetrics {
     safe_area: EdgeInsets,
 }
 
+/// UIKit's edge set for the edges the exclusion regions reach.
+fn rect_edge(edges: crate::shared::screen_edges::DeferredEdges) -> UIRectEdge {
+    [
+        (edges.top, UIRectEdge::Top),
+        (edges.left, UIRectEdge::Left),
+        (edges.bottom, UIRectEdge::Bottom),
+        (edges.right, UIRectEdge::Right),
+    ]
+    .into_iter()
+    .filter(|(reached, _)| *reached)
+    .fold(UIRectEdge::None, |set, (_, edge)| set | edge)
+}
+
 struct NativeAttachment {
     window: Retained<UIWindow>,
-    controller: Retained<UIViewController>,
+    controller: Retained<FluiViewController>,
     token: u64,
     published: bool,
     retiring: bool,
@@ -723,6 +737,14 @@ pub struct IOSWindow {
     /// The screen the scene is on, kept by the view; read by `display_id`.
     screen: Arc<parking_lot::Mutex<ScreenIdentity>>,
     id: WindowId,
+    /// The input regions last projected, and the screen edges they reach.
+    input_regions: parking_lot::Mutex<(
+        flui_platform_api::input_regions::ProjectedInputRegions,
+        crate::shared::screen_edges::DeferredEdges,
+    )>,
+    /// The haptic actuator, made on first use and shared, so its Core
+    /// Haptics engine lives as long as the window.
+    haptics: std::sync::OnceLock<Arc<super::haptics::IOSHaptics>>,
     /// The published window state (ADR-0237).
     snapshot: WindowStateCell,
 }
@@ -737,6 +759,12 @@ impl IOSWindow {
     ) -> Self {
         let screen = Arc::new(parking_lot::Mutex::new(ScreenIdentity::default()));
         let callbacks = Arc::new(WindowCallbacks::new());
+        callbacks.set_input_capabilities(crate::shared::input_availability::ios());
+        if let Some(owner) = signal.upgrade() {
+            callbacks.set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
+                &owner, &callbacks,
+            ));
+        }
         let metrics = Arc::new(parking_lot::Mutex::new(WindowMetrics {
             size: Size::new(0.0, 0.0),
             scale: 1.0,
@@ -769,6 +797,8 @@ impl IOSWindow {
             dark,
             screen,
             id,
+            input_regions: parking_lot::Mutex::default(),
+            haptics: std::sync::OnceLock::new(),
             snapshot: WindowStateCell::new(WindowState::new(
                 WindowGeometry::new(None, Size::new(0.0, 0.0)),
                 Size::new(0.0, 0.0),
@@ -793,7 +823,9 @@ impl IOSWindow {
             .ivars()
             .sampling
             .set(SamplingAdmission::Constructing);
-        let controller = self.status_bar.attach_controller(marker);
+        let controller = self
+            .status_bar
+            .attach_controller(marker, rect_edge(self.input_regions.lock().1));
         controller.setView(Some(&native.view));
         let window = UIWindow::initWithWindowScene(marker.alloc(), scene);
         window.setRootViewController(Some(&controller));
@@ -1158,11 +1190,53 @@ impl PlatformWindow for IOSWindow {
         self.metrics.lock().safe_area
     }
 
+    /// UIKit defers system gestures per screen edge, not per rectangle: the window
+    /// projects the regions, and when the projection changed defers each edge an
+    /// exclusion region reaches (`preferredScreenEdgesDeferringSystemGestures`). A region
+    /// clear of every edge has no UIKit equivalent and defers nothing.
+    fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
+        let marker = MainThreadMarker::new()?;
+        let haptics = self.haptics.get_or_init(|| {
+            let view: Retained<objc2_ui_kit::UIView> =
+                Retained::into_super(self.native.get(marker).view.clone());
+            Arc::new(super::haptics::IOSHaptics::new(view, marker))
+        });
+        Some(Arc::clone(haptics) as Arc<dyn crate::traits::PlatformHaptics>)
+    }
+
+    fn set_input_regions(&self, regions: &[flui_platform_api::input_regions::InputRegion]) {
+        let Some(marker) = MainThreadMarker::new() else {
+            return;
+        };
+        let size = self.physical_size();
+        let scale = self.scale_factor();
+        let edges = {
+            let mut state = self.input_regions.lock();
+            let (projection, edges) = &mut *state;
+            let Some(sent) = projection.update(regions, scale, None) else {
+                return;
+            };
+            *edges = crate::shared::screen_edges::DeferredEdges::of(sent, size);
+            *edges
+        };
+        let controller = self
+            .native
+            .get(marker)
+            .attachment
+            .borrow()
+            .as_ref()
+            .map(|attachment| attachment.controller.clone());
+        if let Some(controller) = controller {
+            controller.defer_edges(rect_edge(edges));
+        }
+    }
+
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform_api::PlatformSystemChrome>> {
         Some(Arc::new(super::status_bar::IOSSystemChrome(Arc::clone(
             &self.status_bar,
         ))))
     }
+
     fn appearance(&self) -> WindowAppearance {
         if self.dark.load(Ordering::Relaxed) {
             WindowAppearance::Dark

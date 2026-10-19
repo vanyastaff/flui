@@ -77,7 +77,7 @@ which the review cited but never studied.
 ### D1. `flui-platform-api` is the contract crate
 
 **Context.** One import, `use flui_platform::traits::PlatformTextInput;`
-(`crates/flui-interaction/src/text_input.rs:27`), is the only `flui_platform` use in
+(`crates/flui-interaction/src/text_input/mod.rs:27`), is the only `flui_platform` use in
 `flui-interaction`'s sources, and it makes winit, tokio and the `windows` crate reachable from
 interaction, rendering, objects, view, widgets and testing. Platform callbacks also require
 `Send` (`crates/flui-platform/src/traits/platform.rs:319` takes `Box<dyn Fn() -> bool + Send>`),

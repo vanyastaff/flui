@@ -3,21 +3,32 @@
 //! Registers DOM event listeners on the canvas and converts browser events
 //! into FLUI's owned PlatformInput types.
 
-use std::{rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+};
 
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::Point;
 use flui_platform_api::{
     EventTime,
-    keyboard::{
-        Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
-    },
+    keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey},
     pointer::{
-        ButtonChange, CancelReason, ContactSize, PenOrientation, PenTool, PointerButton,
-        PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo, PointerKind,
-        PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample,
-        Pressure, ScrollEvent, TangentialPressure, Twist,
+        PenTool, PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
+        PointerPosition, PointerRole, ScrollEvent,
     },
 };
+
+use crate::DispatchEventResult;
+use crate::shared::pointer_assembly::{
+    Assembled, ContactRegistry, DecodeError, GesturePhase, GestureReading, MoveBatch, NativeCancel,
+    NativeClock, NativeContact, NativeReading, NativeSurface, PenAngles, RawSensors, ReadingAction,
+    ReadingTime, decode,
+};
+use crate::shared::web_pinch::{
+    CtrlWheel, GestureEventKind, GestureTracker, WheelRoute, WheelStep,
+};
+use crate::shared::web_text::key_composition;
 use icu_normalizer::{ComposingNormalizerBorrowed, properties::CanonicalCombiningClassMapBorrowed};
 use icu_properties::{CodePointMapData, props::GeneralCategory};
 
@@ -36,14 +47,42 @@ use super::{
 /// Failure rolls back the installed prefix through the registration's Drop.
 pub(super) fn register_event_listeners(
     window: &WebWindow,
+    transfer: &Arc<super::drag::WebTransfer>,
     registration: &mut Registration,
-) -> Result<(), crate::OpenWindowError> {
+) -> Result<CanvasServices, crate::OpenWindowError> {
     let canvas = window.canvas();
     let callbacks = Arc::clone(window.callbacks());
+    let contacts = Rc::new(RefCell::new(
+        ContactRegistry::new(NativeClock::epoch_only()),
+    ));
+    let pinch = Rc::new(Pinch {
+        callbacks: Arc::clone(&callbacks),
+        accepting: Rc::clone(&registration.accepting),
+        contacts: Rc::clone(&contacts),
+        wheel: RefCell::default(),
+        gesture: RefCell::default(),
+        focal: Cell::new(None),
+    });
+    let keys = Rc::new(KeyRoute {
+        callbacks: Arc::clone(&callbacks),
+        pinch: Rc::clone(&pinch),
+        accepting: Rc::clone(&registration.accepting),
+        composing: Rc::default(),
+    });
 
-    register_pointer_events(canvas, &callbacks, registration)?;
-    register_keyboard_events(canvas, &callbacks, registration)?;
+    // The drag source learns of a press before the press is dispatched: the
+    // runtime may start a session from inside that dispatch.
+    let drag = super::drag::register(canvas, transfer, &callbacks, registration)?;
+    register_pointer_events(canvas, &contacts, &pinch, registration)?;
+    register_keyboard_events(canvas, &keys, registration)?;
     let focus = register_focus_events(window, registration)?;
+    let text = super::text_input::WebTextInput::new(
+        canvas,
+        registration.editor_slot(),
+        Rc::clone(&registration.accepting),
+        Rc::clone(&keys),
+        Rc::clone(&focus),
+    );
     let visibility = Rc::new(window.visibility_sync(Rc::clone(&registration.accepting)));
     let observer = Rc::clone(&visibility);
     registration.listen(
@@ -53,7 +92,8 @@ pub(super) fn register_event_listeners(
             observer.sync();
         },
     )?;
-    register_wheel_events(canvas, &callbacks, registration)?;
+    register_wheel_events(canvas, &callbacks, &pinch, registration)?;
+    register_gesture_events(canvas, &pinch, registration)?;
     register_context_menu_block(canvas, registration)?;
     register_layout_events(window, registration)?;
     register_appearance_events(&callbacks, registration)?;
@@ -64,7 +104,43 @@ pub(super) fn register_event_listeners(
     // exist. Reconcile after successful installation, before Created.
     focus.sync();
     visibility.sync();
-    Ok(())
+    Ok(CanvasServices { drag, text })
+}
+
+/// What a canvas registration serves beside its listeners: its drag source
+/// and target, and its text input.
+pub(super) struct CanvasServices {
+    pub(super) drag: super::drag::CanvasDrag,
+    pub(super) text: Rc<super::text_input::WebTextInput>,
+}
+
+/// How a DOM key event reaches the window: from the canvas, or from the
+/// text input's own editor.
+pub(super) struct KeyRoute {
+    callbacks: Arc<WindowCallbacks>,
+    pinch: Rc<Pinch>,
+    accepting: Rc<Cell<bool>>,
+    /// Whether the window's text input composes now.
+    pub(super) composing: Rc<Cell<bool>>,
+}
+
+impl KeyRoute {
+    /// Deliver `event` as a key `state`, answering it with the result.
+    pub(super) fn deliver(&self, event: &web_sys::Event, state: KeyState) {
+        if !self.accepting.get() {
+            return;
+        }
+        let input = convert_keyboard_event(event.unchecked_ref(), state, self.composing.get());
+        // DOM getters can close this registration before callback admission.
+        if !self.accepting.get() {
+            return;
+        }
+        self.pinch.flush(event_time(event.time_stamp()));
+        if !self.accepting.get() {
+            return;
+        }
+        answer(event, self.callbacks.dispatch_input(input));
+    }
 }
 
 // ==================== Layout (size) ====================
@@ -184,7 +260,8 @@ fn register_context_loss_events(
 
 fn register_pointer_events(
     canvas: &web_sys::HtmlCanvasElement,
-    callbacks: &Arc<WindowCallbacks>,
+    contacts: &Rc<RefCell<ContactRegistry>>,
+    pinch: &Rc<Pinch>,
     registration: &mut Registration,
 ) -> Result<(), crate::OpenWindowError> {
     let active = Rc::clone(&registration.pointers);
@@ -193,8 +270,9 @@ fn register_pointer_events(
     // inside the active-pointer cell instead of the JavaScript closure.
     // pointerdown
     {
-        let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
+        let contacts = Rc::clone(contacts);
+        let pinch = Rc::clone(pinch);
         let capture = canvas.clone();
         let accepting = Rc::clone(&registration.accepting);
         let custody = registration.capture_owner();
@@ -225,19 +303,15 @@ fn register_pointer_events(
                 custody.release(id);
                 return;
             }
-            let input = convert_pointer_down(&pe);
-            if accepting.get()
-                && let Some(input) = input
-            {
-                callbacks.dispatch_input(input);
-            }
+            dispatch(&pinch, &pe, convert_pointer_down(&pe, &contacts));
         })?;
     }
 
     // pointermove
     {
-        let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
+        let contacts = Rc::clone(contacts);
+        let pinch = Rc::clone(pinch);
         let accepting = Rc::clone(&registration.accepting);
         registration.listen(canvas.as_ref(), "pointermove", move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
@@ -249,23 +323,18 @@ fn register_pointer_events(
             if !accepting.get() {
                 return;
             }
-            let previous = active
-                .borrow_mut()
-                .get_mut(&id)
-                .map(|held| std::mem::replace(held, buttons));
-            let input = convert_pointer_move(&pe, previous);
-            if accepting.get()
-                && let Some(input) = input
-            {
-                callbacks.dispatch_input(input);
+            if let Some(held) = active.borrow_mut().get_mut(&id) {
+                *held = buttons;
             }
+            dispatch(&pinch, &pe, convert_pointer_move(&pe, &contacts));
         })?;
     }
 
     // pointerup
     {
-        let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
+        let contacts = Rc::clone(contacts);
+        let pinch = Rc::clone(pinch);
         let accepting = Rc::clone(&registration.accepting);
         let custody = registration.capture_owner();
         registration.listen(canvas.as_ref(), "pointerup", move |e: web_sys::Event| {
@@ -282,20 +351,16 @@ fn register_pointer_events(
             if !accepting.get() {
                 return;
             }
-            let input = convert_pointer_up(&pe);
-            if accepting.get()
-                && let Some(input) = input
-            {
-                callbacks.dispatch_input(input);
-            }
+            dispatch(&pinch, &pe, convert_pointer_up(&pe, &contacts));
         })?;
     }
 
     // A browser gesture takeover is a terminal event even when no release
     // will follow. Deliver it through the same public input callback.
     {
-        let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
+        let contacts = Rc::clone(contacts);
+        let pinch = Rc::clone(pinch);
         let accepting = Rc::clone(&registration.accepting);
         let custody = registration.capture_owner();
         registration.listen(
@@ -315,18 +380,18 @@ fn register_pointer_events(
                 if !accepting.get() {
                     return;
                 }
-                let input = convert_pointer_cancel(&pe, CancelReason::Platform);
-                if accepting.get()
-                    && let Some(input) = input
-                {
-                    callbacks.dispatch_input(input);
-                }
+                dispatch(
+                    &pinch,
+                    &pe,
+                    convert_pointer_cancel(&pe, NativeCancel::Platform, &contacts),
+                );
             },
         )?;
     }
 
     {
-        let callbacks = Arc::clone(callbacks);
+        let contacts = Rc::clone(contacts);
+        let pinch = Rc::clone(pinch);
         let accepting = Rc::clone(&registration.accepting);
         let custody = registration.capture_owner();
         registration.listen(
@@ -345,12 +410,11 @@ fn register_pointer_events(
                     return;
                 }
                 custody.forget(id);
-                let input = convert_pointer_cancel(&pe, CancelReason::CaptureLost);
-                if accepting.get()
-                    && let Some(input) = input
-                {
-                    callbacks.dispatch_input(input);
-                }
+                dispatch(
+                    &pinch,
+                    &pe,
+                    convert_pointer_cancel(&pe, NativeCancel::CaptureLost, &contacts),
+                );
             },
         )?;
     }
@@ -359,40 +423,71 @@ fn register_pointer_events(
 
 // ==================== Keyboard Events ====================
 
+/// Deliver assembled pointer input while the registration still accepts it:
+/// a callback can close the window between two events of one reading. A
+/// pinch whose deadline `event` passed ends first.
+fn dispatch(pinch: &Pinch, event: &web_sys::Event, inputs: Assembled) {
+    pinch.flush(event_time(event.time_stamp()));
+    for input in inputs {
+        if !pinch.accepting.get() {
+            return;
+        }
+        pinch.callbacks.dispatch_input(input);
+    }
+}
+
+/// Apply a dispatch result to the DOM event it answers, synchronously, while
+/// the browser still waits on it: `propagate: false` stops it reaching the
+/// canvas's ancestors (same-target listeners still run), and
+/// `default_prevented` cancels its default where it is cancelable.
+pub(super) fn answer(event: &web_sys::Event, result: DispatchEventResult) {
+    if !result.propagate {
+        event.stop_propagation();
+    }
+    if result.default_prevented {
+        event.prevent_default();
+    }
+}
+
+/// A DOM `timeStamp` (milliseconds on the page's high-resolution timeline)
+/// on the event timeline.
+fn event_time(millis: f64) -> EventTime {
+    EventTime::from_nanos((millis * 1_000_000.0) as u64)
+}
+
 fn register_keyboard_events(
     canvas: &web_sys::HtmlCanvasElement,
-    callbacks: &Arc<WindowCallbacks>,
+    keys: &Rc<KeyRoute>,
     registration: &mut Registration,
 ) -> Result<(), crate::OpenWindowError> {
     for (kind, state) in [("keydown", KeyState::Down), ("keyup", KeyState::Up)] {
-        let callbacks = Arc::clone(callbacks);
+        let keys = Rc::clone(keys);
         let target = canvas.clone();
-        let accepting = Rc::clone(&registration.accepting);
         registration.listen(canvas.as_ref(), kind, move |event| {
             if !effective_focus(&target) || event.target().as_ref() != Some(target.as_ref()) {
                 return;
             }
-            if !accepting.get() {
-                return;
-            }
-            let input = convert_keyboard_event(event.unchecked_ref(), state);
-            // DOM getters can close this registration before callback admission.
-            if !accepting.get() {
-                return;
-            }
-            let result = callbacks.dispatch_input(input);
-            if !result.propagate {
-                event.stop_propagation();
-            }
-            if result.default_prevented {
-                event.prevent_default();
-            }
+            keys.deliver(&event, state);
         })?;
     }
     Ok(())
 }
 
 // ==================== Focus Events ====================
+
+/// Whether `event` only moves focus within the canvas's focus area (between
+/// the canvas and its text editor), which the window does not see as a
+/// focus change.
+pub(super) fn is_focus_handoff(
+    canvas: &web_sys::HtmlCanvasElement,
+    event: &web_sys::Event,
+) -> bool {
+    event.type_() == "blur"
+        && event
+            .dyn_ref::<web_sys::FocusEvent>()
+            .and_then(web_sys::FocusEvent::related_target)
+            .is_some_and(|next| super::registration::is_owned_focus(canvas, &next))
+}
 
 fn register_focus_events(
     window: &WebWindow,
@@ -403,7 +498,12 @@ fn register_focus_events(
     for target in [window.canvas().as_ref(), browser.as_ref()] {
         for kind in ["focus", "blur"] {
             let focus = Rc::clone(&focus);
-            registration.listen(target, kind, move |_| focus.sync())?;
+            let canvas = window.canvas().clone();
+            registration.listen(target, kind, move |event| {
+                if !is_focus_handoff(&canvas, &event) {
+                    focus.sync();
+                }
+            })?;
         }
     }
     for (kind, hovered) in [("pointerenter", true), ("pointerleave", false)] {
@@ -417,21 +517,302 @@ fn register_focus_events(
 
 // ==================== Wheel Events ====================
 
+/// The contact label of a trackpad pinch: above every DOM `pointerId`, which
+/// is a 32-bit integer.
+const PINCH_CONTACT: NativeContact = NativeContact(1 << 32);
+
+/// The trackpad pinch of one registration, from Control-held wheel events or
+/// WebKit gesture events (`shared::web_pinch`), and how it reaches the
+/// window's input callback.
+///
+/// No borrow of its cells is held across a dispatch: an application callback
+/// can dispatch another DOM event at the canvas synchronously.
+struct Pinch {
+    callbacks: Arc<WindowCallbacks>,
+    accepting: Rc<Cell<bool>>,
+    contacts: Rc<RefCell<ContactRegistry>>,
+    wheel: RefCell<CtrlWheel>,
+    gesture: RefCell<GestureTracker>,
+    /// The last focal point, which an End or a cancellation keeps.
+    focal: Cell<Option<Point>>,
+}
+
+impl Pinch {
+    /// The input one gesture reading assembles into, at `focal` when given.
+    fn assemble(
+        &self,
+        reading: GestureReading,
+        time: EventTime,
+        focal: Option<Point>,
+        modifiers: Modifiers,
+    ) -> Assembled {
+        if focal.is_some() {
+            self.focal.set(focal);
+        }
+        let mut native = NativeReading::new(
+            PINCH_CONTACT,
+            PointerKind::Trackpad,
+            ReadingAction::Gesture(reading),
+            ReadingTime::epoch(time),
+        )
+        .on(SURFACE)
+        .with_primary(true)
+        .with_modifiers(modifiers);
+        if let Some(point) = self.focal.get() {
+            native = native.at(point.x, point.y, 1.0);
+        }
+        assemble(&self.contacts, &native)
+    }
+
+    /// Deliver `inputs`, answering `event` (when given) with each result,
+    /// and return the first result.
+    fn deliver(
+        &self,
+        inputs: Assembled,
+        event: Option<&web_sys::Event>,
+    ) -> Option<DispatchEventResult> {
+        let mut first = None;
+        for input in inputs {
+            if !self.accepting.get() {
+                break;
+            }
+            let result = self.callbacks.dispatch_input(input);
+            if let Some(event) = event {
+                answer(event, result);
+            }
+            first.get_or_insert(result);
+        }
+        first
+    }
+
+    /// Deliver the End of a Control-held pinch whose deadline `now` passed,
+    /// stamped with that deadline.
+    fn flush(&self, now: EventTime) {
+        let due = self.wheel.borrow_mut().expire(now);
+        if let Some((end, at)) = due {
+            let inputs = self.assemble(end, at, None, Modifiers::NONE);
+            self.deliver(inputs, None);
+        }
+    }
+
+    /// Deliver one step of a pinch for `event`. The sequence's first step is
+    /// delivered alone first: when the application does not prevent its
+    /// default, `refuse` cancels the pinch and the browser keeps the event
+    /// (its page zoom), and nothing else of the step is delivered.
+    fn step(
+        &self,
+        inputs: Assembled,
+        first: bool,
+        event: &web_sys::Event,
+        refuse: impl FnOnce() -> Option<GestureReading>,
+        time: EventTime,
+    ) {
+        let mut inputs = inputs.into_iter();
+        if first {
+            let Some(head) = inputs.next() else {
+                return;
+            };
+            if !self.accepting.get() {
+                return;
+            }
+            let result = self.callbacks.dispatch_input(head);
+            if !result.default_prevented {
+                if let Some(cancel) = refuse() {
+                    let cancelled = self.assemble(cancel, time, None, Modifiers::NONE);
+                    self.deliver(cancelled, None);
+                }
+                return;
+            }
+            answer(event, result);
+        }
+        self.deliver(inputs.collect(), Some(event));
+    }
+}
+
 fn register_wheel_events(
     canvas: &web_sys::HtmlCanvasElement,
     callbacks: &Arc<WindowCallbacks>,
+    pinch: &Rc<Pinch>,
     registration: &mut Registration,
 ) -> Result<(), crate::OpenWindowError> {
+    let timer = {
+        let pinch = Rc::clone(pinch);
+        registration.timer(move || {
+            // The timer runs no earlier than the deadline it was armed for.
+            let deadline = pinch.wheel.borrow().deadline();
+            if let Some(deadline) = deadline {
+                let now =
+                    performance_now().max(deadline.checked_add(NANOSECOND).unwrap_or(deadline));
+                pinch.flush(now);
+            }
+        })
+    };
     let callbacks = Arc::clone(callbacks);
+    let pinch = Rc::clone(pinch);
     let target = canvas.clone();
     registration.listen(canvas.as_ref(), "wheel", move |e: web_sys::Event| {
-        e.prevent_default();
-        let we: web_sys::WheelEvent = e.unchecked_into();
-        let input = convert_wheel_event(&we, &target);
-        if let Some(input) = input {
-            callbacks.dispatch_input(input);
+        let we: &web_sys::WheelEvent = e.unchecked_ref();
+        let step = WheelStep {
+            ctrl: we.ctrl_key(),
+            mode: we.delta_mode(),
+            dx: we.delta_x(),
+            dy: we.delta_y(),
+            time: event_time(we.time_stamp()),
+        };
+        let ended = {
+            let mut wheel = pinch.wheel.borrow_mut();
+            if step.ctrl {
+                wheel.expire(step.time)
+            } else {
+                wheel.finish(step.time)
+            }
+        };
+        if let Some((end, at)) = ended {
+            let inputs = pinch.assemble(end, at, None, Modifiers::NONE);
+            pinch.deliver(inputs, None);
+        }
+        let route = pinch.wheel.borrow_mut().route(step);
+        match route {
+            WheelRoute::Refused => {}
+            WheelRoute::Scroll => {
+                if let Some(input) = convert_wheel_event(we, &target) {
+                    answer(&e, callbacks.dispatch_input(input));
+                }
+            }
+            WheelRoute::Pinch(reading) => {
+                let Ok(focal) = PointerPosition::try_new(wheel_position(we, &target)) else {
+                    return;
+                };
+                // Chromium sets Control on a pinch it encodes as a wheel; it
+                // is not a key the user holds.
+                let modifiers = observed_modifiers(
+                    [we.shift_key(), false, we.alt_key(), we.meta_key()],
+                    |name| name != "Control" && we.get_modifier_state(name),
+                );
+                let inputs = pinch.assemble(reading, step.time, Some(focal.get()), modifiers);
+                let first = reading.phase == GesturePhase::Began;
+                pinch.step(
+                    inputs,
+                    first,
+                    &e,
+                    || pinch.wheel.borrow_mut().refuse(),
+                    step.time,
+                );
+                let deadline = pinch.wheel.borrow().deadline();
+                if let Some(deadline) = deadline {
+                    timer.arm(deadline.saturating_duration_since(performance_now()) + TIMER_SLACK);
+                }
+            }
         }
     })
+}
+
+/// One nanosecond on the event timeline.
+const NANOSECOND: std::time::Duration = std::time::Duration::from_nanos(1);
+/// How much later than a deadline its timer is armed for, so a timer the
+/// browser runs at the deadline's millisecond does not find it pending.
+const TIMER_SLACK: std::time::Duration = std::time::Duration::from_millis(1);
+
+/// The page's high-resolution time now, on the event timeline.
+fn performance_now() -> EventTime {
+    web_sys::window()
+        .and_then(|window| window.performance())
+        .map_or(EventTime::from_nanos(0), |performance| {
+            event_time(performance.now())
+        })
+}
+
+// ==================== WebKit Gesture Events ====================
+
+/// WebKit's `GestureEvent`, which web-sys does not bind.
+#[wasm_bindgen]
+extern "C" {
+    type GestureEventValues;
+    #[wasm_bindgen(method, getter, catch)]
+    fn scale(this: &GestureEventValues) -> Result<f64, JsValue>;
+    #[wasm_bindgen(method, getter, catch)]
+    fn rotation(this: &GestureEventValues) -> Result<f64, JsValue>;
+    #[wasm_bindgen(method, getter, catch, js_name = clientX)]
+    fn gesture_client_x(this: &GestureEventValues) -> Result<f64, JsValue>;
+    #[wasm_bindgen(method, getter, catch, js_name = clientY)]
+    fn gesture_client_y(this: &GestureEventValues) -> Result<f64, JsValue>;
+    #[wasm_bindgen(method, getter, js_name = shiftKey)]
+    fn gesture_shift(this: &GestureEventValues) -> Option<bool>;
+    #[wasm_bindgen(method, getter, js_name = altKey)]
+    fn gesture_alt(this: &GestureEventValues) -> Option<bool>;
+    #[wasm_bindgen(method, getter, js_name = metaKey)]
+    fn gesture_meta(this: &GestureEventValues) -> Option<bool>;
+    #[wasm_bindgen(method, getter, js_name = ctrlKey)]
+    fn gesture_ctrl(this: &GestureEventValues) -> Option<bool>;
+}
+
+/// Whether this browser dispatches WebKit gesture events.
+pub(super) fn has_gesture_events() -> bool {
+    web_sys::window().is_some_and(|window| {
+        js_sys::Reflect::has(&window, &JsValue::from_str("GestureEvent")).unwrap_or(false)
+    })
+}
+
+fn register_gesture_events(
+    canvas: &web_sys::HtmlCanvasElement,
+    pinch: &Rc<Pinch>,
+    registration: &mut Registration,
+) -> Result<(), crate::OpenWindowError> {
+    for (name, kind) in [
+        ("gesturestart", GestureEventKind::Start),
+        ("gesturechange", GestureEventKind::Change),
+        ("gestureend", GestureEventKind::End),
+    ] {
+        let pinch = Rc::clone(pinch);
+        let target = canvas.clone();
+        registration.listen(canvas.as_ref(), name, move |e: web_sys::Event| {
+            let values: &GestureEventValues = e.unchecked_ref();
+            let time = event_time(e.time_stamp());
+            pinch.flush(time);
+            let scale = values.scale().unwrap_or(f64::NAN);
+            let rotation = values.rotation().unwrap_or(f64::NAN);
+            let focal = values
+                .gesture_client_x()
+                .ok()
+                .zip(values.gesture_client_y().ok())
+                .and_then(|(x, y)| client_to_canvas(&target, x, y))
+                .and_then(|point| PointerPosition::try_new(point).ok())
+                .map(PointerPosition::get);
+            let modifiers = [
+                (values.gesture_shift(), Modifiers::SHIFT),
+                (values.gesture_ctrl(), Modifiers::CONTROL),
+                (values.gesture_alt(), Modifiers::ALT),
+                (values.gesture_meta(), Modifiers::META),
+            ]
+            .into_iter()
+            .filter(|(held, _)| held.unwrap_or(false))
+            .fold(Modifiers::NONE, |all, (_, flag)| all | flag);
+            let readings = pinch.gesture.borrow_mut().step(kind, scale, rotation);
+            let mut inputs = Assembled::new();
+            for reading in readings.into_iter().flatten() {
+                inputs.extend(pinch.assemble(reading, time, focal, modifiers));
+            }
+            if pinch.gesture.borrow().is_refused() {
+                return;
+            }
+            pinch.step(
+                inputs,
+                kind == GestureEventKind::Start,
+                &e,
+                || pinch.gesture.borrow_mut().refuse(),
+                time,
+            );
+        })?;
+    }
+    Ok(())
+}
+
+/// Viewport coordinates as canvas-local ones, through the same untransformed
+/// box geometry the wheel path uses; `None` for a transformed ancestry,
+/// whose local coordinates a bounding rectangle cannot recover.
+fn client_to_canvas(canvas: &web_sys::HtmlCanvasElement, x: f64, y: f64) -> Option<Point> {
+    let origin = untransformed_origin(canvas)?;
+    Some(Point::new(x - origin.x, y - origin.y))
 }
 
 // ==================== Context Menu Block ====================
@@ -479,13 +860,18 @@ extern "C" {
     fn azimuth_angle(this: &ExtendedPointerEvent) -> Result<f64, JsValue>;
     #[wasm_bindgen(method, getter, catch, js_name = twist)]
     fn twist_degrees(this: &ExtendedPointerEvent) -> Result<f64, JsValue>;
+    // Pointer Events 3 allows fractional tilt; web-sys reads it as an integer.
+    #[wasm_bindgen(method, getter, catch, js_name = tiltX)]
+    fn tilt_x_degrees(this: &ExtendedPointerEvent) -> Result<f64, JsValue>;
+    #[wasm_bindgen(method, getter, catch, js_name = tiltY)]
+    fn tilt_y_degrees(this: &ExtendedPointerEvent) -> Result<f64, JsValue>;
     #[wasm_bindgen(method, catch, js_name = getCoalescedEvents)]
     fn coalesced_events(this: &ExtendedPointerEvent) -> Result<js_sys::Array, JsValue>;
     #[wasm_bindgen(method, catch, js_name = getPredictedEvents)]
     fn predicted_events(this: &ExtendedPointerEvent) -> Result<js_sys::Array, JsValue>;
 }
 
-fn pointer_position(event: &web_sys::MouseEvent) -> Point {
+pub(super) fn pointer_position(event: &web_sys::MouseEvent) -> Point {
     let event: &PreciseMouseEvent = event.unchecked_ref();
     Point::new(event.offset_x_f64(), event.offset_y_f64())
 }
@@ -503,6 +889,17 @@ fn untransformed_wheel_position(
     event: &web_sys::WheelEvent,
     canvas: &web_sys::HtmlCanvasElement,
 ) -> Option<Point> {
+    let origin = untransformed_origin(canvas)?;
+    let source: &PreciseMouseEvent = event.unchecked_ref();
+    Some(Point::new(
+        source.client_x_f64() - origin.x,
+        source.client_y_f64() - origin.y,
+    ))
+}
+
+/// The viewport position of the canvas's padding edge, when its whole
+/// ancestry has no coordinate transform or zoom.
+fn untransformed_origin(canvas: &web_sys::HtmlCanvasElement) -> Option<Point> {
     let window = web_sys::window()?;
     let canvas_style = window.get_computed_style(canvas).ok()??;
     let mut ancestor = Some(canvas.unchecked_ref::<web_sys::Element>().clone());
@@ -526,33 +923,10 @@ fn untransformed_wheel_position(
     let border_left: f64 = border_left.strip_suffix("px")?.parse().ok()?;
     let border_top: f64 = border_top.strip_suffix("px")?.parse().ok()?;
     let rect = canvas.get_bounding_client_rect();
-    let source: &PreciseMouseEvent = event.unchecked_ref();
     Some(Point::new(
-        source.client_x_f64() - rect.left() - border_left,
-        source.client_y_f64() - rect.top() - border_top,
+        rect.left() + border_left,
+        rect.top() + border_top,
     ))
-}
-
-fn make_pointer_info(pe: &web_sys::PointerEvent) -> Option<PointerInfo> {
-    let id = PointerId::try_from(u64::try_from(pe.pointer_id()).ok()?).ok()?;
-    let kind = match pe.pointer_type().as_str() {
-        "mouse" => PointerKind::Mouse,
-        "pen" => PointerKind::Pen {
-            tool: if pe.button() == 5 || pe.buttons() & 32 != 0 {
-                PenTool::Eraser
-            } else {
-                PenTool::Tip
-            },
-        },
-        "touch" => PointerKind::Touch,
-        _ => PointerKind::Unknown,
-    };
-    let role = if pe.is_primary() {
-        PointerRole::Primary
-    } else {
-        PointerRole::Additional
-    };
-    Some(PointerInfo::new(id, kind).with_role(role))
 }
 
 /// Translate the DOM `MouseEvent.buttons` bitmask into `PointerButtons`.
@@ -590,137 +964,192 @@ fn map_button(button: i16) -> Option<PointerButton> {
     }
 }
 
-fn pointer_time(pe: &web_sys::PointerEvent) -> EventTime {
-    EventTime::from_nanos((pe.time_stamp() * 1_000_000.0) as u64)
+/// Each canvas registration serves one surface.
+const SURFACE: NativeSurface = NativeSurface(0);
+
+/// The DOM `pointerId`, as the contact's label.
+fn pointer_label(pe: &web_sys::PointerEvent) -> NativeContact {
+    NativeContact(u64::from(u32::from_ne_bytes(pe.pointer_id().to_ne_bytes())))
 }
 
-fn pointer_sample(pe: &web_sys::PointerEvent) -> Option<PointerSample> {
-    let point = pointer_position(pe);
-    let position = PointerPosition::try_new(point).ok()?;
-    let mut sample = PointerSample::new(pointer_time(pe), position);
-    // DOM has no per-device sensor capability query. Keep its reported touch
-    // and pen pressure, including zero, without treating a mouse fallback as force.
-    if matches!(pe.pointer_type().as_str(), "touch" | "pen") {
-        sample.pressure = Pressure::saturating(pe.pressure()).ok();
-        let extended: &ExtendedPointerEvent = pe.unchecked_ref();
-        sample.contact_size =
-            ContactSize::try_new(Size::new(extended.width_f64(), extended.height_f64())).ok();
-        if pe.pointer_type() == "pen" {
-            sample.tangential_pressure =
-                TangentialPressure::saturating(pe.tangential_pressure()).ok();
-            let altitude = extended
-                .altitude_angle()
-                .ok()
-                .and_then(|value| PenOrientation::try_altitude(value).ok());
-            let azimuth = extended
-                .azimuth_angle()
-                .ok()
-                .and_then(|value| PenOrientation::try_azimuth(value).ok());
-            sample.orientation = match (altitude, azimuth) {
-                (Some(altitude), Some(azimuth)) => altitude
-                    .altitude()
-                    .zip(azimuth.azimuth())
-                    .and_then(|(altitude, azimuth)| {
-                        PenOrientation::try_new(altitude, azimuth).ok()
-                    }),
-                (altitude, azimuth) => altitude.or(azimuth),
-            };
-            sample.twist = extended
-                .twist_degrees()
-                .ok()
-                .and_then(|degrees| Twist::try_new(degrees.to_radians()).ok());
-        }
+fn pointer_kind(pe: &web_sys::PointerEvent) -> PointerKind {
+    match pe.pointer_type().as_str() {
+        "mouse" => PointerKind::Mouse,
+        "pen" => PointerKind::Pen {
+            tool: if pe.button() == 5 || pe.buttons() & 32 != 0 {
+                PenTool::Eraser
+            } else {
+                PenTool::Tip
+            },
+        },
+        "touch" => PointerKind::Touch,
+        _ => PointerKind::Unknown,
     }
-    Some(sample)
 }
 
-fn pointer_modifiers(pe: &web_sys::PointerEvent) -> flui_platform_api::keyboard::Modifiers {
-    extract_modifiers_from_mouse(pe)
+/// The sensors a touch or pen event reports. DOM has no per-device sensor
+/// capability query: reported touch and pen pressure is kept, including zero,
+/// without treating a mouse fallback as force. Values the browser reports
+/// slightly out of range are clamped.
+fn pointer_sensors(pe: &web_sys::PointerEvent) -> RawSensors {
+    let mut sensors = RawSensors::default();
+    let kind = pe.pointer_type();
+    if !matches!(kind.as_str(), "touch" | "pen") {
+        return sensors;
+    }
+    let pressure = f64::from(pe.pressure());
+    sensors.pressure = pressure.is_finite().then(|| pressure.clamp(0.0, 1.0));
+    let extended: &ExtendedPointerEvent = pe.unchecked_ref();
+    let (width, height) = (extended.width_f64(), extended.height_f64());
+    sensors.contact_size =
+        (width.is_finite() && height.is_finite() && width >= 0.0 && height >= 0.0)
+            .then_some((width, height));
+    if kind == "pen" {
+        let tangential = f64::from(pe.tangential_pressure());
+        sensors.tangential_pressure = tangential.is_finite().then(|| tangential.clamp(-1.0, 1.0));
+        let altitude = extended
+            .altitude_angle()
+            .ok()
+            .filter(|altitude| (0.0..=core::f64::consts::FRAC_PI_2).contains(altitude));
+        let azimuth = extended
+            .azimuth_angle()
+            .ok()
+            .filter(|azimuth| azimuth.is_finite());
+        sensors.angles = if altitude.is_some() || azimuth.is_some() {
+            Some(PenAngles::Spherical { altitude, azimuth })
+        } else {
+            pen_tilt(extended)
+        };
+        sensors.twist_degrees = extended
+            .twist_degrees()
+            .ok()
+            .filter(|degrees| (0.0..360.0).contains(degrees));
+    }
+    sensors
 }
 
-fn convert_pointer_down(pe: &web_sys::PointerEvent) -> Option<PlatformInput> {
-    let pointer = make_pointer_info(pe)?;
-    let button = map_button(pe.button())?;
-    let held = buttons_from_mask(pe.buttons());
-    let press = PointerPress::new(pointer, button, held, pointer_sample(pe)?)
-        .with_modifiers(pointer_modifiers(pe));
-    Some(PlatformInput::Pointer(if held.without(button).is_empty() {
-        PointerEvent::Down(press)
-    } else {
-        PointerEvent::ButtonChange(ButtonChange::Pressed(press))
-    }))
-}
-
-fn convert_pointer_up(pe: &web_sys::PointerEvent) -> Option<PlatformInput> {
-    let pointer = make_pointer_info(pe)?;
-    let Some(sample) = pointer_sample(pe) else {
-        return convert_pointer_cancel(pe, CancelReason::InvalidInput);
+/// The pen's tilt planes, for a browser that reports `tiltX`/`tiltY` but not
+/// the spherical angles (Pointer Events 2): degrees within `[-90, 90]`.
+fn pen_tilt(event: &ExtendedPointerEvent) -> Option<PenAngles> {
+    let plane = |value: Result<f64, JsValue>| {
+        value
+            .ok()
+            .filter(|degrees| (-90.0..=90.0).contains(degrees))
     };
-    let button = map_button(pe.button())?;
-    let held = buttons_from_mask(pe.buttons());
-    let release =
-        PointerRelease::new(pointer, button, held, sample).with_modifiers(pointer_modifiers(pe));
-    Some(PlatformInput::Pointer(if held.without(button).is_empty() {
-        PointerEvent::Up(release)
-    } else {
-        PointerEvent::ButtonChange(ButtonChange::Released(release))
-    }))
+    Some(PenAngles::TiltDegrees {
+        x: plane(event.tilt_x_degrees())?,
+        y: plane(event.tilt_y_degrees())?,
+    })
+}
+
+/// A DOM pointer event as a reading of its contact, in CSS (logical) pixels.
+fn pointer_reading(pe: &web_sys::PointerEvent, action: ReadingAction) -> NativeReading {
+    let point = pointer_position(pe);
+    NativeReading::new(
+        pointer_label(pe),
+        pointer_kind(pe),
+        action,
+        ReadingTime::epoch(EventTime::from_nanos(
+            (pe.time_stamp() * 1_000_000.0) as u64,
+        )),
+    )
+    .on(SURFACE)
+    .at(point.x, point.y, 1.0)
+    .with_primary(pe.is_primary())
+    .with_buttons(buttons_from_mask(pe.buttons()))
+    .with_modifiers(extract_modifiers_from_mouse(pe))
+    .with_sensors(pointer_sensors(pe))
+}
+
+fn assemble(contacts: &RefCell<ContactRegistry>, reading: &NativeReading) -> Assembled {
+    decode(&mut contacts.borrow_mut(), reading).unwrap_or_else(DecodeError::into_inputs)
+}
+
+fn convert_pointer_down(
+    pe: &web_sys::PointerEvent,
+    contacts: &RefCell<ContactRegistry>,
+) -> Assembled {
+    let Some(button) = map_button(pe.button()) else {
+        return Assembled::new();
+    };
+    assemble(contacts, &pointer_reading(pe, ReadingAction::Press(button)))
+}
+
+fn convert_pointer_up(
+    pe: &web_sys::PointerEvent,
+    contacts: &RefCell<ContactRegistry>,
+) -> Assembled {
+    let Some(button) = map_button(pe.button()) else {
+        return Assembled::new();
+    };
+    assemble(
+        contacts,
+        &pointer_reading(pe, ReadingAction::Release(button)),
+    )
 }
 
 fn convert_pointer_cancel(
     pe: &web_sys::PointerEvent,
-    reason: CancelReason,
-) -> Option<PlatformInput> {
-    Some(PlatformInput::Pointer(PointerEvent::Cancel(
-        PointerCancel::new(make_pointer_info(pe)?, pointer_time(pe), reason),
-    )))
+    reason: NativeCancel,
+    contacts: &RefCell<ContactRegistry>,
+) -> Assembled {
+    assemble(
+        contacts,
+        &pointer_reading(pe, ReadingAction::Cancel(reason)),
+    )
 }
 
-fn pointer_samples(
+/// Pass the browser's coalesced or predicted events of `pe`'s own contact
+/// to `push`.
+fn batch_events(
     pe: &web_sys::PointerEvent,
     values: Result<js_sys::Array, JsValue>,
-) -> Vec<PointerSample> {
+    mut push: impl FnMut(NativeReading),
+) {
     let Ok(values) = values else {
-        return Vec::new();
+        return;
     };
-    let kind = pe.pointer_type();
+    let (id, kind) = (pe.pointer_id(), pe.pointer_type());
     values
         .iter()
         .filter_map(|value| value.dyn_into::<web_sys::PointerEvent>().ok())
-        .filter(|sample| sample.pointer_id() == pe.pointer_id() && sample.pointer_type() == kind)
-        .filter_map(|sample| pointer_sample(&sample))
-        .collect()
+        .filter(|sample| sample.pointer_id() == id && sample.pointer_type() == kind)
+        .for_each(|sample| push(pointer_reading(&sample, ReadingAction::Move)));
 }
 
+/// A `pointermove`: a chorded button change when `pe.button()` names a button
+/// whose held state differs from the contact's, otherwise a move carrying the
+/// browser's coalesced and predicted events.
 fn convert_pointer_move(
     pe: &web_sys::PointerEvent,
-    previous: Option<u16>,
-) -> Option<PlatformInput> {
-    let pointer = make_pointer_info(pe)?;
-    let sample = pointer_sample(pe)?;
-    let held = buttons_from_mask(pe.buttons());
-    let modifiers = pointer_modifiers(pe);
-    if let Some(previous) = previous
-        && let Some(button) = map_button(pe.button())
-        && buttons_from_mask(previous).contains(button) != held.contains(button)
+    contacts: &RefCell<ContactRegistry>,
+) -> Assembled {
+    let reported = buttons_from_mask(pe.buttons());
+    let held = contacts.borrow().buttons(SURFACE, None, pointer_label(pe));
+    if let (Some(held), Some(button)) = (held, map_button(pe.button()))
+        && held.contains(button) != reported.contains(button)
     {
-        let change = if held.contains(button) {
-            ButtonChange::Pressed(
-                PointerPress::new(pointer, button, held, sample).with_modifiers(modifiers),
-            )
+        let action = if reported.contains(button) {
+            ReadingAction::Press(button)
         } else {
-            ButtonChange::Released(
-                PointerRelease::new(pointer, button, held, sample).with_modifiers(modifiers),
-            )
+            ReadingAction::Release(button)
         };
-        return Some(PlatformInput::Pointer(PointerEvent::ButtonChange(change)));
+        return assemble(contacts, &pointer_reading(pe, action));
     }
     let extended: &ExtendedPointerEvent = pe.unchecked_ref();
-    let event = PointerMove::new(pointer, held, sample)
-        .with_modifiers(modifiers)
-        .with_coalesced(pointer_samples(pe, extended.coalesced_events()))
-        .with_predicted(pointer_samples(pe, extended.predicted_events()));
-    Some(PlatformInput::Pointer(PointerEvent::Move(event)))
+    let mut batch = MoveBatch::new();
+    batch_events(pe, extended.coalesced_events(), |reading| {
+        batch.push_coalesced(reading);
+    });
+    batch_events(pe, extended.predicted_events(), |reading| {
+        batch.push_predicted(reading);
+    });
+    batch
+        .decode(
+            &mut contacts.borrow_mut(),
+            &pointer_reading(pe, ReadingAction::Move),
+        )
+        .unwrap_or_else(DecodeError::into_inputs)
 }
 
 /// Convert a DOM `WheelEvent` to a W3C `PointerEvent::Scroll`.
@@ -752,7 +1181,13 @@ fn convert_wheel_event(
     )))
 }
 
-fn convert_keyboard_event(ke: &web_sys::KeyboardEvent, state: KeyState) -> PlatformInput {
+/// A DOM key event as the window delivers it; `composing` is whether the
+/// window's own text input composes now.
+pub(super) fn convert_keyboard_event(
+    ke: &web_sys::KeyboardEvent,
+    state: KeyState,
+    composing: bool,
+) -> PlatformInput {
     let modifiers = observed_modifiers(
         [ke.shift_key(), ke.ctrl_key(), ke.alt_key(), ke.meta_key()],
         |name| ke.get_modifier_state(name),
@@ -784,11 +1219,7 @@ fn convert_keyboard_event(ke: &web_sys::KeyboardEvent, state: KeyState) -> Platf
         } else {
             KeyRepeat::First
         })
-        .with_composition(if ke.is_composing() {
-            ImeComposition::Active
-        } else {
-            ImeComposition::Inactive
-        }),
+        .with_composition(key_composition(ke.is_composing(), ke.key_code(), composing)),
     )
 }
 

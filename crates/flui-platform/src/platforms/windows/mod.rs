@@ -16,8 +16,11 @@ mod accessibility;
 mod appearance;
 mod clipboard;
 mod com_apartment;
+mod direct_manipulation;
 pub(crate) mod display;
+mod drag;
 mod events;
+mod haptics;
 mod host_events;
 mod platform;
 pub(crate) mod preferences;
@@ -28,6 +31,7 @@ mod window_ext;
 mod window_frame;
 mod window_limits;
 mod window_modes;
+mod window_placement;
 
 #[cfg(feature = "a11y")]
 pub use accessibility::WindowsAccessibility;

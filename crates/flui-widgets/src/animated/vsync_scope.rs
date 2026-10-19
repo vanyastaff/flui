@@ -48,7 +48,7 @@ impl VsyncScope {
     pub fn new(vsync: Vsync, child: impl IntoView) -> Self {
         Self {
             vsync: Some(vsync),
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 
@@ -64,7 +64,7 @@ impl VsyncScope {
     pub fn detached(child: impl IntoView) -> Self {
         Self {
             vsync: None,
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 }

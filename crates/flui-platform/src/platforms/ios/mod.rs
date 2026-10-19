@@ -55,6 +55,7 @@ mod clipboard;
 mod display;
 mod events;
 mod executor;
+mod haptics;
 mod native_owner;
 mod os_version;
 mod platform;

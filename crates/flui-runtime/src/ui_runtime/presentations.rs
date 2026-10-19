@@ -201,8 +201,98 @@ impl UiRuntime {
             }
             self.focus_coordinator.note_focus_gained(presentation_id);
         }
+        self.drag.attach_presentation(
+            presentation_id,
+            presentation.window_id(),
+            presentation.hit_test_handle(),
+        );
         self.presentations.install(presentation);
         presentation_id
+    }
+
+    /// The handle widgets start drag sessions with (ADR-0211). Weak: it does
+    /// not keep the runtime's sessions alive.
+    #[must_use]
+    pub fn drag_handle(&self) -> flui_interaction::drag::DragHandle {
+        self.drag.handle()
+    }
+
+    /// Enter the OS drag sessions that drags decided on since the last call:
+    /// each is handed to its presentation's window, which may run a modal loop
+    /// inside. A window that cannot start one sends the drag back to its window.
+    ///
+    /// Call at the outermost quiescent point, with no dispatch, borrow or frame
+    /// in progress (ADR-0211 §7). A runtime published to an
+    /// [`OwnerHost`](crate::owner::OwnerHost) needs no call: the host enters them
+    /// when its outermost callback finishes. This is for a runtime driven
+    /// without one.
+    pub fn enter_pending_os_drags(&self) {
+        let refused: Vec<_> = self
+            .take_os_drag_starts()
+            .into_iter()
+            .filter_map(OsDragEntry::start)
+            .collect();
+        self.os_drags_refused(refused);
+    }
+
+    /// Whether a drag decided on an OS session the host has not entered yet.
+    pub(crate) fn has_pending_os_drags(&self) -> bool {
+        self.drag.has_pending_os_drags()
+    }
+
+    /// The OS sessions to start, each with its window's drag source. Nothing is
+    /// started here: the caller starts them with the runtime released, so the
+    /// OS loop a start runs can deliver to this runtime.
+    pub(crate) fn take_os_drag_starts(&self) -> Vec<OsDragEntry> {
+        self.enter(|ui_runtime| {
+            ui_runtime
+                .drag
+                .take_pending_os_drags()
+                .into_iter()
+                .map(|pending| OsDragEntry {
+                    source: ui_runtime
+                        .presentations
+                        .get(pending.presentation)
+                        .and_then(|presentation| {
+                            presentation.with_window(|window| window.drag_source())
+                        })
+                        .flatten(),
+                    request: pending.request,
+                })
+                .collect()
+        })
+    }
+
+    /// Send the drags whose OS session could not start back to their windows.
+    pub(crate) fn os_drags_refused(
+        &self,
+        refused: Vec<(
+            flui_platform_api::drag::DragSessionKey,
+            flui_platform_api::drag::DragError,
+        )>,
+    ) {
+        if refused.is_empty() {
+            return;
+        }
+        // Each refusal tells its source's observer; one that panics leaves the
+        // rest told, and the first failure is the one that propagates.
+        self.enter(|ui_runtime| {
+            let mut first = None;
+            for (key, error) in refused {
+                let failure = catch_unwind(AssertUnwindSafe(|| {
+                    ui_runtime.drag.os_drag_refused(key, error);
+                }))
+                .err();
+                crate::lifecycle_state::preserve_first_lifecycle_panic(
+                    &mut first,
+                    failure,
+                    "drag escalation refusal",
+                );
+            }
+            if let Some(payload) = first {
+                resume_unwind(payload);
+            }
+        });
     }
 
     /// [`Self::install_presentation`], with a throwaway test window — for
@@ -530,6 +620,7 @@ impl UiRuntime {
             return;
         };
         presentation.clock().set_hidden(hidden);
+        presentation.sync_haptics_visibility();
         if !hidden && !presentation.clock().demand_mask().is_empty() {
             self.wake_frame();
         }
@@ -641,6 +732,19 @@ impl UiRuntime {
                 {
                     ui_runtime.focus_coordinator.note_focus_gained(surviving);
                 }
+                // Its drags end and the offers it was shown are left while its
+                // tree still stands. A receiver that panics does not keep the
+                // presentation from stopping; an earlier failure stays first.
+                let mut failure = failure;
+                let detached = catch_unwind(AssertUnwindSafe(|| {
+                    ui_runtime.drag.detach_presentation(id);
+                }))
+                .err();
+                crate::lifecycle_state::preserve_first_lifecycle_panic(
+                    &mut failure,
+                    detached,
+                    "drag withdrawal",
+                );
                 ui_runtime.stop_presentation_after_failure(id, failure);
             });
         }))
@@ -691,5 +795,29 @@ impl UiRuntime {
             }
         }
         true
+    }
+}
+
+/// One OS drag session to start, with the drag source of the window it starts in.
+pub(crate) struct OsDragEntry {
+    source: Option<std::sync::Arc<dyn flui_platform_api::drag::PlatformDragSource>>,
+    request: flui_platform_api::drag::OsDragRequest,
+}
+
+impl OsDragEntry {
+    /// Start the session; a window with no drag source, or one that refuses,
+    /// names the drag to send back to its window.
+    pub(crate) fn start(
+        self,
+    ) -> Option<(
+        flui_platform_api::drag::DragSessionKey,
+        flui_platform_api::drag::DragError,
+    )> {
+        let key = self.request.key;
+        let started = match self.source {
+            Some(source) => source.start(self.request),
+            None => Err(flui_platform_api::drag::DragError::Unavailable),
+        };
+        started.err().map(|error| (key, error))
     }
 }

@@ -6,7 +6,7 @@
 //! answers from a shared atomic; [`IOSSystemChrome`] stores a new style from
 //! any thread and asks UIKit, on the main thread, to read it again.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::{
     Arc,
     atomic::{AtomicU8, Ordering},
@@ -16,7 +16,7 @@ use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_foundation::NSObjectProtocol;
-use objc2_ui_kit::{UIStatusBarStyle, UIViewController};
+use objc2_ui_kit::{UIRectEdge, UIStatusBarStyle, UIViewController};
 
 use flui_platform_api::{PlatformSystemChrome, SystemUiOverlayStyle};
 
@@ -45,20 +45,26 @@ fn status_bar_style(code: u8) -> UIStatusBarStyle {
     }
 }
 
-/// The root view controller's ivars: the style it reports.
+/// The root view controller's ivars: the status-bar style it reports and the
+/// screen edges whose system gestures the application's exclusion regions
+/// reach.
 pub struct FluiViewControllerIvars {
     style: Arc<AtomicU8>,
+    deferred_edges: Cell<UIRectEdge>,
 }
 
 define_class!(
     // SAFETY:
     // - `UIViewController` has no subclassing requirements beyond those the
     //   superclass already satisfies.
-    // - The class does not implement `Drop`, so `define_class!`'s
-    //   `dealloc` story is the superclass's.
+    // - The class does not implement `Drop`; its ivars are an `Arc` and a
+    //   `Cell` of a plain integer, so the superclass's `dealloc` is the whole
+    //   story.
     //
     /// The root view controller, reporting the status-bar style the content
-    /// asked for.
+    /// asked for and answering `preferredScreenEdgesDeferringSystemGestures`
+    /// from its ivar. One class serves both: UIKit asks the root controller
+    /// for each, and an Objective-C class name registers once per process.
     #[unsafe(super(UIViewController))]
     #[thread_kind = MainThreadOnly]
     #[name = "FluiViewController"]
@@ -70,20 +76,37 @@ define_class!(
         fn preferred_status_bar_style(&self) -> UIStatusBarStyle {
             status_bar_style(self.ivars().style.load(Ordering::Acquire))
         }
+
+        #[unsafe(method(preferredScreenEdgesDeferringSystemGestures))]
+        fn preferred_screen_edges_deferring_system_gestures(&self) -> UIRectEdge {
+            self.ivars().deferred_edges.get()
+        }
     }
 
     unsafe impl NSObjectProtocol for FluiViewController {}
 );
 
 impl FluiViewController {
-    fn new(mtm: MainThreadMarker, style: Arc<AtomicU8>) -> Retained<Self> {
-        let this = mtm
-            .alloc::<Self>()
-            .set_ivars(FluiViewControllerIvars { style });
+    fn new(
+        mtm: MainThreadMarker,
+        style: Arc<AtomicU8>,
+        deferred_edges: UIRectEdge,
+    ) -> Retained<Self> {
+        let this = mtm.alloc::<Self>().set_ivars(FluiViewControllerIvars {
+            style,
+            deferred_edges: Cell::new(deferred_edges),
+        });
         // SAFETY: `init` reaches UIViewController's designated initializer
         // with no nib; the receiver is the allocation whose ivars were set
         // above, which is the `define_class!` idiom.
         unsafe { msg_send![super(this), init] }
+    }
+
+    /// Defers `edges` from now on, and asks UIKit to read them again.
+    pub(super) fn defer_edges(&self, edges: UIRectEdge) {
+        if self.ivars().deferred_edges.replace(edges) != edges {
+            self.setNeedsUpdateOfScreenEdgesDeferringSystemGestures();
+        }
     }
 }
 
@@ -101,12 +124,17 @@ impl StatusBar {
         })
     }
 
-    /// A root view controller reporting this window's style; it replaces the
-    /// previous attachment's controller as the one to refresh.
-    pub(super) fn attach_controller(&self, mtm: MainThreadMarker) -> Retained<UIViewController> {
-        let controller = FluiViewController::new(mtm, Arc::clone(&self.style));
+    /// A root view controller reporting this window's style and deferring
+    /// `deferred_edges`; it replaces the previous attachment's controller as
+    /// the one to refresh.
+    pub(super) fn attach_controller(
+        &self,
+        mtm: MainThreadMarker,
+        deferred_edges: UIRectEdge,
+    ) -> Retained<FluiViewController> {
+        let controller = FluiViewController::new(mtm, Arc::clone(&self.style), deferred_edges);
         *self.controller.get(mtm).borrow_mut() = Some(controller.clone());
-        Retained::into_super(controller)
+        controller
     }
 
     /// Forget the detached controller.

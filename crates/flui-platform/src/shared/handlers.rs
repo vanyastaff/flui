@@ -14,6 +14,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use flui_foundation::geometry::Size;
 use parking_lot::Mutex;
 
+use flui_platform_api::input_capabilities::InputCapabilities;
+
 use crate::traits::{
     DispatchEventResult, PlatformInput, SessionEndAnswer, SessionEndPhase, WindowEvent,
     WindowExecutionState,
@@ -21,6 +23,131 @@ use crate::traits::{
 
 /// The callback a platform asks at each phase of the user's session ending.
 pub type SessionEndHook = Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>;
+
+/// A window's input callback.
+pub type InputCallback = Box<dyn FnMut(PlatformInput) -> DispatchEventResult>;
+
+/// Asks the backend for an owner-thread turn that calls
+/// [`WindowCallbacks::resume_input_delivery`].
+pub type InputWake = Arc<dyn Fn() + Send + Sync>;
+
+/// Failed passes over one registration's capability snapshot after which
+/// delivery stops, with no further wakes, until the callback is registered
+/// again or the window closes (ADR-0213 §3).
+const SNAPSHOT_ATTEMPTS: u8 = 3;
+
+/// The most input a window holds behind its snapshot or a failed pass's
+/// tail: the runtime holds as many pointer events while it waits for a tree.
+/// Admission past it evicts the oldest ordinary input.
+const HELD_INPUT_CAPACITY: usize = 256;
+
+/// Keys remembered as answered "not handled" while queued; a platform sends
+/// its follow-up right after the answer, so a few suffice.
+const UNANSWERED_KEYS: usize = 8;
+
+/// The input a window holds behind its capability snapshot (ADR-0213 §3).
+struct InputFeed {
+    /// The capabilities in effect before the first held entry: the snapshot
+    /// a registration receives first.
+    front: InputCapabilities,
+    /// The current registration has not received its snapshot.
+    snapshot_pending: bool,
+    /// An input callback has been registered.
+    registered: bool,
+    /// Bumped by every registration, so a snapshot delivered to an outgoing
+    /// callback is not credited to its replacement.
+    registration: u64,
+    /// Failed passes over the current registration's snapshot.
+    failed_snapshots: u8,
+    /// Input admitted behind the snapshot or behind a failed pass's tail, in
+    /// admission order, capability changes included.
+    held: VecDeque<PlatformInput>,
+    /// Older input a FIFO drain moved behind a pending snapshot during this
+    /// drain; it goes ahead of `held`'s newer entries.
+    redirected: usize,
+    /// Input lost to the bound since the window opened: evicted from a full
+    /// queue, or refused while nothing can deliver it. Reported once.
+    lost: u64,
+}
+
+impl InputFeed {
+    const fn new() -> Self {
+        Self {
+            front: InputCapabilities::UNAVAILABLE,
+            snapshot_pending: true,
+            registered: false,
+            registration: 0,
+            failed_snapshots: 0,
+            held: VecDeque::new(),
+            redirected: 0,
+            lost: 0,
+        }
+    }
+
+    /// Whether ordinary input must wait behind the snapshot or a tail.
+    fn holds(&self) -> bool {
+        self.snapshot_pending || !self.held.is_empty()
+    }
+
+    /// Whether nothing can deliver held input until the callback is
+    /// registered again: the registration's snapshot failed every pass.
+    fn stalled(&self) -> bool {
+        self.registered && self.snapshot_pending && self.failed_snapshots >= SNAPSHOT_ATTEMPTS
+    }
+
+    /// Hold `input` at `at` (clamped to the queue), evicting the oldest
+    /// ordinary input when the queue is full. A queue of capability changes
+    /// only evicts its head instead, which becomes the snapshot's baseline.
+    /// Returns where `input` went and the evicted entry, for the caller to
+    /// drop outside the lock.
+    fn hold_at(&mut self, at: usize, input: PlatformInput) -> (usize, Option<PlatformInput>) {
+        let mut at = at.min(self.held.len());
+        let evicted = if self.held.len() >= HELD_INPUT_CAPACITY {
+            let oldest = self
+                .held
+                .iter()
+                .position(|held| !matches!(held, PlatformInput::Capabilities(_)))
+                .unwrap_or(0);
+            let evicted = self.held.remove(oldest);
+            if let Some(PlatformInput::Capabilities(capabilities)) = &evicted {
+                self.front = *capabilities;
+            }
+            if oldest < at {
+                at -= 1;
+            }
+            if oldest < self.redirected {
+                self.redirected -= 1;
+            }
+            self.count_lost();
+            evicted
+        } else {
+            None
+        };
+        self.held.insert(at, input);
+        (at, evicted)
+    }
+
+    /// Hold `input` behind everything held.
+    fn hold(&mut self, input: PlatformInput) -> Option<PlatformInput> {
+        self.hold_at(self.held.len(), input).1
+    }
+
+    fn count_lost(&mut self) {
+        if self.lost == 0 {
+            tracing::warn!(
+                capacity = HELD_INPUT_CAPACITY,
+                "window input is being lost: its callback has not taken the held input"
+            );
+        }
+        self.lost = self.lost.saturating_add(1);
+    }
+}
+
+/// What one step of an input pass delivers.
+enum HeldEntry {
+    Snapshot(InputCapabilities, u64),
+    Input(PlatformInput),
+}
 
 /// Platform callback handlers registry
 ///
@@ -279,8 +406,15 @@ impl std::fmt::Debug for PlatformHandlers {
 pub struct WindowCallbacks {
     /// Called when an input event (pointer, keyboard) is delivered to this
     /// window. Returns `DispatchEventResult` indicating if the event was
-    /// consumed.
-    pub on_input: Mutex<Option<Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>>>,
+    /// consumed. Installed only through [`Self::set_input_callback`], which
+    /// delivers the capability snapshot first.
+    /// Owner-thread-only (ADR-0082 §4): the callback need not be `Send`.
+    on_input: super::owner_slot::OwnerSlot<InputCallback>,
+    input_feed: Mutex<InputFeed>,
+    input_wake: Mutex<Option<InputWake>>,
+    /// Keys answered "not handled" while queued behind a running callback,
+    /// newest last, whose platform follow-up must not be delivered again.
+    unanswered_keys: Mutex<VecDeque<flui_platform_api::keyboard::KeyEvent>>,
 
     /// Called when the platform requests a new frame to be rendered.
     pub on_request_frame: Mutex<Option<Box<dyn FnMut() + Send>>>,
@@ -437,6 +571,20 @@ impl<'a, E> DispatchDrain<'a, E> {
         })
     }
 
+    /// Become the drain owner without queueing an event; `None` while another
+    /// drain runs.
+    fn acquire(state: &'a Mutex<DispatchState<E>>) -> Option<Self> {
+        let mut guard = state.lock();
+        if guard.dispatching {
+            return None;
+        }
+        guard.dispatching = true;
+        Some(Self {
+            state,
+            active: true,
+        })
+    }
+
     fn next(&mut self) -> Option<E> {
         let mut state = self.state.lock();
         if let Some(event) = state.pending.pop_front() {
@@ -552,6 +700,76 @@ impl<T> Drop for CallbackLease<'_, T> {
     }
 }
 
+/// The input callback taken out of its owner-thread slot for one call; on
+/// drop it goes back unless the window cleared or a replacement was
+/// registered meanwhile, in which case it retires here. Every step runs on
+/// the owner thread, so no lock orders the restore against a clear.
+struct InputLease<'a> {
+    slot: &'a super::owner_slot::OwnerSlot<InputCallback>,
+    cleared: &'a AtomicBool,
+    callback: Option<InputCallback>,
+}
+
+impl<'a> InputLease<'a> {
+    fn take(
+        slot: &'a super::owner_slot::OwnerSlot<InputCallback>,
+        cleared: &'a AtomicBool,
+    ) -> Self {
+        Self {
+            slot,
+            cleared,
+            callback: slot.take(),
+        }
+    }
+
+    fn callback_mut(&mut self) -> Option<&mut InputCallback> {
+        self.callback.as_mut()
+    }
+}
+
+impl Drop for InputLease<'_> {
+    fn drop(&mut self) {
+        let Some(callback) = self.callback.take() else {
+            return;
+        };
+        let outgoing = if self.cleared.load(Ordering::SeqCst) {
+            callback
+        } else {
+            match self.slot.restore(callback) {
+                Ok(()) => return,
+                Err(replaced) => replaced,
+            }
+        };
+        if std::thread::panicking() {
+            // An invocation failure remains authoritative.
+            super::panic_boundary::contain_owner_callback(|| drop(outgoing));
+        } else {
+            drop(outgoing);
+        }
+    }
+}
+
+/// Invoke a leased input callback with `input`, containing a panic; whether
+/// it returned normally. The payload is forgotten, not dropped: its own
+/// destructor may panic.
+fn invoke_contained(lease: &mut InputLease<'_>, input: PlatformInput) -> bool {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Some(callback) = lease.callback_mut() {
+            callback(input);
+        }
+    }));
+    match outcome {
+        Ok(()) => true,
+        Err(payload) => {
+            std::mem::forget(payload);
+            super::panic_boundary::contain_owner_callback(|| {
+                tracing::error!("input callback panicked; the queued input stays in order");
+            });
+            false
+        }
+    }
+}
+
 impl WindowCallbacks {
     /// Refuse registrations once native retirement has started.
     #[cfg(target_os = "windows")]
@@ -574,7 +792,10 @@ impl WindowCallbacks {
             on_execution_state_change: Mutex::new(None),
             on_safe_area_change: Mutex::new(None),
             safe_area_dispatch: Mutex::new(DispatchState::new()),
-            on_input: Mutex::new(None),
+            on_input: super::owner_slot::OwnerSlot::new(),
+            input_feed: Mutex::new(InputFeed::new()),
+            input_wake: Mutex::new(None),
+            unanswered_keys: Mutex::new(VecDeque::new()),
             on_request_frame: Mutex::new(None),
             on_resize: Mutex::new(None),
             on_state_changed: Mutex::new(None),
@@ -703,7 +924,11 @@ impl WindowCallbacks {
         self.cleared.store(true, Ordering::SeqCst);
         let on_safe_area_change = self.on_safe_area_change.lock().take();
         let on_execution_state_change = self.on_execution_state_change.lock().take();
-        let on_input = self.on_input.lock().take();
+        // Off the owner thread this reaches nothing; the callback then
+        // retires at the owner's next lease, which sees `cleared`.
+        let on_input = self.on_input.take();
+        let held = std::mem::take(&mut self.input_feed.lock().held);
+        let input_wake = self.input_wake.lock().take();
         let on_request_frame = self.on_request_frame.lock().take();
         let on_resize = self.on_resize.lock().take();
         let on_state_changed = self.on_state_changed.lock().take();
@@ -720,6 +945,10 @@ impl WindowCallbacks {
         super::panic_boundary::contain_owner_callback(|| drop(on_safe_area_change));
         super::panic_boundary::contain_owner_callback(|| drop(on_execution_state_change));
         super::panic_boundary::contain_owner_callback(|| drop(on_input));
+        for input in held {
+            super::panic_boundary::contain_owner_callback(|| drop(input));
+        }
+        super::panic_boundary::contain_owner_callback(|| drop(input_wake));
         super::panic_boundary::contain_owner_callback(|| drop(on_request_frame));
         super::panic_boundary::contain_owner_callback(|| drop(on_resize));
         super::panic_boundary::contain_owner_callback(|| drop(on_state_changed));
@@ -803,10 +1032,20 @@ impl WindowCallbacks {
         while let Some(event) = drain.next() {
             match event {
                 WindowCallbackEvent::Input(event) => {
-                    let mut lease = CallbackLease::take(&self.on_input, &self.cleared);
+                    // Admitted before a re-registration: the new callback's
+                    // snapshot still comes first.
+                    if !self.deliver_pending_snapshot() {
+                        self.redirect_behind_snapshot(event);
+                        input_result.get_or_insert(DispatchEventResult::DEFERRED);
+                        continue;
+                    }
+                    let mut lease = InputLease::take(&self.on_input, &self.cleared);
                     let result = lease
                         .callback_mut()
                         .map_or_else(DispatchEventResult::default, |callback| callback(event));
+                    // An outgoing callback replaced during its call retires
+                    // here, after its result; its capture failure is contained.
+                    super::panic_boundary::contain_owner_callback(|| drop(lease));
                     input_result.get_or_insert(result);
                 }
                 WindowCallbackEvent::RequestFrame => {
@@ -919,17 +1158,320 @@ impl WindowCallbacks {
     /// Dispatch an input event.
     ///
     /// The outer drain returns the callback result for its own event. A nested
-    /// dispatch is queued and returns [`DispatchEventResult::DEFERRED`]
-    /// immediately because its callback result cannot be synchronously known
-    /// until the outer callback returns. The conservative deferred value
-    /// suppresses native default handling until FLUI consumes the queued event.
+    /// dispatch is queued, never dropped, and answers at once because its
+    /// callback result is not known until the outer callback returns
+    /// (ADR-0207 §7): a key gets [`DispatchEventResult::DEFERRED_UNHANDLED`],
+    /// so its platform default runs now, and the platform's follow-up for it
+    /// (AppKit resends an unhandled key equivalent as `keyDown:`) is not
+    /// delivered again; any other input gets [`DispatchEventResult::DEFERRED`],
+    /// which suppresses a default (Win32 mouse promotion) its queued delivery
+    /// replaces.
+    ///
+    /// Until the input callback has received its capability snapshot, and
+    /// while a failed pass's tail is still queued, the event waits behind
+    /// them ([`Self::set_input_callback`]) and the result is
+    /// [`DispatchEventResult::DEFERRED`] (the default result while no callback
+    /// was ever registered: nothing claims the event yet). At most 256 entries
+    /// are held; past that the oldest ordinary input is evicted. Once a
+    /// registration's snapshot has failed every pass, nothing can deliver
+    /// until the callback is registered again, so the event is refused with
+    /// the default result instead of held. A [`PlatformInput::Capabilities`]
+    /// is a capability change ([`Self::set_input_capabilities`]).
     pub fn dispatch_input(&self, event: PlatformInput) -> DispatchEventResult {
+        if let PlatformInput::Capabilities(capabilities) = event {
+            self.set_input_capabilities(capabilities);
+            return DispatchEventResult::DEFERRED;
+        }
+        // The platform's follow-up for a key answered "not handled" while a
+        // callback ran (AppKit resends it as `keyDown:`): that key is already
+        // queued or delivered, so it is not delivered again.
+        let key = match &event {
+            PlatformInput::Keyboard(key) => Some(key.clone()),
+            _ => None,
+        };
+        if let Some(key) = &key {
+            let mut unanswered = self.unanswered_keys.lock();
+            if let Some(index) = unanswered.iter().position(|marker| marker == key) {
+                unanswered.remove(index);
+                return DispatchEventResult::default();
+            }
+        }
+        {
+            let mut feed = self.input_feed.lock();
+            if feed.stalled() {
+                // Nothing delivers held input until the callback is
+                // registered again: the event is refused, not held, and its
+                // platform default runs.
+                feed.count_lost();
+                return DispatchEventResult::default();
+            }
+            if feed.holds() {
+                let evicted = feed.hold(event);
+                // With no application callback yet nothing claims the event,
+                // so the platform default is not suppressed on its behalf.
+                let result = if feed.registered {
+                    DispatchEventResult::DEFERRED
+                } else {
+                    DispatchEventResult::default()
+                };
+                drop(feed);
+                super::panic_boundary::contain_owner_callback(|| drop(evicted));
+                self.resume_input_delivery();
+                return result;
+            }
+        }
         let Some(drain) =
             DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Input(event))
         else {
-            return DispatchEventResult::DEFERRED;
+            // Queued behind the running callback. A key cannot wait for its
+            // answer: it is answered "not handled" so the platform default
+            // runs now, and its follow-up is recognized above.
+            let Some(key) = key else {
+                return DispatchEventResult::DEFERRED;
+            };
+            let mut unanswered = self.unanswered_keys.lock();
+            if unanswered.len() == UNANSWERED_KEYS {
+                unanswered.pop_front();
+            }
+            unanswered.push_back(key);
+            return DispatchEventResult::DEFERRED_UNHANDLED;
         };
         self.drain_events(drain).unwrap_or_default()
+    }
+
+    /// Install the window's input callback (ADR-0213 §3).
+    ///
+    /// The registration is committed first; the outgoing callback is retired
+    /// after the slot's guard is released, its capture failure contained.
+    /// The new callback then receives the window's capability snapshot
+    /// ([`PlatformInput::Capabilities`]) before any other input, followed by
+    /// the input held while no snapshot had been delivered, in admission
+    /// order. Delivery runs now unless this window's events are already
+    /// draining (a registration from inside a callback), in which case the
+    /// backend's wake ([`Self::set_input_wake`]) resumes it. After the window
+    /// closes, a registration is dropped.
+    ///
+    /// The callback is held for the thread that created this window, which
+    /// delivers its input (ADR-0082 §4): a registration from any other thread
+    /// is refused and the callback dropped on the thread that made it.
+    pub fn set_input_callback(&self, callback: InputCallback) {
+        let outgoing = if self.cleared.load(Ordering::SeqCst) {
+            Some(callback)
+        } else {
+            match self.on_input.replace(callback) {
+                Ok(outgoing) => {
+                    let mut feed = self.input_feed.lock();
+                    feed.snapshot_pending = true;
+                    feed.registered = true;
+                    feed.failed_snapshots = 0;
+                    feed.registration = feed.registration.wrapping_add(1);
+                    outgoing
+                }
+                Err(refused) => {
+                    tracing::error!(
+                        "input callback refused: a window's input callback is registered on \
+                         its owner thread; the callback was dropped on the calling thread"
+                    );
+                    Some(refused)
+                }
+            }
+        };
+        super::panic_boundary::contain_owner_callback(|| drop(outgoing));
+        self.resume_input_delivery();
+    }
+
+    /// Record the window's input capabilities: before the input callback has
+    /// its snapshot (and while no ordinary input waits), the snapshot it will
+    /// receive; after that, a change delivered in order with the input around
+    /// it. A backend sets the initial value when it builds the window,
+    /// reflecting the devices already attached.
+    pub fn set_input_capabilities(&self, capabilities: InputCapabilities) {
+        {
+            let mut feed = self.input_feed.lock();
+            if !feed.held.is_empty() {
+                let evicted = feed.hold(PlatformInput::Capabilities(capabilities));
+                drop(feed);
+                super::panic_boundary::contain_owner_callback(|| drop(evicted));
+                self.resume_input_delivery();
+                return;
+            }
+            feed.front = capabilities;
+            if feed.snapshot_pending {
+                return;
+            }
+        }
+        if let Some(drain) = DispatchDrain::begin(
+            &self.event_dispatch,
+            WindowCallbackEvent::Input(PlatformInput::Capabilities(capabilities)),
+        ) {
+            self.drain_events(drain);
+        }
+    }
+
+    /// The window's current input capabilities, as the latest snapshot or
+    /// change admitted describes them.
+    #[must_use]
+    pub fn input_capabilities(&self) -> InputCapabilities {
+        let feed = self.input_feed.lock();
+        feed.held
+            .iter()
+            .rev()
+            .find_map(|input| match input {
+                PlatformInput::Capabilities(capabilities) => Some(*capabilities),
+                _ => None,
+            })
+            .unwrap_or(feed.front)
+    }
+
+    /// Install the backend's owner-thread wake: after a contained callback
+    /// failure, or when input arrived during a pass, the backend schedules an
+    /// owner turn that calls [`Self::resume_input_delivery`], so a queued
+    /// tail does not wait for unrelated input.
+    pub fn set_input_wake(&self, wake: InputWake) {
+        let outgoing = self.input_wake.lock().replace(wake);
+        super::panic_boundary::contain_owner_callback(|| drop(outgoing));
+    }
+
+    /// Deliver the pending snapshot and held input to the input callback.
+    ///
+    /// One pass delivers only the entries present when it started; input
+    /// admitted during it waits for the next pass, which the backend's wake
+    /// schedules. A callback panic is contained here: the failed snapshot
+    /// stays at the head and is retried (at most three failed passes per
+    /// registration), a failed ordinary entry is not re-delivered, and the
+    /// rest stays queued in order. Called from the backend's wake on the
+    /// owner thread; while this window's events drain it only asks for
+    /// another wake.
+    pub fn resume_input_delivery(&self) {
+        let Some(drain) = DispatchDrain::acquire(&self.event_dispatch) else {
+            self.wake_input();
+            return;
+        };
+        self.input_feed.lock().redirected = 0;
+        let rewake = self.input_pass();
+        // Window events admitted while the pass ran drain in their order.
+        self.drain_events(drain);
+        if rewake {
+            self.wake_input();
+        }
+    }
+
+    /// One bounded pass; whether another pass should be woken.
+    fn input_pass(&self) -> bool {
+        let budget = {
+            let feed = self.input_feed.lock();
+            feed.held.len() + usize::from(feed.snapshot_pending)
+        };
+        for _ in 0..budget {
+            let mut lease = InputLease::take(&self.on_input, &self.cleared);
+            if lease.callback.is_none() {
+                // Held until a registration; a snapshot is never emitted
+                // into an absent callback.
+                return false;
+            }
+            let entry = {
+                let mut feed = self.input_feed.lock();
+                if feed.snapshot_pending {
+                    if feed.failed_snapshots >= SNAPSHOT_ATTEMPTS {
+                        drop(feed);
+                        drop(lease);
+                        return false;
+                    }
+                    HeldEntry::Snapshot(feed.front, feed.registration)
+                } else if let Some(input) = feed.held.pop_front() {
+                    if let PlatformInput::Capabilities(capabilities) = &input {
+                        feed.front = *capabilities;
+                    }
+                    HeldEntry::Input(input)
+                } else {
+                    drop(feed);
+                    drop(lease);
+                    return false;
+                }
+            };
+            let (input, snapshot) = match entry {
+                HeldEntry::Snapshot(capabilities, registration) => (
+                    PlatformInput::Capabilities(capabilities),
+                    Some(registration),
+                ),
+                HeldEntry::Input(input) => (input, None),
+            };
+            let delivered = invoke_contained(&mut lease, input);
+            super::panic_boundary::contain_owner_callback(|| drop(lease));
+            match (delivered, snapshot) {
+                (true, Some(registration)) => self.snapshot_delivered(registration),
+                (true, None) => {}
+                (false, Some(registration)) => return self.snapshot_failed(registration),
+                // The entry is not re-delivered; the tail stays queued.
+                (false, None) => return true,
+            }
+        }
+        // Input admitted during the pass waits for the next one.
+        self.input_feed.lock().holds() && self.on_input.is_occupied() == Some(true)
+    }
+
+    fn snapshot_delivered(&self, registration: u64) {
+        let mut feed = self.input_feed.lock();
+        if feed.registration == registration {
+            feed.snapshot_pending = false;
+            feed.failed_snapshots = 0;
+        }
+    }
+
+    /// Count a failed snapshot; whether it is retried.
+    fn snapshot_failed(&self, registration: u64) -> bool {
+        let mut feed = self.input_feed.lock();
+        if feed.registration != registration {
+            // A replacement registered during the call; its snapshot is due.
+            return true;
+        }
+        feed.failed_snapshots = feed.failed_snapshots.saturating_add(1);
+        feed.failed_snapshots < SNAPSHOT_ATTEMPTS
+    }
+
+    /// Inside a FIFO drain: deliver the snapshot a re-registration owes before
+    /// the drain's next input. `false` when it could not be delivered.
+    fn deliver_pending_snapshot(&self) -> bool {
+        let (capabilities, registration) = {
+            let feed = self.input_feed.lock();
+            if !feed.snapshot_pending {
+                return true;
+            }
+            if feed.failed_snapshots >= SNAPSHOT_ATTEMPTS {
+                return false;
+            }
+            (feed.front, feed.registration)
+        };
+        let mut lease = InputLease::take(&self.on_input, &self.cleared);
+        if lease.callback.is_none() {
+            return false;
+        }
+        let delivered = invoke_contained(&mut lease, PlatformInput::Capabilities(capabilities));
+        super::panic_boundary::contain_owner_callback(|| drop(lease));
+        if delivered {
+            self.snapshot_delivered(registration);
+        } else if self.snapshot_failed(registration) {
+            self.wake_input();
+        }
+        delivered
+    }
+
+    /// Hold an input a FIFO drain could not deliver behind the snapshot,
+    /// ahead of newer held input.
+    fn redirect_behind_snapshot(&self, input: PlatformInput) {
+        let mut feed = self.input_feed.lock();
+        let at = feed.redirected;
+        let (at, evicted) = feed.hold_at(at, input);
+        feed.redirected = at + 1;
+        drop(feed);
+        super::panic_boundary::contain_owner_callback(|| drop(evicted));
+    }
+
+    fn wake_input(&self) {
+        let wake = self.input_wake.lock().clone();
+        if let Some(wake) = wake {
+            super::panic_boundary::contain_owner_callback(|| wake());
+        }
     }
 
     /// Dispatch a frame request.
@@ -1237,11 +1779,10 @@ macro_rules! impl_window_callback_setters {
         fn on_input(
             &self,
             callback: Box<
-                dyn FnMut($crate::traits::PlatformInput) -> $crate::traits::DispatchEventResult
-                    + Send,
+                dyn FnMut($crate::traits::PlatformInput) -> $crate::traits::DispatchEventResult,
             >,
         ) {
-            *self.$callbacks_field.on_input.lock() = Some(callback);
+            self.$callbacks_field.set_input_callback(callback);
         }
 
         fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
@@ -1313,7 +1854,7 @@ pub(crate) use impl_window_callback_setters;
 impl std::fmt::Debug for WindowCallbacks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WindowCallbacks")
-            .field("on_input", &self.on_input.lock().is_some())
+            .field("on_input", &self.on_input.is_occupied())
             .field("on_request_frame", &self.on_request_frame.lock().is_some())
             .field("on_resize", &self.on_resize.lock().is_some())
             .field("on_state_changed", &self.on_state_changed.lock().is_some())
@@ -1492,7 +2033,10 @@ mod tests {
             }));
             let nested = Arc::downgrade(&callbacks);
             let state = Arc::clone(&focused);
-            *callbacks.on_input.lock() = Some(Box::new(move |_| {
+            callbacks.set_input_callback(Box::new(move |input| {
+                if matches!(input, PlatformInput::Capabilities(_)) {
+                    return DispatchEventResult::default();
+                }
                 let owner = nested.upgrade().expect("live owner");
                 let state_lost = Arc::clone(&state);
                 dispatch(
@@ -1565,7 +2109,10 @@ mod tests {
             owner.clear();
         }));
         let nested = Arc::downgrade(&callbacks);
-        *callbacks.on_input.lock() = Some(Box::new(move |_| {
+        callbacks.set_input_callback(Box::new(move |input| {
+            if matches!(input, PlatformInput::Capabilities(_)) {
+                return DispatchEventResult::default();
+            }
             nested
                 .upgrade()
                 .expect("live owner")

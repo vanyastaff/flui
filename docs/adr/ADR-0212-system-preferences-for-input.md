@@ -1,6 +1,6 @@
 # ADR-0212: Input behavior values resolve OS value, then platform preset, then subtree override, with accessibility timings as floors
 
-- **Status:** Accepted (2026-10-13); implementation pending (docs/plans/specs/flui-interaction/completeness/tasks.md). Until it merges, `main` follows ADR-0172 and the current `GestureSettings` constructors.
+- **Status:** Accepted (2026-10-13); implemented (docs/plans/specs/flui-interaction/completeness/tasks.md, T05).
 - **Date:** 2026-10-13
 - **Amends:** [ADR-0172](ADR-0172-host-owned-system-preferences.md): adds the haptics preference,
   per-display gesture values, accessibility timing floors and the resolution order. Its
@@ -68,8 +68,8 @@ numbers differ from the platforms' own: Flutter's Android touch slop is 18 again
    need no pointer kind. Where the presentation's refresh period is unknown (ADR-0236: the display reports
    none, or the window names no display), the metric uses a documented 60 Hz period (16.67 ms) until a period is
    observed, so the deadline is always defined (row
-   `unknown_refresh_period_uses_the_60_hz_fallback`). The metric exists in `flui-runtime` (`UiRuntime::scaled_refresh_interval`, crate-private); its
-   haptics consumer is pending. The product factor × period is a checked
+   `unknown_refresh_period_uses_the_60_hz_fallback`). The presentation's haptics host reads the period from the
+   display its window is on (`flui_interaction::haptic_frame_deadline`). The product factor × period is a checked
    multiplication (`Duration::checked_mul` over a finite factor); a period whose product
    overflows is treated as unknown, with a diagnostic, and the 60 Hz fallback applies (a case
    of the same row).

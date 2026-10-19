@@ -29,7 +29,7 @@ WCAG conformance or certification.
 policy parks them under Reduce and resumes them under Full; it remains the sole
 timing authority. Physical inertia and display/press-delay timers retain Preserve.
 `RefreshIndicator` inherits the visual indicator's behavior without changing its
-physical controller or refresh completion protocol.
+refresh completion protocol.
 
 Indicators select visible static feedback during build when motion is reduced,
 their controller is unbound, or enclosing declarative ticker modes disable motion.

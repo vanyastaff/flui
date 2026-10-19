@@ -15,6 +15,8 @@ use flui_interaction::events::{PointerKind, make_down_event, make_up_event};
 use flui_platform_api::PlatformInput;
 use flui_runtime::frame_rate_demand::{FRAME_RATE_HOLD, FrameRateDemand};
 use flui_runtime::owner::{OwnerEffects, OwnerHost, PresentationDispatcher, WindowObservation};
+
+use crate::HostInputExt as _;
 use flui_runtime::pump::SampledClock;
 use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 
@@ -182,7 +184,7 @@ impl Rig {
         self.owner
             .frame_dispatcher(self.address)
             .expect("frame authority")
-            .deliver(&self.effects)
+            .deliver(crate::VSYNC, &self.effects)
             .expect("frame");
     }
 

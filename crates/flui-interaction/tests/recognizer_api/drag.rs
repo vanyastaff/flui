@@ -1,10 +1,11 @@
 //! Drag notifications belong to the contact that produced them.
 use flui_foundation::geometry::Offset;
-use flui_interaction::arena::{GestureArena, GestureArenaMember};
 use flui_interaction::events::{
     PointerEvent, PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
-use flui_interaction::routing::PointerDispatch;
+use flui_interaction::gesture::GestureContest;
+use flui_interaction::gesture::{GestureArena, GestureArenaMember};
+use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
     DragAxis, DragGestureRecognizer, GestureEndReason, GestureRecognizer, PointerId,
 };
@@ -15,8 +16,8 @@ use std::{
 
 struct Rival;
 impl GestureArenaMember for Rival {
-    fn accept_gesture(&self, _: PointerId) {}
-    fn reject_gesture(&self, _: PointerId) {}
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, _: GestureContest) {}
 }
 
 fn up_before_acceptance_rejects_drag_and_preserves_the_competitor() {
@@ -32,10 +33,10 @@ fn up_before_acceptance_rejects_drag_and_preserves_the_competitor() {
         .build();
     struct Competitor(Rc<Cell<usize>>);
     impl GestureArenaMember for Competitor {
-        fn accept_gesture(&self, _: PointerId) {
+        fn accept_gesture(&self, _: GestureContest) {
             self.0.set(self.0.get() + 1);
         }
-        fn reject_gesture(&self, _: PointerId) {}
+        fn reject_gesture(&self, _: GestureContest) {}
     }
     let rival = Rc::new(Competitor(won.clone()));
     let down = make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
@@ -72,7 +73,7 @@ fn cancelling_drag_from_start_drops_the_stale_update_and_recovers() {
         completed.clone(),
     );
     let drag = DragGestureRecognizer::builder(arena.clone(), DragAxis::Free)
-        .drag_start_behavior(flui_interaction::recognizers::drag::DragStartBehavior::Down)
+        .drag_start_behavior(flui_interaction::gesture::DragStartBehavior::Down)
         .on_start(move |_| {
             s.set(s.get() + 1);
             if cancel_once.replace(false) {
@@ -175,7 +176,7 @@ fn drag_lifecycle_contracts() {
 }
 
 fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
-    use flui_interaction::recognizers::drag::DragPointerStrategy;
+    use flui_interaction::gesture::DragPointerStrategy;
     for callback_panics in [false, true] {
         let arena =
             GestureArena::binding_driven(std::sync::Arc::new(flui_interaction::ManualClock::new()));
@@ -218,6 +219,15 @@ fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
             arena.close(PointerId::try_from(id).expect("nonzero contact"));
             arena.drain_deferred_resolutions();
         }
+        // The drag holds its contacts until one crosses the slop.
+        assert_eq!(starts.get(), 0);
+        let crossing = make_move_event_for_id(
+            PointerId::try_from(2).expect("nonzero contact"),
+            Offset::new(40.0, 0.0),
+            PointerKind::Touch,
+        )
+        .expect("finite move");
+        drag.handle_event(PointerDispatch::at_root(&crossing));
         assert_eq!(starts.get(), 1);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drag.cancel()));
         if callback_panics {
@@ -231,9 +241,17 @@ fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
         }
         assert_eq!(
             (starts.get(), ends.get()),
-            (2, 1),
+            (1, 1),
             "cancel callback can admit an exact same-pointer replacement"
         );
+        let replacement_moves = make_move_event_for_id(
+            PointerId::try_from(2).expect("nonzero contact"),
+            Offset::new(140.0, 0.0),
+            PointerKind::Touch,
+        )
+        .expect("finite move");
+        drag.handle_event(PointerDispatch::at_root(&replacement_moves));
+        assert_eq!(starts.get(), 2, "the replacement starts on its own slop");
         let up = make_up_event_for_id(
             PointerId::try_from(2).expect("nonzero contact"),
             Offset::new(110.0, 0.0),
@@ -253,7 +271,7 @@ fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
 }
 
 fn continuation_does_not_take_a_rejected_or_other_device_contact() {
-    use flui_interaction::recognizers::drag::DragPointerStrategy;
+    use flui_interaction::gesture::DragPointerStrategy;
     use flui_platform_api::pointer::DeviceId;
     for secondary_device in [Some(1_u64), Some(2), None] {
         let arena =
@@ -282,9 +300,16 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
             arena.close(PointerId::try_from(id).expect("nonzero contact"));
             arena.drain_deferred_resolutions();
         }
+        let crossing = make_move_event_for_id(
+            PointerId::try_from(2).expect("nonzero contact"),
+            Offset::new(40.0, 0.0),
+            PointerKind::Touch,
+        )
+        .expect("finite move");
+        drag.handle_event(PointerDispatch::at_root(&crossing));
         let up = make_up_event_for_id(
             PointerId::try_from(2).expect("nonzero contact"),
-            Offset::ZERO,
+            Offset::new(40.0, 0.0),
             PointerKind::Touch,
         )
         .expect("finite release");
@@ -319,6 +344,13 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
         arena.drain_deferred_resolutions();
     };
     send_down(2);
+    let crossing = make_move_event_for_id(
+        PointerId::try_from(2).expect("nonzero contact"),
+        Offset::new(40.0, 0.0),
+        PointerKind::Touch,
+    )
+    .expect("finite move");
+    drag.handle_event(PointerDispatch::at_root(&crossing));
     let pointer = PointerId::try_from(3).expect("nonzero contact");
     let rival = Rc::new(Rival);
     arena.add(pointer, &rival);
@@ -350,7 +382,7 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
 
 fn remaining_touches_continue_in_admission_order_without_a_jump() {
     use flui_foundation::geometry::Point;
-    use flui_interaction::recognizers::drag::DragPointerStrategy;
+    use flui_interaction::gesture::DragPointerStrategy;
     use flui_platform_api::{
         EventTime,
         pointer::{

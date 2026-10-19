@@ -362,7 +362,7 @@ impl SparseChildren {
             let Some(view) = view else {
                 continue;
             };
-            let view: &dyn View = view.0.as_ref();
+            let view: &dyn View = view;
             let candidate = if let Some(key) = view.key() {
                 keyed_by_hash.get(&key.key_hash()).and_then(|bucket| {
                     bucket.iter().copied().find(|&pos| {
@@ -404,7 +404,7 @@ impl SparseChildren {
             let Some(view) = view else {
                 continue;
             };
-            let view: &dyn View = view.0.as_ref();
+            let view: &dyn View = view;
             if let Some(pos) = matched[k] {
                 {
                     let resident = &residents[pos];

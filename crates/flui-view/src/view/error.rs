@@ -273,11 +273,11 @@ impl View for ErrorView {
 pub(crate) fn recovery_view_for(error: &FrameworkError) -> BoxedView {
     let recovered = ErrorView::build_error_view(error);
     if recovered.key().is_some() {
-        BoxedView(Box::new(UnkeyedRecovery {
-            inner: BoxedView(recovered),
-        }))
+        BoxedView::new(UnkeyedRecovery {
+            inner: BoxedView::from(recovered),
+        })
     } else {
-        BoxedView(recovered)
+        BoxedView::from(recovered)
     }
 }
 

@@ -91,14 +91,24 @@ kind = "double"
 names = ["ProbeRoot"]
 
 [[allow]]
-path = "crates/flui-interaction/src/arena/mod.rs"
+path = "crates/flui-interaction/src/gesture/arena/mod.rs"
 kind = "double"
 names = ["MockMember"]
 
 [[allow]]
-path = "crates/flui-interaction/src/text_input.rs"
+path = "crates/flui-interaction/src/text_input/mod.rs"
 kind = "double"
 names = ["RecordingTextInput"]
+
+[[allow]]
+path = "crates/flui-interaction/tests/arena_ownership.rs"
+kind = "double"
+names = ["Probe"]
+
+[[allow]]
+path = "crates/flui-interaction/tests/drag_sessions.rs"
+kind = "double"
+names = ["FakeDragSource", "Probe", "RecordingSource"]
 
 [[allow]]
 path = "crates/flui-interaction/tests/multi_pointer_recognizers.rs"
@@ -119,6 +129,16 @@ names = ["ScriptedAnimation"]
 path = "crates/flui-platform/src/platforms/linux/display/source/tests.rs"
 kind = "double"
 names = ["ScriptedSession"]
+
+[[allow]]
+path = "crates/flui-platform/src/platforms/windows/direct_manipulation/tests.rs"
+kind = "pump"
+names = ["pump"]
+
+[[allow]]
+path = "crates/flui-platform/src/platforms/windows/drag/tests.rs"
+kind = "double"
+names = ["Scripted"]
 
 [[allow]]
 path = "crates/flui-platform/src/platforms/windows/text_services/probe.rs"
@@ -154,6 +174,11 @@ names = ["RecordingChrome"]
 path = "crates/flui-runtime/tests/contracts/frame_rate_demand.rs"
 kind = "pump"
 names = ["advance"]
+
+[[allow]]
+path = "crates/flui-runtime/tests/contracts/owner_input.rs"
+kind = "double"
+names = ["RecordingBridge"]
 
 [[allow]]
 path = "crates/flui-scheduler/src/async_driver.rs"
@@ -206,6 +231,11 @@ kind = "pump"
 names = ["advance"]
 
 [[allow]]
+path = "crates/flui-widgets/tests/haptics.rs"
+kind = "double"
+names = ["Probe", "ProbeState"]
+
+[[allow]]
 path = "crates/flui-widgets/tests/lazy_list.rs"
 kind = "double"
 names = ["ProbeItem", "ProbeItemState"]
@@ -214,6 +244,16 @@ names = ["ProbeItem", "ProbeItemState"]
 path = "crates/flui-widgets/tests/modal_route.rs"
 kind = "double"
 names = ["Probe", "ProbeState"]
+
+[[allow]]
+path = "crates/flui-widgets/tests/nested_scroll.rs"
+kind = "pump"
+names = ["tick"]
+
+[[allow]]
+path = "crates/flui-widgets/tests/nested_scroll.rs"
+kind = "double"
+names = ["Probe"]
 
 [[allow]]
 path = "crates/flui-widgets/tests/overlay.rs"
@@ -274,6 +314,11 @@ names = ["Probe"]
 path = "packages/flui-cupertino/tests/tab_scaffold.rs"
 kind = "double"
 names = ["Probe", "ProbeState"]
+
+[[allow]]
+path = "packages/flui-devtools/tests/gesture_inspector.rs"
+kind = "double"
+names = ["Probe"]
 
 [[allow]]
 path = "packages/flui-material/tests/tab_bar_view.rs"

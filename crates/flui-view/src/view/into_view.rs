@@ -3,6 +3,9 @@
 //! Allows various types to be converted into Views and Elements, enabling
 //! a fluent API for building UI trees.
 
+use std::any::Any;
+use std::rc::Rc;
+
 use crate::element::ElementKind;
 
 use super::view::{ElementBase, View};
@@ -81,7 +84,7 @@ impl IntoView for Box<dyn View> {
 
     #[inline]
     fn into_view(self) -> Self::View {
-        BoxedView(self)
+        BoxedView::from(self)
     }
 }
 
@@ -171,15 +174,66 @@ impl BoxedElement {
 /// [`View::create_element`] or [`IntoElement::into_element`].
 pub trait ElementExt: ElementBase + Sized {}
 
-/// A boxed View for type erasure.
+/// A type-erased, shared View.
 ///
 /// Used when the concrete View type cannot be known at compile time,
-/// such as in collections of heterogeneous Views.
-pub struct BoxedView(pub Box<dyn View>);
+/// such as in collections of heterogeneous Views, and for every child a
+/// widget stores. Cloning shares the view instead of copying it, and that
+/// sharing is the view's identity: an element that last took its
+/// configuration from a `BoxedView` and is offered the same one again
+/// (`widget.child` handed back unchanged by a parent that rebuilt) has
+/// nothing to do, so it and everything below it are not built again. See
+/// `ARCHITECTURE.md`, "A child the parent hands back unchanged is not built
+/// again".
+///
+/// Boxing a `BoxedView` returns it unchanged, so a view keeps its identity
+/// however many wrappers pass it along.
+pub struct BoxedView(Rc<dyn View>);
+
+impl BoxedView {
+    /// Erase `view`. A `BoxedView` comes back as it is, keeping its identity.
+    pub fn new<V: View>(view: V) -> Self {
+        let mut slot = Some(view);
+        // `Option<V>` is `Option<BoxedView>` only when `V` is `BoxedView`.
+        if let Some(erased) = (&mut slot as &mut dyn Any).downcast_mut::<Option<BoxedView>>() {
+            return erased
+                .take()
+                .expect("BUG: the slot was filled one statement above");
+        }
+        Self(Rc::new(
+            slot.take()
+                .expect("BUG: the slot was filled one statement above"),
+        ))
+    }
+
+    /// The erased view.
+    #[must_use]
+    pub fn as_view(&self) -> &dyn View {
+        &*self.0
+    }
+
+    /// The shared allocation that is this view's identity.
+    pub(crate) fn shared(&self) -> &Rc<dyn View> {
+        &self.0
+    }
+}
+
+impl From<Box<dyn View>> for BoxedView {
+    fn from(view: Box<dyn View>) -> Self {
+        let inner: &dyn View = &*view;
+        if inner.as_any().is::<BoxedView>() {
+            return match view.into_any().downcast::<BoxedView>() {
+                Ok(erased) => *erased,
+                Err(_) => unreachable!("BUG: the view was just checked to be a BoxedView"),
+            };
+        }
+        Self(Rc::from(view))
+    }
+}
 
 impl Clone for BoxedView {
     fn clone(&self) -> Self {
-        BoxedView(dyn_clone::clone_box(&*self.0))
+        Self(Rc::clone(&self.0))
     }
 }
 
@@ -192,8 +246,15 @@ impl std::fmt::Debug for BoxedView {
 }
 
 impl View for BoxedView {
+    /// Creates the element and remembers which shared view it came from, so
+    /// the first time its parent offers the same view again is already known
+    /// to be a no-op.
     fn create_element(&self) -> crate::element::ElementKind {
-        self.0.create_element()
+        let mut element = self.0.create_element();
+        element
+            .element_mut()
+            .note_source_view(Rc::downgrade(&self.0));
+        element
     }
 
     fn view_type_id(&self) -> std::any::TypeId {
@@ -211,9 +272,9 @@ impl View for BoxedView {
 
 /// Extension trait for boxing Views.
 pub trait ViewExt: View + Sized {
-    /// Box this View for type erasure.
+    /// Erase this View's type. A [`BoxedView`] is returned as it is.
     fn boxed(self) -> BoxedView {
-        BoxedView(Box::new(self))
+        BoxedView::new(self)
     }
 }
 

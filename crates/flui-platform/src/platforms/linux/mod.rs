@@ -98,8 +98,8 @@ use self::display::protocol::{Environment, Protocol};
 use crate::data_transfer::{DataTransferSource, NullDataTransferSource};
 use crate::error::PlatformError;
 use crate::traits::{
-    Clipboard, DisplaySnapshot, HostWindow, OpenWindowError, Platform, PlatformCapabilities,
-    PlatformExecutor, PlatformReadyCallback, WindowEvent, WindowId, WindowOptions,
+    Clipboard, DisplaySnapshot, HostWindow, OpenWindowError, Platform, PlatformExecutor,
+    PlatformReadyCallback, WindowEvent, WindowId, WindowOptions,
 };
 
 /// Linux platform implementation (stub)
@@ -224,14 +224,6 @@ impl Platform for LinuxPlatform {
     fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
         // No native Linux transport yet (ADR-0038): inert and honest.
         Arc::new(NullDataTransferSource)
-    }
-
-    #[expect(
-        clippy::unimplemented,
-        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
-    )]
-    fn capabilities(&self) -> &dyn PlatformCapabilities {
-        unimplemented!("Linux capabilities not implemented")
     }
 
     fn name(&self) -> &'static str {

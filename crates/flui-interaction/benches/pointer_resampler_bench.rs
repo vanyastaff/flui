@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::geometry::Point;
 use flui_interaction::events::{PointerEvent, PointerEventExt};
-use flui_interaction::processing::PointerEventResampler;
+use flui_interaction::pointer::PointerEventResampler;
 use flui_platform_api::EventTime;
 use flui_platform_api::pointer::{
     CancelReason, PointerButton, PointerButtons, PointerCancel, PointerId, PointerInfo,

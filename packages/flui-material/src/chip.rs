@@ -402,7 +402,7 @@ impl Chip {
     /// delete handler.
     pub fn new(label: impl IntoView) -> Self {
         Self {
-            label: BoxedView(Box::new(label.into_view())),
+            label: BoxedView::new(label.into_view()),
             avatar: None,
             on_pressed: None,
             on_deleted: None,
@@ -413,7 +413,7 @@ impl Chip {
     /// Sets the leading avatar (typically a small icon or image).
     #[must_use]
     pub fn avatar(mut self, avatar: impl IntoView) -> Self {
-        self.avatar = Some(BoxedView(Box::new(avatar.into_view())));
+        self.avatar = Some(BoxedView::new(avatar.into_view()));
         self
     }
 
@@ -616,7 +616,7 @@ impl FilterChip {
     /// [`Self::on_selected`] set yet), with no avatar or delete handler.
     pub fn new(label: impl IntoView) -> Self {
         Self {
-            label: BoxedView(Box::new(label.into_view())),
+            label: BoxedView::new(label.into_view()),
             avatar: None,
             selected: false,
             on_selected: None,
@@ -628,7 +628,7 @@ impl FilterChip {
     /// checkmark while selected — see the module docs' "Selection" section.
     #[must_use]
     pub fn avatar(mut self, avatar: impl IntoView) -> Self {
-        self.avatar = Some(BoxedView(Box::new(avatar.into_view())));
+        self.avatar = Some(BoxedView::new(avatar.into_view()));
         self
     }
 

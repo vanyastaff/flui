@@ -316,13 +316,13 @@ impl FlightInner {
     }
 
     fn clone_shuttle(&self) -> BoxedView {
-        // BoxedView::clone calls the authored view's Clone implementation.
-        // Keep the configuration alive and release the slot before invoking it.
-        let shuttle = Terminal::new(self.shuttle.borrow().clone());
-        match shuttle.as_ref() {
-            Some(shuttle) => (**shuttle).clone(),
-            None => crate::SizedBox::shrink().boxed(),
-        }
+        // Cloning a `BoxedView` shares it: no authored code runs while the
+        // slot is borrowed.
+        self.shuttle
+            .borrow()
+            .as_deref()
+            .cloned()
+            .unwrap_or_else(|| crate::SizedBox::shrink().boxed())
     }
 }
 
@@ -1678,7 +1678,6 @@ mod terminal_tests {
                 "stale_retirement",
                 "abort_failure",
                 "abort_competing",
-                "shuttle_clone_reentry",
                 "placeholder_reentry",
                 "placeholder_reentry_failure",
                 "placeholder_reentry_competing",
@@ -1821,45 +1820,6 @@ mod terminal_tests {
             assert_eq!(next_from.placeholder_size(), None);
             assert_eq!(next_to.placeholder_size(), None);
             current_manager.drain_retired();
-            return;
-        }
-        if case == "shuttle_clone_reentry" {
-            struct CloneHook(Rc<dyn Fn()>);
-            impl Clone for CloneHook {
-                fn clone(&self) -> Self {
-                    (self.0)();
-                    Self(Rc::clone(&self.0))
-                }
-            }
-            impl View for CloneHook {
-                fn create_element(&self) -> flui_view::element::ElementKind {
-                    flui_view::element::ElementKind::stateless(self)
-                }
-            }
-            impl StatelessView for CloneHook {
-                fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-                    crate::SizedBox::shrink()
-                }
-            }
-            let (flight, drops) = flight(false, false, false);
-            let calls = Rc::new(Cell::new(0));
-            let callback_calls = Rc::clone(&calls);
-            let weak = Rc::downgrade(&flight.inner);
-            let view = CloneHook(Rc::new(move || {
-                let inner = weak.upgrade().expect("the shuttle's flight is live");
-                let previous = Terminal::new(inner.shuttle.borrow_mut().take());
-                callback_calls.set(callback_calls.get() + 1);
-                drop(previous);
-            }));
-            *flight.inner.shuttle.borrow_mut() = Some(Rc::new(view.boxed()));
-            let child = flight.inner.clone_shuttle();
-            assert_eq!(
-                calls.get(),
-                1,
-                "authored Clone can withdraw its configuration"
-            );
-            drop((child, flight));
-            assert!(drops.iter().all(|count| count.load(Ordering::SeqCst) == 1));
             return;
         }
         if case.starts_with("abort_") {

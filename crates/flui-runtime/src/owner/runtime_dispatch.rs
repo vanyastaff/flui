@@ -85,7 +85,10 @@ pub(super) enum RuntimeWork {
         PresentationAddress,
         super::presentation_dispatch::PendingWindowState,
     ),
-    Frame(PresentationAddress),
+    /// A frame and its vsync on the event timeline.
+    Frame(PresentationAddress, flui_platform_api::EventTime),
+    /// An assistive-technology request for the presentation's semantics owner.
+    Accessibility(PresentationAddress, accesskit::ActionRequest),
     TextSizingInstall(PresentationAddress, flui_painting::TextSizingSource),
     TextSizingService(PresentationAddress, flui_painting::TextSizingSource),
     TextSizingWithdraw(PresentationAddress, flui_painting::TextSizingSource),
@@ -100,6 +103,7 @@ pub(super) enum RuntimeWork {
     TestCallback(PresentationAddress, Box<dyn FnOnce(&UiRuntime)>),
     Input {
         address: PresentationAddress,
+        surface: flui_interaction::InputSurface,
         input: flui_platform_api::PlatformInput,
         reply: Rc<Cell<Option<bool>>>,
     },
@@ -113,7 +117,8 @@ impl RuntimeWork {
             | Self::Close(address)
             | Self::Observation(address, _)
             | Self::WindowState(address, _)
-            | Self::Frame(address)
+            | Self::Frame(address, _)
+            | Self::Accessibility(address, _)
             | Self::TextSizingInstall(address, _)
             | Self::TextSizingService(address, _)
             | Self::TextSizingWithdraw(address, _)
@@ -159,7 +164,8 @@ impl RuntimeWork {
     pub(super) fn validate_admission(&self, state: &OwnerState) -> Result<usize, DispatchError> {
         match self {
             Self::Initialize(initial) => state.authorizer(initial.address),
-            Self::Frame(address)
+            Self::Frame(address, _)
+            | Self::Accessibility(address, _)
             | Self::SurfaceRestored(address)
             | Self::Close(address)
             | Self::Observation(address, _)
@@ -179,7 +185,8 @@ impl RuntimeWork {
     pub(super) fn validate(&self, state: &OwnerState) -> Result<usize, DispatchError> {
         match self {
             Self::Initialize(initial) => state.presentation_index(initial.address),
-            Self::Frame(address)
+            Self::Frame(address, _)
+            | Self::Accessibility(address, _)
             | Self::SurfaceRestored(address)
             | Self::Close(address)
             | Self::Observation(address, _)
@@ -227,9 +234,23 @@ impl RuntimeWork {
                 runtime.enter(|runtime| observation.apply(runtime, address, effects));
             }
             Self::WindowState(address, state) => {
-                runtime.enter(|runtime| state.apply(runtime, address, effects));
+                runtime.enter(|runtime| {
+                    state.apply(runtime, address, &|size, scale| {
+                        effects.resize_surface(address, size, scale);
+                    });
+                });
             }
-            Self::Frame(address) => effects.frame(address, runtime),
+            Self::Frame(address, vsync) => {
+                // The interaction layer samples this frame at its vsync, on
+                // the timeline input arrives on (ADR-0207 §2).
+                runtime.note_frame_vsync(address.presentation_id, vsync);
+                effects.frame(address, runtime);
+            }
+            Self::Accessibility(address, request) => {
+                runtime.enter(|runtime| {
+                    runtime.dispatch_accessibility(address.presentation_id, &request);
+                });
+            }
             Self::TextSizingInstall(address, source) => {
                 runtime.enter(|runtime| {
                     runtime.install_captured_text_sizing_for(address.presentation_id, source);
@@ -252,11 +273,12 @@ impl RuntimeWork {
             }
             Self::Input {
                 address,
+                surface,
                 input,
                 reply,
             } => {
                 let handled = runtime.enter(|runtime| {
-                    runtime.handle_input_addressed(address.presentation_id, input)
+                    runtime.handle_input_on(address.presentation_id, surface, input)
                 });
                 reply.set(Some(handled));
             }

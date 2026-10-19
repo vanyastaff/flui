@@ -9,15 +9,15 @@
 #![expect(clippy::struct_field_names)]
 
 use std::sync::{
-    Arc,
-    atomic::{AtomicI32, AtomicUsize, Ordering},
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, IntoView, LifecycleContext, StatefulBehavior,
-    StatefulElement, StatefulView, StatelessView, View, ViewExt, ViewState,
+    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, LifecycleContext, RebuildReason,
+    StatefulBehavior, StatefulElement, StatefulView, StatelessView, View, ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -80,61 +80,97 @@ impl View for LeafView {
 // StatefulView Tests
 // ============================================================================
 
-#[derive(Clone, Debug)]
-struct CounterView {
-    initial_count: i32,
+/// What a state saw, in order: its creation, initialization and updates.
+type HookLog = Arc<Mutex<Vec<String>>>;
+
+#[derive(Clone)]
+struct HookOrderView {
+    config: &'static str,
+    log: HookLog,
 }
 
-#[derive(Debug)]
-struct CounterState {
-    count: Arc<AtomicI32>,
-    update_count: Arc<AtomicUsize>,
+struct HookOrderState {
+    log: HookLog,
 }
 
-impl StatefulView for CounterView {
-    type State = CounterState;
+impl StatefulView for HookOrderView {
+    type State = HookOrderState;
 
     fn create_state(&self) -> Self::State {
-        CounterState {
-            count: Arc::new(AtomicI32::new(self.initial_count)),
-            update_count: Arc::new(AtomicUsize::new(0)),
+        self.log
+            .lock()
+            .expect("the hook log is never poisoned")
+            .push(format!("create {}", self.config));
+        HookOrderState {
+            log: Arc::clone(&self.log),
         }
     }
 }
 
-impl ViewState<CounterView> for CounterState {
-    fn build(&self, _view: &CounterView, _ctx: &dyn BuildContext) -> impl IntoView {
-        SimpleStatelessView {
-            label: format!("Count: {}", self.count.load(Ordering::SeqCst)),
-        }
+impl ViewState<HookOrderView> for HookOrderState {
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
+        self.log
+            .lock()
+            .expect("the hook log is never poisoned")
+            .push("init".to_owned());
     }
 
-    fn did_update_view(&mut self, _old_view: &CounterView, _new_view: &CounterView) {
-        self.update_count.fetch_add(1, Ordering::SeqCst);
+    fn build(&self, _view: &HookOrderView, _ctx: &dyn BuildContext) -> impl IntoView {
+        LeafView.boxed()
+    }
+
+    fn did_update_view(&mut self, old_view: &HookOrderView, new_view: &HookOrderView) {
+        self.log
+            .lock()
+            .expect("the hook log is never poisoned")
+            .push(format!("update {} -> {}", old_view.config, new_view.config));
     }
 }
 
-impl View for CounterView {
+impl View for HookOrderView {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
 
-pub(crate) fn test_stateful_element_update_calls_did_update_view() {
-    let view1 = CounterView { initial_count: 0 };
-    let view2 = CounterView { initial_count: 10 };
-
-    let mut element = StatefulElement::new(&view1, StatefulBehavior::new(&view1));
+/// A parent can update an element between its mount and its first build,
+/// where `init_state` runs. The state still sees `init_state` first, then one
+/// update from the configuration it was created with to the current one.
+pub(crate) fn an_update_before_the_first_build_follows_init_state() {
+    let log = HookLog::default();
+    let view = |config| HookOrderView {
+        config,
+        log: Arc::clone(&log),
+    };
+    let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
+    let root = tree.mount_root(&view("a"), &mut owner.element_owner_mut());
 
-    let update_count = element.state().update_count.clone();
-    assert_eq!(update_count.load(Ordering::SeqCst), 0);
+    tree.update(root, &view("b"), &mut owner.element_owner_mut());
+    tree.update(root, &view("c"), &mut owner.element_owner_mut());
+    assert_eq!(
+        *log.lock().expect("the hook log is never poisoned"),
+        ["create a"],
+        "no state hook runs before init_state"
+    );
 
-    // Update with new view
-    element.update(&view2, &mut owner.element_owner_mut());
+    owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
+    assert_eq!(
+        *log.lock().expect("the hook log is never poisoned"),
+        ["create a", "init", "update a -> c"],
+        "the first build initializes the state, then delivers the update"
+    );
 
-    assert_eq!(update_count.load(Ordering::SeqCst), 1);
+    tree.update(root, &view("d"), &mut owner.element_owner_mut());
+    assert_eq!(
+        log.lock()
+            .expect("the hook log is never poisoned")
+            .last()
+            .map(String::as_str),
+        Some("update c -> d"),
+        "an initialized state is updated at once"
+    );
 }
 
 // ============================================================================

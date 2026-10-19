@@ -15,7 +15,7 @@
   anyone is told, and delivers each window the display it is on as
   `WindowObservation::Display(DisplayUpdate)`. A newer "unknown" display replaces an older known
   one instead of losing to it, and an apply that fails part-way is offered again on the next
-  sample. `UiRuntime::window_display`, `refresh_interval` and `scaled_refresh_interval`
+  sample. `UiRuntime::window_display` and `refresh_interval`, and the haptic frame deadline
   (`DEFAULT_REFRESH_PERIOD` is the 60 Hz policy while a display reports nothing) read the result.
 - **Frame budget and frame span follow the display** (`flui-scheduler`):
   `FrameDuration::try_from_period` keeps a fractional rate exact,

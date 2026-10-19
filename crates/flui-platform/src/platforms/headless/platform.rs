@@ -16,23 +16,23 @@ use std::{
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_foundation::{ClaimSlot, claim_slot};
-use flui_platform_api::HapticFeedback;
 use flui_platform_api::InMemoryClipboard;
+pub use flui_platform_api::haptics::FakeHaptics;
+use flui_platform_api::input_regions::{DeviceInputRegion, InputRegion, ProjectedInputRegions};
 use flui_platform_api::text_store::TextStoreHost;
 use parking_lot::Mutex;
 
 use super::display::{DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplays};
 use super::window_policy::HeadlessWindowPolicy;
 use crate::{
-    data_transfer::{DataTransferSource, NullDataTransferSource},
+    data_transfer::DataTransferSource,
     error::PlatformError,
     shared::{PlatformHandlers, WindowCallbacks, window_state::WindowStateCell},
     traits::{
-        Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId,
-        DisplaySnapshot, HostWindow, OpenWindowError, OwnerPlatform, PendingWindow, Platform,
-        PlatformCapabilities, PlatformExecutor, PlatformHaptics, PlatformInput,
-        PlatformReadyCallback, PlatformTextInput, PlatformWindow, SessionEndAnswer,
-        SessionEndPhase, SizeConstraints, SystemNotice, WindowAppearance,
+        Clipboard, ClipboardItem, CursorError, DispatchEventResult, DisplayId, DisplaySnapshot,
+        HostWindow, OpenWindowError, OwnerPlatform, PendingWindow, Platform, PlatformExecutor,
+        PlatformHaptics, PlatformInput, PlatformReadyCallback, PlatformTextInput, PlatformWindow,
+        SessionEndAnswer, SessionEndPhase, SizeConstraints, SystemNotice, WindowAppearance,
         WindowBackgroundAppearance, WindowCapabilities, WindowCommand, WindowCommandError,
         WindowEvent, WindowGeometry, WindowId, WindowMode, WindowOpen, WindowOptions, WindowState,
         owner::{DirectOwnerHooks, OwnerHooks, ProxyTransport},
@@ -77,18 +77,23 @@ fn next_headless_window_id() -> WindowId {
 pub struct HeadlessPlatform {
     signal: Arc<crate::shared::owner_signal::OwnerSignal>,
     wake_failure: Arc<std::sync::atomic::AtomicBool>,
-    capabilities: DesktopCapabilities,
     state: Arc<Mutex<HeadlessState>>,
 }
 
-struct HeadlessState {
+pub(super) struct HeadlessState {
+    /// The simulated OS drag session and the platform's one data-transfer
+    /// source (ADR-0211).
+    drag: Arc<super::drag::DragDouble>,
     owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
     handlers: PlatformHandlers,
     background_executor: Arc<TestExecutor>,
     clipboard: Arc<InMemoryClipboard>,
     active_window: Option<WindowId>,
     is_running: bool,
-    windows: Vec<MockWindow>,
+    pub(super) windows: Vec<MockWindow>,
+    /// Whether the windows sit on one desktop and answer
+    /// [`PlatformWindow::window_at`] ([`HeadlessPlatform::with_window_placement`]).
+    placement: bool,
     keyboard_layout: String,
     opened_urls: Vec<String>,
     /// Deferred-window-open test mode (see
@@ -114,6 +119,16 @@ struct HeadlessState {
     /// What every window opened from now on offers as its text-store host
     /// ([`HeadlessPlatform::with_text_store_host`]); `None`: push-model.
     text_store_host: Option<TextStoreHostFactory>,
+    /// What this backend reports implemented ([`HeadlessPlatform::with_input_availability`]).
+    input_availability: flui_platform_api::input_capabilities::InputCapabilities,
+    /// The attached input devices: presence and device ids from one registry.
+    devices: crate::shared::pointer_assembly::ContactRegistry,
+    /// Simulated devices by the id their events carry.
+    device_labels: Vec<(
+        flui_platform_api::pointer::DeviceId,
+        crate::shared::pointer_assembly::NativeDevice,
+    )>,
+    next_device_label: u64,
     /// The displays this platform reports; replaced by
     /// [`HeadlessPlatform::with_displays`] and changed through
     /// [`HeadlessDisplayControls`].
@@ -136,6 +151,7 @@ impl HeadlessPlatform {
     /// Create a new headless platform
     pub fn new() -> Self {
         let state = HeadlessState {
+            drag: Arc::new(super::drag::DragDouble::new()),
             owner_signal: Weak::new(),
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(TestExecutor::new("background")),
@@ -143,12 +159,19 @@ impl HeadlessPlatform {
             active_window: None,
             is_running: false,
             windows: Vec::new(),
+            placement: false,
             keyboard_layout: "en-US".to_string(),
             opened_urls: Vec::new(),
             deferred_window_open: false,
             pending_opens: Vec::new(),
             exit_reevaluation_requested: false,
             text_store_host: None,
+            input_availability: default_input_availability(),
+            devices: crate::shared::pointer_assembly::ContactRegistry::new(
+                crate::shared::pointer_assembly::NativeClock::epoch_only(),
+            ),
+            device_labels: Vec::new(),
+            next_device_label: 0,
             displays: HeadlessDisplays::new(vec![DisplaySpec::default()]),
             window_capabilities: WindowCapabilities::ALL,
             window_policy: HeadlessWindowPolicy::default(),
@@ -169,12 +192,12 @@ impl HeadlessPlatform {
                     Ok(())
                 }
             })),
-            capabilities: DesktopCapabilities,
             state: Arc::new(Mutex::new(state)),
         };
         {
             let mut state = platform.state.lock();
             state.owner_signal = Arc::downgrade(&platform.signal);
+            state.drag.attach(Arc::downgrade(&platform.state));
         }
         platform
     }
@@ -232,6 +255,73 @@ impl HeadlessPlatform {
         self.with_state(|state| state.text_store_host = Some(Arc::new(factory)));
         self
     }
+    /// Report `availability` as what this backend implements (its device
+    /// presence is ignored: attached devices come from
+    /// [`input_devices`](Self::input_devices)). Without it the headless
+    /// backend reports pen, precise scrolling and trackpad gestures `Native`,
+    /// since a test can synthesize all of them, and input regions and outgoing
+    /// drags `Unavailable`.
+    #[must_use]
+    pub fn with_input_availability(
+        self,
+        availability: flui_platform_api::input_capabilities::InputCapabilities,
+    ) -> Self {
+        self.with_state(|state| state.input_availability = availability);
+        self
+    }
+
+    /// Let this backend's windows start OS drag sessions, starting them at
+    /// `timing` (desktop: `OnLeavingWindow`; iOS and the web: `AtStart`), and
+    /// report outgoing drags `Native`. Without it its windows have no drag
+    /// source, as a Linux/X11 window has none. The test plays the OS through
+    /// [`drag_and_drop`](Self::drag_and_drop).
+    #[must_use]
+    pub fn with_os_drag(self, timing: flui_platform_api::drag::OsDragStart) -> Self {
+        self.with_state(|state| {
+            state.drag.enable(timing);
+            state.input_availability =
+                flui_platform_api::input_capabilities::InputCapabilities::builder()
+                    .pen(state.input_availability.pen())
+                    .precise_scroll(state.input_availability.precise_scroll())
+                    .trackpad_gestures(state.input_availability.trackpad_gestures())
+                    .input_regions(state.input_availability.input_regions())
+                    .outgoing_drag(flui_platform_api::input_capabilities::Availability::Native)
+                    .build();
+        });
+        self
+    }
+
+    /// Place this backend's windows on one desktop, as Win32 and AppKit place
+    /// theirs: each window's content starts at the position its published
+    /// [`WindowState`] reports (this host draws no frame; a window opens where
+    /// its options place it or at the desktop origin, and
+    /// [`MockWindow::simulate_move`], a move command or a mode change moves
+    /// it), the window opened last is topmost, and [`PlatformWindow::window_at`] answers from
+    /// that layout. Without it `window_at` answers
+    /// [`WindowAt::Unknown`](flui_platform_api::WindowAt::Unknown), as on Wayland.
+    #[must_use]
+    pub fn with_window_placement(self) -> Self {
+        self.with_state(|state| state.placement = true);
+        self
+    }
+
+    /// The simulated OS side of drag-and-drop, valid across [`Platform::run`].
+    #[must_use]
+    pub fn drag_and_drop(&self) -> super::drag::HeadlessDragAndDrop {
+        super::drag::HeadlessDragAndDrop::new(self.with_state(|state| Arc::clone(&state.drag)))
+    }
+
+    /// A handle that attaches and removes simulated input devices, valid
+    /// across [`Platform::run`]. Each change reaches every open window as a
+    /// device event and a capability change, in order with its other input;
+    /// a window opened later has the devices in its initial snapshot.
+    #[must_use]
+    pub fn input_devices(&self) -> HeadlessInputDevices {
+        HeadlessInputDevices {
+            state: Arc::downgrade(&self.state),
+        }
+    }
+
     /// Replace the displays this platform reports with `displays`, laid out
     /// left to right; the first is primary. Windows opened afterwards start on
     /// the primary display.
@@ -431,13 +521,9 @@ impl Platform for HeadlessPlatform {
     }
 
     fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
-        // Headless gets a real test source with the clipboard transport
-        // (ADR-0038); until then it is inert and honest.
-        Arc::new(NullDataTransferSource)
-    }
-
-    fn capabilities(&self) -> &dyn PlatformCapabilities {
-        &self.capabilities
+        // The headless backend's one source: it serves the drags the test plays
+        // through `HeadlessDragAndDrop`; it has no clipboard transport yet.
+        self.with_state(|state| Arc::clone(&state.drag) as Arc<dyn DataTransferSource>)
     }
 
     fn name(&self) -> &'static str {
@@ -514,6 +600,106 @@ impl Platform for HeadlessPlatform {
     }
 }
 
+/// What the headless backend implements unless a test says otherwise.
+const fn default_input_availability() -> flui_platform_api::input_capabilities::InputCapabilities {
+    use flui_platform_api::input_capabilities::Availability::Native;
+    flui_platform_api::input_capabilities::InputCapabilities::builder()
+        .pen(Native)
+        .precise_scroll(Native)
+        .trackpad_gestures(Native)
+        .input_regions(Native)
+        .build()
+}
+
+/// Attaches and removes simulated input devices on a [`HeadlessPlatform`]
+/// ([`HeadlessPlatform::input_devices`]).
+#[derive(Clone)]
+pub struct HeadlessInputDevices {
+    state: Weak<Mutex<HeadlessState>>,
+}
+
+impl std::fmt::Debug for HeadlessInputDevices {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeadlessInputDevices")
+            .finish_non_exhaustive()
+    }
+}
+
+impl HeadlessInputDevices {
+    /// Attach a device of `kind`: every open window receives
+    /// [`DeviceAdded`](flui_platform_api::pointer::PointerEvent::DeviceAdded),
+    /// then the capability change. The id its events carry; `None` once the
+    /// platform is gone or device ids are exhausted.
+    pub fn attach(
+        &self,
+        kind: flui_platform_api::pointer::PointerKind,
+    ) -> Option<flui_platform_api::pointer::DeviceId> {
+        use flui_platform_api::pointer::PointerEvent;
+        let state = self.state.upgrade()?;
+        let (change, windows, present) = {
+            let mut state = state.lock();
+            state.next_device_label += 1;
+            let native = crate::shared::pointer_assembly::NativeDevice(state.next_device_label);
+            let time = flui_platform_api::EventTime::from_nanos(
+                crate::shared::events::event_timestamp_ns(),
+            );
+            let change = state.devices.add_device(native, kind, time)?;
+            state.device_labels.push((change.device, native));
+            let windows: Vec<_> = state
+                .windows
+                .iter()
+                .map(|w| Arc::clone(&w.callbacks))
+                .collect();
+            (change, windows, state.devices.devices().present())
+        };
+        for callbacks in windows {
+            callbacks.dispatch_input(PlatformInput::Pointer(PointerEvent::DeviceAdded(change)));
+            callbacks.set_input_capabilities(callbacks.input_capabilities().with_present(present));
+        }
+        Some(change.device)
+    }
+
+    /// Remove the device `id` named: every open window receives its
+    /// contacts' cancellations and
+    /// [`DeviceRemoved`](flui_platform_api::pointer::PointerEvent::DeviceRemoved),
+    /// then the capability change. `false` when it was not attached.
+    pub fn remove(&self, id: flui_platform_api::pointer::DeviceId) -> bool {
+        use flui_platform_api::pointer::PointerEvent;
+        let Some(state) = self.state.upgrade() else {
+            return false;
+        };
+        let (removed, windows, present) = {
+            let mut state = state.lock();
+            let Some(index) = state
+                .device_labels
+                .iter()
+                .position(|(device, _)| *device == id)
+            else {
+                return false;
+            };
+            let (_, native) = state.device_labels.remove(index);
+            let time = flui_platform_api::EventTime::from_nanos(
+                crate::shared::events::event_timestamp_ns(),
+            );
+            let (_, removed) = state.devices.remove_device(native, time);
+            let windows: Vec<_> = state
+                .windows
+                .iter()
+                .map(|w| Arc::clone(&w.callbacks))
+                .collect();
+            (removed, windows, state.devices.devices().present())
+        };
+        for callbacks in windows {
+            if let Some(removed) = removed {
+                callbacks
+                    .dispatch_input(PlatformInput::Pointer(PointerEvent::DeviceRemoved(removed)));
+            }
+            callbacks.set_input_capabilities(callbacks.input_capabilities().with_present(present));
+        }
+        true
+    }
+}
+
 /// Builds a fresh mock window under an already-locked `state`, threading it
 /// through the same register/activate/emit-`Created` bookkeeping
 /// `Platform::open_window`'s synchronous path uses — shared so the deferred-
@@ -527,7 +713,7 @@ fn create_mock_window(
 ) -> Arc<dyn HostWindow> {
     let window_id = next_headless_window_id();
     let display = state.displays.default_window_display();
-    let window = MockWindow::new(
+    let mut window = MockWindow::new(
         window_id,
         options,
         platform_state,
@@ -540,7 +726,28 @@ fn create_mock_window(
         },
     );
 
+    window.drag = state.drag.timing().map(|timing| {
+        Arc::new(super::drag::HeadlessDragSource::new(
+            Arc::clone(&state.drag),
+            timing,
+        )) as Arc<dyn flui_platform_api::drag::PlatformDragSource>
+    });
+    // The initial snapshot reflects the devices already attached (ADR-0213 §3).
+    window.callbacks.set_input_capabilities(
+        state
+            .input_availability
+            .with_present(state.devices.devices().present()),
+    );
+    if let Some(signal) = state.owner_signal.upgrade() {
+        window
+            .callbacks
+            .set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
+                &signal,
+                &window.callbacks,
+            ));
+    }
     state.notices.mark_stale_on_wake(&window.window_state);
+
     state.windows.push(window.clone());
     state.active_window = Some(window_id);
 
@@ -1003,6 +1210,8 @@ pub struct MockWindow {
     /// Builds this window's text-store host, when the platform was made
     /// pull-model.
     text_store_host: Option<TextStoreHostFactory>,
+    /// The input regions last handed to the simulated OS, and every change in order.
+    input_regions: Arc<Mutex<RecordedInputRegions>>,
     /// Back-reference to the platform this window was opened on, so
     /// closing it can remove its own entry from `HeadlessState::windows`
     /// and — only once every tracked window is gone — consult the
@@ -1010,6 +1219,8 @@ pub struct MockWindow {
     /// handling does (see `notify_closed`). `Weak`: a window must never
     /// keep the platform state alive past the platform's own lifetime.
     platform_state: Weak<Mutex<HeadlessState>>,
+    /// The OS drag session this window can start, when the platform was given one.
+    drag: Option<Arc<dyn flui_platform_api::drag::PlatformDragSource>>,
 }
 
 impl std::fmt::Debug for MockWindow {
@@ -1029,6 +1240,12 @@ impl std::fmt::Debug for MockWindow {
     }
 }
 
+/// What a [`MockWindow`] handed its simulated OS as input regions.
+#[derive(Debug, Default)]
+struct RecordedInputRegions {
+    projection: ProjectedInputRegions,
+    updates: Vec<Vec<DeviceInputRegion>>,
+}
 /// What the platform hands a window it opens.
 struct MockWindowHost {
     text_store_host: Option<TextStoreHostFactory>,
@@ -1235,7 +1452,9 @@ impl MockWindow {
             system_chrome: Arc::new(FakeSystemChrome::default()),
             accessibility: Arc::new(FakeAccessibility::new()),
             text_store_host,
+            input_regions: Arc::default(),
             platform_state,
+            drag: None,
         }
     }
 
@@ -1440,6 +1659,12 @@ impl MockWindow {
         self.state.lock().pre_present_notifies
     }
 
+    /// Every input-region set this window handed its simulated OS, in device pixels and
+    /// delivery order: one entry per change of the projection, scale or display.
+    #[must_use]
+    pub fn input_region_updates(&self) -> Vec<Vec<DeviceInputRegion>> {
+        self.input_regions.lock().updates.clone()
+    }
     /// Every frame-rate hint the window was given, oldest first.
     #[must_use]
     pub fn frame_rate_hints(&self) -> Vec<flui_platform_api::FrameRateHint> {
@@ -1467,8 +1692,9 @@ impl MockWindow {
     }
 
     /// Simulate the user (or the OS) moving the window to `position`, outer
-    /// top-left in global logical pixels. Fires `on_state_changed` when the
-    /// snapshot differs.
+    /// top-left in global logical pixels. This host draws no frame, so that is
+    /// also where its content starts: [`PlatformWindow::window_at`] answers
+    /// from it. Fires `on_state_changed` when the snapshot differs.
     pub fn simulate_move(&self, position: Point<f64>) {
         self.state.lock().position = position;
         self.publish_state();
@@ -1783,12 +2009,68 @@ impl PlatformWindow for MockWindow {
         self.state.lock().frame_rate_hints.push(hint);
     }
 
+    fn set_input_regions(&self, regions: &[InputRegion]) {
+        let (scale, display) = {
+            let state = self.state.lock();
+            (state.scale_factor, state.display)
+        };
+        let mut recorded = self.input_regions.lock();
+        let RecordedInputRegions {
+            projection,
+            updates,
+        } = &mut *recorded;
+        if let Some(sent) = projection.update(regions, scale, display) {
+            updates.push(sent.to_vec());
+        }
+    }
+
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
         Some(Arc::clone(&self.text_input) as Arc<dyn PlatformTextInput>)
     }
 
     fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
         Some(Arc::clone(&self.haptics) as Arc<dyn PlatformHaptics>)
+    }
+
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform_api::drag::PlatformDragSource>> {
+        self.drag.clone()
+    }
+
+    fn window_at(&self, position: Point<f64>) -> flui_platform_api::WindowAt {
+        use flui_platform_api::WindowAt;
+        let Some(platform) = self.platform_state.upgrade() else {
+            return WindowAt::Unknown;
+        };
+        // The platform's lock is released before any window's is taken.
+        let windows = {
+            let state = platform.lock();
+            if !state.placement {
+                return WindowAt::Unknown;
+            }
+            state.windows.clone()
+        };
+        // No frame: a window's outer top-left is where its content starts.
+        let origin = self.state.lock().position;
+        let desktop = Point::new(origin.x + position.x, origin.y + position.y);
+        if !(desktop.x.is_finite() && desktop.y.is_finite()) {
+            return WindowAt::Outside;
+        }
+        windows
+            .iter()
+            .rev()
+            .find_map(|window| {
+                let state = window.state.lock();
+                let (origin, size) = (state.position, state.size);
+                let local = Point::new(desktop.x - origin.x, desktop.y - origin.y);
+                let inside =
+                    (0.0..size.width).contains(&local.x) && (0.0..size.height).contains(&local.y);
+                let shown = state.visible && !state.closed && state.mode != WindowMode::Minimized;
+                (shown && inside).then_some(WindowAt::Window {
+                    window: window.id,
+                    position: local,
+                })
+            })
+            .unwrap_or(WindowAt::Outside)
     }
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform_api::PlatformSystemChrome>> {
@@ -2033,57 +2315,6 @@ impl PlatformTextInput for FakeTextInput {
 
     fn set_ime_cursor_area(&self, area: Bounds<f64>) {
         self.state.lock().cursor_area_calls.push(area);
-    }
-}
-
-/// Recording fake for [`PlatformHaptics`], backing the headless backend's
-/// [`PlatformWindow::haptics`].
-///
-/// Every `perform` call is appended to an in-memory history so a test can
-/// assert exactly which feedback kinds the haptics bridge
-/// (`flui-app`'s `UiRuntime::perform_haptic_feedback`, forwarded through
-/// `PresentationState`) told the platform to perform, in delivery order,
-/// rather than only that the call didn't panic.
-#[derive(Default)]
-pub struct FakeHaptics {
-    calls: Mutex<Vec<HapticFeedback>>,
-}
-
-impl FakeHaptics {
-    /// Create a fresh recorder with no recorded calls.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Every `perform` call, in delivery order.
-    #[must_use]
-    pub fn calls(&self) -> Vec<HapticFeedback> {
-        self.calls.lock().clone()
-    }
-
-    /// The most recent `perform` call, if any.
-    #[must_use]
-    pub fn last(&self) -> Option<HapticFeedback> {
-        self.calls.lock().last().copied()
-    }
-}
-
-impl std::fmt::Debug for FakeHaptics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FakeHaptics")
-            .field("calls", &*self.calls.lock())
-            .finish()
-    }
-}
-
-impl PlatformHaptics for FakeHaptics {
-    fn perform(&self, feedback: HapticFeedback) {
-        self.calls.lock().push(feedback);
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

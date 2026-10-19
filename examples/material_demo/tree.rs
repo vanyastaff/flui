@@ -717,10 +717,12 @@ impl ViewState<MaterialDemoHome> for MaterialDemoHomeState {
         let scroll_controller_for_drag = self.scroll_controller.clone();
         let list = GestureDetector::new()
             .behavior(HitTestBehavior::Opaque)
-            .on_pan_update(move |_cx, details: DragUpdateDetails| {
-                let proposed = scroll_controller_for_drag.pixels() - details.delta.dy;
-                scroll_controller_for_drag.jump_to(proposed);
-            })
+            .drag(
+                DragSlot::pan().on_update(move |_cx, details: DragUpdateDetails| {
+                    let proposed = scroll_controller_for_drag.pixels() - details.delta.dy;
+                    scroll_controller_for_drag.jump_to(proposed);
+                }),
+            )
             .child(ListView::new(ITEM_EXTENT, cards).position(self.scroll_controller.position()));
 
         let navigator_for_settings_action = self.navigator.clone();

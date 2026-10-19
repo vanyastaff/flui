@@ -30,17 +30,16 @@ use windows::{
                 GetWindowLongPtrW, GetWindowThreadProcessId, HICON, HTCLIENT, HWND_MESSAGE,
                 IDC_ARROW, ISMEX_NOSEND, InSendMessageEx, IsWindowVisible, MINMAXINFO, MSG,
                 MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW,
-                PostMessageW, PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU,
-                SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
-                SetWindowLongPtrW, SetWindowPos, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
-                WINDOWPOS, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DEADCHAR,
-                WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_INPUTLANGCHANGE,
-                WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-                WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT,
-                WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT,
-                WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCHAR,
-                WM_SYSCOMMAND, WM_SYSDEADCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_WINDOWPOSCHANGED,
-                WM_WINDOWPOSCHANGING, WNDCLASSW,
+                PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU, SW_SHOWNORMAL,
+                SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+                TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPOS, WM_CAPTURECHANGED,
+                WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
+                WM_GETMINMAXINFO, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
+                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
+                WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN,
+                WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT, WM_SETTINGCHANGE,
+                WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP,
+                WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WNDCLASSW,
             },
         },
     },
@@ -55,7 +54,7 @@ use super::{
 };
 use crate::{
     config::WindowConfiguration,
-    data_transfer::{DataTransferSource, NullDataTransferSource},
+    data_transfer::DataTransferSource,
     error::PlatformError,
     executor::BackgroundExecutor,
     shared::{
@@ -64,10 +63,9 @@ use crate::{
         window_state::WindowStateCell,
     },
     traits::{
-        Clipboard, DesktopCapabilities, DisplaySnapshot, HostWindow, OpenWindowError,
-        OwnerPlatform, Platform, PlatformCapabilities, PlatformExecutor, PlatformReadyCallback,
-        SessionEndAnswer, SessionEndPhase, SystemNotice, WindowAppearance, WindowEvent, WindowId,
-        WindowOptions, owner::OwnerHooks,
+        Clipboard, DisplaySnapshot, HostWindow, OpenWindowError, OwnerPlatform, Platform,
+        PlatformExecutor, PlatformReadyCallback, SessionEndAnswer, SessionEndPhase, SystemNotice,
+        WindowAppearance, WindowEvent, WindowId, WindowOptions, owner::OwnerHooks,
     },
 };
 
@@ -75,23 +73,17 @@ use crate::{
 /// `static mut bool`).
 static REGISTER_WINDOW_CLASS: std::sync::Once = std::sync::Once::new();
 
-type WakeDeadlineHook = dyn Fn() -> Option<web_time::Instant> + Send + Sync;
+#[path = "platform/wake_deadline.rs"]
+mod wake_deadline;
+pub(super) use wake_deadline::FrameCount;
+use wake_deadline::{DeadlineArm, DeadlineDelivery, DeadlineQuery, WakeDeadlineHook};
 
-// The query may replace its own registration before panicking. Keep its
-// outgoing ownership in custody before invoking it, so captures cannot
-// double-panic during the incoming unwind. Healthy retirement remains normal;
-// this cannot rescue an aggregate that double-panics during healthy Drop.
-struct DeadlineQuery(Option<Arc<WakeDeadlineHook>>);
-
-impl Drop for DeadlineQuery {
-    fn drop(&mut self) {
-        if std::thread::panicking()
-            && let Some(hook) = self.0.take()
-        {
-            std::mem::forget(hook);
-        }
-    }
-}
+#[path = "platform/keystroke_queue.rs"]
+mod keystroke_queue;
+use keystroke_queue::{
+    drain_dead_char, drain_translated_chars, restore_translated_sys_chars,
+    take_translated_sys_chars,
+};
 
 #[cfg(test)]
 #[path = "platform/preference_retry_tests.rs"]
@@ -100,64 +92,6 @@ mod preference_retry_tests;
 #[cfg(test)]
 #[path = "platform/display_message_tests.rs"]
 mod display_message_tests;
-
-/// The last deadline the loop delivered. The hook answers with an instant
-/// only, so the same `(hook, instant)` pair is either work no frame has had
-/// a chance to service, which must not spin, or work a frame left or
-/// accepted at the instant it just serviced (a queue of obligations all due
-/// at one instant answers the same pair once per item), which must get its
-/// frame. The frame count is the delivery generation that tells them apart.
-struct DeadlineDelivery {
-    arm: DeadlineArm,
-    /// The platform's frame count when the delivery was made.
-    frames: u64,
-}
-
-impl DeadlineDelivery {
-    /// Whether `deadline` from `hook` may be armed after this delivery: a
-    /// different pair always, the same pair whenever a frame callback ran
-    /// since. An answer no frame could have serviced stays delivered, so a
-    /// delivery that reaches no frame never spins the loop.
-    fn admits(
-        &self,
-        deadline: web_time::Instant,
-        hook: &Weak<WakeDeadlineHook>,
-        frames: u64,
-    ) -> bool {
-        !self.arm.matches(deadline, hook) || frames != self.frames
-    }
-}
-
-/// How many frame callbacks this platform's windows have run. The message
-/// loop compares it across a deadline delivery to tell an answer repeated
-/// after a serviced frame from one nothing has serviced yet. Each window's
-/// [`WindowCallbacks`] counts into it when its frame callback runs, so a
-/// frame request no callback answered (a window with nothing registered,
-/// or one already cleared) leaves it unchanged.
-#[derive(Default)]
-pub(super) struct FrameCount(Arc<std::sync::atomic::AtomicU64>);
-
-impl FrameCount {
-    fn get(&self) -> u64 {
-        self.0.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    /// The counter a window's callbacks increment.
-    pub(super) fn counter(&self) -> Arc<std::sync::atomic::AtomicU64> {
-        Arc::clone(&self.0)
-    }
-}
-
-struct DeadlineArm {
-    deadline: web_time::Instant,
-    hook: Weak<WakeDeadlineHook>,
-}
-
-impl DeadlineArm {
-    fn matches(&self, deadline: web_time::Instant, hook: &Weak<WakeDeadlineHook>) -> bool {
-        self.deadline == deadline && Weak::ptr_eq(&self.hook, hook)
-    }
-}
 
 /// Identity of one native window's context, minted once per
 /// [`WindowsWindow::new`] and held by both the context and every wrapper
@@ -354,7 +288,11 @@ pub(super) struct WindowContext {
     /// shared one is still live.
     pub scale_factor: std::cell::Cell<f64>,
     pub message_clock: super::events::MessageClock,
-    pub pointer_registry: RefCell<super::events::NativePointerRegistry>,
+    pub pointer_registry: RefCell<crate::shared::pointer_assembly::ContactRegistry>,
+    /// The precision touchpad's DirectManipulation viewport; `None` when it
+    /// did not initialise (the window then has no precise scrolling or
+    /// trackpad gestures) or after it failed.
+    pub touchpad: super::direct_manipulation::TouchpadSlot,
     /// Current window mode (replaces display_state + saved bounds)
     pub mode: std::cell::Cell<NativeMode>,
     /// Last known size (before minimization) for restore detection
@@ -427,6 +365,10 @@ pub(super) struct WindowContext {
     /// Deactivated by `WM_DESTROY` after the close callbacks and before the
     /// context retires ([`TextServices::retire_with_window`]).
     pub text_services: RefCell<Option<Rc<TextServices>>>,
+    /// The window's registered OLE drop target; `None` when registration
+    /// failed (the window then takes no drags) or after `WM_DESTROY`
+    /// revoked it.
+    pub drop_target: RefCell<Option<windows_core::ComObject<super::drag::WindowDropTarget>>>,
     /// Physical keys held down that were pressed as dead keys, so their
     /// release reports `Dead` like the press.
     pub held_dead_keys: std::cell::RefCell<super::events::HeldDeadKeys>,
@@ -756,6 +698,8 @@ pub(super) fn teardown_route(
 /// Windows platform state
 pub struct WindowsPlatform {
     owner_control: super::owner_control::OwnerControl,
+    /// OLE drag and drop: the platform's one data-transfer source.
+    pub(super) drag: Arc<super::drag::OleTransfer>,
     /// Message-only window for platform messages
     message_window: HWND,
 
@@ -808,7 +752,7 @@ pub struct WindowsPlatform {
 // (`quit`'s `PostQuitMessage`, `open_window`'s queue binding) are logic-level
 // rather than memory-safety and stay guarded by `affinity.debug_assert_owner`
 // — see ADR-0039 (event-loop affinity). `apartment` is `Send + Sync` by its
-// own owner-thread gate.
+// own owner-thread gate, and `drag` keeps its COM objects in an owner slot.
 unsafe impl Send for WindowsPlatform {}
 // SAFETY: as for `Send` — `&WindowsPlatform` grants no more than shared access
 // to already-synchronized members plus a never-dereferenced address.
@@ -915,12 +859,14 @@ impl WindowsPlatform {
         // Build owner resources first so any later native creation failure
         // retires its preference subscriptions and receiver through the guard.
         let windows = Arc::new(Mutex::new(HashMap::new()));
+        let drag = super::drag::OleTransfer::new();
         let displays = Arc::new(WindowsDisplays::new());
         let notices = Arc::new(crate::shared::system_notice::SystemNotices::default());
         notices.mark_stale_on_wake(&displays);
         let owner_control = super::owner_control::OwnerControl::new(
             owner_identity,
             Arc::downgrade(&windows),
+            Arc::clone(&drag),
             Arc::clone(&displays),
             notices,
         )?;
@@ -964,6 +910,7 @@ impl WindowsPlatform {
 
         let platform = Self {
             owner_control,
+            drag,
             message_window,
             windows,
             background_executor,
@@ -1193,6 +1140,15 @@ impl WindowsPlatform {
                     tracing::debug!("WM_DESTROY for HWND {:?}", hwnd);
 
                     if let Some(ctx) = ctx {
+                        // Whatever the precision touchpad has open ends as
+                        // cancelled, and its viewport is released, while the
+                        // window and its callbacks still exist.
+                        ctx.release_touchpad(hwnd);
+
+                        // A drag over the window leaves it, and OLE no
+                        // longer offers it one.
+                        super::drag::revoke_target(hwnd, &ctx.drop_target);
+
                         // Fire per-window on_close callback (FnOnce)
                         ctx.callbacks.dispatch_close();
 
@@ -1299,7 +1255,43 @@ impl WindowsPlatform {
                     LRESULT(1)
                 }
 
+                // The system offers a contact to the window under it; a
+                // touchpad's goes to the DirectManipulation viewport.
+                windows::Win32::UI::WindowsAndMessaging::DM_POINTERHITTEST => {
+                    if let Some(ctx) = ctx {
+                        ctx.offer_touchpad_contact(hwnd, (wparam.0 & 0xffff) as u32);
+                    }
+                    LRESULT(0)
+                }
+
+                windows::Win32::UI::WindowsAndMessaging::WM_ENTERSIZEMOVE => {
+                    if let Some(ctx) = ctx {
+                        ctx.pause_touchpad(hwnd);
+                    }
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+
+                windows::Win32::UI::WindowsAndMessaging::WM_EXITSIZEMOVE => {
+                    if let Some(ctx) = ctx {
+                        ctx.resume_touchpad();
+                    }
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+
+                windows::Win32::UI::WindowsAndMessaging::WM_TIMER
+                    if WindowContext::is_touchpad_timer(wparam.0) =>
+                {
+                    if let Some(ctx) = ctx {
+                        ctx.pump_touchpad(hwnd);
+                    }
+                    LRESULT(0)
+                }
+
                 WM_PAINT => {
+                    // The frame follows the scrolling it shows.
+                    if let Some(ctx) = ctx {
+                        ctx.pump_touchpad_for_frame(hwnd);
+                    }
                     // SAFETY: `ps` is a stack-local `PAINTSTRUCT`; `&raw mut
                     // ps` gives `BeginPaint` a valid, correctly-sized
                     // out-parameter, and `&raw const ps` below hands the
@@ -1351,6 +1343,7 @@ impl WindowsPlatform {
                         let size = Size::new(width, height);
                         let prev_mode = ctx.mode.get();
                         if size_type != SIZE_MINIMIZED {
+                            ctx.resize_touchpad((width, height));
                             ctx.update_window_state(|state| {
                                 state.bounds.size = Size::new(
                                     width as f64 / ctx.scale_factor.get(),
@@ -1608,6 +1601,9 @@ impl WindowsPlatform {
                         // The display's scale changed, so its snapshot entry did.
                         ctx.displays.invalidate();
                         ctx.scale_factor.set(new_scale);
+                        ctx.pointer_registry
+                            .borrow_mut()
+                            .set_click_settings(super::events::click_settings(new_scale));
                         let mut client = RECT::default();
                         let client_size = GetClientRect(hwnd, &raw mut client).is_ok().then(|| {
                             Size::new(
@@ -1740,9 +1736,18 @@ impl WindowsPlatform {
                         // Dispatch hover enter (will be cleared on WM_MOUSELEAVE)
                         ctx.callbacks.dispatch_hover_status_change(true);
 
-                        use super::events::mouse_move_event;
-                        let event = mouse_move_event(wparam, lparam, ctx.scale_factor.get(), time);
-                        ctx.callbacks.dispatch_input(event);
+                        let events = super::events::mouse_move_input(
+                            &ctx.pointer_registry,
+                            wparam,
+                            lparam,
+                            ctx.scale_factor.get(),
+                            time,
+                        );
+                        for event in events {
+                            if ctx.pointer_registry.borrow().delivers(&event) {
+                                ctx.callbacks.dispatch_input(event);
+                            }
+                        }
                     }
                     LRESULT(0)
                 }
@@ -1774,7 +1779,7 @@ impl WindowsPlatform {
                 | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONDOWN
                 | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONUP => {
                     use super::events::{
-                        button_message, capture_on_press, mouse_button_event, release_capture_after,
+                        button_message, capture_on_press, mouse_button_input, release_capture_after,
                     };
                     let Some((button, is_down)) = button_message(msg, wparam) else {
                         return LRESULT(0);
@@ -1791,7 +1796,8 @@ impl WindowsPlatform {
                         release_capture_after(hwnd, wparam);
                     }
                     if let Some((ctx, time)) = timed_context {
-                        let event = mouse_button_event(
+                        let events = mouse_button_input(
+                            &ctx.pointer_registry,
                             button,
                             is_down,
                             wparam,
@@ -1799,8 +1805,10 @@ impl WindowsPlatform {
                             ctx.scale_factor.get(),
                             time,
                         );
-                        if let Some(event) = event {
-                            ctx.callbacks.dispatch_input(event);
+                        for event in events {
+                            if ctx.pointer_registry.borrow().delivers(&event) {
+                                ctx.callbacks.dispatch_input(event);
+                            }
                         }
                     }
                     LRESULT(isize::from(matches!(
@@ -1838,36 +1846,43 @@ impl WindowsPlatform {
                 }
 
                 windows::Win32::UI::WindowsAndMessaging::WM_POINTERDEVICECHANGE => {
-                    if let Some(ctx) = ctx
-                        && let Ok(device) =
-                            flui_platform_api::pointer::DeviceId::try_from(lparam.0 as usize as u64)
-                    {
+                    if let Some(ctx) = ctx {
+                        use flui_platform_api::pointer::PointerEvent;
+                        let device = super::events::native_device(lparam);
                         let time = flui_platform_api::EventTime::from_nanos(
                             ctx.message_clock.message_time(),
                         );
-                        let events = if wparam.0
-                            == windows::Win32::UI::WindowsAndMessaging::PDC_REMOVAL as usize
+                        let mut events = Vec::new();
+                        if wparam.0 == windows::Win32::UI::WindowsAndMessaging::PDC_REMOVAL as usize
                         {
-                            ctx.pointer_registry
+                            let (ended, removed) = ctx
+                                .pointer_registry
                                 .borrow_mut()
-                                .remove_device(device, time)
+                                .remove_device(device, time);
+                            events.extend(ended.into_iter().map(|(_, input)| input));
+                            events.extend(removed.map(|change| {
+                                crate::traits::PlatformInput::Pointer(PointerEvent::DeviceRemoved(
+                                    change,
+                                ))
+                            }));
                         } else if wparam.0
                             == windows::Win32::UI::WindowsAndMessaging::PDC_ARRIVAL as usize
-                        {
-                            if let Some(kind) = super::events::native_device_kind(
+                            && let Some(kind) = super::events::native_device_kind(
                                 windows::Win32::Foundation::HANDLE(
                                     lparam.0 as *mut core::ffi::c_void,
                                 ),
-                            ) {
-                                ctx.pointer_registry
-                                    .borrow_mut()
-                                    .add_device(device, kind, time)
-                            } else {
-                                Vec::new()
-                            }
-                        } else {
-                            Vec::new()
-                        };
+                            )
+                        {
+                            let added = ctx
+                                .pointer_registry
+                                .borrow_mut()
+                                .add_device(device, kind, time);
+                            events.extend(added.map(|change| {
+                                crate::traits::PlatformInput::Pointer(PointerEvent::DeviceAdded(
+                                    change,
+                                ))
+                            }));
+                        }
                         for event in events {
                             ctx.callbacks.dispatch_input(event);
                         }
@@ -1879,37 +1894,38 @@ impl WindowsPlatform {
                     // Another window, a modal loop or `WM_CANCELMODE` took
                     // the capture mid-press: this window will never see the
                     // sequence's release, so end it here.
-                    if let Some(ctx) = ctx
-                        && let Some(cancel) = super::events::capture_changed_event(
+                    if let Some(ctx) = ctx {
+                        let cancels = super::events::capture_changed_input(
                             hwnd,
                             lparam,
                             ctx.message_clock.message_time(),
-                        )
-                    {
-                        ctx.callbacks.dispatch_input(cancel);
-                    }
-                    LRESULT(0)
-                }
-
-                WM_MOUSEWHEEL => {
-                    if let Some(ctx) = ctx {
-                        use super::events::mouse_wheel_event;
-                        let time = ctx.message_clock.message_time();
-                        let event =
-                            mouse_wheel_event(hwnd, wparam, lparam, ctx.scale_factor.get(), time);
-                        if let Some(event) = event {
-                            ctx.callbacks.dispatch_input(event);
+                            &ctx.pointer_registry,
+                        );
+                        for cancel in cancels {
+                            ctx.callbacks.dispatch_input(cancel);
                         }
                     }
                     LRESULT(0)
                 }
 
-                WM_MOUSEHWHEEL => {
+                WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
                     if let Some(ctx) = ctx {
-                        use super::events::mouse_hwheel_event;
+                        use crate::shared::pointer_assembly::WheelAxis;
+                        let axis = if msg == WM_MOUSEWHEEL {
+                            WheelAxis::Vertical
+                        } else {
+                            WheelAxis::Horizontal
+                        };
                         let time = ctx.message_clock.message_time();
-                        let event =
-                            mouse_hwheel_event(hwnd, wparam, lparam, ctx.scale_factor.get(), time);
+                        let event = super::events::mouse_wheel_input(
+                            &ctx.pointer_registry,
+                            hwnd,
+                            axis,
+                            wparam,
+                            lparam,
+                            ctx.scale_factor.get(),
+                            time,
+                        );
                         if let Some(event) = event {
                             ctx.callbacks.dispatch_input(event);
                         }
@@ -2107,6 +2123,10 @@ impl WindowsPlatform {
                 // repaints the chrome and reaches the callback.
                 WM_SETTINGCHANGE => {
                     if let Some(ctx) = ctx {
+                        // Double-click time and size are settings too.
+                        ctx.pointer_registry.borrow_mut().set_click_settings(
+                            super::events::click_settings(ctx.scale_factor.get()),
+                        );
                         let appearance = super::appearance::system_appearance();
                         if ctx.appearance.replace(appearance) != appearance {
                             if ctx.chrome_follows_system.get() {
@@ -2195,7 +2215,7 @@ impl WindowsPlatform {
                         .is_some_and(|hook| Weak::ptr_eq(&arm.hook, &Arc::downgrade(&hook)))
                     {
                         let before = frame_count();
-                        self.redraw_deadline_windows();
+                        Self::redraw_deadline_windows(&self.windows);
                         delivered = Some(DeadlineDelivery {
                             arm,
                             frames: before,
@@ -2310,13 +2330,14 @@ impl WindowsPlatform {
         shares.handlers.borrow().wake_deadline.clone()
     }
 
-    fn redraw_deadline_windows(&self) {
+    /// Ask every window of `windows` for the frame a delivered wake deadline
+    /// is due: the main loop's delivery, and the modal drag loop's.
+    pub(super) fn redraw_deadline_windows(windows: &WindowMap) {
         // Traverse a bounded identity snapshot without a per-frame Vec.
         // A minimized window's frame request runs user code, which may open
         // or close windows; each owning Arc is cloned under the registry
         // lock and used only after releasing it.
-        let limit = self
-            .windows
+        let limit = windows
             .lock()
             .values()
             .map(|window| window.identity.0.get())
@@ -2324,8 +2345,7 @@ impl WindowsPlatform {
             .unwrap_or(0);
         let mut after = 0;
         loop {
-            let next = self
-                .windows
+            let next = windows
                 .lock()
                 .values()
                 .filter(|window| {
@@ -2358,6 +2378,55 @@ impl WindowsPlatform {
                 }
             });
         }
+    }
+
+    /// What the main loop would deliver, while `DoDragDrop`'s modal loop
+    /// stands in for it and dispatches neither deadlines nor paints: a due
+    /// wake deadline is delivered as the main loop delivers it, once per
+    /// frame generation, and every window with an invalid region is painted
+    /// (`UpdateWindow` sends its `WM_PAINT` directly), so every runtime on
+    /// the thread keeps getting frames. Returns how many milliseconds to wait
+    /// before the next request. The hook is user code, run with no borrow
+    /// held and in the main loop's custody.
+    pub(super) fn deliver_modal_frames(
+        handlers: &RefCell<PlatformHandlers>,
+        windows: &Weak<WindowMap>,
+        frames: &FrameCount,
+        delivered: &std::cell::Cell<Option<(web_time::Instant, u64)>>,
+    ) -> u32 {
+        let hook = handlers.borrow().wake_deadline.clone();
+        let deadline = hook.and_then(|hook| {
+            let custody = DeadlineQuery(Some(hook));
+            let deadline = custody.0.as_ref().and_then(|hook| hook());
+            drop(custody);
+            deadline
+        });
+        let now = web_time::Instant::now();
+        if let Some(deadline) = deadline
+            && deadline <= now
+            && delivered.get() != Some((deadline, frames.get()))
+            && let Some(windows) = windows.upgrade()
+        {
+            delivered.set(Some((deadline, frames.get())));
+            Self::redraw_deadline_windows(&windows);
+        }
+        // A snapshot: a paint runs user code, which may open or close windows.
+        let painted: Vec<HWND> = windows
+            .upgrade()
+            .map(|windows| {
+                windows
+                    .lock()
+                    .values()
+                    .map(|window| window.hwnd())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for hwnd in painted {
+            // SAFETY: a window this thread created; a handle closed by an
+            // earlier paint fails the call harmlessly. Nothing is borrowed.
+            let _ = unsafe { windows::Win32::Graphics::Gdi::UpdateWindow(hwnd) };
+        }
+        crate::shared::ole_drag_drop::modal_frame_wait_ms(deadline, now)
     }
 
     /// Installs a platform-level handler into the owner-thread handler set.
@@ -2536,8 +2605,28 @@ impl Platform for WindowsPlatform {
             shares,
             self.config.clone(),
             self.apartment.share(),
+            Arc::clone(&self.drag),
         )?;
         let hwnd_value = window.hwnd().0 as isize;
+        let identity = window.identity;
+        let wake = crate::shared::owner_signal::OwnerSignal::input_wake(
+            &self.owner_control.signal,
+            move || {
+                let hwnd = HWND(hwnd_value as *mut core::ffi::c_void);
+                let _ = with_window_context_checked(hwnd, "resume_input_delivery", |context| {
+                    if context.identity == identity {
+                        context.callbacks.resume_input_delivery();
+                    }
+                });
+            },
+        );
+        let _ =
+            with_window_context_checked(window.hwnd(), "input_capabilities", |context| {
+                context.callbacks.set_input_capabilities(
+                    crate::shared::input_availability::windows(context.has_touchpad()),
+                );
+                context.callbacks.set_input_wake(wake);
+            });
 
         // Store window
         let _prev = self.windows.lock().insert(hwnd_value, window.clone());
@@ -2552,16 +2641,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
-        // No Win32 transport yet (IDropTarget/IDataObject land with the
-        // native slices of ADR-0038): inert and honest.
-        Arc::new(NullDataTransferSource)
-    }
-
-    // ==================== Platform Capabilities ====================
-
-    fn capabilities(&self) -> &dyn PlatformCapabilities {
-        // TODO: Return actual capabilities
-        &WINDOWS_CAPABILITIES
+        self.drag.clone()
     }
 
     fn name(&self) -> &'static str {
@@ -2961,113 +3041,6 @@ impl Drop for WindowsPlatform {
         // the last window's text services if any still live.
     }
 }
-
-// PlatformHandlers is imported from crate::shared
-
-// ==================== Helper Functions ====================
-
-/// Drain the `WM_CHAR` burst `TranslateMessage` queued for the keydown
-/// currently being handled, and decode it into typeable text.
-///
-/// Called from `window_proc`'s `WM_KEYDOWN`/`WM_SYSKEYDOWN` arm. The burst
-/// is complete at that point — the message loop runs `TranslateMessage`
-/// before `DispatchMessageW`, so every `WM_CHAR` belonging to this keystroke
-/// (two of them for an astral-plane character) is already posted. Draining
-/// filters exactly `WM_CHAR` for this window: `WM_SYSCHAR` is deliberately
-/// left queued so Alt+mnemonic accelerators still flow to `DefWindowProcW`
-/// (held across the keydown's dispatch: [`take_translated_sys_chars`]),
-/// and `WM_DEADCHAR` is taken separately by [`drain_dead_char`] (the dead-key state
-/// itself stays Windows' business). Returns `None` for keystrokes with no typeable translation
-/// (navigation keys, Ctrl chords — see `shared::keys::wm_char_text`).
-fn drain_translated_chars(hwnd: HWND) -> Option<String> {
-    let mut units: Vec<u16> = Vec::new();
-    let mut msg = MSG::default();
-
-    // A plain `PM_REMOVE`, with no `PM_QS_*` mask, for this drain and the two
-    // below. A `PM_QS_POSTMESSAGE` peek reads the posted queue only while its
-    // `QS_POSTMESSAGE` wake bit is set, and every `GetMessage`/`PeekMessage`
-    // clears that bit (`GetQueueStatus` docs), filtered or not: after the
-    // retrieval of this keydown or an earlier empty drain, the masked peek
-    // skips a character already queued, which then arrives as a second,
-    // stray key-down. The plain peek always scans the queue. It also delivers
-    // pending cross-thread sent messages first; a keydown among them owns no
-    // burst and drains nothing (the `owns_burst` check in `window_proc`),
-    // so it cannot take this keystroke's characters.
-    // SAFETY: `msg` is a live, writable local and `PeekMessageW` writes
-    // nothing else. `PM_REMOVE` only ever removes messages from this
-    // thread's own queue (the wndproc runs on the queue's owning thread).
-    // A sent message it delivers re-enters `window_proc`, the same
-    // re-entrancy any modal Win32 call permits; nothing here holds a lock or
-    // borrow across the call.
-    unsafe {
-        while PeekMessageW(&raw mut msg, Some(hwnd), WM_CHAR, WM_CHAR, PM_REMOVE).as_bool() {
-            units.push(msg.wParam.0 as u16);
-        }
-    }
-
-    crate::shared::keys::wm_char_text(&units)
-}
-
-/// Remove the dead-character message `TranslateMessage` queued for the keydown
-/// being handled, if any: `WM_SYSDEADCHAR` for a system keydown, else
-/// `WM_DEADCHAR`. Only the notification leaves the queue; the composition
-/// itself lives in the kernel's dead-key state, which this does not touch.
-fn drain_dead_char(hwnd: HWND, keydown: u32) -> bool {
-    let kind = if keydown == WM_SYSKEYDOWN {
-        WM_SYSDEADCHAR
-    } else {
-        WM_DEADCHAR
-    };
-    let mut msg = MSG::default();
-    let mut found = false;
-    // SAFETY: as in `drain_translated_chars`: a live writable local, and
-    // `PM_REMOVE` touches only this thread's own queue.
-    unsafe {
-        while PeekMessageW(&raw mut msg, Some(hwnd), kind, kind, PM_REMOVE).as_bool() {
-            found = true;
-        }
-    }
-    found
-}
-
-/// Remove the `WM_SYSCHAR` burst `TranslateMessage` queued for a system
-/// keydown before user code sees the keydown, so a handler that pumps
-/// messages cannot hand a character to `DefWindowProcW` (which would raise
-/// `SC_KEYMENU` from it, and open the system menu for Alt+Space) before its
-/// result says whether the default runs. The same queue-ordering argument as
-/// [`drain_translated_chars`] makes the burst complete here. The burst is
-/// almost always empty or one character, so the `Vec` rarely allocates.
-fn take_translated_sys_chars(hwnd: HWND) -> Vec<(WPARAM, LPARAM)> {
-    let mut held = Vec::new();
-    let mut msg = MSG::default();
-    // SAFETY: as in `drain_translated_chars`: a live writable local, and
-    // `PM_REMOVE` touches only this thread's own queue.
-    unsafe {
-        while PeekMessageW(&raw mut msg, Some(hwnd), WM_SYSCHAR, WM_SYSCHAR, PM_REMOVE).as_bool() {
-            held.push((msg.wParam, msg.lParam));
-        }
-    }
-    held
-}
-
-/// Return the characters [`take_translated_sys_chars`] held for a system
-/// keydown whose default ran, to be dispatched after it as `TranslateMessage`
-/// had queued them. If the queue refuses one, it gets its default now rather
-/// than being lost.
-fn restore_translated_sys_chars(hwnd: HWND, held: &[(WPARAM, LPARAM)]) {
-    for &(wparam, lparam) in held {
-        // SAFETY: posts integer character data to this thread's own live
-        // window, whose wndproc is running on this thread now.
-        if unsafe { PostMessageW(Some(hwnd), WM_SYSCHAR, wparam, lparam) }.is_err() {
-            // SAFETY: the same live window, called synchronously on its
-            // creating thread with the message `TranslateMessage` produced.
-            unsafe { DefWindowProcW(hwnd, WM_SYSCHAR, wparam, lparam) };
-        }
-    }
-}
-
-// Windows platform capabilities
-static WINDOWS_CAPABILITIES: DesktopCapabilities = DesktopCapabilities;
 
 /// While it lives, the window context does not sample and publish its state;
 /// see [`WindowContext::hold_publishing`].

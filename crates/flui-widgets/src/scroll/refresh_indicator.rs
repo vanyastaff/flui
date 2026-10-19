@@ -1,77 +1,132 @@
-//! [`RefreshIndicator`] — pull-to-refresh gesture wrapper.
+//! [`RefreshIndicator`] — pull to refresh, a participant of the nested scroll
+//! channel (ADR-0209).
 //!
-//! `RefreshIndicator` manages scrolling internally for its content child and
-//! detects a downward overscroll at the top. When the pull distance exceeds
-//! [`RefreshIndicator::threshold_px`], releasing the pointer fires
-//! [`on_refresh`](RefreshIndicator::on_refresh) and shows a visual indicator
-//! until the caller calls [`RefreshController::finish`].
+//! The indicator is not a second scroll path. It joins the chain of the
+//! scrollables beneath it as a [`NestedScrollConnection`] and takes what a
+//! scroll leaf leaves at its leading edge — the top of a vertical list, the
+//! reading start of a horizontal one (its left, or its right under
+//! right-to-left text) — while a contact drags it:
 //!
-//! # Completion model
+//! - **Pull.** `post_scroll` takes the leaf's remainder toward its start
+//!   when the step is [`ScrollCause::UserInput`]: a drag. A fling
+//!   ([`ScrollCause::SideEffect`]) and platform momentum never pull, and a
+//!   fling residual is declined. A wheel, a trackpad pan, keys and
+//!   assistive steps are user input too, and a list at its top passes a
+//!   wheel or trackpad packet up its chain, but none of them is a contact
+//!   ([`ScrollStep::contact`]): only a dragging hand reveals the indicator. Taking the first
+//!   delta latches the contact here (ADR-0209 §5): `pre_scroll` gives a
+//!   reversing finger its pull back first, and the list moves again on the
+//!   next contact. A leaf with bouncing physics keeps its own overscroll and
+//!   leaves nothing to pull with.
+//! - **Release.** `released` decides: a pull of at least
+//!   [`threshold_px`](RefreshIndicator::threshold_px) performs the refresh
+//!   command after the frame; a shorter one settles back. A cancelled
+//!   contact, a contact the arena gave away and a preempted one settle back
+//!   without refreshing, whatever their pull.
+//! - **Refresh.** The command performs [`RefreshIntent`], which the
+//!   indicator binds: it calls [`on_refresh`](RefreshIndicator::on_refresh)
+//!   and runs the future it returns on the owner's async driver. Its
+//!   completion is delivered when the driver polls it, at the start of a
+//!   frame; the frame path itself never waits. While a refresh runs, a pull
+//!   reveals nothing and every other request to refresh is refused.
 //!
-//! `on_refresh` is a synchronous callback receiving `EventCx`. The widget transitions to the
-//! *refreshing* state on the same call stack as the pan-end event; the caller
-//! signals completion by calling [`RefreshController::finish`] on the
-//! [`RefreshController`] it provided.
+//! # Alternatives
 //!
-//! ```text
-//! on_refresh fires  →  show spinner
-//! caller.finish()   →  hide spinner, return to idle
-//! ```
+//! The pull is a path gesture, so the indicator takes its
+//! [`GestureAlternatives`] in its constructor (ADR-0216): the first command
+//! performs [`RefreshIntent`] — [`RefreshIntent::command`] builds it with
+//! the platform's refresh keys — and assistive technology's custom action,
+//! the keys and the visible control or menu perform it as the pull does,
+//! through the same action.
 //!
 //! # Indicator
 //!
-//! What the indicator looks like comes from the nearest [`RefreshIndicatorStyle`]: a builder
-//! from the [`RefreshIndicatorPhase`] (how far the pull has gone, or refreshing) to a view. A
-//! design system installs one for its apps (`flui-material`'s `MaterialApp` installs the
-//! Material circular indicator); without one, an [`ActivityIndicator`] shows while
-//! refreshing and nothing while pulling (ADR-0235).
-//!
-//! # Deferred (v1)
-//!
-//! - DEFERRED (v1): overscroll glow effect.
-//! - DEFERRED (v1): nested-scroll coordination and horizontal pull-to-refresh.
-//!
-//! v1 uses a synchronous completion model rather than a future because the view
-//! layer has no async executor.
+//! A band at the leading edge slides in as the pull nears the threshold and
+//! rests there while refreshing. What it shows comes from the nearest
+//! [`RefreshIndicatorStyle`]: a builder from the [`RefreshIndicatorPhase`] (how
+//! far the pull has gone, or refreshing) to a view. A design system installs one
+//! for its apps (`flui-material`'s `MaterialApp` installs the Material circular
+//! indicator); without one the band holds an [`ActivityIndicator`] (ADR-0235).
 
-use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};
+use std::cell::{Cell, RefCell};
+use std::fmt;
+use std::future::Future;
+use std::rc::{Rc, Weak};
+use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, AnimationStatus, DrivenController, Vsync};
+use flui_animation::{Animation, AnimationController, DrivenController, Vsync};
+use flui_foundation::geometry::{Axis, Vec2};
+use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
+use flui_interaction::InputSequenceId;
 use flui_painting::styling::Color;
-use flui_rendering::hit_testing::HitTestBehavior;
-use flui_rendering::pipeline::WeakPipelineCell;
-use flui_view::prelude::StatefulView;
+use flui_painting::typography::TextDirection;
+use flui_platform_api::TargetPlatform;
+use flui_platform_api::keyboard::NamedKey;
+use flui_view::prelude::{StatefulView, StatelessView};
 use flui_view::{
-    BoxedView, BuildContext, BuildContextExt, Child, EventCx, EventOutcome, InheritedView,
-    IntoView, LifecycleContext, RebuildHandle, RebuildReason, View, ViewExt, ViewState,
-    impl_inherited_view,
+    AsyncDriver, BoxedTask, BoxedView, BuildContext, BuildContextExt, EventCx, InheritedView,
+    IntoView, LifecycleContext, PostFrameHandle, RebuildHandle, RebuildReason, TaskToken, View,
+    ViewExt, ViewState, WriterSource, impl_inherited_view,
 };
 
+use super::nested::{
+    FlingStep, NestedScroll, NestedScrollConnection, ScrollCause, ScrollEndReason, ScrollStep,
+};
 use crate::animated::VsyncScope;
-use crate::scroll::scroll_physics::BoundaryResolvedSimulation;
-use crate::scroll::scrollable::presentation_device_pixel_ratio;
-use crate::scroll::single_child_scroll_view::SingleChildScrollView;
-use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
-use crate::{ActivityIndicator, Center, GestureDetector, Positioned, SizedBox, Stack};
+use crate::{
+    Action, ActionOutcome, Actions, ActivityIndicator, Center, CommandHandle, Directionality,
+    GestureAlternatives, GestureCommand, Intent, Positioned, SingleActivator, SizedBox, Stack,
+};
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/// Default pull distance (logical pixels) required to trigger a refresh.
+/// Default pull, in logical pixels past the leading edge, that refreshes.
 const DEFAULT_THRESHOLD_PX: f64 = 80.0;
 
-/// Height of the indicator's slot (logical pixels).
-/// 56 dp, a standard FAB height.
-const INDICATOR_HEIGHT_PX: f64 = 56.0;
+/// The indicator's band across the content (logical pixels): 56 dp.
+const INDICATOR_EXTENT_PX: f64 = 56.0;
 
-/// The default indicator's colour, without a [`RefreshIndicatorStyle`]: Material Blue 500
-/// at 80 % opacity.
+/// Indicator colour: Material Blue 500 at 80 % opacity.
 const INDICATOR_COLOR: Color = Color::rgba(33, 150, 243, 204);
 
+/// How long a released or abandoned pull takes to settle back.
+const SETTLE: Duration = Duration::from_millis(200);
+
 // ---------------------------------------------------------------------------
-// RefreshControllerInner — owner-local shared state
+// RefreshIntent
+// ---------------------------------------------------------------------------
+
+/// Refresh the content of the enclosing [`RefreshIndicator`].
+///
+/// The indicator binds it: its pull, and every alternative path of its
+/// [`GestureAlternatives`] whose command carries this intent, start one
+/// refresh, and none while a refresh runs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RefreshIntent;
+
+impl Intent for RefreshIntent {}
+
+impl RefreshIntent {
+    /// The refresh command, labelled `label` ("Refresh inbox"), with the
+    /// running platform's refresh keys: F5, and Cmd+R on macOS and iOS or
+    /// Ctrl+R elsewhere.
+    #[must_use]
+    pub fn command(label: impl Into<String>) -> GestureCommand {
+        GestureCommand::new(label, Self)
+            .key(SingleActivator::named(NamedKey::F5))
+            .key(reload_chord(TargetPlatform::current()))
+    }
+}
+
+fn reload_chord(platform: TargetPlatform) -> SingleActivator {
+    let chord = SingleActivator::character("r");
+    match platform {
+        TargetPlatform::MacOS | TargetPlatform::iOS => chord.meta(),
+        _ => chord.control(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RefreshController — what the indicator shows, for the caller to observe
 // ---------------------------------------------------------------------------
 
 struct RefreshControllerInner {
@@ -80,13 +135,11 @@ struct RefreshControllerInner {
     notifier: ChangeNotifier,
 }
 
-impl std::fmt::Debug for RefreshControllerInner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let is_refreshing = self.refreshing.get();
-        let pull = self.pull_distance_px.get();
+impl fmt::Debug for RefreshControllerInner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RefreshControllerInner")
-            .field("is_refreshing", &is_refreshing)
-            .field("pull_distance_px", &pull)
+            .field("is_refreshing", &self.refreshing.get())
+            .field("pull_distance_px", &self.pull_distance_px.get())
             .finish_non_exhaustive()
     }
 }
@@ -109,18 +162,12 @@ impl Listenable for RefreshControllerInner {
     }
 }
 
-// ---------------------------------------------------------------------------
-// RefreshController — public caller handle
-// ---------------------------------------------------------------------------
-
-/// Caller-facing handle for querying the refresh phase and signalling
-/// completion.
+/// The phase and the pull of a [`RefreshIndicator`], for its caller to
+/// observe.
 ///
-/// Create via [`RefreshController::new`], pass to
-/// [`RefreshIndicator::controller`], and call [`finish`](Self::finish) after
-/// the refresh operation completes to dismiss the spinner.
-///
-/// Every clone shares the same state on the owning UI thread via `Rc`.
+/// Pass one to [`RefreshIndicator::controller`]; every clone shares the same
+/// state on the owning UI thread. The indicator writes it and notifies its
+/// [`listenable`](Self::listenable) on every change.
 #[derive(Clone, Debug)]
 pub struct RefreshController {
     inner: Rc<RefreshControllerInner>,
@@ -139,65 +186,48 @@ impl Default for RefreshController {
 }
 
 impl RefreshController {
-    /// Create a controller in the idle (non-refreshing) state.
+    /// A controller of an idle indicator.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Returns `true` while [`on_refresh`](RefreshIndicator::on_refresh) has
-    /// been called but [`finish`](Self::finish) has not yet been called.
+    /// Whether a refresh runs: from the moment it started until the future
+    /// [`on_refresh`](RefreshIndicator::on_refresh) returned completes, or
+    /// the indicator goes away.
     #[must_use]
     pub fn is_refreshing(&self) -> bool {
         self.inner.refreshing.get()
     }
 
-    /// The current pull distance in logical pixels.
-    ///
-    /// Non-zero only while the user is actively overscrolling past the top.
-    /// Resets to `0.0` when the pointer lifts or a refresh begins.
+    /// How far the indicator is pulled past the leading edge, in logical
+    /// pixels: the contact's travel while it pulls, then the settling
+    /// distance back to `0.0`.
     #[must_use]
     pub fn pull_distance_px(&self) -> f64 {
         self.inner.pull_distance_px.get()
     }
 
-    /// Signal that the refresh operation is complete. Hides the spinner and
-    /// transitions back to idle.
-    ///
-    /// Calling while idle leaves the phase unchanged and still notifies listeners.
-    pub fn finish(&self) {
-        self.inner.refreshing.set(false);
-        self.inner.notifier.notify_listeners();
-    }
-
-    /// An `Rc<dyn Listenable>` sharing this controller's notification channel.
-    ///
-    /// Subscribe via [`AnimatedBuilder`](crate::transitions::AnimatedBuilder) to rebuild when the refresh phase or
-    /// pull distance changes.
+    /// An `Rc<dyn Listenable>` sharing this controller's notifications.
     #[must_use]
     pub fn listenable(&self) -> Rc<dyn Listenable> {
         Rc::clone(&self.inner) as Rc<dyn Listenable>
     }
 
-    // -- crate-internal mutation called from gesture callbacks ----------------
-
-    pub(super) fn set_pull_distance_px(&self, distance_px: f64) {
-        self.inner.pull_distance_px.set(distance_px);
-        self.inner.notifier.notify_listeners();
-    }
-
-    /// Whether `other` is a clone of this controller (the same shared state).
     fn shares_state_with(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.inner, &other.inner)
     }
 
-    fn begin_refresh_with_recovery(
-        &self,
-        recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
-    ) {
-        self.inner.refreshing.set(true);
-        self.inner.pull_distance_px.set(0.0);
-        self.inner.notifier.notify_listeners_with_recovery(recovery);
+    fn set_pull(&self, distance_px: f64, recovery: &mut PanicRecovery) {
+        if self.inner.pull_distance_px.replace(distance_px) != distance_px {
+            recovery.run_with(|scope| self.inner.notifier.notify_listeners_with_recovery(scope));
+        }
+    }
+
+    fn set_refreshing(&self, refreshing: bool, recovery: &mut PanicRecovery) {
+        if self.inner.refreshing.replace(refreshing) != refreshing {
+            recovery.run_with(|scope| self.inner.notifier.notify_listeners_with_recovery(scope));
+        }
     }
 }
 
@@ -209,12 +239,12 @@ impl RefreshController {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum RefreshIndicatorPhase {
-    /// The user is pulling past the top.
+    /// The user is pulling past the leading edge.
     Pulling {
         /// The pull as a share of the threshold that triggers a refresh, in `[0, 1]`.
         progress: f64,
     },
-    /// The refresh is running, until [`RefreshController::finish`].
+    /// The refresh is running, until its future completes.
     Refreshing,
 }
 
@@ -222,10 +252,9 @@ pub enum RefreshIndicatorPhase {
 ///
 /// The builder returns the view to show for a phase, or `None` for nothing. It runs when the
 /// phase changes and, while pulling, as the pull grows; the view it returns is laid out in the
-/// indicator's slot at the top of the content, and builds in the refresh indicator's own
-/// context, so it reads the theme there. The nearest style wins. Without one, an
-/// [`ActivityIndicator`] shows while refreshing and nothing shows while pulling, and a pull
-/// rebuilds nothing.
+/// indicator's band at the leading edge of the content, and builds in the refresh indicator's
+/// own context, so it reads the theme there. The nearest style wins. Without one, the band
+/// holds an [`ActivityIndicator`] (ADR-0235).
 ///
 /// # Example
 ///
@@ -266,8 +295,8 @@ impl RefreshIndicatorStyle {
     }
 }
 
-impl std::fmt::Debug for RefreshIndicatorStyle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for RefreshIndicatorStyle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RefreshIndicatorStyle")
             .finish_non_exhaustive()
     }
@@ -292,134 +321,421 @@ impl InheritedView for RefreshIndicatorStyle {
 impl_inherited_view!(RefreshIndicatorStyle);
 
 // ---------------------------------------------------------------------------
-// RefreshIndicator — StatefulView
+// RefreshIndicator
 // ---------------------------------------------------------------------------
 
-/// Pull-to-refresh gesture wrapper that fires a callback when the user drags
-/// down past the top of the scrollable content by more than
-/// [`threshold_px`](Self::threshold_px) and releases.
+/// Starts a refresh: the future that completes it.
+type RefreshCallback = Rc<dyn Fn(&mut EventCx<'_>) -> BoxedTask>;
+
+/// Pull to refresh over the scrollables in its child (see the
+/// `refresh_indicator` module documentation).
 ///
-/// # Content child
+/// ```rust
+/// use flui_widgets::{
+///     Alternative, ControlSpec, GestureAlternatives, RefreshIndicator, RefreshIntent, Scrollable,
+///     SizedBox, Text,
+/// };
 ///
-/// The `child` is the **scrollable content** (e.g. a `SizedBox` or render
-/// widget), **not** a [`Scrollable`](super::Scrollable) widget.
-/// `RefreshIndicator` manages the scroll gesture internally to prevent
-/// arena competition with a nested `Scrollable`.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let refresh_ctrl = RefreshController::new();
-/// let scroll_ctrl  = ScrollController::new();
-/// scroll_ctrl.update_dimensions(400.0, 0.0, 1600.0);
-///
-/// RefreshIndicator::new()
-///     .controller(refresh_ctrl.clone())
-///     .scroll_controller(scroll_ctrl)
-///     .on_refresh(|_cx| { /* start background work */ })
-///     .child(MyContent::new())
-/// // later, after the work is done: refresh_ctrl.finish()
+/// let alternatives = GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+///     RefreshIntent::command("Refresh inbox"),
+///     Text::new("Refresh"),
+/// )))
+/// .expect("one labelled command");
+/// let inbox = RefreshIndicator::new(
+///     Scrollable::new().child(SizedBox::new(300.0, 1400.0)),
+///     alternatives,
+/// )
+/// .on_refresh(|_cx| async { /* fetch the messages */ });
 /// ```
 #[derive(Clone, StatefulView)]
 pub struct RefreshIndicator {
-    /// Scrollable content — NOT a `Scrollable` widget.
-    child: Child,
-    /// Caller handle for querying state and calling `finish()`.
-    controller: RefreshController,
-    /// Fired when the user releases after an over-threshold pull.
-    on_refresh: Rc<dyn Fn(&mut EventCx<'_>)>,
-    /// Minimum overscroll distance (logical pixels) to trigger refresh.
+    child: BoxedView,
+    alternatives: GestureAlternatives,
+    controller: Option<RefreshController>,
+    on_refresh: RefreshCallback,
     threshold_px: f64,
-    /// Scroll boundary / fling behaviour.
-    physics: SharedScrollPhysics,
-    /// Scroll position shared between gesture callbacks and the view tree.
-    /// Call [`ScrollController::update_dimensions`] before layout.
-    scroll_controller: ScrollController,
+    axis: Axis,
 }
 
-impl std::fmt::Debug for RefreshIndicator {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for RefreshIndicator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RefreshIndicator")
             .field("threshold_px", &self.threshold_px)
-            .field("controller", &self.controller)
-            .field("scroll_controller", &self.scroll_controller)
+            .field("axis", &self.axis)
+            .field("alternatives", &self.alternatives)
             .finish_non_exhaustive()
     }
 }
 
-impl Default for RefreshIndicator {
-    fn default() -> Self {
+impl RefreshIndicator {
+    /// Pull to refresh over the scrollables in `child`, reached without the
+    /// pull through `alternatives`, whose first command performs
+    /// [`RefreshIntent`].
+    pub fn new(child: impl IntoView, alternatives: GestureAlternatives) -> Self {
         Self {
-            child: Child::empty(),
-            controller: RefreshController::new(),
-            on_refresh: Rc::new(|_cx| {}),
+            child: child.into_view().boxed(),
+            alternatives,
+            controller: None,
+            on_refresh: Rc::new(|_cx| Box::pin(std::future::ready(()))),
             threshold_px: DEFAULT_THRESHOLD_PX,
-            physics: Arc::new(ClampingScrollPhysics::default()),
-            scroll_controller: ScrollController::new(),
+            axis: Axis::Vertical,
         }
+    }
+
+    /// Start the refresh: called with the event's context when one starts,
+    /// on any path. The refresh runs until the returned future completes.
+    #[must_use]
+    pub fn on_refresh<F>(mut self, on_refresh: impl Fn(&mut EventCx<'_>) -> F + 'static) -> Self
+    where
+        F: Future<Output = ()> + 'static,
+    {
+        self.on_refresh = Rc::new(move |cx| Box::pin(on_refresh(cx)));
+        self
+    }
+
+    /// Observe the phase and the pull through `controller`.
+    #[must_use]
+    pub fn controller(mut self, controller: RefreshController) -> Self {
+        self.controller = Some(controller);
+        self
+    }
+
+    /// The pull past the leading edge, in logical pixels, that refreshes
+    /// (default `80.0`). A value that is not finite and positive keeps the
+    /// default.
+    #[must_use]
+    pub fn threshold_px(mut self, threshold: f64) -> Self {
+        if threshold.is_finite() && threshold > 0.0 {
+            self.threshold_px = threshold;
+        } else {
+            tracing::warn!(
+                threshold,
+                "RefreshIndicator: a threshold must be finite and positive"
+            );
+        }
+        self
+    }
+
+    /// The axis it pulls along (default vertical): down from the top of a
+    /// vertical scrollable, toward the reading end from the reading start
+    /// of a horizontal one — right from its left edge, or left from its
+    /// right edge under the ambient right-to-left [`Directionality`].
+    #[must_use]
+    pub fn axis(mut self, axis: Axis) -> Self {
+        self.axis = axis;
+        self
     }
 }
 
-impl RefreshIndicator {
-    /// Create a `RefreshIndicator` with default settings.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+// ---------------------------------------------------------------------------
+// Refresher — the participant and the refresh it starts
+// ---------------------------------------------------------------------------
+
+/// What the indicator keeps behind its connection: the pull of the contact
+/// that pulls, the refresh in flight and the capabilities that start and
+/// finish one.
+struct Refresher {
+    /// This refresher, for the deferred command and the refresh task.
+    this: Weak<Refresher>,
+    controller: RefCell<RefreshController>,
+    axis: Cell<Axis>,
+    /// The ambient reading direction, which places a horizontal axis's
+    /// start.
+    text_direction: Cell<TextDirection>,
+    threshold_px: Cell<f64>,
+    on_refresh: RefCell<RefreshCallback>,
+    /// The contact sequence pulling now, and its travel past the edge.
+    pulling: Cell<Option<InputSequenceId>>,
+    travel: Cell<f64>,
+    /// The gesture's command, resolved by the latest build below the
+    /// indicator's action.
+    command: RefCell<Option<CommandHandle>>,
+    writer: RefCell<Option<WriterSource>>,
+    post_frame: RefCell<Option<PostFrameHandle>>,
+    driver: RefCell<Option<AsyncDriver>>,
+    /// The refresh in flight; dropping it cancels the future.
+    task: RefCell<Option<TaskToken>>,
+    /// The settling run: its value is the fraction of `settle_from` left.
+    settle: AnimationController,
+    settle_from: Cell<f64>,
+    settle_bound: Cell<bool>,
+    mounted: Cell<bool>,
+}
+
+impl Refresher {
+    fn new(view: &RefreshIndicator, settle: AnimationController) -> Rc<Self> {
+        Rc::new_cyclic(|this| Self {
+            this: this.clone(),
+            controller: RefCell::new(view.controller.clone().unwrap_or_default()),
+            axis: Cell::new(view.axis),
+            text_direction: Cell::new(TextDirection::Ltr),
+            threshold_px: Cell::new(view.threshold_px),
+            on_refresh: RefCell::new(Rc::clone(&view.on_refresh)),
+            pulling: Cell::new(None),
+            travel: Cell::new(0.0),
+            command: RefCell::new(None),
+            writer: RefCell::new(None),
+            post_frame: RefCell::new(None),
+            driver: RefCell::new(None),
+            task: RefCell::new(None),
+            settle,
+            settle_from: Cell::new(0.0),
+            settle_bound: Cell::new(false),
+            mounted: Cell::new(false),
+        })
     }
 
-    /// Set the scrollable content child.
+    fn controller(&self) -> RefreshController {
+        self.controller.borrow().clone()
+    }
+
+    /// Whether the pull axis starts at its physical far end: a horizontal
+    /// axis under right-to-left text starts on the right.
+    fn starts_at_far_end(&self) -> bool {
+        self.axis.get() == Axis::Horizontal && self.text_direction.get().is_rtl()
+    }
+
+    /// `delta`'s component along the pull axis, growing away from its
+    /// reading start: negative toward the start.
+    fn along(&self, delta: Vec2) -> f64 {
+        let physical = match self.axis.get() {
+            Axis::Vertical => delta.y,
+            Axis::Horizontal => delta.x,
+        };
+        if self.starts_at_far_end() {
+            -physical
+        } else {
+            physical
+        }
+    }
+
+    /// The physical vector of `value` along the pull axis, as [`along`]
+    /// measures it.
     ///
-    /// Provide the **content** widget, not a `Scrollable`.
-    #[must_use]
-    pub fn child(mut self, child: impl IntoView) -> Self {
-        self.child = Child::some(child.into_view());
-        self
+    /// [`along`]: Self::along
+    fn on_axis(&self, value: f64) -> Vec2 {
+        let physical = if self.starts_at_far_end() {
+            -value
+        } else {
+            value
+        };
+        match self.axis.get() {
+            Axis::Vertical => Vec2::new(0.0, physical),
+            Axis::Horizontal => Vec2::new(physical, 0.0),
+        }
     }
 
-    /// Attach the [`RefreshController`] the caller uses to call
-    /// [`finish`](RefreshController::finish).
-    #[must_use]
-    pub fn controller(mut self, controller: RefreshController) -> Self {
-        self.controller = controller;
-        self
+    fn show_pull(&self, distance_px: f64) {
+        let mut recovery = PanicRecovery::new();
+        self.controller().set_pull(distance_px, &mut recovery);
+        recovery.finish();
     }
 
-    /// Attach a [`ScrollController`] to share the scroll position externally.
-    ///
-    /// Call [`ScrollController::update_dimensions`] before layout so physics
-    /// boundaries are correct on the first frame.
-    #[must_use]
-    pub fn scroll_controller(mut self, sc: ScrollController) -> Self {
-        self.scroll_controller = sc;
-        self
+    /// Let the shown pull settle back to zero from where it is.
+    fn settle_back(&self) {
+        let from = self.controller().pull_distance_px();
+        let _ = self.settle.stop();
+        if from == 0.0 {
+            return;
+        }
+        self.settle_from.set(from);
+        if self.settle_bound.get() {
+            self.settle.set_value(1.0);
+            if self
+                .settle
+                .animate_to_curved(0.0, Some(SETTLE), flui_animation::curves::EASE_OUT)
+                .is_ok()
+            {
+                return;
+            }
+        }
+        self.show_pull(0.0);
     }
 
-    /// Set the callback fired when a sufficient pull completes.
-    ///
-    /// Called synchronously on the frame the pointer lifts. Signal completion
-    /// by calling [`RefreshController::finish`] on the controller provided to
-    /// [`controller`](Self::controller).
-    #[must_use]
-    pub fn on_refresh<R: EventOutcome>(
-        mut self,
-        f: impl Fn(&mut EventCx<'_>) -> R + 'static,
-    ) -> Self {
-        self.on_refresh = Rc::new(move |cx| f(cx).report());
-        self
+    /// The settling run moved.
+    fn settled_to(&self, fraction: f64) {
+        if self.pulling.get().is_none() {
+            self.show_pull(self.settle_from.get() * fraction);
+        }
     }
 
-    /// Override the pull threshold in logical pixels (default: `80.0`).
-    #[must_use]
-    pub fn threshold_px(mut self, threshold: f64) -> Self {
-        self.threshold_px = threshold;
-        self
+    /// The pull of `sequence` ends: settle back, and refresh when `release`
+    /// and the pull reached the threshold.
+    fn end_pull(&self, sequence: InputSequenceId, release: bool) {
+        if self.pulling.get() != Some(sequence) {
+            return;
+        }
+        self.pulling.set(None);
+        let travel = self.travel.replace(0.0);
+        self.settle_back();
+        if release && travel >= self.threshold_px.get() && !self.controller().is_refreshing() {
+            self.perform_after_frame();
+        }
     }
 
-    /// Override scroll physics (default: [`ClampingScrollPhysics`]).
-    #[must_use]
-    pub fn physics(mut self, physics: SharedScrollPhysics) -> Self {
-        self.physics = physics;
-        self
+    /// Perform the gesture's command once the frame is over: outside the
+    /// scroll chain, so the refresh may scroll the content it refreshes.
+    fn perform_after_frame(&self) {
+        let Some(post_frame) = self.post_frame.borrow().clone() else {
+            tracing::warn!("RefreshIndicator: no post-frame lane; the pull does not refresh");
+            return;
+        };
+        let refresher = self.this.clone();
+        if let Err(error) = post_frame.schedule(move |_| {
+            if let Some(refresher) = refresher.upgrade() {
+                refresher.perform_command();
+            }
+        }) {
+            tracing::warn!(?error, "RefreshIndicator: the post-frame lane is closed");
+        }
+    }
+
+    fn perform_command(&self) {
+        if !self.mounted.get() {
+            return;
+        }
+        let command = self.command.borrow().clone();
+        let writer = self.writer.borrow().clone();
+        if let (Some(command), Some(writer)) = (command, writer) {
+            writer.write(|cx| command.perform(cx));
+        }
+    }
+
+    /// Start one refresh, unless one runs.
+    fn start(&self, cx: &mut EventCx<'_>) -> ActionOutcome {
+        let controller = self.controller();
+        if !self.mounted.get() || controller.is_refreshing() {
+            return ActionOutcome::NotPerformed;
+        }
+        let mut recovery = PanicRecovery::new();
+        controller.set_refreshing(true, &mut recovery);
+        let on_refresh = Rc::clone(&*self.on_refresh.borrow());
+        let mut future = None;
+        recovery.run(|| future = Some(on_refresh(cx)));
+        let driver = self.driver.borrow().clone();
+        match (future, driver) {
+            (Some(future), Some(driver)) if self.mounted.get() => {
+                // The task is the refresh: one runs at a time, and dropping
+                // its token (unmount) cancels it before it can complete.
+                let refresher = self.this.clone();
+                let token = driver.spawn_local(Box::pin(async move {
+                    future.await;
+                    if let Some(refresher) = refresher.upgrade() {
+                        refresher.complete();
+                    }
+                }));
+                let outgoing = self.task.replace(Some(token));
+                recovery.retire(outgoing);
+            }
+            (future, driver) => {
+                if driver.is_none() {
+                    tracing::warn!("RefreshIndicator: no async driver; the refresh ends at once");
+                }
+                recovery.retire(future);
+                self.complete();
+            }
+        }
+        recovery.finish();
+        ActionOutcome::Performed
+    }
+
+    /// The running refresh completed.
+    fn complete(&self) {
+        let mut recovery = PanicRecovery::new();
+        self.controller().set_refreshing(false, &mut recovery);
+        recovery.finish();
+    }
+
+    /// The indicator goes away: cancel its refresh and show it idle.
+    fn retire(&self) {
+        self.mounted.set(false);
+        self.pulling.set(None);
+        self.travel.set(0.0);
+        let _ = self.settle.stop();
+        let task = self.task.take();
+        let command = self.command.take();
+        let controller = self.controller();
+        let mut recovery = PanicRecovery::new();
+        recovery.retire(task);
+        recovery.retire(command);
+        controller.set_refreshing(false, &mut recovery);
+        controller.set_pull(0.0, &mut recovery);
+        recovery.finish();
+    }
+}
+
+impl NestedScrollConnection for Refresher {
+    fn pre_scroll(&self, step: &ScrollStep) -> Vec2 {
+        // A finger reversing its pull takes the pull back before anything
+        // scrolls.
+        if self.pulling.get() != Some(step.sequence) || step.cause != ScrollCause::UserInput {
+            return Vec2::ZERO;
+        }
+        let back = self.along(step.available);
+        let travel = self.travel.get();
+        if back <= 0.0 || travel <= 0.0 {
+            return Vec2::ZERO;
+        }
+        let taken = back.min(travel);
+        self.travel.set(travel - taken);
+        self.show_pull(travel - taken);
+        self.on_axis(taken)
+    }
+
+    fn post_scroll(&self, step: &ScrollStep, _consumed_by_child: Vec2) -> Vec2 {
+        // Only a contact pulls: a wheel or trackpad packet at the top
+        // reaches the chain too, and pulls nothing.
+        if step.cause != ScrollCause::UserInput || !step.contact || !self.mounted.get() {
+            return Vec2::ZERO;
+        }
+        if self.controller().is_refreshing() {
+            return Vec2::ZERO;
+        }
+        if self
+            .pulling
+            .get()
+            .is_some_and(|pulling| pulling != step.sequence)
+        {
+            return Vec2::ZERO;
+        }
+        let toward_start = self.along(step.available);
+        if toward_start >= 0.0 {
+            return Vec2::ZERO;
+        }
+        if self.pulling.get().is_none() {
+            // Catch the indicator where it is settling.
+            let _ = self.settle.stop();
+            self.travel.set(self.controller().pull_distance_px());
+            self.pulling.set(Some(step.sequence));
+        }
+        let travel = self.travel.get() - toward_start;
+        self.travel.set(travel);
+        self.show_pull(travel);
+        self.on_axis(toward_start)
+    }
+
+    fn released(&self, step: &FlingStep) {
+        self.end_pull(step.sequence, true);
+    }
+
+    fn sequence_ended(&self, sequence: InputSequenceId, _reason: ScrollEndReason) {
+        // Cancelled, given to another gesture or preempted before it was
+        // released: the pull settles back and refreshes nothing.
+        self.end_pull(sequence, false);
+    }
+}
+
+/// The indicator's binding of [`RefreshIntent`]: every path that performs
+/// it starts the refresh through the same refresher.
+struct RefreshAction {
+    refresher: Weak<Refresher>,
+}
+
+impl Action<RefreshIntent> for RefreshAction {
+    fn invoke(&self, cx: &mut EventCx<'_>, _intent: &RefreshIntent) -> ActionOutcome {
+        self.refresher
+            .upgrade()
+            .map_or(ActionOutcome::NotPerformed, |refresher| refresher.start(cx))
     }
 }
 
@@ -427,41 +743,22 @@ impl RefreshIndicator {
 // State
 // ---------------------------------------------------------------------------
 
-/// Persistent state for [`RefreshIndicator`].
-///
-/// Owns the fling [`AnimationController`] and its vsync registration,
-/// mirroring the pattern used by [`Scrollable`](super::Scrollable).
+/// Persistent state for [`RefreshIndicator`]: its participant, kept for as
+/// long as it is mounted so the scrollables below keep their chain, and the
+/// registry seat of its settling run.
 pub struct RefreshIndicatorState {
-    recognizer_owner: Rc<()>,
-    fling_authority: Rc<Cell<FlingAuthority>>,
-    /// The scroll controller from the current view configuration.
-    /// Updated in `did_update_view` when the caller swaps controllers.
-    scroll_controller: ScrollController,
-    /// Ballistic simulation driver (wide-open bounds so pixel values are never
-    /// clamped by the controller itself). A value listener pushes current pixel
-    /// values into `scroll_controller` each vsync tick.
-    fling_controller: DrivenController,
-    /// Listener ID on `fling_controller`; removed in `dispose`.
-    fling_listener_id: Option<ListenerId>,
-    fling_status_subscription: Option<flui_animation::StatusSubscription>,
-    /// Registry identity for gesture cancellation policy; the driver owns its seat.
+    refresher: Rc<Refresher>,
+    connection: Rc<dyn NestedScrollConnection>,
+    settle: DrivenController,
+    settle_listener: Option<ListenerId>,
     vsync: Option<Vsync>,
-    /// Presentation metrics acquired before event callbacks are installed.
-    pipeline: Option<WeakPipelineCell>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum FlingAuthority {
-    Detached,
-    Attached,
-    Retired,
-}
-
-impl std::fmt::Debug for RefreshIndicatorState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for RefreshIndicatorState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RefreshIndicatorState")
-            .field("scroll_controller", &self.scroll_controller)
-            .field("fling_registered", &self.fling_controller.is_bound())
+            .field("controller", &self.refresher.controller())
+            .field("settle_bound", &self.settle.is_bound())
             .finish_non_exhaustive()
     }
 }
@@ -470,48 +767,19 @@ impl StatefulView for RefreshIndicator {
     type State = RefreshIndicatorState;
 
     fn create_state(&self) -> Self::State {
-        // Unbounded: pixel values from the ballistic simulation are never
-        // clamped by the controller — the simulation's own `is_done`
-        // terminates the run. Unboundedness is a constructor fact (#1183),
-        // not a bound value. No ticker: `Vsync` drives this controller once
-        // registered.
-        let fling_controller = AnimationController::builder(Duration::from_millis(1))
-            .debug_label("RefreshIndicator.fling")
-            .behavior(flui_animation::AnimationBehavior::Preserve)
-            .unbounded()
+        let settle = AnimationController::builder(SETTLE)
+            .debug_label("RefreshIndicator.settle")
             .build_on(None);
-
+        let refresher = Refresher::new(self, settle.controller().clone());
+        let connection: Rc<dyn NestedScrollConnection> = refresher.clone();
         RefreshIndicatorState {
-            recognizer_owner: Rc::new(()),
-            fling_authority: Rc::new(Cell::new(FlingAuthority::Detached)),
-            scroll_controller: self.scroll_controller.clone(),
-            fling_controller,
-            fling_listener_id: None,
-            fling_status_subscription: None,
+            refresher,
+            connection,
+            settle,
+            settle_listener: None,
             vsync: None,
-            pipeline: None,
         }
     }
-}
-
-/// Observes refresh-phase changes and, while `tracks_pull` is set, pull-distance changes,
-/// committing each observation before the callback. Registration does not call listeners, so
-/// the initial observation cannot go stale.
-fn listen_for_refresh_changes(
-    controller: &RefreshController,
-    tracks_pull: Rc<Cell<bool>>,
-    on_change: impl Fn() + 'static,
-) -> ListenerId {
-    let watched = controller.clone();
-    let seen = Cell::new((watched.is_refreshing(), watched.pull_distance_px()));
-    controller.inner.add_listener(Rc::new(move || {
-        let current = (watched.is_refreshing(), watched.pull_distance_px());
-        let (refreshing, pull) = seen.replace(current);
-        // `!=` on the pull also catches NaN, which never equals itself.
-        if refreshing != current.0 || (tracks_pull.get() && pull != current.1) {
-            on_change();
-        }
-    }))
 }
 
 impl RefreshIndicatorState {
@@ -526,61 +794,163 @@ impl RefreshIndicatorState {
             return;
         }
         self.vsync = incoming;
-        self.fling_authority.set(FlingAuthority::Detached);
-        // Stop at sampled pixels before detachment can settle a finite run.
-        let _ = self.fling_controller.controller().stop();
-        let rebound = self.fling_controller.rebind(self.vsync.as_ref());
-        self.fling_authority
-            .set(if self.fling_controller.is_bound() {
-                FlingAuthority::Attached
-            } else {
-                FlingAuthority::Detached
-            });
+        // A run on the old clock ends where it is.
+        let _ = self.settle.controller().stop();
+        let rebound = self.settle.rebind(self.vsync.as_ref());
+        self.refresher.settle_bound.set(self.settle.is_bound());
         if let Err(error) = rebound {
             tracing::error!(%error, "RefreshIndicator lost its frame registry");
         }
     }
 
-    fn install_fling_listener(&mut self) {
-        if let Some(id) = self.fling_listener_id.take() {
-            self.fling_controller.controller().remove_listener(id);
-        }
-        let fling = self.fling_controller.controller().clone();
-        let scroll = self.scroll_controller.clone();
-        self.fling_listener_id = Some(self.fling_controller.controller().add_listener(
-            std::rc::Rc::new(move || {
-                scroll.set_pixels(fling.value());
-            }),
-        ));
-        drop(self.fling_status_subscription.take());
-        let position = self.scroll_controller.position();
-        self.fling_status_subscription = Some(self.fling_controller.controller().subscribe_status(
-            Rc::new(move |status| {
-                if matches!(
-                    status,
-                    AnimationStatus::ForwardSettled | AnimationStatus::ReverseSettled
-                ) {
-                    position.set_is_scrolling(false);
-                }
-            }),
-        ));
+    /// Point the indicator at `incoming`: it takes over the phase and the
+    /// pull, and the outgoing controller is left idle.
+    fn replace_controller(&self, incoming: RefreshController) {
+        let outgoing = self.refresher.controller.replace(incoming.clone());
+        let mut recovery = PanicRecovery::new();
+        incoming.set_refreshing(outgoing.is_refreshing(), &mut recovery);
+        incoming.set_pull(outgoing.pull_distance_px(), &mut recovery);
+        outgoing.set_refreshing(false, &mut recovery);
+        outgoing.set_pull(0.0, &mut recovery);
+        recovery.finish();
     }
 }
 
-/// Owns refresh-phase invalidation independently of the scrolling subtree.
+impl ViewState<RefreshIndicator> for RefreshIndicatorState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        *self.refresher.writer.borrow_mut() = Some(ctx.writer_source());
+        self.refresher.mounted.set(true);
+        let settle = self.settle.controller().clone();
+        let weak = Rc::downgrade(&self.refresher);
+        self.settle_listener = Some(self.settle.controller().add_listener(Rc::new(move || {
+            if let Some(refresher) = weak.upgrade() {
+                refresher.settled_to(settle.value());
+            }
+        })));
+        self.did_change_dependencies(ctx);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        *self.refresher.post_frame.borrow_mut() = ctx.post_frame_handle();
+        *self.refresher.driver.borrow_mut() = ctx.async_driver();
+        self.refresher
+            .text_direction
+            .set(Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr));
+        self.bind_vsync(ctx);
+    }
+
+    fn build(&self, view: &RefreshIndicator, _ctx: &dyn BuildContext) -> impl IntoView {
+        Actions::new(RefreshBody {
+            refresher: Rc::clone(&self.refresher),
+            alternatives: view.alternatives.clone(),
+            content: NestedScroll::new(Rc::clone(&self.connection), view.child.clone()).boxed(),
+        })
+        .action(RefreshAction {
+            refresher: Rc::downgrade(&self.refresher),
+        })
+    }
+
+    fn did_update_view(&mut self, _old_view: &RefreshIndicator, new_view: &RefreshIndicator) {
+        let refresher = &self.refresher;
+        refresher.axis.set(new_view.axis);
+        refresher.threshold_px.set(new_view.threshold_px);
+        let outgoing = refresher
+            .on_refresh
+            .replace(Rc::clone(&new_view.on_refresh));
+        drop(outgoing);
+        // Without a controller of its own, a rebuild keeps the one the
+        // indicator has.
+        if let Some(incoming) = &new_view.controller
+            && !incoming.shares_state_with(&refresher.controller())
+        {
+            self.replace_controller(incoming.clone());
+        }
+    }
+
+    fn dispose(&mut self) {
+        self.refresher.retire();
+        if let Some(id) = self.settle_listener.take() {
+            self.settle.controller().remove_listener(id);
+        }
+        self.settle.dispose();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Body and overlay
+// ---------------------------------------------------------------------------
+
+/// The content inside the alternatives, below the indicator's action, where
+/// the gesture resolves its command as the alternatives do.
+#[derive(Clone, StatelessView)]
+struct RefreshBody {
+    refresher: Rc<Refresher>,
+    alternatives: GestureAlternatives,
+    content: BoxedView,
+}
+
+impl fmt::Debug for RefreshBody {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RefreshBody").finish_non_exhaustive()
+    }
+}
+
+impl StatelessView for RefreshBody {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        if self
+            .alternatives
+            .commands()
+            .next()
+            .is_some_and(|command| !command.performs::<RefreshIntent>())
+        {
+            tracing::warn!(
+                target: "flui::a11y",
+                "RefreshIndicator: the first command of its alternatives does not perform \
+                 RefreshIntent, so the pull performs it without refreshing; build it with \
+                 RefreshIntent::command"
+            );
+        }
+        let outgoing = self
+            .refresher
+            .command
+            .replace(Some(self.alternatives.handle(ctx)));
+        drop(outgoing);
+        let overlay = RefreshOverlay {
+            controller: self.refresher.controller(),
+            axis: self.refresher.axis.get(),
+            from_far_end: self.refresher.starts_at_far_end(),
+            threshold_px: self.refresher.threshold_px.get(),
+        };
+        self.alternatives
+            .clone()
+            .child(Stack::new(vec![self.content.clone(), overlay.boxed()]))
+    }
+}
+
+/// Shows the pull and the refresh; the only part of the indicator that
+/// rebuilds while a contact pulls.
 #[derive(Clone, StatefulView)]
 struct RefreshOverlay {
     controller: RefreshController,
+    axis: Axis,
+    /// The pull axis starts at its physical far end (the right, under
+    /// right-to-left text), where the band slides in from.
+    from_far_end: bool,
     threshold_px: f64,
+}
+
+impl fmt::Debug for RefreshOverlay {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RefreshOverlay")
+            .field("controller", &self.controller)
+            .finish_non_exhaustive()
+    }
 }
 
 struct RefreshOverlayState {
     rebuild: Option<RebuildHandle>,
-    phase_subscription: Option<(RefreshController, ListenerId)>,
-    initial_controller: Option<RefreshController>,
-    /// Whether the last build found a [`RefreshIndicatorStyle`], whose indicator may follow
-    /// the pull; without one a pull rebuilds nothing.
-    tracks_pull: Rc<Cell<bool>>,
+    subscription: Option<(RefreshController, ListenerId)>,
+    initial: Option<RefreshController>,
 }
 
 impl StatefulView for RefreshOverlay {
@@ -589,31 +959,31 @@ impl StatefulView for RefreshOverlay {
     fn create_state(&self) -> Self::State {
         RefreshOverlayState {
             rebuild: None,
-            phase_subscription: None,
-            initial_controller: Some(self.controller.clone()),
-            tracks_pull: Rc::new(Cell::new(false)),
+            subscription: None,
+            initial: Some(self.controller.clone()),
         }
     }
 }
 
 impl RefreshOverlayState {
-    /// Listens to `controller` and rebuilds when its refresh phase flips and, under a
-    /// [`RefreshIndicatorStyle`], when the pull changes. Without a style a pull-distance
-    /// change reaches external listeners of [`RefreshController::listenable`] but rebuilds
-    /// nothing here.
-    fn subscribe_phase(&mut self, controller: &RefreshController) {
-        self.unsubscribe_phase();
+    fn subscribe(&mut self, controller: &RefreshController) {
+        self.unsubscribe();
         let Some(rebuild) = self.rebuild.clone() else {
             return;
         };
-        let id = listen_for_refresh_changes(controller, Rc::clone(&self.tracks_pull), move || {
-            rebuild.schedule(RebuildReason::StateChange);
-        });
-        self.phase_subscription = Some((controller.clone(), id));
+        let watched = controller.clone();
+        let shown = Cell::new((watched.is_refreshing(), watched.pull_distance_px()));
+        let id = controller.inner.add_listener(Rc::new(move || {
+            let current = (watched.is_refreshing(), watched.pull_distance_px());
+            if shown.replace(current) != current {
+                rebuild.schedule(RebuildReason::StateChange);
+            }
+        }));
+        self.subscription = Some((controller.clone(), id));
     }
 
-    fn unsubscribe_phase(&mut self) {
-        if let Some((controller, id)) = self.phase_subscription.take() {
+    fn unsubscribe(&mut self) {
+        if let Some((controller, id)) = self.subscription.take() {
             controller.inner.remove_listener(id);
         }
     }
@@ -622,257 +992,74 @@ impl RefreshOverlayState {
 impl ViewState<RefreshOverlay> for RefreshOverlayState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.rebuild = Some(ctx.rebuild_handle());
-        if let Some(controller) = self.initial_controller.take() {
-            self.subscribe_phase(&controller);
+        if let Some(controller) = self.initial.take() {
+            self.subscribe(&controller);
         }
     }
 
     fn build(&self, view: &RefreshOverlay, ctx: &dyn BuildContext) -> impl IntoView {
         let style = ctx.depend_on::<RefreshIndicatorStyle, _>(|style| Rc::clone(&style.builder));
-        self.tracks_pull.set(style.is_some());
+        let refreshing = view.controller.is_refreshing();
         let pull = view.controller.pull_distance_px();
-        let phase = if view.controller.is_refreshing() {
-            Some(RefreshIndicatorPhase::Refreshing)
-        } else if pull > 0.0 {
-            // A zero, negative or NaN threshold gives a share that is not in [0, 1]: a
-            // positive pull past a zero threshold is complete, anything else is nothing yet.
-            let share = pull / view.threshold_px;
-            let progress = if share >= 0.0 { share.min(1.0) } else { 0.0 };
-            Some(RefreshIndicatorPhase::Pulling { progress })
+        if !refreshing && (pull.is_nan() || pull <= 0.0) {
+            return SizedBox::shrink().boxed();
+        }
+        // The band slides in from beyond the leading edge as the pull nears
+        // the threshold, and rests fully in while refreshing. A share that is
+        // not in [0, 1] (a zero threshold) is complete past it.
+        let progress = if refreshing {
+            1.0
         } else {
-            None
+            let share = pull / view.threshold_px;
+            if share >= 0.0 { share.min(1.0) } else { 0.0 }
         };
-        let indicator = match (style, phase) {
-            (Some(builder), Some(phase)) => builder(phase),
-            (None, Some(RefreshIndicatorPhase::Refreshing)) => {
-                Some(ActivityIndicator::new().color(INDICATOR_COLOR).boxed())
-            }
-            _ => None,
+        let phase = if refreshing {
+            RefreshIndicatorPhase::Refreshing
+        } else {
+            RefreshIndicatorPhase::Pulling { progress }
         };
-        match indicator {
-            Some(indicator) => Positioned::new(Center::new().child(indicator))
-                .top(0.0)
+        let indicator = match style {
+            Some(builder) => match builder(phase) {
+                Some(indicator) => indicator,
+                None => return SizedBox::shrink().boxed(),
+            },
+            None => ActivityIndicator::new().color(INDICATOR_COLOR).boxed(),
+        };
+        let lead = INDICATOR_EXTENT_PX * (progress - 1.0);
+        let spinner = Center::new().child(indicator);
+        match view.axis {
+            Axis::Vertical => Positioned::new(spinner)
+                .top(lead)
                 .left(0.0)
                 .right(0.0)
-                .height(INDICATOR_HEIGHT_PX)
+                .height(INDICATOR_EXTENT_PX)
                 .boxed(),
-            None => SizedBox::shrink().boxed(),
+            Axis::Horizontal if view.from_far_end => Positioned::new(spinner)
+                .right(lead)
+                .top(0.0)
+                .bottom(0.0)
+                .width(INDICATOR_EXTENT_PX)
+                .boxed(),
+            Axis::Horizontal => Positioned::new(spinner)
+                .left(lead)
+                .top(0.0)
+                .bottom(0.0)
+                .width(INDICATOR_EXTENT_PX)
+                .boxed(),
         }
     }
 
     fn did_update_view(&mut self, _old_view: &RefreshOverlay, new_view: &RefreshOverlay) {
         if !self
-            .phase_subscription
+            .subscription
             .as_ref()
             .is_some_and(|(controller, _)| controller.shares_state_with(&new_view.controller))
         {
-            self.subscribe_phase(&new_view.controller);
+            self.subscribe(&new_view.controller);
         }
     }
 
     fn dispose(&mut self) {
-        self.unsubscribe_phase();
-    }
-}
-
-impl ViewState<RefreshIndicator> for RefreshIndicatorState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
-        self.install_fling_listener();
-        self.did_change_dependencies(ctx);
-    }
-
-    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
-        self.bind_vsync(ctx);
-    }
-
-    fn build(&self, view: &RefreshIndicator, _ctx: &dyn BuildContext) -> impl IntoView {
-        let pipeline_end = self.pipeline.clone();
-        // The viewport follows the shared position itself. Refresh-phase
-        // invalidation belongs to the overlay, so neither scrolling nor phase
-        // changes rebuild the gesture handlers or content.
-        let scroll_view = {
-            let mut scroll_view =
-                SingleChildScrollView::new().position(self.scroll_controller.position());
-            if let Some(content) = view.child.clone().into_inner() {
-                scroll_view = scroll_view.child(content);
-            }
-            scroll_view
-        };
-        let stack_children = vec![
-            scroll_view.boxed(),
-            RefreshOverlay {
-                controller: view.controller.clone(),
-                threshold_px: view.threshold_px,
-            }
-            .boxed(),
-        ];
-
-        let threshold_px = view.threshold_px;
-        let fling_stop = self.fling_controller.controller().clone();
-        let rc_start = view.controller.clone();
-        let sc_start = self.scroll_controller.clone();
-        let sc_update = self.scroll_controller.clone();
-        let rc_update = view.controller.clone();
-        let ph_update = view.physics.clone();
-        let sc_end = self.scroll_controller.clone();
-        let rc_end = view.controller.clone();
-        let ph_end = view.physics.clone();
-        let fc_fling = self.fling_controller.controller().clone();
-        let start_authority = Rc::clone(&self.fling_authority);
-        let update_authority = Rc::clone(&self.fling_authority);
-        let end_authority = Rc::clone(&self.fling_authority);
-        let simulation_authority = Rc::clone(&self.fling_authority);
-        let on_refresh_cb = view.on_refresh.clone();
-        let start_fling = move |metrics: &ScrollMetrics, velocity| {
-            if simulation_authority.get() != FlingAuthority::Attached {
-                return false;
-            }
-            let Some(sim) = ph_end.create_ballistic_simulation(metrics, velocity) else {
-                return false;
-            };
-            // Authored physics may reenter and retire this owner or its clock.
-            if simulation_authority.get() != FlingAuthority::Attached {
-                return false;
-            }
-            let sim = BoundaryResolvedSimulation::new(sim, Arc::clone(&ph_end), *metrics);
-            fc_fling.animate_with(sim).is_ok()
-        };
-
-        GestureDetector::new()
-            .recognizer_owner(Rc::clone(&self.recognizer_owner))
-            .behavior(HitTestBehavior::Opaque)
-            .on_pan_start(move |_cx, _details| {
-                if start_authority.get() == FlingAuthority::Retired {
-                    return;
-                }
-                // Halt any in-flight fling when the user grabs the content.
-                let _ = fling_stop.stop();
-                if !rc_start.is_refreshing() {
-                    sc_start.position().set_is_scrolling(true);
-                    rc_start.set_pull_distance_px(0.0);
-                }
-            })
-            .on_pan_update(move |_cx, details| {
-                if update_authority.get() == FlingAuthority::Retired {
-                    return;
-                }
-                // Ignore scroll/pull updates while a refresh is in progress
-                // so the indicator stays stable.
-                if rc_update.is_refreshing() {
-                    return;
-                }
-                // Positive dy (finger moving DOWN) maps to a decrease in
-                // scroll offset (reveals content above).
-                let raw_delta_y = details.delta.dy;
-                if raw_delta_y != 0.0 {
-                    sc_update
-                        .position()
-                        .set_user_scroll_direction(if raw_delta_y > 0.0 {
-                            flui_rendering::view::ScrollDirection::Forward
-                        } else {
-                            flui_rendering::view::ScrollDirection::Reverse
-                        });
-                }
-                // Pull remains outside the clamped scroll position. Consume
-                // it first when the finger reverses toward ordinary scrolling.
-                let proposed = sc_update.pixels() - rc_update.pull_distance_px() - raw_delta_y;
-
-                if proposed < sc_update.min_scroll_extent() {
-                    // Overscroll at top: track how far past the boundary
-                    // the user has pulled; freeze the scroll at min_extent.
-                    let overscroll_px = sc_update.min_scroll_extent() - proposed;
-                    rc_update.set_pull_distance_px(overscroll_px);
-                    sc_update.set_pixels(sc_update.min_scroll_extent());
-                } else {
-                    rc_update.set_pull_distance_px(0.0);
-                    let metrics = ScrollMetrics::from(&sc_update.position());
-                    let clamped = ph_update.apply_boundary_conditions(&metrics, proposed);
-                    sc_update.set_pixels(clamped);
-                }
-            })
-            .on_pan_end(move |cx, details| {
-                if end_authority.get() == FlingAuthority::Retired {
-                    sc_end.position().set_is_scrolling(false);
-                    rc_end.set_pull_distance_px(0.0);
-                    return;
-                }
-                if rc_end.is_refreshing() {
-                    sc_end.position().set_is_scrolling(false);
-                    return;
-                }
-                if details.reason == flui_interaction::GestureEndReason::Cancelled {
-                    rc_end.set_pull_distance_px(0.0);
-                    let metrics = ScrollMetrics::from(&sc_end.position()).with_device_pixel_ratio(
-                        presentation_device_pixel_ratio(pipeline_end.as_ref()),
-                    );
-                    if !start_fling(&metrics, 0.0) {
-                        sc_end.position().set_is_scrolling(false);
-                    }
-                    return;
-                }
-                let pull = rc_end.pull_distance_px();
-                if pull >= threshold_px {
-                    // Sufficient overscroll: enter refreshing state and
-                    // fire the caller's callback.
-                    let mut recovery = flui_foundation::panic::PanicRecovery::new();
-                    recovery.run_with(|recovery| rc_end.begin_refresh_with_recovery(recovery));
-                    recovery.run_with(|recovery| {
-                        sc_end
-                            .position()
-                            .set_is_scrolling_with_recovery(false, recovery);
-                    });
-                    recovery.run(|| on_refresh_cb(cx));
-                    recovery.finish();
-                } else {
-                    // Under-threshold pull: reset and start a normal fling.
-                    rc_end.set_pull_distance_px(0.0);
-
-                    // Convert pointer velocity to scroll velocity (negate:
-                    // finger DOWN = positive dy → offset increases with negative delta).
-                    let fling_vel_px_per_sec = -details.fling_velocity().pixels_per_second.dy;
-                    let metrics = ScrollMetrics::from(&sc_end.position()).with_device_pixel_ratio(
-                        presentation_device_pixel_ratio(pipeline_end.as_ref()),
-                    );
-                    if !start_fling(&metrics, fling_vel_px_per_sec) {
-                        sc_end.position().set_is_scrolling(false);
-                    }
-                }
-            })
-            .child(Stack::new(stack_children))
-    }
-
-    fn did_update_view(&mut self, _old_view: &RefreshIndicator, new_view: &RefreshIndicator) {
-        if !self
-            .scroll_controller
-            .position()
-            .ptr_eq(&new_view.scroll_controller.position())
-        {
-            // A run samples the old position's metrics. Do not carry that
-            // simulation into a replacement position with different bounds.
-            // Retire callback authority before stopping or retargeting listeners.
-            self.fling_authority.set(FlingAuthority::Retired);
-            self.fling_authority = Rc::new(Cell::new(if self.fling_controller.is_bound() {
-                FlingAuthority::Attached
-            } else {
-                FlingAuthority::Detached
-            }));
-            let _ = self.fling_controller.controller().stop();
-            self.scroll_controller.position().set_is_scrolling(false);
-            self.scroll_controller = new_view.scroll_controller.clone();
-            self.recognizer_owner = Rc::new(());
-            self.install_fling_listener();
-        }
-    }
-
-    fn dispose(&mut self) {
-        self.fling_authority.set(FlingAuthority::Retired);
-        if let Some(id) = self.fling_listener_id.take() {
-            self.fling_controller.controller().remove_listener(id);
-        }
-        drop(self.fling_status_subscription.take());
-        self.scroll_controller.position().set_is_scrolling(false);
-        self.fling_controller.dispose();
+        self.unsubscribe();
     }
 }

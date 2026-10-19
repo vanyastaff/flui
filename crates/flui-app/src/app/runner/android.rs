@@ -85,7 +85,12 @@ where
     // The application's development reload hook may own frames with a scene
     // plugin (`flui run --scene`); inert unless one is installed.
     let hot_reload = ScenePlugin::from_config(&config, app.internal_data_path().as_deref());
-    crate::app::dev_agent::log_undriven(&config, "android");
+    // Attached for the loop: the attachment detaches the hook when it drops,
+    // after `run` returns. The window is handed over once it is installed.
+    let agent = config
+        .dev_agent
+        .as_ref()
+        .and_then(crate::app::dev_agent::DevAgent::attach);
 
     let platform: Box<dyn Platform> = Box::new(AndroidPlatform::new(app));
 
@@ -209,6 +214,7 @@ where
         // desktop bootstrap.
         ui_runtime.set_frame_failure_handler(config.frame_failure_handler.clone());
         ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
+        config.install_input_tap(&ui_runtime);
 
         let logical = window.logical_size();
         let owner = APP_RUNTIME
@@ -235,9 +241,16 @@ where
             tracing::error!("Root widget attach failed: {:?}", e);
             return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
         }
+        // Vended while the ui_runtime is still ours, handed over once the
+        // install commits: a failed install drops it with the ui_runtime.
+        let agent_window = config
+            .dev_agent
+            .as_ref()
+            .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
         let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
         let mut installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
         installation.text_sizing(native_sizing);
+        installation.dev_agent(config.dev_agent.clone().zip(agent_window));
         let owner_dispatch = installation.dispatcher();
 
         // 3b. Start config-declared application services (issue #558) —
@@ -513,6 +526,7 @@ where
         Ok(())
     }));
     teardown_platform_ui_runtime();
+    drop(agent);
 
     // `on_ready`'s `Err` propagates straight out of `Platform::run`; surface
     // it the same way `run_desktop` does now that the event loop has

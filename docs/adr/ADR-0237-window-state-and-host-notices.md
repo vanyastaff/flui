@@ -40,7 +40,11 @@ Web ignored page freeze and GPU context loss.
    Position is `None` where the OS does not report a global position. A change publishes a new
    snapshot with a higher revision and one payload-free `on_state_changed` notification; an equal
    sample keeps the revision. An exhausted revision refuses permanently. Backends share one cell
-   (`WindowStateCell`) built like ADR-0236's `DisplaySource`.
+   (`WindowStateCell`) built like ADR-0236's `DisplaySource`. The snapshot is also how a move
+   reaches the framework: a published state whose position, display or frame differs from the
+   previous one is the window moving, and the runtime re-reads its gesture geometry (ADR-0212 §2)
+   and re-sends its input regions (ADR-0217 §5) before any state subscriber runs. An input
+   recording keeps that as a `Moved` observation, never the payload-free notification.
 3. **Changes are commands checked against capabilities.** Every change is a `WindowCommand` applied
    through `PlatformWindow::apply`. Each window reports `WindowCapabilities`; `apply` refuses with
    `Unsupported` exactly when the corresponding capability is false, so an app can ask up front

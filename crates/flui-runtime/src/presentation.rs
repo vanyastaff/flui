@@ -18,7 +18,6 @@ use flui_interaction::{
     TextInputOwner,
 };
 use flui_layer::{LayerTree, PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample};
-use flui_platform_api::HapticFeedback;
 #[cfg(any(test, feature = "testing"))]
 use flui_platform_api::PlatformTextInput;
 use flui_platform_api::TextStoreHost;
@@ -31,9 +30,7 @@ use flui_scheduler::{
     UpdateScheduler, input_to_present_histogram, produce_to_present_histogram,
 };
 use flui_semantics::platform::PlatformAccessibility;
-use flui_semantics::{
-    ActionDecodeError, SemanticsActionError, SemanticsActionRequest, semantics_action_request_for,
-};
+use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
 use flui_view::{
     __runtime::{BindingRuntime as _, FramePhaseMarker},
     GlobalKeyScope, WidgetsBinding,
@@ -99,6 +96,9 @@ pub(crate) struct RuntimeCapabilities<'a> {
     /// The UI runtime's text context, installed on the presentation's pipeline so
     /// its layout measures text through the UI runtime (ADR-0092 §10 step 3).
     pub(crate) text: flui_rendering::TextContextHandle,
+    /// The UI runtime's drag sessions, which this presentation's widgets reach
+    /// through `LifecycleContext::drag_and_drop`.
+    pub(crate) drag: flui_interaction::drag::DragHandle,
 }
 
 /// A fresh in-memory clipboard — the one the headless platform hands out —
@@ -154,6 +154,7 @@ pub struct PresentationWindow {
     accessibility: Option<Arc<dyn PlatformAccessibility>>,
     text_store_host: Option<Rc<dyn TextStoreHost>>,
     pointer_resampling: PointerResampling,
+    gesture_profiles: flui_interaction::GestureProfiles,
 }
 
 impl std::fmt::Debug for PresentationWindow {
@@ -163,6 +164,7 @@ impl std::fmt::Debug for PresentationWindow {
             .field("pointer_resampling", &self.pointer_resampling)
             .field("accessibility", &self.accessibility.is_some())
             .field("text_store_host", &self.text_store_host.is_some())
+            .field("gesture_profiles", &self.gesture_profiles)
             .finish()
     }
 }
@@ -178,6 +180,9 @@ impl PresentationWindow {
             accessibility,
             text_store_host: None,
             pointer_resampling: PointerResampling::Disabled,
+            gesture_profiles: flui_interaction::GestureProfiles::preset(
+                flui_platform_api::TargetPlatform::Unknown,
+            ),
         }
     }
 
@@ -185,6 +190,23 @@ impl PresentationWindow {
     #[must_use]
     pub fn with_pointer_resampling(mut self, policy: PointerResampling) -> Self {
         self.pointer_resampling = policy;
+        self
+    }
+
+    /// The gesture presets this presentation's host observations resolve
+    /// over (ADR-0212 §4), usually `GestureProfiles::preset(platform)`: each
+    /// contact is admitted, and hit-tested, with its pointer kind's profile.
+    ///
+    /// Without one, the platform-neutral presets apply, one per pointer kind,
+    /// never the build host's: a runner names its platform, and a headless
+    /// test its preset (one [`GestureSettings`](flui_interaction::GestureSettings)
+    /// value is one profile for every kind).
+    #[must_use]
+    pub fn with_gesture_profiles(
+        mut self,
+        profiles: impl Into<flui_interaction::GestureProfiles>,
+    ) -> Self {
+        self.gesture_profiles = profiles.into();
         self
     }
 
@@ -277,6 +299,28 @@ pub(crate) enum PresentationLifecycle {
     Closed,
 }
 
+/// Where a window's content sits on the desktop, as a published
+/// [`WindowState`](flui_platform_api::WindowState) reports it: the outer
+/// top-left corner, the display, and whether a frame offsets the content
+/// from that corner. A change re-reads the window's gesture geometry for new
+/// contacts (ADR-0212 §2) and hands it its input regions again (ADR-0217 §5).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ContentPlacement {
+    position: Option<flui_foundation::geometry::Point<f64>>,
+    display: Option<flui_platform_api::DisplayId>,
+    decorated: bool,
+}
+
+impl ContentPlacement {
+    pub(crate) fn of(state: &flui_platform_api::WindowState) -> Self {
+        Self {
+            position: state.outer.position,
+            display: state.display,
+            decorated: state.decorated,
+        }
+    }
+}
+
 /// Phase-addressed frame fault injection used by the containment tests.
 #[cfg(test)]
 struct SegmentProbe {
@@ -305,9 +349,17 @@ pub struct PresentationState {
     pub(super) window_focused: Cell<bool>,
     /// The display this presentation's window is on, as the host last derived it
     /// from the platform's snapshot (ADR-0236). `None` is an unknown display.
-    pub(super) window_display: Cell<Option<flui_platform_api::WindowDisplay>>,
+    /// Shared with the haptics host, whose frame deadline reads its period.
+    pub(super) window_display: Rc<Cell<Option<flui_platform_api::WindowDisplay>>>,
     pub(super) window_execution: Cell<flui_platform_api::WindowExecutionState>,
     pub(super) closing_requested: Cell<bool>,
+    /// The vsync of the frame being delivered, on the event timeline
+    /// (`HostInput::Frame`): the interaction layer samples motion there.
+    pub(super) frame_vsync: Cell<Option<flui_platform_api::EventTime>>,
+    /// The window's latest input capabilities (`PlatformInput::Capabilities`),
+    /// kept for the lifecycle capability that will expose them (ADR-0213).
+    pub(super) input_capabilities:
+        Cell<Option<flui_platform_api::input_capabilities::InputCapabilities>>,
     /// The system-bar overlay style its frames ask for, delivered on change.
     pub(crate) overlay_style: crate::overlay_style::OverlayStyleCoalescer,
     /// External textures its widgets register; the raster lane drains it.
@@ -329,17 +381,29 @@ pub struct PresentationState {
     /// under `WindowPolicy::Shared` the UI runtime outlives any single presentation too.
     alive: RefCell<Option<Rc<()>>>,
     window: Weak<dyn PlatformWindow>,
+    /// The window's identity, read once at assembly: recordings address input
+    /// by it even after the window itself is gone (ADR-0215 §1).
+    window_id: flui_platform_api::WindowId,
     /// The window's accessibility bridge, if its backend has one. `Weak`
     /// like [`Self::window`]: the backend window owns the bridge, and this
     /// presentation must not keep it alive past the window.
     accessibility: Option<Weak<dyn PlatformAccessibility>>,
     gestures: GestureBinding,
+    /// The frame queue, outcome mailbox and observer of this presentation's
+    /// haptics (ADR-0210), on the gesture clock.
+    haptics: flui_interaction::HapticsHost,
     pub(crate) wheel_preferences: flui_interaction::WheelPreferencesSource,
     interaction_dispatch: Option<InteractionDispatchHandle>,
     /// Pointer input retained while this presentation has no committed tree.
     /// The queue is owner-thread-only and internally capped; replay detaches
     /// its batch before invoking dispatch so callbacks may enqueue reentrantly.
     held_pointer_input: RefCell<HeldPointerQueue>,
+    /// The input regions collected when this frames scene was built, handed to the
+    /// window once the sink accepts the scene (ADR-0217 §5).
+    staged_input_regions: RefCell<Vec<flui_platform_api::input_regions::InputRegion>>,
+    /// The input regions of the last committed frame, handed to the window again when
+    /// it moves, so its backend can re-project them for a new display.
+    published_input_regions: RefCell<Vec<flui_platform_api::input_regions::InputRegion>>,
     focus: Rc<FocusManager>,
     text_input: Rc<TextInputOwner>,
     /// This presentation's semantics enablement gate and platform
@@ -361,6 +425,10 @@ pub struct PresentationState {
     /// presentation's terminal notification, so a handle held past the close
     /// answers closed. Owner thread only.
     pub(crate) window_control: RefCell<Option<std::rc::Rc<flui_view::__runtime::WindowSource>>>,
+    /// Where the window's content sat in the state last published through
+    /// `window_control`: a publication that changes it is the window moving.
+    /// Owner thread only.
+    pub(crate) window_placement: Cell<Option<ContentPlacement>>,
     /// Owner-local widget framework state. One instance per presentation
     /// (ADR-0043) — the UI runtime-level singular binding this used to be
     /// dissolves here; every widget-tree operation for this surface enters
@@ -505,12 +573,12 @@ impl PresentationState {
     ///   assembly starts and stops on the OWNER thread — the listener runs
     ///   on the adapter's own thread and touches only `Send + Sync` state.
     /// - **In** — action requests marshal through the UI runtime inbox as
-    ///   [`SemanticsActionRequest`]s stamped for this exact presentation
-    ///   and resolve at the next Idle drain. Requests FLUI cannot route (a
+    ///   [`HostInput::Accessibility`](crate::HostInput::Accessibility) stamped
+    ///   for this exact presentation and resolve at the next Idle drain. Requests FLUI cannot route (a
     ///   zero node id, an action with no counterpart, a full inbox) are
     ///   traced drops, since screen readers may act on a stale snapshot. Typed action payloads
     ///   (`accesskit::ActionData`) translate with the whole request through
-    ///   [`semantics_action_request_for`]. Numeric setters remain distinct from
+    ///   [`semantics_action_request_for`](flui_semantics::semantics_action_request_for). Numeric setters remain distinct from
     ///   text edits, and expand/collapse preserve their explicit direction.
     ///   The current owner validates payloads before invoking a handler.
     ///
@@ -566,18 +634,10 @@ impl PresentationState {
         }
 
         bridge.set_action_listener(Arc::new(move |request| {
-            let semantics_request = match semantics_action_request_for(&request) {
-                Ok(semantics_request) => semantics_request,
-                Err(error @ ActionDecodeError::UnknownTarget(_)) => {
-                    tracing::warn!(%error, "dropping accessibility action out of contract");
-                    return;
-                }
-                Err(error) => {
-                    tracing::trace!(%error, "dropping undecodable accessibility action");
-                    return;
-                }
-            };
-            if let Err(error) = command_sender.send_semantics_action(semantics_request) {
+            // The adapter's thread only transports the request: it reaches
+            // the owner as `HostInput::Accessibility` and is decoded there
+            // (ADR-0207 §1).
+            if let Err(error) = command_sender.send_accessibility(request) {
                 tracing::warn!(
                     ?error,
                     "dropping accessibility action: the ui_runtime inbox is full or gone"
@@ -594,10 +654,11 @@ impl PresentationState {
         id: PresentationId,
         window: &Arc<dyn PlatformWindow>,
         clock: &ClockSource,
+        preset: flui_interaction::GestureProfiles,
     ) -> GestureBinding {
         // The arena's deadlines read the ui_runtime's clock: a recognizer's
         // timeout and the frame that polls it share one timeline.
-        let gestures = GestureBinding::with_clock(Arc::new(clock.clone()));
+        let gestures = GestureBinding::with_settings_and_clock(preset, Arc::new(clock.clone()));
         flui_interaction::__runtime::set_pointer_capture_wake(&gestures, Arc::downgrade(window));
         let cursor_window = Arc::downgrade(window);
         gestures
@@ -637,6 +698,38 @@ impl PresentationState {
         gestures
     }
 
+    /// Assemble the presentation's haptics on its gesture clock: it plays on
+    /// the window's actuator, reached weakly, and its frame deadline follows
+    /// the refresh period of the display the host last delivered for the
+    /// window (ADR-0210 §4, ADR-0236 §6).
+    fn build_haptics(
+        window: &Arc<dyn PlatformWindow>,
+        display: &Rc<Cell<Option<flui_platform_api::WindowDisplay>>>,
+        gestures: &GestureBinding,
+        request_frame: impl Fn() + 'static,
+    ) -> flui_interaction::HapticsHost {
+        let actuator = Arc::downgrade(window);
+        let display = Rc::downgrade(display);
+        let haptics = flui_interaction::HapticsHost::builder(gestures, move || {
+            actuator.upgrade().and_then(|window| window.haptics())
+        })
+        .frame_requester(request_frame)
+        .refresh_period(move || {
+            display
+                .upgrade()
+                .and_then(|display| display.get())
+                .and_then(|display| display.refresh_period)
+                .map(flui_platform_api::RefreshPeriod::get)
+        })
+        .deadline_factor(gestures.default_profiles().haptic_frame_deadline_factor())
+        .build();
+        haptics.set_visible(
+            window.is_visible()
+                && window.execution_state() == flui_platform_api::WindowExecutionState::Running,
+        );
+        haptics
+    }
+
     /// Assemble a presentation wired into a UI runtime (ADR-0043 §1): installs
     /// `capabilities.global_key_scope` FIRST, then the UI runtime's shared
     /// dispatch handles, before this presentation's own focus/IME are
@@ -657,13 +750,14 @@ impl PresentationState {
             accessibility,
             text_store_host,
             pointer_resampling,
+            gesture_profiles,
         } = window.into();
         let pipeline = PipelineCell::new(PipelineOwner::new(capabilities.text));
         pipeline.withdraw_layout();
         if let Some(device_pixel_ratio) = device_pixel_ratio {
             pipeline.with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
         }
-        let gestures = Self::build_gestures(id, &window, capabilities.clock);
+        let gestures = Self::build_gestures(id, &window, capabilities.clock, gesture_profiles);
         gestures
             .set_resampling_enabled(pointer_resampling == PointerResampling::FrameAligned)
             .expect("BUG: newly assembled presentation has no active contacts");
@@ -765,6 +859,19 @@ impl PresentationState {
             let request_frame = Arc::clone(&request_frame);
             widgets.set_on_need_frame(move || request_frame());
         }
+        let window_display = Rc::new(Cell::new(None));
+        let haptics = Self::build_haptics(&window, &window_display, &gestures, {
+            let request_frame = Arc::clone(&request_frame);
+            move || request_frame()
+        });
+        widgets.with_build_owner_mut(|owner| owner.set_haptics_handle(haptics.handle()));
+        let drag_and_drop = flui_interaction::drag::DragAndDrop::new(
+            capabilities.drag.clone(),
+            id,
+            Arc::downgrade(&window),
+            gestures.mouse_tracker(),
+        );
+        widgets.with_build_owner_mut(|owner| owner.set_drag_and_drop(drag_and_drop));
         pipeline.with_mut(|owner| {
             owner.set_on_need_visual_update(move || request_frame());
         });
@@ -791,7 +898,7 @@ impl PresentationState {
                 crate::ui_runtime::preferences::GeometryProjection::default(),
             ),
             gesture_settings: flui_interaction::GestureSettingsSource::new(
-                gestures.default_settings().clone(),
+                gestures.default_profiles(),
             ),
             media_query: Rc::new(crate::media_query_root::MediaQuerySource::from_window(
                 window.as_ref(),
@@ -799,7 +906,7 @@ impl PresentationState {
             )),
             window_visible: Cell::new(window.is_visible()),
             window_focused: Cell::new(window.is_focused()),
-            window_display: Cell::new(None),
+            window_display,
             window_execution: Cell::new(window.execution_state()),
             closing_requested: Cell::new(false),
             overlay_style: crate::overlay_style::OverlayStyleCoalescer::default(),
@@ -807,25 +914,32 @@ impl PresentationState {
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
+            frame_vsync: Cell::new(None),
+            input_capabilities: Cell::new(None),
             pipeline,
             completion_scope: Some(capabilities.completion_scope),
             text_preparation: RefCell::new(TextPreparation::default()),
             sampled_motion_tick: Cell::new(None),
             frame_rate: Cell::default(),
             alive: RefCell::new(Some(alive)),
+            window_id: window.id(),
             window: Arc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
+            haptics,
             wheel_preferences: flui_interaction::WheelPreferencesSource::new(
                 flui_platform_api::WheelPreferences::default(),
             ),
             interaction_dispatch: Some(interaction_dispatch),
             held_pointer_input: RefCell::new(HeldPointerQueue::new(id)),
+            staged_input_regions: RefCell::default(),
+            published_input_regions: RefCell::default(),
             focus,
             text_input,
             semantics,
             dev_agent: RefCell::new(None),
             window_control: RefCell::new(None),
+            window_placement: Cell::new(None),
             widgets,
             renderer,
             frames_rendered: Cell::new(0),
@@ -867,7 +981,14 @@ impl PresentationState {
         pipeline: PipelineCell,
         window: Arc<dyn PlatformWindow>,
     ) -> Self {
-        let gestures = Self::build_gestures(id, &window, &ClockSource::Platform);
+        let gestures = Self::build_gestures(
+            id,
+            &window,
+            &ClockSource::Platform,
+            flui_interaction::GestureSettings::default().into(),
+        );
+        let window_display = Rc::new(Cell::new(None));
+        let haptics = Self::build_haptics(&window, &window_display, &gestures, || {});
         let alive = Rc::new(());
         let focus = FocusManager::new();
         let text_input = TextInputOwner::new(PresentationWindow::text_input_backend(
@@ -895,7 +1016,7 @@ impl PresentationState {
                 crate::ui_runtime::preferences::GeometryProjection::default(),
             ),
             gesture_settings: flui_interaction::GestureSettingsSource::new(
-                gestures.default_settings().clone(),
+                gestures.default_profiles(),
             ),
             media_query: Rc::new(crate::media_query_root::MediaQuerySource::from_window(
                 window.as_ref(),
@@ -903,7 +1024,7 @@ impl PresentationState {
             )),
             window_visible: Cell::new(window.is_visible()),
             window_focused: Cell::new(window.is_focused()),
-            window_display: Cell::new(None),
+            window_display,
             window_execution: Cell::new(window.execution_state()),
             closing_requested: Cell::new(false),
             overlay_style: crate::overlay_style::OverlayStyleCoalescer::default(),
@@ -911,25 +1032,32 @@ impl PresentationState {
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
+            frame_vsync: Cell::new(None),
+            input_capabilities: Cell::new(None),
             pipeline,
             completion_scope: None,
             text_preparation: RefCell::new(TextPreparation::default()),
             sampled_motion_tick: Cell::new(None),
             frame_rate: Cell::default(),
             alive: RefCell::new(Some(alive)),
+            window_id: window.id(),
             window: Arc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
+            haptics,
             wheel_preferences: flui_interaction::WheelPreferencesSource::new(
                 flui_platform_api::WheelPreferences::default(),
             ),
             interaction_dispatch: None,
             held_pointer_input: RefCell::new(HeldPointerQueue::new(id)),
+            staged_input_regions: RefCell::default(),
+            published_input_regions: RefCell::default(),
             focus,
             text_input,
             semantics,
             dev_agent: RefCell::new(None),
             window_control: RefCell::new(None),
+            window_placement: Cell::new(None),
             widgets,
             renderer,
             frames_rendered: Cell::new(0),
@@ -970,6 +1098,14 @@ impl PresentationState {
     #[must_use]
     pub(crate) fn widgets(&self) -> &WidgetsBinding {
         &self.widgets
+    }
+
+    /// The fresh hit test over this presentation's tree that drags use to find
+    /// its receivers (ADR-0211).
+    pub(crate) fn hit_test_handle(&self) -> flui_interaction::HitTestHandle {
+        self.widgets
+            .with_build_owner(|owner| owner.hit_test_handle().cloned())
+            .expect("BUG: every presentation pairs its hit-test handle when it is assembled")
     }
 
     /// This presentation's own render tree / pipeline coordination binding.
@@ -1241,32 +1377,55 @@ impl PresentationState {
     /// window was installed; here it is "the window this presentation was
     /// built with is gone" instead of "no window installed yet", since a
     /// presentation always has one from construction.
+    /// The identity of the window this presentation was built for.
+    pub(crate) fn window_id(&self) -> flui_platform_api::WindowId {
+        self.window_id
+    }
+
     pub(crate) fn with_window<R>(&self, f: impl FnOnce(&dyn PlatformWindow) -> R) -> Option<R> {
         self.window.upgrade().map(|window| f(window.as_ref()))
     }
 
-    /// Perform haptic feedback on this presentation's window, via
-    /// [`PlatformWindow::haptics`].
-    ///
-    /// Silent no-op — no panic, no error — when the window is gone, or the
-    /// window's backend has no [`PlatformHaptics`](flui_platform_api::PlatformHaptics)
-    /// capability (desktop winit targets, for instance). Every call is fire-and-forget
-    /// best-effort, with no availability-discovery API to check first.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production caller yet -- haptics through a \
-                      presentation is future wiring, forwarded today only by \
-                      UiRuntime::perform_haptic_feedback (also uncalled in \
-                      production)"
-        )
-    )]
-    pub(crate) fn perform_haptic_feedback(&self, feedback: HapticFeedback) {
-        let haptics = self.with_window(|window| window.haptics()).flatten();
-        if let Some(haptics) = haptics {
-            haptics.perform(feedback);
-        }
+    /// Collects the input regions of the frame whose scene is being built, from the tree
+    /// that scene was painted from.
+    pub(crate) fn stage_input_regions(&self) {
+        let regions = self
+            .pipeline
+            .with(flui_rendering::pipeline::PipelineOwner::input_regions);
+        *self.staged_input_regions.borrow_mut() = regions;
+    }
+
+    /// Hands the window the staged input regions of a frame the sink accepted. Called on
+    /// every composited frame, changed or not: the backend compares its projection with
+    /// what the OS holds (ADR-0217 §5).
+    pub(crate) fn publish_input_regions(&self) {
+        let regions = self.staged_input_regions.take();
+        self.with_window(|window| window.set_input_regions(&regions));
+        *self.published_input_regions.borrow_mut() = regions;
+    }
+
+    /// Hands the window the last committed input regions again, after it moved: on another
+    /// display the backend's projection key differs, so it re-sends them without waiting
+    /// for a frame.
+    pub(crate) fn republish_input_regions(&self) {
+        let regions = self.published_input_regions.take();
+        self.with_window(|window| window.set_input_regions(&regions));
+        *self.published_input_regions.borrow_mut() = regions;
+    }
+
+    /// This presentation's haptics host: its frame queue and outcome
+    /// mailbox, played on the window's actuator (ADR-0210).
+    pub(crate) fn haptics(&self) -> &flui_interaction::HapticsHost {
+        &self.haptics
+    }
+
+    /// Tell the haptics host whether the window can show anything: hidden,
+    /// occluded or not running drains its frame queue (ADR-0210 §4).
+    pub(crate) fn sync_haptics_visibility(&self) {
+        self.haptics.set_visible(
+            !self.clock.is_hidden()
+                && self.window_execution.get() == flui_platform_api::WindowExecutionState::Running,
+        );
     }
 
     // ========================================================================
@@ -1892,6 +2051,17 @@ impl PresentationState {
         failure.invoke(|| close_focus(&self.focus, mode));
         let mode = failure.mode();
         failure.invoke(|| close_text_input(&self.text_input, mode));
+        // Queued haptics resolve and their outcomes get one final delivery
+        // pass; after a failure the observer is retained, never run.
+        if failure.preserving() {
+            failure.invoke(|| self.haptics.withdraw());
+        } else {
+            failure.invoke(|| {
+                flui_foundation::panic::RecoveryScope::boundary(|recovery| {
+                    self.haptics.close(recovery);
+                });
+            });
+        }
         // Gesture cancellation runs recognizer callbacks, so it follows every
         // withdrawal above: a rejected recognizer finds the presentation's
         // graph, keys, agent, focus and text input already closed.

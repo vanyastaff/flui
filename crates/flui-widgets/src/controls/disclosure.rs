@@ -5,7 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Point, Size};
-use flui_interaction::routing::FocusNode;
+use flui_interaction::focus::FocusNode;
 use flui_objects::{CrossAxisAlignment, MainAxisSize};
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;

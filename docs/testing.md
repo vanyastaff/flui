@@ -112,8 +112,11 @@ next to its definition, the `default_pools_started` probe it reads exists only u
 the `testing` feature, and the one execution API an embedder reaches through `flui-app`
 (`DeterministicExecutors`) is a target-independent FIFO that would pass identically on native.
 
-Still compile-only: `flui-platform`'s web backend, which is wasm32-only and has no executing
-coverage at all. See #985.
+`flui-platform`'s web backend needs a DOM, which node does not have, so `wasm-test` leaves it
+alone. Its `web_browser` target runs in headless Chrome instead, through
+`cargo xtask device web-input`: that check fetches the ChromeDriver matching the installed Chrome
+into `target/chromedriver/` and hands it to `wasm-bindgen-test-runner`. CI does not run it; a
+change to the web backend's DOM side runs it locally.
 
 ## Quality Gates
 
@@ -727,8 +730,36 @@ binding.replay(&PointerScript::fling(from, to));
 ```
 
 Presets: `tap`, `double_tap`, `long_press`, `drag`, `fling`, `swipe`, `pinch`.
-`GestureRecorder` captures a script off the same virtual clock, so a recording
-round-trips to its own timing.
+Anything else is built per device — `TouchScript`, `MouseScript`, `PenScript`,
+`TrackpadScript`, `VirtualScript` — whose `build()` refuses a contact that went
+down and never came up. A `frame()` step is a frame, so a script states which
+events share one. `HeadlessHost::run_script` delivers a script to a UI runtime,
+`HeadlessHost::find_center` finds its target by semantics role and label, and
+`HeadlessHost::pump_until_settled` runs frames until nothing is left to do,
+bounded by a frame limit.
+
+### Input recordings
+
+`flui_testing::recording` records the `HostInput` a runtime applies, with the
+arena decisions it made and the preference revisions in between, as JSON Lines
+(ADR-0215). Text is redacted unless the header asks for `Privacy::KeepText`.
+`ReplayableRecording::read` checks a whole recording, through its `End` row,
+before `HeadlessHost::replay` applies any of it, and the replay returns the
+decisions to compare with the recorded ones:
+
+```rust,ignore
+let writer = RecordingWriter::new(Vec::new(), &host.recording_header(Privacy::Redact))?;
+let recording = record(host.input_taps(), writer)?;
+// ...drive the host...
+let bytes = recording.finish()?;
+let replayable = ReplayableRecording::read(RecordingReader::new(&bytes[..])?)?;
+assert_eq!(fresh_host.replay(&replayable), replayable.decisions());
+```
+
+A variant added to the recorded vocabulary fails `cargo xtask checks` until
+`cargo xtask recording-vocabulary --write` regenerates the variant table, and
+then `every_vocabulary_variant_round_trips_through_the_recording_dto` until the
+DTO mirrors it.
 
 ### Accessibility
 
@@ -959,11 +990,83 @@ placeholder and password fields, heading level, a modal dialog's Window
 pattern, a disabled control, live settings). The expected table names the
 adapter version it was read from, and a unit test fails when the lock moves.
 `windows-input` separately sends pointer input followed by Tab and Enter.
+Before that it records golden native recordings (ADR-0215 §4 and §8): each
+injected session runs in its own process as a child row of `flui-platform`'s
+native window contract, built with `native-capture` (a debug build), and its
+registry journal must replay through the shared decoder to exactly what the
+window delivered. `a_captured_native_pointer_session_replays_to_what_it_delivered`
+injects a touch and a pen through `InjectSyntheticPointerInput`, and
+`a_captured_native_mouse_session_replays_to_what_it_delivered` sends clicks, a
+double click, a chord, a Control-held click and both wheels through
+`SendInput`. Each run is then held against its golden in
+`crates/flui-platform/tests/native_recording/` by shape: the replayed events
+with times left out and positions in device pixels, since the OS stamps every
+run anew. The fresh recordings land in `target/native-recordings/` to diff the
+rows themselves; `--bless` writes them over the goldens instead:
+
+```bash
+cargo xtask device windows-input            # record, hold against the goldens, then drive the counter
+cargo xtask device windows-input --bless    # replace the goldens with this run's recordings
+# one session by hand:
+FLUI_NATIVE_WINDOW_CONTRACT_CHILD=a_captured_native_mouse_session_replays_to_what_it_delivered \
+  cargo test -p flui-platform --test platform_it --features native-capture -- --exact contract::test_window_lifecycle_contract --nocapture
+```
+
+`native_recording_contracts` replays every golden through the shared decoders
+on every host, so Linux CI checks the Win32 translation without Windows. A
+session whose window loses the foreground, or whose cursor another input
+moves, prints `CANNOT_VERIFY` and records nothing. A precision touchpad has no
+injector: its DirectManipulation viewport calls are journaled, but the golden
+that certifies them has to come from a `native-capture` run on that hardware,
+and keyboard and OLE drag-and-drop input have no native recording rows yet.
 Both checks require an interactive Windows desktop. Before the probe launches,
 the shared UIA session asks Windows (`UOI_IO`) whether the desktop the check
 runs on, which the probe inherits, is the one receiving input: a locked
 workstation, a disconnected or service session, input going to another
 desktop, a failed query, or an unavailable UI Automation exits 2 (CANNOT VERIFY) rather than reporting a FAIL or a passing run.
+
+`android-input` does the same on an Android device over `adb`, from any host
+with the SDK (`ANDROID_HOME`), `cargo-ndk`, the `aarch64-linux-android`
+target and a JDK. It builds `flui-platform`'s `android_input_probe` with
+`native-capture`, packages a debuggable APK with the SDK's build tools,
+installs it and records three sessions, each in a fresh launch: `adb shell
+input` touches, swipes, a stylus and a mouse click; a `uinput` pen that
+hovers, touches with pressure and tilt and leaves; and a `uinput` touchpad
+that pinches and scrolls with two fingers. The recordings and the events the
+window delivered are pulled into `target/native-recordings/android/`; the host
+test `native_recording::pulled_device_recordings_replay_to_what_they_delivered`
+requires each replay to equal the delivered events exactly and holds it
+against its golden by event grammar, since the device resamples moves by its
+frame timing. A last launch reads back the probe's system gesture exclusion
+from the window manager, the haptics switch and long-press timeout from
+`SystemPreferences` after `settings put` (both put back), and its haptics from
+the vibrator service's record. No SDK, no device or a locked one exits 2;
+with several devices attached, `FLUI_ANDROID_SERIAL` picks one. Leave the
+device alone while it runs:
+
+```bash
+cargo xtask device android-input            # record, hold against the goldens, check the system rows
+cargo xtask device android-input --bless    # replace the goldens with this run's recordings
+```
+
+`android-gallery` is `windows-gallery`'s counterpart on the same device: it
+builds `examples/interaction_gallery`'s library with its `agent` feature,
+packages and installs it, and drives every screen with the phone's own input:
+touches from a virtual multi-touch screen the `uinput` command registers
+(written report by report as they fall due, since a `delay` read from its
+standard input does not hold the reports back), `input stylus` and
+`input mouse` events, hardware key events and the device's soft keyboard.
+FLUI publishes no Android accessibility tree, so each outcome is read from the
+gallery's development agent (ADR-0095 §3) over its socket, reached as the
+application's user (`run-as … nc -U`), and from `screencap` pixels where the
+right and the wrong outcome differ. The gallery is uninstalled at the end;
+`FLUI_GALLERY_KEEP=1` leaves it installed, and `FLUI_GALLERY_CHECKS=<text>`
+runs the checks whose name contains `<text>`:
+
+```bash
+cargo xtask device android-gallery
+FLUI_GALLERY_CHECKS=cards: cargo xtask device android-gallery
+```
 
 ## CI Expectations
 

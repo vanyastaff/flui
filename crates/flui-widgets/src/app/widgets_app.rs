@@ -87,7 +87,7 @@ use crate::localization::{
     BoxedLocalizationsDelegate, DefaultWidgetsLocalizationsDelegate, Localizations,
     basic_locale_list_resolution,
 };
-use crate::navigator::{Navigator, NavigatorHandle, NavigatorObserver, RouteId, SimpleRoute};
+use crate::navigator::{Navigator, NavigatorHandle, NavigatorObserver, PageRoute, RouteId};
 use crate::router::{Routable, Router};
 use crate::text::DefaultTextStyle;
 use crate::{FocusScope, MediaQuery, MediaQueryData};
@@ -441,8 +441,14 @@ impl WidgetsAppState {
             if handle.route_ids().is_empty() {
                 let cell = Rc::new(RefCell::new(home.clone()));
                 let reader = Rc::clone(&cell);
+                // A page route, as the router form's pages are: it owns a
+                // focus scope, so a menu or a dialog popped off it gives the
+                // focus back to where it was on the home page.
                 handle.seed_initial(
-                    SimpleRoute::<()>::new(move |_ctx| reader.borrow().clone()).named("/"),
+                    PageRoute::<()>::new(move |_ctx, _animation, _secondary| {
+                        reader.borrow().clone()
+                    })
+                    .named("/"),
                 );
                 let id = handle
                     .current()

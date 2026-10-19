@@ -594,6 +594,29 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         None
     }
 
+    /// The expanded hit area this node claims beyond its own bounds, in its
+    /// local coordinates, or `None` for a node hit-tested by its bounds only.
+    ///
+    /// The pipeline resolves expanded areas after the visual walk, so they
+    /// never outrank a visual hit (see `PipelineOwner::hit_test`). Only
+    /// `RenderHitSlop` overrides it; the area must contain the box itself.
+    /// `kind` is the pointer asking, whose minimum target the area may follow.
+    fn hit_slop_area(
+        &self,
+        size: flui_foundation::geometry::Size,
+        kind: flui_interaction::events::PointerKind,
+    ) -> Option<flui_foundation::geometry::Rect> {
+        let _ = (size, kind);
+        None
+    }
+
+    /// Whether a hit on this node keeps the position from every expanded hit
+    /// area, whatever lies above it — a pointer barrier such as an absorbing
+    /// `RenderAbsorbPointer`. Default `false`.
+    fn blocks_hit_slop(&self) -> bool {
+        false
+    }
+
     /// The data-only pointer target this render object contributes to its hit
     /// entry, if any.
     ///
@@ -653,7 +676,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// The mouse cursor this render object contributes to its hit entry.
     ///
     /// Defaults to deferring; `RenderMouseRegion` overrides this so
-    /// [`MouseTracker`](flui_interaction::routing::MouseTracker) can resolve the active
+    /// [`MouseTracker`](flui_interaction::pointer::MouseTracker) can resolve the active
     /// platform cursor from the leaf-first hit-test path.
     fn mouse_cursor(&self) -> CursorRequest {
         CursorRequest::Defer
@@ -685,6 +708,23 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     ) -> Option<MouseTrackerAnnotation> {
         let _ = id;
         None
+    }
+
+    /// Writes the input regions this node claims, in its own local coordinates at its
+    /// laid-out `size`, into `regions`.
+    ///
+    /// Called on every composited frame by
+    /// [`PipelineOwner::input_regions`](crate::pipeline::PipelineOwner::input_regions),
+    /// which maps each region into the window through the paint transforms and clips
+    /// above this node (see [`crate::input_regions`]). Pure in `(self, size)`, like
+    /// [`Self::paint_effects`]: a configuration change that alters the regions marks paint,
+    /// so a frame is composited and the new set is collected. Default: no regions.
+    fn describe_input_regions(
+        &self,
+        size: flui_foundation::geometry::Size,
+        regions: &mut crate::input_regions::InputRegionSink,
+    ) {
+        let _ = (size, regions);
     }
 
     // ========================================================================

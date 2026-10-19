@@ -50,6 +50,12 @@ pub use flui_runtime::frame_failure::{
     SegmentPhase,
 };
 pub use hot_reload::DevReload;
+// The recording hook (ADR-0215 §1): the tap and the records it observes.
+pub use flui_runtime::owner::{InputOutcome, WindowObservation};
+pub use flui_runtime::{
+    DecisionRow, HostInput, InputRecord, InputRow, InputTap, InputTapFactory, PreferencesRow,
+    RecordingStart, RecordingWindow,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use lifecycle::{
     CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition,

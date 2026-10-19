@@ -16,15 +16,11 @@ use crate::{
     executor::BackgroundExecutor,
     shared::{PlatformHandlers, system_notice::SystemNotices},
     traits::{
-        Clipboard, DesktopCapabilities, DisplaySnapshot, OpenWindowError, OwnerPlatform, Platform,
-        PlatformCapabilities, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent,
-        WindowId, WindowOptions,
+        Clipboard, DisplaySnapshot, OpenWindowError, OwnerPlatform, Platform, PlatformExecutor,
+        PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
-
-/// Capabilities descriptor shared by all macOS platform instances.
-static MACOS_CAPABILITIES: DesktopCapabilities = DesktopCapabilities;
 
 /// macOS platform state
 pub struct MacOSPlatform {
@@ -340,6 +336,12 @@ impl Platform for MacOSPlatform {
         window.install_loop_control(Arc::downgrade(&self.loop_control));
         window.install_wake_pump(Arc::downgrade(&self.wake_pump));
         window.bind_displays(Arc::clone(&self.displays));
+        let callbacks = window.callbacks();
+        callbacks.set_input_capabilities(crate::shared::input_availability::macos());
+        callbacks.set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
+            &self.loop_control.owner_signal,
+            callbacks,
+        ));
 
         Ok(window)
     }
@@ -374,10 +376,6 @@ impl Platform for MacOSPlatform {
         // No AppKit transport yet (NSDraggingDestination/NSPasteboard land
         // with the native slices of ADR-0038): inert and honest.
         Arc::new(NullDataTransferSource)
-    }
-
-    fn capabilities(&self) -> &dyn PlatformCapabilities {
-        &MACOS_CAPABILITIES
     }
 
     fn name(&self) -> &'static str {

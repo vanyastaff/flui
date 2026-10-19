@@ -28,7 +28,7 @@ the tolerance type to `flui-animation`, and the consumer to `flui-widgets`.
    at release time (not at build time, so a window moved to another monitor is
    honoured), carries it in `ScrollMetrics::device_pixel_ratio`, and every
    ballistic simulation its physics build (the built-in `ScrollPhysics` and
-   `PageScrollPhysics`, which the refresh indicator also drives) rests within
+   the page snap spring, which the refresh indicator also drives) rests within
    `ScrollMetrics::ballistic_tolerance()`.
 3. When the presentation cannot be read (it is gone, or a frame holds its
    pipeline) the ratio is `1.0`. A ratio the conversion refuses produces no

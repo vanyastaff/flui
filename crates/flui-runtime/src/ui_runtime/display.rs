@@ -14,8 +14,10 @@
 //! - the pointer resampler's interpolation window is the presentation's period
 //!   when [`PointerResampling::FrameAligned`](crate::presentation::PointerResampling)
 //!   is on;
-//! - [`UiRuntime::scaled_refresh_interval`] is the interval metric that
-//!   haptic frame deadlines multiply (ADR-0212).
+//! - the presentation's haptics host multiplies the display's period by its
+//!   frame-deadline factor (ADR-0212 §4, `flui_interaction::haptic_frame_deadline`),
+//!   reading the same stored value; an unknown period uses that function's
+//!   60 Hz fallback.
 //!
 //! A display that reports no period is not a 60 Hz display, but the readers
 //! need some cadence: they use [`DEFAULT_REFRESH_PERIOD`], a policy of this
@@ -24,7 +26,7 @@
 use std::time::Duration;
 
 use flui_foundation::PresentationId;
-use flui_interaction::processing::SamplingClock;
+use flui_interaction::pointer::SamplingClock;
 use flui_platform_api::WindowDisplay;
 
 use super::UiRuntime;
@@ -43,20 +45,6 @@ fn interval_of(display: Option<WindowDisplay>) -> Duration {
     )
 }
 
-/// `period × factor`, or `None` when the product is not representable. The
-/// product runs through `Duration::try_from_secs_f64`, which refuses a negative,
-/// non-finite or overflowing result, so no intermediate value panics or wraps.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "read by the haptics frame deadline, which is pending"
-    )
-)]
-fn scale(period: Duration, factor: f64) -> Option<Duration> {
-    Duration::try_from_secs_f64(period.as_secs_f64() * factor).ok()
-}
-
 impl UiRuntime {
     /// The display presentation `id`'s window is on, as the host last delivered
     /// it: `None` while the window names no display, one the platform's snapshot
@@ -73,45 +61,6 @@ impl UiRuntime {
     #[must_use]
     pub fn refresh_interval(&self, id: PresentationId) -> Duration {
         interval_of(self.window_display(id))
-    }
-
-    /// `factor ×` the refresh interval of presentation `id`: the display-bound
-    /// deadline metric of ADR-0212, recomputed from the current display on every
-    /// call. Crate-private until its consumer (the haptics frame deadline) lands.
-    ///
-    /// `None` when `factor` is not finite and positive, or when the product is
-    /// not representable even at [`DEFAULT_REFRESH_PERIOD`]. A product that
-    /// overflows for the display's own period is treated as that period being
-    /// unknown, with a diagnostic, and the default period applies instead.
-    #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by the haptics frame deadline, which is pending"
-        )
-    )]
-    pub(crate) fn scaled_refresh_interval(
-        &self,
-        id: PresentationId,
-        factor: f64,
-    ) -> Option<Duration> {
-        if !factor.is_finite() || factor <= 0.0 {
-            tracing::warn!(
-                factor,
-                "refresh-interval factor is not a finite positive number"
-            );
-            return None;
-        }
-        let period = self.refresh_interval(id);
-        scale(period, factor).or_else(|| {
-            tracing::warn!(
-                factor,
-                ?period,
-                "refresh interval times factor overflows; treating the period as unknown"
-            );
-            scale(DEFAULT_REFRESH_PERIOD, factor)
-        })
     }
 
     /// The shortest refresh interval among this runtime's presentations: the
@@ -194,12 +143,9 @@ mod tests {
     }
 
     #[test]
-    fn refresh_interval_metric_recomputes_on_display_change() {
+    fn refresh_interval_follows_a_display_change() {
         let (runtime, id) = runtime_on(16_000);
-        assert_eq!(
-            runtime.scaled_refresh_interval(id, 2.0),
-            Some(Duration::from_millis(32))
-        );
+        assert_eq!(runtime.refresh_interval(id), Duration::from_millis(16));
         let faster = WindowDisplay::new(
             DisplayRegistry::new()
                 .mint(&DisplayKey::Injected(2))
@@ -208,38 +154,21 @@ mod tests {
         );
         runtime.apply_window_display(id, Some(faster));
         assert_eq!(
-            runtime.scaled_refresh_interval(id, 2.0),
-            Some(Duration::from_millis(16)),
-            "the metric kept the previous display's interval"
+            runtime.refresh_interval(id),
+            Duration::from_millis(8),
+            "the interval kept the previous display's period"
         );
-    }
-
-    #[test]
-    fn period_product_overflow_is_treated_as_unknown() {
-        // The longest accepted period times 2e19 does not fit a `Duration`; the
-        // default period times it does, so the metric falls back instead of failing.
-        let (runtime, id) = runtime_on(1_000_000);
-        let fallback = runtime
-            .scaled_refresh_interval(id, 2.0e19)
-            .expect("the default period fits");
-        assert!(
-            fallback > Duration::from_secs(3 * 10_u64.pow(16))
-                && fallback < Duration::from_secs(4 * 10_u64.pow(17)),
-            "expected 2e19 x 16.667 ms, got {fallback:?}"
+        let unknown = WindowDisplay::new(
+            DisplayRegistry::new()
+                .mint(&DisplayKey::Injected(3))
+                .expect("id"),
+            None,
         );
-        // A factor nothing can hold is unknown outright.
-        assert_eq!(runtime.scaled_refresh_interval(id, 1.0e300), None);
-    }
-
-    #[test]
-    fn non_finite_factor_is_treated_as_unknown() {
-        let (runtime, id) = runtime_on(8_333);
-        for factor in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
-            assert_eq!(
-                runtime.scaled_refresh_interval(id, factor),
-                None,
-                "{factor}"
-            );
-        }
+        runtime.apply_window_display(id, Some(unknown));
+        assert_eq!(
+            runtime.refresh_interval(id),
+            DEFAULT_REFRESH_PERIOD,
+            "a display that reports nothing returns to the default"
+        );
     }
 }

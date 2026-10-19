@@ -35,8 +35,8 @@ pub enum Quantity {
     ContactSize,
     /// A scroll distance.
     ScrollDelta,
-    /// A trackpad gesture's pan.
-    Pan,
+    /// A hovering pen's normalized distance from the surface.
+    HoverDistance,
     /// A trackpad gesture's scale.
     Scale,
     /// A trackpad gesture's rotation.
@@ -331,7 +331,8 @@ impl PenOrientation {
     }
 }
 
-/// A pen's rotation about its own axis, in `[0, 2π)` radians clockwise.
+/// A pen's rotation about its own axis, in `[0, 2π)` radians clockwise: the W3C `twist`,
+/// the Apple Pencil `rollAngle` and the Windows pen rotation are this one quantity.
 ///
 /// # Examples
 ///
@@ -404,5 +405,50 @@ impl TryFrom<Size<f64>> for ContactSize {
 
     fn try_from(size: Size<f64>) -> Result<Self, Self::Error> {
         Self::try_new(size)
+    }
+}
+
+/// How far a hovering pen is from the surface, normalized to `[0, 1]`: 0 is touching, 1 is
+/// the edge of the digitizer's detection range (the Apple Pencil `zOffset`, Android
+/// `AXIS_DISTANCE` over its motion range).
+///
+/// # Examples
+///
+/// ```
+/// use flui_platform_api::pointer::HoverDistance;
+///
+/// assert_eq!(HoverDistance::try_new(0.4).map(HoverDistance::get), Ok(0.4));
+/// assert!(HoverDistance::try_new(1.5).is_err());
+/// assert_eq!(HoverDistance::saturating(1.0001).map(HoverDistance::get), Ok(1.0));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct HoverDistance(f32);
+
+impl HoverDistance {
+    /// The distance `value`.
+    ///
+    /// # Errors
+    ///
+    /// [`InputValueError::NonFinite`] for NaN or an infinity, and
+    /// [`InputValueError::OutOfRange`] outside `[0, 1]`.
+    pub fn try_new(value: f32) -> Result<Self, InputValueError> {
+        within(Quantity::HoverDistance, f64::from(value), 0.0, 1.0)?;
+        Ok(Self(value))
+    }
+
+    /// The distance `value` clamped into `[0, 1]`.
+    ///
+    /// # Errors
+    ///
+    /// [`InputValueError::NonFinite`] for NaN or an infinity.
+    pub fn saturating(value: f32) -> Result<Self, InputValueError> {
+        finite(Quantity::HoverDistance, f64::from(value))?;
+        Ok(Self(value.clamp(0.0, 1.0)))
+    }
+
+    /// The distance, in `[0, 1]`.
+    #[must_use]
+    pub const fn get(self) -> f32 {
+        self.0
     }
 }

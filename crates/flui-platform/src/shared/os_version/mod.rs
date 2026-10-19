@@ -63,8 +63,10 @@ pub(crate) fn since<F: Gate>(version: F::Version) -> Option<Since<F>> {
 #[cfg(test)]
 mod tests {
     use super::android::{
-        AndroidApi, ContextDisplay, DisplayCutout, InsetsByType, InsetsController,
-        ScaledScrollFactor, TextWeight,
+        AndroidApi, ContextDisplay, DisplayCutout, DragSource, EnvelopeEffects, GestureExclusion,
+        HapticComposition, InMemoryDex, InsetsByType, InsetsController, RoundPrimitives,
+        ScaledScrollFactor, SegmentFeedback, StylusHandwriting, TextWeight, TouchpadGestures,
+        VibrationTouchUsage,
     };
     use super::apple::AppleVersion;
     use super::{Gate, since};
@@ -152,6 +154,56 @@ mod tests {
             "InsetsController",
             api(29),
             api(30),
+            unknown,
+        ));
+        failures.extend(row::<DragSource>("DragSource", api(23), api(24), unknown));
+        failures.extend(row::<InMemoryDex>("InMemoryDex", api(25), api(26), unknown));
+        failures.extend(row::<GestureExclusion>(
+            "GestureExclusion",
+            api(28),
+            api(29),
+            unknown,
+        ));
+        failures.extend(row::<HapticComposition>(
+            "HapticComposition",
+            api(29),
+            api(30),
+            unknown,
+        ));
+        failures.extend(row::<RoundPrimitives>(
+            "RoundPrimitives",
+            api(30),
+            api(31),
+            unknown,
+        ));
+        failures.extend(row::<VibrationTouchUsage>(
+            "VibrationTouchUsage",
+            api(32),
+            api(33),
+            unknown,
+        ));
+        failures.extend(row::<StylusHandwriting>(
+            "StylusHandwriting",
+            api(32),
+            api(33),
+            unknown,
+        ));
+        failures.extend(row::<TouchpadGestures>(
+            "TouchpadGestures",
+            api(33),
+            api(34),
+            unknown,
+        ));
+        failures.extend(row::<SegmentFeedback>(
+            "SegmentFeedback",
+            api(33),
+            api(34),
+            unknown,
+        ));
+        failures.extend(row::<EnvelopeEffects>(
+            "EnvelopeEffects",
+            api(35),
+            api(36),
             unknown,
         ));
         failures.extend(row::<FrameRateRangeProperty>(

@@ -128,10 +128,9 @@ use crate::{
     executor::BackgroundExecutor,
     shared::{PlatformHandlers, system_notice::SystemNotices},
     traits::{
-        Clipboard, DesktopCapabilities, DisplaySnapshot, HostWindow, OpenWindowError,
-        OwnerPlatform, PendingWindow, Platform, PlatformCapabilities, PlatformExecutor,
-        PlatformInput, PlatformReadyCallback, PlatformWindow, ProxySendError, WindowEvent,
-        WindowId, WindowMode, WindowOpen, WindowOptions,
+        Clipboard, DisplaySnapshot, HostWindow, OpenWindowError, OwnerPlatform, PendingWindow,
+        Platform, PlatformExecutor, PlatformInput, PlatformReadyCallback, PlatformWindow,
+        ProxySendError, WindowEvent, WindowId, WindowMode, WindowOpen, WindowOptions,
         owner::{OwnerHooks, ProxyTransport},
     },
 };
@@ -208,13 +207,6 @@ impl WinitRunState {
 /// ```
 pub struct WinitPlatform {
     owner_signal: Mutex<Option<Arc<crate::shared::owner_signal::OwnerSignal>>>,
-    /// Platform capabilities descriptor. `DesktopCapabilities` is a
-    /// zero-sized, immutable-after-construction marker, so it lives directly
-    /// on `WinitPlatform` (not inside the `Mutex`-guarded state) — that lets
-    /// `capabilities()` return `&dyn PlatformCapabilities` borrowed straight
-    /// from `&self` instead of from a `MutexGuard` temporary.
-    capabilities: DesktopCapabilities,
-
     /// The monitors last sampled and the snapshot built from them. Shared with
     /// every window so each can name its display; outside the state lock so a
     /// window's `display_id()` never contends with the platform state.
@@ -241,9 +233,7 @@ impl std::fmt::Debug for WinitPlatform {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // `WinitPlatformState` holds boxed callbacks and channel endpoints
         // that don't implement `Debug`; print the immutable descriptor only.
-        f.debug_struct("WinitPlatform")
-            .field("capabilities", &self.capabilities)
-            .finish_non_exhaustive()
+        f.debug_struct("WinitPlatform").finish_non_exhaustive()
     }
 }
 
@@ -384,7 +374,6 @@ impl WinitPlatform {
     pub fn new() -> Self {
         let platform = Self {
             owner_signal: Mutex::new(None),
-            capabilities: DesktopCapabilities,
             displays: WinitDisplaySource::new(),
             frame_inset: Arc::new(FrameInset::default()),
             notices: Arc::new(SystemNotices::default()),
@@ -656,8 +645,24 @@ impl WinitPlatform {
         if let Some(source) = self.with_state(|state| state.preferences.upgrade()) {
             winit_window.observe_portal_appearance(source.appearance());
         }
+        let availability = crate::shared::input_availability::winit(winit_session(event_loop));
+        let signal = self.owner_signal.lock().clone();
+        if let Some(signal) = signal {
+            let window = Arc::downgrade(&winit_window);
+            winit_window.callbacks().set_input_wake(
+                crate::shared::owner_signal::OwnerSignal::input_wake(&signal, move || {
+                    if let Some(window) = window.upgrade() {
+                        window.callbacks().resume_input_delivery();
+                    }
+                }),
+            );
+        }
 
         self.with_state(|state| {
+            // The initial snapshot reflects the devices already seen.
+            winit_window
+                .callbacks()
+                .set_input_capabilities(availability.with_present(state.native_pointer.present()));
             state.register_window(winit_id, platform_id, winit_window.clone());
         });
         self.notices.mark_stale_on_wake(winit_window.state_cell());
@@ -992,9 +997,47 @@ struct WinitApp {
     self_close_route: SelfCloseRoute,
 }
 
+/// The OS session this event loop runs in.
+fn winit_session(event_loop: &ActiveEventLoop) -> crate::shared::input_availability::WinitSession {
+    use crate::shared::input_availability::WinitSession;
+    let _ = event_loop;
+    #[cfg(target_os = "linux")]
+    {
+        use winit::platform::wayland::ActiveEventLoopExtWayland;
+        if event_loop.is_wayland() {
+            WinitSession::Wayland
+        } else {
+            WinitSession::X11
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        WinitSession::MacOs
+    }
+    #[cfg(target_os = "windows")]
+    {
+        WinitSession::Windows
+    }
+}
+
 enum NativeDispatch {
     Input(PlatformInput),
     Hover(bool),
+    /// The device kinds present changed: a capability change (ADR-0213).
+    Present(flui_platform_api::input_capabilities::PointerKindSet),
+}
+
+/// One `Present` per tracked window, sorted by window.
+fn presence_dispatch(
+    state: &WinitPlatformState,
+    present: flui_platform_api::input_capabilities::PointerKindSet,
+) -> Vec<(Arc<WinitWindow>, NativeDispatch)> {
+    let mut windows: Vec<_> = state.windows.iter().collect();
+    windows.sort_by_key(|(id, _)| id.0);
+    windows
+        .into_iter()
+        .map(|(_, window)| (Arc::clone(window), NativeDispatch::Present(present)))
+        .collect()
 }
 
 fn dispatch_native_inputs(inputs: Vec<(Arc<WinitWindow>, NativeDispatch)>) {
@@ -1006,6 +1049,11 @@ fn dispatch_native_inputs(inputs: Vec<(Arc<WinitWindow>, NativeDispatch)>) {
             }
             NativeDispatch::Hover(hovered) => {
                 window.callbacks().dispatch_hover_status_change(hovered);
+            }
+            NativeDispatch::Present(present) => {
+                let callbacks = window.callbacks();
+                callbacks
+                    .set_input_capabilities(callbacks.input_capabilities().with_present(present));
             }
         }));
         if let Err(payload) = result {
@@ -1200,7 +1248,7 @@ impl ApplicationHandler for WinitApp {
             let inputs = state
                 .native_pointer
                 .device_event(device_id, &event, &windows);
-            inputs
+            let mut batch: Vec<_> = inputs
                 .into_iter()
                 .filter_map(|(window, input)| {
                     state
@@ -1209,7 +1257,12 @@ impl ApplicationHandler for WinitApp {
                         .cloned()
                         .map(|window| (window, NativeDispatch::Input(input)))
                 })
-                .collect()
+                .collect();
+            // A removal reports absence after the contacts it cancelled.
+            if let Some(present) = state.native_pointer.presence_change() {
+                batch.extend(presence_dispatch(state, present));
+            }
+            batch
         });
         dispatch_native_inputs(inputs);
     }
@@ -1257,20 +1310,28 @@ impl ApplicationHandler for WinitApp {
                 tracing::debug!(?delta, "MouseWheel");
             }
             let scale = window.scale_factor();
-            let inputs = self.platform.with_state(|state| {
+            let (inputs, mut batch) = self.platform.with_state(|state| {
                 if let WinitWindowEvent::CursorMoved { position, .. } = &event {
                     state.cursor_positions.insert(platform_id, *position);
                 }
                 let modifiers = from_winit_modifier_state(state.current_modifiers);
-                state
+                let inputs = state
                     .native_pointer
                     .window_event(platform_id, &event, scale, modifiers)
-                    .unwrap_or_default()
+                    .unwrap_or_default();
+                // A device the reading revealed is present before its input.
+                let presence = state
+                    .native_pointer
+                    .presence_change()
+                    .map(|present| presence_dispatch(state, present))
+                    .unwrap_or_default();
+                (inputs, presence)
             });
-            let mut batch: Vec<_> = inputs
-                .into_iter()
-                .map(|input| (Arc::clone(&window), NativeDispatch::Input(input)))
-                .collect();
+            batch.extend(
+                inputs
+                    .into_iter()
+                    .map(|input| (Arc::clone(&window), NativeDispatch::Input(input))),
+            );
             match event {
                 WinitWindowEvent::CursorEntered { .. } => {
                     batch.push((Arc::clone(&window), NativeDispatch::Hover(true)));
@@ -1287,7 +1348,7 @@ impl ApplicationHandler for WinitApp {
             let inputs = self.platform.with_state(|state| {
                 state.native_pointer.cancel_window(
                     platform_id,
-                    flui_platform_api::pointer::CancelReason::FocusLost,
+                    crate::shared::pointer_assembly::NativeCancel::FocusLost,
                 )
             });
             if let Some(window) = window.as_ref() {
@@ -2027,7 +2088,7 @@ impl WinitApp {
             state.cursor_positions.remove(&window_id);
             state.native_pointer.cancel_window(
                 window_id,
-                flui_platform_api::pointer::CancelReason::FocusLost,
+                crate::shared::pointer_assembly::NativeCancel::FocusLost,
             );
             (window, Arc::clone(&state.data_transfer))
         });
@@ -2184,7 +2245,7 @@ impl WinitApp {
             state.cursor_positions.remove(&platform_id);
             state.native_pointer.cancel_window(
                 platform_id,
-                flui_platform_api::pointer::CancelReason::FocusLost,
+                crate::shared::pointer_assembly::NativeCancel::FocusLost,
             );
             if state.active_window == Some(platform_id) {
                 state.active_window = None;
@@ -2622,10 +2683,6 @@ impl Platform for WinitPlatform {
         // Clones of the ONE source constructed at platform init (ADR-0038
         // §2): every id it mints stays redeemable at every clone.
         self.with_state(|state| Arc::clone(&state.data_transfer) as Arc<dyn DataTransferSource>)
-    }
-
-    fn capabilities(&self) -> &dyn PlatformCapabilities {
-        &self.capabilities
     }
 
     fn name(&self) -> &'static str {

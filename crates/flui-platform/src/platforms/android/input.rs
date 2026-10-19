@@ -1,40 +1,35 @@
-//! Native Android input translated directly into FLUI's owned vocabulary.
+//! Native Android input: `MotionEvent`s copied into plain facts for the
+//! shared translation (`shared::android_motion`), and `KeyEvent`s into the
+//! owned keyboard vocabulary.
 //!
-//! Coordinates and contact axes are physical pixels on this wire; both are
-//! divided by the window scale once. Sensor presence comes from the device's
-//! motion ranges, not from whether an axis happens to read zero.
+//! What stays here is what needs the NDK or the JVM: reading the event's
+//! fields and discovering its device's motion ranges through Java.
 
 use std::{collections::HashMap, sync::Arc};
 
-use android_activity::input::{Axis, Button, ButtonState, KeyAction, MotionAction, ToolType};
-use flui_foundation::geometry::{Point, Size};
-use flui_platform_api::{
-    EventTime,
-    keyboard::Modifiers as OwnedModifiers,
-    pointer::{
-        ButtonChange, CancelReason, ContactSize, DeviceId, PenOrientation, PenTool, PointerButton,
-        PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo,
-        PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
-        PointerSample, PointerSignal, Pressure, ScrollEvent,
-    },
-};
+use android_activity::input::{Axis, KeyAction, MotionAction as NdkAction, ToolType};
+use flui_platform_api::{EventTime, keyboard::Modifiers as OwnedModifiers};
 use keyboard_types::{Key, KeyState, Modifiers, NamedKey};
 use ui_events::keyboard::KeyboardEvent;
 
-use crate::{shared::keyboard_adapter::keyboard_input, traits::PlatformInput};
+use crate::{
+    shared::android_motion::{
+        AndroidMotion, Axes, DeviceCapabilities, DeviceDiscovery, Motion, MotionAction,
+        PointerFacts, Tool, axis,
+    },
+    shared::keyboard_adapter::keyboard_input,
+    shared::pointer_assembly::NativeCancel,
+    traits::PlatformInput,
+};
 
-#[derive(Clone, Copy)]
-pub(crate) struct DeviceCapabilities {
-    source: u32,
-    axes: u64,
-}
-
-impl DeviceCapabilities {
-    fn has(self, axis: Axis) -> bool {
-        let bit = u32::from(axis);
-        bit < 64 && self.axes & (1_u64 << bit) != 0
-    }
-}
+/// `AXIS_GESTURE_SCROLL_X_DISTANCE` (API 34).
+const AXIS_GESTURE_SCROLL_X_DISTANCE: u32 = 50;
+/// `AXIS_GESTURE_SCROLL_Y_DISTANCE` (API 34).
+const AXIS_GESTURE_SCROLL_Y_DISTANCE: u32 = 51;
+/// `AXIS_GESTURE_PINCH_SCALE_FACTOR` (API 34).
+const AXIS_GESTURE_PINCH_SCALE_FACTOR: u32 = 52;
+/// `AXIS_GESTURE_SWIPE_FINGER_COUNT` (API 34).
+const AXIS_GESTURE_SWIPE_FINGER_COUNT: u32 = 53;
 
 #[derive(Clone)]
 pub(crate) struct CachedDevice {
@@ -97,14 +92,8 @@ pub(crate) fn motion_device(
                     replaced,
                 });
             }
-            let mut axes = 0_u64;
-            for axis in [
-                Axis::Pressure,
-                Axis::TouchMajor,
-                Axis::TouchMinor,
-                Axis::Tilt,
-                Axis::Orientation,
-            ] {
+            let mut reported = Vec::with_capacity(axis::SENSORS.len());
+            for axis in axis::SENSORS {
                 let range = env
                     .call_method(
                         &device,
@@ -112,20 +101,19 @@ pub(crate) fn motion_device(
                         jni_sig!("(II)Landroid/view/InputDevice$MotionRange;"),
                         &[
                             JValue::Int(
-                                i32::try_from(u32::from(axis))
-                                    .expect("BUG: Android sensor axes fit i32"),
+                                i32::try_from(axis).expect("BUG: Android sensor axes fit i32"),
                             ),
                             JValue::Int(i32::from_ne_bytes(source.to_ne_bytes())),
                         ],
                     )?
                     .l()?;
                 if !range.is_null() {
-                    axes |= 1_u64 << u32::from(axis);
+                    reported.push(axis);
                 }
             }
             Ok(DeviceReading::Present {
                 cached: CachedDevice {
-                    capabilities: DeviceCapabilities { source, axes },
+                    capabilities: DeviceCapabilities::new(source, reported),
                     object: Arc::new(env.new_global_ref(&device)?),
                 },
                 replaced,
@@ -141,63 +129,27 @@ pub(crate) fn motion_device(
     result.unwrap_or(DeviceReading::Unavailable)
 }
 
-struct Device {
-    cached: CachedDevice,
-    id: DeviceId,
-}
-
-struct Contact {
-    info: PointerInfo,
-    button: PointerButton,
-}
-
-/// Input state for the Android window owner. Java device references are used
-/// only for identity and capability caching; no user callback lives here.
+/// Input state for the Android window owner: the shared translation, and
+/// the Java device objects its capability cache compares by identity. No
+/// user callback lives here.
+#[derive(Default)]
 pub(crate) struct AndroidInputState {
-    devices: HashMap<i32, Device>,
-    contacts: HashMap<PointerId, Contact>,
-    next_device: Option<std::num::NonZeroU64>,
-    last_time: Option<EventTime>,
-}
-
-impl Default for AndroidInputState {
-    fn default() -> Self {
-        Self {
-            devices: HashMap::new(),
-            contacts: HashMap::new(),
-            next_device: Some(std::num::NonZeroU64::MIN),
-            last_time: None,
-        }
-    }
+    motion: AndroidMotion,
+    devices: HashMap<i32, CachedDevice>,
 }
 
 impl AndroidInputState {
-    fn allocate_device_id(&mut self) -> Option<DeviceId> {
-        let next = self.next_device?;
-        self.next_device = next.checked_add(1);
-        Some(DeviceId::new(next))
+    pub(crate) fn cancel_contacts(&mut self, reason: NativeCancel) -> Vec<PlatformInput> {
+        self.motion.cancel_contacts(reason)
     }
 
-    pub(crate) fn cancel_contacts(&mut self, reason: CancelReason) -> Vec<PlatformInput> {
-        let Some(time) = self.last_time else {
-            return Vec::new();
-        };
-        let mut contacts: Vec<_> = self
-            .contacts
-            .drain()
-            .map(|(_, contact)| contact.info)
-            .collect();
-        contacts.sort_by_key(|info| info.id);
-        contacts
-            .into_iter()
-            .map(|info| {
-                PlatformInput::Pointer(PointerEvent::Cancel(PointerCancel::new(info, time, reason)))
-            })
-            .collect()
+    /// What the translation held that is due by the end of this drain.
+    pub(crate) fn finish_drain(&mut self) -> Vec<PlatformInput> {
+        self.motion.finish_drain(web_time::Instant::now())
     }
 
     pub(crate) fn capabilities(&self, id: i32) -> Option<CachedDevice> {
-        self.devices.get(&id).map(|device| device.cached.clone())
+        self.devices.get(&id).cloned()
     }
 
     pub(crate) fn convert_motion_event(
@@ -205,376 +157,111 @@ impl AndroidInputState {
         event: &android_activity::input::MotionEvent<'_>,
         scale_factor: f64,
         scroll_policy: crate::shared::android_scroll::AxisPolicy,
-        discovery: DeviceReading,
+        reading: DeviceReading,
     ) -> Vec<PlatformInput> {
-        let time = u64::try_from(event.event_time())
-            .ok()
-            .map(EventTime::from_nanos);
-        if let Some(time) = time {
-            self.last_time = Some(time);
-        }
-        let Some(delivery_time) = time.or(self.last_time) else {
-            return Vec::new();
-        };
-        let mut output = Vec::new();
-        let native_device = event.device_id();
-        let had_device = self.devices.contains_key(&native_device);
-        let replacement = match &discovery {
-            DeviceReading::Present { replaced, .. } => *replaced,
-            DeviceReading::Removed => true,
-            DeviceReading::Unavailable => false,
-        };
-        if replacement && let Some(old) = self.devices.remove(&native_device) {
-            let mut retired: Vec<_> = self
-                .contacts
-                .values()
-                .map(|contact| contact.info)
-                .filter(|info| info.device == Some(old.id))
-                .collect();
-            retired.sort_by_key(|info| info.id);
-            for info in retired {
-                self.contacts.remove(&info.id);
-                output.push(PlatformInput::Pointer(PointerEvent::Cancel(
-                    PointerCancel::new(info, delivery_time, CancelReason::DeviceRemoved),
-                )));
-            }
-            output.push(PlatformInput::Pointer(PointerEvent::DeviceRemoved(
-                PointerDeviceChange::new(old.id, PointerKind::Unknown, delivery_time),
-            )));
-        }
-        let capabilities = match discovery {
-            DeviceReading::Present { cached, .. } => {
+        let id = event.device_id();
+        let discovery = match reading {
+            DeviceReading::Present { cached, replaced } => {
                 let capabilities = cached.capabilities;
-                if let Some(device) = self.devices.get_mut(&native_device) {
-                    device.cached = cached;
-                } else {
-                    // The counter refuses permanently after its final identity.
-                    let Some(id) = self.allocate_device_id() else {
-                        return output;
-                    };
-                    self.devices.insert(native_device, Device { cached, id });
-                    output.push(PlatformInput::Pointer(PointerEvent::DeviceAdded(
-                        PointerDeviceChange::new(id, PointerKind::Unknown, delivery_time),
-                    )));
+                self.devices.insert(id, cached);
+                DeviceDiscovery::Present {
+                    capabilities,
+                    replaced,
                 }
-                Some(capabilities)
             }
-            DeviceReading::Removed if had_device => return output,
-            // Android-generated/virtual events can have no InputDevice object.
-            // Preserve their native contact and position, with absent device/sensors.
-            DeviceReading::Removed | DeviceReading::Unavailable => None,
+            DeviceReading::Removed => {
+                self.devices.remove(&id);
+                DeviceDiscovery::Removed
+            }
+            DeviceReading::Unavailable => DeviceDiscovery::Unavailable,
         };
-        let modifiers = owned_modifiers(event.meta_state());
-        let action = event.action();
-        if matches!(action, MotionAction::Cancel) {
-            let native = u64::from(u32::from_ne_bytes(native_device.to_ne_bytes()));
-            let mut retired: Vec<_> = self
-                .contacts
-                .values()
-                .map(|contact| contact.info)
-                .filter(|info| (info.id.get().get() - 1) >> 32 == native)
-                .collect();
-            retired.sort_by_key(|info| info.id);
-            for info in retired {
-                self.contacts.remove(&info.id);
-                output.push(PlatformInput::Pointer(PointerEvent::Cancel(
-                    PointerCancel::new(info, delivery_time, CancelReason::Platform),
-                )));
-            }
-            return output;
-        }
-        for (index, pointer) in event.pointers().enumerate() {
-            if matches!(
-                action,
-                MotionAction::Down
-                    | MotionAction::PointerDown
-                    | MotionAction::Up
-                    | MotionAction::PointerUp
-            ) && index != event.pointer_index()
-            {
-                continue;
-            }
-            let Some(id) = native_pointer_id(native_device, pointer.pointer_id()) else {
-                continue;
-            };
-            let kind = pointer_kind(pointer.tool_type());
-            let role = self.contacts.get(&id).map_or_else(
-                || {
-                    if self
-                        .contacts
-                        .values()
-                        .any(|contact| same_kind(contact.info.kind, kind))
-                    {
-                        PointerRole::Additional
-                    } else {
-                        PointerRole::Primary
-                    }
-                },
-                |contact| contact.info.role,
-            );
-            let mut info = PointerInfo::new(id, kind).with_role(role);
-            if let Some(device) = self.devices.get(&native_device) {
-                info = info.with_device(device.id);
-            }
-            let in_contact = match action {
-                MotionAction::Down | MotionAction::PointerDown | MotionAction::Move => true,
-                MotionAction::ButtonPress | MotionAction::ButtonRelease => {
-                    self.contacts.contains_key(&id)
-                }
-                _ => false,
-            } && matches!(kind, PointerKind::Touch | PointerKind::Pen { .. });
-            let buttons = native_buttons(event.button_state(), in_contact);
-            let sample = time.and_then(|time| {
-                native_sample(time, kind, scale_factor, capabilities, |axis| {
-                    pointer.axis_value(axis)
-                })
-            });
-            let converted = match action {
-                MotionAction::Down | MotionAction::PointerDown => {
-                    let Some(sample) = sample else { continue };
-                    let button = if matches!(kind, PointerKind::Mouse) {
-                        buttons.iter().next().unwrap_or(PointerButton::PRIMARY)
-                    } else {
-                        PointerButton::PRIMARY
-                    };
-                    self.contacts.insert(id, Contact { info, button });
-                    Some(PointerEvent::Down(
-                        PointerPress::new(info, button, buttons, sample).with_modifiers(modifiers),
-                    ))
-                }
-                MotionAction::Up | MotionAction::PointerUp => {
-                    let button = self
-                        .contacts
-                        .remove(&id)
-                        .map_or(PointerButton::PRIMARY, |contact| contact.button);
-                    Some(match sample {
-                        Some(sample) => PointerEvent::Up(
-                            PointerRelease::new(info, button, buttons, sample)
-                                .with_modifiers(modifiers),
-                        ),
-                        None => PointerEvent::Cancel(PointerCancel::new(
-                            info,
-                            delivery_time,
-                            CancelReason::InvalidInput,
-                        )),
+        let pointers: Vec<PointerFacts> = event
+            .pointers()
+            .map(|pointer| PointerFacts {
+                id: pointer.pointer_id(),
+                tool: tool(pointer.tool_type()),
+                axes: axes(&|axis| pointer.axis_value(axis)),
+                history: pointer
+                    .history()
+                    .filter_map(|past| {
+                        let time = u64::try_from(past.event_time())
+                            .ok()
+                            .map(EventTime::from_nanos)?;
+                        Some((time, axes(&|axis| past.axis_value(axis))))
                     })
-                }
-                MotionAction::Move | MotionAction::HoverMove => {
-                    let Some(sample) = sample else { continue };
-                    if let Some(contact) = self.contacts.get_mut(&id) {
-                        contact.info = info;
-                    }
-                    let history = pointer
-                        .history()
-                        .filter_map(|past| {
-                            let time = u64::try_from(past.event_time())
-                                .ok()
-                                .map(EventTime::from_nanos)?;
-                            native_sample(time, kind, scale_factor, capabilities, |axis| {
-                                past.axis_value(axis)
-                            })
-                        })
-                        .collect();
-                    Some(PointerEvent::Move(
-                        PointerMove::new(info, buttons, sample)
-                            .with_modifiers(modifiers)
-                            .with_coalesced(history),
-                    ))
-                }
-                MotionAction::ButtonPress | MotionAction::ButtonRelease => {
-                    let Some(sample) = sample else { continue };
-                    let Some(button) = native_button(event.action_button()) else {
-                        continue;
-                    };
-                    if matches!(action, MotionAction::ButtonPress) {
-                        Some(PointerEvent::ButtonChange(ButtonChange::Pressed(
-                            PointerPress::new(info, button, buttons, sample)
-                                .with_modifiers(modifiers),
-                        )))
-                    } else {
-                        Some(PointerEvent::ButtonChange(ButtonChange::Released(
-                            PointerRelease::new(info, button, buttons, sample)
-                                .with_modifiers(modifiers),
-                        )))
-                    }
-                }
-                MotionAction::HoverEnter | MotionAction::HoverExit => {
-                    let mut signal = PointerSignal::new(info, delivery_time);
-                    if let Some(sample) = sample {
-                        signal = signal.with_position(sample.position);
-                    }
-                    Some(if matches!(action, MotionAction::HoverEnter) {
-                        PointerEvent::Enter(signal)
-                    } else {
-                        PointerEvent::Leave(signal)
-                    })
-                }
-                MotionAction::Scroll => {
-                    let Some(sample) = sample else { continue };
-                    // Android axes are positive left/up, opposite the owned wheel convention.
-                    // The accepted activity-context policy already projects
-                    // native factors into logical pixels exactly once.
-                    let Some(delta) = scroll_policy.delta(
-                        pointer.axis_value(Axis::Hscroll),
-                        pointer.axis_value(Axis::Vscroll),
-                    ) else {
-                        continue;
-                    };
-                    Some(PointerEvent::Scroll(
-                        ScrollEvent::new(info, sample.time, sample.position, delta)
-                            .with_modifiers(modifiers),
-                    ))
-                }
-                _ => None,
-            };
-            if let Some(converted) = converted {
-                output.push(PlatformInput::Pointer(converted));
-            }
-        }
-        output
+                    .collect(),
+            })
+            .collect();
+        let motion = Motion {
+            device: id,
+            source: u32::from(event.source()),
+            action: action(event.action()),
+            action_index: event.pointer_index(),
+            action_button: u32::from(event.action_button()),
+            buttons: event.button_state().0,
+            modifiers: owned_modifiers(event.meta_state()),
+            time: u64::try_from(event.event_time())
+                .ok()
+                .map(EventTime::from_nanos),
+            pointers: &pointers,
+        };
+        // The accepted activity-context policy already projects native
+        // factors into logical pixels exactly once.
+        self.motion.decode(
+            &motion,
+            scale_factor,
+            &|horizontal, vertical| scroll_policy.delta(horizontal, vertical),
+            discovery,
+            web_time::Instant::now(),
+        )
     }
 }
 
-fn native_pointer_id(device: i32, pointer: i32) -> Option<PointerId> {
-    // Preserve the signed native device identity injectively; contact IDs are
-    // nonnegative Android IDs. Device and pointer namespaces never collide.
-    let device = u64::from(u32::from_ne_bytes(device.to_ne_bytes()));
-    let pointer = u64::try_from(pointer).ok()?;
-    if pointer > u64::from(u32::MAX) {
-        return None;
+fn action(action: NdkAction) -> MotionAction {
+    match action {
+        NdkAction::Down => MotionAction::Down,
+        NdkAction::Up => MotionAction::Up,
+        NdkAction::Move => MotionAction::Move,
+        NdkAction::Cancel => MotionAction::Cancel,
+        NdkAction::PointerDown => MotionAction::PointerDown,
+        NdkAction::PointerUp => MotionAction::PointerUp,
+        NdkAction::HoverEnter => MotionAction::HoverEnter,
+        NdkAction::HoverMove => MotionAction::HoverMove,
+        NdkAction::HoverExit => MotionAction::HoverExit,
+        NdkAction::Scroll => MotionAction::Scroll,
+        NdkAction::ButtonPress => MotionAction::ButtonPress,
+        NdkAction::ButtonRelease => MotionAction::ButtonRelease,
+        _ => MotionAction::Other,
     }
-    PointerId::try_from(((device << 32) | pointer).checked_add(1)?).ok()
 }
 
-fn same_kind(a: PointerKind, b: PointerKind) -> bool {
-    match (a, b) {
-        (PointerKind::Pen { .. }, PointerKind::Pen { .. }) => true,
-        _ => a == b,
-    }
-}
-
-fn pointer_kind(tool: ToolType) -> PointerKind {
+fn tool(tool: ToolType) -> Tool {
     match tool {
-        ToolType::Finger => PointerKind::Touch,
-        ToolType::Stylus => PointerKind::Pen { tool: PenTool::Tip },
-        ToolType::Eraser => PointerKind::Pen {
-            tool: PenTool::Eraser,
-        },
-        ToolType::Mouse => PointerKind::Mouse,
-        _ => PointerKind::Unknown,
+        ToolType::Finger => Tool::Finger,
+        ToolType::Stylus => Tool::Stylus,
+        ToolType::Eraser => Tool::Eraser,
+        ToolType::Mouse => Tool::Mouse,
+        _ => Tool::Unknown,
     }
 }
 
-fn native_button(button: Button) -> Option<PointerButton> {
-    match button {
-        Button::Primary => Some(PointerButton::PRIMARY),
-        Button::Secondary | Button::StylusPrimary => Some(PointerButton::SECONDARY),
-        Button::Tertiary | Button::StylusSecondary => Some(PointerButton::AUXILIARY),
-        Button::Back => Some(PointerButton::BACK),
-        Button::Forward => Some(PointerButton::FORWARD),
-        _ => None,
+/// The axes the translation reads, from `value`.
+fn axes(value: &dyn Fn(Axis) -> f32) -> Axes {
+    Axes {
+        x: value(Axis::X),
+        y: value(Axis::Y),
+        pressure: value(Axis::Pressure),
+        touch_major: value(Axis::TouchMajor),
+        touch_minor: value(Axis::TouchMinor),
+        tilt: value(Axis::Tilt),
+        orientation: value(Axis::Orientation),
+        hscroll: value(Axis::Hscroll),
+        vscroll: value(Axis::Vscroll),
+        gesture_scroll_x: value(Axis::from(AXIS_GESTURE_SCROLL_X_DISTANCE)),
+        gesture_scroll_y: value(Axis::from(AXIS_GESTURE_SCROLL_Y_DISTANCE)),
+        pinch_scale: value(Axis::from(AXIS_GESTURE_PINCH_SCALE_FACTOR)),
+        swipe_fingers: value(Axis::from(AXIS_GESTURE_SWIPE_FINGER_COUNT)),
     }
-}
-
-fn native_buttons(native: ButtonState, contact: bool) -> PointerButtons {
-    let mut buttons: PointerButtons = [
-        Button::Primary,
-        Button::Secondary,
-        Button::Tertiary,
-        Button::Back,
-        Button::Forward,
-        Button::StylusPrimary,
-        Button::StylusSecondary,
-    ]
-    .into_iter()
-    .filter(|button| native.0 & u32::from(*button) != 0)
-    .filter_map(native_button)
-    .collect();
-    if contact {
-        buttons = buttons.with(PointerButton::PRIMARY);
-    }
-    buttons
-}
-
-fn logical_contact(major: f64, minor: f64, scale: f64) -> Option<ContactSize> {
-    if !scale.is_finite() || scale <= 0.0 {
-        return None;
-    }
-    ContactSize::try_new(Size::new(major / scale, minor / scale)).ok()
-}
-
-fn pen_orientation(tilt: f64, orientation: f64) -> Option<PenOrientation> {
-    // Android measures tilt from the screen normal, orientation clockwise
-    // from upwards. Owned altitude is above the surface, azimuth from rightwards.
-    if !tilt.is_finite() || !(0.0..=f64::from(core::f32::consts::FRAC_PI_2)).contains(&tilt) {
-        return None;
-    }
-    PenOrientation::try_new(
-        core::f64::consts::FRAC_PI_2 - tilt.min(core::f64::consts::FRAC_PI_2),
-        orientation - core::f64::consts::FRAC_PI_2,
-    )
-    .ok()
-}
-
-fn native_sample(
-    time: EventTime,
-    kind: PointerKind,
-    scale: f64,
-    capabilities: Option<DeviceCapabilities>,
-    mut axis: impl FnMut(Axis) -> f32,
-) -> Option<PointerSample> {
-    if !scale.is_finite() || scale <= 0.0 {
-        return None;
-    }
-    let position = PointerPosition::try_new(Point::new(
-        f64::from(axis(Axis::X)) / scale,
-        f64::from(axis(Axis::Y)) / scale,
-    ))
-    .ok()?;
-    let mut sample = PointerSample::new(time, position);
-    let Some(capabilities) = capabilities else {
-        return Some(sample);
-    };
-    if matches!(kind, PointerKind::Touch | PointerKind::Pen { .. }) {
-        if capabilities.has(Axis::Pressure) {
-            sample.pressure = Pressure::saturating(axis(Axis::Pressure)).ok();
-        }
-        if capabilities.has(Axis::TouchMajor) && capabilities.has(Axis::TouchMinor) {
-            sample.contact_size = logical_contact(
-                f64::from(axis(Axis::TouchMajor)),
-                f64::from(axis(Axis::TouchMinor)),
-                scale,
-            );
-        }
-    }
-    if matches!(kind, PointerKind::Pen { .. }) {
-        sample.orientation = match (
-            capabilities.has(Axis::Tilt),
-            capabilities.has(Axis::Orientation),
-        ) {
-            (true, true) => pen_orientation(
-                f64::from(axis(Axis::Tilt)),
-                f64::from(axis(Axis::Orientation)),
-            ),
-            (true, false) => {
-                let tilt = f64::from(axis(Axis::Tilt));
-                if (0.0..=f64::from(core::f32::consts::FRAC_PI_2)).contains(&tilt) {
-                    PenOrientation::try_altitude(
-                        core::f64::consts::FRAC_PI_2 - tilt.min(core::f64::consts::FRAC_PI_2),
-                    )
-                    .ok()
-                } else {
-                    None
-                }
-            }
-            (false, true) => PenOrientation::try_azimuth(
-                f64::from(axis(Axis::Orientation)) - core::f64::consts::FRAC_PI_2,
-            )
-            .ok(),
-            (false, false) => None,
-        };
-    }
-    Some(sample)
 }
 
 fn owned_modifiers(meta: android_activity::input::MetaState) -> OwnedModifiers {
@@ -595,10 +282,39 @@ fn owned_modifiers(meta: android_activity::input::MetaState) -> OwnedModifiers {
     owned
 }
 
-/// Convert an Android `KeyEvent` to a `PlatformInput`.
+/// The key presses an input method's editor action arrives as: `key`
+/// pressed and released at `uptime_ms`, with Shift when `shift`.
+pub(crate) fn editor_action_keys(
+    key: flui_platform_api::keyboard::NamedKey,
+    shift: bool,
+    uptime_ms: i64,
+) -> [PlatformInput; 2] {
+    use flui_platform_api::keyboard::{Code, Key as OwnedKey, KeyEvent, KeyState as OwnedState};
+    let time = EventTime::from_nanos(
+        u64::try_from(uptime_ms)
+            .unwrap_or(0)
+            .saturating_mul(1_000_000),
+    );
+    let modifiers = if shift {
+        OwnedModifiers::SHIFT
+    } else {
+        OwnedModifiers::NONE
+    };
+    [OwnedState::Down, OwnedState::Up].map(|state| {
+        PlatformInput::Keyboard(
+            KeyEvent::new(state, OwnedKey::Named(key), Code::Unidentified, time)
+                .with_modifiers(modifiers),
+        )
+    })
+}
+
+/// Convert an Android `KeyEvent` to a `PlatformInput`. `composing` is whether
+/// the input method composes now: a key it passed on during a composition is
+/// still its own (`shared::android_ime::key_composition`).
 pub fn convert_key_event(
     app: &android_activity::AndroidApp,
     event: &android_activity::input::KeyEvent<'_>,
+    composing: bool,
 ) -> Option<PlatformInput> {
     let action = event.action();
     let state = match action {
@@ -611,12 +327,20 @@ pub fn convert_key_event(
     // Keycode implements Into<u32> via num_enum::IntoPrimitive
     let keycode_i32 = i32::try_from(u32::from(event.key_code())).ok()?;
     let code = ui_events::keyboard::android::keycode_to_code(keycode_i32);
-    let named_key = ui_events::keyboard::android::keycode_to_named_key(keycode_i32);
+    let named_key = match ui_events::keyboard::android::keycode_to_named_key(keycode_i32) {
+        NamedKey::Unidentified => crate::shared::android_keys::unnamed_key(keycode_i32)
+            .and_then(|named| named.as_str().parse().ok())
+            .unwrap_or(NamedKey::Unidentified),
+        named => named,
+    };
     let location = ui_events::keyboard::android::keycode_to_location(keycode_i32);
 
     let mapped = if named_key == NamedKey::Unidentified {
+        let lookup = android_activity::input::MetaState(
+            crate::shared::android_keys::character_meta_state(event.meta_state().0),
+        );
         app.device_key_character_map(event.device_id())
-            .and_then(|map| map.get(event.key_code(), event.meta_state()))
+            .and_then(|map| map.get(event.key_code(), lookup))
             .ok()
     } else {
         None
@@ -633,7 +357,8 @@ pub fn convert_key_event(
             location,
             modifiers,
             repeat,
-            is_composing: false,
+            is_composing: crate::shared::android_ime::key_composition(composing)
+                == flui_platform_api::keyboard::ImeComposition::Active,
         },
         u64::try_from(event.event_time()).ok()?,
     ))
@@ -748,7 +473,6 @@ fn convert_meta_state(meta: android_activity::input::MetaState) -> Modifiers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_platform_api::pointer::{PenTool, PointerKind};
 
     #[test]
     fn android_native_key_map_preserves_logical_keys() {
@@ -805,277 +529,5 @@ mod tests {
                 Key::Character(expected.into())
             );
         }
-    }
-
-    #[test]
-    fn android_native_pointer_readings() {
-        let rows: &[(&str, fn())] = &[
-            ("eraser remains a tool", eraser_remains_a_tool),
-            (
-                "buttons preserve contact and barrel",
-                buttons_preserve_contact_and_barrel,
-            ),
-            (
-                "fractional physical contact is logical",
-                fractional_contact_is_logical,
-            ),
-            (
-                "invalid scale refuses geometry",
-                invalid_scale_refuses_geometry,
-            ),
-            (
-                "native orientation changes coordinate basis",
-                native_orientation_changes_basis,
-            ),
-            (
-                "known zero sensors remain readings",
-                known_zero_sensors_remain_readings,
-            ),
-            (
-                "unknown sensor capability remains absent",
-                unknown_sensor_capability_remains_absent,
-            ),
-            (
-                "partial pen capabilities remain partial",
-                partial_pen_capabilities_remain_partial,
-            ),
-            (
-                "native device identities stay independent",
-                native_device_identities_stay_independent,
-            ),
-            (
-                "terminal device allocation stays refused",
-                terminal_device_allocation_stays_refused,
-            ),
-            (
-                "lifecycle cancellation retires admitted contacts",
-                lifecycle_cancellation_retires_contacts,
-            ),
-        ];
-        for (name, row) in rows {
-            row();
-            eprintln!("passed: {name}");
-        }
-    }
-
-    fn eraser_remains_a_tool() {
-        assert_eq!(
-            pointer_kind(ToolType::Eraser),
-            PointerKind::Pen {
-                tool: PenTool::Eraser
-            }
-        );
-        assert_eq!(
-            pointer_kind(ToolType::Stylus),
-            PointerKind::Pen { tool: PenTool::Tip }
-        );
-        assert_eq!(pointer_kind(ToolType::Unknown), PointerKind::Unknown);
-    }
-
-    fn buttons_preserve_contact_and_barrel() {
-        use flui_platform_api::pointer::PointerButton as Button;
-        let held = native_buttons(android_activity::input::ButtonState(0x20 | 0x40), true);
-        assert!(held.contains(Button::PRIMARY));
-        assert!(held.contains(Button::SECONDARY));
-        assert!(held.contains(Button::AUXILIARY));
-        assert_eq!(
-            native_buttons(android_activity::input::ButtonState(0), false),
-            flui_platform_api::pointer::PointerButtons::NONE
-        );
-    }
-
-    fn fractional_contact_is_logical() {
-        let size = logical_contact(18.5, 7.25, 2.0)
-            .expect("reported finite axes")
-            .get();
-        assert_eq!((size.width, size.height), (9.25, 3.625));
-        let zero = logical_contact(0.0, 0.0, 2.0)
-            .expect("reported zero axes")
-            .get();
-        assert_eq!((zero.width, zero.height), (0.0, 0.0));
-    }
-
-    fn invalid_scale_refuses_geometry() {
-        for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-            assert_eq!(logical_contact(18.5, 7.25, scale), None);
-        }
-    }
-
-    fn native_orientation_changes_basis() {
-        let angles = pen_orientation(core::f64::consts::FRAC_PI_4, 0.0).expect("finite pen angles");
-        assert_eq!(angles.altitude(), Some(core::f64::consts::FRAC_PI_4));
-        assert_eq!(angles.azimuth(), Some(3.0 * core::f64::consts::FRAC_PI_2));
-        assert_eq!(pen_orientation(f64::NAN, 0.0), None);
-    }
-
-    fn capabilities(axes: &[Axis]) -> DeviceCapabilities {
-        DeviceCapabilities {
-            source: 0,
-            axes: axes
-                .iter()
-                .fold(0, |bits, axis| bits | (1_u64 << u32::from(*axis))),
-        }
-    }
-
-    fn known_zero_sensors_remain_readings() {
-        let sample = native_sample(
-            EventTime::from_nanos(17),
-            PointerKind::Pen { tool: PenTool::Tip },
-            2.0,
-            Some(capabilities(&[
-                Axis::Pressure,
-                Axis::Tilt,
-                Axis::Orientation,
-                Axis::TouchMajor,
-                Axis::TouchMinor,
-            ])),
-            |_| 0.0,
-        )
-        .expect("reported zero samples");
-        assert_eq!(sample.time, EventTime::from_nanos(17));
-        assert_eq!(sample.pressure.map(Pressure::get), Some(0.0));
-        let orientation = sample.orientation.expect("two reported angles");
-        assert_eq!(orientation.altitude(), Some(core::f64::consts::FRAC_PI_2));
-        assert_eq!(
-            orientation.azimuth(),
-            Some(3.0 * core::f64::consts::FRAC_PI_2)
-        );
-        assert_eq!(
-            sample.contact_size.expect("reported contact axes").get(),
-            Size::ZERO
-        );
-        assert_eq!(sample.tangential_pressure, None);
-        assert_eq!(sample.twist, None);
-    }
-
-    fn unknown_sensor_capability_remains_absent() {
-        for capabilities in [None, Some(capabilities(&[]))] {
-            let sample = native_sample(
-                EventTime::from_nanos(17),
-                PointerKind::Pen {
-                    tool: PenTool::Eraser,
-                },
-                2.0,
-                capabilities,
-                |_| 0.0,
-            )
-            .expect("position without sensor capabilities");
-            assert_eq!(sample.pressure, None);
-            assert_eq!(sample.orientation, None);
-            assert_eq!(sample.contact_size, None);
-        }
-        let mouse = native_sample(
-            EventTime::from_nanos(17),
-            PointerKind::Mouse,
-            2.0,
-            Some(capabilities(&[Axis::Pressure])),
-            |_| 0.5,
-        )
-        .expect("mouse position");
-        assert_eq!(mouse.pressure, None);
-    }
-
-    fn partial_pen_capabilities_remain_partial() {
-        for (axes, expected) in [
-            (
-                &[Axis::Tilt][..],
-                (Some(core::f64::consts::FRAC_PI_2), None),
-            ),
-            (
-                &[Axis::Orientation][..],
-                (None, Some(3.0 * core::f64::consts::FRAC_PI_2)),
-            ),
-        ] {
-            let sample = native_sample(
-                EventTime::from_nanos(17),
-                PointerKind::Pen { tool: PenTool::Tip },
-                2.0,
-                Some(capabilities(axes)),
-                |_| 0.0,
-            )
-            .expect("position and partial angles");
-            let orientation = sample.orientation.expect("one reported angle");
-            assert_eq!((orientation.altitude(), orientation.azimuth()), expected);
-        }
-        assert_eq!(
-            pen_orientation(f64::from(core::f32::consts::FRAC_PI_2), 0.0)
-                .expect("native flat pen endpoint")
-                .altitude(),
-            Some(0.0)
-        );
-    }
-
-    fn native_device_identities_stay_independent() {
-        let first = native_pointer_id(1, 0).expect("first device pointer");
-        let second = native_pointer_id(2, 0).expect("second device pointer");
-        let virtual_device = native_pointer_id(-1, 0).expect("signed native device");
-        assert_ne!(first, second);
-        assert_ne!(first, virtual_device);
-        assert_eq!(first.get().get(), 4_294_967_297);
-        assert_eq!(native_pointer_id(1, -1), None);
-    }
-
-    fn terminal_device_allocation_stays_refused() {
-        let mut owner = AndroidInputState {
-            next_device: Some(std::num::NonZeroU64::MAX),
-            ..AndroidInputState::default()
-        };
-        assert_eq!(
-            owner
-                .allocate_device_id()
-                .expect("last admitted identity")
-                .get(),
-            std::num::NonZeroU64::MAX
-        );
-        assert_eq!(owner.allocate_device_id(), None);
-        owner.devices.clear();
-        assert_eq!(owner.allocate_device_id(), None);
-    }
-
-    fn lifecycle_cancellation_retires_contacts() {
-        let mut owner = AndroidInputState {
-            last_time: Some(EventTime::from_nanos(91)),
-            ..AndroidInputState::default()
-        };
-        let first = PointerInfo::new(
-            PointerId::try_from(1_u64).expect("fixture ID"),
-            PointerKind::Touch,
-        );
-        let second = PointerInfo::new(
-            PointerId::try_from(2_u64).expect("fixture ID"),
-            PointerKind::Pen {
-                tool: PenTool::Eraser,
-            },
-        );
-        for info in [second, first] {
-            owner.contacts.insert(
-                info.id,
-                Contact {
-                    info,
-                    button: PointerButton::PRIMARY,
-                },
-            );
-        }
-        let events = owner.cancel_contacts(CancelReason::FocusLost);
-        let [
-            PlatformInput::Pointer(PointerEvent::Cancel(first_cancel)),
-            PlatformInput::Pointer(PointerEvent::Cancel(second_cancel)),
-        ] = &events[..]
-        else {
-            panic!("two contacts must end in native cancellation");
-        };
-        assert_eq!(first_cancel.pointer, first);
-        assert_eq!(second_cancel.pointer, second);
-        assert_eq!(first_cancel.time, EventTime::from_nanos(91));
-        assert_eq!(second_cancel.reason, CancelReason::FocusLost);
-        assert!(owner.cancel_contacts(CancelReason::FocusLost).is_empty());
-        owner.contacts.insert(
-            first.id,
-            Contact {
-                info: first,
-                button: PointerButton::PRIMARY,
-            },
-        );
-        assert_eq!(owner.cancel_contacts(CancelReason::CaptureLost).len(), 1);
     }
 }

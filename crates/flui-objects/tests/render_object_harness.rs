@@ -70,7 +70,10 @@
 //! | `RenderFlow` | `harness_flow_*` | yes | yes | yes | yes | order, paint transform |
 //! | `RenderTable` | `harness_table_*` | yes | yes | yes | yes | column widths |
 //! | `RenderAbsorbPointer` | `harness_absorb_pointer_*` | yes | yes | — | yes | — |
+//! | `RenderContentShape` | `harness_content_shape_*` | yes | yes | — | yes | — |
+//! | `RenderHitSlop` | `harness_hit_slop_*` | yes | yes | — | yes | — |
 //! | `RenderIgnorePointer` | `harness_ignore_pointer_*` | yes | yes | — | yes | — |
+//! | `RenderInputRegion` | `harness_input_regions*` | yes | yes | — | yes | input regions |
 //! | `RenderIgnoreBaseline` | `harness_ignore_baseline_*` | yes | yes | — | yes | baseline hidden |
 //! | `RenderListener` | `harness_listener_*` | yes | yes | — | yes | — |
 //! | `RenderMouseRegion` | `harness_mouse_region_*` | yes | yes | — | yes | cursor/annotation |
@@ -127,7 +130,7 @@ use flui_animation::{
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, RelativeRect, Size};
 use flui_interaction::InteractionLane;
-use flui_interaction::routing::{MouseTracker, PointerMotionKind};
+use flui_interaction::pointer::{MouseTracker, PointerMotionKind};
 use flui_objects::TableColumnWidth;
 use flui_objects::*;
 use flui_painting::{Alignment, BoxFit, BoxShape, ImagePlacement};
@@ -230,6 +233,9 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderTable",
     "RenderTheater",
     "RenderAbsorbPointer",
+    "RenderContentShape",
+    "RenderHitSlop",
+    "RenderInputRegion",
     "RenderIgnorePointer",
     "RenderIgnoreBaseline",
     "RenderListener",
@@ -1365,8 +1371,11 @@ fn harness_listener_passes_layout_through_and_attaches_handler() {
         "the listener registers itself in the hit path",
     );
     let mut result = HitTestResult::new();
-    run.pipeline()
-        .hit_test(Offset::new(20.0, 20.0), &mut result);
+    run.pipeline().hit_test(
+        Offset::new(20.0, 20.0),
+        flui_interaction::events::PointerKind::Touch,
+        &mut result,
+    );
     assert!(
         result
             .path()
@@ -1411,7 +1420,11 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
 
     let mut inside = HitTestResult::new();
     let inside_position = Offset::new(10.0, 10.0);
-    run.pipeline().hit_test(inside_position, &mut inside);
+    run.pipeline().hit_test(
+        inside_position,
+        flui_interaction::events::PointerKind::Mouse,
+        &mut inside,
+    );
     let tracker = MouseTracker::new();
     let device = flui_interaction::events::DeviceId::try_from(1).expect("nonzero mouse device");
     let mouse_move = |position, buttons| {
@@ -1476,7 +1489,11 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
 
     let mut outside = HitTestResult::new();
     let outside_position = Offset::new(80.0, 10.0);
-    run.pipeline().hit_test(outside_position, &mut outside);
+    run.pipeline().hit_test(
+        outside_position,
+        flui_interaction::events::PointerKind::Mouse,
+        &mut outside,
+    );
     let outside_event = mouse_move(
         outside_position,
         flui_interaction::events::PointerButtons::NONE,
@@ -3864,6 +3881,50 @@ fn harness_animated_transform_tick_dirty_marking() {
     let (crossing, structure) = tick_to(&mut run, &slide, 0.25);
     assert!(structure.contains(&"Transform"), "{structure:?}");
     let (patched, _) = tick_to(&mut run, &slide, 0.5);
+    assert!(
+        patched <= PATCH_REPAINTS && patched < crossing,
+        "a moving translation patches its layer: {patched} painted, {crossing} on the crossing"
+    );
+}
+
+/// A pixel translation moves the child by its offset in logical pixels,
+/// whatever the child's size, and hit-testing follows it; a moving one
+/// patches its layer like any other.
+fn harness_animated_transform_translates_by_logical_pixels() {
+    let controller = ticking_controller(100, 0.0);
+    let offset = ProxyAnimation::new(std::rc::Rc::new(flui_animation::Animatable::animate(
+        flui_animation::Tween::new(Offset::ZERO, Offset::new(60.0, 10.0)),
+        std::rc::Rc::new(controller.clone()) as std::rc::Rc<dyn Animation<f64>>,
+    )) as std::rc::Rc<dyn Animation<Offset>>);
+    let mut run = RenderTester::mount(
+        box_node(RenderFlex::row()).child(
+            box_node(RenderRepaintBoundary::new()).child(
+                box_node(RenderAnimatedTransform::new(TransformMotion::Translate {
+                    offset,
+                }))
+                .label("transform")
+                .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+            ),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    assert!(run.hit(20.0, 20.0).contains(&run.id("child")), "at rest");
+    let (crossing, structure) = tick_to(&mut run, &controller, 0.5);
+    assert!(structure.contains(&"Transform"), "{structure:?}");
+    assert!(
+        run.hit(35.0, 20.0).contains(&run.id("child"))
+            && !run.hit(20.0, 20.0).contains(&run.id("child")),
+        "30 px right, 5 px down: within the node, the child is hit where it moved"
+    );
+    assert_eq!(
+        run.pipeline()
+            .transform_to(run.id("child"), run.id("transform"))
+            .map(|matrix| matrix.transform_point(0.0, 0.0)),
+        Some((30.0, 5.0)),
+        "the offset is logical pixels, not a fraction of the 40 px child"
+    );
+    let (patched, _) = tick_to(&mut run, &controller, 1.0);
     assert!(
         patched <= PATCH_REPAINTS && patched < crossing,
         "a moving translation patches its layer: {patched} painted, {crossing} on the crossing"
@@ -7581,6 +7642,186 @@ fn harness_ignore_pointer_lets_hits_pass_to_sibling_below() {
     assert_eq!(run.hit_first(20.0, 20.0), Some(run.id("below")));
 }
 
+/// A circle's bounding-box corners are not part of it: a hit there falls
+/// through to what is painted below, while the centre reaches the child.
+fn harness_content_shape_oval_rejects_the_corners_of_its_box() {
+    let run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("below"))
+            .child(
+                box_node(RenderContentShape::new(HitShape::Oval))
+                    .child(box_node(RenderColoredBox::green(100.0, 100.0)).label("inner"))
+                    .label("shape"),
+            ),
+    )
+    .with_size(Size::new(100.0, 100.0))
+    .run_frame();
+
+    assert_eq!(run.hit_first(50.0, 50.0), Some(run.id("inner")));
+    // (8, 8) is inside the 100×100 box and ~59 px from the centre: outside
+    // the radius-50 circle.
+    assert_eq!(run.hit_first(8.0, 8.0), Some(run.id("below")));
+    assert!(!run.hit(8.0, 8.0).contains(&run.id("shape")));
+    // On the circle's edge band, still inside it.
+    assert_eq!(run.hit_first(50.0, 2.0), Some(run.id("inner")));
+    assert_descendant_properties(&run.diagnostics(), "RenderContentShape", &["shape"]);
+}
+
+/// A rounded rectangle rejects only its rounded-off corners, and the shape,
+/// not the child's content, is the hit area: a child that never takes a hit
+/// still leaves the shape itself on the path, blocking what is below.
+fn harness_content_shape_rounded_rect_is_the_hit_area() {
+    let run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("below"))
+            .child(
+                box_node(RenderContentShape::new(HitShape::RoundedRect(
+                    <flui_painting::styling::BorderRadius as flui_painting::styling::BorderRadiusExt>::circular(30.0),
+                )))
+                .child(
+                    box_node(RenderIgnorePointer::new(true))
+                        .child(box_node(RenderColoredBox::green(100.0, 100.0))),
+                )
+                .label("shape"),
+            ),
+    )
+    .with_size(Size::new(100.0, 100.0))
+    .run_frame();
+
+    assert_eq!(run.hit_first(50.0, 50.0), Some(run.id("shape")));
+    assert_eq!(run.hit_first(50.0, 1.0), Some(run.id("shape")));
+    assert_eq!(run.hit_first(2.0, 2.0), Some(run.id("below")));
+}
+
+/// The slop area takes a hit outside the child's bounds and routes it to the
+/// child; beyond the area the hit falls to what is below.
+fn harness_hit_slop_extends_the_child_hit_area() {
+    let run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(box_node(RenderColoredBox::red(200.0, 200.0)).label("base"))
+            .child(
+                box_node(RenderHitSlop::new(EdgeInsets::all(10.0), 0.0))
+                    .child(box_node(RenderColoredBox::green(20.0, 20.0)).label("target"))
+                    .with_stack_parent_data(StackParentData::new().with_top(90.0).with_left(90.0))
+                    .label("slop"),
+            ),
+    )
+    .with_size(Size::new(200.0, 200.0))
+    .run_frame();
+
+    assert_eq!(run.hit_first(100.0, 100.0), Some(run.id("target")));
+    assert_eq!(run.hit_first(82.0, 100.0), Some(run.id("target")));
+    assert_eq!(run.hit_first(100.0, 118.0), Some(run.id("target")));
+    assert_eq!(run.hit_first(78.0, 100.0), Some(run.id("base")));
+    assert_descendant_properties(&run.diagnostics(), "RenderHitSlop", &["slop", "min_target"]);
+}
+
+/// `min_target` grows a small target to that side, centred on it, without
+/// changing its layout size.
+fn harness_hit_slop_min_target_centres_on_the_child() {
+    let run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(box_node(RenderColoredBox::red(200.0, 200.0)).label("base"))
+            .child(
+                box_node(RenderHitSlop::new(EdgeInsets::ZERO, 44.0))
+                    .child(box_node(RenderColoredBox::green(20.0, 20.0)).label("target"))
+                    .with_stack_parent_data(StackParentData::new().with_top(90.0).with_left(90.0))
+                    .label("slop"),
+            ),
+    )
+    .with_size(Size::new(200.0, 200.0))
+    .run_frame();
+
+    assert_eq!(run.box_geometry(run.id("slop")), Size::new(20.0, 20.0));
+    // 44 − 20 = 24 extra, 12 per side.
+    assert_eq!(run.hit_first(79.0, 100.0), Some(run.id("target")));
+    assert_eq!(run.hit_first(100.0, 121.0), Some(run.id("target")));
+    assert_eq!(run.hit_first(77.0, 100.0), Some(run.id("base")));
+    assert_eq!(run.hit_first(100.0, 123.0), Some(run.id("base")));
+}
+
+/// An enabled region reports its own box in window coordinates; a disabled one
+/// reports nothing. Layout and hit-testing are the child's.
+fn harness_input_regions() {
+    use flui_rendering::input_regions::{InputRegion, InputRegionKind};
+    let exclusion = InputRegionKind::SystemGestureExclusion;
+    let run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(box_node(RenderColoredBox::red(200.0, 200.0)).label("base"))
+            .child(
+                box_node(RenderInputRegion::new(exclusion))
+                    .child(box_node(RenderColoredBox::green(20.0, 30.0)).label("target"))
+                    .with_stack_parent_data(StackParentData::new().with_top(40.0).with_left(10.0))
+                    .label("region"),
+            ),
+    )
+    .with_size(Size::new(200.0, 200.0))
+    .run_frame();
+
+    assert_eq!(run.box_geometry(run.id("region")), Size::new(20.0, 30.0));
+    assert_eq!(run.hit_first(15.0, 45.0), Some(run.id("target")));
+    assert_eq!(
+        run.owner().input_regions(),
+        vec![InputRegion::new(
+            exclusion,
+            Rect::from_ltrb(10.0, 40.0, 30.0, 70.0)
+        )],
+    );
+    assert_descendant_properties(&run.diagnostics(), "RenderInputRegion", &["kind"]);
+
+    let mut disabled = RenderInputRegion::new(exclusion);
+    assert_eq!(
+        disabled.set_enabled(false),
+        flui_rendering::RenderUpdateImpact::PAINT
+    );
+    let run = RenderTester::mount(
+        box_node(disabled).child(box_node(RenderColoredBox::green(20.0, 30.0))),
+    )
+    .with_size(Size::new(200.0, 200.0))
+    .run_frame();
+    assert_eq!(run.owner().input_regions(), Vec::new());
+}
+
+/// A region under a follower is reported at the follower's composite-resolved
+/// position (its leader's anchor), where it is painted and hit-tested, not at
+/// its tree-relative position.
+fn harness_input_regions_follow_a_follower_to_its_resolved_position() {
+    use flui_rendering::input_regions::{InputRegion, InputRegionKind};
+    let exclusion = InputRegionKind::SystemGestureExclusion;
+    let link = LayerLink::new();
+    let leader = box_node(RenderRepaintBoundary::new())
+        .with_stack_parent_data(StackParentData::new().with_top(60.0).with_left(50.0))
+        .child(box_node(RenderLeaderLayer::new(link)));
+    let follower = box_node(RenderRepaintBoundary::new())
+        .with_stack_parent_data(
+            StackParentData::new()
+                .with_top(0.0)
+                .with_left(0.0)
+                .with_width(300.0)
+                .with_height(300.0),
+        )
+        .child(
+            box_node(RenderFollowerLayer::new(link)).child(
+                box_node(RenderAlign::new(Alignment::TOP_LEFT)).child(
+                    box_node(RenderInputRegion::new(exclusion))
+                        .child(box_node(RenderColoredBox::red(30.0, 30.0))),
+                ),
+            ),
+        );
+
+    let run = RenderTester::mount(box_node(RenderStack::new()).child(leader).child(follower))
+        .with_size(Size::new(300.0, 300.0))
+        .run_frame();
+
+    assert_eq!(
+        run.owner().input_regions(),
+        vec![InputRegion::new(
+            exclusion,
+            Rect::from_ltrb(50.0, 60.0, 80.0, 90.0)
+        )],
+    );
+}
+
 // ============================================================================
 // Sliver objects (via viewport host)
 // ============================================================================
@@ -10954,6 +11195,40 @@ fn harness_layout_builder_publishes_the_real_incoming_constraints() {
     );
 }
 
+/// Before its builder has run once, a builder has no child, and its size
+/// stands in for one pass only. It must be finite under any constraints: a
+/// builder freshly mounted in a list or a column gets an unbounded main axis,
+/// and the biggest size there is infinite, which failed the layout of every
+/// ancestor up to the list for that frame.
+fn harness_layout_builder_without_a_child_takes_its_smallest_size() {
+    let cases = [
+        (
+            "unbounded_height",
+            BoxConstraints::new(0.0, 300.0, 0.0, f64::INFINITY),
+            Size::ZERO,
+        ),
+        (
+            "unbounded_width_with_a_floor",
+            BoxConstraints::new(12.0, f64::INFINITY, 0.0, 40.0),
+            Size::new(12.0, 0.0),
+        ),
+        (
+            "tight",
+            BoxConstraints::tight(Size::new(80.0, 30.0)),
+            Size::new(80.0, 30.0),
+        ),
+    ];
+    for (name, constraints, expected) in cases {
+        let run = RenderTester::mount(box_node(RenderLayoutBuilder::new(Arc::new(
+            LayoutConstraintsCell::new(),
+        ))))
+        .with_constraints(constraints)
+        .try_run_layout()
+        .unwrap_or_else(|error| panic!("{name}: a childless builder failed layout: {error:?}"));
+        assert_eq!(run.box_geometry(run.root()), expected, "{name}");
+    }
+}
+
 // ============================================================================
 // Catalog guard — every exported render type must be exercised above
 // ============================================================================
@@ -11972,6 +12247,10 @@ fn family_sizing() {
                 "layout_builder_publishes_the_real_incoming_constraints",
                 harness_layout_builder_publishes_the_real_incoming_constraints,
             ),
+            (
+                "layout_builder_without_a_child_takes_its_smallest_size",
+                harness_layout_builder_without_a_child_takes_its_smallest_size,
+            ),
         ],
     );
 }
@@ -12234,6 +12513,10 @@ fn family_clips_and_effects() {
             (
                 "animated_transform_tick_dirty_marking",
                 harness_animated_transform_tick_dirty_marking,
+            ),
+            (
+                "animated_transform_translates_by_logical_pixels",
+                harness_animated_transform_translates_by_logical_pixels,
             ),
             (
                 "animated_transform_singular_paints_and_hits_nothing",
@@ -12546,6 +12829,27 @@ fn family_pointer() {
             (
                 "ignore_pointer_lets_hits_pass_to_sibling_below",
                 harness_ignore_pointer_lets_hits_pass_to_sibling_below,
+            ),
+            (
+                "content_shape_oval_rejects_the_corners_of_its_box",
+                harness_content_shape_oval_rejects_the_corners_of_its_box,
+            ),
+            (
+                "content_shape_rounded_rect_is_the_hit_area",
+                harness_content_shape_rounded_rect_is_the_hit_area,
+            ),
+            (
+                "hit_slop_extends_the_child_hit_area",
+                harness_hit_slop_extends_the_child_hit_area,
+            ),
+            (
+                "hit_slop_min_target_centres_on_the_child",
+                harness_hit_slop_min_target_centres_on_the_child,
+            ),
+            ("input_regions", harness_input_regions),
+            (
+                "input_regions_follow_a_follower_to_its_resolved_position",
+                harness_input_regions_follow_a_follower_to_its_resolved_position,
             ),
         ],
     );

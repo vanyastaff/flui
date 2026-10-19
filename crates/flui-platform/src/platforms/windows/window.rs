@@ -19,16 +19,15 @@ use windows::{
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DestroyWindow, GCLP_HBRBACKGROUND, GWL_EXSTYLE,
                 GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetForegroundWindow,
-                GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, IDC_APPSTARTING, IDC_ARROW,
-                IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
-                IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, IsIconic, IsWindowVisible, IsZoomed,
-                LoadCursorW, PostMessageW, SC_RESTORE, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE,
-                SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_FRAMECHANGED,
-                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
-                SetClassLongPtrW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
-                SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, WINDOWPLACEMENT,
-                WM_APP, WM_CLOSE, WM_SYSCOMMAND, WS_CAPTION, WS_EX_APPWINDOW, WS_MAXIMIZE,
-                WS_MAXIMIZEBOX, WS_MINIMIZE, WS_THICKFRAME,
+                GetWindowLongPtrW, GetWindowRect, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND,
+                IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
+                IDC_WAIT, IsIconic, IsWindowVisible, IsZoomed, LoadCursorW, PostMessageW,
+                SC_RESTORE, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+                SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+                SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetClassLongPtrW, SetCursor,
+                SetForegroundWindow, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
+                SetWindowTextW, ShowWindow, WM_APP, WM_CLOSE, WM_SYSCOMMAND, WS_CAPTION,
+                WS_EX_APPWINDOW, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_THICKFRAME,
             },
         },
     },
@@ -38,6 +37,9 @@ use windows::{
 use super::util::{USER_DEFAULT_SCREEN_DPI, WINDOW_CLASS_NAME, logical_to_device};
 use super::window_frame::{
     FirstShow, first_show_command, frame_style, restyled, to_screen, to_workspace,
+};
+use super::window_placement::{
+    open_spot, outer_size, placement_of, restore_rectangle, workspace_origin,
 };
 
 /// Posted to a window nothing paints, so its frame still runs: a hidden window
@@ -94,10 +96,17 @@ pub struct WindowsWindow {
     /// [`WindowsAccessibility::new`](super::accessibility::WindowsAccessibility::new).
     #[cfg(feature = "a11y")]
     accessibility: Arc<super::accessibility::WindowsAccessibility>,
+
+    /// This window's haptic actuator: the pen in range of it.
+    haptics: Arc<super::haptics::WindowsHaptics>,
+
+    /// Starts this window's OS drag sessions through OLE (ADR-0211).
+    drag_source: Arc<super::drag::Win32DragSource>,
 }
 
 // SAFETY, per field: `state` is an `Arc<Mutex<..>>` with its own
 // synchronization; `windows_map` is likewise an `Arc<Mutex<..>>`;
+// `haptics` and `drag_source` are `Send + Sync` themselves;
 // `identity` is a plain integer. The struct carries no callback storage:
 // callbacks live in the owner-thread `WindowContext` and are installed only
 // through the context gate below, so a foreign thread can neither run nor
@@ -381,165 +390,6 @@ fn backend_error(what: &str, error: windows::core::Error) -> WindowCommandError 
     }
 }
 
-/// The window's placement: its show state and the rectangles it returns to.
-pub(super) fn placement_of(hwnd: HWND) -> windows::core::Result<WINDOWPLACEMENT> {
-    let mut placement = WINDOWPLACEMENT {
-        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-        ..Default::default()
-    };
-    // SAFETY: `placement` is a stack local with `length` set; a stale `hwnd`
-    // only makes the call fail.
-    unsafe { GetWindowPlacement(hwnd, &raw mut placement) }?;
-    Ok(placement)
-}
-
-/// How far the work area of `hwnd`'s monitor starts from the monitor's own
-/// origin, in device pixels: a taskbar on the top or left edge moves it.
-/// `WINDOWPLACEMENT::rcNormalPosition` is measured from the work area, screen
-/// coordinates from the monitor.
-fn workspace_origin(hwnd: HWND) -> (i32, i32) {
-    use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
-    };
-
-    let mut info = MONITORINFO {
-        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-        ..Default::default()
-    };
-    // SAFETY: `info` is a stack local with `cbSize` set; a stale `hwnd` makes
-    // the monitor lookup fall back to the nearest monitor and never faults.
-    let found = unsafe {
-        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-        GetMonitorInfoW(monitor, &raw mut info).as_bool()
-    };
-    if found {
-        (
-            info.rcWork.left - info.rcMonitor.left,
-            info.rcWork.top - info.rcMonitor.top,
-        )
-    } else {
-        (0, 0)
-    }
-}
-
-/// The outer rectangle `hwnd` returns to from a maximized or minimized state
-/// (`rcNormalPosition`), in device pixels of the virtual screen. Unlike
-/// `GetWindowRect` it is the normal rectangle whatever state the window is in
-/// now.
-pub(super) fn restore_rectangle(hwnd: HWND) -> Option<Bounds<i32>> {
-    let placement = placement_of(hwnd).ok()?;
-    let screen = to_screen(placement.rcNormalPosition, workspace_origin(hwnd));
-    Some(Bounds {
-        origin: Point::new(screen.left, screen.top),
-        size: Size::new(screen.right - screen.left, screen.bottom - screen.top),
-    })
-}
-
-/// Where Win32 is asked to put a window that opens, in physical pixels of the
-/// virtual screen.
-#[derive(Debug, Clone, PartialEq)]
-struct OpenSpot {
-    /// The scale the sizes were computed at: the target display's, else the
-    /// system's.
-    scale: f64,
-    /// The outer size the window is created with.
-    outer: (i32, i32),
-    /// The outer top-left; `None` leaves the place to the system.
-    origin: Option<(i32, i32)>,
-    /// The outer rectangle (left, top, right, bottom) a window that opens
-    /// maximized or fullscreen returns to; `None` leaves it to the system.
-    normal: Option<(i32, i32, i32, i32)>,
-}
-
-/// Turn the options of an opening window into physical pixels.
-///
-/// `options.size` is the content size, so `outer_of` (the window frame at a
-/// DPI) turns it into the outer size. `options.position` and
-/// `options.normal_geometry` are relative to the origin of `target`'s usable
-/// area in that display's logical pixels and convert through that display's own
-/// scale; with no `target` they are global logical pixels at `system_scale`.
-fn open_spot(
-    options: &WindowOptions,
-    target: Option<&flui_platform_api::DisplayInfo>,
-    system_scale: f64,
-    outer_of: impl Fn(u32, (i32, i32)) -> (i32, i32),
-) -> OpenSpot {
-    let scale = target
-        .map(|display| display.scale_factor)
-        .filter(|scale| scale.is_finite() && *scale > 0.0)
-        .unwrap_or(system_scale);
-    let dpi = ((scale * f64::from(USER_DEFAULT_SCREEN_DPI)).round() as u32).max(1);
-    let content = (
-        logical_to_device(options.size.width, scale),
-        logical_to_device(options.size.height, scale),
-    );
-    let outer = outer_of(dpi, content);
-    let anchor = target.map_or((0, 0), |display| {
-        (
-            display.usable_bounds.origin.x,
-            display.usable_bounds.origin.y,
-        )
-    });
-    let place = |at: Point<f64>| {
-        (
-            anchor.0.saturating_add(logical_to_device(at.x, scale)),
-            anchor.1.saturating_add(logical_to_device(at.y, scale)),
-        )
-    };
-    let origin = options.position.map(place);
-    let normal = options.normal_geometry.and_then(|geometry| {
-        let (left, top) = geometry.position.map(place).or(origin)?;
-        Some((
-            left,
-            top,
-            left.saturating_add(logical_to_device(geometry.size.width, scale)),
-            top.saturating_add(logical_to_device(geometry.size.height, scale)),
-        ))
-    });
-    OpenSpot {
-        scale,
-        outer,
-        origin,
-        normal,
-    }
-}
-
-/// The outer size, in physical pixels, of a window of `style` that has a
-/// content area of `content` at `dpi`: the content plus its title bar and
-/// borders (`AdjustWindowRectExForDpi`), measured for the style given and not
-/// for the window's current rectangle, which a maximized or minimized window
-/// does not keep.
-pub(super) fn outer_size(
-    style: u32,
-    ex_style: u32,
-    dpi: u32,
-    content: (i32, i32),
-) -> windows::core::Result<(i32, i32)> {
-    use windows::Win32::UI::{
-        HiDpi::AdjustWindowRectExForDpi,
-        WindowsAndMessaging::{WINDOW_EX_STYLE, WINDOW_STYLE},
-    };
-
-    let mut rect = RECT {
-        left: 0,
-        top: 0,
-        right: content.0,
-        bottom: content.1,
-    };
-    // SAFETY: `rect` is a stack local passed as the documented in/out
-    // parameter; the style and DPI are plain values.
-    unsafe {
-        AdjustWindowRectExForDpi(
-            &raw mut rect,
-            WINDOW_STYLE(style),
-            false,
-            WINDOW_EX_STYLE(ex_style),
-            dpi,
-        )?;
-    }
-    Ok((rect.right - rect.left, rect.bottom - rect.top))
-}
-
 /// What every Win32 window honours and observes, known before one exists
 /// (`Platform::window_capabilities`).
 pub(crate) const fn window_capabilities() -> WindowCapabilities {
@@ -575,6 +425,7 @@ impl WindowsWindow {
         shares: super::owner_control::OwnerShares,
         config: crate::config::WindowConfiguration,
         apartment: Option<Rc<super::com_apartment::ComApartment>>,
+        drag: Arc<super::drag::OleTransfer>,
     ) -> Result<Arc<Self>, OpenWindowError> {
         let super::owner_control::OwnerShares {
             handlers,
@@ -606,6 +457,7 @@ impl WindowsWindow {
             scale_factor,
             normal,
             apartment,
+            drag,
         )
     }
 
@@ -707,6 +559,7 @@ impl WindowsWindow {
         scale_factor: f64,
         normal: Option<RECT>,
         apartment: Option<Rc<super::com_apartment::ComApartment>>,
+        drag: Arc<super::drag::OleTransfer>,
     ) -> Result<Arc<Self>, OpenWindowError> {
         let (width, height) = (requested.width, requested.height);
         // SAFETY: `hwnd` is the valid handle `create_native` just returned
@@ -803,26 +656,27 @@ impl WindowsWindow {
             // never delivers a `WM_SHOWWINDOW` edge for it — a `false`
             // seed would swallow that window's first minimize. See
             // `shared::visibility::win32_initial_visibility`'s doc.
+            let message_clock = super::events::MessageClock::new();
+            let pointer_registry = std::cell::RefCell::new(super::events::pointer_registry(
+                message_clock.native(),
+                scale_factor,
+            ));
             let context = Box::new(WindowContext {
                 window_id,
-                identity,
                 windows: Arc::downgrade(&windows_map),
                 window_state: Arc::downgrade(&state),
                 snapshot: Arc::clone(&snapshot),
                 handlers,
                 exit_policy,
-                displays: Arc::clone(&displays),
-                last_monitor: std::cell::Cell::new(0),
                 callbacks: WindowCallbacks::counting_frames(frames.counter()),
                 scale_factor: std::cell::Cell::new(scale_factor),
-                message_clock: super::events::MessageClock::new(),
-                pointer_registry: std::cell::RefCell::default(),
+                message_clock,
+                pointer_registry,
+                touchpad: super::direct_manipulation::TouchpadSlot::default(),
                 mode: std::cell::Cell::new(NativeMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
                 config,
                 is_hovered: std::cell::Cell::new(false),
-                appearance: std::cell::Cell::new(appearance),
-                chrome_follows_system: std::cell::Cell::new(true),
                 modifiers: std::cell::Cell::new(flui_platform_api::Modifiers::NONE),
                 cursor: std::cell::Cell::new(CursorIcon::default()),
                 restore_style: std::cell::Cell::new(0),
@@ -844,8 +698,14 @@ impl WindowsWindow {
                 ),
                 pending_high_surrogate: std::cell::Cell::new(None),
                 text_services: std::cell::RefCell::new(None),
+                drop_target: std::cell::RefCell::new(None),
                 held_dead_keys: std::cell::RefCell::default(),
                 ledger: std::cell::RefCell::new(crate::shared::hwnd_affinity::ContextLedger::new()),
+                identity,
+                displays: Arc::clone(&displays),
+                last_monitor: std::cell::Cell::new(0),
+                appearance: std::cell::Cell::new(appearance),
+                chrome_follows_system: std::cell::Cell::new(true),
             });
             let context_ptr = Box::into_raw(context);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_ptr as isize);
@@ -862,14 +722,42 @@ impl WindowsWindow {
                 // requires; `hwnd` was validated just above.
                 #[cfg(feature = "a11y")]
                 accessibility: Arc::new(super::accessibility::WindowsAccessibility::new(hwnd)),
+                haptics: super::haptics::WindowsHaptics::new(hwnd),
+                drag_source: super::drag::Win32DragSource::new(Arc::clone(&drag), hwnd),
             });
             // The wrapper owns the window from here: a panic out of the
             // activation (or anything after it) drops it, which destroys the
             // window and retires its context.
+            let touchpad_apartment = apartment.clone();
             if !Self::activate_text_services(hwnd, apartment) {
                 return Err(OpenWindowError::Backend {
                     message: "the window was destroyed while its text services activated".into(),
                 });
+            }
+
+            // From here on the window takes drags, from this process or
+            // another (ADR-0211).
+            super::drag::register_target(hwnd, identity, drag);
+
+            // The precision touchpad's viewport. Without one the window
+            // reports no precise scrolling or trackpad gestures
+            // (`input_availability::windows`).
+            let mut client = windows::Win32::Foundation::RECT::default();
+            let size = if GetClientRect(hwnd, &raw mut client).is_ok() {
+                (client.right - client.left, client.bottom - client.top)
+            } else {
+                (width, height)
+            };
+            if let Some(host) =
+                super::direct_manipulation::create_host(hwnd, size, touchpad_apartment)
+            {
+                let installed = super::platform::with_window_context(hwnd, "touchpad", |context| {
+                    context.touchpad.install(host);
+                });
+                debug_assert!(
+                    installed.is_some(),
+                    "BUG: the window's context is installed"
+                );
             }
 
             // The window is still hidden: put it where and in the mode it
@@ -1852,6 +1740,68 @@ impl PlatformWindow for WindowsWindow {
         WindowId(self.hwnd.0 as u64)
     }
 
+    fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
+        Some(Arc::clone(&self.haptics) as Arc<dyn crate::traits::PlatformHaptics>)
+    }
+
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform_api::drag::PlatformDragSource>> {
+        Some(Arc::clone(&self.drag_source) as Arc<dyn flui_platform_api::drag::PlatformDragSource>)
+    }
+
+    fn window_at(&self, position: Point<f64>) -> flui_platform_api::WindowAt {
+        use flui_platform_api::WindowAt;
+        use windows::Win32::UI::WindowsAndMessaging::{GA_ROOT, GetAncestor, WindowFromPoint};
+
+        let scale = self.state.lock().scale_factor;
+        let device = |logical: f64| {
+            let device = (logical * scale).round();
+            (device.is_finite() && device >= f64::from(i32::MIN) && device <= f64::from(i32::MAX))
+                .then_some(device as i32)
+        };
+        let (Some(x), Some(y)) = (device(position.x), device(position.y)) else {
+            // No display holds a point past the device coordinate range.
+            return WindowAt::Outside;
+        };
+        let mut point = POINT { x, y };
+        // SAFETY: `point` is a live, writable local; on a stale `hwnd` the call
+        // fails and `point` is not read.
+        if !unsafe { ClientToScreen(self.hwnd, &raw mut point) }.as_bool() {
+            return WindowAt::Unknown;
+        }
+        // SAFETY: queries by value; a point over no window answers a null
+        // handle, which `GetAncestor` and the context lookup refuse.
+        let root = unsafe { GetAncestor(WindowFromPoint(point), GA_ROOT) };
+        // Only a window of this platform instance, on this thread, has a context
+        // here; any other window under the point is another application's.
+        let Some((window, target_scale)) =
+            super::platform::with_window_context(root, "window_at", |context| {
+                (context.window_id, context.scale_factor.get())
+            })
+        else {
+            return WindowAt::Outside;
+        };
+        let mut client = RECT::default();
+        // SAFETY: `root` is this thread's live window (its context answered);
+        // both out-parameters are live locals.
+        let placed = unsafe {
+            ScreenToClient(root, &raw mut point).as_bool()
+                && GetClientRect(root, &raw mut client).is_ok()
+        };
+        let inside = (client.left..client.right).contains(&point.x)
+            && (client.top..client.bottom).contains(&point.y);
+        if !(placed && inside) {
+            // Over the window's frame, not its content.
+            return WindowAt::Outside;
+        }
+        WindowAt::Window {
+            window,
+            position: Point::new(
+                f64::from(point.x) / target_scale,
+                f64::from(point.y) / target_scale,
+            ),
+        }
+    }
+
     fn physical_size(&self) -> Size<i32> {
         let state = self.state.lock();
         let logical = state.bounds.size;
@@ -2239,10 +2189,9 @@ impl PlatformWindow for WindowsWindow {
     // thread. A replaced callback is dropped after its slot's lock is
     // released, since its destructor may re-enter this window.
 
-    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
+    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
         self.register("on_input", move |callbacks| {
-            let previous = callbacks.on_input.lock().replace(callback);
-            drop(previous);
+            callbacks.set_input_callback(callback);
         });
     }
 
@@ -2480,6 +2429,10 @@ impl Clone for WindowsWindow {
             // bridge — one subclass hook per HWND, never two.
             #[cfg(feature = "a11y")]
             accessibility: Arc::clone(&self.accessibility),
+            // And its actuator, so a newer request replaces an older one
+            // whichever wrapper made it.
+            haptics: Arc::clone(&self.haptics),
+            drag_source: Arc::clone(&self.drag_source),
         }
     }
 }

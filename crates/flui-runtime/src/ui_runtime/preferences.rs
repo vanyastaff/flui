@@ -2,13 +2,14 @@ use std::{
     cell::RefCell,
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     rc::Rc,
+    sync::Arc,
     time::Duration,
 };
 
 use flui_foundation::{MonotonicClock, PresentationId, geometry::DevicePixelRatio};
-use flui_interaction::GestureSettings;
+use flui_interaction::GestureProfiles;
 use flui_platform_api::{
-    GestureGeometry, GesturePreferences, PreferenceQueryError, SystemPreferences,
+    DisplayId, GestureGeometry, GesturePreferences, PreferenceQueryError, SystemPreferences,
 };
 use flui_rendering::binding::RendererBinding as _;
 
@@ -51,10 +52,16 @@ impl Drop for GeometryTurn {
     }
 }
 
+/// One presentation's gesture geometry, held for the display it was read on
+/// and in that display's pixel context (ADR-0212 §2).
 #[derive(Debug)]
 pub(crate) struct GeometryProjection {
     context: DevicePixelRatio,
+    /// The display the presentation is on; `None` when its window cannot say.
+    display: Option<DisplayId>,
     accepted: Option<GestureGeometry>,
+    /// The display `accepted` was read on.
+    accepted_display: Option<DisplayId>,
     barrier: Rc<()>,
     pending: Option<QueryDebt>,
 }
@@ -63,7 +70,9 @@ impl Default for GeometryProjection {
     fn default() -> Self {
         Self {
             context: DevicePixelRatio::ONE,
+            display: None,
             accepted: None,
+            accepted_display: None,
             barrier: Rc::new(()),
             pending: None,
         }
@@ -82,16 +91,19 @@ impl GeometryProjection {
         self.pending.as_ref().map(|debt| debt.deadline)
     }
 
+    /// Geometry read on another display or at another scale is not this
+    /// context's, even while its replacement query is pending.
     fn geometry(&self) -> Option<GestureGeometry> {
-        self.accepted
-            .filter(|geometry| geometry.pixel_ratio() == self.context)
+        self.accepted.filter(|geometry| {
+            geometry.pixel_ratio() == self.context && self.accepted_display == self.display
+        })
     }
 
     /// Acknowledgement and projection acceptance are separate: a successful
     /// exact query settles delivery even when its deterministic projection fails.
     fn accept(
         &mut self,
-        baseline: &GestureSettings,
+        baseline: &GestureProfiles,
         preferences: &GesturePreferences,
         query: Result<Option<GestureGeometry>, PreferenceQueryError>,
     ) -> Option<String> {
@@ -100,10 +112,10 @@ impl GeometryProjection {
                 if geometry.is_none_or(|geometry| geometry.pixel_ratio() == self.context) =>
             {
                 self.pending = None;
-                match GestureSettings::resolve_preferences(baseline, preferences, geometry.as_ref())
-                {
+                match baseline.resolve_preferences(preferences, geometry.as_ref()) {
                     Ok(_) => {
                         self.accepted = geometry;
+                        self.accepted_display = self.display;
                         None
                     }
                     Err(error) => Some(error.to_string()),
@@ -115,11 +127,28 @@ impl GeometryProjection {
     }
 }
 
+fn pixel_context(presentation: &PresentationState) -> DevicePixelRatio {
+    presentation.renderer().root_pipeline_owner().with(|owner| {
+        DevicePixelRatio::new(owner.device_pixel_ratio())
+            .expect("BUG: renderer accepted invalid pixel ratio")
+    })
+}
+
+/// The display the presentation's window is on, when its backend can say.
+fn current_display(presentation: &PresentationState) -> Option<DisplayId> {
+    presentation
+        .with_window(|window| window.display_id())
+        .flatten()
+}
+
 pub(super) fn publish(
     presentation: &PresentationState,
     values: &SystemPreferences,
     now: web_time::Instant,
 ) {
+    presentation
+        .haptics()
+        .set_preference(values.haptics() != Some(false));
     presentation.set_system_motion(
         values
             .motion()
@@ -137,10 +166,8 @@ fn refresh(
     if presentation.closing_requested.get() {
         return;
     }
-    let context = presentation.renderer().root_pipeline_owner().with(|owner| {
-        DevicePixelRatio::new(owner.device_pixel_ratio())
-            .expect("BUG: renderer accepted invalid pixel ratio")
-    });
+    let context = pixel_context(presentation);
+    let display = barrier.then(|| current_display(presentation)).flatten();
     let attempt = {
         let mut state = presentation.gesture_geometry.borrow_mut();
         if barrier {
@@ -148,6 +175,7 @@ fn refresh(
             // replacement cannot alias it even if allocator addresses recycle.
             let identity = Rc::new(());
             state.context = context;
+            state.display = display;
             state.barrier = Rc::clone(&identity);
             let debt = QueryDebt {
                 barrier: identity,
@@ -192,19 +220,18 @@ fn refresh(
         }
         if let Some(query) = query {
             diagnostic = state.accept(
-                presentation.gestures().default_settings(),
+                &presentation.gestures().default_profiles(),
                 values.gestures(),
                 query,
             );
         }
         state.geometry()
     };
-    let settings = GestureSettings::resolve_preferences(
-        presentation.gestures().default_settings(),
-        values.gestures(),
-        geometry.as_ref(),
-    )
-    .expect("BUG: retained gesture geometry was previously projected successfully");
+    let settings = presentation
+        .gestures()
+        .default_profiles()
+        .resolve_preferences(values.gestures(), geometry.as_ref())
+        .expect("BUG: retained gesture geometry was previously projected successfully");
     presentation.gesture_settings.replace(settings);
     presentation
         .wheel_preferences
@@ -313,16 +340,68 @@ impl UiRuntime {
             GeometryTurn::Owner(Rc::clone(&self.geometry_turn))
         }
     }
+    /// Re-read presentation `id`'s gesture geometry when its display or that
+    /// display's scale changed. Active contacts keep their admitted settings.
+    /// What a host calls when presentation `id`'s window moved and may be on another
+    /// display: gesture geometry is re-read for new contacts when the display changed
+    /// (ADR-0212 §2), and the window is handed its last committed input regions again, so
+    /// its backend re-sends them when the display differs (ADR-0217 §5).
+    pub fn window_moved(&self, id: flui_foundation::PresentationId) {
+        self.refresh_gesture_context_for(id);
+        if let Some(presentation) = self.presentations.get(id) {
+            presentation.republish_input_regions();
+        }
+    }
+
+    /// Replace presentation `id`'s per-kind gesture presets, as a replay
+    /// restores the ones a recording was made under, and resolve the
+    /// preferences in effect over them for its new contacts.
+    #[cfg(feature = "testing")]
+    pub fn replace_gesture_profiles(
+        &self,
+        id: flui_foundation::PresentationId,
+        profiles: GestureProfiles,
+    ) {
+        let Some(presentation) = self.presentations.get(id) else {
+            return;
+        };
+        presentation.gestures().replace_default_profiles(profiles);
+        let values = self
+            .preferences
+            .borrow()
+            .as_ref()
+            .map(|snapshot| std::sync::Arc::clone(&snapshot.values));
+        let unknown = SystemPreferences::default();
+        refresh(
+            presentation,
+            values.as_deref().unwrap_or(&unknown),
+            self.clock.now(),
+            true,
+        );
+    }
+
+    /// The system-preference revision in effect and its values, if a host
+    /// delivered one: what a recording header stores.
+    #[cfg(feature = "testing")]
+    #[must_use]
+    pub fn system_preferences(&self) -> Option<(u64, std::sync::Arc<SystemPreferences>)> {
+        self.preferences
+            .borrow()
+            .as_ref()
+            .map(|snapshot| (snapshot.revision, std::sync::Arc::clone(&snapshot.values)))
+    }
+
     pub(crate) fn refresh_gesture_context_for(&self, id: flui_foundation::PresentationId) {
         let Some(presentation) = self.presentations.get(id) else {
             return;
         };
-        let context = presentation.renderer().root_pipeline_owner().with(|owner| {
-            DevicePixelRatio::new(owner.device_pixel_ratio())
-                .expect("BUG: renderer accepted invalid pixel ratio")
-        });
-        if presentation.gesture_geometry.borrow().context == context {
-            return;
+        let context = pixel_context(presentation);
+        let display = current_display(presentation);
+        {
+            let state = presentation.gesture_geometry.borrow();
+            if state.context == context && state.display == display {
+                return;
+            }
         }
         let values = self
             .preferences
@@ -425,6 +504,9 @@ impl UiRuntime {
         // Preference delivery can invoke native getters and wakes. All clocks
         // observe the accepted host value before the first such callout.
         for presentation in self.presentations.iter() {
+            presentation
+                .haptics()
+                .set_preference(snapshot.values.haptics() != Some(false));
             presentation.set_system_motion(
                 snapshot
                     .values
@@ -456,17 +538,42 @@ impl UiRuntime {
                 );
             }
         }
+        if self.begin_recorded_input() {
+            self.record_preferences(snapshot.revision, Arc::clone(&snapshot.values));
+        }
         if let Some(failure) = first_failure {
             resume_unwind(failure);
         }
+    }
+
+    /// Apply `values` as this runtime's next system-preference revision, as
+    /// a host's preference source delivers one, for a headless host with no
+    /// preference source of its own.
+    #[cfg(feature = "testing")]
+    #[doc(hidden)]
+    pub fn apply_system_preferences_for_test(&self, values: SystemPreferences) {
+        let snapshot = {
+            let current = self.preferences.borrow();
+            SystemPreferencesSnapshot {
+                origin: current
+                    .as_ref()
+                    .map_or_else(|| Rc::new(()), |current| Rc::clone(&current.origin)),
+                revision: current
+                    .as_ref()
+                    .map_or(1, |current| current.revision.saturating_add(1)),
+                values: Arc::new(values),
+            }
+        };
+        self.apply_preferences(snapshot);
     }
 }
 
 #[cfg(test)]
 pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_admission() {
     use flui_foundation::geometry::Offset;
+    use flui_interaction::GestureSettings;
     use flui_interaction::{
-        GestureArena, GestureRecognizer, TapGestureRecognizer, routing::PointerDispatch,
+        GestureArena, GestureRecognizer, TapGestureRecognizer, pointer::PointerDispatch,
     };
     use flui_interaction::{
         events::{PointerEventExt, PointerKind},
@@ -479,6 +586,7 @@ pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_adm
         .expect("hit slop")
         .try_with_pan_slop(20.0)
         .expect("pan ratio two");
+    let profiles = GestureProfiles::from(baseline.clone());
     let old_geometry = GestureGeometry::new(DevicePixelRatio::ONE)
         .with_touch_slop(Distance::new(2.0).expect("touch slop"));
     let preferences =
@@ -488,7 +596,7 @@ pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_adm
         assert!(
             state
                 .accept(
-                    &baseline,
+                    &profiles,
                     &GesturePreferences::default(),
                     Ok(Some(old_geometry))
                 )
@@ -506,7 +614,7 @@ pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_adm
             .with_touch_slop(Distance::new(f64::MAX).expect("finite native distance"));
         assert!(
             state
-                .accept(&baseline, &preferences, Ok(Some(refused)))
+                .accept(&profiles, &preferences, Ok(Some(refused)))
                 .is_some(),
             "ratio multiplication must refuse the otherwise valid native reading"
         );
@@ -548,7 +656,7 @@ pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_adm
             usize::from(changed_context),
             "same context retains native2; changed context admits baseline10 without publishing a partial overflowing profile"
         );
-        assert!(state.accept(&baseline, &preferences, Ok(None)).is_none());
+        assert!(state.accept(&profiles, &preferences, Ok(None)).is_none());
         let restored = GestureSettings::resolve_preferences(
             &baseline,
             &preferences,
@@ -557,9 +665,8 @@ pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_adm
         .expect("restored baseline");
         assert_eq!(
             restored,
-            baseline
-                .clone()
-                .with_long_press_timeout(Duration::from_millis(200)),
+            GestureSettings::resolve_preferences(&baseline, &preferences, None)
+                .expect("timing-only projection"),
             "healthy absence restores the entire baseline with latest timing"
         );
     }

@@ -256,6 +256,21 @@ edges; `Elastic` eases the right edge by `sin(πt/2)` and the left by
 leads in either direction of travel and a reversal paints the same rect for the
 same position. Right-to-left rows mirror the fractions.
 
+A `TabBarView` swipe is a path, so the view offers "Previous tab" and "Next tab"
+(`TabController::step_alternatives`, Ctrl+[ and Ctrl+]) as `Alternative::Companion`
+commands, and the `TabBar` on the same controller is their companion: it registers on
+the controller's `CompanionLink` in `resolve_controller` and releases the registration
+in `dispose`, and each tab is a `SemanticsRole::Tab` node declaring an anchor made once
+per controller. The commands perform a private `TabStep` intent that `TabBarView`
+answers through `TabController::animate_to`, not `PageIntent`: the pager's own intent
+would move the pages, but the controller commits the selection only when the user lets
+go of the pager, so the selection would stay behind. A step past either end is a
+disabled action and the bar publishes no node for it
+(`the_end_tabs_have_no_step_beyond_them`); unmounting the bar unregisters it
+(`unmounting_the_tab_bar_unregisters_it`); a view with no bar is rejected by
+`assert_gesture_alternatives` and warns (`tab_bar_view_without_a_tab_bar`); the
+passing row is `tab_bar_view_with_its_tab_bar`, all in `gesture_alternatives`.
+
 `a_drag_moves_the_position_and_indicator_but_not_the_index` (full and reduced
 motion), `a_released_drag_commits_the_page_it_settles_on`,
 `a_jump_during_a_tab_animation_keeps_the_jumped_index`,

@@ -9,12 +9,19 @@
 
 mod catalog_disclosure;
 mod catalog_slider;
+mod collapsing_header;
 mod common;
+mod context_menu_area;
 mod contracts;
 mod frame_partitions;
+mod gesture_alternatives;
 mod gesture_settings;
+mod interactive_viewer;
+mod keyboard_focus;
 mod keyboard_modifiers;
+mod nested_scroll;
 mod pointer_vocabulary;
+mod refresh_indicator;
 
 #[path = "absorb_pointer.rs"]
 mod absorb_pointer;
@@ -22,6 +29,7 @@ mod absorb_pointer;
 mod actions;
 #[path = "activity_indicator.rs"]
 mod activity_indicator;
+mod anchored_drag;
 #[path = "animated_list.rs"]
 mod animated_list;
 #[path = "animated_size.rs"]
@@ -44,8 +52,8 @@ mod custom_multi_child_layout;
 mod directionality_dependency;
 #[path = "dismissible.rs"]
 mod dismissible;
-#[path = "draggable_events.rs"]
-mod draggable_events;
+#[path = "drag_and_drop.rs"]
+mod drag_and_drop;
 #[path = "editable_text.rs"]
 mod editable_text;
 #[path = "editable_text_clipboard.rs"]
@@ -62,6 +70,7 @@ mod future_builder;
 mod gesture_detector;
 #[path = "gesture_detector_advanced.rs"]
 mod gesture_detector_advanced;
+mod haptics;
 #[path = "hero.rs"]
 mod hero;
 #[path = "hero_controller.rs"]
@@ -75,6 +84,8 @@ mod hero_public;
 #[path = "hero_seam.rs"]
 mod hero_seam;
 mod hero_waypoint_tracks;
+#[path = "hit_slop.rs"]
+mod hit_slop;
 #[path = "hot_reload_state.rs"]
 mod hot_reload_state;
 #[path = "implicit_animations.rs"]
@@ -103,7 +114,6 @@ mod motion;
 mod navigator;
 #[path = "navigator_public.rs"]
 mod navigator_public;
-mod nested_scroll;
 /// Issue #536: an `Opacity` rebuild reaches the composited layer.
 #[path = "overlay.rs"]
 mod overlay;
@@ -113,6 +123,8 @@ mod owner_code;
 mod page_route;
 #[path = "page_transitions.rs"]
 mod page_transitions;
+#[path = "page_view.rs"]
+mod page_view;
 #[path = "page_view_events.rs"]
 mod page_view_events;
 #[path = "parent_data_ancestry.rs"]
@@ -139,6 +151,9 @@ mod sliver_persistent_header;
 mod stack_positioned;
 #[path = "stream_builder.rs"]
 mod stream_builder;
+mod swipe_actions;
+#[path = "system_gesture_exclusion.rs"]
+mod system_gesture_exclusion;
 #[path = "table.rs"]
 mod table;
 #[path = "text.rs"]
@@ -153,6 +168,8 @@ mod text_store_kit;
 mod transition_route;
 #[path = "transitions.rs"]
 mod transitions;
+#[path = "unchanged_child.rs"]
+mod unchanged_child;
 #[path = "visibility.rs"]
 mod visibility;
 #[path = "widgets_app.rs"]

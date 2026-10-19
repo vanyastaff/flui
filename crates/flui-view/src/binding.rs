@@ -430,6 +430,15 @@ impl Drop for BindingRouteResponse<'_> {
     }
 }
 
+/// Which build pass of a frame [`WidgetsBinding::draw_frame_impl`] runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BuildPass {
+    /// The frame's first build: expires what the previous frame left.
+    FrameEntry,
+    /// A repeat within the same frame: keeps what this frame recorded.
+    Repeat,
+}
+
 /// Inner mutable state of WidgetsBinding
 struct WidgetsBindingInner {
     /// The build owner manages dirty elements and rebuild scheduling.
@@ -1116,10 +1125,21 @@ impl WidgetsBinding {
     /// In debug mode, panics if called while already building dirty elements
     /// (to catch accidental frame scheduling during build).
     pub fn draw_frame(&self) {
-        self.draw_frame_impl(|| {});
+        self.draw_frame_impl(BuildPass::FrameEntry, || {});
     }
 
-    pub(crate) fn draw_frame_impl(&self, before_finalize: impl FnOnce()) {
+    /// Rebuild what owner code dirtied after this frame's build and layout
+    /// settled, and finalize what that removed, inside the same frame.
+    ///
+    /// Unlike [`Self::draw_frame`] this does not open a frame: the recovered
+    /// lifecycle panics the frame's first build left stay for the frame's
+    /// drain. [`BuildOwner::last_frame_build_report`] then describes this
+    /// pass.
+    pub fn rebuild_within_frame(&self) {
+        self.draw_frame_impl(BuildPass::Repeat, || {});
+    }
+
+    pub(crate) fn draw_frame_impl(&self, pass: BuildPass, before_finalize: impl FnOnce()) {
         let mut inner = self.inner.write();
 
         #[cfg(debug_assertions)]
@@ -1152,12 +1172,14 @@ impl WidgetsBinding {
             BuildingFlagReset(&self.debug_building_dirty_elements)
         };
 
-        let discarded_recovered_panics = inner.build_owner.discard_stale_recovered_panics();
-        if discarded_recovered_panics != 0 {
-            tracing::warn!(
-                count = discarded_recovered_panics,
-                "discarding recovered lifecycle panics left undrained from the previous frame"
-            );
+        if pass == BuildPass::FrameEntry {
+            let discarded_recovered_panics = inner.build_owner.discard_stale_recovered_panics();
+            if discarded_recovered_panics != 0 {
+                tracing::warn!(
+                    count = discarded_recovered_panics,
+                    "discarding recovered lifecycle panics left undrained from the previous frame"
+                );
+            }
         }
 
         inner.build_scheduled = false;
@@ -1179,7 +1201,7 @@ impl WidgetsBinding {
             build_owner.build_scope(element_tree);
 
             tracing::debug!("Build phase complete");
-        } else {
+        } else if pass == BuildPass::FrameEntry {
             inner.build_owner.clear_frame_build_report();
         }
 
@@ -1280,6 +1302,40 @@ impl WidgetsBinding {
             ..
         } = *inner;
         build_owner.run_frame_with_layout_builders(element_tree, pipeline)
+    }
+
+    /// [`Self::run_frame_with_layout_builders`]'s build-during-layout
+    /// fixpoint alone, released before it returns, so the caller can run
+    /// owner code against the settled tree before
+    /// [`Self::run_settled_frame`] paints it.
+    ///
+    /// # Errors
+    ///
+    /// The first layout error of a pass.
+    pub fn settle_layout_with_builders(
+        &self,
+        pipeline: &PipelineCell,
+    ) -> flui_rendering::error::RenderResult<()> {
+        let mut inner = self.inner.write();
+        let WidgetsBindingInner {
+            ref mut build_owner,
+            ref mut element_tree,
+            ..
+        } = *inner;
+        build_owner.settle_layout_with_builders(element_tree, pipeline)
+    }
+
+    /// Paint a tree [`Self::settle_layout_with_builders`] settled: layout of
+    /// whatever is still dirty, compositing, paint and semantics.
+    ///
+    /// # Errors
+    ///
+    /// The pipeline's first error.
+    pub fn run_settled_frame(
+        &self,
+        pipeline: &PipelineCell,
+    ) -> flui_rendering::error::RenderResult<Option<flui_rendering::layer::LayerTree>> {
+        BuildOwner::run_settled_frame(pipeline)
     }
 
     /// Check if we are currently building dirty elements.

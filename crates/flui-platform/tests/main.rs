@@ -17,10 +17,22 @@
 //! asserts the AppKit main thread, which a bare `cargo test` cannot host
 //! unbundled (ADR-0039; unbundled NSWindow construction aborts the process).
 
+#[path = "android_drag.rs"]
+mod android_drag;
 #[path = "android_exit_path.rs"]
 mod android_exit_path;
+#[path = "android_ime.rs"]
+mod android_ime;
+#[path = "android_keys.rs"]
+mod android_keys;
+#[path = "android_motion.rs"]
+mod android_motion;
+#[path = "backend_conformance.rs"]
+mod backend_conformance;
 #[path = "contract.rs"]
 mod contract;
+#[path = "direct_manipulation.rs"]
+mod direct_manipulation;
 #[path = "displays.rs"]
 mod displays;
 #[cfg(not(target_arch = "wasm32"))]
@@ -28,10 +40,28 @@ mod displays;
 mod executor;
 #[path = "file_store.rs"]
 mod file_store;
+#[path = "haptic_degradation.rs"]
+mod haptic_degradation;
+#[path = "html_drag_drop.rs"]
+mod html_drag_drop;
+#[path = "input_capabilities.rs"]
+mod input_capabilities;
+#[path = "input_regions.rs"]
+mod input_regions;
+#[path = "native_recording/mod.rs"]
+mod native_recording;
+#[path = "ole_drag_drop.rs"]
+mod ole_drag_drop;
+#[path = "pointer_assembly.rs"]
+mod pointer_assembly;
 #[path = "preferences.rs"]
 mod preferences;
 #[path = "text_input_mapping.rs"]
 mod text_input_mapping;
+#[path = "web_pinch.rs"]
+mod web_pinch;
+#[path = "web_text.rs"]
+mod web_text;
 #[path = "window_callback_unwind.rs"]
 #[cfg(not(target_arch = "wasm32"))]
 mod window_callback_unwind;

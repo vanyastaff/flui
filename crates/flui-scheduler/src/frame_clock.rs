@@ -258,6 +258,13 @@ impl MonotonicClock for ClockSource {
             Self::Manual(clock) => clock.now(),
         }
     }
+
+    fn epoch(&self) -> Instant {
+        match self {
+            Self::Platform => flui_foundation::event_epoch(),
+            Self::Manual(clock) => clock.epoch(),
+        }
+    }
 }
 
 /// The per-presentation physical-time policy state machine.

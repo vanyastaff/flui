@@ -38,7 +38,8 @@
 //! use std::{cell::{Cell, RefCell}, num::NonZeroU64, rc::Rc, time::Duration};
 //! use flui::interaction::{
 //!     GestureArena, GestureArenaMember, GestureDeadlineError,
-//!     GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition, PointerId,
+//!     GestureContest, GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition,
+//!     PointerId,
 //! };
 //!
 //! struct TimedMember {
@@ -58,8 +59,8 @@
 //! }
 //!
 //! impl GestureArenaMember for TimedMember {
-//!     fn accept_gesture(&self, _: PointerId) { self.settle(); }
-//!     fn reject_gesture(&self, _: PointerId) { self.settle(); }
+//!     fn accept_gesture(&self, _: GestureContest) { self.settle(); }
+//!     fn reject_gesture(&self, _: GestureContest) { self.settle(); }
 //! }
 //!
 //! let arena = GestureArena::new();
@@ -108,31 +109,36 @@
 //! use flui::interaction::__runtime::CloseMode;
 //! ```
 
-pub use flui_interaction::arena::{
-    GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineError,
-    GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition, SweepModel,
-};
 pub use flui_interaction::events::{
     CursorIcon, PointerButtons, PointerEvent, PointerEventExt, PointerKind,
 };
-pub use flui_interaction::recognizers::double_tap::DoubleTapDetails;
-pub use flui_interaction::recognizers::multi_tap::MultiTapDetails;
-pub use flui_interaction::recognizers::scale::{
-    ScaleEndDetails, ScaleStartDetails, ScaleUpdateDetails,
-};
-pub use flui_interaction::recognizers::{
+pub use flui_interaction::gesture::DoubleTapDetails;
+pub use flui_interaction::gesture::MultiTapDetails;
+pub use flui_interaction::gesture::{
     ArenaMembership, BeginContactError, CancelOutcome, ContactId, ContactSnapshot,
     GestureRecognizerState, PrimaryContact, RecognizerSet, cancel_all,
 };
+pub use flui_interaction::gesture::{
+    CompositionBranch, CompositionError, CompositionKind, ContestCancel, GestureBranches,
+    GestureComposition, GestureContest, GestureObservation, GestureObserver, MotionRole,
+    ObservedComposition, ObservedMember, ObserverHandle, PanClaim, RejectionReason,
+    SequencedBranch,
+};
+pub use flui_interaction::gesture::{
+    GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineError,
+    GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition, SweepModel,
+};
+pub use flui_interaction::gesture::{ScaleEndDetails, ScaleStartDetails, ScaleUpdateDetails};
 pub use flui_interaction::{
     DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails, DragGestureRecognizer,
-    DragStartDetails, DragUpdateDetails, EagerGestureRecognizer, ForcePressGestureRecognizer,
-    GestureEndReason, GestureRecognizer, GestureSettings, GestureSettingsError,
+    DragStartDetails, DragUpdateDetails, ForcePressGestureRecognizer, GestureEndReason,
+    GestureProfiles, GestureRecognizer, GestureSettings, GestureSettingsError,
     HorizontalDragGestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
     MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails,
-    MultiTapGestureRecognizer, PanGestureRecognizer, PointerId, ScaleGestureRecognizer,
-    TapAndDragGestureRecognizer, TapDragDownDetails, TapDragEndDetails, TapDragStartDetails,
-    TapDragUpDetails, TapDragUpdateDetails, TapGestureRecognizer, VerticalDragGestureRecognizer,
+    MultiTapCount, MultiTapCountError, MultiTapGestureRecognizer, PanGestureRecognizer, PointerId,
+    ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapDragDownDetails, TapDragEndDetails,
+    TapDragStartDetails, TapDragUpDetails, TapDragUpdateDetails, TapGestureRecognizer,
+    VerticalDragGestureRecognizer,
 };
 pub use flui_interaction::{
     ForcePressDetails, LongPressCallback, LongPressDetails, LongPressDownCallback,
@@ -141,6 +147,26 @@ pub use flui_interaction::{
     LongPressStartDetails, TapCallback, TapDetails, TapDownCallback, TapDownDetails, TapUpCallback,
     TapUpDetails, Velocity, VelocityEstimate,
 };
+pub use flui_interaction::{GestureSettingsProvider, PointerKindSet};
+
+/// Drag-and-drop (ADR-0211): what a `Draggable` carries and a `DropTarget`
+/// sees, and the sessions a custom drag source starts through the
+/// presentation's [`DragAndDrop`](drag::DragAndDrop).
+pub mod drag {
+    pub use flui_interaction::drag::{
+        AllowedActions, Autoscroll, DragAndDrop, DragError, DragFetch, DragIdentity, DragItem,
+        DragObserver, DragOutcome, DragPoint, DragReach, DragRepresentation, DragScope,
+        DragSession, DragStart, DragTrigger, DragView, DropReceiver, DropReceiverSlot, LazyPayload,
+        MoveOutcome, SpringLoading,
+    };
+    pub use flui_platform_api::data_transfer::TransferActions;
+}
+/// A widget's haptics capability, from `LifecycleContext::haptics`
+/// (ADR-0210); unstable, under the `unstable-input` feature.
+#[cfg(feature = "unstable-input")]
+pub use flui_interaction::{HapticObserver, HapticsHandle};
+// Arena deadlines are points on the event timeline (ADR-0207 §2).
+pub use flui_platform_api::EventTime;
 pub use flui_platform_api::pointer::{
     ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
     PointerButton, PointerInfo, PointerMove, PointerPosition, PointerPress, PointerRelease,
@@ -149,14 +175,18 @@ pub use flui_platform_api::pointer::{
 
 pub use flui_interaction::events::KeyEvent;
 pub use flui_interaction::events::keyboard::{Code, Key, KeyState, Location, Modifiers, NamedKey};
-pub use flui_interaction::routing::{
-    FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusDirection, FocusManager,
-    FocusNode, FocusNodeChangeCallback, FocusNodeId, FocusNodeRegistration, FocusRequestOutcome,
-    FocusScopeNode, FocusSubscription, FocusTraversalOverrides, FocusTraversalPolicy,
-    FocusTreeError, GlobalKeyRegistration, GlobalKeyRegistrationError, HitTestEntry, HitTestHandle,
-    HitTestSnapshot, InteractionDispatchError, KeyEventHandler, KeyEventResult, PointerCapture,
-    PointerCaptureError, PointerDispatch, ReadingOrderPolicy, RectProvider, ResolvedStep,
-    TraversalDirection, TraversalEdgeBehavior,
+pub use flui_interaction::focus::{
+    EntryTarget, FocusAttachment, FocusCause, FocusChangeCallback, FocusDetachOutcome,
+    FocusDirection, FocusManager, FocusNode, FocusNodeChangeCallback, FocusNodeRegistration,
+    FocusRequestOutcome, FocusScopeNode, FocusSubscription, FocusTraversalOverrides,
+    FocusTraversalPolicy, FocusTreeError, GlobalKeyRegistration, GlobalKeyRegistrationError,
+    KeyCancelHandler, KeyEventHandler, KeyEventResult, ReadingOrderPolicy, RectProvider,
+    ResolvedStep, TraversalDirection, TraversalEdgeBehavior, TraversalEntry,
+};
+pub use flui_interaction::ids::FocusNodeId;
+pub use flui_interaction::pointer::{
+    HitTestEntry, HitTestHandle, HitTestSnapshot, InteractionDispatchError, PointerCapture,
+    PointerCaptureError, PointerDispatch,
 };
 pub use flui_interaction::text_input::{
     ClientToken, DetachOutcome, TextInputClient, TextInputError, TextInputHandle,

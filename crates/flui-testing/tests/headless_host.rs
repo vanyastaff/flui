@@ -322,7 +322,7 @@ fn secondary_window_preserves_its_text_store_backend() {
     let enabled = host.open_window(HeadlessWindow::new(100, 100).with_text_store_host());
     let absent = host.open_window(HeadlessWindow::new(100, 100));
     assert!(host.text_store_host_on(host.primary_window()).is_none());
-    let node = flui_interaction::routing::FocusNode::new();
+    let node = flui_interaction::focus::FocusNode::new();
     host.attach_to(
         enabled,
         &flui_widgets::EditableText::new(flui_widgets::TextEditingController::new(), node.clone()),
@@ -339,4 +339,125 @@ fn secondary_window_preserves_its_text_store_backend() {
         "the secondary field reaches the pull host"
     );
     assert!(host.text_store_host_on(absent).is_none());
+}
+
+/// A headless test's gestures follow the preset it names, never the machine
+/// that runs it: a 9 px drift exceeds Android's 8 dp touch slop and stays
+/// within iOS's 10 pt and the platform-neutral 18 px.
+#[test]
+fn gestures_follow_the_named_preset_on_every_host() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::{
+        GestureSettings,
+        events::PointerKind,
+        testing::input::{pointer_down, pointer_move, pointer_up},
+    };
+    use flui_platform_api::{PlatformInput, TargetPlatform};
+
+    for (preset, taps) in [
+        (Some(TargetPlatform::Android), 0),
+        (Some(TargetPlatform::iOS), 1),
+        (None, 1),
+    ] {
+        let mut window = HeadlessWindow::new(200, 200);
+        if let Some(platform) = preset {
+            window =
+                window.with_gesture_preset(GestureSettings::preset(platform, PointerKind::Touch));
+        }
+        let mut host = HeadlessHost::new(window);
+        let count = Rc::new(Cell::new(0));
+        let output = Rc::clone(&count);
+        host.attach(
+            &flui_widgets::GestureDetector::new()
+                .on_tap(move |_| output.set(output.get() + 1))
+                .child(flui_widgets::ColoredBox::new(
+                    flui_painting::styling::Color::RED,
+                )),
+        )
+        .expect("attach");
+        let _ = host.pump(Duration::from_millis(16));
+        let start = Offset::new(40.0, 40.0);
+        let drifted = Offset::new(49.0, 40.0);
+        for event in [
+            pointer_down(start, PointerKind::Touch).expect("down"),
+            pointer_move(drifted, PointerKind::Touch).expect("move"),
+            pointer_up(drifted, PointerKind::Touch).expect("up"),
+        ] {
+            host.dispatch(PlatformInput::Pointer(event));
+        }
+        assert_eq!(count.get(), taps, "preset {preset:?}");
+    }
+}
+
+/// One presentation, two kinds of pointer: each contact is admitted and
+/// hit-tested with its own kind's preset (ADR-0212 §4), never one profile for
+/// the whole window. On Windows a finger gets the coarse row (44 px minimum
+/// target, 18 px slop) and a mouse the fine one (24 px, 1 px).
+#[test]
+fn a_mouse_and_a_touch_get_their_own_preset_and_min_target() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::{
+        GestureProfiles, PointerId,
+        events::{
+            PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+        },
+    };
+    use flui_platform_api::{PlatformInput, TargetPlatform};
+
+    let window = HeadlessWindow::new(200, 200)
+        .with_gesture_preset(GestureProfiles::preset(TargetPlatform::Windows));
+    let mut host = HeadlessHost::new(window);
+    let count = Rc::new(Cell::new(0));
+    let output = Rc::clone(&count);
+    host.attach(&flui_widgets::Stack::new(flui_widgets::row![
+        flui_widgets::SizedBox::new(200.0, 200.0),
+        flui_widgets::Positioned::new(
+            flui_widgets::HitSlop::new().child(
+                flui_widgets::GestureDetector::new()
+                    .on_tap(move |_| output.set(output.get() + 1))
+                    .child(flui_widgets::SizedBox::new(20.0, 20.0).child(
+                        flui_widgets::ColoredBox::new(flui_painting::styling::Color::RED),
+                    )),
+            )
+        )
+        .left(90.0)
+        .top(90.0),
+    ]))
+    .expect("attach");
+    let _ = host.pump(Duration::from_millis(16));
+
+    let mut next_id = 0_u64;
+    let mut contact = |kind: PointerKind, down: Offset<f64>, up: Offset<f64>| -> usize {
+        next_id += 1;
+        let id = PointerId::try_from(next_id).expect("nonzero pointer id");
+        let before = count.get();
+        for event in [
+            make_down_event_for_id(id, down, kind).expect("down"),
+            make_move_event_for_id(id, up, kind).expect("move"),
+            make_up_event_for_id(id, up, kind).expect("up"),
+        ] {
+            host.dispatch(PlatformInput::Pointer(event));
+        }
+        let _ = host.pump(Duration::from_millis(16));
+        count.get() - before
+    };
+
+    // 10 px left of the 20 px target: inside a 44 px minimum target (12 px a
+    // side), outside a 24 px one (2 px a side).
+    let beside = Offset::new(80.0, 100.0);
+    assert_eq!(
+        contact(PointerKind::Touch, beside, beside),
+        1,
+        "touch min target"
+    );
+    assert_eq!(
+        contact(PointerKind::Mouse, beside, beside),
+        0,
+        "mouse min target"
+    );
+    // On the target, drifting 5 px before lifting: within a finger's slop,
+    // past a mouse's.
+    let (on, drifted) = (Offset::new(100.0, 100.0), Offset::new(105.0, 100.0));
+    assert_eq!(contact(PointerKind::Touch, on, drifted), 1, "touch slop");
+    assert_eq!(contact(PointerKind::Mouse, on, drifted), 0, "mouse slop");
 }

@@ -56,7 +56,7 @@ bounded number of layout passes over dirty subtrees instead of one pass with a r
 
 `RenderLayoutBuilder` (`flui-objects`) is a single-child box holding an `Arc<LayoutConstraintsCell>`.
 `perform_layout` calls `cell.publish(constraints)`, lays the existing child out with those
-constraints, and sizes to `constraints.constrain(child_size)` (or `constraints.biggest()` with no
+constraints, and sizes to `constraints.constrain(child_size)` (or `constraints.smallest()` with no
 child). It performs no build and touches no tree. `publish` raises `needs_build` iff the constraints
 differ from the last committed ones — the analogue of Flutter's
 `_previousConstraints == constraints && !_needsBuild` skip. Because the cell is shared with the
@@ -166,7 +166,7 @@ Checked against Flutter master `3.33.0-0.0.pre-6280-g88e87cd963f`
 | # | Question | Flutter | FLUI | Verdict |
 |---|---|---|---|---|
 | 1 | Skip condition | `_needsBuild \|\| (layoutInfo != _previousLayoutInfo)` gates the rebuild | `publish` raises `needs_build` only on changed constraints; a widget update dirties the element | Match |
-| 2 | First pass | The child is built before `performLayout` lays it out | The first pass has no child and sizes to `constraints.biggest()`; the fixpoint then builds and re-lays out | Internal difference, unobservable — the intermediate size never reaches paint. `layout_builder_constraint_change_rebuilds_in_the_same_frame` (`flui-widgets`) pins the settled size; the childless first pass itself is **Unasserted:** no test pins this |
+| 2 | First pass | The child is built before `performLayout` lays it out | The first pass has no child and sizes to `constraints.smallest()`; the fixpoint then builds and re-lays out | The intermediate size never reaches paint, but it must be finite: under an unbounded axis (a builder in a list or a column) `constraints.biggest()` failed the layout of every ancestor for that frame. `layout_builder_without_a_child_takes_its_smallest_size` (`flui-objects` harness) pins the childless pass; `layout_builder_constraint_change_rebuilds_in_the_same_frame` (`flui-widgets`) pins the settled size |
 | 3 | `performLayout` | `child.layout(constraints, parentUsesSize: true)`; `constrain(child.size)`; else `biggest` | Identical | Match |
 | 4 | Intrinsics | Asserts (throws) outside `debugCheckingIntrinsics`, then returns `0.0` | Returns `0.0`, logs `tracing::error!` | Divergence: an intrinsic query has no error channel, panics are reserved for internal invariants, and FLUI has no `debugCheckingIntrinsics` to tell Flutter's own probe from real use |
 | 5 | Dry layout | Asserts, returns `Size.zero` | Returns `Size::ZERO`, logs, never publishes | Match on the value; same throw-vs-log divergence. Must not answer from the current child, which was built for other constraints |

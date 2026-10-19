@@ -25,6 +25,7 @@ pub struct PresentationFactory {
     storage: Option<Arc<dyn Storage>>,
     clock: ClockSource,
     text: flui_rendering::TextContextHandle,
+    drag: flui_interaction::drag::DragHandle,
 }
 
 impl std::fmt::Debug for PresentationFactory {
@@ -50,6 +51,7 @@ impl UiRuntime {
             storage: self.storage.clone(),
             clock: self.clock.clone(),
             text: self.text.clone(),
+            drag: self.drag.handle(),
         }
     }
 }
@@ -92,6 +94,7 @@ impl PresentationFactory {
                 storage: self.storage.clone(),
                 clock: &self.clock,
                 text: self.text.clone(),
+                drag: self.drag.clone(),
             },
         ))
     }

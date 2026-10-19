@@ -1,0 +1,11 @@
+error[E0599]: no method named `handle` found for struct `HapticsHostBuilder` in the current scope
+ --> tests/compile_fail/haptics_host_is_configured_before_its_handles.rs:9:21
+  |
+9 |     let _ = builder.handle();
+  |                     ^^^^^^ method not found in `HapticsHostBuilder`
+
+error[E0599]: no method named `deadline_factor` found for struct `HapticsHost` in the current scope
+  --> tests/compile_fail/haptics_host_is_configured_before_its_handles.rs:13:18
+   |
+13 |     let _ = host.deadline_factor(NonZeroU32::MIN);
+   |                  ^^^^^^^^^^^^^^^ method not found in `HapticsHost`

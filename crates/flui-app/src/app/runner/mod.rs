@@ -108,6 +108,11 @@ pub(crate) fn presentation_window(
     let text_store_host = text_store_host_of(&host);
     crate::app::presentation::PresentationWindow::new(host, accessibility)
         .with_text_store_host(text_store_host)
+        // The runner names the platform it was built for; host observations
+        // then replace the values the OS publishes (ADR-0212 §4).
+        .with_gesture_profiles(flui_interaction::GestureProfiles::preset(
+            flui_platform_api::TargetPlatform::current(),
+        ))
 }
 
 fn text_store_host_of(

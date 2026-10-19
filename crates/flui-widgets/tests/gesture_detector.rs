@@ -6,9 +6,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::common::{lay_out, tight};
+use crate::common::{LaidOut, lay_out, tight};
 use flui_painting::styling::Color;
-use flui_widgets::{ColoredBox, GestureDetector};
+use flui_widgets::{ColoredBox, DragSlot, GestureDetector, TransformSlot};
 
 pub(crate) fn drag_motion_retains_root_units_under_scale_and_rotation() {
     use flui_foundation::geometry::{Matrix4, Offset};
@@ -31,8 +31,11 @@ pub(crate) fn drag_motion_retains_root_units_under_scale_and_rotation() {
             Transform::new(matrix).alignment(Alignment::CENTER).child(
                 GestureDetector::new()
                     .behavior(flui_widgets::HitTestBehavior::Opaque)
-                    .on_pan_update(move |_, details| update_log.borrow_mut().push(details))
-                    .on_pan_end(move |_, details| end_log.borrow_mut().push(details))
+                    .drag(
+                        DragSlot::pan()
+                            .on_update(move |_, details| update_log.borrow_mut().push(details))
+                            .on_end(move |_, details| end_log.borrow_mut().push(details)),
+                    )
                     .child(SizedBox::new(100.0, 100.0)),
             ),
             tight(100.0, 100.0),
@@ -83,12 +86,15 @@ pub(crate) fn binding_admits_distinct_drag_sequences_when_pointer_ids_are_reused
     let laid = lay_out(
         GestureDetector::new()
             .behavior(flui_widgets::HitTestBehavior::Opaque)
-            .on_pan_start(move |_, details| {
-                observed
-                    .borrow_mut()
-                    .push(details.sequence.expect("binding-owned identity"));
-            })
-            .on_pan_update(|_, _| {})
+            .drag(
+                DragSlot::pan()
+                    .on_start(move |_, details| {
+                        observed
+                            .borrow_mut()
+                            .push(details.sequence.expect("binding-owned identity"));
+                    })
+                    .on_update(|_, _| {}),
+            )
             .child(flui_widgets::SizedBox::new(100.0, 100.0)),
         tight(100.0, 100.0),
     );
@@ -134,20 +140,30 @@ pub(crate) fn nested_native_scale_loser_recovers_touch_after_winner_terminal() {
         let laid = lay_out(
             GestureDetector::new()
                 .behavior(HitTestBehavior::Opaque)
-                .on_scale_start(move |_, _| outer_start.borrow_mut().push("start"))
-                .on_scale_update(move |_, _| outer_update.borrow_mut().push("update"))
-                .on_scale_end(move |_, _| outer_end.borrow_mut().push("end"))
-                .on_scale_cancel(move |_| outer_cancel.borrow_mut().push("cancel"))
+                .transform(
+                    TransformSlot::new()
+                        .on_start(move |_, _| outer_start.borrow_mut().push("start"))
+                        .on_update(move |_, _| outer_update.borrow_mut().push("update"))
+                        .on_end(move |_, _| outer_end.borrow_mut().push("end"))
+                        .on_cancel(move |_| outer_cancel.borrow_mut().push("cancel")),
+                )
                 .child(
                     Center::new().child(
                         SizedBox::new(100.0, 100.0).child(
                             GestureDetector::new()
-                                .on_scale_start(move |_, _| inner_start.borrow_mut().push("start"))
-                                .on_scale_update(move |_, _| {
-                                    inner_update.borrow_mut().push("update");
-                                })
-                                .on_scale_end(move |_, _| inner_end.borrow_mut().push("end"))
-                                .on_scale_cancel(move |_| inner_cancel.borrow_mut().push("cancel"))
+                                .transform(
+                                    TransformSlot::new()
+                                        .on_start(move |_, _| {
+                                            inner_start.borrow_mut().push("start");
+                                        })
+                                        .on_update(move |_, _| {
+                                            inner_update.borrow_mut().push("update");
+                                        })
+                                        .on_end(move |_, _| inner_end.borrow_mut().push("end"))
+                                        .on_cancel(move |_| {
+                                            inner_cancel.borrow_mut().push("cancel");
+                                        }),
+                                )
                                 .child(ColoredBox::new(Color::RED)),
                         ),
                     ),
@@ -168,7 +184,7 @@ pub(crate) fn nested_native_scale_loser_recovers_touch_after_winner_terminal() {
         };
         let zoom = |scale| {
             PanZoomPhase::Update(
-                PanZoomTransform::try_new(Offset::ZERO, scale, 0.0).expect("finite native scale"),
+                PanZoomTransform::try_new(scale, 0.0).expect("finite native scale"),
             )
         };
         for round in 0_u64..2 {
@@ -237,38 +253,480 @@ pub(crate) fn nested_native_scale_loser_recovers_touch_after_winner_terminal() {
     }
 }
 
-pub(crate) fn exclusive_drag_callbacks_have_one_arena_winner() {
+/// A pan inside `PanClaimRegion(PanClaim::None)` keeps a horizontal contact an
+/// enclosing horizontal drag would otherwise own (ADR-0208 rule 1).
+pub(crate) fn pan_claim_region_keeps_the_pan_from_an_enclosing_drag() {
+    use flui_interaction::gesture::PanClaim;
+    use flui_view::BoxedView;
+    use flui_view::prelude::IntoView;
+    use flui_widgets::PanClaimRegion;
     use std::{cell::RefCell, rc::Rc};
-    let calls = Rc::new(RefCell::new(Vec::new()));
-    let (pan_start, pan_end, horizontal_start, horizontal_end, horizontal_cancel) = (
-        Rc::clone(&calls),
-        Rc::clone(&calls),
-        Rc::clone(&calls),
-        Rc::clone(&calls),
-        Rc::clone(&calls),
+    for claim in [None, Some(PanClaim::None)] {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let (pan, pager) = (Rc::clone(&calls), Rc::clone(&calls));
+        let map = GestureDetector::new()
+            .drag(DragSlot::pan().on_start(move |_, _| pan.borrow_mut().push("pan")))
+            .child(ColoredBox::new(Color::rgb(10, 20, 30)));
+        let inner = match claim {
+            Some(claim) => BoxedView::new(PanClaimRegion::new(claim, map).into_view()),
+            None => BoxedView::new(map.into_view()),
+        };
+        let scoped = lay_out(
+            GestureDetector::new()
+                .drag(DragSlot::horizontal().on_start(move |_, _| pager.borrow_mut().push("pager")))
+                .child(inner),
+            tight(100.0, 100.0),
+        );
+        scoped.dispatch_pointer_down(10.0, 50.0);
+        scoped.dispatch_pointer_move(50.0, 50.0);
+        scoped.dispatch_pointer_move(60.0, 50.0);
+        scoped.dispatch_pointer_up(60.0, 50.0);
+        let expected = if claim.is_some() { "pan" } else { "pager" };
+        assert_eq!(calls.borrow().as_slice(), [expected], "{claim:?}");
+    }
+}
+
+/// A detector whose tap and double tap would wait past the preset's
+/// `max_resolution_delay` reports the refused composition as a build
+/// diagnostic (ADR-0208 §3), and its tap still works uncomposed.
+pub(crate) fn a_composition_past_the_delay_ceiling_is_reported() {
+    use std::time::Duration;
+    let taps = Arc::new(AtomicUsize::new(0));
+    let tapped = Arc::clone(&taps);
+    let settings = flui_interaction::GestureSettings::default()
+        .with_double_tap_timeout(Duration::from_secs(2));
+    let (laid, log) = flui_testing::log_capture::capture(|| {
+        lay_out(
+            crate::gesture_settings::SettingsScope::new(
+                settings,
+                GestureDetector::new()
+                    .on_tap(move |_| {
+                        tapped.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .on_double_tap(|_| {})
+                    .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            ),
+            tight(100.0, 100.0),
+        )
+    });
+    assert!(
+        log.records().iter().any(|record| {
+            record.level == tracing::Level::WARN
+                && record.target == "flui_widgets::gesture_detector"
+                && record.message.contains("composition refused")
+        }),
+        "the refusal is reported:\n{log}"
     );
-    let scoped = lay_out(
+    laid.dispatch_pointer_down(50.0, 50.0);
+    laid.dispatch_pointer_up(50.0, 50.0);
+    let mut laid = laid;
+    laid.pump_for(Duration::from_secs(3));
+    assert_eq!(taps.load(Ordering::SeqCst), 1, "the tap still works");
+}
+
+/// A detector's drag and transform slots carry the recognizers' locks: a
+/// railed pan that starts near the horizontal axis moves on it alone, and a
+/// transform locked against rotation that begins as a pan does not turn.
+pub(crate) fn drag_and_transform_slots_carry_their_locks() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::{AxisLock, TransformLock};
+    use flui_testing::replay::TouchScript;
+    use std::time::Duration;
+    use std::{cell::RefCell, rc::Rc};
+
+    let near_axis = {
+        let mut script = TouchScript::new("near-axis pan").down(1, Offset::new(50.0, 150.0));
+        for step in 1..=8 {
+            script = script.wait(Duration::from_millis(16)).move_to(
+                1,
+                Offset::new(50.0 + 10.0 * f64::from(step), 150.0 + 1.5 * f64::from(step)),
+            );
+        }
+        script
+            .wait(Duration::from_millis(16))
+            .up(1)
+            .build()
+            .expect("one finger")
+    };
+    for (lock, railed) in [(AxisLock::Rails, true), (AxisLock::Free, false)] {
+        let vertical = Rc::new(RefCell::new(0.0_f64));
+        let moved = Rc::clone(&vertical);
+        let mut laid = lay_out(
+            GestureDetector::new()
+                .drag(DragSlot::pan().axis_lock(lock).on_update(move |_, update| {
+                    *moved.borrow_mut() += update.delta.dy;
+                }))
+                .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            tight(300.0, 300.0),
+        );
+        laid.replay(&near_axis);
+        let dy = *vertical.borrow();
+        assert_eq!(
+            dy.abs() < f64::EPSILON,
+            railed,
+            "{lock:?}: vertical travel {dy}"
+        );
+    }
+
+    let pan_then_turn = {
+        let (mut a, mut b) = (Offset::new(50.0, 150.0), Offset::new(250.0, 150.0));
+        let mut script = TouchScript::new("pan, then turn").down(1, a).down(2, b);
+        for round in 0..20 {
+            let (a_by, b_by) = if round < 10 {
+                (Offset::new(4.0, 0.0), Offset::new(4.0, 0.0))
+            } else {
+                (Offset::new(0.0, -5.0), Offset::new(0.0, 5.0))
+            };
+            a += a_by;
+            b += b_by;
+            script = script
+                .wait(Duration::from_millis(8))
+                .move_to(1, a)
+                .wait(Duration::from_millis(8))
+                .move_to(2, b);
+        }
+        script
+            .wait(Duration::from_millis(16))
+            .up(1)
+            .up(2)
+            .build()
+            .expect("two fingers")
+    };
+    for (lock, turns) in [
+        (TransformLock::Rotation, false),
+        (TransformLock::None, true),
+    ] {
+        let rotation = Rc::new(RefCell::new(0.0_f64));
+        let turned = Rc::clone(&rotation);
+        let mut laid = lay_out(
+            GestureDetector::new()
+                .transform(
+                    TransformSlot::new()
+                        .transform_lock(lock)
+                        .on_update(move |_, update| *turned.borrow_mut() = update.rotation),
+                )
+                .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            tight(300.0, 300.0),
+        );
+        laid.replay(&pan_then_turn);
+        let rotation = *rotation.borrow();
+        assert_eq!(rotation.abs() > 0.3, turns, "{lock:?}: rotation {rotation}");
+    }
+
+    let two_near_axis = {
+        let (mut a, mut b) = (Offset::new(50.0, 150.0), Offset::new(150.0, 150.0));
+        let mut script = TouchScript::new("two-finger near-axis pan")
+            .down(1, a)
+            .down(2, b);
+        for _ in 0..40 {
+            let by = Offset::new(2.0, 0.3);
+            a += by;
+            b += by;
+            script = script
+                .wait(Duration::from_millis(8))
+                .move_to(1, a)
+                .wait(Duration::from_millis(8))
+                .move_to(2, b);
+        }
+        script
+            .wait(Duration::from_millis(16))
+            .up(1)
+            .up(2)
+            .build()
+            .expect("two fingers")
+    };
+    for (lock, railed) in [(AxisLock::Rails, true), (AxisLock::Free, false)] {
+        let vertical = Rc::new(RefCell::new(0.0_f64));
+        let moved = Rc::clone(&vertical);
+        let mut laid = lay_out(
+            GestureDetector::new()
+                .transform(
+                    TransformSlot::new()
+                        .axis_lock(lock)
+                        .on_update(move |_, update| {
+                            *moved.borrow_mut() += update.focal_point_delta.dy;
+                        }),
+                )
+                .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            tight(300.0, 300.0),
+        );
+        laid.replay(&two_near_axis);
+        let dy = *vertical.borrow();
+        assert_eq!(
+            dy.abs() < f64::EPSILON,
+            railed,
+            "{lock:?}: focal vertical travel {dy}"
+        );
+    }
+}
+
+/// A scope that hands its subtree another arena handle: here, a
+/// `PanClaim::None` region once `claimed` is set.
+#[derive(Clone, flui_view::prelude::StatefulView)]
+struct SwitchingScope {
+    claimed: flui_view::StateHandle<bool>,
+    child: flui_view::BoxedView,
+}
+
+struct SwitchingScopeState {
+    claimed: flui_view::StateHandle<bool>,
+    handles: Option<(
+        flui_interaction::GestureArena,
+        flui_interaction::GestureArena,
+    )>,
+}
+
+impl flui_view::StatefulView for SwitchingScope {
+    type State = SwitchingScopeState;
+    fn create_state(&self) -> Self::State {
+        SwitchingScopeState {
+            claimed: self.claimed.clone(),
+            handles: None,
+        }
+    }
+}
+
+impl flui_view::ViewState<SwitchingScope> for SwitchingScopeState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        self.claimed.bind(ctx);
+        let plain = flui_widgets::GestureArenaScope::of(ctx);
+        let claimed = plain.with_pan_claim(flui_interaction::gesture::PanClaim::None);
+        self.handles = Some((plain, claimed));
+    }
+    fn build(
+        &self,
+        view: &SwitchingScope,
+        _: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        let (plain, claimed) = self.handles.as_ref().expect("mounted handles");
+        let arena = if view.claimed.with(|claimed| *claimed) {
+            claimed
+        } else {
+            plain
+        };
+        flui_widgets::GestureArenaScope::new(arena.clone(), view.child.clone())
+    }
+}
+
+impl std::fmt::Debug for SwitchingScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SwitchingScope")
+    }
+}
+
+impl std::fmt::Debug for SwitchingScopeState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SwitchingScopeState")
+    }
+}
+
+/// Live recognizers follow the arena their scope hands them: once the scope
+/// above a pan turns into a `PanClaim::None` region, the pan keeps the
+/// horizontal contact the enclosing drag took before; and a rebuilt
+/// `PanClaimRegion` is the same region, so the recognizers inside it stay.
+pub(crate) fn recognizers_follow_a_changed_arena_scope() {
+    use flui_interaction::gesture::PanClaim;
+    use flui_view::StateHandle;
+    use flui_view::prelude::IntoView;
+    use flui_widgets::PanClaimRegion;
+    use std::{cell::RefCell, rc::Rc};
+
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let (pan, pager) = (Rc::clone(&calls), Rc::clone(&calls));
+    let claimed = StateHandle::new(false);
+    let map = GestureDetector::new()
+        .drag(DragSlot::pan().on_start(move |_, _| pan.borrow_mut().push("pan")))
+        .child(ColoredBox::new(Color::rgb(10, 20, 30)));
+    let mut laid = lay_out(
         GestureDetector::new()
-            .exclusive_drags()
-            .on_pan_start(move |_, _| pan_start.borrow_mut().push("pan start"))
-            .on_pan_end(move |_, _| pan_end.borrow_mut().push("pan end"))
-            .on_horizontal_drag_start(move |_, _| {
-                horizontal_start.borrow_mut().push("horizontal start");
-            })
-            .on_horizontal_drag_end(move |_, _| horizontal_end.borrow_mut().push("horizontal end"))
-            .on_horizontal_drag_cancel(move |_| {
-                horizontal_cancel.borrow_mut().push("horizontal cancel");
-            })
-            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            .drag(DragSlot::horizontal().on_start(move |_, _| pager.borrow_mut().push("pager")))
+            .child(SwitchingScope {
+                claimed: claimed.clone(),
+                child: flui_view::BoxedView::new(map.into_view()),
+            }),
         tight(100.0, 100.0),
     );
-    scoped.dispatch_pointer_down(10.0, 50.0);
-    scoped.dispatch_pointer_move(50.0, 50.0);
-    scoped.dispatch_pointer_up(60.0, 50.0);
+    let swipe = |laid: &LaidOut| {
+        laid.dispatch_pointer_down(10.0, 50.0);
+        laid.dispatch_pointer_move(50.0, 50.0);
+        laid.dispatch_pointer_move(60.0, 50.0);
+        laid.dispatch_pointer_up(60.0, 50.0);
+    };
+    swipe(&laid);
+    claimed.update(|claimed| *claimed = true);
+    laid.pump();
+    swipe(&laid);
     assert_eq!(
         calls.borrow().as_slice(),
-        ["horizontal cancel", "pan start", "pan end"]
+        ["pager", "pan"],
+        "the pan joins the region its scope now declares"
     );
+
+    let (created, rebuilt) = (
+        Rc::new(std::cell::Cell::new(0_u32)),
+        StateHandle::new(0_u32),
+    );
+    let factory = CountingPan(Rc::clone(&created));
+    let mut laid = lay_out(
+        Rebuilding {
+            revision: rebuilt.clone(),
+            child: Rc::new(move || {
+                let detector = flui_widgets::RawGestureDetector::new()
+                    .recognizer(factory.clone())
+                    .child(ColoredBox::new(Color::rgb(10, 20, 30)));
+                flui_view::BoxedView::new(PanClaimRegion::new(PanClaim::None, detector).into_view())
+            }),
+        },
+        tight(100.0, 100.0),
+    );
+    rebuilt.update(|revision| *revision += 1);
+    laid.pump();
+    assert_eq!(
+        created.get(),
+        1,
+        "a rebuilt region is the same region: its recognizers stay"
+    );
+}
+
+/// Builds a pan and counts how many it built.
+#[derive(Clone)]
+struct CountingPan(std::rc::Rc<std::cell::Cell<u32>>);
+
+impl flui_widgets::GestureRecognizerFactory for CountingPan {
+    type Recognizer = flui_interaction::DragGestureRecognizer;
+
+    fn create(&self, cx: &flui_widgets::RecognizerContext) -> std::rc::Rc<Self::Recognizer> {
+        self.0.set(self.0.get() + 1);
+        flui_interaction::DragGestureRecognizer::builder(
+            cx.arena().clone(),
+            flui_interaction::DragAxis::Free,
+        )
+        .build()
+    }
+
+    fn update(&self, _recognizer: &Self::Recognizer) {}
+}
+
+/// Builds a fresh `child` whenever `revision` changes.
+#[derive(Clone, flui_view::prelude::StatefulView)]
+struct Rebuilding {
+    revision: flui_view::StateHandle<u32>,
+    child: std::rc::Rc<dyn Fn() -> flui_view::BoxedView>,
+}
+
+struct RebuildingState {
+    revision: flui_view::StateHandle<u32>,
+}
+
+impl flui_view::StatefulView for Rebuilding {
+    type State = RebuildingState;
+    fn create_state(&self) -> Self::State {
+        RebuildingState {
+            revision: self.revision.clone(),
+        }
+    }
+}
+
+impl flui_view::ViewState<Rebuilding> for RebuildingState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        self.revision.bind(ctx);
+    }
+    fn build(
+        &self,
+        view: &Rebuilding,
+        _: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        let _ = view.revision.with(|revision| *revision);
+        (view.child)()
+    }
+}
+
+impl std::fmt::Debug for Rebuilding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Rebuilding")
+    }
+}
+
+impl std::fmt::Debug for RebuildingState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RebuildingState")
+    }
+}
+
+/// A detector with a drag slot and a transform slot splits the contacts: one
+/// finger (or the mouse) pans and never scales, and a two-finger pinch
+/// scales and never pans. The transform's scale needs two contacts, so on a
+/// lone contact it does not take the motion from the pan; it used to, and the
+/// pan was cancelled on every one-contact drag while the scale never started.
+pub(crate) fn drag_and_transform_slots_split_one_contact_from_two() {
+    use flui_foundation::geometry::Offset;
+    use flui_testing::replay::{MouseScript, PointerScript, TouchScript};
+    use std::time::Duration;
+    use std::{cell::RefCell, rc::Rc};
+
+    let one_finger = || {
+        let mut script = TouchScript::new("one finger").down(1, Offset::new(20.0, 50.0));
+        for step in 1..=10 {
+            script = script
+                .wait(Duration::from_millis(16))
+                .move_to(1, Offset::new(20.0 + 6.0 * f64::from(step), 50.0));
+        }
+        script
+            .wait(Duration::from_millis(16))
+            .up(1)
+            .build()
+            .expect("the finger lifts")
+    };
+    let mouse = || {
+        let mut script = MouseScript::new("mouse").press(Offset::new(20.0, 50.0));
+        for step in 1..=10 {
+            script = script
+                .wait(Duration::from_millis(16))
+                .move_to(Offset::new(20.0 + 6.0 * f64::from(step), 50.0));
+        }
+        script
+            .wait(Duration::from_millis(16))
+            .release()
+            .build()
+            .expect("the button is released")
+    };
+    let pinch = || PointerScript::pinch(Offset::new(50.0, 50.0), 20.0, 80.0, 8);
+    let cases: [(&str, PointerScript, &[&str]); 3] = [
+        ("one finger", one_finger(), &["pan start", "pan end"]),
+        ("mouse", mouse(), &["pan start", "pan end"]),
+        ("two-finger pinch", pinch(), &["scale start", "scale end"]),
+    ];
+    for (name, script, expected) in cases {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let record = |call: &'static str| {
+            let calls = Rc::clone(&calls);
+            move || calls.borrow_mut().push(call)
+        };
+        let (pan_start, pan_end, scale_start, scale_end) = (
+            record("pan start"),
+            record("pan end"),
+            record("scale start"),
+            record("scale end"),
+        );
+        let mut laid = lay_out(
+            GestureDetector::new()
+                .drag(
+                    DragSlot::pan()
+                        .on_start(move |_, _| pan_start())
+                        .on_end(move |_, _| pan_end()),
+                )
+                .transform(
+                    TransformSlot::new()
+                        .on_start(move |_, _| scale_start())
+                        .on_end(move |_, _| scale_end()),
+                )
+                .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            tight(100.0, 100.0),
+        );
+        laid.replay(&script);
+        laid.pump_for(Duration::from_millis(16));
+        assert_eq!(calls.borrow().as_slice(), expected, "{name}");
+    }
 }
 
 #[derive(Clone, flui_view::prelude::StatefulView)]
@@ -291,7 +749,7 @@ impl flui_view::ViewState<ComposedDetector> for ComposedDetectorState {
     fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
         let arena = flui_widgets::GestureArenaScope::of(ctx);
         let (first, _) = arena
-            .compose(flui_interaction::arena::GestureCompetition::Exclusive)
+            .compose(flui_interaction::gesture::GestureComposition::Exclusive)
             .expect("presentation root")
             .into_branches();
         self.branch = Some(first);
@@ -384,7 +842,7 @@ pub(crate) fn scoped_estimator_controls_delivered_drag_velocity() {
     use std::{cell::Cell, rc::Rc};
 
     use flui_foundation::geometry::Point;
-    use flui_interaction::{GestureSettings, processing::VelocityEstimator};
+    use flui_interaction::{GestureSettings, gesture::VelocityEstimator};
     use flui_platform_api::{
         EventTime,
         pointer::{
@@ -409,21 +867,21 @@ pub(crate) fn scoped_estimator_controls_delivered_drag_velocity() {
                 let delivered = Rc::new(Cell::new(None));
                 let observed = Rc::clone(&delivered);
                 let detector = if horizontal {
-                    GestureDetector::new().on_horizontal_drag_end(move |_, details| {
+                    GestureDetector::new().drag(DragSlot::horizontal().on_end(move |_, details| {
                         assert!(
                             observed
                                 .replace(Some(details.velocity.pixels_per_second.dx))
                                 .is_none()
                         );
-                    })
+                    }))
                 } else {
-                    GestureDetector::new().on_pan_end(move |_, details| {
+                    GestureDetector::new().drag(DragSlot::pan().on_end(move |_, details| {
                         assert!(
                             observed
                                 .replace(Some(details.velocity.pixels_per_second.dx))
                                 .is_none()
                         );
-                    })
+                    }))
                 }
                 .child(ColoredBox::new(Color::rgb(10, 20, 30)));
                 let laid = lay_out(
@@ -487,9 +945,10 @@ pub(crate) fn scoped_settings_control_touch_recognition_thresholds() {
             let detector = match family {
                 "tap" => GestureDetector::new().on_tap(move |_| observed.set(observed.get() + 1)),
                 "pan" => GestureDetector::new()
-                    .on_pan_start(move |_, _| observed.set(observed.get() + 1)),
-                _ => GestureDetector::new()
-                    .on_horizontal_drag_start(move |_, _| observed.set(observed.get() + 1)),
+                    .drag(DragSlot::pan().on_start(move |_, _| observed.set(observed.get() + 1))),
+                _ => GestureDetector::new().drag(
+                    DragSlot::horizontal().on_start(move |_, _| observed.set(observed.get() + 1)),
+                ),
             };
             // A sole arena member is accepted by default before its slop
             // decision. A competing tap keeps drag admission undecided until
@@ -633,10 +1092,12 @@ pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
         let detector = if gate.get() {
             let (started, updated, ended) =
                 (Rc::clone(&started), Rc::clone(&updated), Rc::clone(&ended));
-            detector
-                .on_pan_start(move |_, _| started.set(started.get() + 1))
-                .on_pan_update(move |_, _| updated.set(updated.get() + 1))
-                .on_pan_end(move |_, _| ended.set(ended.get() + 1))
+            detector.drag(
+                DragSlot::pan()
+                    .on_start(move |_, _| started.set(started.get() + 1))
+                    .on_update(move |_, _| updated.set(updated.get() + 1))
+                    .on_end(move |_, _| ended.set(ended.get() + 1)),
+            )
         } else {
             detector
         };
@@ -734,16 +1195,19 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
                 fail_once.clone(),
             );
             GestureDetector::new()
-                .drag_pointer_strategy(configured_policy.get())
-                .on_pan_start(move |_, _| started.set(started.get() + 1))
-                .on_pan_update(move |_, details| updated.borrow_mut().push(details.delta.dy))
-                .on_pan_end(move |_, details| match details.reason {
-                    GestureEndReason::Completed => ended.set(ended.get() + 1),
-                    GestureEndReason::Cancelled => {
-                        cancelled.set(cancelled.get() + 1);
-                        assert!(!fail.replace(false), "drag policy cancellation");
-                    }
-                })
+                .drag(
+                    DragSlot::pan()
+                        .pointer_strategy(configured_policy.get())
+                        .on_start(move |_, _| started.set(started.get() + 1))
+                        .on_update(move |_, details| updated.borrow_mut().push(details.delta.dy))
+                        .on_end(move |_, details| match details.reason {
+                            GestureEndReason::Completed => ended.set(ended.get() + 1),
+                            GestureEndReason::Cancelled => {
+                                cancelled.set(cancelled.get() + 1);
+                                assert!(!fail.replace(false), "drag policy cancellation");
+                            }
+                        }),
+                )
                 .child(ColoredBox::new(Color::rgb(10, 20, 30)))
         });
         let mut laid = lay_out(probe.view(), tight(100.0, 100.0));
@@ -791,16 +1255,19 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
             assert_eq!(reports[0].field("hook"), Some("Update"));
             assert_eq!(reports[0].field("internal_invariant"), Some("false"));
             assert_eq!(
-                laid.count_elements_by_view_type::<GestureDetector>(),
+                laid.count_elements_by_view_type::<flui_widgets::RawGestureDetector>(),
                 0,
-                "the failed lifecycle actor is substituted"
+                "the failed lifecycle actor, the raw detector owning the recognizers, is substituted"
             );
         } else {
             assert!(
                 reports.is_empty(),
                 "healthy policy replacement is not a lifecycle failure: {log}"
             );
-            assert_eq!(laid.count_elements_by_view_type::<GestureDetector>(), 1);
+            assert_eq!(
+                laid.count_elements_by_view_type::<flui_widgets::RawGestureDetector>(),
+                1
+            );
         }
         assert_eq!(cancelled.get(), 1, "old accepted drag is cancelled once");
         send(&laid, 2, 50.0, 2);
@@ -817,7 +1284,10 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
                 .write(|cx| signal.get().expect("mounted probe").set(cx, 2))
                 .expect("rebuild after contained cancellation");
             laid.pump();
-            assert_eq!(laid.count_elements_by_view_type::<GestureDetector>(), 1);
+            assert_eq!(
+                laid.count_elements_by_view_type::<flui_widgets::RawGestureDetector>(),
+                1
+            );
         }
 
         send(&laid, 2, 10.0, 0);
@@ -894,15 +1364,12 @@ fn authored_drag_owner_replacement(horizontal: bool) {
                     }
                 }
             };
-            let detector = if horizontal {
-                GestureDetector::new()
-                    .on_horizontal_drag_start(on_start)
-                    .on_horizontal_drag_end(on_end)
+            let slot = if horizontal {
+                DragSlot::horizontal()
             } else {
-                GestureDetector::new()
-                    .on_pan_start(on_start)
-                    .on_pan_end(on_end)
+                DragSlot::pan()
             };
+            let detector = GestureDetector::new().drag(slot.on_start(on_start).on_end(on_end));
             ConfiguredGesture {
                 settings: GestureSettings::default()
                     .try_with_touch_slop(90.0)
@@ -962,9 +1429,9 @@ fn authored_drag_owner_replacement(horizontal: bool) {
                 Some("authored settings cancellation")
             );
             assert_eq!(
-                laid.count_elements_by_view_type::<GestureDetector>(),
+                laid.count_elements_by_view_type::<flui_widgets::RawGestureDetector>(),
                 0,
-                "the failed lifecycle actor is substituted"
+                "the failed lifecycle actor, the raw detector owning the recognizers, is substituted"
             );
         }
         send(&laid, 2, 50.0, 2);
@@ -1099,7 +1566,7 @@ fn authored_contact_owner_replacement(family: &'static str) {
 
 pub(crate) fn authored_settings_retire_native_scale_session_before_fresh_admission() {
     use crate::common::{ProbeSignals, SignalProbe};
-    use flui_foundation::geometry::{Offset, Point};
+    use flui_foundation::geometry::Point;
     use flui_interaction::GestureSettings;
     use flui_platform_api::{
         EventTime,
@@ -1131,9 +1598,12 @@ pub(crate) fn authored_settings_retire_native_scale_session_before_fresh_admissi
                 if profile.get() { 400 } else { 100 },
             )),
             detector: GestureDetector::new()
-                .on_scale_start(move |_, _| started.set(started.get() + 1))
-                .on_scale_cancel(move |_| cancels.set(cancels.get() + 1))
-                .on_scale_end(move |_, _| ends.set(ends.get() + 1))
+                .transform(
+                    TransformSlot::new()
+                        .on_start(move |_, _| started.set(started.get() + 1))
+                        .on_cancel(move |_| cancels.set(cancels.get() + 1))
+                        .on_end(move |_, _| ends.set(ends.get() + 1)),
+                )
                 .child(ColoredBox::new(Color::RED)),
         }
     });
@@ -1149,11 +1619,8 @@ pub(crate) fn authored_settings_retire_native_scale_session_before_fresh_admissi
             phase,
         )));
     };
-    let update = || {
-        PanZoomPhase::Update(
-            PanZoomTransform::try_new(Offset::ZERO, 1.5, 0.0).expect("finite scale"),
-        )
-    };
+    let update =
+        || PanZoomPhase::Update(PanZoomTransform::try_new(1.5, 0.0).expect("finite scale"));
     send(&laid, PanZoomPhase::Start);
     send(&laid, update());
     assert_eq!(starts.get(), 1);
@@ -1183,8 +1650,8 @@ pub(crate) fn mounted_native_begin_retains_estimator_before_first_claim() {
     use std::{cell::Cell, rc::Rc};
 
     use crate::gesture_settings::SettingsScope;
-    use flui_foundation::geometry::{Offset, Point};
-    use flui_interaction::{GestureSettings, GestureSettingsSource, processing::VelocityEstimator};
+    use flui_foundation::geometry::Point;
+    use flui_interaction::{GestureSettings, GestureSettingsSource, gesture::VelocityEstimator};
     use flui_platform_api::{
         EventTime,
         pointer::{
@@ -1202,8 +1669,11 @@ pub(crate) fn mounted_native_begin_retains_estimator_before_first_claim() {
         SettingsScope::new(
             source.provider(),
             GestureDetector::new()
-                .on_scale_start(move |_, _| started.set(started.get() + 1))
-                .on_scale_end(move |_, details| terminal.set(Some(details.velocity)))
+                .transform(
+                    TransformSlot::new()
+                        .on_start(move |_, _| started.set(started.get() + 1))
+                        .on_end(move |_, details| terminal.set(Some(details.velocity))),
+                )
                 .child(ColoredBox::new(Color::RED)),
         ),
         tight(100.0, 100.0),
@@ -1232,9 +1702,7 @@ pub(crate) fn mounted_native_begin_retains_estimator_before_first_claim() {
         for (millis, scale) in [(10, 1.3), (20, 1.5), (30, 1.6)] {
             send(
                 millis,
-                PanZoomPhase::Update(
-                    PanZoomTransform::try_new(Offset::ZERO, scale, 0.0).expect("finite scale"),
-                ),
+                PanZoomPhase::Update(PanZoomTransform::try_new(scale, 0.0).expect("finite scale")),
             );
         }
         assert_eq!(
@@ -1278,9 +1746,7 @@ pub(crate) fn mounted_native_begin_retains_estimator_before_first_claim() {
         );
         send(
             30,
-            PanZoomPhase::Update(
-                PanZoomTransform::try_new(Offset::ZERO, 1.3, 0.0).expect("finite scale"),
-            ),
+            PanZoomPhase::Update(PanZoomTransform::try_new(1.3, 0.0).expect("finite scale")),
         );
         assert_eq!(
             starts.get(),
@@ -1313,8 +1779,11 @@ pub(crate) fn mounted_native_begin_refused_by_touch_cannot_claim_after_touch_ter
     let laid = lay_out(
         GestureDetector::new()
             .on_tap(|_| {})
-            .on_scale_start(move |_, _| started.set(started.get() + 1))
-            .on_scale_end(move |_, _| completed.set(completed.get() + 1))
+            .transform(
+                TransformSlot::new()
+                    .on_start(move |_, _| started.set(started.get() + 1))
+                    .on_end(move |_, _| completed.set(completed.get() + 1)),
+            )
             .child(ColoredBox::new(Color::RED)),
         tight(100.0, 100.0),
     );
@@ -1331,11 +1800,8 @@ pub(crate) fn mounted_native_begin_refused_by_touch_cannot_claim_after_touch_ter
             phase,
         )));
     };
-    let update = || {
-        PanZoomPhase::Update(
-            PanZoomTransform::try_new(Offset::ZERO, 1.3, 0.0).expect("finite scale"),
-        )
-    };
+    let update =
+        || PanZoomPhase::Update(PanZoomTransform::try_new(1.3, 0.0).expect("finite scale"));
     laid.dispatch_pointer_event(
         &make_down_event_for_id(touch, Offset::new(50.0, 50.0), PointerKind::Touch)
             .expect("finite touch"),
@@ -1395,10 +1861,11 @@ pub(crate) fn unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival() {
         if gate.get() {
             let cancels = Rc::clone(&cancels);
             GestureDetector::new()
-                .on_horizontal_drag_start(|_, _| -> () {
-                    panic!("the retired contender must not start")
-                })
-                .on_horizontal_drag_cancel(move |_| cancels.set(cancels.get() + 1))
+                .drag(
+                    DragSlot::horizontal()
+                        .on_start(|_, _| -> () { panic!("the retired contender must not start") })
+                        .on_cancel(move |_| cancels.set(cancels.get() + 1)),
+                )
                 .child(child)
                 .into_view()
                 .boxed()
@@ -1409,8 +1876,11 @@ pub(crate) fn unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival() {
     let (started, ended) = (Rc::clone(&rival_starts), Rc::clone(&rival_ends));
     let mut laid = lay_out(
         GestureDetector::new()
-            .on_pan_start(move |_, _| started.set(started.get() + 1))
-            .on_pan_end(move |_, _| ended.set(ended.get() + 1))
+            .drag(
+                DragSlot::pan()
+                    .on_start(move |_, _| started.set(started.get() + 1))
+                    .on_end(move |_, _| ended.set(ended.get() + 1)),
+            )
             .child(probe.view()),
         tight(100.0, 100.0),
     );
@@ -1490,15 +1960,18 @@ pub(crate) fn gesture_detector_recognizes_a_pan_and_suppresses_the_tap() {
             .on_tap(move |_cx| {
                 tap_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_pan_start(move |_cx, _details| {
-                start_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .on_pan_update(move |_cx, _details| {
-                update_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .on_pan_end(move |_cx, _details| {
-                end_cb.fetch_add(1, Ordering::SeqCst);
-            })
+            .drag(
+                DragSlot::pan()
+                    .on_start(move |_cx, _details| {
+                        start_cb.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .on_update(move |_cx, _details| {
+                        update_cb.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .on_end(move |_cx, _details| {
+                        end_cb.fetch_add(1, Ordering::SeqCst);
+                    }),
+            )
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
         tight(100.0, 100.0),
     );
@@ -1547,16 +2020,19 @@ pub(crate) fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_
 
     let laid = lay_out(
         GestureDetector::new()
-            .on_horizontal_drag_start(move |_cx, _details| {
-                start_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .on_horizontal_drag_cancel(move |_cx| {
-                cancel_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .on_horizontal_drag_end(move |_cx, details| {
-                recorded.borrow_mut().push(details.reason);
-                end_cb.fetch_add(1, Ordering::SeqCst);
-            })
+            .drag(
+                DragSlot::horizontal()
+                    .on_start(move |_cx, _details| {
+                        start_cb.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .on_cancel(move |_cx| {
+                        cancel_cb.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .on_end(move |_cx, details| {
+                        recorded.borrow_mut().push(details.reason);
+                        end_cb.fetch_add(1, Ordering::SeqCst);
+                    }),
+            )
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
         tight(200.0, 200.0),
     );
@@ -1574,7 +2050,7 @@ pub(crate) fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_
     assert_eq!(
         cancels.load(Ordering::SeqCst),
         0,
-        "on_horizontal_drag_cancel is reserved for a sequence rejected before acceptance"
+        "the drag slot's on_cancel is reserved for a sequence rejected before acceptance"
     );
 
     // A fresh contact afterward still completes normally.
@@ -1665,20 +2141,19 @@ pub(crate) mod event_cx {
         .expect("a click on a node advertising one resolves");
     }
 
-    pub(crate) fn repeated_assistive_taps_are_delivered_once_each_and_keep_making_progress() {
-        assert_repeated_actions_are_delivered_once_each(Action::Click);
+    pub(crate) fn repeated_assistive_taps_run_once_each_in_their_dispatch() {
+        assert_repeated_actions_run_once_each(Action::Click);
     }
 
-    pub(crate) fn repeated_assistive_long_presses_are_delivered_once_each_and_keep_making_progress()
-    {
-        assert_repeated_actions_are_delivered_once_each(Action::ShowContextMenu);
+    pub(crate) fn repeated_assistive_long_presses_run_once_each_in_their_dispatch() {
+        assert_repeated_actions_run_once_each(Action::ShowContextMenu);
     }
 
-    /// Two accepted `action`s of one kind run their handler twice on the next
-    /// frame, never again on a later one, and a third still arrives after the
-    /// batch drains. The detector advertises both kinds, so only the handler
-    /// `action` reaches counts.
-    fn assert_repeated_actions_are_delivered_once_each(action: Action) {
+    /// Each `action` runs its handler once, inside the request's own
+    /// dispatch, with its signal write accepted there; no frame replays it.
+    /// The detector advertises both kinds, so only the handler `action`
+    /// reaches counts.
+    fn assert_repeated_actions_run_once_each(action: Action) {
         let long_press = matches!(action, Action::ShowContextMenu);
         let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
             let detector = GestureDetector::new();
@@ -1699,46 +2174,29 @@ pub(crate) mod event_cx {
         let tree = app.a11y_tree().expect("semantics enabled before the frame");
 
         invoke_labelled_action(&app, &tree, action);
+        assert_eq!(probe.value(), Ok(1), "the action ran in its own dispatch");
         invoke_labelled_action(&app, &tree, action);
-        assert_eq!(probe.value(), Ok(0), "accepted actions are deferred");
+        assert_eq!(probe.value(), Ok(2), "a second request runs again");
 
         app.tick();
-        assert_eq!(
-            probe.value(),
-            Ok(2),
-            "coalescing wake demand must not coalesce two accepted activations"
-        );
-        app.tick();
         assert_eq!(probe.reads().last(), Some(&2), "the signal reader rebuilt");
-        assert_eq!(
-            probe.value(),
-            Ok(2),
-            "a later frame must not replay either action"
-        );
+        app.tick();
+        assert_eq!(probe.value(), Ok(2), "no frame replays either action");
 
         let tree = app.a11y_tree().expect("semantics remains available");
         invoke_labelled_action(&app, &tree, action);
-        assert_eq!(probe.value(), Ok(2), "the next activation is deferred too");
-        app.tick();
-        assert_eq!(
-            probe.value(),
-            Ok(3),
-            "delivery remains live after draining a batch"
-        );
+        assert_eq!(probe.value(), Ok(3), "a later request still runs");
         app.tick();
         assert_eq!(
             probe.reads().last(),
             Some(&3),
             "the later write also rebuilds"
         );
-        assert_eq!(
-            probe.value(),
-            Ok(3),
-            "the later action is delivered only once"
-        );
     }
 
-    pub(crate) fn a_panicking_assistive_action_does_not_discard_the_fifo_tail() {
+    /// A panicking assistive tap reaches its dispatcher and costs the next
+    /// request nothing: a long press asked for afterwards still runs.
+    pub(crate) fn a_panicking_assistive_action_leaves_the_next_one_deliverable() {
         let long_press_calls = Rc::new(Cell::new(0));
         let observed_long_press = Rc::clone(&long_press_calls);
         let mut app = lay_out(
@@ -1754,25 +2212,21 @@ pub(crate) mod event_cx {
         app.enable_semantics();
         app.pump();
         let tree = app.a11y_tree().expect("semantics enabled before the frame");
-        invoke_labelled_action(&app, &tree, Action::Click);
-        invoke_labelled_action(&app, &tree, Action::ShowContextMenu);
-
-        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.tick()));
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            invoke_labelled_action(&app, &tree, Action::Click);
+        }));
         assert!(
             panicked.is_err(),
             "the user callback panic still propagates"
         );
-        assert_eq!(
-            long_press_calls.get(),
-            0,
-            "the tail has not run out of order"
-        );
 
         app.tick();
+        let tree = app.a11y_tree().expect("semantics remains available");
+        invoke_labelled_action(&app, &tree, Action::ShowContextMenu);
         assert_eq!(
             long_press_calls.get(),
             1,
-            "scheduler recovery retains the next accepted command"
+            "the next request runs after the panic"
         );
     }
 }
@@ -1784,7 +2238,7 @@ pub(crate) fn viewer_reports_cancelled_then_completed_interactions() {
     let reasons = Rc::new(RefCell::new(Vec::new()));
     let recorded = Rc::clone(&reasons);
     let laid = lay_out(
-        InteractiveViewer::new()
+        InteractiveViewer::new(crate::common::viewer_alternatives())
             .on_interaction_end(move |_cx, details| recorded.borrow_mut().push(details.reason))
             .child(target_for_viewer()),
         tight(200.0, 200.0),
@@ -1803,4 +2257,221 @@ pub(crate) fn viewer_reports_cancelled_then_completed_interactions() {
 
 fn target_for_viewer() -> ColoredBox {
     ColoredBox::new(Color::rgb(10, 20, 30))
+}
+
+/// A timed primary contact for the slot rows: Down, Moves and Up of one
+/// pointer, each sample carrying a pressure when given.
+struct TimedContact {
+    info: flui_platform_api::pointer::PointerInfo,
+}
+
+impl TimedContact {
+    fn new(id: u64, kind: flui_platform_api::pointer::PointerKind) -> Self {
+        use flui_platform_api::pointer::{PointerId, PointerInfo};
+        Self {
+            info: PointerInfo::new(PointerId::try_from(id).expect("nonzero contact"), kind),
+        }
+    }
+
+    fn sample(
+        millis: u64,
+        x: f64,
+        y: f64,
+        pressure: Option<f32>,
+    ) -> flui_platform_api::pointer::PointerSample {
+        use flui_foundation::geometry::Point;
+        use flui_platform_api::{
+            EventTime,
+            pointer::{PointerPosition, PointerSample, Pressure},
+        };
+        let sample = PointerSample::new(
+            EventTime::from_nanos(millis * 1_000_000),
+            PointerPosition::try_new(Point::new(x, y)).expect("finite position"),
+        );
+        match pressure {
+            Some(value) => sample.with_pressure(Pressure::try_new(value).expect("unit pressure")),
+            None => sample,
+        }
+    }
+
+    fn down(&self, laid: &crate::common::LaidOut, at: (u64, f64, f64), pressure: Option<f32>) {
+        use flui_platform_api::pointer::{
+            PointerButton, PointerButtons, PointerEvent, PointerPress,
+        };
+        let (millis, x, y) = at;
+        laid.dispatch_pointer_event(&PointerEvent::Down(PointerPress::new(
+            self.info,
+            PointerButton::PRIMARY,
+            PointerButtons::NONE,
+            Self::sample(millis, x, y, pressure),
+        )));
+    }
+
+    fn moved(&self, laid: &crate::common::LaidOut, at: (u64, f64, f64), pressure: Option<f32>) {
+        use flui_platform_api::pointer::{
+            PointerButton, PointerButtons, PointerEvent, PointerMove,
+        };
+        let (millis, x, y) = at;
+        laid.dispatch_pointer_event(&PointerEvent::Move(PointerMove::new(
+            self.info,
+            PointerButtons::NONE.with(PointerButton::PRIMARY),
+            Self::sample(millis, x, y, pressure),
+        )));
+    }
+
+    fn up(&self, laid: &crate::common::LaidOut, at: (u64, f64, f64)) {
+        use flui_platform_api::pointer::{
+            PointerButton, PointerButtons, PointerEvent, PointerRelease,
+        };
+        let (millis, x, y) = at;
+        laid.dispatch_pointer_event(&PointerEvent::Up(PointerRelease::new(
+            self.info,
+            PointerButton::PRIMARY,
+            PointerButtons::NONE.with(PointerButton::PRIMARY),
+            Self::sample(millis, x, y, None),
+        )));
+    }
+}
+
+/// A vertical drag slot claims only vertical motion: a horizontal drag of
+/// the same length never starts it, a vertical one does.
+pub(crate) fn a_vertical_drag_slot_claims_only_vertical_motion() {
+    use flui_platform_api::pointer::PointerKind;
+    use std::{cell::Cell, rc::Rc};
+
+    let starts = Rc::new(Cell::new(0));
+    let started = Rc::clone(&starts);
+    let laid = lay_out(
+        GestureDetector::new()
+            .drag(DragSlot::vertical().on_start(move |_, _| started.set(started.get() + 1)))
+            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        tight(200.0, 200.0),
+    );
+    let across = TimedContact::new(1, PointerKind::Touch);
+    across.down(&laid, (0, 20.0, 100.0), None);
+    across.moved(&laid, (10, 120.0, 100.0), None);
+    across.up(&laid, (20, 120.0, 100.0));
+    assert_eq!(
+        starts.get(),
+        0,
+        "horizontal motion does not start a vertical drag"
+    );
+    let along = TimedContact::new(2, PointerKind::Touch);
+    along.down(&laid, (100, 100.0, 20.0), None);
+    along.moved(&laid, (110, 100.0, 120.0), None);
+    along.up(&laid, (120, 100.0, 120.0));
+    assert_eq!(starts.get(), 1, "vertical motion starts it");
+}
+
+/// Two contacts down and released together fire the multi-contact tap with
+/// both contacts. A count below two is refused as a value, before any
+/// detector is built, rather than panicking in the parent's `build`.
+pub(crate) fn two_contacts_released_together_fire_on_multi_tap() {
+    use flui_platform_api::pointer::PointerKind;
+    use flui_widgets::MultiTapCount;
+    use std::{cell::RefCell, rc::Rc};
+
+    for refused in [0, 1] {
+        let error = MultiTapCount::try_from(refused).expect_err("one contact is a tap");
+        assert_eq!(error.contacts(), refused);
+    }
+    let count = MultiTapCount::try_from(2).expect("two contacts are a multi-contact tap");
+    assert_eq!(count, MultiTapCount::TWO);
+
+    let taps = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&taps);
+    let laid = lay_out(
+        GestureDetector::new()
+            .on_multi_tap(count, move |_, details| {
+                recorded.borrow_mut().push(details.pointer_count);
+            })
+            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        tight(200.0, 200.0),
+    );
+    let (first, second) = (
+        TimedContact::new(1, PointerKind::Touch),
+        TimedContact::new(2, PointerKind::Touch),
+    );
+    first.down(&laid, (0, 60.0, 100.0), None);
+    second.down(&laid, (5, 140.0, 100.0), None);
+    first.up(&laid, (40, 60.0, 100.0));
+    second.up(&laid, (45, 140.0, 100.0));
+    assert_eq!(taps.borrow().as_slice(), [2]);
+}
+
+/// A pen pressing past the start and then the peak pressure starts, peaks
+/// and ends one force press.
+pub(crate) fn a_pressure_contact_starts_peaks_and_ends_a_force_press() {
+    use flui_platform_api::pointer::{PenTool, PointerKind};
+    use std::{cell::RefCell, rc::Rc};
+
+    let phases = Rc::new(RefCell::new(Vec::new()));
+    let (start, peak, end) = (Rc::clone(&phases), Rc::clone(&phases), Rc::clone(&phases));
+    let laid = lay_out(
+        GestureDetector::new()
+            .force_press(
+                flui_widgets::ForcePressSlot::new()
+                    .on_start(move |_, _| start.borrow_mut().push("start"))
+                    .on_peak(move |_, _| peak.borrow_mut().push("peak"))
+                    .on_end(move |_, _| end.borrow_mut().push("end")),
+            )
+            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        tight(200.0, 200.0),
+    );
+    let pen = TimedContact::new(1, PointerKind::Pen { tool: PenTool::Tip });
+    pen.down(&laid, (0, 100.0, 100.0), Some(0.2));
+    pen.moved(&laid, (10, 100.0, 100.0), Some(0.5));
+    pen.moved(&laid, (20, 100.0, 100.0), Some(0.95));
+    pen.up(&laid, (30, 100.0, 100.0));
+    assert_eq!(phases.borrow().as_slice(), ["start", "peak", "end"]);
+}
+
+/// A scope whose settings select One Euro smoothing smooths the positions a
+/// drag slot publishes after recognition: an 8 px sensor jitter reaches the
+/// callback whole without it and much reduced with it.
+pub(crate) fn scoped_position_smoothing_reaches_drag_slot_updates() {
+    use flui_interaction::{GestureSettings, gesture::OneEuroTuning};
+    use flui_platform_api::pointer::PointerKind;
+    use std::{cell::RefCell, rc::Rc};
+
+    let jitter = |smoothing: Option<OneEuroTuning>| {
+        let positions = Rc::new(RefCell::new(Vec::new()));
+        let recorded = Rc::clone(&positions);
+        let laid = lay_out(
+            ConfiguredGesture {
+                settings: GestureSettings::default().with_position_smoothing(smoothing),
+                detector: GestureDetector::new()
+                    .drag(DragSlot::pan().on_update(move |_, details| {
+                        recorded.borrow_mut().push(details.local_position.dy);
+                    }))
+                    .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            },
+            tight(200.0, 200.0),
+        );
+        let contact = TimedContact::new(1, PointerKind::Touch);
+        contact.down(&laid, (0, 100.0, 20.0), None);
+        contact.moved(&laid, (10, 100.0, 100.0), None);
+        for step in 0..40_u64 {
+            let y = if step % 2 == 0 { 104.0 } else { 96.0 };
+            contact.moved(&laid, (20 + step * 10, 100.0, y), None);
+        }
+        contact.up(&laid, (500, 100.0, 100.0));
+        let positions = positions.borrow();
+        let tail = &positions[positions.len() - 20..];
+        let (low, high) = tail
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), &y| {
+                (low.min(y), high.max(y))
+            });
+        high - low
+    };
+    let raw = jitter(None);
+    let smoothed = jitter(Some(
+        OneEuroTuning::new(0.5, 0.0, 1.0).expect("valid tuning"),
+    ));
+    assert!(
+        (raw - 8.0).abs() < 1e-9,
+        "unsmoothed updates carry the full jitter: {raw}"
+    );
+    assert!(smoothed < 2.0, "smoothed jitter {smoothed} of 8 px");
 }

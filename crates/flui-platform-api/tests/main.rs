@@ -3,6 +3,15 @@
 #[path = "composition_ledger.rs"]
 mod composition_ledger;
 
+#[path = "drag_plan.rs"]
+mod drag_plan;
+
+#[path = "haptics.rs"]
+mod haptics;
+
+#[path = "input_regions.rs"]
+mod input_regions;
+
 #[path = "display.rs"]
 mod display;
 

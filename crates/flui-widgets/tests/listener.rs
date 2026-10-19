@@ -129,6 +129,55 @@ pub(crate) fn presentation_resampling_uses_the_owner_frame_clock() {
     }
 }
 
+/// A press on a scrolled list row reaches the row and every listener above
+/// the list: the hit path runs from the row through its sliver and viewport
+/// up to the root, for the fixed-extent and the lazily built list alike.
+pub(crate) fn a_press_on_a_list_row_reaches_the_listeners_above_the_list() {
+    use flui_view::{BoxedView, ViewExt};
+    use flui_widgets::ListView;
+    use std::cell::RefCell;
+
+    const ROWS: usize = 10;
+    const EXTENT: f64 = 50.0;
+    let row = |pressed: &Rc<RefCell<Vec<usize>>>, index: usize| -> BoxedView {
+        let pressed = Rc::clone(pressed);
+        Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_pointer_down(move |_, _| pressed.borrow_mut().push(index))
+            .child(SizedBox::new(200.0, EXTENT))
+            .boxed()
+    };
+    for name in ["fixed extent", "lazily built"] {
+        let pressed = Rc::new(RefCell::new(Vec::new()));
+        let list = if name == "fixed extent" {
+            ListView::new(
+                EXTENT,
+                (0..ROWS)
+                    .map(|index| row(&pressed, index))
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            let pressed = Rc::clone(&pressed);
+            ListView::builder(ROWS, EXTENT, move |index| {
+                (index < ROWS).then(|| row(&pressed, index))
+            })
+        };
+        let (outer, on_outer) = counter();
+        let laid = lay_out(
+            Listener::new()
+                .on_pointer_down(on_outer)
+                .child(list.offset(60.0)),
+            tight(200.0, 200.0),
+        );
+        // 125 below the top of a list scrolled by 60 is 185 into the
+        // content: the fourth row.
+        laid.dispatch_pointer_down(40.0, 125.0);
+        assert_eq!(*pressed.borrow(), [3], "{name}: the row under the press");
+        assert_eq!(outer.get(), 1, "{name}: the listener above the list");
+        laid.dispatch_pointer_up(40.0, 125.0);
+    }
+}
+
 /// A counter callback + a readable handle.
 fn counter() -> (
     Rc<Cell<usize>>,
@@ -347,13 +396,13 @@ pub(crate) fn listener_unmount_preserves_one_captured_contact_terminal() {
 }
 
 pub(crate) fn listener_admission_keeps_terminal_delivery_and_weak_ownership() {
-    use flui_interaction::{CancelOutcome, GestureArenaMember, GestureRecognizer, PointerId};
+    use flui_interaction::{CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer};
     use std::cell::RefCell;
 
     struct ContactObserver(Rc<RefCell<Vec<&'static str>>>);
     impl GestureArenaMember for ContactObserver {
-        fn accept_gesture(&self, _: PointerId) {}
-        fn reject_gesture(&self, _: PointerId) {}
+        fn accept_gesture(&self, _: GestureContest) {}
+        fn reject_gesture(&self, _: GestureContest) {}
     }
     impl GestureRecognizer for ContactObserver {
         fn add_pointer(&self, _: PointerDispatch<'_>) {
@@ -402,11 +451,11 @@ pub(crate) fn listener_admission_keeps_terminal_delivery_and_weak_ownership() {
 }
 
 pub(crate) fn listener_raw_observer_panic_still_delivers_the_recognizer_event() {
-    use flui_interaction::{CancelOutcome, GestureArenaMember, GestureRecognizer, PointerId};
+    use flui_interaction::{CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer};
     struct Observer(Rc<Cell<usize>>);
     impl GestureArenaMember for Observer {
-        fn accept_gesture(&self, _: PointerId) {}
-        fn reject_gesture(&self, _: PointerId) {}
+        fn accept_gesture(&self, _: GestureContest) {}
+        fn reject_gesture(&self, _: GestureContest) {}
     }
     impl GestureRecognizer for Observer {
         fn add_pointer(&self, _: PointerDispatch<'_>) {
@@ -450,10 +499,94 @@ pub(crate) fn listener_raw_observer_panic_still_delivers_the_recognizer_event() 
     assert_eq!(delivered.get(), 2, "the next contact remains deliverable");
 }
 
+/// Final sensor values for a delivered reading reach the contact's listener
+/// with the revised sample, and never its recognizers, which decided on the
+/// estimate.
+pub(crate) fn a_revision_reaches_listeners_and_never_recognizers() {
+    use flui_interaction::{
+        CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer, PointerId,
+    };
+    use flui_platform_api::EventTime;
+    use flui_platform_api::pointer::{
+        PenTool, PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind,
+        PointerPosition, PointerPress, PointerRelease, PointerRevision, PointerSample, Pressure,
+    };
+    use std::cell::RefCell;
+    struct Observer(Rc<RefCell<Vec<&'static str>>>);
+    impl GestureArenaMember for Observer {
+        fn accept_gesture(&self, _: GestureContest) {}
+        fn reject_gesture(&self, _: GestureContest) {}
+    }
+    impl GestureRecognizer for Observer {
+        fn add_pointer(&self, _: PointerDispatch<'_>) {}
+        fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+            if matches!(dispatch.local, PointerEvent::Revise(_)) {
+                self.0.borrow_mut().push("revise");
+            }
+        }
+        fn cancel(&self) -> CancelOutcome {
+            CancelOutcome::Idle
+        }
+    }
+    let recognized = Rc::new(RefCell::new(Vec::new()));
+    let recognizer = Rc::new(Observer(Rc::clone(&recognized)));
+    let revised = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&revised);
+    let laid = lay_out(
+        Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_pointer_revise(move |_, dispatch| {
+                let PointerEvent::Revise(revision) = dispatch.local else {
+                    panic!("Revise")
+                };
+                seen.borrow_mut().push((
+                    revision.sample.time.as_nanos(),
+                    revision.sample.pressure.map(Pressure::get),
+                ));
+            })
+            .recognizer(&recognizer)
+            .child(SizedBox::new(80.0, 80.0)),
+        tight(80.0, 80.0),
+    );
+    let pen = PointerInfo::new(
+        PointerId::try_from(4_u64).expect("nonzero"),
+        PointerKind::Pen { tool: PenTool::Tip },
+    );
+    let estimated = PointerSample::new(
+        EventTime::from_nanos(10),
+        PointerPosition::try_new(flui_foundation::geometry::Point::new(40.0, 40.0))
+            .expect("finite"),
+    )
+    .with_pressure(Pressure::try_new(0.2).expect("pressure"));
+    laid.dispatch_pointer_event(&PointerEvent::Down(PointerPress::new(
+        pen,
+        PointerButton::PRIMARY,
+        PointerButtons::NONE,
+        estimated,
+    )));
+    let final_values = estimated.with_pressure(Pressure::try_new(0.7).expect("pressure"));
+    laid.dispatch_pointer_event(&PointerEvent::Revise(PointerRevision::new(
+        pen,
+        final_values,
+    )));
+    laid.dispatch_pointer_event(&PointerEvent::Up(PointerRelease::new(
+        pen,
+        PointerButton::PRIMARY,
+        PointerButtons::NONE,
+        PointerSample::new(EventTime::from_nanos(20), estimated.position),
+    )));
+    assert_eq!(
+        &*revised.borrow(),
+        &[(10, Some(0.7))],
+        "listener sees the revision"
+    );
+    assert!(recognized.borrow().is_empty(), "recognizers never see it");
+}
+
 pub(crate) fn custom_recognizer_competes_through_a_listener() {
     use flui_interaction::{
-        ArenaMembership, CancelOutcome, GestureArenaMember, GestureRecognizer, GestureSettings,
-        PointerId, PrimaryContact, TapGestureRecognizer,
+        ArenaMembership, CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer,
+        GestureSettings, PrimaryContact, TapGestureRecognizer,
     };
     use flui_rendering::hit_testing::PointerEvent;
     use flui_view::prelude::*;
@@ -465,10 +598,10 @@ pub(crate) fn custom_recognizer_competes_through_a_listener() {
         events: Rc<RefCell<Vec<&'static str>>>,
     }
     impl GestureArenaMember for ExternalRecognizer {
-        fn accept_gesture(&self, _: PointerId) {
+        fn accept_gesture(&self, _: GestureContest) {
             self.events.borrow_mut().push("custom won");
         }
-        fn reject_gesture(&self, _: PointerId) {
+        fn reject_gesture(&self, _: GestureContest) {
             self.contact.finish();
         }
     }

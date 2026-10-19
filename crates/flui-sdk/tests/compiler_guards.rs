@@ -10,5 +10,6 @@ mod trybuild_ui {
         cases.compile_fail("tests/ui/empty_motion.rs");
         cases.compile_fail("tests/ui/non_motion_field.rs");
         cases.compile_fail("tests/ui/generic_motion_width.rs");
+        cases.compile_fail("tests/ui/gesture_command_needs_an_intent.rs");
     }
 }
