@@ -1,16 +1,18 @@
 //! The status-bar icon appearance a window's content asks for.
 //!
 //! "Light status bars" in Android's vocabulary means a light bar background
-//! with dark icons, so [`SystemUiOverlayStyle::Dark`] sets the flag. API 30+
-//! uses `WindowInsetsController.setSystemBarsAppearance`; API 23–29 the
-//! `SYSTEM_UI_FLAG_LIGHT_STATUS_BAR` visibility flag; before API 23 the icon
-//! colour is not controllable and the request is dropped. View calls run on
-//! the Java main thread, in submission order.
+//! with dark icons, so [`SystemUiOverlayStyle::Dark`] sets the flag. With
+//! [`InsetsController`] it goes through
+//! `WindowInsetsController.setSystemBarsAppearance`; otherwise through the
+//! `SYSTEM_UI_FLAG_LIGHT_STATUS_BAR` visibility flag, which the floor (API 23)
+//! has. View calls run on the Java main thread, in submission order.
 
 use android_activity::AndroidApp;
 use jni::{JValue, jni_sig, jni_str};
 
 use flui_platform_api::{PlatformSystemChrome, SystemUiOverlayStyle};
+
+use crate::shared::os_version::android::{AndroidApi, InsetsController};
 
 /// `WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS`.
 const APPEARANCE_LIGHT_STATUS_BARS: i32 = 0x8;
@@ -20,23 +22,22 @@ const SYSTEM_UI_FLAG_LIGHT_STATUS_BAR: i32 = 0x2000;
 /// `PlatformSystemChrome` for the activity's window.
 pub(super) struct AndroidSystemChrome {
     app: AndroidApp,
+    api: AndroidApi,
 }
 
 impl AndroidSystemChrome {
-    pub(super) fn new(app: AndroidApp) -> Self {
-        Self { app }
+    pub(super) fn new(app: AndroidApp, api: AndroidApi) -> Self {
+        Self { app, api }
     }
 }
 
 impl PlatformSystemChrome for AndroidSystemChrome {
     fn set_overlay_style(&self, style: SystemUiOverlayStyle) {
-        if AndroidApp::sdk_version() < 23 {
-            return;
-        }
         let dark_icons = style == SystemUiOverlayStyle::Dark;
         let app = self.app.clone();
+        let api = self.api;
         self.app.run_on_java_main_thread(Box::new(move || {
-            if let Err(error) = apply(&app, dark_icons) {
+            if let Err(error) = apply(&app, api, dark_icons) {
                 tracing::warn!(%error, "status bar appearance was not applied");
             }
         }));
@@ -48,7 +49,11 @@ impl PlatformSystemChrome for AndroidSystemChrome {
 }
 
 /// Must run on the Java main thread.
-fn apply(app: &AndroidApp, dark_icons: bool) -> Result<(), crate::PreferenceQueryError> {
+fn apply(
+    app: &AndroidApp,
+    api: AndroidApi,
+    dark_icons: bool,
+) -> Result<(), crate::PreferenceQueryError> {
     super::preferences::with_activity(app, |env, activity| {
         let window = env
             .call_method(
@@ -58,7 +63,7 @@ fn apply(app: &AndroidApp, dark_icons: bool) -> Result<(), crate::PreferenceQuer
                 &[],
             )?
             .l()?;
-        if AndroidApp::sdk_version() >= 30 {
+        if api.since::<InsetsController>().is_some() {
             let controller = env
                 .call_method(
                     &window,

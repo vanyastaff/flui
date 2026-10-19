@@ -79,7 +79,8 @@ use crate::{
         PlatformHandlers,
         android_display::idle_wait_until,
         android_lifecycle::{ActivityEvent, ActivityLifecycle, ActivityTarget, Reaction},
-        android_os_version::{AndroidApi, LoadedLibraries, SymbolSource},
+        android_ndk::{LoadedLibraries, SymbolSource},
+        os_version::android::AndroidApi,
         owner_signal::OwnerSignal,
     },
     traits::{
@@ -89,10 +90,6 @@ use crate::{
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
-
-/// The API level assumed when the system will not say: the floor (ADR-0244),
-/// so nothing newer than it is attempted.
-const FALLBACK_API_LEVEL: u32 = crate::shared::platform_floor::ANDROID_API;
 
 /// Whether the registered wake-deadline hook's answer means `run`'s loop
 /// should WANT to force a frame dispatch this iteration, even though
@@ -186,12 +183,11 @@ impl AndroidPlatform {
         let library: Arc<dyn SymbolSource> = Arc::new(LoadedLibraries::open());
         let api = AndroidApi::detect(library.as_ref()).unwrap_or_else(|| {
             tracing::warn!(
-                fallback = FALLBACK_API_LEVEL,
-                "Android: the API level could not be read; treating the system as the oldest supported"
+                "Android: the API level could not be read; nothing above the floor is attempted"
             );
-            AndroidApi::from_level(FALLBACK_API_LEVEL)
+            AndroidApi::UNKNOWN
         });
-        tracing::info!(api = api.level(), "Android API level");
+        tracing::info!(api = %api, "Android API level");
         let owner = Arc::downgrade(&owner_signal);
         Self {
             app,
@@ -908,6 +904,7 @@ impl Platform for AndroidPlatform {
             Arc::clone(&self.activity),
             Arc::downgrade(&self.owner_signal),
             Arc::clone(&self.displays),
+            self.api,
         ));
         let previous = self.window.lock().replace(Arc::clone(&window));
         if let Some(previous) = previous {

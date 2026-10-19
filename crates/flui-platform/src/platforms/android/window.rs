@@ -20,7 +20,7 @@ use flui_platform_api::{
 use parking_lot::Mutex;
 
 use crate::{
-    shared::{WindowCallbacks, window_state::WindowStateCell},
+    shared::{WindowCallbacks, os_version::android::AndroidApi, window_state::WindowStateCell},
     traits::{CursorError, PlatformWindow, WindowExecutionState, WindowId},
 };
 
@@ -45,6 +45,8 @@ pub struct AndroidWindow {
     text_sizing: Arc<super::text_sizing::Acquisition>,
     safe_area: Arc<Mutex<super::safe_area::Capture>>,
     system_chrome: Arc<super::system_chrome::AndroidSystemChrome>,
+    /// The platform's API level, for the safe-area gates.
+    api: AndroidApi,
     /// The night mode last reported to `on_appearance_changed`.
     appearance: Arc<Mutex<WindowAppearance>>,
     displays: Arc<super::display::AndroidDisplays>,
@@ -70,8 +72,12 @@ impl AndroidWindow {
         activity: Arc<ActivityFlags>,
         owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
         displays: Arc<super::display::AndroidDisplays>,
+        api: AndroidApi,
     ) -> Self {
-        let system_chrome = Arc::new(super::system_chrome::AndroidSystemChrome::new(app.clone()));
+        let system_chrome = Arc::new(super::system_chrome::AndroidSystemChrome::new(
+            app.clone(),
+            api,
+        ));
         let snapshot = Arc::new(WindowStateCell::new(sample_state(
             &app, &displays, &activity,
         )));
@@ -85,6 +91,7 @@ impl AndroidWindow {
             text_sizing: super::text_sizing::Acquisition::new(),
             safe_area: Arc::new(Mutex::new(super::safe_area::Capture::default())),
             system_chrome,
+            api,
             appearance: Arc::new(Mutex::new(night_mode(&app))),
             displays,
             frame_rate_hint: Arc::new(Mutex::new(FrameRateHint::Default)),
@@ -172,11 +179,12 @@ impl AndroidWindow {
             capture.query = super::safe_area::Query::Waiting;
         }
         let app = self.app.clone();
+        let api = self.api;
         let capture = Arc::downgrade(&self.safe_area);
         let live = Arc::downgrade(&self.geometry_live);
         let signal = self.owner_signal.clone();
         self.app.run_on_java_main_thread(Box::new(move || {
-            let sample = super::safe_area::sample(&app);
+            let sample = super::safe_area::sample(&app, api);
             if !live
                 .upgrade()
                 .is_some_and(|live| live.load(Ordering::Acquire))

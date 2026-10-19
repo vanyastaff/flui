@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use flui_platform_api::RefreshPeriod;
 
-use super::apple_os_version::{OsVersion, Since, VersionedFeature};
+use super::os_version::{Gate, Since, apple::AppleVersion};
 
 /// The floor of the requested range: an adaptive ProMotion panel may drop to
 /// 60 Hz when nothing moves, never lower while a frame source is running.
@@ -20,11 +20,13 @@ const ASSUMED_MAXIMUM: u16 = 60;
 const MAXIMUM_CEILING: u16 = 1000;
 
 /// `CADisplayLink.preferredFrameRateRange`, which iOS 15 introduced.
+/// Without it the link gets a single `preferredFramesPerSecond`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FrameRateRangeProperty;
 
-impl VersionedFeature for FrameRateRangeProperty {
-    const SINCE: OsVersion = OsVersion::new(15, 0, 0);
+impl Gate for FrameRateRangeProperty {
+    type Version = AppleVersion;
+    const SINCE: u64 = AppleVersion::new(15, 0, 0).rank();
 }
 
 /// A frame-rate range in frames per second.
@@ -51,7 +53,7 @@ pub(crate) enum FrameRatePreference {
 /// above 1000 is held at 1000. The range's minimum is 60, or the maximum when
 /// that is lower, so the range is never inverted.
 pub(crate) fn frame_rate_preference(
-    version: OsVersion,
+    version: AppleVersion,
     maximum_frames_per_second: i64,
 ) -> FrameRatePreference {
     let maximum = if maximum_frames_per_second < 1 {
@@ -172,7 +174,7 @@ mod tests {
     use flui_platform_api::RefreshPeriod;
 
     use super::{
-        FrameRatePreference, FrameRateRange, LinkPeriod, OsVersion, ScreenPeriods,
+        AppleVersion, FrameRatePreference, FrameRateRange, LinkPeriod, ScreenPeriods,
         frame_rate_preference,
     };
 
@@ -190,11 +192,11 @@ mod tests {
     #[test]
     fn ios_14_uses_preferred_frames_per_second() {
         for (version, maximum, expected) in [
-            (OsVersion::new(13, 0, 0), 60, 60),
-            (OsVersion::new(14, 8, 1), 120, 120),
-            (OsVersion::new(14, 0, 0), 0, 60),
-            (OsVersion::new(14, 0, 0), -4, 60),
-            (OsVersion::new(14, 0, 0), 1_000_000, 1000),
+            (AppleVersion::new(13, 0, 0), 60, 60),
+            (AppleVersion::new(14, 8, 1), 120, 120),
+            (AppleVersion::new(14, 0, 0), 0, 60),
+            (AppleVersion::new(14, 0, 0), -4, 60),
+            (AppleVersion::new(14, 0, 0), 1_000_000, 1000),
         ] {
             assert_eq!(
                 frame_rate_preference(version, maximum),
@@ -207,13 +209,13 @@ mod tests {
     #[test]
     fn ios_15_uses_the_frame_rate_range() {
         for (version, maximum, minimum, ceiling) in [
-            (OsVersion::new(15, 0, 0), 120, 60.0, 120.0),
-            (OsVersion::new(17, 4, 1), 60, 60.0, 60.0),
-            (OsVersion::new(18, 0, 0), 240, 60.0, 240.0),
+            (AppleVersion::new(15, 0, 0), 120, 60.0, 120.0),
+            (AppleVersion::new(17, 4, 1), 60, 60.0, 60.0),
+            (AppleVersion::new(18, 0, 0), 240, 60.0, 240.0),
             // A maximum below the floor never inverts the range.
-            (OsVersion::new(16, 0, 0), 30, 30.0, 30.0),
+            (AppleVersion::new(16, 0, 0), 30, 30.0, 30.0),
             // A screen reporting nothing reads as 60.
-            (OsVersion::new(16, 0, 0), 0, 60.0, 60.0),
+            (AppleVersion::new(16, 0, 0), 0, 60.0, 60.0),
         ] {
             let range = range(frame_rate_preference(version, maximum))
                 .unwrap_or_else(|| panic!("{version:?} has the range property"));

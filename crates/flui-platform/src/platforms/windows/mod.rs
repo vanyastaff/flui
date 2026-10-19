@@ -53,5 +53,4 @@ pub mod win32 {
     };
 }
 
-mod os_version;
 mod owner_control;
