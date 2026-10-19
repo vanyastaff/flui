@@ -87,6 +87,7 @@ fn view(output: u32) -> OutputView {
         scale_factor: 1.0,
         refresh_period: None,
         is_primary: false,
+        persistent_key: None,
     }
 }
 
