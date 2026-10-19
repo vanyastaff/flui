@@ -1,7 +1,7 @@
 //! `cargo xtask worktree`: one root for task worktrees, and their cleanup once
 //! origin/main holds their branch.
 //!
-//! Every task works in a worktree of its own (AGENTS.md, "Working here"), and
+//! Every task works in a worktree of its own, and
 //! each worktree grows its own multi-GB `target/`. `new` puts them in a single
 //! root, `.worktrees/` inside the main checkout (git-ignored, and skipped by
 //! the gates that walk the tree); `list` shows every worktree git knows,
