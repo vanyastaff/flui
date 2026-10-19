@@ -30,17 +30,16 @@ use windows::{
                 GetWindowLongPtrW, GetWindowThreadProcessId, HICON, HTCLIENT, HWND_MESSAGE,
                 IDC_ARROW, ISMEX_NOSEND, InSendMessageEx, IsWindowVisible, MINMAXINFO, MSG,
                 MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW,
-                PostMessageW, PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU,
-                SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
-                SetWindowLongPtrW, SetWindowPos, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
-                WINDOWPOS, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DEADCHAR,
-                WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_INPUTLANGCHANGE,
-                WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-                WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT,
-                WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT,
-                WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCHAR,
-                WM_SYSCOMMAND, WM_SYSDEADCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_WINDOWPOSCHANGED,
-                WM_WINDOWPOSCHANGING, WNDCLASSW,
+                PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU, SW_SHOWNORMAL,
+                SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+                TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPOS, WM_CAPTURECHANGED,
+                WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
+                WM_GETMINMAXINFO, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
+                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
+                WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN,
+                WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT, WM_SETTINGCHANGE,
+                WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP,
+                WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WNDCLASSW,
             },
         },
     },
@@ -65,9 +64,8 @@ use crate::{
     },
     traits::{
         Clipboard, DisplaySnapshot, HostWindow, OpenWindowError, OwnerPlatform, Platform,
-        PlatformExecutor, PlatformReadyCallback,
-        SessionEndAnswer, SessionEndPhase, SystemNotice, WindowAppearance, WindowEvent, WindowId,
-        WindowOptions, owner::OwnerHooks,
+        PlatformExecutor, PlatformReadyCallback, SessionEndAnswer, SessionEndPhase, SystemNotice,
+        WindowAppearance, WindowEvent, WindowId, WindowOptions, owner::OwnerHooks,
     },
 };
 
@@ -75,23 +73,17 @@ use crate::{
 /// `static mut bool`).
 static REGISTER_WINDOW_CLASS: std::sync::Once = std::sync::Once::new();
 
-type WakeDeadlineHook = dyn Fn() -> Option<web_time::Instant> + Send + Sync;
+#[path = "platform/wake_deadline.rs"]
+mod wake_deadline;
+pub(super) use wake_deadline::FrameCount;
+use wake_deadline::{DeadlineArm, DeadlineDelivery, DeadlineQuery, WakeDeadlineHook};
 
-// The query may replace its own registration before panicking. Keep its
-// outgoing ownership in custody before invoking it, so captures cannot
-// double-panic during the incoming unwind. Healthy retirement remains normal;
-// this cannot rescue an aggregate that double-panics during healthy Drop.
-struct DeadlineQuery(Option<Arc<WakeDeadlineHook>>);
-
-impl Drop for DeadlineQuery {
-    fn drop(&mut self) {
-        if std::thread::panicking()
-            && let Some(hook) = self.0.take()
-        {
-            std::mem::forget(hook);
-        }
-    }
-}
+#[path = "platform/keystroke_queue.rs"]
+mod keystroke_queue;
+use keystroke_queue::{
+    drain_dead_char, drain_translated_chars, restore_translated_sys_chars,
+    take_translated_sys_chars,
+};
 
 #[cfg(test)]
 #[path = "platform/preference_retry_tests.rs"]
@@ -100,64 +92,6 @@ mod preference_retry_tests;
 #[cfg(test)]
 #[path = "platform/display_message_tests.rs"]
 mod display_message_tests;
-
-/// The last deadline the loop delivered. The hook answers with an instant
-/// only, so the same `(hook, instant)` pair is either work no frame has had
-/// a chance to service, which must not spin, or work a frame left or
-/// accepted at the instant it just serviced (a queue of obligations all due
-/// at one instant answers the same pair once per item), which must get its
-/// frame. The frame count is the delivery generation that tells them apart.
-struct DeadlineDelivery {
-    arm: DeadlineArm,
-    /// The platform's frame count when the delivery was made.
-    frames: u64,
-}
-
-impl DeadlineDelivery {
-    /// Whether `deadline` from `hook` may be armed after this delivery: a
-    /// different pair always, the same pair whenever a frame callback ran
-    /// since. An answer no frame could have serviced stays delivered, so a
-    /// delivery that reaches no frame never spins the loop.
-    fn admits(
-        &self,
-        deadline: web_time::Instant,
-        hook: &Weak<WakeDeadlineHook>,
-        frames: u64,
-    ) -> bool {
-        !self.arm.matches(deadline, hook) || frames != self.frames
-    }
-}
-
-/// How many frame callbacks this platform's windows have run. The message
-/// loop compares it across a deadline delivery to tell an answer repeated
-/// after a serviced frame from one nothing has serviced yet. Each window's
-/// [`WindowCallbacks`] counts into it when its frame callback runs, so a
-/// frame request no callback answered (a window with nothing registered,
-/// or one already cleared) leaves it unchanged.
-#[derive(Default)]
-pub(super) struct FrameCount(Arc<std::sync::atomic::AtomicU64>);
-
-impl FrameCount {
-    fn get(&self) -> u64 {
-        self.0.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    /// The counter a window's callbacks increment.
-    pub(super) fn counter(&self) -> Arc<std::sync::atomic::AtomicU64> {
-        Arc::clone(&self.0)
-    }
-}
-
-struct DeadlineArm {
-    deadline: web_time::Instant,
-    hook: Weak<WakeDeadlineHook>,
-}
-
-impl DeadlineArm {
-    fn matches(&self, deadline: web_time::Instant, hook: &Weak<WakeDeadlineHook>) -> bool {
-        self.deadline == deadline && Weak::ptr_eq(&self.hook, hook)
-    }
-}
 
 /// Identity of one native window's context, minted once per
 /// [`WindowsWindow::new`] and held by both the context and every wrapper
@@ -3096,110 +3030,6 @@ impl Drop for WindowsPlatform {
 
         // COM is left by the `apartment` field, after this body, or later by
         // the last window's text services if any still live.
-    }
-}
-
-// PlatformHandlers is imported from crate::shared
-
-// ==================== Helper Functions ====================
-
-/// Drain the `WM_CHAR` burst `TranslateMessage` queued for the keydown
-/// currently being handled, and decode it into typeable text.
-///
-/// Called from `window_proc`'s `WM_KEYDOWN`/`WM_SYSKEYDOWN` arm. The burst
-/// is complete at that point — the message loop runs `TranslateMessage`
-/// before `DispatchMessageW`, so every `WM_CHAR` belonging to this keystroke
-/// (two of them for an astral-plane character) is already posted. Draining
-/// filters exactly `WM_CHAR` for this window: `WM_SYSCHAR` is deliberately
-/// left queued so Alt+mnemonic accelerators still flow to `DefWindowProcW`
-/// (held across the keydown's dispatch: [`take_translated_sys_chars`]),
-/// and `WM_DEADCHAR` is taken separately by [`drain_dead_char`] (the dead-key state
-/// itself stays Windows' business). Returns `None` for keystrokes with no typeable translation
-/// (navigation keys, Ctrl chords — see `shared::keys::wm_char_text`).
-fn drain_translated_chars(hwnd: HWND) -> Option<String> {
-    let mut units: Vec<u16> = Vec::new();
-    let mut msg = MSG::default();
-
-    // A plain `PM_REMOVE`, with no `PM_QS_*` mask, for this drain and the two
-    // below. A `PM_QS_POSTMESSAGE` peek reads the posted queue only while its
-    // `QS_POSTMESSAGE` wake bit is set, and every `GetMessage`/`PeekMessage`
-    // clears that bit (`GetQueueStatus` docs), filtered or not: after the
-    // retrieval of this keydown or an earlier empty drain, the masked peek
-    // skips a character already queued, which then arrives as a second,
-    // stray key-down. The plain peek always scans the queue. It also delivers
-    // pending cross-thread sent messages first; a keydown among them owns no
-    // burst and drains nothing (the `owns_burst` check in `window_proc`),
-    // so it cannot take this keystroke's characters.
-    // SAFETY: `msg` is a live, writable local and `PeekMessageW` writes
-    // nothing else. `PM_REMOVE` only ever removes messages from this
-    // thread's own queue (the wndproc runs on the queue's owning thread).
-    // A sent message it delivers re-enters `window_proc`, the same
-    // re-entrancy any modal Win32 call permits; nothing here holds a lock or
-    // borrow across the call.
-    unsafe {
-        while PeekMessageW(&raw mut msg, Some(hwnd), WM_CHAR, WM_CHAR, PM_REMOVE).as_bool() {
-            units.push(msg.wParam.0 as u16);
-        }
-    }
-
-    crate::shared::keys::wm_char_text(&units)
-}
-
-/// Remove the dead-character message `TranslateMessage` queued for the keydown
-/// being handled, if any: `WM_SYSDEADCHAR` for a system keydown, else
-/// `WM_DEADCHAR`. Only the notification leaves the queue; the composition
-/// itself lives in the kernel's dead-key state, which this does not touch.
-fn drain_dead_char(hwnd: HWND, keydown: u32) -> bool {
-    let kind = if keydown == WM_SYSKEYDOWN {
-        WM_SYSDEADCHAR
-    } else {
-        WM_DEADCHAR
-    };
-    let mut msg = MSG::default();
-    let mut found = false;
-    // SAFETY: as in `drain_translated_chars`: a live writable local, and
-    // `PM_REMOVE` touches only this thread's own queue.
-    unsafe {
-        while PeekMessageW(&raw mut msg, Some(hwnd), kind, kind, PM_REMOVE).as_bool() {
-            found = true;
-        }
-    }
-    found
-}
-
-/// Remove the `WM_SYSCHAR` burst `TranslateMessage` queued for a system
-/// keydown before user code sees the keydown, so a handler that pumps
-/// messages cannot hand a character to `DefWindowProcW` (which would raise
-/// `SC_KEYMENU` from it, and open the system menu for Alt+Space) before its
-/// result says whether the default runs. The same queue-ordering argument as
-/// [`drain_translated_chars`] makes the burst complete here. The burst is
-/// almost always empty or one character, so the `Vec` rarely allocates.
-fn take_translated_sys_chars(hwnd: HWND) -> Vec<(WPARAM, LPARAM)> {
-    let mut held = Vec::new();
-    let mut msg = MSG::default();
-    // SAFETY: as in `drain_translated_chars`: a live writable local, and
-    // `PM_REMOVE` touches only this thread's own queue.
-    unsafe {
-        while PeekMessageW(&raw mut msg, Some(hwnd), WM_SYSCHAR, WM_SYSCHAR, PM_REMOVE).as_bool() {
-            held.push((msg.wParam, msg.lParam));
-        }
-    }
-    held
-}
-
-/// Return the characters [`take_translated_sys_chars`] held for a system
-/// keydown whose default ran, to be dispatched after it as `TranslateMessage`
-/// had queued them. If the queue refuses one, it gets its default now rather
-/// than being lost.
-fn restore_translated_sys_chars(hwnd: HWND, held: &[(WPARAM, LPARAM)]) {
-    for &(wparam, lparam) in held {
-        // SAFETY: posts integer character data to this thread's own live
-        // window, whose wndproc is running on this thread now.
-        if unsafe { PostMessageW(Some(hwnd), WM_SYSCHAR, wparam, lparam) }.is_err() {
-            // SAFETY: the same live window, called synchronously on its
-            // creating thread with the message `TranslateMessage` produced.
-            unsafe { DefWindowProcW(hwnd, WM_SYSCHAR, wparam, lparam) };
-        }
     }
 }
 
