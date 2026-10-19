@@ -123,6 +123,9 @@ pub enum DispatchError {
     /// A runtime is already checked out or a publication owns the registry.
     #[error("the UI runtime is busy")]
     Busy,
+    /// The runtime's command inbox has no room for this request.
+    #[error("the UI runtime's command inbox is full")]
+    InboxFull,
 }
 
 impl From<PublicationError> for DispatchError {

@@ -403,6 +403,88 @@ fn a_tap_that_fails_at_finish_reports_an_incomplete_recording() {
     );
 }
 
+/// A tap that finishes its own recording inside a call ends the pass it is
+/// part of: the rows that pass has not offered yet are lost, and the final
+/// rows say so instead of claiming none were.
+fn finishing_inside_a_tap_call_counts_the_rows_it_skips() {
+    use flui_runtime::owner::WindowObservation;
+
+    let runtime = Rc::new(crate::owner_publication::runtime());
+    let address = PresentationAddress {
+        ui_runtime_id: runtime.id(),
+        presentation_id: runtime.presentation_id(),
+    };
+    let recorded = rows();
+    let handle: Rc<RefCell<Option<InputTapHandle>>> = Rc::new(RefCell::new(None));
+    let tap = {
+        let recorded = Rc::clone(&recorded);
+        let runtime = Rc::downgrade(&runtime);
+        let handle = Rc::clone(&handle);
+        move |record: &InputRecord| {
+            recorded.borrow_mut().push(describe(record));
+            let Some(handle) = handle.borrow_mut().take() else {
+                return;
+            };
+            let runtime = runtime.upgrade().expect("the runtime outlives its tap");
+            // Two rows admitted behind the running one, then a stop.
+            for visible in [false, true] {
+                runtime.apply_window_observation(
+                    address,
+                    WindowObservation::Visibility(visible),
+                    &|_, _| {},
+                );
+            }
+            assert_eq!(
+                handle.finish(),
+                Ok(()),
+                "the gap and the end row were delivered"
+            );
+        }
+    };
+    *handle.borrow_mut() = Some(runtime.input_taps().install(tap).expect("registration"));
+    runtime.apply_window_observation(address, WindowObservation::Focus(true), &|_, _| {});
+    let seen = recorded.borrow().clone();
+    assert_eq!(seen.len(), 3, "{seen:?}");
+    assert!(seen[0].starts_with("input"), "{seen:?}");
+    assert_eq!(seen[1..], ["gap 2", "end 2"]);
+    assert!(
+        !runtime.input_taps().is_recording(),
+        "finishing unregistered it"
+    );
+}
+
+/// An assistive request no handler ran for is recorded as unhandled, as a
+/// key is, so a replay tells a dropped action from one that ran.
+fn an_assistive_request_no_handler_ran_is_recorded_unhandled() {
+    use flui_runtime::owner::InputOutcome;
+
+    let runtime = crate::owner_publication::runtime();
+    let outcomes = Rc::new(RefCell::new(Vec::new()));
+    let tap = {
+        let outcomes = Rc::clone(&outcomes);
+        move |record: &InputRecord| {
+            if let InputRecord::Input(row) = record
+                && matches!(row.input, HostInput::Accessibility(_))
+            {
+                outcomes.borrow_mut().push(row.outcome);
+            }
+        }
+    };
+    let handle = runtime.input_taps().install(tap).expect("registration");
+    let handled = runtime.dispatch_accessibility(
+        runtime.presentation_id(),
+        &accesskit::ActionRequest {
+            action: accesskit::Action::Click,
+            target_tree: accesskit::TreeId::ROOT,
+            target_node: accesskit::NodeId(u64::MAX),
+            data: None,
+        },
+    );
+    assert!(!handled, "no node was ever published");
+    handle.finish().expect("complete recording");
+    assert_eq!(*outcomes.borrow(), [InputOutcome::Unhandled]);
+}
+
 #[test]
 fn input_tap_delivery_contract() {
     crate::table_test::run_table(
@@ -439,6 +521,14 @@ fn input_tap_delivery_contract() {
             (
                 "a_tap_that_fails_at_finish_reports_an_incomplete_recording",
                 a_tap_that_fails_at_finish_reports_an_incomplete_recording,
+            ),
+            (
+                "finishing_inside_a_tap_call_counts_the_rows_it_skips",
+                finishing_inside_a_tap_call_counts_the_rows_it_skips,
+            ),
+            (
+                "an_assistive_request_no_handler_ran_is_recorded_unhandled",
+                an_assistive_request_no_handler_ran_is_recorded_unhandled,
             ),
         ],
     );

@@ -974,6 +974,10 @@ fn owner_metrics_contract() {
                 gesture_values_follow_the_presentation_display as fn(),
             ),
             (
+                "a_failed_move_keeps_its_regions_subscribers_and_row",
+                a_failed_move_keeps_its_regions_subscribers_and_row as fn(),
+            ),
+            (
                 "accessibility_floor_holds_under_an_authored_scope",
                 accessibility_floor_holds_under_an_authored_scope as fn(),
             ),
@@ -2219,6 +2223,214 @@ impl flui_platform_api::PlatformWindow for GeometryWindow {
         }
         self.answer.lock().expect("query script").clone()
     }
+}
+
+/// A window whose input-region backend fails once on request.
+struct RegionWindow {
+    inner: std::sync::Arc<dyn flui_platform_api::PlatformWindow>,
+    /// How many regions each call handed the backend.
+    sent: std::sync::Mutex<Vec<usize>>,
+    panic_next: std::sync::atomic::AtomicBool,
+}
+
+impl flui_platform_api::PlatformWindow for RegionWindow {
+    fn id(&self) -> flui_platform_api::WindowId {
+        self.inner.id()
+    }
+    fn physical_size(&self) -> Size<i32> {
+        self.inner.physical_size()
+    }
+    fn logical_size(&self) -> Size<f64> {
+        self.inner.logical_size()
+    }
+    fn scale_factor(&self) -> f64 {
+        self.inner.scale_factor()
+    }
+    fn request_redraw(&self) {
+        self.inner.request_redraw();
+    }
+    fn is_focused(&self) -> bool {
+        self.inner.is_focused()
+    }
+    fn is_visible(&self) -> bool {
+        self.inner.is_visible()
+    }
+    fn set_cursor(
+        &self,
+        cursor: flui_platform_api::CursorIcon,
+    ) -> Result<(), flui_platform_api::CursorError> {
+        self.inner.set_cursor(cursor)
+    }
+    fn state(&self) -> flui_platform_api::WindowState {
+        self.inner.state()
+    }
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        Ok(())
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn set_input_regions(&self, regions: &[flui_platform_api::input_regions::InputRegion]) {
+        self.sent.lock().expect("sent regions").push(regions.len());
+        if self
+            .panic_next
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            panic!("scripted input-region failure");
+        }
+    }
+}
+
+/// The window state a host publishes: its content moves with `position`.
+struct MovingWindow {
+    position: std::sync::Mutex<(
+        flui_foundation::geometry::Point<f64>,
+        flui_platform_api::WindowRevision,
+    )>,
+}
+
+/// [`MovingWindow`] shared with the test that moves it.
+struct SharedControl(std::sync::Arc<MovingWindow>);
+
+impl flui_platform_api::WindowControl for SharedControl {
+    fn state(&self) -> flui_platform_api::WindowState {
+        let (position, revision) = *self.0.position.lock().expect("position");
+        let size = Size::new(40.0, 40.0);
+        let mut state = flui_platform_api::WindowState::new(
+            flui_platform_api::WindowGeometry::new(Some(position), size),
+            size,
+        );
+        state.revision = revision;
+        state
+    }
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+    fn submit(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        Ok(())
+    }
+    fn request_close(&self) {}
+}
+
+/// A move whose input-region backend panics still reaches the window's state
+/// subscribers and the recording, and the committed regions survive the
+/// failure: the next move hands the backend the same regions again.
+fn a_failed_move_keeps_its_regions_subscribers_and_row() {
+    use flui_foundation::geometry::Point;
+    use flui_platform_api::WindowRevision;
+    use flui_runtime::{HostInput, InputRecord};
+    use std::sync::{Arc, Mutex, atomic::AtomicBool};
+
+    let window = Arc::new(RegionWindow {
+        inner: Arc::clone(crate::owner_publication::window().window()),
+        sent: Mutex::new(Vec::new()),
+        panic_next: AtomicBool::new(false),
+    });
+    let mut runtime = UiRuntime::new(
+        flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
+        1.0,
+        flui_runtime::ui_runtime::RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Platform,
+        ),
+    )
+    .expect("runtime");
+    let control = Arc::new(MovingWindow {
+        position: Mutex::new((Point::new(0.0, 0.0), WindowRevision::ZERO)),
+    });
+    let source = flui_view::__runtime::WindowSource::new(SharedControl(Arc::clone(&control)));
+    let delivered = Rc::new(Cell::new(0));
+    let (_, _subscription) = {
+        let delivered = Rc::clone(&delivered);
+        source
+            .handle()
+            .subscribe(move |_| delivered.set(delivered.get() + 1))
+            .expect("open window")
+    };
+    let id = runtime.presentation_id();
+    assert!(runtime.install_window(id, source));
+    runtime
+        .attach_root_widget_with_size(
+            &flui_widgets::SystemGestureExclusion::new().child(flui_widgets::ColoredBox::new(
+                flui_painting::styling::Color::RED,
+            )),
+            40.0,
+            40.0,
+        )
+        .expect("mount");
+    struct Sink;
+    impl FrameSink for Sink {
+        fn surface_size(&mut self) -> (u32, u32) {
+            (40, 40)
+        }
+        fn submit(&mut self, _: flui_layer::Scene) -> SubmitVerdict {
+            SubmitVerdict::Presented
+        }
+    }
+    let _ = runtime.pump(
+        &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
+        &mut Sink,
+    );
+    let sent = || window.sent.lock().expect("sent regions").clone();
+    assert_eq!(sent(), [1], "the frame committed one exclusion region");
+
+    let rows = Rc::new(RefCell::new(Vec::new()));
+    let tap = runtime
+        .input_taps()
+        .install({
+            let rows = Rc::clone(&rows);
+            move |record: &InputRecord| {
+                if let InputRecord::Input(row) = record
+                    && let HostInput::Window(observation) = row.input
+                {
+                    rows.borrow_mut().push(format!("{observation:?}"));
+                }
+            }
+        })
+        .expect("registration");
+    let address = PresentationAddress {
+        ui_runtime_id: runtime.id(),
+        presentation_id: id,
+    };
+    {
+        let mut position = control.position.lock().expect("position");
+        *position = (Point::new(100.0, 0.0), position.1.next().expect("revision"));
+    }
+    window
+        .panic_next
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let moved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.apply_window_observation(address, WindowObservation::State, &|_, _| {});
+    }));
+    assert!(moved.is_err(), "the backend's failure resumes");
+    assert_eq!(
+        delivered.get(),
+        1,
+        "the subscribers received the moved state"
+    );
+    assert_eq!(*rows.borrow(), ["Moved"], "the recording kept the move");
+
+    runtime.apply_window_observation(address, WindowObservation::Moved, &|_, _| {});
+    assert_eq!(
+        sent(),
+        [1, 1, 1],
+        "the next move hands the backend the committed region again"
+    );
+    tap.finish().expect("complete recording");
 }
 
 fn native_geometry_controls_admission_and_retries_without_a_frame() {

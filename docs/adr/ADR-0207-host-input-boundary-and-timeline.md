@@ -3,7 +3,8 @@
 - **Status:** Accepted (2026-10-13); implemented. §7 was narrowed on implementation (2026-10-13):
   a reentrant key is the event that needs a synchronous answer; reentrant pointer input keeps
   suppressing its native default. The AppKit nested-pump row is type-checked on Windows and Linux
-  hosts and runs only in an AppKit-pumping macOS process.
+  hosts and runs only in an AppKit-pumping macOS process. §1 amended (2026-10-19): assistive
+  requests cross the command inbox (see the amendment).
 - **Date:** 2026-10-13
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (owner-affine runtimes, the
   runtime-local FIFO), [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§4: callbacks lose
@@ -154,3 +155,22 @@ only. Per-thread Win32 runtimes and cross-thread capture are unverified until me
   WinUI InteractionTracker either fall back to the main thread or drop scroll-linked callbacks.
 - **Separate sequence ids per subsystem.** A fling handed between channel members, a haptic tied
   to the gesture and a recording row would then need translation tables.
+
+## Amendment (2026-10-19): assistive requests cross the command inbox
+
+§1 said every `HostInput` is admitted through the owner FIFO. An assistive request is not: the
+accessibility adapter produces it on its own thread, and the owner FIFO is owner-affine (`Rc`,
+`!Send`), so it cannot be reached from there. The request crosses the runtime's bounded command
+inbox (`UiCommand::Accessibility`), stamped for the presentation whose bridge received it, and is
+unwrapped at the next owner turn's Idle drain — inside that turn, before its frame begins.
+`PresentationDispatcher::dispatch` queues an owner-thread caller's `HostInput::Accessibility` in
+the same inbox and answers `InputOutcome::Queued` (`DispatchError::InboxFull` when it has no
+room), so there is one path and one ordering for every assistive request.
+
+Re-admitting the drained request into the owner FIFO was rejected: the drain already runs inside
+an owner turn, so the request would join the FIFO behind the frame that turn is driving and reach
+the semantics owner one frame later than now, with nothing gained in ordering — no causal order
+exists between an adapter thread and native input. The rest of §1 stands: the request is decoded
+on the owner thread, recorded where it is applied (`Unhandled` when no handler ran), and replayed
+from its row. `accessibility_input_reaches_the_semantics_owner` pins that a dispatched request
+waits for the next turn's drain and runs there.

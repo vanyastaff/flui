@@ -65,9 +65,10 @@ pub enum UiCommand {
     #[cfg(feature = "hot-reload")]
     HotReload(crate::reload::ReloadTier),
     /// [`HostInput::Accessibility`](crate::HostInput::Accessibility) from the
-    /// platform adapter's thread, addressed to the exact presentation that
-    /// was live when the sender stamped it and unwrapped on the owner thread
-    /// like any other host input (ADR-0207 §1).
+    /// platform adapter's thread, or dispatched on the owner thread, addressed
+    /// to the exact presentation that was live when the sender stamped it and
+    /// unwrapped on the owner thread at the next Idle drain: every assistive
+    /// request takes this path (ADR-0207, amendment).
     Accessibility {
         /// The presentation this request was stamped for.
         presentation_id: PresentationId,

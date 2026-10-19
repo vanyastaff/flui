@@ -4,9 +4,7 @@ use std::rc::{Rc, Weak};
 use flui_foundation::{PresentationAddress, UiRuntimeId};
 use flui_scheduler::AppLifecycleState;
 
-use super::{
-    Delivery, DispatchError, OwnerCore, OwnerEffects, OwnerHost, OwnerState, WindowObservation,
-};
+use super::{Delivery, DispatchError, OwnerCore, OwnerEffects, OwnerHost, OwnerState};
 use crate::ui_runtime::UiRuntime;
 
 /// Work belonging to the runtime independently of any presentation's lifetime.
@@ -80,15 +78,16 @@ pub(super) enum RuntimeWork {
     Initialize(super::InstallInitialization),
     SurfaceRestored(PresentationAddress),
     Close(PresentationAddress),
-    Observation(PresentationAddress, WindowObservation),
+    Observation(
+        PresentationAddress,
+        super::presentation_dispatch::OrderedObservation,
+    ),
     WindowState(
         PresentationAddress,
         super::presentation_dispatch::PendingWindowState,
     ),
     /// A frame and its vsync on the event timeline.
     Frame(PresentationAddress, flui_platform_api::EventTime),
-    /// An assistive-technology request for the presentation's semantics owner.
-    Accessibility(PresentationAddress, accesskit::ActionRequest),
     TextSizingInstall(PresentationAddress, flui_painting::TextSizingSource),
     TextSizingService(PresentationAddress, flui_painting::TextSizingSource),
     TextSizingWithdraw(PresentationAddress, flui_painting::TextSizingSource),
@@ -118,7 +117,6 @@ impl RuntimeWork {
             | Self::Observation(address, _)
             | Self::WindowState(address, _)
             | Self::Frame(address, _)
-            | Self::Accessibility(address, _)
             | Self::TextSizingInstall(address, _)
             | Self::TextSizingService(address, _)
             | Self::TextSizingWithdraw(address, _)
@@ -165,7 +163,6 @@ impl RuntimeWork {
         match self {
             Self::Initialize(initial) => state.authorizer(initial.address),
             Self::Frame(address, _)
-            | Self::Accessibility(address, _)
             | Self::SurfaceRestored(address)
             | Self::Close(address)
             | Self::Observation(address, _)
@@ -186,7 +183,6 @@ impl RuntimeWork {
         match self {
             Self::Initialize(initial) => state.presentation_index(initial.address),
             Self::Frame(address, _)
-            | Self::Accessibility(address, _)
             | Self::SurfaceRestored(address)
             | Self::Close(address)
             | Self::Observation(address, _)
@@ -231,7 +227,7 @@ impl RuntimeWork {
             }
             Self::Close(address) => core.close_presentation(runtime, address, effects),
             Self::Observation(address, observation) => {
-                runtime.enter(|runtime| observation.apply(runtime, address, effects));
+                runtime.enter(|runtime| runtime.apply_ordered_observation(address, observation));
             }
             Self::WindowState(address, state) => {
                 runtime.enter(|runtime| {
@@ -245,11 +241,6 @@ impl RuntimeWork {
                 // the timeline input arrives on (ADR-0207 §2).
                 runtime.note_frame_vsync(address.presentation_id, vsync);
                 effects.frame(address, runtime);
-            }
-            Self::Accessibility(address, request) => {
-                runtime.enter(|runtime| {
-                    runtime.dispatch_accessibility(address.presentation_id, &request);
-                });
             }
             Self::TextSizingInstall(address, source) => {
                 runtime.enter(|runtime| {

@@ -619,9 +619,11 @@ impl flui_semantics::platform::PlatformAccessibility for RecordingBridge {
     fn set_action_listener(&self, _: flui_semantics::platform::AccessibilityActionListener) {}
 }
 
-/// `HostInput::Accessibility` admitted through the owner FIFO is decoded and
-/// invoked by the addressed presentation's semantics owner (ADR-0207 §1); a
-/// request for a node the presentation never published runs nothing.
+/// `HostInput::Accessibility` takes the accessibility bridge's path: it waits
+/// in the runtime's command inbox and is decoded and invoked by the addressed
+/// presentation's semantics owner at the next owner turn's Idle drain
+/// (ADR-0207, amendment); a request for a node the presentation never
+/// published runs nothing.
 fn accessibility_input_reaches_the_semantics_owner() {
     use flui_runtime::HostInput;
     use flui_runtime::presentation::PresentationWindow;
@@ -704,20 +706,28 @@ fn accessibility_input_reaches_the_semantics_owner() {
             data: None,
         })
     };
-    effects
-        .input
-        .dispatch(click(accesskit::NodeId(u64::MAX)), &effects)
-        .expect("admitted");
-    assert_eq!(clicks.get(), 0, "an unpublished node runs nothing");
-    effects
-        .input
-        .dispatch(click(send), &effects)
-        .expect("admitted");
-    assert_eq!(
-        clicks.get(),
-        1,
-        "the semantics owner ran the node's handler"
-    );
+    let owner_turn = || {
+        owner
+            .runtime_dispatcher(address.ui_runtime_id)
+            .expect("runtime authority")
+            .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
+            .expect("background turn");
+    };
+    for (node, ran) in [(accesskit::NodeId(u64::MAX), 0), (send, 1)] {
+        assert_eq!(
+            effects.input.dispatch(click(node), &effects),
+            Ok(InputOutcome::Queued),
+            "the request waits in the inbox, as the bridge's does"
+        );
+        assert_eq!(clicks.get(), 0, "nothing runs before the next owner turn");
+        owner_turn();
+        assert_eq!(
+            clicks.get(),
+            ran,
+            "the next turn's Idle drain ran the node's handler, or nothing for an unpublished node"
+        );
+        clicks.set(0);
+    }
 }
 
 #[test]

@@ -467,22 +467,23 @@ geometry/timing publication from stale healthy or panicking continuations.
 ### Host input is one value on one timeline
 
 A presentation accepts `HostInput::{Platform, Window, Frame { vsync }, Accessibility}`
-and nothing else (ADR-0207 §1). The owner FIFO admits it through
-`PresentationDispatcher::dispatch` (frames also through the frame driver's
-`FrameDispatcher::deliver`, which admits the same `Frame` work), so platform input,
-window observations, frames and AT requests share one order. The runtime unwraps
-it: platform input to the gesture binding (`dispatch_pointer_on`, whose sequence id
-is traced), focus and text owners, a window observation to metrics and lifecycle,
-a frame's vsync to the next render's motion sampling, and an AT request — decoded
-on the owner thread, after the adapter's thread only transported it — to the
-semantics owner with an assistive sequence id the binding minted. The adapter's
-off-thread requests reach the owner through the command inbox as the same
-`Accessibility` input. A window's latest `InputCapabilities` are kept per
-presentation (`UiRuntime::input_capabilities`) for the lifecycle capability that
-will expose them. The window payload is the runtime's normalized
-`WindowObservation`, not `flui_platform_api::WindowEvent`, which keys raw window
-events by native id. `owner_input_contract`'s
-`accessibility_input_reaches_the_semantics_owner` pins the AT arm.
+and nothing else (ADR-0207 §1). The owner FIFO admits platform input, window
+observations and frames through `PresentationDispatcher::dispatch` (frames also
+through the frame driver's `FrameDispatcher::deliver`, which admits the same
+`Frame` work), so they share one order. An AT request is produced on the
+accessibility adapter's thread, so it crosses the runtime's bounded command inbox
+stamped for its presentation, and `dispatch` queues an owner-thread caller's
+request there too (ADR-0207, amendment): every AT request is applied at the next
+owner turn's Idle drain, before that turn's frame begins, so the frame the wake
+runs already reflects it. The runtime unwraps the input: platform input to the
+gesture binding (`dispatch_pointer_on`, whose sequence id is traced), focus and
+text owners, a window observation to metrics and lifecycle, a frame's vsync to the
+next render's motion sampling, and an AT request — decoded on the owner thread,
+after the adapter's thread only transported it — to the semantics owner with an
+assistive sequence id the binding minted. The window payload is the runtime's
+normalized `WindowObservation`, not `flui_platform_api::WindowEvent`, which keys
+raw window events by native id. `owner_input_contract`'s
+`accessibility_input_reaches_the_semantics_owner` pins the AT path.
 
 ### Recorded input is emitted where it is applied
 
@@ -511,8 +512,11 @@ contained call or before the next row, and an outgoing tap is retired after the
 failure is reported, so its destructor's panic never comes first. Finishing (the
 handle's `finish`, or the registry's drop for a tap installed for the runtime's
 life) delivers the pending gap and the `End` row, or reports
-`RecordingIncomplete`. Handles are generation-bound and generations are never
-reused. `input_tap_delivery_contract` pins each of these.
+`RecordingIncomplete`; finishing inside a tap call counts the rows its pass has
+not offered yet, and rows queued for a later pass, as lost in those final rows.
+An AT request no handler ran for is recorded `Unhandled`, as a key is. Handles are
+generation-bound and generations are never reused. `input_tap_delivery_contract`
+pins each of these.
 
 ### Observing input follows its presentation's accepted motion
 
