@@ -17,7 +17,10 @@ impl WindowContext {
     /// The app's size limits as outer sizes at the window's current DPI, or
     /// `None` when there are none or the window is fullscreen (it covers its
     /// monitor whatever the limits say).
-    fn size_limits(&self, hwnd: HWND) -> Option<crate::shared::windows_window_limits::TrackLimits> {
+    fn outer_limits(
+        &self,
+        hwnd: HWND,
+    ) -> Option<crate::shared::windows_window_limits::TrackLimits> {
         use crate::shared::windows_window_limits::{PixelSize, track_limits};
 
         let constraints = self.constraints.get();
@@ -49,10 +52,10 @@ impl WindowContext {
 
     /// Fill in `WM_GETMINMAXINFO` with the app's size limits at the window's
     /// current DPI. A fullscreen window keeps the system's rectangle.
-    pub(super) fn constrain_track(&self, hwnd: HWND, info: &mut MINMAXINFO) {
+    pub(super) fn fill_min_max_info(&self, hwnd: HWND, info: &mut MINMAXINFO) {
         use crate::shared::windows_window_limits::{MinMaxInfo, PixelSize, constrain};
 
-        let Some(limits) = self.size_limits(hwnd) else {
+        let Some(limits) = self.outer_limits(hwnd) else {
             return;
         };
         let os = MinMaxInfo {
@@ -60,7 +63,7 @@ impl WindowContext {
             min_track: PixelSize::new(info.ptMinTrackSize.x, info.ptMinTrackSize.y),
             max_track: PixelSize::new(info.ptMaxTrackSize.x, info.ptMaxTrackSize.y),
         };
-        let constrained = constrain(os, limits, false);
+        let constrained = constrain(os, limits);
         info.ptMaxSize.x = constrained.max_size.width;
         info.ptMaxSize.y = constrained.max_size.height;
         info.ptMinTrackSize.x = constrained.min_track.width;
@@ -78,7 +81,7 @@ impl WindowContext {
         if !self.mode.get().is_normal() || pos.flags.0 & SWP_NOSIZE.0 != 0 {
             return;
         }
-        let Some(limits) = self.size_limits(hwnd) else {
+        let Some(limits) = self.outer_limits(hwnd) else {
             return;
         };
         if let Some(min) = limits.min {

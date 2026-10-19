@@ -58,7 +58,7 @@ pub(crate) enum HostEvent {
 
 /// What a message asks of the receiver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Received {
+pub(crate) enum HostMessage {
     /// The system asks whether the session may end; the receiver answers with
     /// [`query_answer`].
     Query { critical: bool },
@@ -69,57 +69,54 @@ pub(crate) enum Received {
 }
 
 /// Classify one message by its number and parameters.
-pub(crate) fn classify(message: u32, wparam: usize, lparam: isize) -> Received {
+pub(crate) fn classify(message: u32, wparam: usize, lparam: isize) -> HostMessage {
     match message {
-        WM_QUERYENDSESSION => Received::Query {
+        WM_QUERYENDSESSION => HostMessage::Query {
             // The flags are the low 32 bits of `lParam`.
             critical: lparam as u32 & ENDSESSION_CRITICAL != 0,
         },
-        WM_ENDSESSION => Received::Event(if wparam != 0 {
+        WM_ENDSESSION => HostMessage::Event(if wparam != 0 {
             HostEvent::SessionEnded
         } else {
             HostEvent::SessionEndCancelled
         }),
         WM_POWERBROADCAST => match wparam {
-            PBT_APMSUSPEND => Received::Event(HostEvent::Sleep),
-            PBT_APMRESUMEAUTOMATIC => Received::Event(HostEvent::Wake),
-            _ => Received::Ignored,
+            PBT_APMSUSPEND => HostMessage::Event(HostEvent::Sleep),
+            PBT_APMRESUMEAUTOMATIC => HostMessage::Event(HostEvent::Wake),
+            _ => HostMessage::Ignored,
         },
         WM_WTSSESSION_CHANGE => match wparam {
-            WTS_SESSION_LOCK => Received::Event(HostEvent::SessionLocked),
-            WTS_SESSION_UNLOCK => Received::Event(HostEvent::SessionUnlocked),
-            _ => Received::Ignored,
+            WTS_SESSION_LOCK => HostMessage::Event(HostEvent::SessionLocked),
+            WTS_SESSION_UNLOCK => HostMessage::Event(HostEvent::SessionUnlocked),
+            _ => HostMessage::Ignored,
         },
-        _ => Received::Ignored,
+        _ => HostMessage::Ignored,
     }
 }
 
 /// How the receiver answers a query to end the session.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct QueryAnswer {
-    /// The window procedure's result: `true` lets the session end.
-    pub(crate) allow: bool,
-    /// The reason to register with `ShutdownBlockReasonCreate` before
-    /// returning, NUL-terminated; the system shows it to the user.
-    pub(crate) reason: Option<Vec<u16>>,
+pub(crate) enum QueryAnswer {
+    /// Return `TRUE`: the session may end.
+    Allow,
+    /// Register `reason` with `ShutdownBlockReasonCreate`, NUL-terminated (the
+    /// system shows it to the user), then return `FALSE`.
+    Block { reason: Vec<u16> },
 }
 
-/// The answer to a query when the application asks to block with `block`
-/// (`Some(reason)`) or lets the session end (`None`).
+/// The answer to a query when the application asks to block, giving `block` as
+/// its reason (`Some`), or lets the session end (`None`). A blank reason is
+/// replaced by a neutral one.
 ///
 /// A critical session ends whatever the application answers: refusing would
 /// only show the user a reason for something that happens anyway, so it is
 /// always allowed.
 pub(crate) fn query_answer(critical: bool, block: Option<&str>) -> QueryAnswer {
     match block {
-        Some(reason) if !critical => QueryAnswer {
-            allow: false,
-            reason: Some(block_reason(reason)),
+        Some(reason) if !critical => QueryAnswer::Block {
+            reason: block_reason(reason),
         },
-        _ => QueryAnswer {
-            allow: true,
-            reason: None,
-        },
+        _ => QueryAnswer::Allow,
     }
 }
 
@@ -147,8 +144,8 @@ pub(crate) fn block_reason(reason: &str) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::{
-        FALLBACK_BLOCK_REASON, HostEvent, MAX_BLOCK_REASON_UNITS, PBT_APMRESUMEAUTOMATIC,
-        PBT_APMSUSPEND, QueryAnswer, Received, WM_ENDSESSION, WM_POWERBROADCAST,
+        FALLBACK_BLOCK_REASON, HostEvent, HostMessage, MAX_BLOCK_REASON_UNITS,
+        PBT_APMRESUMEAUTOMATIC, PBT_APMSUSPEND, QueryAnswer, WM_ENDSESSION, WM_POWERBROADCAST,
         WM_QUERYENDSESSION, WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
         block_reason, classify, query_answer,
     };
@@ -172,7 +169,7 @@ mod tests {
         ] {
             assert_eq!(
                 classify(WM_QUERYENDSESSION, 0, flags),
-                Received::Query { critical },
+                HostMessage::Query { critical },
                 "flags {flags:#x}"
             );
         }
@@ -181,11 +178,11 @@ mod tests {
     fn an_end_session_message_ends_or_cancels_by_its_flag() {
         assert_eq!(
             classify(WM_ENDSESSION, 1, 0x8000_0000_u32 as isize),
-            Received::Event(HostEvent::SessionEnded)
+            HostMessage::Event(HostEvent::SessionEnded)
         );
         assert_eq!(
             classify(WM_ENDSESSION, 0, 0),
-            Received::Event(HostEvent::SessionEndCancelled),
+            HostMessage::Event(HostEvent::SessionEndCancelled),
             "a false flag means the end was cancelled, not that it ended"
         );
     }
@@ -193,11 +190,11 @@ mod tests {
     fn power_broadcasts_map_sleep_and_one_wake() {
         assert_eq!(
             classify(WM_POWERBROADCAST, PBT_APMSUSPEND, 0),
-            Received::Event(HostEvent::Sleep)
+            HostMessage::Event(HostEvent::Sleep)
         );
         assert_eq!(
             classify(WM_POWERBROADCAST, PBT_APMRESUMEAUTOMATIC, 0),
-            Received::Event(HostEvent::Wake)
+            HostMessage::Event(HostEvent::Wake)
         );
         for other in [
             0x0007, // PBT_APMRESUMESUSPEND, which follows the automatic resume
@@ -207,7 +204,7 @@ mod tests {
         ] {
             assert_eq!(
                 classify(WM_POWERBROADCAST, other, 0),
-                Received::Ignored,
+                HostMessage::Ignored,
                 "{other:#x} would repeat or invent an event"
             );
         }
@@ -216,16 +213,16 @@ mod tests {
     fn only_lock_and_unlock_are_session_events() {
         assert_eq!(
             classify(WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK, 1),
-            Received::Event(HostEvent::SessionLocked)
+            HostMessage::Event(HostEvent::SessionLocked)
         );
         assert_eq!(
             classify(WM_WTSSESSION_CHANGE, WTS_SESSION_UNLOCK, 1),
-            Received::Event(HostEvent::SessionUnlocked)
+            HostMessage::Event(HostEvent::SessionUnlocked)
         );
         for other in [1, 2, 3, 4, 5, 6, 9] {
             assert_eq!(
                 classify(WM_WTSSESSION_CHANGE, other, 1),
-                Received::Ignored,
+                HostMessage::Ignored,
                 "WTS code {other}"
             );
         }
@@ -233,34 +230,28 @@ mod tests {
 
     fn other_messages_are_ignored() {
         for message in [0, 0x000F, 0x001A, 0x0112, 0x0219] {
-            assert_eq!(classify(message, 0, 0), Received::Ignored, "{message:#x}");
+            assert_eq!(
+                classify(message, 0, 0),
+                HostMessage::Ignored,
+                "{message:#x}"
+            );
         }
     }
 
     fn an_ordinary_query_is_blocked_with_a_reason() {
         assert_eq!(
             query_answer(false, Some("Saving the document")),
-            QueryAnswer {
-                allow: false,
-                reason: Some(utf16("Saving the document")),
+            QueryAnswer::Block {
+                reason: utf16("Saving the document"),
             }
         );
-        assert_eq!(
-            query_answer(false, None),
-            QueryAnswer {
-                allow: true,
-                reason: None,
-            }
-        );
+        assert_eq!(query_answer(false, None), QueryAnswer::Allow);
     }
 
     fn a_critical_query_is_never_blocked() {
         assert_eq!(
             query_answer(true, Some("Saving the document")),
-            QueryAnswer {
-                allow: true,
-                reason: None,
-            }
+            QueryAnswer::Allow
         );
     }
 

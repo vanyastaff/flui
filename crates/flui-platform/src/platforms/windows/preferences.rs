@@ -96,9 +96,9 @@ impl PreferenceSource {
         Self::with_host(signal, displays, None)
     }
 
+    /// A source whose receiver also forwards the system events `host` handles
     /// (session end, power, lock, memory); `None` for the winit backend, which
     /// has none of them on Windows.
-    /// hears them another way.
     pub(super) fn with_host(
         signal: &Arc<OwnerSignal>,
         displays: &Arc<super::display::WindowsDisplays>,

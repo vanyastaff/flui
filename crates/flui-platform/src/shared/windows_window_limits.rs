@@ -91,11 +91,8 @@ pub(crate) struct MinMaxInfo {
 /// The minimum can only raise the OS minimum, never lower it below what the
 /// frame needs. The maximum caps both the drag size and the maximized size, so
 /// a window with a maximum does not grow past it by maximizing. A fullscreen
-/// window covers its monitor whatever its limits say, so it keeps `info`.
-pub(crate) fn constrain(info: MinMaxInfo, limits: TrackLimits, fullscreen: bool) -> MinMaxInfo {
-    if fullscreen {
-        return info;
-    }
+/// window covers its monitor whatever its limits say; the caller gives it none.
+pub(crate) fn constrain(info: MinMaxInfo, limits: TrackLimits) -> MinMaxInfo {
     let mut constrained = info;
     if let Some(min) = limits.min {
         constrained.min_track = info.min_track.component_max(min);
@@ -200,14 +197,12 @@ mod tests {
         let raised = constrain(
             os_default(),
             track_limits(Some(Size::new(400.0, 300.0)), None, 96, FRAME),
-            false,
         );
         assert_eq!(raised.min_track, px(416, 339));
         assert_eq!(raised.max_track, os_default().max_track);
         let below = constrain(
             os_default(),
             track_limits(Some(Size::new(20.0, 10.0)), None, 96, FRAME),
-            false,
         );
         assert_eq!(
             below.min_track,
@@ -220,14 +215,12 @@ mod tests {
         let capped = constrain(
             os_default(),
             track_limits(None, Some(Size::new(800.0, 600.0)), 96, FRAME),
-            false,
         );
         assert_eq!(capped.max_track, px(816, 639));
         assert_eq!(capped.max_size, px(816, 639));
         let roomy = constrain(
             os_default(),
             track_limits(None, Some(Size::new(5000.0, 5000.0)), 96, FRAME),
-            false,
         );
         assert_eq!(roomy.max_track, px(5016, 5039));
         assert_eq!(
@@ -237,21 +230,10 @@ mod tests {
         );
     }
 
-    fn fullscreen_keeps_the_os_rectangle() {
-        let limits = track_limits(
-            Some(Size::new(400.0, 300.0)),
-            Some(Size::new(800.0, 600.0)),
-            96,
-            FRAME,
-        );
-        assert_eq!(constrain(os_default(), limits, true), os_default());
-    }
-
     fn a_maximum_below_the_smallest_size_is_that_size() {
         let capped = constrain(
             os_default(),
             track_limits(None, Some(Size::new(1.0, 1.0)), 96, px(0, 0)),
-            false,
         );
         assert_eq!(capped.max_track, os_default().min_track);
         assert_eq!(capped.max_size, os_default().min_track);
@@ -263,7 +245,6 @@ mod tests {
                 96,
                 px(0, 0),
             ),
-            false,
         );
         assert!(raised.max_track.width >= raised.min_track.width);
         assert!(raised.max_track.height >= raised.min_track.height);
@@ -271,7 +252,7 @@ mod tests {
 
     fn no_limits_keep_the_os_rectangle() {
         let none = track_limits(None, None, 96, FRAME);
-        assert_eq!(constrain(os_default(), none, false), os_default());
+        assert_eq!(constrain(os_default(), none), os_default());
     }
 
     #[test]
@@ -310,10 +291,6 @@ mod tests {
                 (
                     "the_maximum_caps_dragging_and_maximizing",
                     the_maximum_caps_dragging_and_maximizing as fn(),
-                ),
-                (
-                    "fullscreen_keeps_the_os_rectangle",
-                    fullscreen_keeps_the_os_rectangle as fn(),
                 ),
                 (
                     "a_maximum_below_the_smallest_size_is_that_size",

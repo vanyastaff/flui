@@ -45,7 +45,8 @@ impl MemoryWatch {
     /// The event fired. Returns whether the owner must be woken: `false` when
     /// a report is already owed or the watch is holding, because the signal
     /// joins what is pending or is the same low-memory episode.
-    pub(crate) fn signaled(&mut self) -> bool {
+    #[must_use]
+    pub(crate) fn on_signal(&mut self) -> bool {
         match self.phase {
             Phase::Armed => {
                 self.phase = Phase::Owed;
@@ -57,7 +58,8 @@ impl MemoryWatch {
 
     /// The owner takes what is owed at `now`. Returns whether a report is to
     /// be delivered; the hold starts with it.
-    pub(crate) fn take(&mut self, now: Duration) -> bool {
+    #[must_use]
+    pub(crate) fn take_report(&mut self, now: Duration) -> bool {
         match self.phase {
             Phase::Owed => {
                 self.phase = Phase::Holding { since: now };
@@ -70,7 +72,8 @@ impl MemoryWatch {
     /// Whether the hold is over at `now` and the wait should be registered
     /// again. Answers `true` once per hold; a clock that reads earlier than the
     /// start of the hold counts as no time passed.
-    pub(crate) fn rearm(&mut self, now: Duration) -> bool {
+    #[must_use]
+    pub(crate) fn try_rearm(&mut self, now: Duration) -> bool {
         match self.phase {
             Phase::Holding { since } if now.saturating_sub(since) >= HOLD_INTERVAL => {
                 self.phase = Phase::Armed;
@@ -80,9 +83,9 @@ impl MemoryWatch {
         }
     }
 
-    /// The wait could not be registered again after [`rearm`](Self::rearm): hold
+    /// The wait could not be registered again after [`try_rearm`](Self::try_rearm): hold
     /// for another interval from `now`, then try again.
-    pub(crate) fn rearm_failed(&mut self, now: Duration) {
+    pub(crate) fn hold_again(&mut self, now: Duration) {
         if self.phase == Phase::Armed {
             self.phase = Phase::Holding { since: now };
         }
@@ -99,70 +102,70 @@ mod tests {
 
     fn a_signal_owes_one_report_that_the_owner_takes() {
         let mut watch = MemoryWatch::armed();
-        assert!(watch.signaled(), "the first signal wakes the owner");
-        assert!(watch.take(START));
-        assert!(!watch.take(START), "a report is delivered once");
+        assert!(watch.on_signal(), "the first signal wakes the owner");
+        assert!(watch.take_report(START));
+        assert!(!watch.take_report(START), "a report is delivered once");
     }
 
     fn signals_while_a_report_is_owed_join_it() {
         let mut watch = MemoryWatch::armed();
-        assert!(watch.signaled());
+        assert!(watch.on_signal());
         for _ in 0..5 {
-            assert!(!watch.signaled(), "the owner is already woken");
+            assert!(!watch.on_signal(), "the owner is already woken");
         }
-        assert!(watch.take(START));
-        assert!(!watch.take(START), "five signals, one report");
+        assert!(watch.take_report(START));
+        assert!(!watch.take_report(START), "five signals, one report");
     }
 
     fn a_signal_during_the_hold_is_the_same_episode() {
         let mut watch = MemoryWatch::armed();
-        assert!(watch.signaled());
-        assert!(watch.take(START));
+        assert!(watch.on_signal());
+        assert!(watch.take_report(START));
         // The pool thread had a callback in flight when the owner took the report.
-        assert!(!watch.signaled());
-        assert!(!watch.take(START));
+        assert!(!watch.on_signal());
+        assert!(!watch.take_report(START));
         assert!(
-            !watch.rearm(START + HOLD_INTERVAL.saturating_sub(Duration::from_millis(1))),
+            !watch.try_rearm(START + HOLD_INTERVAL.saturating_sub(Duration::from_millis(1))),
             "armed too early"
         );
     }
 
     fn the_wait_is_registered_again_only_after_the_hold() {
         let mut watch = MemoryWatch::armed();
-        assert!(watch.signaled());
-        assert!(watch.take(START));
-        assert!(!watch.rearm(START));
-        assert!(watch.rearm(START + HOLD_INTERVAL));
-        assert!(!watch.rearm(START + HOLD_INTERVAL * 2), "once per hold");
+        assert!(watch.on_signal());
+        assert!(watch.take_report(START));
+        assert!(!watch.try_rearm(START));
+        assert!(watch.try_rearm(START + HOLD_INTERVAL));
+        assert!(!watch.try_rearm(START + HOLD_INTERVAL * 2), "once per hold");
         // Armed again: a new episode is a new report.
-        assert!(watch.signaled());
-        assert!(watch.take(START + HOLD_INTERVAL * 2));
+        assert!(watch.on_signal());
+        assert!(watch.take_report(START + HOLD_INTERVAL * 2));
     }
 
     fn the_owner_taking_nothing_changes_nothing() {
         let mut watch = MemoryWatch::armed();
-        assert!(!watch.take(START));
-        assert!(!watch.rearm(START + HOLD_INTERVAL * 10));
-        assert!(watch.signaled(), "an armed watch is still armed");
+        assert!(!watch.take_report(START));
+        assert!(!watch.try_rearm(START + HOLD_INTERVAL * 10));
+        assert!(watch.on_signal(), "an armed watch is still armed");
     }
 
     fn a_wait_that_cannot_be_registered_is_tried_again_after_another_hold() {
         let mut watch = MemoryWatch::armed();
-        assert!(watch.signaled());
-        assert!(watch.take(START));
+        assert!(watch.on_signal());
+        assert!(watch.take_report(START));
         let later = START + HOLD_INTERVAL;
-        assert!(watch.rearm(later));
-        watch.rearm_failed(later);
-        assert!(!watch.rearm(later), "not at once");
-        assert!(watch.rearm(later + HOLD_INTERVAL), "after another hold");
-        assert!(watch.signaled(), "armed again");
+        assert!(watch.try_rearm(later));
+        watch.hold_again(later);
+        assert!(!watch.try_rearm(later), "not at once");
+        assert!(watch.try_rearm(later + HOLD_INTERVAL), "after another hold");
+        assert!(watch.on_signal(), "armed again");
     }
 
     fn a_clock_that_reads_earlier_counts_as_no_time_passed() {
         let mut watch = MemoryWatch::armed();
-        assert!(watch.signaled());
-        assert!(watch.take(START));
-        assert!(!watch.rearm(Duration::ZERO));
+        assert!(watch.on_signal());
+        assert!(watch.take_report(START));
+        assert!(!watch.try_rearm(Duration::ZERO));
     }
 
     #[test]

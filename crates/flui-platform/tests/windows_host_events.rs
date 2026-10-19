@@ -215,6 +215,10 @@ fn native_host_events() {
             a_second_query_replaces_the_first_block,
         ),
         (
+            "the_block_is_held_while_the_host_saves_for_an_ending_session",
+            the_block_is_held_while_the_host_saves_for_an_ending_session,
+        ),
+        (
             "a_query_the_host_lets_through_is_allowed",
             a_query_the_host_lets_through_is_allowed,
         ),
@@ -310,6 +314,8 @@ fn a_block_is_registered_on_the_visible_window() {
     assert_eq!(host.block_reason(), None, "not the hidden receiver");
     host.platform.release_session_end();
     assert_eq!(reason_held_for(window_hwnd), None);
+    // The window goes with the case: the next one must not find it visible.
+    window.close();
 }
 
 fn a_second_query_replaces_the_first_block() {
@@ -318,4 +324,28 @@ fn a_second_query_replaces_the_first_block() {
     assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
     host.platform.release_session_end();
     assert_eq!(host.block_reason(), None, "no reason is left behind");
+}
+
+fn the_block_is_held_while_the_host_saves_for_an_ending_session() {
+    use std::sync::atomic::{AtomicIsize, Ordering};
+
+    let receiver = Arc::new(AtomicIsize::new(0));
+    let held_at_ending = Arc::new(Mutex::new(None));
+    let (seen_receiver, seen_held) = (Arc::clone(&receiver), Arc::clone(&held_at_ending));
+    let host = hosted(move |phase| {
+        if phase == SessionEndPhase::Ending {
+            let window = HWND(seen_receiver.load(Ordering::SeqCst) as *mut _);
+            *seen_held.lock().expect("log") = Some(reason_held_for(window).is_some());
+        }
+        SessionEndAnswer::Block
+    });
+    receiver.store(host.receiver.0 as isize, Ordering::SeqCst);
+    assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
+    host.send(WM_ENDSESSION, 1, 0);
+    assert_eq!(
+        *held_at_ending.lock().expect("log"),
+        Some(true),
+        "the system waits for the hook; the reason goes after it"
+    );
+    assert_eq!(host.block_reason(), None);
 }

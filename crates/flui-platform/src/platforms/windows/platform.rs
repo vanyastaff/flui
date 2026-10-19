@@ -323,7 +323,7 @@ pub(super) struct WindowContext {
     pub window_id: WindowId,
     /// Which native window this context belongs to; see [`WindowIdentity`].
     pub identity: WindowIdentity,
-    /// OwnerTracking and cache access do not keep wrappers or their state alive.
+    /// Tracking and cache access do not keep wrappers or their state alive.
     pub windows: std::sync::Weak<WindowMap>,
     pub window_state: std::sync::Weak<Mutex<super::window::WindowRecord>>,
     /// The published window state, shared with the wrapper; refreshed by
@@ -390,13 +390,10 @@ pub(super) struct WindowContext {
     /// Set while the window is being put into fullscreen, before its mode says
     /// so: the size limits do not apply to the rectangle it is given.
     pub limits_waived: std::cell::Cell<bool>,
-    /// The mode the window takes the first time it is shown, until it is. A
-    /// window opens hidden and in this mode, so the first sight of it is
-    /// already maximized or fullscreen, not a normal window that jumps.
-    pub first_show: std::cell::Cell<Option<flui_platform_api::WindowMode>>,
-    /// Whether the first show waits for the embedder's first presented frame
-    /// (`reveal_after_first_frame`) rather than for an explicit show.
-    pub reveal_deferred: std::cell::Cell<bool>,
+    /// What is still owed of the window's first show. A window opens hidden and
+    /// in its mode, so the first sight of it is already maximized or
+    /// fullscreen, not a normal window that jumps.
+    pub first_show: std::cell::Cell<super::window::FirstShow>,
     /// Last surface-visibility value dispatched through
     /// `WindowCallbacks::dispatch_visibility_status_change` (hidden-surface
     /// gating). Two message families feed it — `WM_SIZE`
@@ -1692,7 +1689,7 @@ impl WindowsPlatform {
                         // SAFETY: for this message `lParam` is the address of a
                         // `MINMAXINFO` the system owns for the call.
                         let info = &mut *(lparam.0 as *mut MINMAXINFO);
-                        ctx.constrain_track(hwnd, info);
+                        ctx.fill_min_max_info(hwnd, info);
                         LRESULT(0)
                     } else {
                         DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -3058,6 +3055,7 @@ static WINDOWS_CAPABILITIES: DesktopCapabilities = DesktopCapabilities;
 
 /// While it lives, the window context does not sample and publish its state;
 /// see [`WindowContext::hold_publishing`].
+#[must_use = "publishing resumes when the guard drops"]
 pub(super) struct PublishHold<'a>(&'a std::cell::Cell<u32>);
 
 impl Drop for PublishHold<'_> {

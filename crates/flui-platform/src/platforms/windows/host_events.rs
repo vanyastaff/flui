@@ -42,12 +42,12 @@ use crate::shared::{
     PlatformHandlers,
     panic_boundary::contain_owner_callback,
     system_notice::SystemNotices,
-    windows_host_messages::{self, HostEvent, Received},
+    windows_host_messages::{self, HostEvent, HostMessage, QueryAnswer},
     windows_memory_watch::{HOLD_INTERVAL, MemoryWatch},
 };
 
 /// Posted by the pool thread that waits on the low-memory event.
-pub(super) const LOW_MEMORY: u32 = WM_APP + 1;
+pub(super) const LOW_MEMORY: u32 = WM_APP + 2;
 
 /// The receiver's timer that ends the hold after a low-memory report.
 const REARM_TIMER: usize = 1;
@@ -129,22 +129,24 @@ impl HostEvents {
             return Some(LRESULT(0));
         }
         match windows_host_messages::classify(message, wparam.0, lparam.0) {
-            Received::Query { critical } => Some(self.query_session_end(hwnd, critical)),
-            Received::Event(event) => {
+            HostMessage::Query { critical } => Some(self.query_session_end(hwnd, critical)),
+            HostMessage::Event(event) => {
                 self.report(event);
                 // `WM_POWERBROADCAST` grants a query with TRUE; the others
                 // define no result.
                 Some(LRESULT(1))
             }
-            Received::Ignored => None,
+            HostMessage::Ignored => None,
         }
     }
 
     fn report(&self, event: HostEvent) {
         match event {
             HostEvent::SessionEnded => {
-                self.release_block();
+                // The block stays up while the host saves; the process is about to
+                // go, and the system lets it once this returns.
                 self.ask_session_end(SessionEndPhase::Ending);
+                self.release_block();
             }
             HostEvent::SessionEndCancelled => {
                 // A block this platform answered a query with is itself followed by
@@ -168,22 +170,27 @@ impl HostEvents {
         let block = self.ask_session_end(SessionEndPhase::Query) == SessionEndAnswer::Block;
         // The host's answer carries no reason, so the system is given a fixed,
         // neutral one.
-        let answer = windows_host_messages::query_answer(critical, block.then_some(""));
-        if let Some(reason) = &answer.reason {
-            let window = visible_window_of_this_thread().unwrap_or(receiver);
-            // SAFETY: `reason` is NUL-terminated and outlives the call; `window`
-            // is a live top-level window of this thread.
-            match unsafe { ShutdownBlockReasonCreate(window, PCWSTR(reason.as_ptr())) } {
-                Ok(()) => self.blocking.set(Some(window)),
-                Err(error) => {
-                    // Without a reason the system would not wait; answer that
-                    // the session may end instead of a refusal nobody sees.
-                    tracing::warn!(%error, "the session end could not be blocked");
-                    return LRESULT(1);
+        match windows_host_messages::query_answer(critical, block.then_some("")) {
+            QueryAnswer::Allow => LRESULT(1),
+            QueryAnswer::Block { reason } => {
+                let window = visible_window_of_this_thread().unwrap_or(receiver);
+                // SAFETY: `reason` is NUL-terminated and outlives the call; a
+                // `window` that has gone since it was found only makes the call
+                // fail.
+                match unsafe { ShutdownBlockReasonCreate(window, PCWSTR(reason.as_ptr())) } {
+                    Ok(()) => {
+                        self.blocking.set(Some(window));
+                        LRESULT(0)
+                    }
+                    Err(error) => {
+                        // Without a reason the system would not wait; answer that
+                        // the session may end instead of a refusal nobody sees.
+                        tracing::warn!(%error, "the session end could not be blocked");
+                        LRESULT(1)
+                    }
                 }
             }
         }
-        LRESULT(isize::from(answer.allow))
     }
 
     /// Let go of a registered shutdown-blocking reason, so the system carries
@@ -238,7 +245,7 @@ impl HostEvents {
             .memory
             .borrow()
             .as_ref()
-            .is_some_and(|wait| wait.shared.watch.lock().take(self.now()));
+            .is_some_and(|wait| wait.shared.watch.lock().take_report(self.now()));
         if !owed {
             return;
         }
@@ -282,7 +289,7 @@ impl HostEvents {
         self.memory
             .borrow()
             .as_ref()
-            .is_some_and(|wait| wait.shared.watch.lock().signaled())
+            .is_some_and(|wait| wait.shared.watch.lock().on_signal())
     }
 
     /// Pretend the hold after a report has run out.
@@ -339,7 +346,7 @@ unsafe extern "system" fn low_memory_fired(context: *mut c_void, _timed_out: boo
     // `LowMemoryWait` keeps alive until the wait is unregistered and every
     // running callback has returned.
     let shared = unsafe { &*context.cast::<LowMemoryShared>() };
-    if shared.watch.lock().signaled() {
+    if shared.watch.lock().on_signal() {
         let receiver = HWND(shared.receiver as *mut _);
         // SAFETY: posting is legal from any thread; a destroyed receiver only
         // makes it fail.
@@ -385,7 +392,7 @@ impl LowMemoryWait {
 
     /// Whether the hold is over and the wait was registered again.
     fn rearm(&mut self, now: std::time::Duration) -> bool {
-        if !self.shared.watch.lock().rearm(now) {
+        if !self.shared.watch.lock().try_rearm(now) {
             return false;
         }
         self.unregister();
@@ -393,7 +400,7 @@ impl LowMemoryWait {
             // No wait is registered: the hold starts over, and the timer, which
             // keeps firing, tries again.
             tracing::warn!(%error, "low-memory notices could not be re-armed; retrying");
-            self.shared.watch.lock().rearm_failed(now);
+            self.shared.watch.lock().hold_again(now);
             return false;
         }
         true
