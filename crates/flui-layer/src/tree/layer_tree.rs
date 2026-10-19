@@ -336,10 +336,8 @@ impl LayerTree {
 
 #[cfg(test)]
 mod tests {
-    use flui_foundation::geometry::Size;
-
     use super::*;
-    use crate::{LeaderLayer, OffsetLayer, PictureLayer};
+    use crate::{OffsetLayer, PictureLayer};
 
     fn offset() -> Layer {
         Layer::from(OffsetLayer::zero())
@@ -402,6 +400,10 @@ mod tests {
 
     #[cfg(debug_assertions)]
     fn rejected_duplicate_leader_preserves_the_index() {
+        use flui_foundation::geometry::Size;
+
+        use crate::LeaderLayer;
+
         let link = LayerLink::new();
         let leader = Layer::from(LeaderLayer::new(link, Size::new(10.0, 10.0)));
         let mut tree = LayerTree::new(leader.clone());
