@@ -97,7 +97,8 @@ trait depends on `flui-platform-api` instead.
   what the code does without it; `version.since::<F>()` returns a `Since<F>` proof
   or `None`, and the gated call takes the proof. A gate at or below the floor fails
   to compile, so raising a floor turns the gates it makes dead into errors, and an
-  unreadable version unlocks nothing. Clippy refuses `objc2::available!`. The
+  unreadable version unlocks nothing. Clippy refuses `objc2::available!` and
+  `AndroidApp::sdk_version`. The
   table `os_version_gate_table` checks every marker at the version before its
   `SINCE`, at `SINCE` and at an unknown version.
 
