@@ -152,6 +152,6 @@ preserve state across inactive retake and active-to-active reparent paths.
 For focused work in this crate:
 
 ```bash
-cargo test -p flui-view --features test-utils --all-targets
-cargo clippy -p flui-view --features test-utils --all-targets -- -D warnings
+cargo test -p flui-view --features testing --all-targets
+cargo clippy -p flui-view --features testing --all-targets -- -D warnings
 ```

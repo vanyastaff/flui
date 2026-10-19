@@ -22,7 +22,7 @@ impl UiRuntime {
 
     /// Draw a frame and return the produced `Scene`, if any. Test-only —
     /// production drives frames through [`Self::pump`].
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn draw_frame(&self, constraints: BoxConstraints) -> Option<Scene> {
         match self
@@ -40,7 +40,7 @@ impl UiRuntime {
     /// The draw step alone (the crate-private `render_frame`), for a test outside this
     /// crate that pins the submit classification against a scripted backend.
     /// Test-only — production drives frames through [`Self::pump`].
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     pub fn render_frame_for_test<S: crate::sink::FrameSink + ?Sized>(&self, sink: &mut S) -> bool {
         self.render_frame(sink)
     }
@@ -493,7 +493,7 @@ impl UiRuntime {
     ///
     /// Crate-private: a host reaches it only through [`Self::pump`], so no
     /// code outside this crate can draw a frame that skips begin or end frame
-    /// (tests outside it use `render_frame_for_test`, under `test-support`).
+    /// (tests outside it use `render_frame_for_test`, under `testing`).
     ///
     /// The host chooses the sink it hands the pump: `flui-app` passes its
     /// raster lane on the desktop, Android and iOS runners and a direct sink

@@ -56,8 +56,8 @@ use windows::Win32::{
 // BOOL moved from Win32::Foundation to windows_core in windows 0.62
 use windows::core::{BOOL, PCWSTR};
 
-use super::os_version::WindowsBuild;
 use crate::error::PlatformError;
+use crate::shared::os_version::windows::WindowsBuild;
 use crate::shared::{
     display_source::DisplaySource,
     windows_display::{SampledMonitor, frequency_period, rational_refresh_period, resolve_display},

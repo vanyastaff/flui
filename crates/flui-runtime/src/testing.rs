@@ -1,6 +1,6 @@
 //! Test doubles for driving a UI runtime with no platform backend and no GPU.
 //!
-//! Compiled for this crate's own tests and, through the `test-support`
+//! Compiled for this crate's own tests and, through the `testing`
 //! feature, for `flui-app`'s, which enables it on its dev edge only.
 //!
 //! - [`TestWindow`]: a [`PlatformWindow`] value with every knob the UI runtime

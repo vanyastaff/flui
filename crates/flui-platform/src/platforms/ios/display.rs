@@ -42,9 +42,9 @@ use super::native_owner::NativeOwner;
 use super::os_version;
 use crate::error::PlatformError;
 use crate::shared::apple_display_identity::{SameObject, ScreenLedger};
-use crate::shared::apple_os_version::OsVersion;
 use crate::shared::display_link_rate::{FrameRatePreference, ScreenPeriods, frame_rate_preference};
 use crate::shared::display_source::DisplaySource;
+use crate::shared::os_version::apple::AppleVersion;
 use crate::shared::owner_signal::OwnerSignal;
 use crate::traits::WindowId;
 
@@ -71,7 +71,7 @@ pub(super) struct ScreenIdentity {
 /// windows measured, and the OS version.
 pub(super) struct IosDisplays {
     source: DisplaySource,
-    version: OsVersion,
+    version: AppleVersion,
     /// The retained screens and their numbers. Main thread only: a
     /// `UIScreen` is retained and compared there.
     screens: NativeOwner<std::cell::RefCell<ScreenLedger<RetainedScreen>>>,

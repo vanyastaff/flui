@@ -14,7 +14,7 @@
 //! the tree forgets the active element from its old parent, moves it under the
 //! new parent, and emits `from_parent: Some(old_parent)`.
 
-#![cfg(feature = "test-utils")]
+#![cfg(feature = "testing")]
 // ADR-0027: ElementBuildContext's current test/prod seam still takes
 // Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
 // Send + Sync to satisfy clippy. Future UiRuntime/Rc migration should remove this.

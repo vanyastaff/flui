@@ -46,7 +46,7 @@
 //! - [`sink`]: the [`FrameSink`](sink::FrameSink) a frame is submitted
 //!   through, and the [`SubmitVerdict`](sink::SubmitVerdict) the UI runtime
 //!   classifies;
-//! - `testing` (with the `test-support` feature): a window double and a
+//! - `testing` (with the `testing` feature): a window double and a
 //!   scripted sink for driving a UI runtime headlessly.
 
 pub mod dev_agent;
@@ -69,7 +69,7 @@ pub mod renderer_binding;
 mod runtime_services;
 pub mod semantics_host;
 pub mod sink;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod ui_runtime;
 

@@ -100,9 +100,9 @@ tracing-subscriber = { workspace = true }
 # Integration tests drive the real layout pipeline through the render harness.
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
-# `test-utils` reaches the fixpoint's lazy-band pass budget so a widget test can
+# `testing` reaches the fixpoint's lazy-band pass budget so a widget test can
 # drive the deferral path with ordinary content.
-flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-utils"] }
+flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["testing"] }
 flui-objects = { path = "../flui-objects", version = "=0.2.0-dev", features = ["testing"] }
 # A paint oracle: a widget test walks the composited layer tree's display
 # lists to assert what a frame did and did not draw.

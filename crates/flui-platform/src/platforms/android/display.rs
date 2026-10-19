@@ -49,10 +49,11 @@ use parking_lot::Mutex;
 use crate::PreferenceQueryError;
 use crate::error::PlatformError;
 use crate::shared::android_display::{RawDisplay, max_refresh_hz, requested_frame_rate};
-use crate::shared::android_os_version::{
-    AChoreographer, AndroidApi, NdkFn, RefreshRateWatch, SetFrameRate, SymbolSource,
+use crate::shared::android_ndk::{
+    AChoreographer, NdkFn, RefreshRateWatch, SetFrameRate, SymbolSource,
 };
 use crate::shared::display_source::DisplaySource;
+use crate::shared::os_version::android::{AndroidApi, ContextDisplay};
 use crate::shared::owner_signal::OwnerSignal;
 
 /// `ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT`.
@@ -316,7 +317,7 @@ impl AndroidDisplays {
         }
         let Some(functions) = RefreshRateWatch::resolve(&self.library, self.api) else {
             tracing::debug!(
-                api = self.api.level(),
+                api = %self.api,
                 "Android: no refresh-rate callback; the rate is read on configuration changes and resume"
             );
             return;
@@ -451,7 +452,7 @@ fn activity_display_id(
     activity: &JObject<'_>,
     api: AndroidApi,
 ) -> jni::errors::Result<i32> {
-    if api.level() >= 30 {
+    if api.since::<ContextDisplay>().is_some() {
         match env.call_method(
             activity,
             jni_str!("getDisplay"),

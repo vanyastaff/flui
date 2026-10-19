@@ -28,6 +28,9 @@ use std::ffi::{CStr, c_char, c_int, c_void};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
+use super::os_version::Gate;
+use super::os_version::android::AndroidApi;
+
 /// The size of the buffer `__system_property_get` fills (`PROP_VALUE_MAX`).
 const PROPERTY_VALUE_MAX: usize = 92;
 
@@ -45,27 +48,9 @@ pub(crate) trait SymbolSource: Send + Sync {
     fn symbol(&self, name: &CStr) -> Option<NonNull<c_void>>;
 }
 
-/// The Android API level of the running system (`Build.VERSION.SDK_INT`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct AndroidApi(u32);
-
+/// The reading of the level; the type and its gates are in
+/// [`os_version::android`](super::os_version::android).
 impl AndroidApi {
-    /// A level taken from elsewhere; the test seam.
-    pub(crate) const fn from_level(level: u32) -> Self {
-        Self(level)
-    }
-
-    /// The level as a number, for the code that has to compare it with a
-    /// framework API's own level (a JNI field that exists only from some level).
-    pub(crate) const fn level(self) -> u32 {
-        self.0
-    }
-
-    /// The level as `Build.VERSION.SDK_INT` reports it.
-    pub(crate) fn sdk_int(self) -> i32 {
-        i32::try_from(self.0).unwrap_or(i32::MAX)
-    }
-
     /// Read the level of the running system through `source`: the NDK function
     /// when the system exports it, otherwise the system property. `None` when
     /// neither answers.
@@ -87,7 +72,7 @@ impl AndroidApi {
         u32::try_from(level)
             .ok()
             .filter(|level| *level > 0)
-            .map(Self)
+            .map(Self::from_level)
     }
 
     fn from_system_property(source: &dyn SymbolSource) -> Option<Self> {
@@ -115,7 +100,7 @@ impl AndroidApi {
             .parse::<u32>()
             .ok()
             .filter(|level| *level > 0)
-            .map(Self)
+            .map(Self::from_level)
     }
 }
 
@@ -143,30 +128,31 @@ mod sealed {
     pub trait Sealed {}
 }
 
-/// An NDK function that exists only from some API level: its name, the level
-/// it appeared in and its pointer type.
+/// An NDK function that exists only from some API level: its name, its pointer
+/// type, and as a [`Gate`] the level it appeared in.
 ///
 /// Sealed: the only implementations are the ones below, which pair each name
 /// with the signature the NDK header declares for it. That pairing is what makes
 /// [`NdkFn::resolve`] safe.
-pub(crate) trait NdkFunction: sealed::Sealed {
+pub(crate) trait NdkFunction: sealed::Sealed + Gate<Version = AndroidApi> {
     /// The function's pointer type; pointer-sized.
     type Pointer: Copy;
     /// The exported symbol.
     const NAME: &'static CStr;
-    /// The first API level that has it.
-    const MIN_API: u32;
 }
 
 macro_rules! ndk_function {
-    ($(#[$doc:meta])* $marker:ident, $name:literal, $min_api:literal, $pointer:ty) => {
+    ($(#[$doc:meta])* $marker:ident, $name:literal, $since:literal, $pointer:ty) => {
         $(#[$doc])*
         pub(crate) struct $marker;
         impl sealed::Sealed for $marker {}
+        impl Gate for $marker {
+            type Version = AndroidApi;
+            const SINCE: u64 = $since;
+        }
         impl NdkFunction for $marker {
             type Pointer = $pointer;
             const NAME: &'static CStr = $name;
-            const MIN_API: u32 = $min_api;
         }
     };
 }
@@ -215,14 +201,12 @@ pub(crate) struct NdkFn<N: NdkFunction> {
 }
 
 impl<N: NdkFunction> NdkFn<N> {
-    /// Look `N` up in `library`, but only when `api` is at least `N::MIN_API`.
+    /// Look `N` up in `library`, but only when `api` has it.
     pub(crate) fn resolve(library: &Arc<dyn SymbolSource>, api: AndroidApi) -> Option<Self> {
         const {
             assert!(size_of::<N::Pointer>() == size_of::<*mut c_void>());
         }
-        if api.level() < N::MIN_API {
-            return None;
-        }
+        api.since::<N>()?;
         let address = library.symbol(N::NAME)?.as_ptr();
         // SAFETY: `N::Pointer` is pointer-sized (asserted above) and, because
         // `NdkFunction` is sealed to the declarations above, the type of the
@@ -462,12 +446,6 @@ mod tests {
             AndroidApi::detect(&symbols),
             Some(AndroidApi::from_level(33)),
             "the property answered although the function was there"
-        );
-        assert_eq!(AndroidApi::from_level(33).sdk_int(), 33);
-        assert_eq!(
-            AndroidApi::from_level(u32::MAX).sdk_int(),
-            i32::MAX,
-            "a level past i32 saturates instead of wrapping negative"
         );
     }
 
