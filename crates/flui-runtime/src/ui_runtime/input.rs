@@ -74,6 +74,15 @@ struct Applied {
     held: bool,
 }
 
+/// Where one platform input is dispatched, and so where its row says it
+/// went: the presentation whose tree receives it and the surface of that
+/// presentation's window it is applied to.
+#[derive(Debug, Clone, Copy)]
+struct InputTarget {
+    presentation: PresentationId,
+    surface: InputSurface,
+}
+
 /// Keep the earliest input-phase panic when cleanup or wake work also
 /// unwinds. Secondary panic payloads are intentionally leaked because their
 /// destructors are arbitrary user code and must not replace or abort the
@@ -269,8 +278,10 @@ impl UiRuntime {
     /// While a tap records, the input is recorded after its dispatch
     /// committed, with the sequence the dispatch placed it in and followed by
     /// the arena verdicts it produced (ADR-0215 §1); a dispatch failure is
-    /// recorded too and then resumed. Pointer input held for the tree's commit
-    /// is recorded where it is dispatched or discarded instead.
+    /// recorded too and then resumed. Its row names the window and surface it
+    /// was dispatched to, not the ones it was stamped for: a key on the active
+    /// presentation's window. Pointer input held for the tree's commit is
+    /// recorded where it is dispatched or discarded instead.
     pub fn handle_input_addressed(
         &self,
         presentation_id: PresentationId,
@@ -286,22 +297,26 @@ impl UiRuntime {
     /// contacts, hover, coalescing and latches (ADR-0207 §5) and is held,
     /// like the window's, until the tree it hit-tests is committed. Keyboard,
     /// IME, drag-and-drop and capability input belong to the window whatever
-    /// surface reported them.
+    /// surface reported them, and are recorded on it.
     pub fn handle_input_on(
         &self,
         presentation_id: PresentationId,
         surface: InputSurface,
         input: PlatformInput,
     ) -> bool {
-        if !self.begin_recorded_input() {
+        let recording = self.begin_recorded_input();
+        // Resolved once, before dispatch: the row names where the input went
+        // even when a handler it reaches moves keyboard focus.
+        let target = self.input_target(presentation_id, surface, &input);
+        if !recording {
             return self
-                .apply_platform_input(presentation_id, surface, input, false)
+                .apply_platform_input(presentation_id, target, input, false)
                 .handled;
         }
         let keyboard = matches!(input, PlatformInput::Keyboard(_));
         let recorded = input.clone();
         let applied = catch_unwind(AssertUnwindSafe(|| {
-            self.apply_platform_input(presentation_id, surface, input, true)
+            self.apply_platform_input(presentation_id, target, input, true)
         }));
         let (outcome, sequence) = match &applied {
             // Its row waits for the dispatch; the rows of input the hold
@@ -317,8 +332,8 @@ impl UiRuntime {
             Err(_) => (crate::owner::InputOutcome::Handled, None),
         };
         self.record_dispatched(
-            presentation_id,
-            surface,
+            target.presentation,
+            target.surface,
             crate::HostInput::Platform(recorded),
             outcome,
             sequence,
@@ -326,22 +341,50 @@ impl UiRuntime {
         applied.map_or_else(|payload| resume_unwind(payload), |applied| applied.handled)
     }
 
-    /// Apply `input`; while `recording`, pointer input held for the tree's
-    /// commit takes its input row along.
-    fn apply_platform_input(
+    /// Where `input`, stamped for `presentation_id` and reported by `surface`
+    /// of its window, is dispatched. Keyboard goes to the active
+    /// presentation whatever presentation it was stamped for
+    /// ([`FocusCoordinator`]); every other kind to the stamped one. Pointer
+    /// input stays on the surface that reported it; keyboard, IME,
+    /// drag-and-drop and capability input belong to the window.
+    fn input_target(
         &self,
         presentation_id: PresentationId,
         surface: InputSurface,
+        input: &PlatformInput,
+    ) -> InputTarget {
+        match input {
+            PlatformInput::Pointer(_) => InputTarget {
+                presentation: presentation_id,
+                surface,
+            },
+            PlatformInput::Keyboard(_) => InputTarget {
+                presentation: self.focus_coordinator.active(),
+                surface: InputSurface::Window,
+            },
+            PlatformInput::Ime(_) | PlatformInput::DragDrop(_) | PlatformInput::Capabilities(_) => {
+                InputTarget {
+                    presentation: presentation_id,
+                    surface: InputSurface::Window,
+                }
+            }
+        }
+    }
+
+    /// Apply `input`, stamped for `presentation_id`, at `target`; while
+    /// `recording`, pointer input held for the tree's commit takes its input
+    /// row along.
+    fn apply_platform_input(
+        &self,
+        presentation_id: PresentationId,
+        target: InputTarget,
         input: PlatformInput,
         recording: bool,
     ) -> Applied {
-        let target_id = match &input {
-            PlatformInput::Keyboard(_) => self.focus_coordinator.active(),
-            PlatformInput::Pointer(_)
-            | PlatformInput::Ime(_)
-            | PlatformInput::DragDrop(_)
-            | PlatformInput::Capabilities(_) => presentation_id,
-        };
+        let InputTarget {
+            presentation: target_id,
+            surface,
+        } = target;
         let Some(presentation) = self.presentations.get(target_id) else {
             tracing::debug!(
                 { flui_foundation::diagnostics::PRESENTATION_ID } = target_id.as_u64(),

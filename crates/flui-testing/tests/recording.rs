@@ -853,8 +853,77 @@ fn a_held_pointer_discarded_by_lifecycle_is_recorded_undelivered() {
     assert!(log.borrow().is_empty());
 }
 
-/// Every pointer row names the input sequence its dispatch placed it in, so a
-/// reader can join a gesture's input with its verdicts.
+/// The box of [`host`] in window A, and window B opened beside it holding a
+/// focus that logs and handles every key; B has OS focus.
+fn focused_beside(log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
+    use flui_interaction::focus::KeyEventResult;
+
+    let mut host = attached(HeadlessWindow::new(200, 200), log);
+    let b = host.open_window(HeadlessWindow::new(200, 200));
+    let keys = Rc::clone(log);
+    host.attach_to(
+        b,
+        &flui_widgets::Focus::new(flui_widgets::ColoredBox::new(
+            flui_painting::styling::Color::RED,
+        ))
+        .autofocus(true)
+        .on_key_event(move |_, _| {
+            keys.borrow_mut().push("key on b");
+            KeyEventResult::Handled
+        }),
+    )
+    .expect("attach b");
+    let _ = host.pump(Duration::from_millis(16));
+    host.focus_window(b);
+    host
+}
+
+/// A key a surface of window A reported after window B gained focus goes to
+/// B, and its row names B's window, not the surface that reported it: the
+/// row says where the key went, and a replay delivers it there again.
+fn a_key_records_the_window_focus_dispatched_it_to() {
+    use flui_interaction::testing::input::KeyEventBuilder;
+    use flui_platform_api::WindowId;
+    use flui_platform_api::keyboard::Code;
+    use flui_runtime::RecordedSurface;
+
+    let (bytes, fired) = recorded_on(focused_beside, Privacy::KeepText, |host| {
+        let surface = host.embed_surface().expect("a surface identity");
+        host.dispatch_on(
+            surface,
+            PlatformInput::Keyboard(KeyEventBuilder::new(Code::F4).build()),
+        );
+    });
+    assert_eq!(fired, ["key on b"]);
+    let recording = replayable(&bytes).expect("a whole recording");
+    let keys: Vec<_> = recording
+        .rows()
+        .iter()
+        .filter_map(|row| match row {
+            InputRecord::Input(row)
+                if matches!(row.input, HostInput::Platform(PlatformInput::Keyboard(_))) =>
+            {
+                Some((row.window, row.surface, row.outcome))
+            }
+            _ => None,
+        })
+        .collect();
+    // `open_window` gives the first window it opens the identity after the
+    // primary's.
+    assert_eq!(
+        keys,
+        [(WindowId(2), RecordedSurface::Window, InputOutcome::Handled)],
+        "the row names the window the key was dispatched to"
+    );
+
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let _ = focused_beside(&log).replay(&recording);
+    assert_eq!(*log.borrow(), ["key on b"]);
+}
+
+/// Every input row names where its dispatch placed it: a pointer row the
+/// input sequence, so a reader can join a gesture's input with its verdicts,
+/// and a key row the window focus sent it to.
 #[test]
 fn input_rows_carry_the_sequence_their_dispatch_placed_them_in() {
     crate::run_table(
@@ -871,6 +940,10 @@ fn input_rows_carry_the_sequence_their_dispatch_placed_them_in() {
             (
                 "a_held_pointer_discarded_by_lifecycle_is_recorded_undelivered",
                 a_held_pointer_discarded_by_lifecycle_is_recorded_undelivered,
+            ),
+            (
+                "a_key_records_the_window_focus_dispatched_it_to",
+                a_key_records_the_window_focus_dispatched_it_to,
             ),
         ],
     );
