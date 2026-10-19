@@ -24,6 +24,9 @@ test elsewhere has nothing uniform to adopt.
 
 **D1 — One switch name.** A crate exposes its test support behind a Cargo feature named `testing`.
 `test-support` and `test-utils` are renamed. The feature exposes the crate's kit and nothing else.
+This narrows the rule in `docs/testing.md` that test-only APIs live in `flui-testing` and not behind
+a feature: that holds from the frame layer up, and a crate below `flui-testing` keeps its own kit
+behind `testing`. The guide is amended in the same change.
 
 **D2 — One kit per layer.** Each layer has one kit, `<crate>::testing`, built on the kit of the layer
 below. From the frame layer up it is `flui-testing` (`HeadlessBinding`, `HeadlessHost`, `lay_out`).
