@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-19 · **Change:** minor (version floor row) ·
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-19 · **Change:** minor (version map) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -55,7 +55,7 @@ Counted over every row of the core and system-service sections.
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes | Hours |
 |---|---|---|---|---|---|---|---|---|---|---|
 | Event loop, startup and wake-ups | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Runs: `device windows-input`, the macOS live check, `live-smoke` (Xvfb and `--wayland`), the iOS Simulator, the Android emulator, the Web counter | 0 |
-| Version floor: declared, packaged, refused below it | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | [ADR-0244](adr/ADR-0244-os-version-floors-and-gates.md) sets a floor per environment (the generated version map will list them); none is packaged from one source or checked at start yet, and none has run on its floor version. Headless has no OS version | 12–20 |
+| Version floor: declared, packaged, refused below it | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | [ADR-0244](adr/ADR-0244-os-version-floors-and-gates.md) sets a floor per environment, listed in the [version map](version-map.md) generated from `platform-support.toml`; only the Android `minSdk` is packaged from it, nothing is checked at start yet, and none has run on its floor version. Headless has no OS version | 12–20 |
 | Quit, exit request, last-window policy | 🟡 | ✅ | ✅ | ✅ | — | 🟡 | 🟡 | ✅ | macOS Cmd+Q and close ran; `live-smoke` checks the exit code; iOS has no quit API | 2–3 |
 | Close request with veto | 🟡 | ✅ | 🟡 | 🟡 | — | — | ❌ | ✅ | Web has no `beforeunload` | 2–3 |
 | Reopen with no windows (Dock click) | — | ✅ | — | — | — | — | — | ❌ | `device macos-reopen`; headless can't drive it | 1 |
@@ -236,3 +236,4 @@ exists yet.
 | 2026-10-18 | minor | macOS and iOS window lifecycle: macOS reads and sets window state through `NSWindow`, delivers sleep, wake, lock and memory pressure, and holds a session end with `NSTerminateLater`; iOS maps the memory warning and `applicationWillTerminate:`; display bounds and persistent keys on macOS; type-checked only, the cells stay 🟡 until [#1736](https://github.com/vanyastaff/flui/issues/1736) runs |
 | 2026-10-18 | minor | Web page lifecycle: `freeze` and `resume` set the execution state, `pagehide` is reported as the session ending (and a page restored from the back/forward cache as cancelling it), `fullscreenchange` republishes the window state, and a lost WebGL context or WebGPU device rebuilds the renderer at once; the page events ran against a fake page and the renderer rebuild is compile-checked, so the cells are 🟡; the two cells it moves from ❌ and — to 🟡 leave the overall figure at ~27% |
 | 2026-10-19 | minor | A "Version floor" row: ADR-0244 declares a floor per environment; nothing enforces it yet, so every cell is ❌ |
+| 2026-10-19 | minor | The "Version floor" row links the [version map](version-map.md) generated from `platform-support.toml`, and the Android `minSdk` is packaged from that file; nothing is checked at start, so the cells stay ❌ |

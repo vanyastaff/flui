@@ -1,6 +1,6 @@
 # Where FLUI falls short
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-19 · **Change:** minor (version floors join the list)
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-19 · **Change:** minor (version floors declared)
 
 The work list. One entry per shortfall, ranked by how much it stops someone from choosing FLUI for a
 production app on that environment. Each entry says what is missing, the evidence, who it hurts, an
@@ -34,7 +34,7 @@ pull request.
 | 19 | **No native views inside the UI** (web view, map, video) | all | Not in the contract; the design shapes compositing, hit-testing and accessibility | Apps that embed a map, browser or player | 30–60 + owner decision | [Windows](platform-parity.md#windows) |
 | 20 | **Window looks**: backdrop materials, transparency, icon, capture exclusion | desktop; mobile for capture | Windows forces Mica; macOS Liquid Glass unreachable; no window icon on Windows or Linux | Apps with a native look; apps showing sensitive data | 9–16 | [Windows](platform-parity.md#windows) |
 | 21 | **Unaudited rows** | desktop, Web | App identity and packaging, live resize | Unknown | 2–4 | [Windows](platform-parity.md#windows) |
-| 22 | **No declared version floor, and one GPU backend per environment** | all | Android packages `minSdk` 23 while rendering only through Vulkan (API 24); iOS and macOS bundles inherit whatever deployment target the build had; Windows links a 1607 API unconditionally; the Linux release glibc is the runner's; no GLES or WebGL2 fallback is compiled (ADR-0244) | Users on older systems or GPUs without Vulkan or WebGPU, who get a failure in the middle of start instead of a clear refusal | 30–55 | [App lifecycle](platform-parity.md#app-lifecycle) |
+| 22 | **Version floors not enforced, and one GPU backend per environment** | all | The floors are declared in `platform-support.toml` ([version map](version-map.md)), but only the Android `minSdk` is packaged from it and no backend checks them at start; Android packages API 23 while rendering only through Vulkan (API 24); iOS and macOS bundles inherit whatever deployment target the build had; Windows links a 1607 API unconditionally; the Linux release glibc is the runner's; no GLES or WebGL2 fallback is compiled (ADR-0244) | Users on older systems or GPUs without Vulkan or WebGPU, who get a failure in the middle of start instead of a clear refusal | 30–55 | [App lifecycle](platform-parity.md#app-lifecycle) |
 
 ## Revision history
 
@@ -52,3 +52,4 @@ pull request.
 | 2026-10-18 | minor | The live Wayland output change ran under WSLg (an output grown, a second one added); it leaves the display runs still owed in entry 4 |
 | 2026-10-18 | minor | Apps controlling their windows narrows on macOS and iOS: window state and commands, sleep, lock, session end and memory pressure are written and type-checked, and [#1736](https://github.com/vanyastaff/flui/issues/1736) is the owed run; the entries stay open |
 | 2026-10-19 | minor | Version floors and the GPU fallback join the list (ADR-0244) |
+| 2026-10-19 | minor | Entry 22 narrows: the floors are declared in `platform-support.toml` and the [version map](version-map.md) is generated from it; enforcing them is still open |

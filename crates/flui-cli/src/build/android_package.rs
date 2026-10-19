@@ -52,8 +52,8 @@ pub(crate) struct BuildTools {
     java_home: Option<PathBuf>,
 }
 
-// View.getRootWindowInsets is the native safe-area capture boundary.
-const MIN_SDK: u32 = 23;
+// The floor (ADR-0244); `View.getRootWindowInsets`, the safe-area read, is one of what sets it.
+const MIN_SDK: u32 = super::platform_floor::ANDROID_MIN_SDK;
 const DEBUG_ALIAS: &str = "androiddebugkey";
 const DEBUG_PASSWORD: &str = "android";
 
