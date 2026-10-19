@@ -817,6 +817,13 @@ impl ScrollOwner {
         }
         let pixels = self.controller.pixels();
         let available = self.to_physical(target - pixels);
+        if !(available.x.is_finite() && available.y.is_finite()) {
+            // Finite ends whose distance overflows (a jump across extents
+            // near `f64::MAX`): no step can carry it, so the leaf lands the
+            // target itself rather than the channel dropping the move.
+            self.publish(target, cause);
+            return;
+        }
         sequence.dispatch(
             0,
             cause,

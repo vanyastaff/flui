@@ -747,10 +747,11 @@ impl ScrollSequence {
     /// remainder goes back up within the latch. Returns what everyone
     /// consumed.
     ///
-    /// `available` is finite: each source drops a non-finite delta where it
-    /// is made (the controller's jump and run targets, the drag and scale
-    /// recognizers, the wheel and key conversions), so no answer is clamped
-    /// against a NaN bound and nothing publishes a non-finite offset.
+    /// A delta that is not finite is dropped here, before anyone sees it:
+    /// finite inputs still make one (a jump across an extent near `f64::MAX`
+    /// overflows the difference), and every source dispatches through here,
+    /// so no participant or leaf is offered one, no answer is clamped against
+    /// a NaN bound and nothing publishes a non-finite offset.
     pub(crate) fn dispatch(
         &self,
         runner: usize,
@@ -759,10 +760,14 @@ impl ScrollSequence {
         consume: impl FnOnce(Vec2) -> Vec2,
         recovery: &mut PanicRecovery,
     ) -> Vec2 {
-        debug_assert!(
-            available.x.is_finite() && available.y.is_finite(),
-            "BUG: a scroll source offered a step that is not finite: {available:?}"
-        );
+        if !(available.x.is_finite() && available.y.is_finite()) {
+            tracing::warn!(
+                available.x,
+                available.y,
+                "a scroll step that is not finite was dropped"
+            );
+            return Vec2::ZERO;
+        }
         self.pass(recovery, |recovery| {
             self.dispatch_within(runner, cause, available, consume, recovery)
         })

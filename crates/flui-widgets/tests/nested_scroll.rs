@@ -1792,10 +1792,12 @@ pub(crate) fn participant_result_is_clamped() {
     }
 }
 
-/// A jump that is not finite is dropped where it is asked: it moves
+/// A step that is not finite never enters the chain: a jump to NaN moves
 /// nothing and reaches no participant, even one that opts into programmatic
-/// steps and answers with what fits, and the next jump goes through.
-pub(crate) fn a_jump_that_is_not_finite_reaches_no_participant() {
+/// steps and answers with what fits, and the next jump goes through. Finite
+/// values make one too: a jump across extents near `f64::MAX` overflows the
+/// distance; no participant is offered it, and the jump still lands.
+pub(crate) fn a_step_that_is_not_finite_is_dropped_at_the_channel() {
     let (controller, probe, vsync) = (ScrollController::new(), Probe::new(), Vsync::new());
     let tree = VsyncScope::new(
         vsync.clone(),
@@ -1829,6 +1831,29 @@ pub(crate) fn a_jump_that_is_not_finite_reaches_no_participant() {
     *probe.pre.borrow_mut() = None;
     controller.jump_to(120.0);
     assert_eq!(controller.pixels(), 120.0, "the next jump goes through");
+
+    // Every operand finite, the distance not: `f64::MAX - -f64::MAX`.
+    probe.take();
+    controller.update_dimensions(300.0, -f64::MAX, f64::MAX);
+    controller.set_pixels(-f64::MAX);
+    let jumped = catch_unwind(AssertUnwindSafe(|| controller.jump_to(f64::MAX)));
+    assert!(
+        jumped.is_ok(),
+        "a jump whose distance overflows does not panic"
+    );
+    assert!(
+        probe
+            .steps()
+            .iter()
+            .all(|step| step.available.x.is_finite() && step.available.y.is_finite()),
+        "no participant sees the overflowed step: {:?}",
+        probe.seen()
+    );
+    assert_eq!(
+        controller.pixels(),
+        f64::MAX,
+        "the jump still lands, though no step could carry it"
+    );
 }
 
 /// User input a participant dispatches into the chain that called it is
