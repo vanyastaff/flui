@@ -253,11 +253,6 @@ impl<K: Copy + Eq + 'static> DraggableAnchors<K> {
         }
     }
 
-    /// The anchors, ascending by offset.
-    pub fn iter(&self) -> impl Iterator<Item = (K, f64)> + '_ {
-        self.entries.iter().copied()
-    }
-
     /// The same anchors, settled by `policy` instead of the nearest-anchor
     /// snap: a release goes where `policy` targets, which should be one of
     /// the anchors.

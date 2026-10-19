@@ -61,14 +61,6 @@ pub struct InvalidViewportFraction {
     fraction: f64,
 }
 
-impl InvalidViewportFraction {
-    /// The refused share.
-    #[must_use]
-    pub fn fraction(&self) -> f64 {
-        self.fraction
-    }
-}
-
 impl ViewportFraction {
     /// A page as long as the viewport.
     pub const FULL: Self = Self(1.0);
@@ -100,17 +92,9 @@ impl Default for ViewportFraction {
     }
 }
 
-impl TryFrom<f64> for ViewportFraction {
-    type Error = InvalidViewportFraction;
-
-    fn try_from(fraction: f64) -> Result<Self, Self::Error> {
-        Self::new(fraction)
-    }
-}
-
 /// Snaps to whole pages of a [`ViewportFraction`] of the viewport.
 ///
-/// A release faster than [`velocity_tolerance`](Self::velocity_tolerance)
+/// A release faster than 20 logical pixels per second
 /// commits to the next page in its direction, from anywhere on the current
 /// one; a slower one settles on the nearest page.
 ///
@@ -138,12 +122,6 @@ impl PageSnap {
         Self {
             viewport_fraction: viewport_fraction.get(),
         }
-    }
-
-    /// The release speed, logical px/s, below which the nearest page wins.
-    #[must_use]
-    pub fn velocity_tolerance(&self) -> f64 {
-        VELOCITY_TOLERANCE
     }
 }
 
@@ -195,7 +173,7 @@ pub enum AnchorSnapError {
 /// Snaps to the nearest of a set of anchor offsets along the scroll axis: the
 /// stops of a sheet, a row's revealed actions, item starts of uneven size.
 ///
-/// A release faster than [`velocity_tolerance`](Self::velocity_tolerance)
+/// A release faster than 20 logical pixels per second
 /// commits to the next anchor in its direction, also from an anchor's own
 /// offset, or stays on the last one that way; a slower one settles on the
 /// nearest anchor (the farther one, from exactly halfway). Anchors are
@@ -244,12 +222,6 @@ impl AnchorSnap {
     #[must_use]
     pub fn anchors(&self) -> &[f64] {
         &self.anchors
-    }
-
-    /// The release speed, logical px/s, below which the nearest anchor wins.
-    #[must_use]
-    pub fn velocity_tolerance(&self) -> f64 {
-        VELOCITY_TOLERANCE
     }
 }
 
