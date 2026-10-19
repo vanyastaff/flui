@@ -1108,7 +1108,7 @@ fn nested_scroll_channel() {
             ("nested_scroll::a_participant_declining_programmatic_scrolls_hears_none_of_them", crate::nested_scroll::a_participant_declining_programmatic_scrolls_hears_none_of_them),
             ("nested_scroll::anchor_correction_bypasses_the_channel", crate::nested_scroll::anchor_correction_bypasses_the_channel),
             ("nested_scroll::participant_result_is_clamped", crate::nested_scroll::participant_result_is_clamped),
-            ("nested_scroll::a_step_that_is_not_finite_is_dropped_at_the_channel", crate::nested_scroll::a_step_that_is_not_finite_is_dropped_at_the_channel),
+            ("nested_scroll::a_jump_that_is_not_finite_reaches_no_participant", crate::nested_scroll::a_jump_that_is_not_finite_reaches_no_participant),
             ("nested_scroll::a_participant_cannot_dispatch_input_into_its_own_chain", crate::nested_scroll::a_participant_cannot_dispatch_input_into_its_own_chain),
             ("nested_scroll::requests::a_jump_from_a_participant_lands_when_the_pass_returns", crate::nested_scroll::requests::a_jump_from_a_participant_lands_when_the_pass_returns),
             ("nested_scroll::requests::a_jump_from_a_position_listener_never_nests_inside_a_step", crate::nested_scroll::requests::a_jump_from_a_position_listener_never_nests_inside_a_step),

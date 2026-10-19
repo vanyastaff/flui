@@ -1792,10 +1792,10 @@ pub(crate) fn participant_result_is_clamped() {
     }
 }
 
-/// A step that is not finite never enters the chain: a jump to NaN moves
+/// A jump that is not finite is dropped where it is asked: it moves
 /// nothing and reaches no participant, even one that opts into programmatic
 /// steps and answers with what fits, and the next jump goes through.
-pub(crate) fn a_step_that_is_not_finite_is_dropped_at_the_channel() {
+pub(crate) fn a_jump_that_is_not_finite_reaches_no_participant() {
     let (controller, probe, vsync) = (ScrollController::new(), Probe::new(), Vsync::new());
     let tree = VsyncScope::new(
         vsync.clone(),

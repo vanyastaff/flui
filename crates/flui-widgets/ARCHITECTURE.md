@@ -3218,8 +3218,9 @@ extent, and a leaf at its extent dispatches nothing, so the scrollable around it
 next by the drag machinery, autoscrolls on its own if the drag is near its edge. Row:
 `drag_autoscroll_dispatches_side_effect_deltas`.
 
-A step that is not finite is dropped where it enters the dispatcher, so no participant or
-leaf is offered one (`a_step_that_is_not_finite_is_dropped_at_the_channel`). A scrollable
+A step that is not finite is dropped by the source that makes it (a jump, a run, a
+recognizer, a wheel or key conversion), so no participant or leaf is offered one
+(`a_jump_that_is_not_finite_reaches_no_participant`). A scrollable
 past its extent takes a remainder or a drop autoscroll step only toward its range, never
 farther than the step and never farther out
 (`a_remainder_moves_an_overscrolled_ancestor_only_toward_its_range`,
