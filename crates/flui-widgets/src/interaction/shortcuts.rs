@@ -182,13 +182,6 @@ impl SingleActivator {
         })
     }
 
-    /// Whether the activator matches the key's release rather than its
-    /// key-down.
-    #[must_use]
-    pub fn is_on_release(&self) -> bool {
-        self.on_release
-    }
-
     /// Whether `event` triggers this activator: a key-down (or allowed repeat)
     /// of exactly the trigger key under exactly the required modifiers — or,
     /// for an [`on_release`](Self::on_release) activator, that key's release.
