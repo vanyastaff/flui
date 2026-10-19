@@ -42,6 +42,7 @@ const STYLES: Styles = Styles::styled()
     .valid(AnsiColor::Green.on_default().effects(Effects::BOLD))
     .invalid(AnsiColor::Yellow.on_default().effects(Effects::BOLD));
 
+mod agent;
 mod build;
 mod commands;
 mod config;
@@ -217,6 +218,24 @@ enum Commands {
         /// With `--device browser:…`: print the URL, do not open the browser
         #[arg(long)]
         no_open: bool,
+
+        /// Serve the app to an AI agent (debug builds, this desktop): starts
+        /// it with the `dev-agent` feature, a local endpoint and a launch
+        /// token, then `flui mcp` connects to it
+        #[arg(long, conflicts_with_all = ["release", "scene"])]
+        agent: bool,
+    },
+
+    /// Serve a running app to an AI agent over MCP (stdio)
+    ///
+    /// Start the app with `flui run --agent`; the MCP client launches
+    /// `flui mcp` in the same project. Tools: flui_windows, flui_read,
+    /// flui_act, flui_motion. stdout carries the protocol only.
+    Mcp {
+        /// Session file written by `flui run --agent` (default: the nearest
+        /// `target/flui-agent.json`, or FLUI_AGENT_ENDPOINT and FLUI_AGENT_TOKEN)
+        #[arg(long, value_name = "FILE")]
+        session: Option<std::path::PathBuf>,
     },
 
     /// Build the FLUI application
@@ -693,6 +712,7 @@ fn main() {
             profile,
             web_port,
             no_open,
+            agent,
         } => {
             if scene {
                 // clap enforces both via `requires`; the unwraps document that.
@@ -708,13 +728,18 @@ fn main() {
                     !no_hot_reload,
                     profile,
                     verbose,
-                    commands::run::WebOptions {
-                        port: web_port,
-                        open: !no_open,
+                    commands::run::RunOptions {
+                        web: commands::run::WebOptions {
+                            port: web_port,
+                            open: !no_open,
+                        },
+                        agent,
                     },
                 )
             }
         }
+
+        Commands::Mcp { session } => commands::mcp::execute(session),
 
         Commands::Build {
             platform,
