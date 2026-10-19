@@ -743,7 +743,6 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn close(&self) {
-        self.mark_closed();
         // Hide now, from whichever thread this is called on: the visible
         // effect of a close should not wait for the owner's next turn. The
         // close itself — `on_close`, map removal, callback clear, exit
@@ -753,8 +752,16 @@ impl PlatformWindow for WinitWindow {
         // off its owner thread) would silently refuse it, and skipping the
         // map removal is precisely issue #919 — a hidden window that the
         // exit policy still counts, so the process never exits.
-        self.window.set_visible(false);
-        *self.is_visible.lock() = false;
+        {
+            // Closing is terminal for a deferred reveal: the flag is set and the
+            // window hidden holding the lock a reveal checks it under, so a
+            // reveal on another thread cannot map the window after this.
+            let mut pending = self.reveal_pending.lock();
+            self.mark_closed();
+            *pending = false;
+            self.window.set_visible(false);
+            *self.is_visible.lock() = false;
+        }
         self.close_lane.request_close_window(self.id);
     }
 
