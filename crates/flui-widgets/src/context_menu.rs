@@ -80,9 +80,8 @@ use crate::{
 /// [`Navigator`](crate::Navigator) above it, as `WidgetsApp` provides.
 #[derive(Clone, StatefulView)]
 pub struct ContextMenuArea {
-    first: GestureCommand,
-    more: Vec<GestureCommand>,
-    target: Option<Rc<str>>,
+    /// The checked commands as a menu; the mounted area presents it.
+    alternatives: GestureAlternatives,
     child: Option<BoxedView>,
 }
 
@@ -98,21 +97,20 @@ impl ContextMenuArea {
         first: GestureCommand,
         more: impl IntoIterator<Item = GestureCommand>,
     ) -> Result<Self, GestureAlternativesError> {
-        let area = Self {
-            first,
-            more: more.into_iter().collect(),
-            target: None,
+        let menu = more
+            .into_iter()
+            .fold(MenuSpec::new(first, |_cx, _request| {}), MenuSpec::item);
+        Ok(Self {
+            alternatives: GestureAlternatives::new(Alternative::ContextMenu(menu))?,
             child: None,
-        };
-        area.alternatives(MenuSpec::new(area.first.clone(), |_cx, _request| {}))?;
-        Ok(area)
+        })
     }
 
     /// Name what the commands act on ("Alice"), for the labels the area
     /// makes itself, such as the control focus reveals.
     #[must_use]
     pub fn target(mut self, name: impl Into<String>) -> Self {
-        self.target = Some(Rc::from(name.into()));
+        self.alternatives = self.alternatives.target(name);
         self
     }
 
@@ -123,18 +121,9 @@ impl ContextMenuArea {
         self
     }
 
-    /// The alternatives of `menu`, which shows the first command, followed by
-    /// the others.
-    fn alternatives(
-        &self,
-        menu: MenuSpec,
-    ) -> Result<GestureAlternatives, GestureAlternativesError> {
-        let spec = self.more.iter().cloned().fold(menu, MenuSpec::item);
-        let alternatives = GestureAlternatives::new(Alternative::ContextMenu(spec))?;
-        Ok(match &self.target {
-            Some(target) => alternatives.target(target.to_string()),
-            None => alternatives,
-        })
+    /// The area's commands as a context menu; the mounted area presents it.
+    pub(crate) fn alternatives(&self) -> &GestureAlternatives {
+        &self.alternatives
     }
 }
 
@@ -143,12 +132,12 @@ impl fmt::Debug for ContextMenuArea {
         f.debug_struct("ContextMenuArea")
             .field(
                 "items",
-                &std::iter::once(&self.first)
-                    .chain(&self.more)
+                &self
+                    .alternatives
+                    .commands()
                     .map(GestureCommand::label)
                     .collect::<Vec<_>>(),
             )
-            .field("target", &self.target)
             .finish_non_exhaustive()
     }
 }
@@ -214,12 +203,12 @@ impl ViewState<ContextMenuArea> for ContextMenuAreaState {
         // A long press that hands its contact to a drag closes the menu it
         // opened.
         let session = Rc::clone(&self.session);
-        let menu = MenuSpec::new(view.first.clone(), move |_cx, request| {
-            presenter.present(request);
-        })
-        .dismiss(move |_cx| session.close_current());
-        view.alternatives(menu)
-            .expect("BUG: ContextMenuArea::new checked the labels")
+        view.alternatives
+            .clone()
+            .present_menu_with(
+                Rc::new(move |_cx, request| presenter.present(request)),
+                move |_cx| session.close_current(),
+            )
             .child(content)
     }
 }

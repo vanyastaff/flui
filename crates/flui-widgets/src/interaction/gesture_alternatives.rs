@@ -779,6 +779,21 @@ impl GestureAlternatives {
         self
     }
 
+    /// Show the menu through `presenter` and close it through `dismiss`,
+    /// keeping the commands already checked. Ignored by visible controls and
+    /// companions.
+    pub(crate) fn present_menu_with(
+        mut self,
+        presenter: MenuPresenter,
+        dismiss: impl Fn(&mut EventCx<'_>) + 'static,
+    ) -> Self {
+        if let Alternative::ContextMenu(spec) = &mut self.alternative {
+            spec.presenter = presenter;
+            spec.dismiss = Some(Rc::new(dismiss));
+        }
+        self
+    }
+
     /// Whether one pointer reaches the commands through a context menu.
     pub(crate) fn is_menu(&self) -> bool {
         matches!(self.alternative, Alternative::ContextMenu(_))
