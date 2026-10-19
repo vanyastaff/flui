@@ -51,7 +51,7 @@ sub-traits cover the two layout protocols FLUI ships: `RenderBox` (box protocol 
 
 An `Element` owns at most one `RenderObject`; `StatelessView`/`StatefulView` that only compose
 other views don't need one at all — only the leaf render-backed widgets do. See "Add a render
-object" in AGENTS.md's Extending FLUI table for the checklist to implement a new one.
+object" in the [Extending FLUI table](https://github.com/vanyastaff/flui/blob/main/docs/extending.md) for the checklist to implement a new one.
 
 ## `Layer`
 

@@ -379,7 +379,7 @@ recorded:
 - Applications that enabled `flui-view/runtime-internals` directly (none in this workspace
   besides the composition roots) lose the feature; the items are reachable at
   `flui_view::__runtime`, not through `flui::view` or `flui_sdk::view`.
-- AGENTS.md's "Crate layering" rows and the "Crate" row of "Extending FLUI" and `docs/crates.md`
+- AGENTS.md's "Crate layering" rows and the "Crate" row of `docs/extending.md` and `docs/crates.md`
   changed with the tier gate; `docs/ROADMAP.md:11` changes with §5. ADR-0041 carries the
   `Superseded in part by: ADR-0081` back-link.
 - Migration: one change added the three keys and `edge-exceptions` next to `layer` and taught

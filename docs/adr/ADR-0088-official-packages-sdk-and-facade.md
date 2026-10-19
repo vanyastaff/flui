@@ -295,7 +295,7 @@ which exists.
   application adds `flui-material` (and development tools) as its own dependencies. The CHANGELOG
   carries the migration note.
 - **Breaks for this repository.** Material examples move to `packages/flui-material/examples`;
-  `cargo xtask facade-combos` and the AGENTS.md "Extending FLUI" row about
+  `cargo xtask facade-combos` and the `docs/extending.md` row about
   `[[example]] required-features` are rewritten; `tests/facade_smoke.rs`, README, the crate docs
   and the book are updated from the list
   `rg 'flui::(material|cupertino)|features.*(material|cupertino)'` produces.
