@@ -197,13 +197,13 @@ fn collect_sources(
     for path in prod_tree.modules.keys() {
         files.entry(path.clone()).or_insert(false);
     }
-    for path in prod_tree
-        .test_files
-        .iter()
-        .chain(test_tree.modules.keys())
-        .chain(&test_tree.test_files)
-    {
+    for path in &prod_tree.test_files {
         files.insert(path.clone(), true);
+    }
+    // a file a test target shares with a production target is production code there: only its
+    // test-scoped items count
+    for path in test_tree.modules.keys().chain(&test_tree.test_files) {
+        files.entry(path.clone()).or_insert(true);
     }
     let prefix = format!("{}{}", root.display(), std::path::MAIN_SEPARATOR);
     let mut problems: Vec<String> = test_tree
@@ -345,7 +345,7 @@ impl<'ast> Visit<'ast> for Scan {
             }
             if let Item::Mod(module) = item
                 && this.kit_modules
-                && module.ident == "testing"
+                && module.ident.unraw() == "testing"
             {
                 let before = this.in_kit;
                 this.in_kit = true;
@@ -940,6 +940,31 @@ fn row_items_in_a_test_only_block_are_test_code() {
     );
 }
 
+fn row_a_file_shared_with_production_keeps_production_scope() {
+    let found = findings_for(
+        &[
+            ("src/lib.rs", "mod shared;\n"),
+            (
+                "src/shared.rs",
+                "fn tick() {}\n#[cfg(test)]\nmod t {\n    fn pump() {}\n}\n",
+            ),
+            (
+                "tests/a.rs",
+                "#[path = \"../src/shared.rs\"]\nmod shared;\n",
+            ),
+        ],
+        &[],
+        HEADER,
+    );
+    assert_eq!(found, [("src/shared.rs".to_owned(), "unlisted")]);
+}
+
+fn row_a_raw_testing_module_is_a_kit() {
+    let lib = "#[cfg(test)]\nmod r#testing {\n    struct FakeClock;\n}\n";
+    let found = findings_for(&[("src/lib.rs", lib)], &[], HEADER);
+    assert!(found.is_empty(), "{found:?}");
+}
+
 fn row_a_src_folder_inside_a_test_target_is_not_a_kit() {
     let found = findings_for(
         &[
@@ -1054,6 +1079,14 @@ fn rows() -> Vec<(&'static str, fn())> {
         (
             "items_in_a_test_only_block_are_test_code",
             row_items_in_a_test_only_block_are_test_code,
+        ),
+        (
+            "a_file_shared_with_production_keeps_production_scope",
+            row_a_file_shared_with_production_keeps_production_scope,
+        ),
+        (
+            "a_raw_testing_module_is_a_kit",
+            row_a_raw_testing_module_is_a_kit,
         ),
         (
             "a_src_folder_inside_a_test_target_is_not_a_kit",
