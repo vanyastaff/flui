@@ -244,7 +244,10 @@ impl Platform for MacOSPlatform {
             .debug_assert_owner("MacOSPlatform::window_frame_inset");
         debug_assert_appkit_main_thread("MacOSPlatform::window_frame_inset");
         // AppKit measures a frame in points, so the scale does not enter.
-        super::window::decorated_frame_inset()
+        let main = MainThreadMarker::new().expect(
+            "BUG: the owner thread is the AppKit main thread, which the assertions above check",
+        );
+        super::window::decorated_frame_inset(main)
     }
 
     fn on_session_end(
@@ -255,7 +258,7 @@ impl Platform for MacOSPlatform {
         >,
     ) {
         let previous = self.handlers.lock().session_end.replace(callback);
-        drop(previous);
+        crate::shared::panic_boundary::contain_owner_callback(|| drop(previous));
     }
 
     fn on_host_notice(&self, callback: Box<dyn FnMut(flui_platform_api::SystemNotice) + Send>) {
@@ -383,7 +386,7 @@ impl Platform for MacOSPlatform {
 
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
         let previous = self.handlers.lock().exit_policy.replace(hook);
-        drop(previous);
+        crate::shared::panic_boundary::contain_owner_callback(|| drop(previous));
     }
 
     fn request_exit_policy_reevaluation(&self) {

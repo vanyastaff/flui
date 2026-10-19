@@ -10,10 +10,14 @@
 //! android_main(AndroidApp)
 //!   -> AndroidPlatform::new(app)
 //!   -> Platform::run()  [poll_events loop]
-//!     -> MainEvent::Resume           -> resumed = true
+//!     -> MainEvent::Start / Stop     -> visibility
+//!     -> MainEvent::Resume / Pause   -> execution state (frame gate)
+//!     -> MainEvent::Gained/LostFocus -> focus, nothing else
 //!     -> MainEvent::InitWindow       -> on_ready(), create surface
 //!     -> MainEvent::TerminateWindow  -> surface released
-//!     -> MainEvent::Pause            -> lifecycle gate only
+//!     -> MainEvent::LowMemory        -> memory pressure `Critical`
+//!     -> Resume/Pause/Stop/LowMemory -> memory pressure from the trim level (JNI)
+//!     -> MainEvent::Stop/SaveState   -> session end notice (once per start-to-stop cycle)
 //!     -> MainEvent::Destroy          -> break loop
 //!     -> each tick                   -> dispatch_request_frame()
 //!   -> loop exit                     -> window released, callbacks cleared, quit hook
@@ -44,6 +48,7 @@
 
 mod display;
 pub mod input;
+mod memory;
 mod preferences;
 mod safe_area;
 mod system_chrome;
@@ -60,8 +65,10 @@ use std::{
 };
 
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
+use flui_platform_api::{MemoryPressureLevel, SessionEndPhase, SystemNotice, WindowExecutionState};
 
 use parking_lot::Mutex;
+use window::ActivityFlags;
 pub use window::AndroidWindow;
 
 use crate::{
@@ -71,6 +78,7 @@ use crate::{
     shared::{
         PlatformHandlers,
         android_display::idle_wait_until,
+        android_lifecycle::{ActivityEvent, ActivityLifecycle, ActivityTarget, Reaction},
         android_os_version::{AndroidApi, LoadedLibraries, SymbolSource},
         owner_signal::OwnerSignal,
     },
@@ -137,7 +145,9 @@ pub struct AndroidPlatform {
     app: AndroidApp,
     handlers: Arc<Mutex<PlatformHandlers>>,
     running: Arc<AtomicBool>,
-    execution_resumed: Arc<AtomicBool>,
+    activity: Arc<ActivityFlags>,
+    lifecycle: Mutex<ActivityLifecycle>,
+    notices: crate::shared::system_notice::SystemNotices,
     window: Arc<Mutex<Option<Arc<AndroidWindow>>>>,
     background_executor: Arc<SimpleExecutor>,
     clipboard: Arc<MockClipboard>,
@@ -187,7 +197,9 @@ impl AndroidPlatform {
             app,
             handlers: Arc::new(Mutex::new(PlatformHandlers::new())),
             running: Arc::new(AtomicBool::new(true)),
-            execution_resumed: Arc::new(AtomicBool::new(false)),
+            activity: Arc::new(ActivityFlags::default()),
+            lifecycle: Mutex::new(ActivityLifecycle::default()),
+            notices: crate::shared::system_notice::SystemNotices::default(),
             window: Arc::new(Mutex::new(None)),
             background_executor: Arc::new(SimpleExecutor),
             clipboard: Arc::new(MockClipboard::new()),
@@ -204,6 +216,21 @@ impl AndroidPlatform {
     /// Get the underlying `AndroidApp`
     pub fn app(&self) -> &AndroidApp {
         &self.app
+    }
+
+    /// Record one fact of the Activity's lifecycle and tell the window: its
+    /// state is published first, so an observer reads the new value.
+    fn publish_activity_fact(
+        &self,
+        record: impl FnOnce(&ActivityFlags),
+        notify: impl FnOnce(&AndroidWindow),
+    ) {
+        record(&self.activity);
+        let window = self.window.lock().clone();
+        if let Some(window) = window {
+            window.publish_state();
+            notify(&window);
+        }
     }
 
     fn refresh_preferences(&self) -> Result<crate::SystemPreferences, PlatformError> {
@@ -371,6 +398,52 @@ impl AndroidPlatform {
     }
 }
 
+impl ActivityTarget for AndroidPlatform {
+    fn visibility_changed(&self, visible: bool) {
+        self.publish_activity_fact(
+            |flags| flags.visible.store(visible, Ordering::SeqCst),
+            |window| {
+                window
+                    .callbacks()
+                    .dispatch_visibility_status_change(visible);
+            },
+        );
+    }
+
+    fn execution_changed(&self, state: WindowExecutionState) {
+        self.publish_activity_fact(
+            |flags| {
+                flags
+                    .resumed
+                    .store(state == WindowExecutionState::Running, Ordering::SeqCst);
+            },
+            |window| {
+                window.callbacks().dispatch_execution_state_change(state);
+            },
+        );
+    }
+
+    fn focus_changed(&self, focused: bool) {
+        self.publish_activity_fact(
+            |flags| flags.focused.store(focused, Ordering::SeqCst),
+            |window| {
+                window.callbacks().dispatch_active_status_change(focused);
+            },
+        );
+    }
+
+    /// The system does not wait for an answer, so this is
+    /// [`SessionEndPhase::Ending`] only: no query, no block.
+    fn session_ended(&self) {
+        // The system does not wait for an answer: there is nothing to veto.
+        let _answer = PlatformHandlers::run_session_end(&self.handlers, SessionEndPhase::Ending);
+    }
+
+    fn memory_pressure_raised(&self, level: MemoryPressureLevel) {
+        self.notices.dispatch(SystemNotice::MemoryPressure(level));
+    }
+}
+
 impl Platform for AndroidPlatform {
     fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
         flui_platform_api::WindowCapabilities::NONE
@@ -378,6 +451,18 @@ impl Platform for AndroidPlatform {
 
     fn preferences(&self) -> Result<crate::SystemPreferences, PlatformError> {
         self.refresh_preferences()
+    }
+
+    fn on_session_end(
+        &self,
+        callback: Box<dyn FnMut(SessionEndPhase) -> flui_platform_api::SessionEndAnswer + Send>,
+    ) {
+        let replaced = self.handlers.lock().session_end.replace(callback);
+        drop(replaced);
+    }
+
+    fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
+        self.notices.set_hook(callback);
     }
 
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
@@ -405,7 +490,7 @@ impl Platform for AndroidPlatform {
         platform.displays.watch_refresh_rate();
 
         let mut on_ready = Some(on_ready);
-        platform.execution_resumed.store(false, Ordering::SeqCst);
+        platform.activity.resumed.store(false, Ordering::SeqCst);
         // Set when `on_ready` returns `Err`: a fallible bootstrap
         // failure (window creation, GPU init, root-widget attach) has no
         // other return path back to `run`'s caller. Stopping `running` and
@@ -477,7 +562,7 @@ impl Platform for AndroidPlatform {
                 .lock()
                 .as_ref()
                 .is_some_and(|w| w.has_redraw_request());
-            let resumed = platform.execution_resumed.load(Ordering::SeqCst);
+            let resumed = platform.activity.resumed.load(Ordering::SeqCst);
             let mut should_call_ready = false;
             let ((), redraw_after_poll) =
                 RedrawPoll::new(deadline_due, redraw_requested).poll(resumed, |should_render| {
@@ -492,24 +577,50 @@ impl Platform for AndroidPlatform {
                     };
                     platform.app.poll_events(Some(timeout), |event| {
                 if let PollEvent::Main(main_event) = event {
+                    // What the Activity callback means (`shared::android_lifecycle`).
+                    // An arm that must act around its signal takes and delivers it
+                    // itself; what is left of the reaction (the signal of every other
+                    // callback, then the memory pressure) is delivered after the match.
+                    let mut reaction = ActivityEvent::from_main_event(&main_event).map_or_else(
+                        Reaction::default,
+                        |event| {
+                            platform.lifecycle.lock().react(event, || {
+                                memory::last_trim_level(&platform.app)
+                            })
+                        },
+                    );
                     match main_event {
+                        // Visibility, focus gained and the end of the session
+                        // have nothing to do besides delivering their signal.
+                        MainEvent::Start
+                        | MainEvent::Stop
+                        | MainEvent::GainedFocus
+                        | MainEvent::SaveState { .. } => {
+                            tracing::debug!(event = ?main_event, "Android: lifecycle callback");
+                        }
                         MainEvent::Resume { .. } => {
                             tracing::info!(
                                 "Android: Resumed — lifecycle transition, native window untouched"
                             );
-                            platform.execution_resumed.store(true, Ordering::SeqCst);
                             // The Activity may have come back on another display.
                             platform.displays.invalidate();
 
-                            // Notify window of activation. The surface signal
-                            // rides along: a `Resume` with no window yet (the
-                            // startup order) or with the previous surface still
-                            // released asks for one, and a `true` that finds a
-                            // live surface simply replaces it — see
+                            // The execution state first, then the surface: a
+                            // presentation rebuilt on `true` below already runs.
+                            // The surface signal rides along: a `Resume` with
+                            // no window yet (the startup order) or with the
+                            // previous surface still released asks for one, and
+                            // a `true` that finds a live surface simply
+                            // replaces it — see
                             // `PlatformWindow::on_surface_status_change`.
-                            if let Some(ref w) = *platform.window.lock() {
-                                w.publish_state();
-                                w.callbacks().dispatch_active_status_change(true);
+                            if let Some(signal) = reaction.signal.take() {
+                                signal.deliver(&*platform);
+                            }
+                            // The window is cloned out of its lock: the surface
+                            // observer runs embedder code that may call back
+                            // into the platform.
+                            let window = platform.window.lock().clone();
+                            if let Some(w) = window {
                                 w.callbacks().dispatch_surface_status_change(true);
                                 w.request_redraw();
                             }
@@ -522,17 +633,19 @@ impl Platform for AndroidPlatform {
                             // Publish suspension before invoking embedder callbacks: a nested
                             // continuation request must not acknowledge a redraw opportunity
                             // that this loop will refuse to dispatch.
-                            platform.execution_resumed.store(false, Ordering::SeqCst);
+                            platform.activity.resumed.store(false, Ordering::SeqCst);
                             platform.cancel_input_contacts(flui_platform_api::pointer::CancelReason::FocusLost);
 
-                            // Release BEFORE deactivating: the drop is the one
+                            // Release BEFORE suspending: the drop is the one
                             // step here with a validity window behind it, and
-                            // `on_active_status_change` runs arbitrary embedder
+                            // the execution observer runs arbitrary embedder
                             // code.
-                            if let Some(ref w) = *platform.window.lock() {
+                            let window = platform.window.lock().clone();
+                            if let Some(w) = window {
                                 w.callbacks().dispatch_surface_status_change(false);
-                                w.publish_state();
-                                w.callbacks().dispatch_active_status_change(false);
+                            }
+                            if let Some(signal) = reaction.signal.take() {
+                                signal.deliver(&*platform);
                             }
                         }
                         MainEvent::InitWindow { .. } => {
@@ -585,7 +698,7 @@ impl Platform for AndroidPlatform {
                         MainEvent::Destroy => {
                             platform.cancel_input_contacts(flui_platform_api::pointer::CancelReason::FocusLost);
                             tracing::info!("Android: Destroy — shutting down");
-                            platform.execution_resumed.store(false, Ordering::SeqCst);
+                            platform.activity.resumed.store(false, Ordering::SeqCst);
 
                             // A window that never arrived leaves `on_ready`
                             // untaken, and exiting clean here would report a
@@ -618,20 +731,9 @@ impl Platform for AndroidPlatform {
                                 w.request_redraw();
                             }
                         }
-                        MainEvent::GainedFocus => {
-                            tracing::debug!("Android: Gained focus");
-                            if let Some(ref w) = *platform.window.lock() {
-                                w.publish_state();
-                                w.callbacks().dispatch_active_status_change(true);
-                            }
-                        }
                         MainEvent::LostFocus => {
                             platform.cancel_input_contacts(flui_platform_api::pointer::CancelReason::FocusLost);
                             tracing::debug!("Android: Lost focus");
-                            if let Some(ref w) = *platform.window.lock() {
-                                w.publish_state();
-                                w.callbacks().dispatch_active_status_change(false);
-                            }
                         }
                         MainEvent::ConfigChanged { .. } => {
                             tracing::debug!("Android: Config changed");
@@ -657,6 +759,7 @@ impl Platform for AndroidPlatform {
                         }
                         _ => {}
                     }
+                    reaction.deliver(&*platform);
                 }
                     });
                 });
@@ -695,7 +798,7 @@ impl Platform for AndroidPlatform {
                 platform.running.store(false, Ordering::Relaxed);
                 continue;
             }
-            let resumed = platform.execution_resumed.load(Ordering::SeqCst);
+            let resumed = platform.activity.resumed.load(Ordering::SeqCst);
             if resumed {
                 platform.process_input_events();
             }
@@ -711,7 +814,7 @@ impl Platform for AndroidPlatform {
             }
         }
 
-        platform.execution_resumed.store(false, Ordering::SeqCst);
+        platform.activity.resumed.store(false, Ordering::SeqCst);
         // Unregister the choreographer callback on the thread it was registered
         // on, before its data can be freed with the platform.
         platform.displays.stop_watching();
@@ -787,7 +890,7 @@ impl Platform for AndroidPlatform {
             // on the app owner when its loop exits.
             window.fence_text_sizing();
         }
-        self.execution_resumed.store(false, Ordering::SeqCst);
+        self.activity.resumed.store(false, Ordering::SeqCst);
         self.running.store(false, Ordering::Relaxed);
         let _ = self.owner_signal.request_quit();
     }
@@ -802,7 +905,7 @@ impl Platform for AndroidPlatform {
             .cancel_contacts(flui_platform_api::pointer::CancelReason::CaptureLost);
         let window = Arc::new(AndroidWindow::new(
             self.app.clone(),
-            Arc::clone(&self.execution_resumed),
+            Arc::clone(&self.activity),
             Arc::downgrade(&self.owner_signal),
             Arc::clone(&self.displays),
         ));

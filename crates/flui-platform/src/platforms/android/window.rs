@@ -38,7 +38,7 @@ pub struct AndroidWindow {
     app: AndroidApp,
     callbacks: Arc<WindowCallbacks>,
     redraw_requested: Arc<AtomicBool>,
-    execution_resumed: Arc<AtomicBool>,
+    activity: Arc<ActivityFlags>,
     owner: std::thread::ThreadId,
     owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
     geometry_live: Arc<AtomicBool>,
@@ -67,16 +67,18 @@ impl AndroidWindow {
     /// Create a new Android window wrapping the given `AndroidApp`
     pub(super) fn new(
         app: AndroidApp,
-        execution_resumed: Arc<AtomicBool>,
+        activity: Arc<ActivityFlags>,
         owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
         displays: Arc<super::display::AndroidDisplays>,
     ) -> Self {
         let system_chrome = Arc::new(super::system_chrome::AndroidSystemChrome::new(app.clone()));
-        let snapshot = Arc::new(WindowStateCell::new(sample_state(&app, &displays)));
+        let snapshot = Arc::new(WindowStateCell::new(sample_state(
+            &app, &displays, &activity,
+        )));
         Self {
             callbacks: Arc::new(WindowCallbacks::new()),
             redraw_requested: Arc::new(AtomicBool::new(true)),
-            execution_resumed,
+            activity,
             owner: std::thread::current().id(),
             owner_signal,
             geometry_live: Arc::new(AtomicBool::new(true)),
@@ -201,7 +203,7 @@ impl AndroidWindow {
     pub(crate) fn take_deliverable_redraw_request(&self) -> bool {
         take_deliverable_redraw_request(
             &self.redraw_requested,
-            self.execution_resumed.load(Ordering::SeqCst),
+            self.activity.resumed.load(Ordering::SeqCst),
         )
     }
 
@@ -217,7 +219,7 @@ impl AndroidWindow {
     fn current_state(&self) -> WindowState {
         let published = self
             .snapshot
-            .state_with(|| sample_state(&self.app, &self.displays));
+            .state_with(|| sample_state(&self.app, &self.displays, &self.activity));
         if published.changed {
             self.callbacks.dispatch_state_changed();
         }
@@ -252,9 +254,27 @@ fn native_scale(app: &AndroidApp) -> f64 {
     density as f64 / 160.0
 }
 
+/// The Activity's lifecycle as its callbacks reported it, shared by the
+/// platform's event loop and the window it opened.
+///
+/// Three independent facts (see `shared::android_lifecycle`): the Activity is on
+/// screen (`onStart` to `onStop`), it may run (`onResume` to `onPause`), and its
+/// window has input focus. None implies another: a dialog takes focus from a
+/// running, visible Activity. All three are false until their first callback.
+#[derive(Debug, Default)]
+pub(super) struct ActivityFlags {
+    pub(super) visible: AtomicBool,
+    pub(super) resumed: AtomicBool,
+    pub(super) focused: AtomicBool,
+}
+
 /// The activity surface as the system reports it now. The activity fills its
 /// display with no frame, title or position of its own.
-fn sample_state(app: &AndroidApp, displays: &super::display::AndroidDisplays) -> WindowState {
+fn sample_state(
+    app: &AndroidApp,
+    displays: &super::display::AndroidDisplays,
+    activity: &ActivityFlags,
+) -> WindowState {
     let (width, height) = native_extent(app);
     let scale = native_scale(app);
     let size = if scale > 0.0 {
@@ -263,8 +283,8 @@ fn sample_state(app: &AndroidApp, displays: &super::display::AndroidDisplays) ->
         Size::new(f64::from(width), f64::from(height))
     };
     WindowState::new(WindowGeometry::new(None, size), size)
-        .with_visible(app.native_window().is_some())
-        .with_focused(true)
+        .with_visible(activity.visible.load(Ordering::SeqCst))
+        .with_focused(activity.focused.load(Ordering::SeqCst))
         .with_resizable(false)
         .with_decorated(false)
         .with_display(displays.activity_display())
@@ -366,7 +386,7 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn execution_state(&self) -> WindowExecutionState {
-        if self.execution_resumed.load(Ordering::SeqCst) {
+        if self.activity.resumed.load(Ordering::SeqCst) {
             WindowExecutionState::Running
         } else {
             WindowExecutionState::Suspended
@@ -386,12 +406,11 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn is_focused(&self) -> bool {
-        // On Android, the Activity surface is always focused when resumed
-        true
+        self.activity.focused.load(Ordering::SeqCst)
     }
 
     fn is_visible(&self) -> bool {
-        self.app.native_window().is_some()
+        self.activity.visible.load(Ordering::SeqCst)
     }
 
     fn capabilities(&self) -> WindowCapabilities {
@@ -408,12 +427,6 @@ impl PlatformWindow for AndroidWindow {
     fn state(&self) -> WindowState {
         self.current_state()
     }
-
-    // The activity surface honours no window command and reports no position:
-    // `WindowCapabilities::NONE` is the trait default.
-    //
-    // `apply` is the trait default too: it refuses every command as
-    // unsupported.
 
     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
         Err(CursorError::Unsupported)

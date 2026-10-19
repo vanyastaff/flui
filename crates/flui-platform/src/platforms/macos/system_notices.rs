@@ -148,10 +148,41 @@ impl Drop for MemoryPressureSource {
     }
 }
 
+/// The distributed notification centre delivering while the application is
+/// inactive, for as long as this value lives.
+///
+/// The centre holds back what it is sent while the application is inactive and
+/// delivers it, merged, once the application is active again, so a lock that
+/// happened while another application was in front would be heard after the
+/// unlock. The setting belongs to the process's default centre; the previous
+/// one is put back on drop.
+struct DeliveryWhileInactive {
+    center: Retained<NSDistributedNotificationCenter>,
+    was_suspended: bool,
+}
+
+impl DeliveryWhileInactive {
+    fn ask_for(center: &Retained<NSDistributedNotificationCenter>) -> Self {
+        let was_suspended = center.suspended();
+        center.setSuspended(false);
+        Self {
+            center: center.clone(),
+            was_suspended,
+        }
+    }
+}
+
+impl Drop for DeliveryWhileInactive {
+    fn drop(&mut self) {
+        self.center.setSuspended(self.was_suspended);
+    }
+}
+
 /// The platform's live sources of system notices.
 pub(super) struct SystemNoticeSources {
     _observations: Vec<Observation>,
     _memory_pressure: MemoryPressureSource,
+    _delivery: DeliveryWhileInactive,
 }
 
 impl SystemNoticeSources {
@@ -159,19 +190,15 @@ impl SystemNoticeSources {
     /// notices; `control` is told a session end is announced.
     pub(super) fn new(notices: &Arc<SystemNotices>, control: &Arc<LoopControl>) -> Self {
         let workspace = NSWorkspace::sharedWorkspace().notificationCenter();
-        // The distributed centre holds back what it is sent while the
-        // application is inactive and delivers it, merged, once it is active
-        // again; a lock that happened while another application was in front
-        // would be heard after the unlock. Delivery is asked for at once.
         let distributed = NSDistributedNotificationCenter::defaultCenter();
-        distributed.setSuspended(false);
+        let delivery = DeliveryWhileInactive::ask_for(&distributed);
         let distributed: Retained<NSNotificationCenter> = distributed.into_super();
 
-        let notice = |notices: &Arc<SystemNotices>, notice: SystemNotice| {
+        let forward = |notices: &Arc<SystemNotices>, kind: SystemNotice| {
             let notices = Arc::downgrade(notices);
             move || {
                 if let Some(notices) = notices.upgrade() {
-                    notices.dispatch(notice);
+                    notices.dispatch(kind);
                 }
             }
         };
@@ -190,29 +217,30 @@ impl SystemNoticeSources {
                 Observation::new(
                     workspace.clone(),
                     NSWorkspaceWillSleepNotification,
-                    notice(notices, SystemNotice::Sleep),
+                    forward(notices, SystemNotice::Sleep),
                 ),
                 Observation::new(
                     workspace.clone(),
                     NSWorkspaceDidWakeNotification,
-                    notice(notices, SystemNotice::Wake),
+                    forward(notices, SystemNotice::Wake),
                 ),
                 Observation::new(workspace, NSWorkspaceWillPowerOffNotification, session_end),
                 Observation::new(
                     distributed.clone(),
                     &NSString::from_str(SCREEN_LOCKED),
-                    notice(notices, SystemNotice::SessionLocked),
+                    forward(notices, SystemNotice::SessionLocked),
                 ),
                 Observation::new(
                     distributed,
                     &NSString::from_str(SCREEN_UNLOCKED),
-                    notice(notices, SystemNotice::SessionUnlocked),
+                    forward(notices, SystemNotice::SessionUnlocked),
                 ),
             ]
         };
         Self {
             _observations: observations,
             _memory_pressure: MemoryPressureSource::new(Arc::downgrade(notices)),
+            _delivery: delivery,
         }
     }
 }
