@@ -51,7 +51,7 @@ or a plan step) and counts exactly, as the `markers` and `file-length` gates do
 **D7 — The gate.** `cargo heli xtask testing` fails on:
 
 - a Cargo feature named `test-support` or `test-utils`;
-- a `fn pump`, `fn advance` or `fn tick` added under `tests/` outside a kit and not listed;
+- a `fn pump`, `fn advance` or `fn tick` added in test code outside a kit and not listed;
 - a type named `Mock*`, `Fake*`, `Scripted*`, `Recording*` or `Probe*` added in test code outside a
   kit and not listed.
 
@@ -66,8 +66,10 @@ exception. The starting allowlist is built from the same scope. The gate joins
 - The migration is gradual and measured: the allowlist starts at today's count and only goes down.
 - Crates below `flui-testing` use it from `tests/` and keep private kits only for unit tests inside
   `src/`; the allowlist shows what remains.
-- Renaming `test-support` and `test-utils` changes the dev-dependency feature lists of their users
-  and nothing in a consumer's build, because the features are test-only.
+- Renaming `test-support` and `test-utils` also changes normal dependency edges: `flui-testing`
+  enables `flui-runtime/test-support` from its `[dependencies]`, and the facade exposes
+  `flui-testing` through its optional `testing` feature. The rename step moves those edges in the same
+  change and builds the facade with `--features testing` to prove consumer test builds still resolve.
 - `docs/testing.md` gains the layer-to-kit table when the first migration lands.
 
 ## Alternatives rejected
@@ -80,8 +82,11 @@ exception. The starting allowlist is built from the same scope. The gate joins
 
 ## Verification
 
-`cargo heli nextest run -p xtask testing` runs a fixture tree with a listed and an unlisted helper, a
-renamed feature, a feature-gated double and a count that grew or fell, in the style of the `ratchet`
-fixtures. `cargo heli xtask testing` on the tree reports the starting allowlist with every entry citing
-this ADR or a plan step. Each migration step lowers a count and keeps `cargo heli nextest run` green on
-the changed crates.
+`testing_gate_fixture_rows` (xtask, run with `cargo heli nextest run -p xtask testing_gate`) walks a
+fixture tree in the style of the `ratchet` fixtures. Its rows pin a listed helper passing, an unlisted
+helper in `tests/` and in a `#[cfg(test)]` module failing, a feature named `test-support` failing, a
+double behind the `testing` feature failing, an unconditional production `Recording*` type ignored,
+and an allowlist count that grew or fell. `cargo heli xtask testing` on the tree reports the starting
+allowlist with every entry citing this ADR or a plan step. The feature rename is checked with
+`cargo heli check -p flui --features testing`. Each migration step lowers a count and keeps
+`cargo heli nextest run` green on the changed crates.
