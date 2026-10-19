@@ -468,14 +468,18 @@ impl ScrollOwner {
             return;
         }
         let mut recovery = PanicRecovery::new();
+        // Every slot is emptied before a settle tells a participant: no
+        // borrow is held while user code runs.
         let contact = self.contact.borrow_mut().take();
         let driving = self.driving.borrow_mut().take();
-        if let Some((_, sequence)) = self.autoscroll.borrow_mut().take() {
+        let autoscroll = self.autoscroll.borrow_mut().take();
+        let keyboard = self.keyboard.borrow_mut().take();
+        if let Some((_, sequence)) = autoscroll {
             sequence.finish_input();
             sequence.set_end_reason(ScrollEndReason::Cancelled);
             Self::settle(&sequence, ScrollEndReason::Cancelled, &mut recovery);
         }
-        if let Some(held) = self.keyboard.borrow_mut().take() {
+        if let Some(held) = keyboard {
             held.sequence.finish_input();
             held.sequence.set_end_reason(ScrollEndReason::Cancelled);
             Self::settle(&held.sequence, ScrollEndReason::Cancelled, &mut recovery);

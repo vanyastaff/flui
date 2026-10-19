@@ -938,7 +938,10 @@ impl ViewerLeaf {
     /// The viewer went away: what it leads ends cancelled.
     fn retire(&self) {
         let mut recovery = PanicRecovery::new();
-        if let Some(contact) = self.contact.borrow_mut().take() {
+        // Taken before its end tells a participant: no borrow is held while
+        // user code runs.
+        let contact = self.contact.borrow_mut().take();
+        if let Some(contact) = contact {
             contact.cancel_contact();
             contact.end(ScrollEndReason::Cancelled, &mut recovery);
         }
