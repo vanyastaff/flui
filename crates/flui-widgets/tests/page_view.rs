@@ -146,6 +146,43 @@ fn a_release_settles_on_a_page() {
     }
 }
 
+/// The pager's drag is axial: a drag along its axis turns the page, one
+/// across it never moves the pager, for either axis and device.
+#[test]
+fn a_drag_across_the_axis_does_not_turn_the_page() {
+    let horizontal = (at(280.0, 150.0), at(80.0, 150.0));
+    let vertical = (at(150.0, 280.0), at(150.0, 80.0));
+    for device in [Device::Touch, Device::Mouse] {
+        for (axis, along, across) in [
+            (Axis::Horizontal, horizontal, vertical),
+            (Axis::Vertical, vertical, horizontal),
+        ] {
+            let drag = |(from, to): (Offset<f64>, Offset<f64>)| {
+                let controller = PageController::new();
+                let (mut laid, _vsync) = mount(
+                    PageView::new(pages(3), pager_alternatives())
+                        .controller(controller.clone())
+                        .scroll_direction(axis),
+                );
+                let mut furthest = 0.0_f64;
+                laid.replay_with(&slow_drag(device, from, to), |_, _| {
+                    furthest = furthest.max(controller.position().extents_snapshot().pixels.abs());
+                });
+                settle(&mut laid);
+                (furthest, controller.page())
+            };
+            let (_, page) = drag(along);
+            assert_eq!(page, Some(1.0), "{device:?} {axis:?}: along the axis");
+            let (furthest, page) = drag(across);
+            assert_eq!(
+                furthest, 0.0,
+                "{device:?} {axis:?}: a drag across the axis never moves the pager"
+            );
+            assert_eq!(page, Some(0.0), "{device:?} {axis:?}: and turns no page");
+        }
+    }
+}
+
 #[test]
 fn a_page_view_turns_pages_with_the_scroll_keys() {
     let controller = PageController::new();

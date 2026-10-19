@@ -58,7 +58,7 @@
 
 | Имя | Крейт | Уровень | `surface.rs` | Первый продакшн-вызывающий |
 |---|---|---|---|---|
-| `HostInput`, `InputSequenceId`, `InputSurface` | `flui-runtime` (`HostInput`), `flui-foundation` (тип `InputSequenceId`, рядом с `DataTransferId`, чтобы контрактные крейты могли его называть), `flui-interaction` (выдаёт `GestureBinding`), `flui-platform-api` (`PointerKind::Virtual`) | Evolving / Stable | да | `flui-app` runner, `GestureBinding` |
+| `HostInput`, `InputSequenceId`, `InputSurface` | `flui-runtime` (`HostInput`), `flui-foundation` (тип `InputSequenceId`, рядом с `DataTransferId`, чтобы контрактные крейты могли его называть), `flui-interaction` (выдаёт `GestureBinding`), `flui-platform-api` (`PointerKind::Virtual`) | Evolving / Stable | `InputSequenceId` — да (`foundation`); `HostInput`, `InputSurface` — нет: граница хоста (`flui::app::HostInput`, `GestureBinding::embed_surface`), пакет на `flui-sdk` хоста не видит (ADR-0088 §4) | `flui-app` runner, `GestureBinding` |
 | арена, композиция, `PanClaim`, `allowed_devices`, `AxisLock`, `TransformLock`, свайп, трейт распознавателя, сдерживание | `flui-interaction` | Evolving через SDK | да | `GestureDetector`, `Scrollable` |
 | `RawGestureDetector`, слоты `GestureDetector` | `flui-widgets` | Evolving | да | все детекторы |
 | канал прокрутки, `SnapPolicy`, `OverscrollBehavior` | `flui-widgets` (`scroll::nested`) | Evolving | да | `Scrollable`, `PageView`, `RefreshIndicator`, `InteractiveViewer`, `AnchoredDrag` |
@@ -67,7 +67,7 @@
 | `HapticFeedback` (+варианты), `PanZoomPhase`, `PointerEvent::Revise`, поля пера | `flui-platform-api` | Stable | реэкспорт | бэкенды, binding |
 | `HapticPattern` и части, `HapticRequest`, `HapticOutcome`, `HapticCapabilities`, `InputCapabilities`, `Availability` | `flui-platform-api` за фичей `unstable-input` | Unstable до таблиц деградации и соответствия | реэкспорт за фичей | виджеты через lifecycle-возможность |
 | DnD-сессии | `flui-interaction` поверх ADR-0038 | Evolving | да | `Draggable`, `ReorderableList` |
-| `InputTap` | `flui-runtime` (реестр у рантайма), реэкспорт и установка — `flui-app` | Evolving | да | запись (dev/tool сборка) |
+| `InputTap` | `flui-runtime` (реестр у рантайма), реэкспорт и установка — `flui-app` | Evolving | нет: установка хостом (`flui::app::InputTap`, `AppConfig::with_input_tap`), пакету не нужна | запись (dev/tool сборка) |
 | запись, скрипты, проверки | `flui-testing` (бестиповый фрейминг, DTO); нативный кодек — тесты `flui-platform` | тестовый | нет | тесты всех слоёв |
 | `GestureObserver` / `GestureInspector` | `flui-interaction` / `flui-devtools` | Evolving / пакет | наблюдатель — да | `flui-devtools` |
 | `GestureAlternatives`, `Alternative`, `ControlSpec`, `MenuSpec`, `GestureCommand`, `CommandHandle`, `MenuRequest`, `ShowContextMenuIntent` | `flui-widgets` (`interaction::gesture_alternatives`; ключи меню — `DefaultFocusTraversal`) | Evolving | да | `Dismissible` |
@@ -283,6 +283,23 @@ pub trait NestedScrollConnection {
 - Hit-test по фигуре — render-объект с harness.
 - `OneEuro` после распознавания.
 
+Сверх перечня W, с причиной и потребителем:
+
+- `Alternative::Companion` (`CompanionSpec`, `CompanionLink`, `CompanionRegistration`, `CompanionGap`) —
+  третья одноуказательная альтернатива ADR-0216: виджет, уже рисующий элементы управления (вкладки
+  `flui-material`), регистрирует их на ссылке вместо второго набора кнопок; `CompanionGap` — отказ
+  `assert_gesture_alternatives`.
+- `SwipeAlternative::PresentedMenu` — меню `SwipeActions`, показанное презентером пакета дизайна, а не
+  бестемным `ContextMenuArea`; строка таблицы владения в `flui-testing` его проверяет.
+- `Dismissible` сохраняет словарь направлений, порогов и колбэков обновления (`DismissDirection`,
+  `DismissThreshold`, `DismissUpdateDetails`, `DismissDirectionCallback`): это настройка поверх
+  `AnchoredDrag`, которую задают `flui-material` и приложения; порог — проверенный newtype, а не `f64`.
+- `PanAxis` и `WheelScaleGate` у `InteractiveViewer` — ось панорамирования и выбор, масштабирует ли колесо
+  без модификатора: без них просмотрщик внутри списка забирает его прокрутку колесом.
+- `ForcePressSlot` у `GestureDetector` — слот распознавателя давления, как `DragSlot` и `TransformSlot`
+  (порог старта и пика, только для устройств с измеренным давлением).
+- `AnchoredDrag`: границы ключа, ошибки якорей и `set_anchors` — §18.
+
 ## 14. Доступность (A1–A9)
 
 `GestureAlternatives` регистрирует каждый `Intent` как semantics-действие (ADR-0203), клавишу (`Shortcuts`
@@ -336,7 +353,7 @@ live-region узел), строки W5 внесены у них. Строки м
 | слоты `GestureDetector` | структура с `Option` на семейство конфликта (`DragSlot`, `TransformSlot`) | потребляющий builder без typestate | неизменяемая конфигурация, пересборка сравнивает | `#[must_use]` |
 | `NestedScrollConnection`, диспетчер | открытый объектно-безопасный трейт на `&self`, методы по умолчанию, `!Send`; конкретный `NestedScrollDispatcher` | `ScrollStep`/`FlingStep` строит только диспетчер (`for_test` за `testing`); RPITIT нет | снимок `SmallVec<[Weak<dyn …>; 4]>` на последовательность; состояние участника в `Cell`/`RefCell` | нарушение контракта — обрезка с диагностикой |
 | `SnapPolicy` | открытый трейт по образцу `ScrollPhysics`: `target(&self, &ScrollMetrics, velocity) -> f64`; `PageSnap`, `AnchorSnap<K>` | — | `SnapPolicy: Send + Sync + Debug`, `Arc<dyn SnapPolicy>` как `SharedScrollPhysics`, идентичность — `Arc::ptr_eq` (шов компоновщика ADR-0207) | неконечная цель — обрезка с диагностикой |
-| `AnchoredDrag` | `AnchoredDrag<K: Copy + Eq + Hash + 'static>`, статически по перечислению якорей; `connection() -> Rc<dyn NestedScrollConnection>` | `DraggableAnchors::<K>::builder().at(k, x).build() -> Result<_, AnchorsError>` | хэндл `Rc` с `Cell`, уведомления — существующий `ChangeNotifier` | `AnchorsError::{Duplicate, NonFinite, Empty}` |
+| `AnchoredDrag` | `AnchoredDrag<K: Copy + Eq + 'static>`, статически по перечислению якорей; `Hash` не требуется — якоря — отсортированный по смещению срез `Rc<[(K, f64)]>`, ключ ищется линейно; в канале участвует сам как прокручиваемый, публичного `connection()` нет | `DraggableAnchors::<K>::builder().at(k, x).build() -> Result<_, AnchorsError>`; `AnchoredDragController::set_anchors` — команда хэндла, как `jump_to`, а не `set_*` конфигурации: якоря `Dismissible` и `SwipeActions` зависят от протяжённости ряда, известной после layout | хэндл `Rc` с `Cell`, уведомления — существующий `ChangeNotifier` | `AnchorsError::{Empty, NonFinite, OutOfRange, Duplicate, Coincident, Missing}`: `OutOfRange` держит произведения скоростей конечными, `Coincident` — два ключа на одном смещении неразличимы при покое, `Missing` — ключ `jump_to`/`animate_to` вне набора |
 | `GestureAlternatives` | `enum Alternative { VisibleControl(ControlSpec), ContextMenu(MenuSpec) }` — обязательный аргумент конструктора; `ContextMenu` строится только с условиями A1 | `I: Intent` типизированно | владеемая конфигурация | `on_unimplemented` на `Intent` |
 | `HapticPattern` | проверяющий builder без typestate | `Intensity(f32)`, `Sharpness(f32)`: `TryFrom<f32>`, `const fn new -> Option`; готовый — `Arc<[HapticEvent]>` (неизменяемое значение через `Send + Sync` границу платформы) | значение | `HapticPatternError::{Unordered { index }, NonFinite, OutOfRange, EnvelopeNotClosed, TooLong { max }}`; `TryFrom<f32, Error = UnitRangeError>` |
 | `HapticOutcome` | перечисление, не `Result` | `Queued(HapticTicket)`, билет — порядковый номер в презентации | значение | `#[must_use]`, `#[non_exhaustive]` |

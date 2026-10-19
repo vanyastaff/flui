@@ -11,6 +11,11 @@ use web_time::{Duration, Instant};
 
 /// A recognizer admits Down and receives the remaining pointer stream.
 /// Strong ownership lives in widget state; arena and attachments use weak references.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a gesture recognizer",
+    label = "missing `impl GestureRecognizer for {Self}`",
+    note = "a recognizer implements `GestureRecognizer` (`add_pointer`, `handle_event`, `cancel`) and its supertrait `GestureArenaMember` (`accept_gesture`, `reject_gesture`), and joins the arena through `ArenaMembership` or `PrimaryContact`"
+)]
 pub trait GestureRecognizer: GestureArenaMember {
     /// Admit a Down, committing membership before invoking user callbacks.
     fn add_pointer(&self, down: PointerDispatch<'_>);
