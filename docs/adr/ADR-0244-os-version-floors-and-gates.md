@@ -93,14 +93,21 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
    minimum, the refusal is the system's, before any FLUI code runs: Android will not install an APK
    below `minSdk`, iOS will not install below `MinimumOSVersion`, macOS will not launch a binary whose
    `minos` or `LSMinimumSystemVersion` is newer, and the dynamic loader rejects a Linux binary whose
-   glibc symbols are newer. Everywhere the executable does start (Windows, whose manifest does not
-   block a launch; the Linux driver and protocol parts of the floor; the Web), the built-in backend
-   reads its version once, when the platform is built, and compares it with the floor before anything
-   else; below it the constructor returns
-   `PlatformError::UnsupportedOs { environment, found, floor }`, and the app runner prints it and exits
-   non-zero. A version that cannot be read is not below the floor: it starts and unlocks no gate. On
-   the Web, where a page has no exit status, a browser with neither a WebGPU nor a WebGL2 adapter gets
-   the same error returned from the web runner instead of a panic: it is written to the console, the
+   glibc symbols are newer. Where the executable does start, the refusal has two forms, by what the
+   floor is made of:
+   - a **version** floor (Windows, whose manifest does not block a launch, and the versioned
+     environments as a second line): the built-in backend reads its version once, when the platform
+     is built, and compares it with the floor before anything else; below it the constructor returns
+     `PlatformError::UnsupportedOs { environment, found, floor }`. A version that cannot be read is
+     not below the floor: it starts and unlocks no gate;
+   - a **requirement** floor (the Linux drivers and protocols, the Web's graphics API, and a GPU
+     adapter anywhere), which has no value to compare: the probe that finds it missing returns
+     `PlatformError::MissingRequirement { environment, requirement }` naming what was looked for (the
+     `xdg_wm_base` global, RandR 1.5, a WebGPU or WebGL2 adapter), and the renderer's
+     `EngineError::NoSupportedGpu` is reported the same way.
+
+   A native app runner prints either error and exits non-zero. On the Web, where a page has no exit
+   status, the error is returned from the web runner instead of a panic: it is written to the console, the
    runner replaces the app's host element with a message naming what is missing, and no frame is
    scheduled.
 
@@ -218,7 +225,7 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
   window-tiling `TODO`.
 - `WindowsBuild`, Apple `OsVersion` and `AndroidApi` move under one module sharing `Since<F>`; the
   version types stay per environment because their shapes differ.
-- `PlatformError::UnsupportedOs` is a new public error, returned by FLUI's built-in backends. An
+- `PlatformError::UnsupportedOs` and `PlatformError::MissingRequirement` are new public errors, returned by FLUI's built-in backends. An
   external backend has no seam to return it through today (`Platform::run` takes an `OwnerPlatform`
   outside code cannot mint); that seam is its own decision.
 - A low floor costs proof: each floor needs a machine, image, emulator or simulator to run on, and
