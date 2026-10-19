@@ -64,12 +64,14 @@ impl FocusCoordinator {
 }
 
 /// What applying one platform input did: whether a handler consumed it (a
-/// key a shortcut or focused node handled) and the input sequence its
-/// dispatch placed it in.
+/// key a shortcut or focused node handled), the input sequence its
+/// dispatch placed it in, and whether it was held for its presentation's
+/// committed tree instead, its row then recorded where it is dispatched.
 #[derive(Debug, Clone, Copy, Default)]
 struct Applied {
     handled: bool,
     sequence: Option<InputSequenceId>,
+    held: bool,
 }
 
 /// Keep the earliest input-phase panic when cleanup or wake work also
@@ -267,7 +269,8 @@ impl UiRuntime {
     /// While a tap records, the input is recorded after its dispatch
     /// committed, with the sequence the dispatch placed it in and followed by
     /// the arena verdicts it produced (ADR-0215 §1); a dispatch failure is
-    /// recorded too and then resumed.
+    /// recorded too and then resumed. Pointer input held for the tree's commit
+    /// is recorded where it is dispatched or discarded instead.
     pub fn handle_input_addressed(
         &self,
         presentation_id: PresentationId,
@@ -292,15 +295,21 @@ impl UiRuntime {
     ) -> bool {
         if !self.begin_recorded_input() {
             return self
-                .apply_platform_input(presentation_id, surface, input)
+                .apply_platform_input(presentation_id, surface, input, false)
                 .handled;
         }
         let keyboard = matches!(input, PlatformInput::Keyboard(_));
         let recorded = input.clone();
         let applied = catch_unwind(AssertUnwindSafe(|| {
-            self.apply_platform_input(presentation_id, surface, input)
+            self.apply_platform_input(presentation_id, surface, input, true)
         }));
         let (outcome, sequence) = match &applied {
+            // Its row waits for the dispatch; the rows of input the hold
+            // discarded go out now.
+            Ok(applied) if applied.held => {
+                self.deliver_input_records();
+                return applied.handled;
+            }
             Ok(applied) if keyboard && !applied.handled => {
                 (crate::owner::InputOutcome::Unhandled, applied.sequence)
             }
@@ -317,11 +326,14 @@ impl UiRuntime {
         applied.map_or_else(|payload| resume_unwind(payload), |applied| applied.handled)
     }
 
+    /// Apply `input`; while `recording`, pointer input held for the tree's
+    /// commit takes its input row along.
     fn apply_platform_input(
         &self,
         presentation_id: PresentationId,
         surface: InputSurface,
         input: PlatformInput,
+        recording: bool,
     ) -> Applied {
         let target_id = match &input {
             PlatformInput::Keyboard(_) => self.focus_coordinator.active(),
@@ -380,12 +392,16 @@ impl UiRuntime {
                     let pointer_id = flui_interaction::PointerEventExt::pointer_id(&pointer_event);
                     let has_active_contact_sequence =
                         pointer_id.is_some_and(|id| presentation.gestures().has_hit_test(id));
-                    presentation.held_pointer_input().borrow_mut().append_on(
-                        surface,
-                        pointer_event,
-                        has_active_contact_sequence,
-                    );
-                    return Applied::default();
+                    let row = recording
+                        .then(|| self.held_input_row(presentation, surface, &pointer_event));
+                    presentation
+                        .held_pointer_input()
+                        .borrow_mut()
+                        .append_recorded(surface, pointer_event, has_active_contact_sequence, row);
+                    return Applied {
+                        held: true,
+                        ..Applied::default()
+                    };
                 }
                 let mut sequence = None;
                 let dispatch =
@@ -393,8 +409,8 @@ impl UiRuntime {
                         .map(|dispatched| sequence = dispatched);
                 self.finish_addressed_input_dispatch(presentation, dispatch);
                 Applied {
-                    handled: false,
                     sequence,
+                    ..Applied::default()
                 }
             }
             PlatformInput::Keyboard(keyboard_event) => {
@@ -417,7 +433,7 @@ impl UiRuntime {
                 self.finish_addressed_input_dispatch(presentation, dispatch);
                 Applied {
                     handled,
-                    sequence: None,
+                    ..Applied::default()
                 }
             }
             PlatformInput::DragDrop(drag_drop_event) => {
@@ -664,7 +680,11 @@ impl UiRuntime {
                 false
             }
         };
-        Applied { handled, sequence }
+        Applied {
+            handled,
+            sequence,
+            held: false,
+        }
     }
 
     /// Note the vsync of the frame about to be delivered to `presentation_id`

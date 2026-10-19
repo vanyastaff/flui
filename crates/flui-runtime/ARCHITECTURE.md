@@ -495,7 +495,14 @@ admitted after its dispatch committed (a dispatch panic is recorded, then
 resumed), followed by the arena decisions a `GestureObserver` on each presentation's
 arena reported during it, each stamped with the time its arena committed it
 (`a_decision_row_carries_its_commit_time`); decisions made inside a frame
-follow its frame row when the pump ends. An applied preference revision is a `Preferences` row.
+follow its frame row when the pump ends. Pointer input a presentation holds for
+its committed tree carries its row with the held event (`HeldInputRow`): the
+frame's replay admits it after the verdicts reached before that dispatch, with
+the input's arrival and the dispatch's sequence; a dispatch that fails still
+admits it, in no sequence, before the failure resumes. Dropped undispatched,
+wherever the held queue drops it, it admits itself as `Queued` with no
+sequence, which replay skips. An applied preference revision is a
+`Preferences` row.
 Without a tap nothing is cloned and no arena is observed. Delivery is a batched pass over owned rows
 with no runtime or registry borrow held: rows a tap admits reentrantly wait for
 the next pass, which an owner wake starts. Every call is contained; the first

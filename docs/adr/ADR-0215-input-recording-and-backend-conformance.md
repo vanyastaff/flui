@@ -1,7 +1,8 @@
 # ADR-0215: Input is recorded as the `HostInput` stream, and backends are certified against one conformance table
 
 - **Status:** Accepted (2026-10-13); §8 amended (2026-10-18): Android injects through the shell's
-  `input` and `uinput` commands, not instrumentation. §1–§6 are implemented; §4's native codec is in
+  `input` and `uinput` commands, not instrumentation; §1 amended (2026-10-19): pointer input held
+  for a commit is recorded where it is dispatched or discarded. §1–§6 are implemented; §4's native codec is in
   `crates/flui-platform/tests/native_recording/`, with the `native-capture` feature to record on a
   native host. §7 is implemented for pointer assembly, clocks, the scroll grammar, undecodable
   readings, availability and ownership (`flui_testing::backend_conformance`), with its DnD,
@@ -41,7 +42,17 @@ and put `serde` on the Stable contract crate.
    installs one per runtime through `flui-app`'s `AppConfig::with_input_tap`, which re-exports
    the tap and record types. An `Input` row holds the `InputSurface`/`WindowId` it addressed
    (the window, or a surface embedded in it, ADR-0207 §5), `t` (the `EventTime`), the arrival
-   time, the dispatch result and the `InputSequenceId` dispatch placed it in. The arena's
+   time, the dispatch result and the `InputSequenceId` dispatch placed it in. Pointer input a
+   presentation holds until its tree is committed (ADR-0048) gets its row where the runtime
+   dispatches it: with the time it arrived, the event as dispatched (held moves folded into it)
+   and that dispatch's sequence, ahead of the verdicts the dispatch reaches. Held input the
+   runtime never dispatches (refused, folded into a later move, superseded, evicted, or dropped
+   when the window hides, loses the contact or closes) gets its row where it is discarded, with
+   the outcome `Queued` and no sequence; replay does not apply it, since the recorded runtime
+   never delivered it (rows
+   `a_pointer_held_for_the_first_commit_records_the_sequence_its_dispatch_minted`,
+   `a_held_pointer_discarded_by_lifecycle_is_recorded_undelivered`). Held input is recorded
+   only when a tap was registered at its arrival. The arena's
    verdicts (the decisions `GestureObserver` reports, each naming its contest's sequence) are
    recorded as `Decision` rows in the same stream, so decisions made later on deadlines, with no
    input of their own, are replayable. A `Decision` row names its member by a number the

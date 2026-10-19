@@ -11,7 +11,8 @@ use flui_interaction::GestureDisposition;
 use flui_interaction::PointerId;
 use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
 use flui_platform_api::{GesturePreferences, PlatformInput, SystemPreferences};
-use flui_runtime::{DecisionRow, InputRecord};
+use flui_runtime::owner::InputOutcome;
+use flui_runtime::{DecisionRow, HostInput, InputRecord, InputRow};
 use flui_testing::recording::{
     Privacy, RecordingClock, RecordingError, RecordingReader, RecordingWriter, ReplayableRecording,
     record,
@@ -25,7 +26,23 @@ fn host(log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
 
 /// [`host`] presenting into `window`.
 fn host_on(window: HeadlessWindow, log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
-    let mut host = HeadlessHost::new(window);
+    let mut host = attached(window, log);
+    let _ = host.pump(Duration::from_millis(16));
+    host
+}
+
+/// [`host`] whose surface deferred its first frame: the tree rendered but is
+/// not committed, so pointer input waits for the next presented frame.
+fn uncommitted(log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
+    let mut host = attached(HeadlessWindow::new(200, 200), log);
+    host.defer_presents(1);
+    let _ = host.pump(Duration::from_millis(16));
+    host
+}
+
+/// The box of [`host`], attached to a host on `window` and not pumped yet.
+fn attached(window: HeadlessWindow, log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
+    let host = HeadlessHost::new(window);
     let (taps, presses) = (Rc::clone(log), Rc::clone(log));
     host.attach(
         &flui_widgets::GestureDetector::new()
@@ -36,7 +53,6 @@ fn host_on(window: HeadlessWindow, log: &Rc<RefCell<Vec<&'static str>>>) -> Head
             )),
     )
     .expect("attach");
-    let _ = host.pump(Duration::from_millis(16));
     host
 }
 
@@ -66,8 +82,17 @@ fn recorded(
     privacy: Privacy,
     session: impl FnOnce(&mut HeadlessHost),
 ) -> (Vec<u8>, Vec<&'static str>) {
+    recorded_on(host, privacy, session)
+}
+
+/// [`recorded`] on the host `make` builds over the log of what fired.
+fn recorded_on(
+    make: fn(&Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost,
+    privacy: Privacy,
+    session: impl FnOnce(&mut HeadlessHost),
+) -> (Vec<u8>, Vec<&'static str>) {
     let log = Rc::new(RefCell::new(Vec::new()));
-    let mut host = host(&log);
+    let mut host = make(&log);
     let writer = RecordingWriter::new(Vec::new(), &host.recording_header(privacy))
         .expect("the header writes");
     let recording = record(host.input_taps(), writer).expect("first tap registration");
@@ -125,7 +150,7 @@ fn a_recording_replays_to_the_decisions_it_recorded() {
 #[test]
 fn a_scale_change_mid_recording_replays_to_the_same_decisions() {
     use flui_platform_api::PlatformWindow as _;
-    use flui_runtime::{HostInput, owner::WindowObservation};
+    use flui_runtime::owner::WindowObservation;
 
     let (bytes, fired) = recorded(Privacy::Redact, |host| {
         press(host, 1, 3);
@@ -171,7 +196,7 @@ fn a_scale_change_mid_recording_replays_to_the_same_decisions() {
 /// no row at all.
 #[test]
 fn a_move_through_the_window_state_records_the_move() {
-    use flui_runtime::{HostInput, owner::WindowObservation};
+    use flui_runtime::owner::WindowObservation;
 
     let registry = flui_platform_api::DisplayRegistry::new();
     let display = registry
@@ -400,8 +425,6 @@ fn a_truncated_recording_dispatches_nothing() {
 fn text_rows() -> Vec<InputRecord> {
     use flui_platform_api::keyboard::{Code, Key, KeyEvent, KeyState};
     use flui_platform_api::{EventTime, ImeEvent, WindowId};
-    use flui_runtime::owner::InputOutcome;
-    use flui_runtime::{HostInput, InputRow};
 
     let at = EventTime::from_nanos(1_000);
     let request = |action, text: &str| accesskit::ActionRequest {
@@ -652,13 +675,38 @@ fn a_factory_tap_ends_its_recording_when_the_runtime_goes_away() {
     );
 }
 
+/// The pointer rows of `rows`, with their positions.
+fn pointer_rows(rows: &[InputRecord]) -> Vec<(usize, &InputRow)> {
+    rows.iter()
+        .enumerate()
+        .filter_map(|(index, row)| match row {
+            InputRecord::Input(row)
+                if matches!(row.input, HostInput::Platform(PlatformInput::Pointer(_))) =>
+            {
+                Some((index, row))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The position of the first frame row of `rows`, and the row.
+fn first_frame(rows: &[InputRecord]) -> (usize, &InputRow) {
+    rows.iter()
+        .enumerate()
+        .find_map(|(index, row)| match row {
+            InputRecord::Input(row) if matches!(row.input, HostInput::Frame { .. }) => {
+                Some((index, row))
+            }
+            _ => None,
+        })
+        .expect("the session pumped a frame")
+}
+
 /// Two contacts reusing one pointer ID are two sequences in a recording: each
 /// pointer row names the sequence its dispatch placed it in, and each verdict
 /// the sequence its contest decided.
-#[test]
 fn a_reused_pointer_id_records_two_sequences() {
-    use flui_runtime::HostInput;
-
     let (bytes, fired) = recorded(Privacy::Redact, |host| {
         press(host, 1, 3);
         press(host, 1, 3);
@@ -700,6 +748,131 @@ fn a_reused_pointer_id_records_two_sequences() {
             .map(|(_, sequence)| *sequence)
             .collect::<Vec<_>>(),
         "each Down row names the sequence its contest decided"
+    );
+}
+
+/// A press that arrives while the first frame waits for its surface is held
+/// until a frame commits the tree. Its rows are recorded where that frame
+/// dispatches it, keeping the time the input arrived, in the sequence the
+/// dispatch placed it in and ahead of the verdicts it led to; a replay
+/// decides as the recording did.
+fn a_pointer_held_for_the_first_commit_records_the_sequence_its_dispatch_minted() {
+    let (bytes, fired) = recorded_on(uncommitted, Privacy::Redact, |host| {
+        touch(host, 1, true);
+        touch(host, 1, false);
+        let _ = host.pump(Duration::from_millis(16));
+        let _ = host.pump(Duration::from_millis(16));
+    });
+    assert_eq!(
+        fired,
+        ["tap"],
+        "the presented frame delivered the held press"
+    );
+    let recording = replayable(&bytes).expect("a whole recording");
+    let rows = recording.rows();
+    let decisions = recording.decisions();
+    let won = decisions
+        .iter()
+        .find(|decision| decision.disposition == GestureDisposition::Accepted)
+        .expect("the tap won its contest");
+    assert!(won.sequence.is_some(), "the contest names its sequence");
+    let pointers = pointer_rows(rows);
+    assert_eq!(pointers.len(), 2, "the Down and the Up");
+    for (_, row) in &pointers {
+        assert_eq!(
+            row.sequence, won.sequence,
+            "a held pointer row names the sequence its dispatch placed it in"
+        );
+        assert_eq!(row.outcome, InputOutcome::Handled);
+    }
+    let (frame_at, frame) = first_frame(rows);
+    let (down_at, down) = pointers[0];
+    assert!(
+        frame_at < down_at,
+        "the row is recorded where the frame dispatched it"
+    );
+    assert!(
+        down.arrival < frame.arrival,
+        "the row keeps the time the input arrived"
+    );
+    assert!(
+        rows.iter().enumerate().all(|(index, row)| match row {
+            InputRecord::Decision(decision) if decision.sequence == won.sequence => index > down_at,
+            _ => true,
+        }),
+        "the verdicts of the press follow its Down row"
+    );
+
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut fresh = host(&log);
+    assert_eq!(
+        fresh.replay(&recording),
+        decisions,
+        "the replay decided as the recording did"
+    );
+    assert_eq!(*log.borrow(), ["tap"]);
+}
+
+/// A press held for the first commit that its presentation drops instead (the
+/// window hid before the frame, ending the contact) is recorded where it was
+/// dropped: accepted, never delivered, in no sequence. A replay does not
+/// apply it, so it opens no contest there either.
+fn a_held_pointer_discarded_by_lifecycle_is_recorded_undelivered() {
+    let (bytes, fired) = recorded_on(uncommitted, Privacy::Redact, |host| {
+        touch(host, 1, true);
+        host.set_window_visible(false);
+        host.set_window_visible(true);
+        // Past the long-press deadline: a delivered press would fire it.
+        for _ in 0..40 {
+            let _ = host.pump(Duration::from_millis(16));
+        }
+    });
+    assert!(fired.is_empty(), "the dropped press reached no widget");
+    let recording = replayable(&bytes).expect("a whole recording");
+    let rows = recording.rows();
+    let pointers = pointer_rows(rows);
+    assert_eq!(pointers.len(), 1, "the dropped Down keeps its row");
+    let (down_at, down) = pointers[0];
+    assert_eq!(
+        (down.outcome, down.sequence),
+        (InputOutcome::Queued, None),
+        "accepted, never delivered, in no sequence"
+    );
+    assert!(
+        down_at < first_frame(rows).0,
+        "recorded where the hidden window dropped it"
+    );
+    assert!(recording.decisions().is_empty(), "no contest was decided");
+
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut fresh = host(&log);
+    assert!(
+        fresh.replay(&recording).is_empty(),
+        "the replay dispatched nothing for it"
+    );
+    assert!(log.borrow().is_empty());
+}
+
+/// Every pointer row names the input sequence its dispatch placed it in, so a
+/// reader can join a gesture's input with its verdicts.
+#[test]
+fn input_rows_carry_the_sequence_their_dispatch_placed_them_in() {
+    crate::run_table(
+        "input_rows_carry_the_sequence_their_dispatch_placed_them_in",
+        &[
+            (
+                "a_reused_pointer_id_records_two_sequences",
+                a_reused_pointer_id_records_two_sequences as fn(),
+            ),
+            (
+                "a_pointer_held_for_the_first_commit_records_the_sequence_its_dispatch_minted",
+                a_pointer_held_for_the_first_commit_records_the_sequence_its_dispatch_minted,
+            ),
+            (
+                "a_held_pointer_discarded_by_lifecycle_is_recorded_undelivered",
+                a_held_pointer_discarded_by_lifecycle_is_recorded_undelivered,
+            ),
+        ],
     );
 }
 
@@ -780,7 +953,7 @@ fn two_members_of_one_type_replay_to_the_right_winner() {
 /// replay routes it to the surface the replaying host embedded in its place.
 #[test]
 fn input_to_an_embedded_surface_records_and_replays_to_the_same_decisions() {
-    use flui_runtime::{HostInput, RecordedSurface};
+    use flui_runtime::RecordedSurface;
 
     fn touch_on(host: &HeadlessHost, surface: flui_interaction::InputSurface, down: bool) {
         let id = PointerId::try_from(4_u64).expect("nonzero pointer");

@@ -496,9 +496,20 @@ impl UiRuntime {
             return;
         };
         let mut replayed = 0usize;
-        for (surface, pointer_event) in replay.by_ref() {
+        for mut held in replay.by_ref() {
+            let row = held.take_row();
+            if row.is_some() {
+                // Verdicts reached earlier in the frame precede this input's
+                // row; the ones its dispatch reaches follow it.
+                self.admit_decisions();
+            }
             let dispatch =
-                Self::dispatch_pointer_event_entered(presentation, surface, &pointer_event);
+                Self::dispatch_pointer_event_entered(presentation, held.surface, &held.event);
+            // Recorded before a dispatch failure resumes: the event was
+            // dispatched, so its row is not lost with the unwind.
+            if let Some(row) = row {
+                row.dispatched(&held.event, dispatch.as_ref().ok().copied().flatten());
+            }
             replayed = replayed.saturating_add(1);
             if let Err(payload) = dispatch {
                 self.request_redraw_for(presentation);

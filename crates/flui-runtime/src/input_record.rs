@@ -114,15 +114,24 @@ pub struct InputRow {
     /// The input's own time: the event's stamp, a frame's vsync, or the
     /// arrival time for input that carries none.
     pub t: EventTime,
-    /// When the runtime applied it, on the same event timeline.
+    /// When the input reached the runtime, on the same event timeline. Rows
+    /// follow the order the runtime applied their input, so the row of
+    /// pointer input a presentation held for its committed tree, recorded
+    /// where it was dispatched or discarded, arrived before the rows ahead
+    /// of it.
     pub arrival: EventTime,
-    /// The input.
+    /// The input: for held pointer input that was dispatched, the event as
+    /// dispatch delivered it, with the held moves folded into it.
     pub input: HostInput,
-    /// The dispatch result.
+    /// The dispatch result. [`InputOutcome::Queued`] is held pointer input
+    /// the runtime accepted and never dispatched (refused, folded into a later
+    /// move, superseded, evicted or dropped with its presentation's held
+    /// input), which a replay does not apply.
     pub outcome: InputOutcome,
     /// The input sequence the dispatch placed it in: a contact's, a wheel or
     /// trackpad latch's, an assistive action's. `None` for input outside any
-    /// sequence (hover, frames, window observations) or not dispatched yet.
+    /// sequence (hover, frames, window observations), never dispatched, or
+    /// whose dispatch failed.
     pub sequence: Option<RecordedSequence>,
 }
 

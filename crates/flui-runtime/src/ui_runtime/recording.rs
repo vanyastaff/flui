@@ -4,9 +4,12 @@
 //! committed, followed by the arena decisions that dispatch produced, which a
 //! [`GestureObserver`](flui_interaction::gesture::GestureObserver) on each
 //! presentation's arena reports; decisions made inside a frame (a deadline
-//! with no input of its own) follow the frame row once the pump ends. A
-//! delivery pass then hands the rows to the tap with no runtime borrow held.
-//! Nothing is cloned, kept or observed while no tap is registered.
+//! with no input of its own) follow the frame row once the pump ends. Pointer
+//! input a presentation holds for its committed tree keeps its row with the
+//! held event, admitted where the frame dispatches it or where the queue
+//! discards it ([`HeldInputRow`]). A delivery pass then hands the rows to the
+//! tap with no runtime borrow held. Nothing is cloned, kept or observed while
+//! no tap is registered.
 
 use std::cell::RefCell;
 use std::num::NonZeroU64;
@@ -24,6 +27,7 @@ use crate::input_record::{
     DeadlineRow, DecisionRow, InputRecord, InputRow, PreferencesRow, RecordedMember,
     RecordedSequence, RecordingStart, RecordingWindow, input_time,
 };
+use crate::input_tap::HeldInputRow;
 use crate::owner::InputOutcome;
 use crate::{HostInput, InputTaps};
 
@@ -247,6 +251,31 @@ impl UiRuntime {
         }
         self.admit_decisions();
         self.input_taps.deliver();
+    }
+
+    /// The row of `event`, addressed to `surface` of `presentation`'s window
+    /// and arriving now while its presentation holds pointer input: admitted
+    /// when the event is dispatched or discarded, with this arrival.
+    pub(crate) fn held_input_row(
+        &self,
+        presentation: &crate::presentation::PresentationState,
+        surface: InputSurface,
+        event: &flui_interaction::PointerEvent,
+    ) -> HeldInputRow {
+        let arrival = self.event_now();
+        let input = HostInput::Platform(flui_platform_api::PlatformInput::Pointer(event.clone()));
+        let t = input_time(&input).unwrap_or(arrival);
+        HeldInputRow::new(
+            self.input_taps.clone(),
+            InputRow::new(
+                presentation.window_id(),
+                t,
+                arrival,
+                input,
+                InputOutcome::Queued,
+            )
+            .on_surface(surface),
+        )
     }
 
     /// Admit an applied system-preference revision and deliver.

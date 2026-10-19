@@ -461,12 +461,13 @@ impl PlatformAccessibility for HeadlessAccessibility {
 }
 
 /// The frame sink of a [`HeadlessHost`]: a surface of fixed size that
-/// presents every scene and keeps the last one.
+/// presents every scene and keeps the last one, unless told to defer some.
 #[derive(Debug)]
 pub struct HeadlessSink {
     size: (u32, u32),
     last_scene: Option<Scene>,
     submits: u64,
+    deferred: u32,
 }
 
 impl HeadlessSink {
@@ -477,6 +478,7 @@ impl HeadlessSink {
             size: (width, height),
             last_scene: None,
             submits: 0,
+            deferred: 0,
         }
     }
 
@@ -487,7 +489,7 @@ impl HeadlessSink {
         self.last_scene.as_ref().map(Scene::tree)
     }
 
-    /// How many scenes have been submitted.
+    /// How many scenes have been submitted, not counting deferred ones.
     #[must_use]
     pub fn submits(&self) -> u64 {
         self.submits
@@ -500,6 +502,10 @@ impl FrameSink for HeadlessSink {
     }
 
     fn submit(&mut self, scene: Scene) -> SubmitVerdict {
+        if let Some(deferred) = self.deferred.checked_sub(1) {
+            self.deferred = deferred;
+            return SubmitVerdict::Retry;
+        }
         self.last_scene = Some(scene);
         self.submits = self.submits.saturating_add(1);
         SubmitVerdict::Presented
@@ -752,6 +758,14 @@ impl HeadlessHost {
                 panic!("{failure}")
             }
         }
+    }
+
+    /// Defer the next `frames` submits, as a surface not yet ready to show
+    /// its window defers them (`SubmitVerdict::Retry`): those frames render,
+    /// their tree stays uncommitted, and pointer input waits for the first
+    /// presented frame to be dispatched (ADR-0048).
+    pub fn defer_presents(&mut self, frames: u32) {
+        self.sink.deferred = frames;
     }
 
     /// Deliver `input` to the UI runtime's primary presentation, as a runner
@@ -1200,7 +1214,10 @@ impl HeadlessHost {
     /// recorded window moves to its recorded scale (as a runner delivers a
     /// scale change) and its per-kind gesture values replace this host's, and
     /// the recorded system-preference values apply. Each input is then
-    /// applied at its recorded arrival: the clock advances to it first. The
+    /// applied at its recorded arrival: the clock advances to it first, and
+    /// never back, since pointer input the recorded host held for its first
+    /// commit is recorded where it was dispatched. Input the recorded host
+    /// accepted and never delivered (`InputOutcome::Queued`) is not applied. The
     /// windows the recording names must be this host's (the same
     /// [`WindowId`]s), and an embedded surface it names one this host
     /// [embedded](Self::embed_surface) in the same order; preference
@@ -1244,6 +1261,12 @@ impl HeadlessHost {
         let mut last_frame = None;
         for row in recording.rows() {
             match row {
+                // Held input its host discarded: nothing dispatched it.
+                InputRecord::Input(row)
+                    if row.outcome == flui_runtime::owner::InputOutcome::Queued =>
+                {
+                    continue;
+                }
                 InputRecord::Input(row) => {
                     let presentation = self.presentation_of(row.window);
                     self.advance_to(row.arrival);

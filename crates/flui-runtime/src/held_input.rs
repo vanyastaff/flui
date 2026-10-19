@@ -6,6 +6,8 @@ use std::collections::VecDeque;
 use flui_foundation::PresentationId;
 use flui_interaction::{InputSurface, PointerEvent, PointerEventExt, PointerId};
 
+use crate::input_tap::HeldInputRow;
+
 /// Most pointer events one presentation retains while it has no committed
 /// tree, counting events handed out for an in-flight replay.
 pub const HELD_POINTER_CAPACITY: usize = 256;
@@ -13,14 +15,28 @@ pub const HELD_POINTER_CAPACITY: usize = 256;
 /// One held pointer event and the surface of the window it addressed: the
 /// window itself or a surface embedded in it, where it is dispatched once
 /// the tree is committed.
-#[derive(Debug, Clone)]
-struct Held {
-    surface: InputSurface,
-    event: PointerEvent,
+///
+/// While a recording runs it also holds the event's input row, which
+/// dispatching it admits with the sequence the dispatch placed it in and
+/// dropping it admits as never delivered (ADR-0215 §1).
+#[derive(Debug)]
+pub struct HeldEvent {
+    /// The surface of the window the event addressed.
+    pub surface: InputSurface,
+    /// The event.
+    pub event: PointerEvent,
+    row: Option<HeldInputRow>,
+}
+
+impl HeldEvent {
+    /// Take the event's input row, to admit once the event is dispatched.
+    pub(crate) fn take_row(&mut self) -> Option<HeldInputRow> {
+        self.row.take()
+    }
 }
 
 /// The queue reasons about pointer epochs, which the event alone decides.
-impl std::ops::Deref for Held {
+impl std::ops::Deref for HeldEvent {
     type Target = PointerEvent;
 
     fn deref(&self) -> &PointerEvent {
@@ -63,7 +79,7 @@ struct QueueCounters {
 /// uncommitted-frame storm.
 pub struct HeldPointerQueue {
     presentation_id: PresentationId,
-    events: VecDeque<Held>,
+    events: VecDeque<HeldEvent>,
     replay_in_flight: bool,
     replay_reserved: usize,
     replay_tail_open_pointers: Vec<PointerId>,
@@ -135,7 +151,24 @@ impl HeldPointerQueue {
         event: PointerEvent,
         has_active_contact_sequence: bool,
     ) {
-        let mut held = Held { surface, event };
+        self.append_recorded(surface, event, has_active_contact_sequence, None);
+    }
+
+    /// [`append_on`](Self::append_on) with the event's input row while a
+    /// recording runs: the row is admitted when the event is dispatched, or
+    /// as undelivered when the queue refuses or discards it.
+    pub(crate) fn append_recorded(
+        &mut self,
+        surface: InputSurface,
+        event: PointerEvent,
+        has_active_contact_sequence: bool,
+        row: Option<HeldInputRow>,
+    ) {
+        let mut held = HeldEvent {
+            surface,
+            event,
+            row,
+        };
         let pointer_id = held.event.pointer_id();
         let motion_class = Self::motion_class(&held.event);
         let has_queued_open_epoch = pointer_id.is_some_and(|id| self.has_open_epoch(id));
@@ -690,7 +723,7 @@ impl HeldPointerQueue {
         self.active_route_terminal_pointers = retained_pointers;
     }
 
-    fn retain_replay_active_route_terminals(&mut self, replay_events: &VecDeque<Held>) {
+    fn retain_replay_active_route_terminals(&mut self, replay_events: &VecDeque<HeldEvent>) {
         let mut retained_pointers = Vec::new();
         for pointer_id in &self.replay_active_route_terminal_pointers {
             let retained_count = retained_pointers
@@ -714,7 +747,7 @@ impl HeldPointerQueue {
     fn remove_replay_active_route_terminal(
         &mut self,
         pointer_id: PointerId,
-        replay_events_after_dispatch: &VecDeque<Held>,
+        replay_events_after_dispatch: &VecDeque<HeldEvent>,
     ) {
         let protected_terminal_count = self
             .replay_active_route_terminal_pointers
@@ -859,7 +892,7 @@ impl HeldPointerQueue {
 #[must_use = "dropping an unconsumed replay batch restores its remaining input"]
 pub struct HeldPointerReplay<'a> {
     queue: &'a RefCell<HeldPointerQueue>,
-    remaining: VecDeque<Held>,
+    remaining: VecDeque<HeldEvent>,
     snapshot_events: usize,
     completed: bool,
 }
@@ -1039,9 +1072,9 @@ impl<'a> HeldPointerReplay<'a> {
     }
 }
 
-/// Each held event with the surface it addressed, in arrival order.
+/// Each held event, with the surface it addressed, in arrival order.
 impl Iterator for HeldPointerReplay<'_> {
-    type Item = (InputSurface, PointerEvent);
+    type Item = HeldEvent;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.discard_remaining_if_cleared() {
@@ -1082,7 +1115,7 @@ impl Iterator for HeldPointerReplay<'_> {
         } else {
             self.complete_inner();
         }
-        event.map(|held| (held.surface, held.event))
+        event
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -1178,7 +1211,7 @@ mod tests {
 
     fn drain(queue: &RefCell<HeldPointerQueue>) -> Vec<PointerEvent> {
         let mut replay = HeldPointerReplay::begin(queue).expect("no replay is already in flight");
-        let events = replay.by_ref().map(|(_, event)| event).collect();
+        let events = replay.by_ref().map(|held| held.event).collect();
         replay.complete();
         events
     }
@@ -1211,7 +1244,7 @@ mod tests {
 
         let mut replay = HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
         assert!(matches!(
-            replay.next().map(|(_, event)| event),
+            replay.next().map(|held| held.event),
             Some(PointerEvent::Down(_))
         ));
         queue
@@ -1248,19 +1281,19 @@ mod tests {
             let mut replay =
                 HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
             assert!(matches!(
-                replay.next().map(|(_, event)| event),
+                replay.next().map(|held| held.event),
                 Some(PointerEvent::Down(_))
             ));
             assert!(matches!(
-                replay.next().map(|(_, event)| event),
+                replay.next().map(|held| held.event),
                 Some(PointerEvent::Move(_))
             ));
             assert!(matches!(
-                replay.next().map(|(_, event)| event),
+                replay.next().map(|held| held.event),
                 Some(PointerEvent::Up(_))
             ));
             assert!(matches!(
-                replay.next().map(|(_, event)| event),
+                replay.next().map(|held| held.event),
                 Some(PointerEvent::Down(_))
             ));
             queue.borrow_mut().append(down(superseded));
@@ -1288,7 +1321,7 @@ mod tests {
             let mut replay =
                 HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
             assert!(matches!(
-                replay.next().map(|(_, event)| event),
+                replay.next().map(|held| held.event),
                 Some(PointerEvent::Down(_))
             ));
             queue.borrow_mut().clear();
@@ -1311,13 +1344,13 @@ mod tests {
 
         let mut replay = HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
         assert!(matches!(
-            replay.next().map(|(_, event)| event),
+            replay.next().map(|held| held.event),
             Some(PointerEvent::Down(_))
         ));
         queue.borrow_mut().drop_open_sequences();
         // A contact move for the abandoned epoch is refused from here on.
         queue.borrow_mut().append(contact_move(dispatched, 2.0));
-        let rest: Vec<_> = replay.by_ref().map(|(_, event)| event).collect();
+        let rest: Vec<_> = replay.by_ref().map(|held| held.event).collect();
         replay.complete();
 
         let ids: Vec<_> = rest
@@ -1347,7 +1380,7 @@ mod tests {
         let mut replay = HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
         let replayed: Vec<_> = replay
             .by_ref()
-            .map(|(surface, event)| (surface, event.pointer_id()))
+            .map(|held| (held.surface, held.event.pointer_id()))
             .collect();
         replay.complete();
         assert_eq!(

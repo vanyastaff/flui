@@ -24,9 +24,13 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use flui_foundation::panic::{payload_text, retain_opaque_payload};
-use flui_foundation::{IdExhausted, IdMint};
+use flui_foundation::{IdExhausted, IdMint, InputSequenceId};
+use flui_interaction::PointerEvent;
+use flui_platform_api::PlatformInput;
 
-use crate::input_record::{InputRecord, RecordingStart};
+use crate::HostInput;
+use crate::input_record::{InputRecord, InputRow, RecordedSequence, RecordingStart};
+use crate::owner::InputOutcome;
 
 /// The tracing target every contained tap failure is reported on.
 pub const INPUT_TAP_TARGET: &str = "flui_runtime::input_tap";
@@ -429,6 +433,61 @@ impl Drop for InputTapHandle {
     fn drop(&mut self) {
         if let Some(state) = self.state.upgrade() {
             state.remove(self.generation);
+        }
+    }
+}
+
+/// The row of pointer input a presentation holds until its tree is committed
+/// (ADR-0048), kept back until the runtime dispatches or discards that input,
+/// so the row names the sequence its dispatch placed it in (ADR-0215 §1).
+///
+/// [`dispatched`](Self::dispatched) admits it as the event dispatch delivered.
+/// Dropped undispatched — the input refused, folded into a later move,
+/// superseded, evicted, or dropped with the queue — it admits the event as it
+/// arrived, with [`InputOutcome::Queued`] and no sequence: accepted for a
+/// delivery that never happened, which a replay does not apply. Either way the
+/// row keeps the time the input arrived; admitting it runs no tap.
+pub(crate) struct HeldInputRow {
+    taps: InputTaps,
+    row: Option<InputRow>,
+}
+
+impl std::fmt::Debug for HeldInputRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeldInputRow")
+            .field("pending", &self.row.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl HeldInputRow {
+    /// Hold `row`, the input as it arrived, for `taps`; until it is
+    /// dispatched it is undelivered, in no sequence.
+    pub(crate) fn new(taps: InputTaps, mut row: InputRow) -> Self {
+        row.outcome = InputOutcome::Queued;
+        row.sequence = None;
+        Self {
+            taps,
+            row: Some(row),
+        }
+    }
+
+    /// Admit the row for `event`, the input as dispatch delivered it (a held
+    /// move carries the moves folded into it), in `sequence`.
+    pub(crate) fn dispatched(mut self, event: &PointerEvent, sequence: Option<InputSequenceId>) {
+        if let Some(mut row) = self.row.take() {
+            row.input = HostInput::Platform(PlatformInput::Pointer(event.clone()));
+            row.outcome = InputOutcome::Handled;
+            row.sequence = sequence.map(RecordedSequence::from);
+            self.taps.admit(InputRecord::Input(row));
+        }
+    }
+}
+
+impl Drop for HeldInputRow {
+    fn drop(&mut self) {
+        if let Some(row) = self.row.take() {
+            self.taps.admit(InputRecord::Input(row));
         }
     }
 }
