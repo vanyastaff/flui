@@ -121,7 +121,7 @@ impl WinitDisplaySource {
     /// once one runs (winit's own choice), else the one the environment names.
     /// A caller that asks before the event loop runs gets the environment's
     /// answer, which is winit's too unless winit was told otherwise.
-    pub(super) fn speaks_wayland(&self) -> bool {
+    pub(super) fn is_wayland(&self) -> bool {
         match &*self.watcher.lock() {
             Some((protocol, _)) => *protocol == Protocol::Wayland,
             None => crate::platforms::linux::LinuxPlatform::is_wayland(),

@@ -59,21 +59,6 @@ impl WindowShell {
     }
 }
 
-/// The mode of a window from what the window system says of it. A minimized
-/// window is hidden whatever else is set; a fullscreen one often keeps its
-/// maximized flag, so fullscreen comes before maximized.
-pub(super) const fn mode_of(minimized: bool, fullscreen: bool, maximized: bool) -> WindowMode {
-    if minimized {
-        WindowMode::Minimized
-    } else if fullscreen {
-        WindowMode::Fullscreen
-    } else if maximized {
-        WindowMode::Maximized
-    } else {
-        WindowMode::Normal
-    }
-}
-
 /// The display a window is placed on: where its origin is in the global
 /// device-pixel space, and how many device pixels make a logical one.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -135,6 +120,12 @@ pub(super) struct OpenPlan {
 }
 
 impl OpenPlan {
+    /// Whether the window is created unmapped, to be mapped later: after its
+    /// first frame, or once its opening mode is set.
+    pub(super) const fn created_unmapped(&self) -> bool {
+        self.hidden_until_first_frame || self.map_after_setup
+    }
+
     /// Plan the creation of a window on `shell` from `options`.
     ///
     /// `display` is the display the options measure their position on, or the
@@ -229,10 +220,11 @@ pub(super) struct FrameInset {
 }
 
 impl FrameInset {
-    /// Record a window's sizes if they show a frame: the window is decorated
-    /// and in normal mode (a maximized or fullscreen window's frame is not the
-    /// one a normal window gets), and its outer extent is at least its
-    /// content's in both dimensions with some difference.
+    /// Record the sizes of a window the caller found in normal mode (a
+    /// maximized or fullscreen window's frame is not the one a normal window
+    /// gets) if they show a frame: the window is decorated, and its outer
+    /// extent is at least its content's in both dimensions, with some
+    /// difference.
     pub(super) fn observe(&self, decorated: bool, outer: Size<i32>, content: Size<i32>) {
         if !decorated || outer.width < content.width || outer.height < content.height {
             return;
@@ -370,46 +362,6 @@ mod tests {
             Size::new(0.0, 0.0),
         );
         assert_eq!(planned.position, Some(Point::new(1940, 100)));
-    }
-
-    #[test]
-    fn window_mode_precedence() {
-        // (case, minimized, fullscreen, maximized, mode)
-        let table = [
-            ("nothing set", false, false, false, WindowMode::Normal),
-            ("maximized", false, false, true, WindowMode::Maximized),
-            ("fullscreen", false, true, false, WindowMode::Fullscreen),
-            ("minimized", true, false, false, WindowMode::Minimized),
-            (
-                "fullscreen that kept its maximized flag",
-                false,
-                true,
-                true,
-                WindowMode::Fullscreen,
-            ),
-            (
-                "minimized from fullscreen",
-                true,
-                true,
-                false,
-                WindowMode::Minimized,
-            ),
-            (
-                "minimized from maximized",
-                true,
-                false,
-                true,
-                WindowMode::Minimized,
-            ),
-            ("all three", true, true, true, WindowMode::Minimized),
-        ];
-        for (case, minimized, fullscreen, maximized, expected) in table {
-            assert_eq!(
-                mode_of(minimized, fullscreen, maximized),
-                expected,
-                "{case}"
-            );
-        }
     }
 
     #[test]

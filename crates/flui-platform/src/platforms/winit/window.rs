@@ -23,13 +23,11 @@ use winit::{
 };
 
 #[cfg(target_os = "linux")]
-use super::super::linux::{
-    lifecycle_model::x11_window_mode::X11WindowMode, x11_window_probe::X11WindowProbe,
-};
+use super::super::linux::x11_window_probe::X11WindowProbe;
 use super::control::ControlSender;
 use super::display::WinitDisplaySource;
-use super::window_plan::{FrameInset, OpenPlan, WindowShell, mode_of};
-use crate::shared::window_state::WindowStateCell;
+use super::window_plan::{FrameInset, OpenPlan, WindowShell};
+use crate::shared::window_state::{WindowStateCell, mode_of};
 #[cfg(all(target_os = "linux", feature = "a11y"))]
 use crate::traits::PlatformAccessibility;
 use crate::traits::{
@@ -189,7 +187,7 @@ impl WinitWindow {
         let initial = sample_state(
             &window,
             shell,
-            &UnreadableFacts {
+            &RecordedState {
                 title: &title,
                 constraints,
                 focused: true,
@@ -209,7 +207,7 @@ impl WinitWindow {
             normal_geometry: Mutex::new(plan.normal_geometry),
             map_after_setup: plan.map_after_setup,
             #[cfg(target_os = "linux")]
-            opens_in: if plan.hidden_until_first_frame || plan.map_after_setup {
+            opens_in: if plan.created_unmapped() {
                 plan.mode
             } else {
                 WindowMode::Normal
@@ -217,7 +215,7 @@ impl WinitWindow {
             #[cfg(target_os = "linux")]
             outer_to_fit: plan
                 .normal_geometry
-                .filter(|_| plan.hidden_until_first_frame || plan.map_after_setup)
+                .filter(|_| plan.created_unmapped())
                 .map(|geometry| geometry.size),
             reveal_pending: Mutex::new(plan.hidden_until_first_frame),
             frame_inset,
@@ -254,7 +252,7 @@ impl WinitWindow {
         };
         if let Some(probe) = probe() {
             probe.watch(id);
-            probe.set_mode_hint(id, x11_mode(self.opens_in));
+            probe.set_mode_hint(id, self.opens_in);
             let _ = self.x11.set((probe, id));
             // The snapshot made at creation knew nothing of the probe.
             self.refresh_state();
@@ -292,12 +290,7 @@ impl WinitWindow {
         #[cfg(target_os = "linux")]
         {
             let (probe, id) = self.x11.get()?;
-            Some(match probe.mode(*id)? {
-                X11WindowMode::Normal => WindowMode::Normal,
-                X11WindowMode::Minimized => WindowMode::Minimized,
-                X11WindowMode::Maximized => WindowMode::Maximized,
-                X11WindowMode::Fullscreen => WindowMode::Fullscreen,
-            })
+            probe.mode(*id)
         }
         #[cfg(not(target_os = "linux"))]
         None
@@ -381,7 +374,7 @@ impl WinitWindow {
         let mut state = sample_state(
             &self.window,
             self.shell,
-            &UnreadableFacts {
+            &RecordedState {
                 title: &title,
                 constraints: *self.constraints.lock(),
                 focused: *self.is_focused.lock(),
@@ -491,7 +484,7 @@ impl WinitWindow {
 }
 
 /// What the window's snapshot holds that winit cannot read back.
-struct UnreadableFacts<'a> {
+struct RecordedState<'a> {
     title: &'a str,
     constraints: SizeConstraints,
     focused: bool,
@@ -509,7 +502,7 @@ fn device_size(size: winit::dpi::PhysicalSize<u32>) -> Size<i32> {
 }
 
 /// The window as winit and `facts` describe it.
-fn sample_state(window: &Window, shell: WindowShell, facts: &UnreadableFacts<'_>) -> WindowState {
+fn sample_state(window: &Window, shell: WindowShell, facts: &RecordedState<'_>) -> WindowState {
     let capabilities = shell.capabilities();
     let scale = window.scale_factor();
     let logical = |size: winit::dpi::PhysicalSize<u32>| {
@@ -777,16 +770,5 @@ impl HostWindow for WinitWindow {
     #[cfg(all(target_os = "linux", feature = "a11y"))]
     fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
         Some(Arc::clone(&self.accessibility) as _)
-    }
-}
-
-/// The mode as the X11 probe names it.
-#[cfg(target_os = "linux")]
-fn x11_mode(mode: WindowMode) -> X11WindowMode {
-    match mode {
-        WindowMode::Maximized => X11WindowMode::Maximized,
-        WindowMode::Fullscreen => X11WindowMode::Fullscreen,
-        WindowMode::Minimized => X11WindowMode::Minimized,
-        _ => X11WindowMode::Normal,
     }
 }

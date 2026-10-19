@@ -96,7 +96,7 @@ impl Drop for PressureWatcher {
     }
 }
 
-/// Open the pressure file and set the first trigger for `level` the kernel
+/// Open the pressure file and set the first trigger for `stall` the kernel
 /// accepts. Each trigger needs a file of its own: the kernel allows one per
 /// descriptor.
 fn set_trigger(stall: Stall) -> Option<(Trigger, File)> {
@@ -174,10 +174,7 @@ fn run<F: AsFd>(mut triggers: Vec<(Trigger, F)>, stop: &OwnedFd, inbox: &Inbox) 
             );
         }
         if let Some(level) = level_of(fired) {
-            inbox.post(
-                HostEvent::Notice(SystemNotice::MemoryPressure(level)),
-                false,
-            );
+            inbox.post(HostEvent::Notice(SystemNotice::MemoryPressure(level)));
         }
         if triggers.is_empty() {
             return;

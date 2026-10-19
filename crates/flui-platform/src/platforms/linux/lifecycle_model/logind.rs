@@ -91,22 +91,13 @@ pub(crate) fn locked_hint_event(locked: bool) -> LogindEvent {
 
 /// Which events to deliver: a lock that the signal and the hint both announce
 /// is one, and a shutdown is cancelled only if it began.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct LogindFilter {
     locked: bool,
     shutting_down: bool,
 }
 
 impl LogindFilter {
-    /// `locked` is whether the session is locked as far as the owner has been
-    /// told.
-    pub(crate) fn new(locked: bool) -> Self {
-        Self {
-            locked,
-            shutting_down: false,
-        }
-    }
-
     /// The event to deliver, `None` for one that changes nothing.
     pub(crate) fn accept(&mut self, event: LogindEvent) -> Option<LogindEvent> {
         let (flag, now) = match event {
@@ -287,7 +278,7 @@ mod tests {
 
     #[test]
     fn logind_events_are_announced_once() {
-        // (case, locked at start, events in, events out)
+        // (case, locked before the first event, events in, events out)
         let table: &[(&str, bool, &[LogindEvent], &[LogindEvent])] = &[
             (
                 "signal then hint",
@@ -352,7 +343,10 @@ mod tests {
             ),
         ];
         for (case, locked, input, expected) in table {
-            let mut filter = LogindFilter::new(*locked);
+            let mut filter = LogindFilter::default();
+            if *locked {
+                filter.accept(SessionLocked);
+            }
             let out: Vec<_> = input
                 .iter()
                 .filter_map(|event| filter.accept(*event))

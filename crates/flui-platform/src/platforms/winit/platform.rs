@@ -93,7 +93,9 @@ use std::{
 };
 
 use flui_foundation::{ClaimOutcome, ClaimSlot};
-use flui_platform_api::{SessionEndAnswer, SessionEndPhase, SystemNotice};
+use flui_platform_api::SystemNotice;
+#[cfg(target_os = "linux")]
+use flui_platform_api::{SessionEndAnswer, SessionEndPhase};
 use parking_lot::Mutex;
 use ui_events_winit::keyboard::from_winit_modifier_state;
 use winit::{
@@ -407,7 +409,7 @@ impl WinitPlatform {
     )]
     fn expected_shell(&self) -> WindowShell {
         #[cfg(target_os = "linux")]
-        if self.displays.speaks_wayland() {
+        if self.displays.is_wayland() {
             return WindowShell::Wayland;
         }
         WindowShell::Desktop
@@ -612,9 +614,7 @@ impl WinitPlatform {
             ))
             .with_resizable(options.resizable)
             .with_decorations(options.decorated)
-            .with_visible(
-                options.visible && !plan.hidden_until_first_frame && !plan.map_after_setup,
-            )
+            .with_visible(options.visible && !plan.created_unmapped())
             .with_maximized(plan.mode == WindowMode::Maximized);
         if plan.mode == WindowMode::Fullscreen {
             attributes =
@@ -2353,6 +2353,7 @@ impl Drop for WinitApp {
 }
 
 impl Platform for WinitPlatform {
+    #[cfg(target_os = "linux")]
     fn on_session_end(&self, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {
         self.with_state(|state| state.handlers.session_end = Some(callback));
     }

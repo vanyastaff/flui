@@ -29,6 +29,7 @@ use std::{
 };
 
 use flui_foundation::geometry::Size;
+use flui_platform_api::WindowMode;
 use parking_lot::Mutex;
 use rustix::{
     event::{EventfdFlags, PollFd, PollFlags, eventfd, poll},
@@ -47,13 +48,11 @@ use x11rb::{
     wrapper::ConnectionExt as _,
 };
 
-use super::lifecycle_model::x11_window_mode::{
-    NetWmState, NetWmStateAtoms, WmState, X11WindowMode, window_mode,
-};
+use super::lifecycle_model::x11_window_mode::{NetWmState, NetWmStateAtoms, WmState, window_mode};
 use crate::shared::{owner_signal::OwnerSignal, panic_boundary::contain_owner_callback};
 
 /// `_NET_WM_STATE` is read this far (in 4-byte units).
-const STATE_ATOMS_LENGTH: u32 = 64;
+const PROPERTY_READ_LENGTH: u32 = 64;
 
 /// The atoms the probe reads and watches, as the server numbered them.
 #[derive(Clone, Copy)]
@@ -115,7 +114,7 @@ pub(crate) struct X11WindowProbe {
     changed: Arc<Mutex<BTreeSet<u32>>>,
     watch: Arc<RustConnection>,
     stop: Arc<OwnedFd>,
-    thread: Mutex<Option<JoinHandle<()>>>,
+    thread: Option<JoinHandle<()>>,
 }
 
 impl X11WindowProbe {
@@ -163,7 +162,7 @@ impl X11WindowProbe {
             changed,
             watch,
             stop,
-            thread: Mutex::new(Some(thread)),
+            thread: Some(thread),
         }))
     }
 
@@ -194,12 +193,12 @@ impl X11WindowProbe {
     /// not managed yet: the window manager reads the property when it maps the
     /// window, and ignores a client message about a window it does not manage.
     /// Any other mode is no state to set.
-    pub(crate) fn set_mode_hint(&self, window: u32, mode: X11WindowMode) {
+    pub(crate) fn set_mode_hint(&self, window: u32, mode: WindowMode) {
         let states = &self.atoms.states;
         let atoms: &[u32] = match mode {
-            X11WindowMode::Maximized => &[states.maximized_horz, states.maximized_vert],
-            X11WindowMode::Fullscreen => &[states.fullscreen],
-            X11WindowMode::Normal | X11WindowMode::Minimized => return,
+            WindowMode::Maximized => &[states.maximized_horz, states.maximized_vert],
+            WindowMode::Fullscreen => &[states.fullscreen],
+            _ => return,
         };
         let set = self
             .query
@@ -253,7 +252,7 @@ impl X11WindowProbe {
 
     /// The mode the window manager gives `window`, `None` when the server
     /// cannot say (the window is gone, or the connection failed).
-    pub(crate) fn mode(&self, window: u32) -> Option<X11WindowMode> {
+    pub(crate) fn mode(&self, window: u32) -> Option<WindowMode> {
         let state_atoms = self
             .property(window, self.atoms.net_wm_state, AtomEnum::ATOM.into())?
             .value32()
@@ -277,7 +276,7 @@ impl X11WindowProbe {
         kind: xproto::Atom,
     ) -> Option<xproto::GetPropertyReply> {
         self.query
-            .get_property(false, window, property, kind, 0, STATE_ATOMS_LENGTH)
+            .get_property(false, window, property, kind, 0, PROPERTY_READ_LENGTH)
             .ok()?
             .reply()
             .ok()
@@ -299,7 +298,7 @@ impl Drop for X11WindowProbe {
             tracing::error!(%error, "cannot signal the X11 window thread to stop");
             return;
         }
-        if let Some(thread) = self.thread.lock().take()
+        if let Some(thread) = self.thread.take()
             && thread.join().is_err()
         {
             tracing::error!("the X11 window thread ended in a panic");

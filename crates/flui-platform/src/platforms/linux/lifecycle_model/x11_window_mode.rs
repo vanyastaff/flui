@@ -18,6 +18,10 @@
 //! Atoms are numbers the server hands out at run time, so the adapter passes
 //! the numbers it interned in [`NetWmStateAtoms`].
 
+use flui_platform_api::WindowMode;
+
+use crate::shared::window_state::mode_of;
+
 /// The `_NET_WM_STATE` atoms this model reads, as the server numbered them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NetWmStateAtoms {
@@ -73,34 +77,21 @@ impl WmState {
     }
 }
 
-/// How an X11 window is shown.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum X11WindowMode {
-    Normal,
-    Minimized,
-    Maximized,
-    Fullscreen,
-}
-
 /// The window's mode. `wm_state` is `None` when the window manager sets none.
 ///
 /// Minimized wins over the rest, as it hides the window whatever else is set;
 /// fullscreen wins over maximized, which a fullscreen window often keeps. A
 /// window maximized on one axis only is tiled or snapped, not maximized.
-pub(crate) fn window_mode(wm_state: Option<WmState>, net: NetWmState) -> X11WindowMode {
+pub(crate) fn window_mode(wm_state: Option<WmState>, net: NetWmState) -> WindowMode {
     let minimized = match wm_state {
         Some(state) => state == WmState::Iconic,
         None => net.hidden,
     };
-    if minimized {
-        X11WindowMode::Minimized
-    } else if net.fullscreen {
-        X11WindowMode::Fullscreen
-    } else if net.maximized_horz && net.maximized_vert {
-        X11WindowMode::Maximized
-    } else {
-        X11WindowMode::Normal
-    }
+    mode_of(
+        minimized,
+        net.fullscreen,
+        net.maximized_horz && net.maximized_vert,
+    )
 }
 
 #[cfg(test)]
@@ -119,11 +110,11 @@ mod tests {
 
     #[test]
     fn x11_window_state_parse() {
+        use WindowMode::{Fullscreen, Maximized, Minimized, Normal};
         use WmState::{Iconic, Normal as Mapped, Withdrawn};
-        use X11WindowMode::{Fullscreen, Maximized, Minimized, Normal};
 
         // (case, `WM_STATE`, `_NET_WM_STATE` atoms, mode)
-        let table: &[(&str, Option<WmState>, &[u32], X11WindowMode)] = &[
+        let table: &[(&str, Option<WmState>, &[u32], WindowMode)] = &[
             ("no properties at all", None, &[], Normal),
             ("mapped, no state atoms", Some(Mapped), &[], Normal),
             (

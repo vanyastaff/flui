@@ -80,11 +80,11 @@ async fn serve(
     // so the owner hears of it once. Seeding it as locked instead would turn
     // a lock that landed between the subscription and this read (its signal is
     // queued) into a duplicate and drop it.
-    let mut filter = LogindFilter::new(false);
+    let mut filter = LogindFilter::default();
     if session.as_ref().is_some_and(|session| session.locked)
         && let Some(event) = filter.accept(LogindEvent::SessionLocked)
     {
-        inbox.post(host_event(event), false);
+        inbox.post(host_event(event));
     }
 
     loop {
@@ -102,8 +102,13 @@ async fn serve(
         let Some(event) = event.and_then(|event| filter.accept(event)) else {
             continue;
         };
-        let wait = event.inhibitor_action() == InhibitorAction::Release;
-        if let Some(delivered) = inbox.post(host_event(event), wait) {
+        let delivered = if event.inhibitor_action() == InhibitorAction::Release {
+            inbox.post_awaited(host_event(event))
+        } else {
+            inbox.post(host_event(event));
+            None
+        };
+        if let Some(delivered) = delivered {
             // An owner that never delivers cannot hold the machine longer
             // than the budget; one that dropped the completion has delivered.
             let _ = tokio::time::timeout(delivery_budget, delivered).await;

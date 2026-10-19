@@ -81,20 +81,26 @@ struct Inbox {
 }
 
 impl Inbox {
-    /// Queue `event` and wake the owner. With `wait`, the receiver completes
-    /// once the owner has delivered the event.
-    fn post(&self, event: HostEvent, wait: bool) -> Option<oneshot::Receiver<()>> {
-        let (done, receiver) = if wait {
-            let (sender, receiver) = oneshot::channel();
-            (Some(sender), Some(receiver))
-        } else {
-            (None, None)
-        };
+    /// Queue `event` and wake the owner.
+    fn post(&self, event: HostEvent) {
+        self.push(event, None);
+    }
+
+    /// Queue `event` and wake the owner. The receiver completes once the owner
+    /// has delivered the event; `None` when the inbox was full and dropped it.
+    fn post_awaited(&self, event: HostEvent) -> Option<oneshot::Receiver<()>> {
+        let (done, receiver) = oneshot::channel();
+        self.push(event, Some(done)).then_some(receiver)
+    }
+
+    /// Queue `event` with the completion to signal once delivered, and wake
+    /// the owner. Whether it was queued.
+    fn push(&self, event: HostEvent, done: Option<oneshot::Sender<()>>) -> bool {
         {
             let mut queue = self.queue.lock();
             if queue.len() >= MAX_PENDING {
                 tracing::warn!(?event, "the owner is not taking host notices; dropping one");
-                return None;
+                return false;
             }
             queue.push_back(Delivery { event, done });
         }
@@ -107,7 +113,7 @@ impl Inbox {
                 let _ = signal.wake();
             }
         });
-        receiver
+        true
     }
 }
 
@@ -177,7 +183,7 @@ mod tests {
             HostEvent::SessionEndCancelled,
         ];
         for event in events {
-            inbox.post(event, false);
+            inbox.post(event);
         }
         let seen: Vec<_> = drain(&inbox).into_iter().map(|d| d.event).collect();
         assert_eq!(seen, events);
@@ -187,7 +193,7 @@ mod tests {
     fn a_waiting_event_completes_when_the_owner_has_delivered_it() {
         let inbox = inbox();
         let mut waiting = inbox
-            .post(HostEvent::Notice(SystemNotice::Sleep), true)
+            .post_awaited(HostEvent::Notice(SystemNotice::Sleep))
             .expect("a waiting post returns its completion");
         assert!(waiting.try_recv().is_err(), "not delivered yet");
 
@@ -206,7 +212,7 @@ mod tests {
     fn a_handler_that_panics_still_releases_the_waiting_source() {
         let inbox = inbox();
         let mut waiting = inbox
-            .post(HostEvent::SessionEnding, true)
+            .post_awaited(HostEvent::SessionEnding)
             .expect("a waiting post returns its completion");
         let delivery = drain(&inbox).remove(0);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -225,9 +231,9 @@ mod tests {
     fn a_full_inbox_drops_the_newest_event() {
         let inbox = inbox();
         for _ in 0..MAX_PENDING {
-            inbox.post(HostEvent::Notice(SystemNotice::SessionLocked), false);
+            inbox.post(HostEvent::Notice(SystemNotice::SessionLocked));
         }
-        assert!(inbox.post(HostEvent::SessionEnding, true).is_none());
+        assert!(inbox.post_awaited(HostEvent::SessionEnding).is_none());
         let queued = drain(&inbox);
         assert_eq!(queued.len(), MAX_PENDING);
         assert!(

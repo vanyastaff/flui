@@ -112,7 +112,7 @@ fn x11_probe_reads_the_mode_from_the_properties() {
 
     assert_eq!(
         probe.mode(window),
-        Some(X11WindowMode::Normal),
+        Some(WindowMode::Normal),
         "a window with no properties"
     );
 
@@ -121,26 +121,26 @@ fn x11_probe_reads_the_mode_from_the_properties() {
         "_NET_WM_STATE_MAXIMIZED_HORZ",
         "_NET_WM_STATE_MAXIMIZED_VERT",
     ]);
-    assert_eq!(probe.mode(window), Some(X11WindowMode::Maximized));
+    assert_eq!(probe.mode(window), Some(WindowMode::Maximized));
 
     fixture.set_state(&[
         "_NET_WM_STATE_MAXIMIZED_HORZ",
         "_NET_WM_STATE_MAXIMIZED_VERT",
         "_NET_WM_STATE_FULLSCREEN",
     ]);
-    assert_eq!(probe.mode(window), Some(X11WindowMode::Fullscreen));
+    assert_eq!(probe.mode(window), Some(WindowMode::Fullscreen));
 
     fixture.set_state(&["_NET_WM_STATE_MAXIMIZED_HORZ"]);
-    assert_eq!(probe.mode(window), Some(X11WindowMode::Normal), "tiled");
+    assert_eq!(probe.mode(window), Some(WindowMode::Normal), "tiled");
 
     fixture.set_wm_state(3);
     fixture.set_state(&["_NET_WM_STATE_HIDDEN"]);
-    assert_eq!(probe.mode(window), Some(X11WindowMode::Minimized));
+    assert_eq!(probe.mode(window), Some(WindowMode::Minimized));
 
     fixture.set_wm_state(1);
     assert_eq!(
         probe.mode(window),
-        Some(X11WindowMode::Normal),
+        Some(WindowMode::Normal),
         "hidden but mapped is on another desktop, not minimized"
     );
 
@@ -208,19 +208,19 @@ fn x11_probe_asks_for_a_mode_on_a_window_that_is_not_mapped() {
     }
     let probe = X11WindowProbe::connect(&signal()).expect("the probe connects");
     let fixture = Fixture::new();
-    assert_eq!(probe.mode(fixture.window), Some(X11WindowMode::Normal));
+    assert_eq!(probe.mode(fixture.window), Some(WindowMode::Normal));
 
     // Modes that are no state to set change nothing.
-    probe.set_mode_hint(fixture.window, X11WindowMode::Normal);
-    probe.set_mode_hint(fixture.window, X11WindowMode::Minimized);
-    assert_eq!(probe.mode(fixture.window), Some(X11WindowMode::Normal));
+    probe.set_mode_hint(fixture.window, WindowMode::Normal);
+    probe.set_mode_hint(fixture.window, WindowMode::Minimized);
+    assert_eq!(probe.mode(fixture.window), Some(WindowMode::Normal));
 
-    probe.set_mode_hint(fixture.window, X11WindowMode::Maximized);
-    assert_eq!(probe.mode(fixture.window), Some(X11WindowMode::Maximized));
+    probe.set_mode_hint(fixture.window, WindowMode::Maximized);
+    assert_eq!(probe.mode(fixture.window), Some(WindowMode::Maximized));
 
     // It adds to what the window already asks for rather than replacing it.
-    probe.set_mode_hint(fixture.window, X11WindowMode::Fullscreen);
-    assert_eq!(probe.mode(fixture.window), Some(X11WindowMode::Fullscreen));
+    probe.set_mode_hint(fixture.window, WindowMode::Fullscreen);
+    assert_eq!(probe.mode(fixture.window), Some(WindowMode::Fullscreen));
 }
 
 #[test]
