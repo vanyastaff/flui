@@ -967,19 +967,20 @@ pub(crate) fn the_revealed_menu_control_names_its_target() {
 
 /// A command whose intent nothing answers, and a command key the platform
 /// reserves, each leave a `flui::a11y` warning naming the command: a gesture
-/// that silently does nothing is the defect the diagnostic exists for.
+/// that silently does nothing is the defect the diagnostic exists for. The
+/// reserved key is reported once, not again on each rebuild.
 pub(crate) fn an_unanswered_intent_and_a_reserved_key_are_reported() {
-    let alternatives = GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
-        GestureCommand::new("Delete Alice", Delete("Alice"))
-            .key(SingleActivator::named(NamedKey::Escape)),
-        SizedBox::new(16.0, 16.0),
-    )))
-    .expect("one labelled command");
+    let row = || {
+        GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+            GestureCommand::new("Delete Alice", Delete("Alice"))
+                .key(SingleActivator::named(NamedKey::Escape)),
+            SizedBox::new(16.0, 16.0),
+        )))
+        .expect("one labelled command")
+        .child(SizedBox::new(300.0, 50.0))
+    };
     let ((), log) = flui_testing::log_capture::capture(|| {
-        let mut laid = lay_out(
-            alternatives.child(SizedBox::new(300.0, 50.0)),
-            tight(400.0, 300.0),
-        );
+        let mut laid = lay_out(row(), tight(400.0, 300.0));
         laid.enable_semantics();
         laid.pump();
         let tree = laid.a11y_tree().expect("semantics enabled");
@@ -995,19 +996,28 @@ pub(crate) fn an_unanswered_intent_and_a_reserved_key_are_reported() {
         })
         .expect("the control takes a click");
         laid.pump();
+        laid.pump_widget(row());
+        laid.pump_widget(row());
     });
     let warned = |text: &str| {
-        log.records().iter().any(|record| {
-            record.target == "flui::a11y"
-                && record.message.contains(text)
-                && record.field("command") == Some("Delete Alice")
-        })
+        log.records()
+            .iter()
+            .filter(|record| {
+                record.target == "flui::a11y"
+                    && record.message.contains(text)
+                    && record.field("command") == Some("Delete Alice")
+            })
+            .count()
     };
     assert!(
-        warned("has no action"),
+        warned("has no action") > 0,
         "the unanswered intent is reported:\n{log}"
     );
-    assert!(warned("reserved"), "the reserved key is reported:\n{log}");
+    assert_eq!(
+        warned("reserved"),
+        1,
+        "the reserved key is reported once:\n{log}"
+    );
 }
 
 // ============================================================================

@@ -175,8 +175,13 @@ impl GestureCommand {
         action.invoke(cx, intent)
     }
 
-    fn warn_reserved_keys(&self, platform: TargetPlatform) {
+    /// Report this command's keys reserved on `platform`, except those
+    /// `already` reported.
+    fn warn_reserved_keys(&self, platform: TargetPlatform, already: &[&SingleActivator]) {
         for activator in &self.keys {
+            if already.contains(&activator) {
+                continue;
+            }
             if let Some(reserved) = reserved_key(platform, activator) {
                 tracing::warn!(
                     target: "flui::a11y",
@@ -825,6 +830,10 @@ impl StatefulView for GestureAlternatives {
     type State = GestureAlternativesState;
 
     fn create_state(&self) -> Self::State {
+        let platform = TargetPlatform::current();
+        for command in self.commands() {
+            command.warn_reserved_keys(platform, &[]);
+        }
         GestureAlternativesState {
             opener: OpenerSlot::new(Rc::new(|_cx, _cause, _position| {})),
             menu: self.is_menu(),
@@ -1032,7 +1041,18 @@ impl ViewState<GestureAlternatives> for GestureAlternativesState {
 
     /// A view that turns the alternative into a menu, out of one, or hands
     /// the long press another hold replaces it.
-    fn did_update_view(&mut self, _old_view: &GestureAlternatives, new_view: &GestureAlternatives) {
+    fn did_update_view(&mut self, old_view: &GestureAlternatives, new_view: &GestureAlternatives) {
+        // A rebuild reports only the reserved keys it brings: those the
+        // command already had were reported when it got them.
+        let platform = TargetPlatform::current();
+        for command in new_view.commands() {
+            let already: Vec<&SingleActivator> = old_view
+                .commands()
+                .filter(|old| old.label == command.label)
+                .flat_map(|old| &old.keys)
+                .collect();
+            command.warn_reserved_keys(platform, &already);
+        }
         self.menu = new_view.is_menu();
         self.given_hold.clone_from(&new_view.hold);
         self.rebuild_hold();
@@ -1103,7 +1123,6 @@ impl GestureAlternatives {
         let mut semantics = Semantics::new().container(true);
         let mut shortcuts_bindings = Vec::new();
         for command in self.commands() {
-            command.warn_reserved_keys(platform);
             for activator in command.keys(platform) {
                 shortcuts_bindings.push((activator.clone(), Rc::clone(&command.intent)));
             }
