@@ -1178,7 +1178,10 @@ mod x11_window {
     use super::*;
     use crate::{
         platforms::winit::window::WinitWindow,
-        traits::{WindowCapabilities, WindowCommand, WindowMode, WindowReveal, WindowState},
+        traits::{
+            WindowCapabilities, WindowCommand, WindowGeometry, WindowMode, WindowReveal,
+            WindowState,
+        },
     };
 
     fn build_x11_event_loop() -> EventLoop<()> {
@@ -1259,8 +1262,13 @@ mod x11_window {
             .expect("the server sets the properties");
     }
 
-    #[test]
-    fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
+    /// Open a window with `opening` on a real X server in a loop of its own and
+    /// run `scenario` on a worker thread against it, with the window, its X11
+    /// id and a connection to the server.
+    fn run_x11_scenario(
+        opening: WindowOptions,
+        scenario: impl FnOnce(Arc<dyn HostWindow>, u32, &RustConnection) + Send + 'static,
+    ) {
         let platform = Arc::new(WinitPlatform::new());
         let event_loop = build_x11_event_loop();
         install_test_owner_signal(&platform, &event_loop);
@@ -1281,12 +1289,6 @@ mod x11_window {
                 let server = RustConnection::connect(None)
                     .expect("an X server answers")
                     .0;
-
-                let opening = WindowOptions::default()
-                    .with_title("x11-window")
-                    .with_size(Size::new(320.0, 240.0))
-                    .with_position(Some(Point::new(40.0, 60.0)))
-                    .with_reveal(WindowReveal::AfterFirstFrame);
                 let window = match control_for_worker
                     .request_open_window(opening)
                     .expect("lane accepts the request")
@@ -1300,82 +1302,7 @@ mod x11_window {
                     .downcast_ref::<WinitWindow>()
                     .and_then(WinitWindow::x11_id)
                     .expect("an X11 window has an id once the probe is attached");
-
-                // Created hidden, to be shown with the first frame; the window
-                // already counts as visible, which is the intent.
-                assert_eq!(map_state(&server, id), MapState::UNMAPPED);
-                assert!(window.state().visible);
-                assert_eq!(window.capabilities(), WindowCapabilities::ALL);
-                let changes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-                let counter = Arc::clone(&changes);
-                window.on_state_changed(Box::new(move || {
-                    counter.fetch_add(1, Ordering::SeqCst);
-                }));
-
-                window.reveal_after_first_frame();
-                until_map_state(&server, id, MapState::VIEWABLE);
-
-                // The position it opened at, and the commands a server carries
-                // out without a window manager.
-                until_state(&window, "the opening position", |state| {
-                    state.outer.position == Some(Point::new(40.0, 60.0))
-                });
-                window
-                    .apply(WindowCommand::SetSize(Size::new(400.0, 300.0)))
-                    .expect("a desktop window resizes");
-                until_state(&window, "the new size", |state| {
-                    state.content_size == Size::new(400.0, 300.0)
-                });
-                window
-                    .apply(WindowCommand::SetPosition(Point::new(100.0, 120.0)))
-                    .expect("a desktop window moves");
-                until_state(&window, "the new position", |state| {
-                    state.outer.position == Some(Point::new(100.0, 120.0))
-                });
-                window
-                    .apply(WindowCommand::SetTitle("renamed".into()))
-                    .expect("a title is set");
-                assert_eq!(window.state().title.as_deref(), Some("renamed"));
-
-                window
-                    .apply(WindowCommand::Hide)
-                    .expect("a desktop window hides");
-                until_map_state(&server, id, MapState::UNMAPPED);
-                assert!(!window.state().visible);
-                window
-                    .apply(WindowCommand::Show)
-                    .expect("a desktop window shows");
-                until_map_state(&server, id, MapState::VIEWABLE);
-                assert!(window.state().visible);
-
-                // The window manager minimizes the window: winit reports no
-                // event, the probe hears of it, and the snapshot follows with
-                // a notification.
-                let before = changes.load(Ordering::SeqCst);
-                set_window_manager_state(&server, id, 3, &["_NET_WM_STATE_HIDDEN"]);
-                until_state(&window, "the minimized mode", |state| {
-                    state.mode == WindowMode::Minimized
-                });
-                assert!(changes.load(Ordering::SeqCst) > before, "a notification");
-
-                // It returns, maximized.
-                set_window_manager_state(
-                    &server,
-                    id,
-                    1,
-                    &[
-                        "_NET_WM_STATE_MAXIMIZED_HORZ",
-                        "_NET_WM_STATE_MAXIMIZED_VERT",
-                    ],
-                );
-                until_state(&window, "the maximized mode", |state| {
-                    state.mode == WindowMode::Maximized
-                });
-                assert_eq!(
-                    window.state().normal_geometry.map(|geometry| geometry.size),
-                    Some(Size::new(400.0, 300.0)),
-                    "it returns to the size it had in normal mode"
-                );
+                scenario(window, id, &server);
             }));
             control_for_worker.request_quit();
             if let Err(payload) = outcome {
@@ -1399,6 +1326,135 @@ mod x11_window {
             .run_app(&mut app)
             .expect("event loop runs to completion");
         worker.join().expect("worker thread does not panic");
+    }
+
+    #[test]
+    fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
+        let opening = WindowOptions::default()
+            .with_title("x11-window")
+            .with_size(Size::new(320.0, 240.0))
+            .with_position(Some(Point::new(40.0, 60.0)))
+            .with_reveal(WindowReveal::AfterFirstFrame);
+        run_x11_scenario(opening, |window, id, server| {
+            // Created hidden, to be shown with the first frame; the window
+            // already counts as visible, which is the intent.
+            assert_eq!(map_state(server, id), MapState::UNMAPPED);
+            assert!(window.state().visible);
+            assert_eq!(window.capabilities(), WindowCapabilities::ALL);
+            let changes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counter = Arc::clone(&changes);
+            window.on_state_changed(Box::new(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }));
+
+            window.reveal_after_first_frame();
+            until_map_state(server, id, MapState::VIEWABLE);
+
+            // The position it opened at, and the commands a server carries
+            // out without a window manager.
+            until_state(&window, "the opening position", |state| {
+                state.outer.position == Some(Point::new(40.0, 60.0))
+            });
+            window
+                .apply(WindowCommand::SetSize(Size::new(400.0, 300.0)))
+                .expect("a desktop window resizes");
+            until_state(&window, "the new size", |state| {
+                state.content_size == Size::new(400.0, 300.0)
+            });
+            window
+                .apply(WindowCommand::SetPosition(Point::new(100.0, 120.0)))
+                .expect("a desktop window moves");
+            until_state(&window, "the new position", |state| {
+                state.outer.position == Some(Point::new(100.0, 120.0))
+            });
+            window
+                .apply(WindowCommand::SetTitle("renamed".into()))
+                .expect("a title is set");
+            assert_eq!(window.state().title.as_deref(), Some("renamed"));
+
+            window
+                .apply(WindowCommand::Hide)
+                .expect("a desktop window hides");
+            until_map_state(server, id, MapState::UNMAPPED);
+            assert!(!window.state().visible);
+            window
+                .apply(WindowCommand::Show)
+                .expect("a desktop window shows");
+            until_map_state(server, id, MapState::VIEWABLE);
+            assert!(window.state().visible);
+
+            // The window manager minimizes the window: winit reports no
+            // event, the probe hears of it, and the snapshot follows with
+            // a notification.
+            let before = changes.load(Ordering::SeqCst);
+            set_window_manager_state(server, id, 3, &["_NET_WM_STATE_HIDDEN"]);
+            until_state(&window, "the minimized mode", |state| {
+                state.mode == WindowMode::Minimized
+            });
+            assert!(changes.load(Ordering::SeqCst) > before, "a notification");
+
+            // It returns, maximized.
+            set_window_manager_state(
+                server,
+                id,
+                1,
+                &[
+                    "_NET_WM_STATE_MAXIMIZED_HORZ",
+                    "_NET_WM_STATE_MAXIMIZED_VERT",
+                ],
+            );
+            until_state(&window, "the maximized mode", |state| {
+                state.mode == WindowMode::Maximized
+            });
+            assert_eq!(
+                window.state().normal_geometry.map(|geometry| geometry.size),
+                Some(Size::new(400.0, 300.0)),
+                "it returns to the size it had in normal mode"
+            );
+        });
+    }
+
+    /// A window that opens maximized waits unmapped for its first frame, and
+    /// a window manager reads "maximized" from the window's properties when it
+    /// maps it, so the property is there before the map, and the snapshot
+    /// already shows the mode and the rectangle the window returns to.
+    #[test]
+    fn x11_window_opens_maximized_with_the_property_set_before_it_is_mapped() {
+        let returns_to = WindowGeometry::new(Some(Point::new(40.0, 60.0)), Size::new(500.0, 400.0));
+        let opening = WindowOptions::default()
+            .with_size(Size::new(320.0, 240.0))
+            .with_mode(WindowMode::Maximized)
+            .with_normal_geometry(Some(returns_to))
+            .with_reveal(WindowReveal::AfterFirstFrame);
+        run_x11_scenario(opening, move |window, id, server| {
+            assert_eq!(map_state(server, id), MapState::UNMAPPED);
+            let atom = |name: &str| {
+                server
+                    .intern_atom(false, name.as_bytes())
+                    .expect("request")
+                    .reply()
+                    .expect("the atom")
+                    .atom
+            };
+            let property = server
+                .get_property(false, id, atom("_NET_WM_STATE"), AtomEnum::ATOM, 0, 64)
+                .expect("request")
+                .reply()
+                .expect("the property");
+            let atoms: Vec<u32> = property.value32().expect("atoms").collect();
+            assert!(
+                atoms.contains(&atom("_NET_WM_STATE_MAXIMIZED_HORZ"))
+                    && atoms.contains(&atom("_NET_WM_STATE_MAXIMIZED_VERT")),
+                "the window manager reads the mode from the property: {atoms:?}"
+            );
+            let state = window.state();
+            assert_eq!(state.mode, WindowMode::Maximized);
+            assert_eq!(state.normal_geometry, Some(returns_to));
+            assert!(state.visible, "intended to be shown");
+
+            window.reveal_after_first_frame();
+            until_map_state(server, id, MapState::VIEWABLE);
+        });
     }
 }
 

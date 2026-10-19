@@ -1,15 +1,9 @@
 //! Memory pressure from the kernel's pressure stall information (PSI).
 //!
-//! `/proc/pressure/memory` has two lines:
-//!
-//! ```text
-//! some avg10=0.00 avg60=0.00 avg300=0.00 total=0
-//! full avg10=0.00 avg60=0.00 avg300=0.00 total=0
-//! ```
-//!
-//! `some` is the share of time at least one task stalled on memory, `full`
-//! the share in which every non-idle task did; `total` is the stall so far in
-//! microseconds. Reading the averages would mean polling. Writing a *trigger*
+//! The kernel exposes memory pressure as `/proc/pressure/memory`, a file with a
+//! `some` line (the share of time at least one task stalled on memory) and a
+//! `full` line (every non-idle task did).
+//! Reading the averages would mean polling. Writing a *trigger*
 //! (`some 150000 1000000`: wake me when tasks stall 150 ms within any 1 s
 //! window) to the same file and polling the descriptor for `POLLPRI` wakes the
 //! reader only when pressure is real, so the watcher sleeps otherwise.
@@ -58,104 +52,6 @@ impl Stall {
 /// The heaviest level any of `fired` asks for, `None` for none.
 pub(crate) fn level_of(fired: impl IntoIterator<Item = Stall>) -> Option<MemoryPressureLevel> {
     fired.into_iter().map(Stall::level).max()
-}
-
-/// A line of `/proc/pressure/memory`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct PressureLine {
-    pub stall: Stall,
-    pub avg10: f64,
-    pub avg60: f64,
-    pub avg300: f64,
-    /// Stall time since boot.
-    pub total: Duration,
-}
-
-/// The whole of `/proc/pressure/memory`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct PressureReport {
-    pub some: PressureLine,
-    pub full: PressureLine,
-}
-
-#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
-pub(crate) enum PressureParseError {
-    #[error("pressure line is empty")]
-    Empty,
-    #[error("pressure line starts with `{0}`, not `some` or `full`")]
-    UnknownStall(String),
-    #[error("pressure line has no `{0}` field")]
-    MissingField(&'static str),
-    #[error("pressure field `{0}` is not a number")]
-    BadField(&'static str),
-    #[error("pressure file has no `{0}` line")]
-    MissingLine(&'static str),
-}
-
-impl PressureLine {
-    /// Parse one line. Fields it does not know are skipped, as the kernel may
-    /// add some; a field it needs that is missing or not a finite
-    /// non-negative number is an error.
-    pub(crate) fn parse(line: &str) -> Result<Self, PressureParseError> {
-        let mut words = line.split_whitespace();
-        let stall = match words.next().ok_or(PressureParseError::Empty)? {
-            "some" => Stall::Partial,
-            "full" => Stall::Full,
-            other => return Err(PressureParseError::UnknownStall(other.to_owned())),
-        };
-        let (mut avg10, mut avg60, mut avg300, mut total) = (None, None, None, None);
-        for word in words {
-            let Some((key, value)) = word.split_once('=') else {
-                continue;
-            };
-            match key {
-                "avg10" => avg10 = Some(average(value, "avg10")?),
-                "avg60" => avg60 = Some(average(value, "avg60")?),
-                "avg300" => avg300 = Some(average(value, "avg300")?),
-                "total" => {
-                    let micros = value
-                        .parse::<u64>()
-                        .map_err(|_| PressureParseError::BadField("total"))?;
-                    total = Some(Duration::from_micros(micros));
-                }
-                _ => {}
-            }
-        }
-        Ok(Self {
-            stall,
-            avg10: avg10.ok_or(PressureParseError::MissingField("avg10"))?,
-            avg60: avg60.ok_or(PressureParseError::MissingField("avg60"))?,
-            avg300: avg300.ok_or(PressureParseError::MissingField("avg300"))?,
-            total: total.ok_or(PressureParseError::MissingField("total"))?,
-        })
-    }
-}
-
-fn average(value: &str, field: &'static str) -> Result<f64, PressureParseError> {
-    value
-        .parse::<f64>()
-        .ok()
-        .filter(|average| average.is_finite() && *average >= 0.0)
-        .ok_or(PressureParseError::BadField(field))
-}
-
-impl PressureReport {
-    /// Parse the file's text. Both lines must be there: a kernel that reports
-    /// only `some` for memory predates the triggers this module writes.
-    pub(crate) fn parse(text: &str) -> Result<Self, PressureParseError> {
-        let (mut some, mut full) = (None, None);
-        for line in text.lines().filter(|line| !line.trim().is_empty()) {
-            let line = PressureLine::parse(line)?;
-            match line.stall {
-                Stall::Partial => some = Some(line),
-                Stall::Full => full = Some(line),
-            }
-        }
-        Ok(Self {
-            some: some.ok_or(PressureParseError::MissingLine("some"))?,
-            full: full.ok_or(PressureParseError::MissingLine("full"))?,
-        })
-    }
 }
 
 /// A trigger the kernel accepts: wake when `stall` lasts `threshold` within
@@ -207,12 +103,8 @@ impl Trigger {
         self.stall
     }
 
-    /// The level a wake from this trigger reports.
-    pub(crate) fn level(&self) -> MemoryPressureLevel {
-        self.stall.level()
-    }
-
     /// Whether the kernel lets a process without `CAP_SYS_RESOURCE` set it.
+    #[cfg(test)]
     pub(crate) fn is_unprivileged(&self) -> bool {
         self.window
             .as_micros()
@@ -264,165 +156,6 @@ pub(crate) fn triggers_for(stall: Stall) -> [Trigger; 2] {
 mod tests {
     use super::*;
 
-    const IDLE: &str = "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n\
-                        full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n";
-
-    #[test]
-    fn psi_line_parse() {
-        // (case, line, parsed)
-        let ok: &[(&str, &str, PressureLine)] = &[
-            (
-                "idle some",
-                "some avg10=0.00 avg60=0.00 avg300=0.00 total=0",
-                PressureLine {
-                    stall: Stall::Partial,
-                    avg10: 0.0,
-                    avg60: 0.0,
-                    avg300: 0.0,
-                    total: Duration::ZERO,
-                },
-            ),
-            (
-                "busy full",
-                "full avg10=12.50 avg60=3.07 avg300=0.41 total=48213377",
-                PressureLine {
-                    stall: Stall::Full,
-                    avg10: 12.5,
-                    avg60: 3.07,
-                    avg300: 0.41,
-                    total: Duration::from_micros(48_213_377),
-                },
-            ),
-            (
-                "fields in another order",
-                "some total=7 avg300=3 avg60=2 avg10=1",
-                PressureLine {
-                    stall: Stall::Partial,
-                    avg10: 1.0,
-                    avg60: 2.0,
-                    avg300: 3.0,
-                    total: Duration::from_micros(7),
-                },
-            ),
-            (
-                "unknown field and trailing blanks",
-                "  some avg10=0.10 avg60=0.20 avg300=0.30 total=9 avg1800=0.4  \n",
-                PressureLine {
-                    stall: Stall::Partial,
-                    avg10: 0.1,
-                    avg60: 0.2,
-                    avg300: 0.3,
-                    total: Duration::from_micros(9),
-                },
-            ),
-            (
-                "total past u32",
-                "some avg10=0 avg60=0 avg300=0 total=18446744073709551615",
-                PressureLine {
-                    stall: Stall::Partial,
-                    avg10: 0.0,
-                    avg60: 0.0,
-                    avg300: 0.0,
-                    total: Duration::from_micros(u64::MAX),
-                },
-            ),
-        ];
-        for (case, line, expected) in ok {
-            assert_eq!(PressureLine::parse(line), Ok(*expected), "{case}");
-        }
-
-        // (case, line, error)
-        let bad: &[(&str, &str, PressureParseError)] = &[
-            ("empty", "", PressureParseError::Empty),
-            ("blank", "   \t", PressureParseError::Empty),
-            (
-                "cpu-style word",
-                "cpu avg10=0 avg60=0 avg300=0 total=0",
-                PressureParseError::UnknownStall("cpu".into()),
-            ),
-            (
-                "no total",
-                "some avg10=0 avg60=0 avg300=0",
-                PressureParseError::MissingField("total"),
-            ),
-            (
-                "no averages",
-                "some total=0",
-                PressureParseError::MissingField("avg10"),
-            ),
-            (
-                "text total",
-                "some avg10=0 avg60=0 avg300=0 total=lots",
-                PressureParseError::BadField("total"),
-            ),
-            (
-                "negative total",
-                "some avg10=0 avg60=0 avg300=0 total=-1",
-                PressureParseError::BadField("total"),
-            ),
-            (
-                "total past u64",
-                "some avg10=0 avg60=0 avg300=0 total=18446744073709551616",
-                PressureParseError::BadField("total"),
-            ),
-            (
-                "nan average",
-                "some avg10=nan avg60=0 avg300=0 total=0",
-                PressureParseError::BadField("avg10"),
-            ),
-            (
-                "infinite average",
-                "some avg10=0 avg60=inf avg300=0 total=0",
-                PressureParseError::BadField("avg60"),
-            ),
-            (
-                "negative average",
-                "some avg10=0 avg60=0 avg300=-0.5 total=0",
-                PressureParseError::BadField("avg300"),
-            ),
-            (
-                "empty average",
-                "some avg10= avg60=0 avg300=0 total=0",
-                PressureParseError::BadField("avg10"),
-            ),
-        ];
-        for (case, line, expected) in bad {
-            assert_eq!(PressureLine::parse(line), Err(expected.clone()), "{case}");
-        }
-    }
-
-    #[test]
-    fn psi_file_parse() {
-        let report = PressureReport::parse(IDLE).expect("an idle file parses");
-        assert_eq!(report.some.stall, Stall::Partial);
-        assert_eq!(report.full.stall, Stall::Full);
-
-        // Lines in either order, and blank lines between them.
-        let swapped = "full avg10=1 avg60=1 avg300=1 total=5\n\n\
-                       some avg10=2 avg60=2 avg300=2 total=6\n";
-        let report = PressureReport::parse(swapped).expect("order does not matter");
-        assert_eq!(report.some.total, Duration::from_micros(6));
-        assert_eq!(report.full.total, Duration::from_micros(5));
-
-        // (case, text, error)
-        let bad: &[(&str, &str, PressureParseError)] = &[
-            ("empty file", "", PressureParseError::MissingLine("some")),
-            (
-                "kernel before the full line",
-                "some avg10=0 avg60=0 avg300=0 total=0\n",
-                PressureParseError::MissingLine("full"),
-            ),
-            (
-                "a bad line fails the file",
-                "some avg10=0 avg60=0 avg300=0 total=x\nfull avg10=0 avg60=0 avg300=0 total=0\n",
-                PressureParseError::BadField("total"),
-            ),
-        ];
-        for (case, text, expected) in bad {
-            assert_eq!(PressureReport::parse(text), Err(expected.clone()), "{case}");
-        }
-    }
-
     #[test]
     fn psi_trigger_requests() {
         // (stall, level, [first request, fallback request])
@@ -454,7 +187,7 @@ mod tests {
             assert!(
                 triggers
                     .iter()
-                    .all(|trigger| trigger.stall() == stall && trigger.level() == level)
+                    .all(|trigger| trigger.stall() == stall && trigger.stall().level() == level)
             );
             assert!(
                 !triggers[0].is_unprivileged(),

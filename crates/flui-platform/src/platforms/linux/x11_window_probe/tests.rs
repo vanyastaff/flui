@@ -11,7 +11,6 @@ use x11rb::{
     connection::Connection,
     protocol::xproto::{AtomEnum, CreateWindowAux, PropMode, WindowClass},
     rust_connection::RustConnection,
-    wrapper::ConnectionExt as _,
 };
 
 use super::*;
@@ -200,4 +199,68 @@ fn x11_probe_hears_of_a_change_to_a_watched_window() {
         .expect("the server sets the property");
     fixture.set_wm_state(3);
     assert!(hears(&[fixture.window]), "WM_STATE is read");
+}
+
+#[test]
+fn x11_probe_asks_for_maximized_on_a_window_that_is_not_mapped() {
+    if !x_server() {
+        return;
+    }
+    let probe = X11WindowProbe::connect(&signal()).expect("the probe connects");
+    let fixture = Fixture::new();
+    assert_eq!(probe.mode(fixture.window), Some(X11WindowMode::Normal));
+
+    probe.set_maximized_hint(fixture.window);
+    assert_eq!(probe.mode(fixture.window), Some(X11WindowMode::Maximized));
+
+    // It adds to what the window already asks for rather than replacing it.
+    fixture.set_state(&["_NET_WM_STATE_FULLSCREEN"]);
+    probe.set_maximized_hint(fixture.window);
+    assert_eq!(probe.mode(fixture.window), Some(X11WindowMode::Fullscreen));
+}
+
+#[test]
+fn x11_probe_reads_the_frame_a_window_manager_reports() {
+    if !x_server() {
+        return;
+    }
+    let probe = X11WindowProbe::connect(&signal()).expect("the probe connects");
+    let fixture = Fixture::new();
+
+    // No window manager answers the request on a bare server.
+    let asked = Instant::now();
+    assert_eq!(
+        probe.frame_extents(fixture.window, Duration::from_millis(30)),
+        None
+    );
+    assert!(
+        asked.elapsed() < Duration::from_secs(2),
+        "the wait is bounded"
+    );
+
+    // One that answers a little late is waited for: left, right, top, bottom.
+    let answering = Fixture::new();
+    let window = answering.window;
+    let property = answering.atom("_NET_FRAME_EXTENTS");
+    let answer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(20));
+        answering
+            .connection
+            .change_property32(
+                PropMode::REPLACE,
+                window,
+                property,
+                AtomEnum::CARDINAL,
+                &[1, 2, 28, 3],
+            )
+            .expect("request")
+            .check()
+            .expect("the server sets the property");
+        answering
+    });
+    assert_eq!(
+        probe.frame_extents(window, Duration::from_secs(5)),
+        Some(flui_foundation::geometry::Size::new(3, 31))
+    );
+    drop(answer.join().expect("the stand-in answered"));
 }

@@ -156,13 +156,13 @@ fn run<F: AsFd>(mut triggers: Vec<(Trigger, F)>, stop: &OwnedFd, inbox: &Inbox) 
         let mut gone = Vec::new();
         for (index, fd) in fds[1..].iter().enumerate() {
             let revents = fd.revents();
-            if revents.contains(PollFlags::PRI) {
-                fired.push(triggers[index].0.stall());
-            }
             // The kernel destroys a trigger it can no longer serve and reports
-            // it as an error.
+            // it as an error, together with `POLLPRI`: that is the end of the
+            // trigger, not pressure.
             if revents.intersects(PollFlags::ERR | PollFlags::HUP | PollFlags::NVAL) {
                 gone.push(index);
+            } else if revents.contains(PollFlags::PRI) {
+                fired.push(triggers[index].0.stall());
             }
         }
         drop(fds);
@@ -302,6 +302,25 @@ mod tests {
         }
     }
 
+    /// A trigger the kernel destroys is reported as an error together with
+    /// `POLLPRI`; it ends the trigger and is no pressure. Here the server end
+    /// closes with out-of-band data pending, which the client end reports the
+    /// same way.
+    #[test]
+    fn pressure_loop_treats_a_destroyed_trigger_as_the_end_not_as_pressure() {
+        let inbox = inbox();
+        let stop = eventfd(0, EventfdFlags::CLOEXEC | EventfdFlags::NONBLOCK).expect("an eventfd");
+        let (server, client) = raising_pair();
+        raise(&server);
+        drop(server);
+        std::thread::scope(|scope| {
+            let thread =
+                scope.spawn(|| run(vec![(triggers_for(Stall::Full)[0], client)], &stop, &inbox));
+            wait_for("the thread to end", || thread.is_finished());
+        });
+        assert_eq!(levels(&inbox), []);
+    }
+
     #[test]
     fn pressure_loop_ends_when_asked_to_stop() {
         let inbox = inbox();
@@ -334,19 +353,5 @@ mod tests {
         }
         drop(watcher);
         assert_eq!(levels(&inbox), []);
-    }
-
-    /// Reading the real file needs a kernel with pressure information, which a
-    /// CI runner may lack; the test then has nothing to check.
-    #[test]
-    fn the_kernels_pressure_file_parses_when_there_is_one() {
-        let Ok(text) = std::fs::read_to_string(PRESSURE_FILE) else {
-            return;
-        };
-        let report =
-            crate::platforms::linux::lifecycle_model::memory_pressure::PressureReport::parse(&text)
-                .expect("the kernel's memory pressure file has a some and a full line");
-        assert_eq!(report.some.stall, Stall::Partial);
-        assert_eq!(report.full.stall, Stall::Full);
     }
 }

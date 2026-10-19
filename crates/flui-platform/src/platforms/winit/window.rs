@@ -38,6 +38,11 @@ use crate::traits::{
     WindowId, WindowMode, WindowOptions, WindowState,
 };
 
+/// How long a window that opens unmapped waits for the window manager to say
+/// what frame it will have.
+#[cfg(target_os = "linux")]
+const FRAME_EXTENTS_WAIT: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// Concrete winit window wrapper
 ///
 /// Wraps `winit::window::Window` to implement `PlatformWindow`.
@@ -90,7 +95,15 @@ pub struct WinitWindow {
     normal_geometry: Mutex<Option<WindowGeometry>>,
     /// Whether the window was created hidden and still waits for its first
     /// frame (or an explicit show) to become visible.
-    reveal_pending: AtomicBool,
+    reveal_pending: Mutex<bool>,
+    /// Whether the window was created unmapped to open maximized: a window
+    /// manager only reads that from the window's properties.
+    #[cfg(target_os = "linux")]
+    opens_maximized: bool,
+    /// The outer size an unmapped window opened with a remembered rectangle
+    /// has to end up with once its frame is known.
+    #[cfg(target_os = "linux")]
+    outer_to_fit: Option<Size<f64>>,
     /// The frame around decorated windows, measured from this and the
     /// platform's other windows.
     frame_inset: Arc<FrameInset>,
@@ -173,11 +186,11 @@ impl WinitWindow {
         let initial = sample_state(
             &window,
             shell,
-            &Facts {
+            &UnreadableFacts {
                 title: &title,
                 constraints,
                 focused: true,
-                visible: true,
+                visible: options.visible,
                 display,
                 probed_mode: None,
             },
@@ -191,13 +204,20 @@ impl WinitWindow {
             title: Mutex::new(title),
             constraints: Mutex::new(constraints),
             normal_geometry: Mutex::new(plan.normal_geometry),
-            reveal_pending: AtomicBool::new(plan.hidden_until_first_frame),
+            #[cfg(target_os = "linux")]
+            opens_maximized: plan.hidden_until_first_frame && plan.mode == WindowMode::Maximized,
+            #[cfg(target_os = "linux")]
+            outer_to_fit: plan
+                .normal_geometry
+                .filter(|_| plan.hidden_until_first_frame)
+                .map(|geometry| geometry.size),
+            reveal_pending: Mutex::new(plan.hidden_until_first_frame),
             frame_inset,
             #[cfg(target_os = "linux")]
             x11: std::sync::OnceLock::new(),
             window,
             is_focused: parking_lot::Mutex::new(true),
-            is_visible: parking_lot::Mutex::new(true),
+            is_visible: parking_lot::Mutex::new(options.visible),
             callbacks: crate::shared::WindowCallbacks::new(),
             #[cfg(all(target_os = "linux", feature = "a11y"))]
             accessibility: Arc::new(crate::platforms::linux::UnixAccessibility::new()),
@@ -226,6 +246,9 @@ impl WinitWindow {
         };
         if let Some(probe) = probe() {
             probe.watch(id);
+            if self.opens_maximized {
+                probe.set_maximized_hint(id);
+            }
             let _ = self.x11.set((probe, id));
         }
     }
@@ -336,7 +359,7 @@ impl WinitWindow {
         let mut state = sample_state(
             &self.window,
             self.shell,
-            &Facts {
+            &UnreadableFacts {
                 title: &title,
                 constraints: *self.constraints.lock(),
                 focused: *self.is_focused.lock(),
@@ -352,7 +375,6 @@ impl WinitWindow {
                 if state.visible {
                     self.frame_inset.observe(
                         state.decorated,
-                        true,
                         device_size(self.window.outer_size()),
                         device_size(self.window.inner_size()),
                     );
@@ -387,16 +409,64 @@ impl WinitWindow {
         Ok(())
     }
 
-    /// Make the window visible, ending a wait for the first frame.
+    /// Give a window that opens at a remembered outer rectangle, unmapped, the
+    /// content size that makes its outer size that. The first window of a run
+    /// has no frame measured yet, so the window manager is asked for the one
+    /// it will add (`_NET_REQUEST_FRAME_EXTENTS`), waiting briefly for the
+    /// answer: without it, un-maximizing the window would leave it larger than
+    /// it was saved by the frame, and saving that again grows it every run.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            clippy::unused_self,
+            reason = "only an X11 window can ask for its frame"
+        )
+    )]
+    fn fit_to_remembered_rectangle(&self) {
+        #[cfg(target_os = "linux")]
+        {
+            let Some(outer) = self.outer_to_fit else {
+                return;
+            };
+            if self.frame_inset.is_known() || !self.window.is_decorated() {
+                return;
+            }
+            let Some((probe, id)) = self.x11.get() else {
+                return;
+            };
+            let Some(frame) = probe.frame_extents(*id, FRAME_EXTENTS_WAIT) else {
+                return;
+            };
+            self.frame_inset.record(frame);
+            let inset = self.frame_inset.logical(self.window.scale_factor());
+            let _ = self.window.request_inner_size(LogicalSize::new(
+                (outer.width - inset.width).max(1.0),
+                (outer.height - inset.height).max(1.0),
+            ));
+        }
+    }
+
+    /// Make the window visible, ending a wait for the first frame. Every change
+    /// of the native window's visibility is made holding `reveal_pending`, so a
+    /// reveal and a hide from two threads cannot interleave their halves.
     fn make_visible(&self) {
-        self.reveal_pending.store(false, Ordering::Release);
+        let mut pending = self.reveal_pending.lock();
+        *pending = false;
         self.window.set_visible(true);
         *self.is_visible.lock() = true;
+    }
+
+    /// Hide the window. A hidden window has no first frame to wait for.
+    fn make_hidden(&self) {
+        let mut pending = self.reveal_pending.lock();
+        *pending = false;
+        self.window.set_visible(false);
+        *self.is_visible.lock() = false;
     }
 }
 
 /// What the window's snapshot holds that winit cannot read back.
-struct Facts<'a> {
+struct UnreadableFacts<'a> {
     title: &'a str,
     constraints: SizeConstraints,
     focused: bool,
@@ -414,7 +484,7 @@ fn device_size(size: winit::dpi::PhysicalSize<u32>) -> Size<i32> {
 }
 
 /// The window as winit and `facts` describe it.
-fn sample_state(window: &Window, shell: WindowShell, facts: &Facts<'_>) -> WindowState {
+fn sample_state(window: &Window, shell: WindowShell, facts: &UnreadableFacts<'_>) -> WindowState {
     let capabilities = shell.capabilities();
     let scale = window.scale_factor();
     let logical = |size: winit::dpi::PhysicalSize<u32>| {
@@ -572,12 +642,7 @@ impl PlatformWindow for WinitWindow {
                 }
                 _ => WindowCommandError::Unsupported,
             })?,
-            WindowCommand::Hide => {
-                // A hidden window has no first frame to wait for.
-                self.reveal_pending.store(false, Ordering::Release);
-                self.window.set_visible(false);
-                *self.is_visible.lock() = false;
-            }
+            WindowCommand::Hide => self.make_hidden(),
             WindowCommand::Activate => self.window.focus_window(),
             // `admit` refuses a command this window does not know.
             _ => return Err(WindowCommandError::Unsupported),
@@ -601,13 +666,15 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn reveal_after_first_frame(&self) {
-        if self.closed.load(Ordering::Acquire) {
-            return;
-        }
-        if self.reveal_pending.swap(false, Ordering::AcqRel) {
+        {
+            let mut pending = self.reveal_pending.lock();
+            if self.closed.load(Ordering::Acquire) || !std::mem::take(&mut *pending) {
+                return;
+            }
+            self.fit_to_remembered_rectangle();
             self.window.set_visible(true);
-            self.refresh_state();
         }
+        self.refresh_state();
     }
 
     fn close(&self) {

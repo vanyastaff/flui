@@ -12,13 +12,6 @@
 //! - [`logind`]: the login manager's signals to sleep, shutdown and lock
 //!   events, and what to do with the delay inhibitor after each.
 
-// The adapters that read these models come with the window commands; until
-// they land the models have no caller outside their tests.
-#![allow(
-    dead_code,
-    reason = "the Linux window and host adapters that read these models land with the window commands"
-)]
-
 pub(crate) mod logind;
 pub(crate) mod memory_pressure;
 pub(crate) mod x11_window_mode;

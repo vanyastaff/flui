@@ -413,29 +413,6 @@ impl WinitPlatform {
         WindowShell::Desktop
     }
 
-    /// The display a window's position is measured on: the one `wanted` names,
-    /// else global coordinates at the primary display's scale.
-    fn placement_display(&self, wanted: Option<flui_platform_api::DisplayId>) -> PlacementDisplay {
-        let snapshot = self.displays.snapshot().ok();
-        let named = snapshot
-            .as_ref()
-            .zip(wanted)
-            .and_then(|(snapshot, id)| snapshot.get(id));
-        match named {
-            Some(display) => PlacementDisplay {
-                origin: display.bounds.origin,
-                scale_factor: display.scale_factor,
-            },
-            None => PlacementDisplay {
-                origin: Point::new(0, 0),
-                scale_factor: snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.primary())
-                    .map_or(1.0, |display| display.scale_factor),
-            },
-        }
-    }
-
     /// Bring the display source up to date with `event_loop` and wake the owner
     /// when that may have changed the snapshot, so the host samples it again.
     ///
@@ -619,7 +596,8 @@ impl WinitPlatform {
                 rejected: Some(Box::new(options)),
             });
         };
-        let display = self.placement_display(options.display);
+        let display =
+            PlacementDisplay::choose(self.displays.snapshot().ok().as_ref(), options.display);
         let plan = OpenPlan::new(
             &options,
             shell_of(event_loop),

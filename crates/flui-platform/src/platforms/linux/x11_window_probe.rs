@@ -5,9 +5,10 @@
 //! The probe holds two connections to the X server `DISPLAY` names, apart from
 //! winit's own:
 //!
-//! - one **queries** on the owner thread (`WM_STATE` and `_NET_WM_STATE` of a
-//!   window, decided by
-//!   [`lifecycle_model::x11_window_mode`](super::lifecycle_model::x11_window_mode));
+//! - one **queries**, on whichever thread asks (`WM_STATE` and `_NET_WM_STATE`
+//!   of a window, decided by
+//!   [`lifecycle_model::x11_window_mode`](super::lifecycle_model::x11_window_mode)),
+//!   and sets the properties a client sets on a window that is not mapped yet;
 //! - one **watches** on a thread of its own: it selects property changes on
 //!   each window it is given and records which windows the window manager
 //!   changed, then wakes the owner.
@@ -24,8 +25,10 @@ use std::{
     os::fd::{AsFd, OwnedFd},
     sync::{Arc, Weak},
     thread::JoinHandle,
+    time::{Duration, Instant},
 };
 
+use flui_foundation::geometry::Size;
 use parking_lot::Mutex;
 use rustix::{
     event::{EventfdFlags, PollFd, PollFlags, eventfd, poll},
@@ -35,9 +38,13 @@ use x11rb::{
     connection::Connection,
     protocol::{
         Event,
-        xproto::{self, AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, EventMask},
+        xproto::{
+            self, AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConnectionExt as _,
+            EventMask, PropMode,
+        },
     },
     rust_connection::RustConnection,
+    wrapper::ConnectionExt as _,
 };
 
 use super::lifecycle_model::x11_window_mode::{
@@ -53,6 +60,8 @@ const STATE_ATOMS_LENGTH: u32 = 64;
 struct Atoms {
     wm_state: xproto::Atom,
     net_wm_state: xproto::Atom,
+    frame_extents: xproto::Atom,
+    request_frame_extents: xproto::Atom,
     states: NetWmStateAtoms,
 }
 
@@ -69,6 +78,8 @@ impl Atoms {
         Ok(Self {
             wm_state: intern(b"WM_STATE")?,
             net_wm_state: intern(b"_NET_WM_STATE")?,
+            frame_extents: intern(b"_NET_FRAME_EXTENTS")?,
+            request_frame_extents: intern(b"_NET_REQUEST_FRAME_EXTENTS")?,
             states: NetWmStateAtoms {
                 hidden: intern(b"_NET_WM_STATE_HIDDEN")?,
                 maximized_horz: intern(b"_NET_WM_STATE_MAXIMIZED_HORZ")?,
@@ -99,6 +110,7 @@ impl ProbeError {
 pub(crate) struct X11WindowProbe {
     atoms: Atoms,
     query: RustConnection,
+    root: xproto::Window,
     /// Windows whose mode properties changed since the owner last asked.
     changed: Arc<Mutex<BTreeSet<u32>>>,
     watch: Arc<RustConnection>,
@@ -114,9 +126,15 @@ impl X11WindowProbe {
     /// [`ProbeError`] when a connection cannot be made or the thread cannot
     /// start.
     pub(crate) fn connect(signal: &Arc<OwnerSignal>) -> Result<Arc<Self>, ProbeError> {
-        let query = RustConnection::connect(None)
-            .map_err(ProbeError::from_display)?
-            .0;
+        let (query, screen) = RustConnection::connect(None).map_err(ProbeError::from_display)?;
+        let root = query
+            .setup()
+            .roots
+            .get(screen)
+            .ok_or_else(|| {
+                ProbeError::from_display("the server lists no screen of the display number")
+            })?
+            .root;
         let atoms = Atoms::intern(&query)?;
         let watch = Arc::new(
             RustConnection::connect(None)
@@ -141,6 +159,7 @@ impl X11WindowProbe {
         Ok(Arc::new(Self {
             atoms,
             query,
+            root,
             changed,
             watch,
             stop,
@@ -149,6 +168,12 @@ impl X11WindowProbe {
     }
 
     /// Start hearing of changes to `window`'s mode properties.
+    ///
+    /// The request is sent without waiting for its reply: this connection is
+    /// the watching thread's to read, and a reply wait here would read events
+    /// off the socket into the connection's queue, where the sleeping thread
+    /// would not hear of them. A refusal (the window is gone) arrives as an
+    /// error event the thread discards.
     pub(crate) fn watch(&self, window: u32) {
         let selected = self
             .watch
@@ -156,11 +181,71 @@ impl X11WindowProbe {
                 window,
                 &ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE),
             )
+            .map(x11rb::cookie::VoidCookie::ignore_error)
             .map_err(ProbeError::from_display)
-            .and_then(|cookie| cookie.check().map_err(ProbeError::from_display))
             .and_then(|()| self.watch.flush().map_err(ProbeError::from_display));
         if let Err(error) = selected {
             tracing::debug!(%error, window, "cannot watch an X11 window's state");
+        }
+    }
+
+    /// Set `_NET_WM_STATE` on the not yet mapped `window` to include
+    /// maximized, as EWMH has a client do for a window that is not managed
+    /// yet: the window manager reads the property when it maps the window, and
+    /// ignores a client message about a window it does not manage.
+    pub(crate) fn set_maximized_hint(&self, window: u32) {
+        let atoms = [
+            self.atoms.states.maximized_horz,
+            self.atoms.states.maximized_vert,
+        ];
+        let set = self
+            .query
+            .change_property32(
+                PropMode::APPEND,
+                window,
+                self.atoms.net_wm_state,
+                AtomEnum::ATOM,
+                &atoms,
+            )
+            .map_err(ProbeError::from_display)
+            .and_then(|cookie| cookie.check().map_err(ProbeError::from_display));
+        if let Err(error) = set {
+            tracing::debug!(%error, window, "cannot ask for a maximized X11 window");
+        }
+    }
+
+    /// The frame the window manager will put around the not yet mapped
+    /// `window`, as the width and height it adds: asked for with
+    /// `_NET_REQUEST_FRAME_EXTENTS` and read from `_NET_FRAME_EXTENTS`, waiting
+    /// at most `wait` for the answer. `None` when the window manager does not
+    /// answer (there is none, or it does not know the request).
+    pub(crate) fn frame_extents(&self, window: u32, wait: Duration) -> Option<Size<i32>> {
+        let request =
+            ClientMessageEvent::new(32, window, self.atoms.request_frame_extents, [0_u32; 5]);
+        self.query
+            .send_event(
+                false,
+                self.root,
+                EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+                request,
+            )
+            .ok()?
+            .check()
+            .ok()?;
+        let deadline = Instant::now() + wait;
+        loop {
+            // left, right, top, bottom
+            let extents: Option<[u32; 4]> = self
+                .property(window, self.atoms.frame_extents, AtomEnum::CARDINAL.into())
+                .and_then(|reply| reply.value32()?.collect::<Vec<_>>().try_into().ok());
+            if let Some([left, right, top, bottom]) = extents {
+                let sum = |a: u32, b: u32| i32::try_from(u64::from(a) + u64::from(b)).ok();
+                return Some(Size::new(sum(left, right)?, sum(top, bottom)?));
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(2));
         }
     }
 

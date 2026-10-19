@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use flui_foundation::panic::FirstPanic;
 use flui_platform_api::{SessionEndAnswer, SessionEndPhase};
 
 use super::{WinitApp, WinitPlatform};
@@ -96,20 +97,29 @@ impl WinitApp {
         let Some(source) = &self.host_notices else {
             return;
         };
+        // A subscriber that panics must not keep the rest from hearing, nor
+        // keep logind waiting for the events behind it: every delivery runs,
+        // and the first panic is raised once all have.
+        let mut panics = FirstPanic::new();
         for delivery in source.take() {
-            delivery.deliver_with(|event| match event {
-                HostEvent::Notice(notice) => self.platform.notices.dispatch(notice),
-                // Linux cannot hold a shutdown for the user, so the answer to
-                // the query is not read; the application hears the query so
-                // that it can start saving, then the shutdown.
-                HostEvent::SessionEnding => {
-                    self.platform.session_end(SessionEndPhase::Query);
-                    self.platform.session_end(SessionEndPhase::Ending);
-                }
-                HostEvent::SessionEndCancelled => {
-                    self.platform.session_end(SessionEndPhase::Cancelled);
-                }
+            panics.contain(|| {
+                delivery.deliver_with(|event| match event {
+                    HostEvent::Notice(notice) => self.platform.notices.dispatch(notice),
+                    // Linux cannot hold a shutdown for the user, so the answer
+                    // to the query is not read; the application hears the
+                    // query so that it can start saving, then the shutdown.
+                    HostEvent::SessionEnding => {
+                        let mut phases = FirstPanic::new();
+                        phases.contain(|| self.platform.session_end(SessionEndPhase::Query));
+                        phases.contain(|| self.platform.session_end(SessionEndPhase::Ending));
+                        phases.resume();
+                    }
+                    HostEvent::SessionEndCancelled => {
+                        self.platform.session_end(SessionEndPhase::Cancelled);
+                    }
+                });
             });
         }
+        panics.resume();
     }
 }

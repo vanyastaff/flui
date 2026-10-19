@@ -13,7 +13,8 @@
 
 use flui_foundation::geometry::{Point, Size};
 use flui_platform_api::{
-    WindowCapabilities, WindowGeometry, WindowMode, WindowOptions, WindowReveal,
+    DisplayId, DisplaySnapshot, WindowCapabilities, WindowGeometry, WindowMode, WindowOptions,
+    WindowReveal,
 };
 use parking_lot::Mutex;
 
@@ -76,6 +77,34 @@ pub(super) const fn mode_of(minimized: bool, fullscreen: bool, maximized: bool) 
 pub(super) struct PlacementDisplay {
     pub origin: Point<i32>,
     pub scale_factor: f64,
+}
+
+impl PlacementDisplay {
+    /// The display options measure their position on: the one `wanted` names
+    /// if the snapshot holds it, else global coordinates (origin zero) at the
+    /// primary display's scale.
+    ///
+    /// A named display's origin is that of its **usable area**, which is what
+    /// `WindowPlacement` measures a remembered offset from: a window on a
+    /// display with a panel along its top reopens below the panel, not under
+    /// it.
+    pub(super) fn choose(snapshot: Option<&DisplaySnapshot>, wanted: Option<DisplayId>) -> Self {
+        let named = snapshot
+            .zip(wanted)
+            .and_then(|(snapshot, id)| snapshot.get(id));
+        match named {
+            Some(display) => Self {
+                origin: display.usable_bounds.origin,
+                scale_factor: display.scale_factor,
+            },
+            None => Self {
+                origin: Point::new(0, 0),
+                scale_factor: snapshot
+                    .and_then(DisplaySnapshot::primary)
+                    .map_or(1.0, |display| display.scale_factor),
+            },
+        }
+    }
 }
 
 /// What winit is asked for when a window is created.
@@ -180,30 +209,33 @@ pub(super) struct FrameInset {
 }
 
 impl FrameInset {
-    /// Record a window's sizes if they show a frame: the window is decorated,
-    /// shown and in normal mode (a maximized or fullscreen window's frame
-    /// is not the one a normal window gets), and its outer extent is at least
-    /// its content's in both dimensions with some difference.
-    pub(super) fn observe(
-        &self,
-        decorated: bool,
-        shown_in_normal_mode: bool,
-        outer: Size<i32>,
-        content: Size<i32>,
-    ) {
-        if !(decorated && shown_in_normal_mode) {
+    /// Record a window's sizes if they show a frame: the window is decorated
+    /// and in normal mode (a maximized or fullscreen window's frame is not the
+    /// one a normal window gets), and its outer extent is at least its
+    /// content's in both dimensions with some difference.
+    pub(super) fn observe(&self, decorated: bool, outer: Size<i32>, content: Size<i32>) {
+        if !decorated || outer.width < content.width || outer.height < content.height {
             return;
         }
-        let width = outer.width.saturating_sub(content.width);
-        let height = outer.height.saturating_sub(content.height);
-        // A window narrower or shorter than its content is not one with a frame.
-        if outer.width < content.width || outer.height < content.height {
+        self.record(Size::new(
+            outer.width - content.width,
+            outer.height - content.height,
+        ));
+    }
+
+    /// Record a frame the window manager reported, in device pixels. A frame
+    /// of nothing, or a negative one, is not a measurement.
+    pub(super) fn record(&self, frame: Size<i32>) {
+        if frame.width < 0 || frame.height < 0 || (frame.width == 0 && frame.height == 0) {
             return;
         }
-        if width == 0 && height == 0 {
-            return;
-        }
-        *self.measured.lock() = Some(Size::new(width, height));
+        *self.measured.lock() = Some(frame);
+    }
+
+    /// Whether any frame was measured.
+    #[cfg(any(target_os = "linux", test))]
+    pub(super) fn is_known(&self) -> bool {
+        self.measured.lock().is_some()
     }
 
     /// The frame in logical pixels on a display of `scale_factor`; zero before
@@ -237,6 +269,87 @@ mod tests {
 
     fn plan(options: &WindowOptions, shell: WindowShell) -> OpenPlan {
         OpenPlan::new(options, shell, DISPLAY, Size::new(0.0, 0.0))
+    }
+
+    #[test]
+    fn placement_display_is_measured_from_the_usable_area() {
+        use flui_foundation::geometry::Bounds;
+        use flui_platform_api::{DisplayInfo, DisplayKey, DisplayRegistry};
+
+        let registry = DisplayRegistry::new();
+        let id = |_| registry.mint(&DisplayKey::Unkeyed).expect("an id");
+        // A 1920x1080 display at scale 2 with a 56-pixel panel along its top.
+        let bounds = Bounds::new(Point::new(1920, 0), Size::new(1920, 1080));
+        let usable = Bounds::new(Point::new(1920, 56), Size::new(1920, 1024));
+        let main = DisplayInfo::new(id(0), "main", bounds, 2.0)
+            .with_usable_bounds(usable)
+            .with_primary(true);
+        let other = DisplayInfo::new(id(1), "other", bounds, 1.0);
+        let (main_id, other_id) = (main.id, other.id);
+        let snapshot = DisplaySnapshot::empty()
+            .successor(vec![main, other])
+            .expect("a snapshot");
+
+        // (case, wanted display, display placed on)
+        let table = [
+            (
+                "a named display: its usable origin and scale",
+                Some(main_id),
+                PlacementDisplay {
+                    origin: Point::new(1920, 56),
+                    scale_factor: 2.0,
+                },
+            ),
+            (
+                "a named display with no panel",
+                Some(other_id),
+                PlacementDisplay {
+                    origin: Point::new(1920, 0),
+                    scale_factor: 1.0,
+                },
+            ),
+            (
+                "none named: global, at the primary scale",
+                None,
+                PlacementDisplay {
+                    origin: Point::new(0, 0),
+                    scale_factor: 2.0,
+                },
+            ),
+        ];
+        for (case, wanted, expected) in table {
+            assert_eq!(
+                PlacementDisplay::choose(Some(&snapshot), wanted),
+                expected,
+                "{case}"
+            );
+        }
+        let gone = registry.mint(&DisplayKey::Unkeyed).expect("an id");
+        assert_eq!(
+            PlacementDisplay::choose(Some(&snapshot), Some(gone)).origin,
+            Point::new(0, 0),
+            "a display that is gone"
+        );
+        assert_eq!(
+            PlacementDisplay::choose(None, Some(main_id)),
+            PlacementDisplay {
+                origin: Point::new(0, 0),
+                scale_factor: 1.0
+            },
+            "no snapshot"
+        );
+
+        // A window 100 logical pixels below the top of the display is saved as
+        // an offset from the usable area and reopens where it was.
+        let main_display = PlacementDisplay::choose(Some(&snapshot), Some(main_id));
+        let options = options().with_position(Some(Point::new(10.0, 22.0)));
+        let planned = OpenPlan::new(
+            &options,
+            WindowShell::Desktop,
+            main_display,
+            Size::new(0.0, 0.0),
+        );
+        assert_eq!(planned.position, Some(Point::new(1940, 100)));
     }
 
     #[test]
@@ -517,19 +630,12 @@ mod tests {
             Size::new(0.0, 0.0),
             "nothing measured yet"
         );
+        assert!(!inset.is_known());
 
-        // (case, decorated, shown in normal mode, outer, content)
+        // (case, decorated, outer, content)
         let ignored = [
             (
                 "undecorated",
-                false,
-                true,
-                Size::new(810, 640),
-                Size::new(800, 600),
-            ),
-            (
-                "not in normal mode",
-                true,
                 false,
                 Size::new(810, 640),
                 Size::new(800, 600),
@@ -537,13 +643,11 @@ mod tests {
             (
                 "no difference",
                 true,
-                true,
                 Size::new(800, 600),
                 Size::new(800, 600),
             ),
             (
                 "outer narrower than content",
-                true,
                 true,
                 Size::new(790, 640),
                 Size::new(800, 600),
@@ -551,18 +655,26 @@ mod tests {
             (
                 "outer shorter than content",
                 true,
-                true,
                 Size::new(810, 590),
                 Size::new(800, 600),
             ),
         ];
-        for (case, decorated, shown, outer, content) in ignored {
-            inset.observe(decorated, shown, outer, content);
+        for (case, decorated, outer, content) in ignored {
+            inset.observe(decorated, outer, content);
             assert_eq!(inset.logical(1.0), Size::new(0.0, 0.0), "{case}");
         }
+        for (case, frame) in [
+            ("a frame of nothing", Size::new(0, 0)),
+            ("a negative width", Size::new(-1, 10)),
+            ("a negative height", Size::new(10, -1)),
+        ] {
+            inset.record(frame);
+            assert!(!inset.is_known(), "{case}");
+        }
 
-        inset.observe(true, true, Size::new(1620, 1260), Size::new(1600, 1200));
+        inset.observe(true, Size::new(1620, 1260), Size::new(1600, 1200));
         assert_eq!(inset.logical(1.0), Size::new(20.0, 60.0));
+        assert!(inset.is_known());
         assert_eq!(
             inset.logical(2.0),
             Size::new(10.0, 30.0),
@@ -575,8 +687,11 @@ mod tests {
         );
         assert_eq!(inset.logical(f64::NAN), Size::new(0.0, 0.0));
 
-        // A frame of one dimension only (a bar and no borders) is a frame.
-        inset.observe(true, true, Size::new(800, 630), Size::new(800, 600));
+        // A frame of one dimension only (a bar and no borders) is a frame, and
+        // a frame the window manager reports replaces a measured one.
+        inset.observe(true, Size::new(800, 630), Size::new(800, 600));
         assert_eq!(inset.logical(1.0), Size::new(0.0, 30.0));
+        inset.record(Size::new(8, 38));
+        assert_eq!(inset.logical(1.0), Size::new(8.0, 38.0));
     }
 }
