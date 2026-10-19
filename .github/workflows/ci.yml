@@ -7,7 +7,7 @@ name: CI
 # No label enables native application Windows/macOS or GPU jobs. Platform typechecking
 # uses Linux cross tools and macOS SDK legs; OS runtime checks are local commands.
 # Native host-tool tests live separately in xtask-native.yml.
-# test-nested and test-trybuild run independently, restoring the test cache.
+# test-nested and test-trybuild (main only) run independently, each with its own cache.
 # All jobs except the notification are gated by the ci aggregator.
 
 on:
@@ -311,7 +311,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # test — the workspace suite on Linux (`cargo xtask test --fast`: nextest
   # over TEST_SCOPE, then flui-platform under Xvfb), then the build that
-  # links the examples and benches with the same features, so it compiles
+  # links the examples and benches with the same packages and features, so it compiles
   # nothing twice (a target whose `required-features` the test scope leaves
   # off is compiled per feature by `feature-matrix`, not linked). The nested-cargo group runs beside it in `test-nested`.
   # `cross-typecheck` is the only job touching the AppKit/Win32/Android
@@ -423,10 +423,16 @@ jobs:
       - name: cargo xtask test --nested --nested-group native
         run: cargo xtask test --nested --nested-group native
 
+  # The compile-fail suites run on main, not on pull requests: they are the
+  # longest job (16-21 min) and fail only when a change loosens a type rule
+  # or moves a diagnostic, which the first main run reports through
+  # `notify-main-red`. Locally a changed crate's `cargo nextest run` still
+  # runs its suite, and `cargo xtask test --nested --nested-group trybuild`
+  # runs them all.
   test-trybuild:
     name: test-trybuild
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
@@ -1025,10 +1031,10 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           HEAVY_JOBS: >-
-            clippy wasm-check cross-typecheck test test-nested test-trybuild doc
-            test-features live-smoke
+            clippy wasm-check cross-typecheck test test-nested doc test-features
+            live-smoke
           FULL_JOBS: >-
-            feature-matrix doc-test miri
+            feature-matrix doc-test miri test-trybuild
           LANE: ${{ needs.plan.outputs.lane }}
           EVENT: ${{ github.event_name }}
         run: cargo xtask ci-verify

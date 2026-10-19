@@ -98,9 +98,8 @@ mod measured {
         WindowState as _,
     };
     use flui_sdk::rendering::{
-        BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, InputRegion as _,
-        InputRegionKind as _, InputRegionSink as _, RenderError as _, RenderResult as _,
-        RenderUpdateImpact as _,
+        BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, RenderError as _,
+        RenderResult as _, RenderUpdateImpact as _,
     };
     use flui_sdk::view::dev_agent::{
         AgentAnswer as _, AgentFault as _, AgentWindow as _, DevAgentHook as _, HandleKind as _,
@@ -470,9 +469,6 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform_api::input_capabilities::PointerKindSet;",
         "pub use flui_rendering::constraints::BoxConstraints;",
         "pub use flui_rendering::hit_testing::HitTestBehavior;",
-        "pub use flui_rendering::input_regions::InputRegion;",
-        "pub use flui_rendering::input_regions::InputRegionKind;",
-        "pub use flui_rendering::input_regions::InputRegionSink;",
         "pub use flui_rendering::protocol::BoxProtocol;",
         "pub use flui_rendering::semantics::SemanticsRegion;",
         "pub use flui_rendering::semantics::SemanticsRegionKey;",

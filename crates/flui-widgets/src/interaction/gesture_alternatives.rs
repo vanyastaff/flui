@@ -42,7 +42,7 @@ use super::actions::{
 use super::companion::{CompanionGap, CompanionLink, LinkedCompanions};
 use super::focus::Focus;
 use super::focus_ring::FocusRing;
-use super::gesture_arena_scope::GestureArenaScope;
+use super::gesture_arena_scope::{GestureArenaScope, GesturePolicy};
 use super::listener::Listener;
 use super::raw_button::RawButton;
 use super::raw_gesture_detector::{
@@ -175,8 +175,13 @@ impl GestureCommand {
         action.invoke(cx, intent)
     }
 
-    fn warn_reserved_keys(&self, platform: TargetPlatform) {
+    /// Report this command's keys reserved on `platform`, except those
+    /// `already` reported.
+    fn warn_reserved_keys(&self, platform: TargetPlatform, already: &[&SingleActivator]) {
         for activator in &self.keys {
+            if already.contains(&activator) {
+                continue;
+            }
             if let Some(reserved) = reserved_key(platform, activator) {
                 tracing::warn!(
                     target: "flui::a11y",
@@ -676,6 +681,14 @@ pub enum GestureAlternativesError {
         /// The shared label.
         label: String,
     },
+    /// Two commands have keys one key press matches: `ctrl+d` and `ctrl+D`,
+    /// or Shift ignored beside Shift required, so pressing it could perform
+    /// either.
+    #[error("two gesture commands share the key {key:?}")]
+    DuplicateKey {
+        /// The later command's key that a press of an earlier one matches.
+        key: SingleActivator,
+    },
     /// A companion command performs an intent of a type its
     /// [`CompanionLink`] does not carry, so no companion could ever publish
     /// a node for it.
@@ -719,8 +732,9 @@ impl GestureAlternatives {
     ///
     /// [`GestureAlternativesError::EmptyLabel`] for a command without a
     /// label, [`GestureAlternativesError::DuplicateLabel`] for two commands
-    /// with one, [`GestureAlternativesError::ForeignIntent`] for a companion
-    /// command whose intent its link does not carry.
+    /// with one, [`GestureAlternativesError::DuplicateKey`] for two commands
+    /// with one key, [`GestureAlternativesError::ForeignIntent`] for a
+    /// companion command whose intent its link does not carry.
     pub fn new(alternative: Alternative) -> Result<Self, GestureAlternativesError> {
         let alternatives = Self {
             alternative,
@@ -729,6 +743,7 @@ impl GestureAlternatives {
             hold: None,
         };
         let mut seen: Vec<&str> = Vec::new();
+        let mut keys: Vec<&SingleActivator> = Vec::new();
         for command in alternatives.commands() {
             if command.label().is_empty() {
                 return Err(GestureAlternativesError::EmptyLabel);
@@ -739,6 +754,13 @@ impl GestureAlternatives {
                 });
             }
             seen.push(command.label());
+            let earlier = keys.len();
+            for key in &command.keys {
+                if keys[..earlier].iter().any(|earlier| earlier.overlaps(key)) {
+                    return Err(GestureAlternativesError::DuplicateKey { key: key.clone() });
+                }
+                keys.push(key);
+            }
             if let Alternative::Companion(spec) = &alternatives.alternative
                 && !spec.link.accepts(command.intent_any())
             {
@@ -771,6 +793,21 @@ impl GestureAlternatives {
     /// own. Ignored by visible controls.
     pub(crate) fn with_hold(mut self, hold: Option<Rc<SequencedBranch>>) -> Self {
         self.hold = hold;
+        self
+    }
+
+    /// Show the menu through `presenter` and close it through `dismiss`,
+    /// keeping the commands already checked. Ignored by visible controls and
+    /// companions.
+    pub(crate) fn present_menu_with(
+        mut self,
+        presenter: MenuPresenter,
+        dismiss: impl Fn(&mut EventCx<'_>) + 'static,
+    ) -> Self {
+        if let Alternative::ContextMenu(spec) = &mut self.alternative {
+            spec.presenter = presenter;
+            spec.dismiss = Some(Rc::new(dismiss));
+        }
         self
     }
 
@@ -825,6 +862,10 @@ impl StatefulView for GestureAlternatives {
     type State = GestureAlternativesState;
 
     fn create_state(&self) -> Self::State {
+        let platform = TargetPlatform::current();
+        for command in self.commands() {
+            command.warn_reserved_keys(platform, &[]);
+        }
         GestureAlternativesState {
             opener: OpenerSlot::new(Rc::new(|_cx, _cause, _position| {})),
             menu: self.is_menu(),
@@ -866,7 +907,7 @@ pub struct GestureAlternativesState {
     menu: bool,
     given_hold: Option<Rc<SequencedBranch>>,
     /// The arena, settings and writer the long press is built against.
-    policy: Option<(GestureArena, GestureSettingsProvider, WriterSource)>,
+    policy: Option<(GesturePolicy, WriterSource)>,
     hold: Option<MenuHold>,
     hold_attachment: Rc<RecognizerAttachment<LongPressGestureRecognizer>>,
     /// The contacts down on the row, one of which the long press holds.
@@ -883,13 +924,9 @@ pub struct GestureAlternativesState {
 struct MenuHold {
     branch: Option<Rc<SequencedBranch>>,
     recognizer: Rc<LongPressGestureRecognizer>,
-    /// What the hold was built for: the arena handle and policy, and the hold
-    /// the view handed it.
-    built_for: (
-        GestureArena,
-        GestureSettingsProvider,
-        Option<Rc<SequencedBranch>>,
-    ),
+    /// What the hold was built for: the arena handle and settings, and the
+    /// hold the view handed it.
+    built_for: (GesturePolicy, Option<Rc<SequencedBranch>>),
 }
 
 impl fmt::Debug for GestureAlternativesState {
@@ -905,13 +942,7 @@ impl GestureAlternativesState {
     /// Only a menu's long press uses them, and visible controls work outside
     /// a gesture scope, so there is none outside one.
     fn acquire(&mut self, ctx: &dyn LifecycleContext) {
-        self.policy = GestureArenaScope::maybe_of(ctx).map(|arena| {
-            (
-                arena,
-                GestureArenaScope::settings_or_default_of(ctx),
-                ctx.writer_source(),
-            )
-        });
+        self.policy = GesturePolicy::maybe_of(ctx).map(|policy| (policy, ctx.writer_source()));
         self.rebuild_hold();
     }
 
@@ -919,7 +950,7 @@ impl GestureAlternativesState {
     /// retiring the one it replaces; drop it when the alternative is no
     /// longer a menu.
     fn rebuild_hold(&mut self) {
-        let Some((arena, settings, writer)) = self.policy.clone().filter(|_| self.menu) else {
+        let Some((policy, writer)) = self.policy.clone().filter(|_| self.menu) else {
             self.hold_attachment.clear();
             if let Some(outgoing) = self.hold.take() {
                 let _ = outgoing.recognizer.cancel();
@@ -927,14 +958,13 @@ impl GestureAlternativesState {
             return;
         };
         let current = self.hold.as_ref().is_some_and(|hold| {
-            let (built_arena, built_settings, built_hold) = &hold.built_for;
-            built_arena.admits_like(&arena)
-                && *built_settings == settings
-                && same_hold(built_hold.as_ref(), self.given_hold.as_ref())
+            let (built_policy, built_hold) = &hold.built_for;
+            *built_policy == policy && same_hold(built_hold.as_ref(), self.given_hold.as_ref())
         });
         if current {
             return;
         }
+        let GesturePolicy { arena, settings } = &policy;
         let branch = match &self.given_hold {
             Some(branch) => Some(Rc::clone(branch)),
             None => match arena.sequenced() {
@@ -951,8 +981,8 @@ impl GestureAlternativesState {
         };
         let recognizer = menu_long_press(
             branch.as_ref(),
-            &arena,
-            &settings,
+            arena,
+            settings,
             &writer,
             &self.opener,
             &self.pressed,
@@ -961,7 +991,7 @@ impl GestureAlternativesState {
         let outgoing = self.hold.replace(MenuHold {
             branch,
             recognizer,
-            built_for: (arena, settings, self.given_hold.clone()),
+            built_for: (policy, self.given_hold.clone()),
         });
         if let Some(outgoing) = outgoing {
             let _ = outgoing.recognizer.cancel();
@@ -1032,7 +1062,18 @@ impl ViewState<GestureAlternatives> for GestureAlternativesState {
 
     /// A view that turns the alternative into a menu, out of one, or hands
     /// the long press another hold replaces it.
-    fn did_update_view(&mut self, _old_view: &GestureAlternatives, new_view: &GestureAlternatives) {
+    fn did_update_view(&mut self, old_view: &GestureAlternatives, new_view: &GestureAlternatives) {
+        // A rebuild reports only the reserved keys it brings: those the
+        // command already had were reported when it got them.
+        let platform = TargetPlatform::current();
+        for command in new_view.commands() {
+            let already: Vec<&SingleActivator> = old_view
+                .commands()
+                .filter(|old| old.label == command.label)
+                .flat_map(|old| &old.keys)
+                .collect();
+            command.warn_reserved_keys(platform, &already);
+        }
         self.menu = new_view.is_menu();
         self.given_hold.clone_from(&new_view.hold);
         self.rebuild_hold();
@@ -1103,7 +1144,6 @@ impl GestureAlternatives {
         let mut semantics = Semantics::new().container(true);
         let mut shortcuts_bindings = Vec::new();
         for command in self.commands() {
-            command.warn_reserved_keys(platform);
             for activator in command.keys(platform) {
                 shortcuts_bindings.push((activator.clone(), Rc::clone(&command.intent)));
             }
@@ -1275,15 +1315,24 @@ fn control_button(
     .boxed()
 }
 
-/// The theme-free "more" glyph the revealed menu control draws: three dots.
+/// The theme-free glyph's surface and dots: the control paints both, as the
+/// theme-free menu does, so whatever the row draws behind it cannot hide it.
+const GLYPH_SURFACE: Color = Color::WHITE;
+const GLYPH_INK: Color = Color::BLACK;
+
+/// The theme-free "more" glyph the revealed menu control draws: three dots
+/// on a surface of their own.
 fn more_glyph() -> BoxedView {
     let dot = || {
         Padding::symmetric(1.5, 0.0)
-            .child(SizedBox::new(3.0, 3.0).child(ColoredBox::new(Color::BLACK)))
+            .child(SizedBox::new(3.0, 3.0).child(ColoredBox::new(GLYPH_INK)))
             .boxed()
     };
-    Row::new(vec![dot(), dot(), dot()])
-        .main_axis_size(MainAxisSize::Min)
+    ColoredBox::new(GLYPH_SURFACE)
+        .child(
+            Padding::all(4.0)
+                .child(Row::new(vec![dot(), dot(), dot()]).main_axis_size(MainAxisSize::Min)),
+        )
         .boxed()
 }
 

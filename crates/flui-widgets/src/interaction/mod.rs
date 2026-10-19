@@ -58,6 +58,7 @@ pub use gesture_alternatives::{
     MenuSpec,
 };
 pub use gesture_arena_scope::GestureArenaScope;
+pub(crate) use gesture_arena_scope::GesturePolicy;
 pub use gesture_detector::{
     DragSlot, ForcePressSlot, GestureDetector, GestureDetectorState, MultiTapCount,
     MultiTapCountError, TransformSlot,

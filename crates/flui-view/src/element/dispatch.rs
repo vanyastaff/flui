@@ -8,7 +8,7 @@
 //! — no reference downcast smuggles a view type through this path.
 //! The `tracing::warn!` fall-through of the Phase 1 identity-shim
 //! is removed: after unwrapping any `BoxedView` (below), a genuine
-//! concrete-type mismatch returns `false`, the caller (`Phase 2
+//! concrete-type mismatch is [`ViewUpdate::Mismatch`], the caller (`Phase 2
 //! reconciler`) replaces the element, and no silent stale state
 //! remains in the tree.
 //!
@@ -34,7 +34,7 @@
 //! from the vtable) against `TypeId::of::<V>()`. On match the inner
 //! is cloned and `Box::downcast::<V>` succeeds (so the element
 //! updates in place — consistent with `can_update_by_id`); on a real mismatch it returns
-//! `false` and the reconciler replaces the element. Without the
+//! [`ViewUpdate::Mismatch`] and the reconciler replaces the element. Without the
 //! unwrap a boxed rebuild was neither updated (TypeId saw
 //! `BoxedView`) nor replaced (`can_update` saw `Inner`) — a
 //! silently stale render object after every `setState`.
@@ -60,7 +60,7 @@ use crate::view::{BoxedView, View};
 /// `downcast_ref::<V>()` view-type smuggling this path avoids.
 /// On mismatch — and on the defense-in-depth case
 /// where the downcast still fails despite the TypeId check —
-/// the function returns `false`; the reconciler replaces the
+/// the function returns [`ViewUpdate::Mismatch`]; the reconciler replaces the
 /// element via the type-mismatch path the keyed reconciler's
 /// "different concrete type" branch already exercises.
 ///
@@ -148,12 +148,7 @@ where
             view_type = ?TypeId::of::<V>(),
             "dispatch_view_update: skip rebuild (configs equal)",
         );
-        // Reuse the element and skip the replace and the rebuild: the
-        // behavior still hears of the update, with an equal view as the
-        // previous one.
-        return ViewUpdate::Replaced {
-            previous: core.view().clone(),
-        };
+        return ViewUpdate::Equal;
     }
 
     // TypeId equality should guarantee the dynamic value is V.
@@ -193,9 +188,13 @@ pub(crate) enum ViewUpdate<V> {
     Mismatch,
     /// The element already holds this very view: nothing was touched.
     Unchanged,
-    /// The element took the view (or found it equal, under
-    /// [`View::should_skip_rebuild`]) and its behavior reacts to the update,
-    /// given the view it held before.
+    /// The view compares equal to the one held, under
+    /// [`View::should_skip_rebuild`]: the element keeps the view it has and is
+    /// not marked dirty, and its behavior still hears of the update, with the
+    /// held view as the previous one.
+    Equal,
+    /// The element took the view and its behavior reacts to the update, given
+    /// the view it held before.
     Replaced {
         /// The configuration the element held before the update.
         previous: V,

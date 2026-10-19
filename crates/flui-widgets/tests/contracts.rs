@@ -124,6 +124,7 @@ fn drag_and_drop() {
             ("drag_and_drop::spring_loading_fires_once_per_hover", crate::drag_and_drop::spring_loading_fires_once_per_hover),
             ("drag_and_drop::a_long_press_trigger_lifts_after_the_hold", crate::drag_and_drop::a_long_press_trigger_lifts_after_the_hold),
             ("drag_and_drop::a_drag_reports_to_the_callbacks_it_started_with", crate::drag_and_drop::a_drag_reports_to_the_callbacks_it_started_with),
+            ("drag_and_drop::the_feedback_keeps_its_anchor_in_an_inset_overlay", crate::drag_and_drop::the_feedback_keeps_its_anchor_in_an_inset_overlay),
             ("drag_and_drop::autoscroll_finds_the_target_scrolled_under_a_resting_pointer", crate::drag_and_drop::autoscroll_finds_the_target_scrolled_under_a_resting_pointer),
             ("drag_and_drop::unmounting_a_target_releases_its_receiver", crate::drag_and_drop::unmounting_a_target_releases_its_receiver),
             ("drag_and_drop::a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag", crate::drag_and_drop::a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag),
@@ -235,6 +236,7 @@ fn pointer_and_gesture_recognition() {
             ("listener::presentation_resampling_uses_the_owner_frame_clock", crate::listener::presentation_resampling_uses_the_owner_frame_clock as fn()),
             ("gesture_detector::pan_claim_region_keeps_the_pan_from_an_enclosing_drag", crate::gesture_detector::pan_claim_region_keeps_the_pan_from_an_enclosing_drag),
             ("gesture_detector::recognizers_follow_a_changed_arena_scope", crate::gesture_detector::recognizers_follow_a_changed_arena_scope),
+            ("gesture_detector::a_retired_recognizer_panicking_on_cancel_leaves_the_kept_ones_updated", crate::gesture_detector::a_retired_recognizer_panicking_on_cancel_leaves_the_kept_ones_updated),
             ("gesture_detector::drag_and_transform_slots_carry_their_locks", crate::gesture_detector::drag_and_transform_slots_carry_their_locks),
             ("gesture_detector::a_composition_past_the_delay_ceiling_is_reported", crate::gesture_detector::a_composition_past_the_delay_ceiling_is_reported),
             ("gesture_detector::drag_and_transform_slots_split_one_contact_from_two", crate::gesture_detector::drag_and_transform_slots_split_one_contact_from_two),
@@ -372,6 +374,7 @@ fn focus_actions_and_shortcuts() {
             ("focus::an_adopted_external_node_ignores_the_old_elements_focus_action", crate::focus::an_adopted_external_node_ignores_the_old_elements_focus_action as fn()),
             ("focus::a_focus_keeps_its_subtree_when_it_stops_being_focusable", crate::focus::a_focus_keeps_its_subtree_when_it_stops_being_focusable as fn()),
             ("focus::the_first_focus_gain_does_not_rebuild_the_app_under_a_drag", crate::focus::the_first_focus_gain_does_not_rebuild_the_app_under_a_drag as fn()),
+            ("focus::a_refused_node_replacement_is_made_by_the_next_rebuild", crate::focus::a_refused_node_replacement_is_made_by_the_next_rebuild as fn()),
             ("actions::the_nearest_enabled_action_wins_and_receives_the_payload", crate::actions::the_nearest_enabled_action_wins_and_receives_the_payload as fn()),
             ("actions::callback_action_writes_through_the_key_events_cx", crate::actions::callback_action_writes_through_the_key_events_cx),
             ("actions::a_refused_write_in_a_callback_action_is_reported_not_panicked", crate::actions::a_refused_write_in_a_callback_action_is_reported_not_panicked),
@@ -791,6 +794,7 @@ fn animation_and_visibility() {
             ("dismissible::a_dismissible_collapses_its_laid_out_size", crate::dismissible::a_dismissible_collapses_its_laid_out_size as fn()),
             ("dismissible::resize_delivery_keeps_accepted_ticks_before_completion", crate::dismissible::resize_delivery_keeps_accepted_ticks_before_completion as fn()),
             ("dismissible::a_dismissible_goes_out_only_where_its_direction_and_threshold_allow", crate::dismissible::a_dismissible_goes_out_only_where_its_direction_and_threshold_allow),
+            ("dismissible::a_row_scrolled_out_of_a_lazy_list_mid_slide_keeps_its_slide", crate::dismissible::a_row_scrolled_out_of_a_lazy_list_mid_slide_keeps_its_slide),
             ("animated_size::animated_size_interpolates_to_a_new_child_size_over_frames", crate::animated_size::animated_size_interpolates_to_a_new_child_size_over_frames as fn()),
             ("animated_size::an_active_size_run_migrates_between_registries", crate::animated_size::an_active_size_run_migrates_between_registries),
             ("animated_size::animated_size_defaults_to_a_critically_damped_spring", crate::animated_size::animated_size_defaults_to_a_critically_damped_spring),
@@ -1002,6 +1006,7 @@ fn layout_and_render_object_wiring() {
             ("custom_multi_child_layout::custom_multi_child_layout_mounts_render_object_and_positions_layout_id_children", crate::custom_multi_child_layout::custom_multi_child_layout_mounts_render_object_and_positions_layout_id_children),
             ("child_type_swap::a_replaced_root_render_object_is_laid_out_in_the_frame_it_is_mounted", crate::child_type_swap::a_replaced_root_render_object_is_laid_out_in_the_frame_it_is_mounted),
             ("unchanged_child::a_child_handed_back_unchanged_is_built_only_when_something_it_reads_changes", crate::unchanged_child::a_child_handed_back_unchanged_is_built_only_when_something_it_reads_changes),
+            ("unchanged_child::a_lazily_mounted_item_handed_back_unchanged_is_not_built_again", crate::unchanged_child::a_lazily_mounted_item_handed_back_unchanged_is_not_built_again),
             ("component_child_ordering::component_child_keeps_slot_order_before_a_render_sibling", crate::component_child_ordering::component_child_keeps_slot_order_before_a_render_sibling),
             ("parent_data_ancestry::expanded_under_stack_panics_at_attach_with_ancestry_diagnostic", crate::parent_data_ancestry::expanded_under_stack_panics_at_attach_with_ancestry_diagnostic),
             ("layer_inspection::the_composited_tree_exposes_parent_child_shape_not_just_a_flat_list", crate::layer_inspection::the_composited_tree_exposes_parent_child_shape_not_just_a_flat_list),
@@ -1288,6 +1293,10 @@ fn gesture_alternatives() {
                 crate::gesture_alternatives::the_revealed_menu_control_names_its_target,
             ),
             (
+                "gesture_alternatives::the_revealed_menu_control_draws_its_glyph_on_its_own_surface",
+                crate::gesture_alternatives::the_revealed_menu_control_draws_its_glyph_on_its_own_surface,
+            ),
+            (
                 "gesture_alternatives::an_unanswered_intent_and_a_reserved_key_are_reported",
                 crate::gesture_alternatives::an_unanswered_intent_and_a_reserved_key_are_reported,
             ),
@@ -1341,6 +1350,10 @@ fn context_menu_area() {
             (
                 "context_menu_area::items_read_in_the_area_direction",
                 crate::context_menu_area::items_read_in_the_area_direction,
+            ),
+            (
+                "context_menu_area::the_menu_labels_contrast_with_its_surface_under_any_text_colour",
+                crate::context_menu_area::the_menu_labels_contrast_with_its_surface_under_any_text_colour,
             ),
             (
                 "context_menu_area::a_panicking_item_leaves_no_menu_open",

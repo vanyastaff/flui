@@ -93,6 +93,10 @@ const ROWS: &[(&str, Row)] = &[
     ("free / PanClaim::None", free_with_pan_claim_none),
     ("free / PanClaim::PanY", free_with_pan_claim_pan_y),
     ("free / PanClaim::PanX", free_with_pan_claim_pan_x),
+    (
+        "axial inside a PanClaim::None region",
+        axial_inside_a_pan_claim_none_region,
+    ),
     ("free / allowed_devices: pen", free_admitting_only_a_pen),
     ("free / no competitor", free_alone),
     ("free / channel-leaf ancestor", free_in_channel_leaf),
@@ -475,6 +479,26 @@ fn free_with_pan_claim_none(device: PointerKind) {
     route.level().pan("map", map);
     route.level().axial("pager", Axis::Horizontal);
     assert_eq!(route.run(&swipe(device, heading(0.0))), ["map"]);
+}
+
+/// A carousel inside a map's `PanClaim::None` region takes its axis from the
+/// map's pan whether or not it declares a region of its own: the region
+/// encloses both members, so it declares nothing between them.
+fn axial_inside_a_pan_claim_none_region(device: PointerKind) {
+    for own in [None, Some(PanClaim::Auto), Some(PanClaim::PanY)] {
+        let mut route = Route::new();
+        let map = route.arena().with_pan_claim(PanClaim::None);
+        let carousel = own.map_or_else(|| map.clone(), |claim| map.with_pan_claim(claim));
+        route
+            .level()
+            .drag("carousel", carousel, DragAxis::Horizontal);
+        route.level().pan("map", map);
+        assert_eq!(
+            route.run(&swipe(device, heading(0.0))),
+            ["carousel"],
+            "carousel region {own:?}"
+        );
+    }
 }
 
 fn free_with_pan_claim_pan_y(device: PointerKind) {

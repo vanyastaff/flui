@@ -451,6 +451,15 @@ fn the_page_label_comes_from_the_widgets_localizations() {
         fn radio_button_unselected_label(&self) -> &'static str {
             DefaultWidgetsLocalizations.radio_button_unselected_label()
         }
+        fn search_results_found(&self) -> &'static str {
+            DefaultWidgetsLocalizations.search_results_found()
+        }
+        fn no_results_found(&self) -> &'static str {
+            DefaultWidgetsLocalizations.no_results_found()
+        }
+        fn context_menu_button_label(&self, target: Option<&str>) -> String {
+            DefaultWidgetsLocalizations.context_menu_button_label(target)
+        }
         fn page_label(&self, page: usize, page_count: usize) -> String {
             format!("Seite {page} von {page_count}")
         }

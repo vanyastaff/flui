@@ -1706,6 +1706,10 @@ fn gesture_lifecycle_matrix() {
             "hover_freezes_while_a_scroll_is_latched",
             arena_ownership::hover_freezes_while_a_scroll_is_latched,
         ),
+        (
+            "a_hold_tracks_its_contact_before_beaten_members_hear",
+            arena_ownership::a_hold_tracks_its_contact_before_beaten_members_hear,
+        ),
     ];
     let mut failures = Vec::new();
     for &(name, case) in cases {

@@ -211,7 +211,9 @@ impl UiRuntime {
     }
 
     /// The handle widgets start drag sessions with (ADR-0211). Weak: it does
-    /// not keep the runtime's sessions alive.
+    /// not keep the runtime's sessions alive. Widgets reach it through their
+    /// presentation; a test drives sessions with it directly.
+    #[cfg(feature = "testing")]
     #[must_use]
     pub fn drag_handle(&self) -> flui_interaction::drag::DragHandle {
         self.drag.handle()

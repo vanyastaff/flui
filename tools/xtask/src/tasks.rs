@@ -70,28 +70,36 @@ pub(crate) const TEST_SCOPE: [&str; 10] = [
 /// The features [`TEST_SCOPE`] turns on (see there for each one's reason).
 const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui-devtools/agent";
 
-/// The build that links the examples and benches: the workspace's
-/// `--all-targets` with [`TEST_SCOPE`]'s features, so it reuses what a test
-/// run built instead of resolving features a second time. Cargo skips a
-/// target whose `required-features` those features leave off (devtools'
+/// The build that links the examples and benches: `--all-targets` over the
+/// packages and features of the test run on `host` ([`scoped_nextest`]), so
+/// it reuses what that run built and compiles only the example and bench
+/// targets. Any other package set resolves features differently, and every
+/// workspace crate above the changed dependency is built a second time:
+/// selecting flui-platform turns on its dev-dependency serde_json's
+/// `float_roundtrip`, and leaving out the driver drops its proc-macro2
+/// `span-locations`. On Windows the test run leaves the driver out, since
+/// Windows cannot replace its running executable, and so does this build.
+/// flui-platform's examples link in its own suite on Linux and Windows,
+/// which builds them under `--all-features` ([`platform_suite`]). Cargo skips
+/// a target whose `required-features` the test features leave off (devtools'
 /// `profiler_demo`, the engine's `testing` benches): `feature-matrix`
 /// compiles them per feature, and nothing links them.
-/// The driver itself is already built by the cargo alias. Exclude it here:
-/// Windows cannot replace its running executable when workspace feature
-/// unification changes the driver's dependency artifacts. Its test binary
-/// remains covered by the test task (separately on Windows), and lint checks
-/// all its targets.
-fn build_all_targets() -> Cmd {
-    Cmd::cargo([
+fn build_all_targets(host: Host) -> Cmd {
+    let command = Cmd::cargo([
         "build",
         "--workspace",
         "--exclude",
-        "xtask",
+        "flui-platform",
         "--all-targets",
         "--locked",
         "--features",
         TEST_FEATURES,
-    ])
+    ]);
+    if host == Host::Windows {
+        command.args(["--exclude", "xtask"])
+    } else {
+        command
+    }
 }
 
 /// Options every task takes.
@@ -791,7 +799,7 @@ pub(crate) struct BuildAllTargetsArgs {
 
 /// `cargo xtask build-all-targets`: link the examples and benches the test features reach (see [`build_all_targets`]).
 pub(crate) fn build_all_targets_task(args: &BuildAllTargetsArgs) -> anyhow::Result<ExitCode> {
-    done(args.run.runner().run(&build_all_targets()))
+    done(args.run.runner().run(&build_all_targets(Host::current())))
 }
 
 /// Arguments for `cargo xtask ci`.
@@ -825,7 +833,7 @@ pub(crate) struct CiFullArgs {
 pub(crate) fn ci_full(args: &CiFullArgs) -> anyhow::Result<ExitCode> {
     let runner = args.run.runner();
     ci_stage(runner)?;
-    runner.run(&build_all_targets())?;
+    runner.run(&build_all_targets(Host::current()))?;
     runner.steps(&test_features_plan())?;
     feature_matrix_stage(runner, Slice::All)?;
     web::check(runner)?;
@@ -1249,11 +1257,17 @@ mod tests {
             "{}",
             windows[5]
         );
-        // the example link reuses the test build: the same features
+        // the example link reuses the test build: the same packages and features
         assert_eq!(
-            lines(&[build_all_targets().into()]),
+            lines(&[build_all_targets(Host::Linux).into()]),
             [format!(
-                "$ cargo build --workspace --exclude xtask --all-targets --locked --features {TEST_FEATURES}"
+                "$ cargo build --workspace --exclude flui-platform --all-targets --locked --features {TEST_FEATURES}"
+            )]
+        );
+        assert_eq!(
+            lines(&[build_all_targets(Host::Windows).into()]),
+            [format!(
+                "$ cargo build --workspace --exclude flui-platform --all-targets --locked --features {TEST_FEATURES} --exclude xtask"
             )]
         );
         assert!(SCOPE.ends_with(&format!("--features {TEST_FEATURES}")));

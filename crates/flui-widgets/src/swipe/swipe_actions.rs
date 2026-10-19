@@ -165,7 +165,6 @@ pub struct SwipeActions {
     full_leading: bool,
     full_trailing: bool,
     host: Host,
-    described: GestureAlternatives,
 }
 
 impl SwipeActions {
@@ -191,41 +190,29 @@ impl SwipeActions {
         let mut actions = trailing.iter().chain(leading.iter());
         let first = actions.next().ok_or(SwipeActionsError::NoActions)?;
         let more: Vec<&SwipeAction> = actions.collect();
-        let menu = |presenter: MenuPresenter| {
-            more.iter().fold(
-                MenuSpec::new(first.command.clone(), move |cx, request| {
-                    presenter(cx, request);
-                }),
-                |spec, action| spec.item(action.command.clone()),
-            )
-        };
-        let (host, described) = match alternative {
+        let host = match alternative {
             SwipeAlternative::VisibleControls(placement) => {
                 let spec = more.iter().fold(
                     ControlSpec::new(first.command.clone(), first.content.clone()),
                     |spec, action| spec.control(action.command.clone(), action.content.clone()),
                 );
-                let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+                Host::Alternatives(GestureAlternatives::new(Alternative::VisibleControl(
                     spec.placement(placement),
-                ))?;
-                (Host::Alternatives(alternatives.clone()), alternatives)
+                ))?)
             }
             SwipeAlternative::PresentedMenu(presenter) => {
-                let alternatives =
-                    GestureAlternatives::new(Alternative::ContextMenu(menu(presenter)))?;
-                (Host::Alternatives(alternatives.clone()), alternatives)
+                let menu = more.iter().fold(
+                    MenuSpec::new(first.command.clone(), move |cx, request| {
+                        presenter(cx, request);
+                    }),
+                    |spec, action| spec.item(action.command.clone()),
+                );
+                Host::Alternatives(GestureAlternatives::new(Alternative::ContextMenu(menu))?)
             }
-            SwipeAlternative::ContextMenu => {
-                let area = ContextMenuArea::new(
-                    first.command.clone(),
-                    more.iter().map(|action| action.command.clone()),
-                )?;
-                // The area presents the menu itself; this is the alternatives
-                // it mounts, as `alternatives` describes them.
-                let described =
-                    GestureAlternatives::new(Alternative::ContextMenu(menu(Rc::new(|_, _| {}))))?;
-                (Host::Area(area), described)
-            }
+            SwipeAlternative::ContextMenu => Host::Area(ContextMenuArea::new(
+                first.command.clone(),
+                more.iter().map(|action| action.command.clone()),
+            )?),
         };
         Ok(Self {
             child: child.into_view().boxed(),
@@ -234,7 +221,6 @@ impl SwipeActions {
             full_leading: false,
             full_trailing: false,
             host,
-            described,
         })
     }
 
@@ -253,14 +239,10 @@ impl SwipeActions {
     /// itself, such as the menu control's.
     #[must_use]
     pub fn target(mut self, name: impl Into<String>) -> Self {
-        let name = name.into();
         self.host = match self.host {
-            Host::Alternatives(alternatives) => {
-                Host::Alternatives(alternatives.target(name.clone()))
-            }
-            Host::Area(area) => Host::Area(area.target(name.clone())),
+            Host::Alternatives(alternatives) => Host::Alternatives(alternatives.target(name)),
+            Host::Area(area) => Host::Area(area.target(name)),
         };
-        self.described = self.described.target(name);
         self
     }
 
@@ -270,7 +252,10 @@ impl SwipeActions {
     /// [`ContextMenuArea`] the row mounts.
     #[must_use]
     pub fn alternatives(&self) -> &GestureAlternatives {
-        &self.described
+        match &self.host {
+            Host::Alternatives(alternatives) => alternatives,
+            Host::Area(area) => area.alternatives(),
+        }
     }
 
     fn anchors(&self) -> RowAnchors {

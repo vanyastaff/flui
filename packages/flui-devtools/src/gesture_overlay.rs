@@ -22,7 +22,7 @@
 //! ```
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashSet, VecDeque};
 use std::fmt;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
@@ -123,8 +123,9 @@ impl fmt::Debug for GestureOverlayController {
     }
 }
 
-/// Where each contact went down, in the overlay's coordinates.
-type Positions = Rc<RefCell<HashMap<PointerId, Offset<f64>>>>;
+/// Where each contact went down, in the overlay's coordinates, oldest first
+/// like the inspector's contests.
+type Positions = Rc<RefCell<VecDeque<(PointerId, Offset<f64>)>>>;
 
 /// Draws the window's gesture contests over `child` while its controller
 /// shows it. Mount it at the application's root, below the window's
@@ -180,13 +181,28 @@ impl StatefulView for GestureInspectorOverlay {
 impl ViewState<GestureInspectorOverlay> for GestureInspectorOverlayState {
     fn build(&self, view: &GestureInspectorOverlay, _ctx: &dyn BuildContext) -> impl IntoView {
         let positions = Rc::clone(&self.positions);
+        let controller = view.controller.clone();
         let app = Listener::new()
             .behavior(HitTestBehavior::Translucent)
             .on_pointer_down(move |_, dispatch| {
+                // Nothing reads a position while the overlay is hidden, and
+                // the layer prunes only while it builds shown.
+                if !controller.is_shown() {
+                    return;
+                }
                 if let (Some(pointer), Some(at)) =
                     (dispatch.local.pointer_id(), dispatch.local.position())
                 {
-                    positions.borrow_mut().insert(pointer, at);
+                    let mut positions = positions.borrow_mut();
+                    // Ordered like the inspector's contests, which keeps the
+                    // newest `DEFAULT_CONTEST_CAPACITY`: the position dropped
+                    // is the one whose contest the inspector dropped, and a
+                    // burst of downs between builds cannot outgrow it.
+                    positions.retain(|(known, _)| *known != pointer);
+                    positions.push_back((pointer, at));
+                    if positions.len() > DEFAULT_CONTEST_CAPACITY {
+                        positions.pop_front();
+                    }
                 }
             })
             .child(view.child.clone());
@@ -252,9 +268,12 @@ impl Live {
             }
         } else if !shown && attached {
             let outgoing = self.inspector.borrow_mut().take();
-            let observing = &self.controller.borrow().inner.observing;
-            observing.set(observing.get().saturating_sub(1));
+            // Dropping the inspector detaches from the arena and may run
+            // observer code, so no borrow of the controller is held across it.
             drop(outgoing);
+            let controller = self.controller.borrow();
+            let observing = &controller.inner.observing;
+            observing.set(observing.get().saturating_sub(1));
         }
         self.rebuild.schedule(RebuildReason::StateChange);
     }
@@ -262,28 +281,37 @@ impl Live {
     /// The contests to draw now, with their opacity.
     fn visible(&self) -> Vec<(ContestReport, f64)> {
         let now = self.arena.now();
-        self.inspector
-            .borrow()
-            .as_ref()
-            .map(GestureInspector::contests)
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|contest| {
-                let opacity = opacity(&contest, now)?;
-                Some((contest, opacity))
-            })
-            .collect()
+        let mut visible = Vec::new();
+        if let Some(inspector) = self.inspector.borrow().as_ref() {
+            inspector.visit_contests(|contest| {
+                if let Some(opacity) = opacity(contest, now) {
+                    visible.push((contest.clone(), opacity));
+                }
+            });
+        }
+        visible
+    }
+
+    /// The pointers of every contest the inspector still retains.
+    fn retained_pointers(&self) -> HashSet<PointerId> {
+        let mut pointers = HashSet::new();
+        if let Some(inspector) = self.inspector.borrow().as_ref() {
+            inspector.visit_contests(|contest| {
+                pointers.insert(contest.pointer);
+            });
+        }
+        pointers
     }
 
     /// While a settled contest is still fading, rebuild after every frame.
     fn keep_fading(self: &Rc<Self>) {
         let now = self.arena.now();
-        let fading = self.inspector.borrow().as_ref().is_some_and(|inspector| {
-            inspector
-                .contests()
-                .iter()
-                .any(|contest| settled_at(contest).is_some() && opacity(contest, now).is_some())
-        });
+        let mut fading = false;
+        if let Some(inspector) = self.inspector.borrow().as_ref() {
+            inspector.visit_contests(|contest| {
+                fading |= settled_at(contest).is_some() && opacity(contest, now).is_some();
+            });
+        }
         let Some(post_frame) = &self.post_frame else {
             return;
         };
@@ -413,20 +441,31 @@ impl ViewState<OverlayLayer> for OverlayLayerState {
         let Some(live) = self.live.as_ref().filter(|_| view.controller.is_shown()) else {
             return SizedBox::shrink().boxed();
         };
-        let positions = view.positions.borrow();
+        // A position outlives its contest only until the next build: the
+        // inspector keeps a bounded number of contests, so the map is bounded
+        // by it too.
+        let retained = live.retained_pointers();
+        let mut positions = view.positions.borrow_mut();
+        positions.retain(|(pointer, _)| retained.contains(pointer));
         let labels: Vec<BoxedView> = live
             .visible()
             .into_iter()
             .enumerate()
             .map(|(index, (contest, opacity))| {
-                let at = positions.get(&contest.pointer).copied().unwrap_or_else(|| {
-                    #[expect(
-                        clippy::cast_precision_loss,
-                        reason = "a stacking index for contests with no known position"
-                    )]
-                    let row = index as f64;
-                    Offset::new(0.0, row * 64.0)
-                });
+                let at = positions
+                    .iter()
+                    .find(|(pointer, _)| *pointer == contest.pointer)
+                    .map_or_else(
+                        || {
+                            #[expect(
+                                clippy::cast_precision_loss,
+                                reason = "a stacking index for contests with no known position"
+                            )]
+                            let row = index as f64;
+                            Offset::new(0.0, row * 64.0)
+                        },
+                        |(_, at)| *at,
+                    );
                 Positioned::new(label(&contest, opacity))
                     .left(at.dx + LABEL_OFFSET)
                     .top(at.dy + LABEL_OFFSET)

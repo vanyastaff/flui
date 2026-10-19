@@ -29,9 +29,10 @@ use flui_view::StateHandle;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_widgets::{
-    AlternativeKind, CommandAppearance, CopySelectionTextIntent, Directionality, DragCommands,
-    Draggable, DropCommands, DropHover, DropTarget, InsertPosition, Overlay, OverlayEntry,
-    OverlayHandle, PasteTextIntent, Positioned, SingleActivator, SizedBox, Stack, StackFit, Text,
+    AlternativeKind, CommandAppearance, CopySelectionTextIntent, Directionality, DragAnchor,
+    DragCommands, Draggable, DropCommands, DropHover, DropTarget, InsertPosition, Overlay,
+    OverlayEntry, OverlayHandle, Padding, PasteTextIntent, Positioned, SingleActivator, SizedBox,
+    Stack, StackFit, Text,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -1219,6 +1220,102 @@ pub(crate) fn a_drag_reports_to_the_callbacks_it_started_with() {
         Some("end Alice Dropped { action: TransferActions(MOVE) }")
     );
     assert_eq!(shared.board(), moved_alice(), "Bob stays where he is");
+}
+
+/// An overlay inset from the window by [`INSET`], holding one card at its
+/// origin whose feedback sits at `anchor`.
+#[derive(Clone)]
+struct InsetDesk {
+    anchor: DragAnchor,
+}
+
+/// Where the inset desk's overlay sits in the window.
+const INSET: (f64, f64) = (30.0, 50.0);
+
+impl View for InsetDesk {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateful(self)
+    }
+}
+
+impl StatefulView for InsetDesk {
+    type State = DeskState;
+
+    fn create_state(&self) -> DeskState {
+        let handle = OverlayHandle::new();
+        let anchor = self.anchor;
+        let entry = OverlayEntry::new(move |_ctx| {
+            let card = Draggable::new(
+                quiet_commands(),
+                || vec![DragItem::new().with_value(7_u32)],
+                SizedBox::new(200.0, ROW).child(Text::new("card")),
+            )
+            .expect("one labelled command")
+            .anchor(anchor)
+            .feedback(|| {
+                SizedBox::new(20.0, 20.0)
+                    .child(Text::new("feedback"))
+                    .into_view()
+                    .boxed()
+            });
+            Stack::new(vec![
+                Positioned::new(card)
+                    .left(0.0)
+                    .top(0.0)
+                    .width(200.0)
+                    .height(ROW)
+                    .into_view()
+                    .boxed(),
+            ])
+            .fit(StackFit::Expand)
+            .into_view()
+            .boxed()
+        });
+        handle.insert(&entry, &InsertPosition::Top);
+        DeskState {
+            handle,
+            _entry: entry,
+        }
+    }
+}
+
+impl ViewState<InsetDesk> for DeskState {
+    fn build(&self, _view: &InsetDesk, _ctx: &dyn BuildContext) -> impl IntoView {
+        Padding::only(INSET.0, INSET.1, 0.0, 0.0).child(Overlay::new(self.handle.clone()))
+    }
+}
+
+/// The feedback keeps its anchor to the pointer in the window wherever the
+/// overlay sits: grabbed 40 px from the card's left and 20 px from its top,
+/// `DragAnchor::Child` keeps that offset, and `DragAnchor::Pointer` puts the
+/// feedback's corner under the pointer.
+pub(crate) fn the_feedback_keeps_its_anchor_in_an_inset_overlay() {
+    let (grab_x, grab_y) = (40.0, 20.0);
+    let rows = [
+        ("child", DragAnchor::Child, (grab_x, grab_y)),
+        ("pointer", DragAnchor::Pointer, (0.0, 0.0)),
+    ];
+    for (label, anchor, (back_x, back_y)) in rows {
+        let mut laid = lay_out(InsetDesk { anchor }, tight(400.0, 400.0));
+        laid.pump();
+        let (x, y) = (INSET.0 + grab_x, INSET.1 + grab_y);
+        laid.dispatch_pointer_down(x, y);
+        laid.dispatch_pointer_move(x, y + 15.0);
+        let (to_x, to_y) = (250.0, 300.0);
+        laid.dispatch_pointer_move(to_x, to_y);
+        laid.pump();
+        let feedback = laid
+            .find_text("feedback")
+            .unwrap_or_else(|| panic!("{label}: the feedback shows in the overlay"));
+        let at = laid.absolute_offset(feedback);
+        assert_eq!(
+            (at.dx, at.dy),
+            (to_x - back_x, to_y - back_y),
+            "{label}: the feedback's corner in the window"
+        );
+        laid.dispatch_pointer_up(to_x, to_y);
+        settle(&mut laid);
+    }
 }
 
 /// While a drag rests near a list's edge the list scrolls under it, and the

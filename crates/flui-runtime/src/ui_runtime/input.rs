@@ -507,11 +507,8 @@ impl UiRuntime {
             }
             PlatformInput::Capabilities(capabilities) => {
                 // Not stamped and no frame requested: a capability snapshot or
-                // change is session state, not an interaction. The latest one
-                // per window is kept for the lifecycle capability that exposes
-                // it to widgets (ADR-0213).
+                // change is session state, not an interaction (ADR-0213).
                 tracing::debug!(?capabilities, "input capabilities received");
-                presentation.input_capabilities.set(Some(capabilities));
                 Applied::default()
             }
         }
@@ -656,12 +653,21 @@ impl UiRuntime {
         let applied = catch_unwind(AssertUnwindSafe(|| {
             self.apply_accessibility(presentation_id, request)
         }));
+        // A request no handler ran for is recorded as unhandled, as a key is,
+        // so a replay tells a dropped action from one that ran.
+        let (outcome, sequence) = match &applied {
+            Ok(applied) if !applied.handled => {
+                (crate::owner::InputOutcome::Unhandled, applied.sequence)
+            }
+            Ok(applied) => (crate::owner::InputOutcome::Handled, applied.sequence),
+            Err(_) => (crate::owner::InputOutcome::Handled, None),
+        };
         self.record_dispatched(
             presentation_id,
             InputSurface::Window,
             crate::HostInput::Accessibility(request.clone()),
-            crate::owner::InputOutcome::Handled,
-            applied.as_ref().ok().and_then(|applied| applied.sequence),
+            outcome,
+            sequence,
         );
         applied.map_or_else(|payload| resume_unwind(payload), |applied| applied.handled)
     }
@@ -736,7 +742,13 @@ impl UiRuntime {
     ///
     /// This is where a [`HostInput::Frame`](crate::HostInput::Frame) is
     /// recorded; the verdicts the frame makes follow it when the pump ends.
+    ///
+    /// The command inbox is drained first. The frame applies what it holds
+    /// (assistive requests among it) before it renders, so their rows precede
+    /// the frame's row and a replay applies them before rendering it too. A
+    /// drain failure is resumed after the frame's row is recorded.
     pub fn note_frame_vsync(&self, presentation_id: PresentationId, vsync: EventTime) {
+        let drained = catch_unwind(AssertUnwindSafe(|| self.drain_commands())).err();
         let recording = self.begin_recorded_input();
         if let Some(presentation) = self.presentations.get(presentation_id) {
             presentation.frame_vsync.set(Some(vsync));
@@ -748,18 +760,9 @@ impl UiRuntime {
                 crate::owner::InputOutcome::Handled,
             );
         }
-    }
-
-    /// The latest input capabilities `presentation_id`'s window reported, if
-    /// any (`PlatformInput::Capabilities`, ADR-0213).
-    #[must_use]
-    pub fn input_capabilities(
-        &self,
-        presentation_id: PresentationId,
-    ) -> Option<flui_platform_api::input_capabilities::InputCapabilities> {
-        self.presentations
-            .get(presentation_id)
-            .and_then(|presentation| presentation.input_capabilities.get())
+        if let Some(payload) = drained {
+            resume_unwind(payload);
+        }
     }
 
     /// Record that `presentation_id`'s native window just gained OS focus —

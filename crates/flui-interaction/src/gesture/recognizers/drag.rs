@@ -13,8 +13,8 @@ use crate::gesture::observer::GestureContest;
 use crate::{
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{GestureArena, GestureArenaMember, MotionRole},
+    gesture::constraints::{AxisLock, DragAxis, on_rail},
     gesture::settings::{GestureSettings, GestureSettingsProvider},
-    gesture::traits::{AxisLock, DragAxis, on_rail},
     gesture::{PublishedPosition, VelocityTracker},
     ids::PointerId,
     pointer::PointerDispatch,

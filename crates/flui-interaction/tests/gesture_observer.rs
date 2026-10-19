@@ -180,6 +180,18 @@ fn gesture_observer_delivery_contract() {
             "a_join_reports_its_whole_composition_path",
             a_join_reports_its_whole_composition_path,
         ),
+        (
+            "a_failed_operation_still_reaches_observers",
+            a_failed_operation_still_reaches_observers,
+        ),
+        (
+            "a_failing_clock_loses_no_committed_verdict",
+            a_failing_clock_loses_no_committed_verdict,
+        ),
+        (
+            "a_clock_failure_before_a_member_failure_is_the_one_raised",
+            a_clock_failure_before_a_member_failure_is_the_one_raised,
+        ),
     ]);
 }
 
@@ -794,4 +806,166 @@ fn releasing_the_observer_during_its_call_finishes_cleanly() {
     assert_eq!(calls.get(), 1, "the removed observer receives nothing more");
     assert!(own.borrow().is_none());
     assert_eq!(logged(&log), ["a accepted"]);
+}
+
+/// A standalone operation whose member fails still delivers the decisions it
+/// committed to observers before the failure propagates: nothing else would
+/// deliver them.
+fn a_failed_operation_still_reaches_observers() {
+    struct FailingWinner;
+    impl GestureArenaMember for FailingWinner {
+        fn accept_gesture(&self, _: GestureContest) {
+            std::panic::panic_any("winner failure");
+        }
+        fn reject_gesture(&self, _: GestureContest) {}
+    }
+    let log = Log::default();
+    let arena = GestureArena::new();
+    let _observer = record_into(&arena, &log, &[]);
+    let winner = Rc::new(FailingWinner);
+    let p = pointer(1);
+    let _entry = arena.add(p, &winner);
+    arena.close(p);
+    let drained = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        arena.drain_deferred_resolutions()
+    }));
+    let payload = drained.expect_err("the winner's failure propagates");
+    assert_eq!(payload.downcast_ref::<&str>(), Some(&"winner failure"));
+    assert_eq!(
+        logged(&log),
+        ["observed joined ?", "observed closed", "observed won ?"]
+    );
+}
+
+/// A clock that fails stamping a committed verdict loses none of it: the
+/// members hear their verdicts and observers the decision, then the clock's
+/// failure propagates.
+fn a_failing_clock_loses_no_committed_verdict() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    #[derive(Debug)]
+    struct Clock {
+        now: web_time::Instant,
+        armed: AtomicBool,
+    }
+    impl flui_foundation::MonotonicClock for Clock {
+        fn now(&self) -> web_time::Instant {
+            if self.armed.load(Ordering::Relaxed) {
+                std::panic::panic_any("clock failure");
+            }
+            self.now
+        }
+    }
+    let clock = Arc::new(Clock {
+        now: web_time::Instant::now(),
+        armed: AtomicBool::new(false),
+    });
+    let log = Log::default();
+    let arena = GestureArena::with_clock(clock.clone());
+    let (a, b) = (Member::new("a", &log), Member::new("b", &log));
+    let _observer = record_into(&arena, &log, &[&a, &b]);
+    let p = pointer(1);
+    let entry = arena.add(p, &a);
+    let _b_entry = arena.add(p, &b);
+    // An eager claim while open wins when the contest closes.
+    entry.resolve(GestureDisposition::Accepted);
+    log.borrow_mut().clear();
+    clock.armed.store(true, Ordering::Relaxed);
+    let closed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| arena.close(p)));
+    clock.armed.store(false, Ordering::Relaxed);
+    let payload = closed.expect_err("the clock's failure propagates");
+    assert_eq!(payload.downcast_ref::<&str>(), Some(&"clock failure"));
+    assert_eq!(
+        logged(&log),
+        [
+            "b rejected",
+            "a accepted",
+            "observed closed",
+            "observed rejected b",
+            "observed won a",
+        ]
+    );
+}
+
+/// A clock that fails stamping a verdict before a member's callback fails in
+/// the same operation is the failure raised, whether the verdict was stamped
+/// before the operation delivered (a close) or inside it (a claim on a closed
+/// contest); nothing committed is lost to either failure.
+fn a_clock_failure_before_a_member_failure_is_the_one_raised() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    #[derive(Debug)]
+    struct Clock {
+        now: web_time::Instant,
+        armed: AtomicBool,
+    }
+    impl flui_foundation::MonotonicClock for Clock {
+        fn now(&self) -> web_time::Instant {
+            if self.armed.load(Ordering::Relaxed) {
+                std::panic::panic_any("clock failure");
+            }
+            self.now
+        }
+    }
+    struct FailingLoser {
+        log: Log,
+    }
+    impl GestureArenaMember for FailingLoser {
+        fn accept_gesture(&self, _: GestureContest) {}
+        fn reject_gesture(&self, _: GestureContest) {
+            self.log.borrow_mut().push("b rejected".to_owned());
+            std::panic::panic_any("loser failure");
+        }
+    }
+    type Case = (&'static str, bool, &'static str);
+    let cases: [Case; 2] = [
+        ("a close settling an eager claim", true, "observed closed"),
+        ("a claim on a closed contest", false, "observed claimed a"),
+    ];
+    for (name, eager, decided) in cases {
+        let clock = Arc::new(Clock {
+            now: web_time::Instant::now(),
+            armed: AtomicBool::new(false),
+        });
+        let log = Log::default();
+        let arena = GestureArena::with_clock(clock.clone());
+        let a = Member::new("a", &log);
+        let b = Rc::new(FailingLoser {
+            log: Rc::clone(&log),
+        });
+        let _observer = record_into(&arena, &log, &[&a]);
+        let p = pointer(1);
+        let entry = arena.add(p, &a);
+        let _b_entry = arena.add(p, &b);
+        if eager {
+            entry.resolve(GestureDisposition::Accepted);
+        } else {
+            arena.close(p);
+        }
+        log.borrow_mut().clear();
+        clock.armed.store(true, Ordering::Relaxed);
+        let decide = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if eager {
+                arena.close(p);
+            } else {
+                entry.resolve(GestureDisposition::Accepted);
+            }
+        }));
+        clock.armed.store(false, Ordering::Relaxed);
+        let payload = decide.expect_err("a failure propagates");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"clock failure"),
+            "{name}: the earlier failure is raised"
+        );
+        assert_eq!(
+            logged(&log),
+            [
+                "b rejected",
+                "a accepted",
+                decided,
+                "observed rejected ?",
+                "observed won a",
+            ],
+            "{name}"
+        );
+    }
 }

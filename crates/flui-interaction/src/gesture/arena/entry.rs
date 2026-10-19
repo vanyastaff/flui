@@ -6,7 +6,7 @@ use flui_foundation::geometry::Offset;
 use smallvec::SmallVec;
 
 use super::{
-    Admission, AdmissionContext, GestureArenaMember, GestureDisposition,
+    Admission, AdmissionContext, ContactRole, GestureArenaMember, GestureDisposition,
     composition::{BranchLink, CompositionKind, CompositionNode},
     ownership::{MotionCandidate, PanClaimNode, motion_owner},
 };
@@ -231,7 +231,7 @@ impl ArenaEntryData {
         }
         let claimant_moves = self
             .admission(&identity)
-            .is_some_and(|admission| admission.role.is_some());
+            .is_some_and(|admission| admission.role.motion().is_some());
         if !claimant_moves || self.is_blocked(&identity) {
             return self.accept_identity(identity);
         }
@@ -245,7 +245,7 @@ impl ArenaEntryData {
                 let Some(admission) = self.admission(candidate) else {
                     continue;
                 };
-                let Some(role) = admission.role.filter(|_| !admission.dormant) else {
+                let Some(role) = admission.role.motion().filter(|_| !admission.dormant) else {
                     continue;
                 };
                 movers.push(candidate);
@@ -428,11 +428,10 @@ impl ArenaEntryData {
         }
         // Hold on Down (ADR-0208 rule 4): once a member holds the contact, a
         // member that does not move (a tap, a long press) cannot win it.
-        let discrete = context.role.is_none() && !context.holds;
-        if discrete && self.is_held_on_down() {
+        if context.role == ContactRole::Discrete && self.is_held_on_down() {
             return None;
         }
-        let rejected = if context.holds {
+        let rejected = if context.role == ContactRole::Hold {
             self.reject_discrete()
         } else {
             PendingNotifications::new()
@@ -445,7 +444,6 @@ impl ArenaEntryData {
                 pan_claim: pan_claim.cloned(),
                 role: context.role,
                 dormant: false,
-                holds: context.holds,
                 feeder: context.feeder,
             },
         ));
@@ -470,14 +468,14 @@ impl ArenaEntryData {
     /// Whether `member` was admitted with a motion role.
     pub(super) fn moves(&self, member: &Member) -> bool {
         self.admission(member)
-            .is_some_and(|admission| admission.role.is_some())
+            .is_some_and(|admission| admission.role.motion().is_some())
     }
 
     /// Whether a live member holds this contact on Down.
     fn is_held_on_down(&self) -> bool {
         self.members.iter().any(|member| {
             self.admission(member)
-                .is_some_and(|admission| admission.holds)
+                .is_some_and(|admission| admission.role == ContactRole::Hold)
         })
     }
 
@@ -489,7 +487,7 @@ impl ArenaEntryData {
             .iter()
             .filter(|member| {
                 self.admission(member)
-                    .is_none_or(|admission| admission.role.is_none() && !admission.holds)
+                    .is_none_or(|admission| admission.role == ContactRole::Discrete)
             })
             .cloned()
             .collect();

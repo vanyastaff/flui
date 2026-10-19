@@ -393,8 +393,9 @@ impl UiRuntime {
     ///
     /// An accepted host observation that system haptics are off suppresses
     /// both tiers; an unobserved setting plays them (ADR-0212 §1).
+    #[cfg(test)]
     #[must_use]
-    pub fn haptics(&self) -> flui_interaction::HapticsHandle {
+    pub(crate) fn haptics(&self) -> flui_interaction::HapticsHandle {
         self.presentations.primary().haptics().handle()
     }
 

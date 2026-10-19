@@ -194,7 +194,9 @@ impl UiRuntime {
     /// A state that puts the content somewhere else is the window moving:
     /// its gesture geometry and input regions follow
     /// ([`Self::window_moved`]) and `moved` runs, both before any subscriber
-    /// does.
+    /// does. `moved` runs first, so the move is noted even when following it
+    /// panics; the subscribers still receive the state, and the first panic
+    /// resumes afterwards.
     pub(crate) fn publish_window_state(&self, id: PresentationId, moved: impl FnOnce()) {
         let Some(window) = self
             .presentations
@@ -210,11 +212,13 @@ impl UiRuntime {
         let placed_elsewhere = self.presentations.get(id).is_some_and(|presentation| {
             presentation.window_placement.replace(placement) != placement
         });
+        let mut first = FirstPanic::new();
         if placed_elsewhere {
-            self.window_moved(id);
             moved();
+            first.contain(|| self.window_moved(id));
         }
-        window.drain();
+        first.contain(|| window.drain());
+        first.resume();
     }
 
     /// Deliver a system notice to every presentation's subscribers

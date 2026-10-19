@@ -503,7 +503,7 @@ where
     /// via `Downcast::into_any` + `Box::downcast::<V>` — the literal
     /// `downcast_ref::<V>()` view-type smuggling is gone from this
     /// path entirely. On type mismatch
-    /// the dispatch returns `false` without `tracing::warn!`; the
+    /// the dispatch returns [`ViewUpdate::Mismatch`] without `tracing::warn!`; the
     /// caller (reconciler) replaces the element rather than
     /// continuing with stale state.
     ///
@@ -515,7 +515,9 @@ where
     ///
     /// What the update did: [`ViewUpdate::Mismatch`] when the type did not
     /// match (the caller replaces the element), [`ViewUpdate::Unchanged`]
-    /// when the view offered is the one the element already holds, and
+    /// when the view offered is the one the element already holds,
+    /// [`ViewUpdate::Equal`] when it compares equal under
+    /// [`View::should_skip_rebuild`] (kept as it was), and
     /// [`ViewUpdate::Replaced`] otherwise, with the view held before.
     pub(crate) fn update_view(&mut self, new_view: &dyn View) -> ViewUpdate<V>
     where

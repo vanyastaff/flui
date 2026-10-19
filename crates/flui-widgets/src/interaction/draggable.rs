@@ -26,9 +26,9 @@ use flui_interaction::drag::{
 };
 use flui_interaction::gesture::SequencedBranch;
 use flui_interaction::{
-    GestureArena, GestureRecognizer, GestureSettingsProvider, HapticsHandle, HitTestHandle,
-    LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
-    MultiDragHandle, MultiDragUpdateDetails, PointerEvent, PointerId,
+    GestureRecognizer, HapticsHandle, HitTestHandle, LongPressGestureRecognizer, MultiDragAxis,
+    MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails,
+    PointerEvent, PointerId,
 };
 use flui_platform_api::data_transfer::TransferActions;
 use flui_platform_api::haptics::{HapticRequest, HapticTiming};
@@ -44,7 +44,7 @@ use super::gesture_alternatives::{
     AlternativeKind, CommandAppearance, GestureAlternatives, GestureAlternativesError,
     MenuHoldScope,
 };
-use super::gesture_arena_scope::GestureArenaScope;
+use super::gesture_arena_scope::GesturePolicy;
 use super::recognizer_attachment::RecognizerAttachment;
 use crate::overlay::{InsertPosition, Overlay, OverlayEntry, OverlayHandle};
 use crate::support::{EventCallback, ValueCallback, event_callback, value_callback};
@@ -522,8 +522,10 @@ struct Feedback {
 struct FeedbackPlace {
     /// The pointer's offset from the feedback's top-left corner.
     anchor: Offset<f64>,
-    /// The top-left corner in the overlay's space.
-    at: Cell<Offset<f64>>,
+    /// The pointer in the window's space. The entry resolves it into the
+    /// overlay's space when it builds, once it knows its overlay node: a move
+    /// before the entry's first build has no overlay to resolve against.
+    pointer: Cell<Offset<f64>>,
     /// The render node the entry is laid out in, published by its anchor, and
     /// the tree that maps the window's space to it.
     overlay_node: Cell<Option<flui_foundation::RenderId>>,
@@ -540,7 +542,7 @@ impl Feedback {
     ) -> Rc<Self> {
         let place = Rc::new(FeedbackPlace {
             anchor,
-            at: Cell::new(Offset::ZERO),
+            pointer: Cell::new(Offset::ZERO),
             overlay_node: Cell::new(None),
             pipeline,
             rebuild: RefCell::new(None),
@@ -569,8 +571,7 @@ impl Feedback {
         if self.removed.get() {
             return;
         }
-        let origin = self.place.overlay_origin();
-        self.place.at.set(global - origin - self.place.anchor);
+        self.place.pointer.set(global);
         let rebuild = self.place.rebuild.borrow().clone();
         if let Some(rebuild) = rebuild {
             rebuild.schedule(flui_view::RebuildReason::StateChange);
@@ -585,6 +586,11 @@ impl Feedback {
 }
 
 impl FeedbackPlace {
+    /// The feedback's top-left corner in the overlay's space.
+    fn top_left(&self) -> Offset<f64> {
+        self.pointer.get() - self.overlay_origin() - self.anchor
+    }
+
     /// Where the overlay's origin is in the window: the feedback follows the
     /// pointer's window position wherever the overlay sits.
     fn overlay_origin(&self) -> Offset<f64> {
@@ -635,7 +641,7 @@ impl ViewState<FeedbackAnchor> for FeedbackAnchorState {
     }
 
     fn build(&self, view: &FeedbackAnchor, _ctx: &dyn BuildContext) -> impl IntoView {
-        let at = view.place.at.get();
+        let at = view.place.top_left();
         Stack::new(vec![
             // The feedback sits under the pointer, where the drag hit-tests:
             // a hit-testable one would hide every target beneath it.
@@ -656,10 +662,9 @@ pub struct DraggableState {
     source: Rc<Source>,
     drag: Option<Rc<MultiDragGestureRecognizer>>,
     hold: Option<Rc<LongPressGestureRecognizer>>,
-    /// The trigger the view asks for, and the arena and policy the
-    /// recognizers are built for.
+    /// The trigger the view asks for, and the scope's arena and settings.
     trigger: DragTrigger,
-    arena: Option<GestureArena>,
+    policy: Option<GesturePolicy>,
     /// The hold of an enclosing context menu, and whether the widget's own
     /// alternatives are a menu: a long-press drag succeeds a menu's long press
     /// instead of holding the contact itself.
@@ -696,7 +701,7 @@ impl StatefulView for Draggable {
             drag: None,
             hold: None,
             trigger: self.trigger,
-            arena: None,
+            policy: None,
             enclosing_hold: None,
             own_menu: self.alternatives.is_menu(),
             own_hold: None,
@@ -709,8 +714,7 @@ impl StatefulView for Draggable {
 
 /// What a draggable's recognizers were built for.
 struct BuiltFor {
-    arena: GestureArena,
-    settings: GestureSettingsProvider,
+    policy: GesturePolicy,
     trigger: DragTrigger,
     enclosing_hold: Option<Rc<SequencedBranch>>,
     own_menu: bool,
@@ -724,8 +728,7 @@ impl BuiltFor {
             (Some(ours), Some(theirs)) => Rc::ptr_eq(ours, theirs),
             _ => false,
         };
-        self.arena.admits_like(&wanted.arena)
-            && self.settings == wanted.settings
+        self.policy == wanted.policy
             && self.trigger == wanted.trigger
             && self.own_menu == wanted.own_menu
             && same_hold
@@ -749,14 +752,14 @@ impl DraggableState {
 
     /// Build the recognizers for `trigger` under `settings`, retiring the ones
     /// they replace.
-    fn rebuild_recognizers(&mut self, settings: GestureSettingsProvider) {
+    fn rebuild_recognizers(&mut self) {
         let trigger = self.trigger;
-        let Some(arena) = self.arena.clone() else {
+        let Some(policy) = self.policy.clone() else {
             return;
         };
+        let GesturePolicy { arena, settings } = policy.clone();
         let built_for = BuiltFor {
-            arena: arena.clone(),
-            settings: settings.clone(),
+            policy,
             trigger,
             enclosing_hold: self.enclosing_hold.clone(),
             own_menu: self.own_menu,
@@ -867,9 +870,9 @@ impl ViewState<Draggable> for DraggableState {
     /// hold changed (ADR-0208).
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.acquire(ctx);
-        self.arena = Some(GestureArenaScope::of(ctx));
+        self.policy = Some(GesturePolicy::of(ctx));
         self.enclosing_hold = MenuHoldScope::of(ctx);
-        self.rebuild_recognizers(GestureArenaScope::settings_of(ctx));
+        self.rebuild_recognizers();
     }
 
     /// A new trigger, or alternatives that turn into a menu or out of one,
@@ -880,9 +883,8 @@ impl ViewState<Draggable> for DraggableState {
         if new_view.trigger != self.trigger || own_menu != self.own_menu {
             self.trigger = new_view.trigger;
             self.own_menu = own_menu;
-            if let Some(built) = &self.built_for {
-                let settings = built.settings.clone();
-                self.rebuild_recognizers(settings);
+            if self.built_for.is_some() {
+                self.rebuild_recognizers();
             }
         }
     }
