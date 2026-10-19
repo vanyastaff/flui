@@ -65,6 +65,11 @@ impl CloseCoordinator {
         );
     }
 
+    /// Whether the innermost dispatch on the stack is the outermost one.
+    pub(super) fn is_outermost(&self) -> bool {
+        self.depth.get() == 1
+    }
+
     /// Leave a dispatch; `true` when it was the outermost one.
     pub(super) fn leave(&self) -> bool {
         let depth = self

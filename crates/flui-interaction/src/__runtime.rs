@@ -121,12 +121,13 @@ pub fn next_deadline_snapshot(
 }
 
 /// The instant a deadline on `owner`'s event timeline names on its clock, for
-/// the host's native wake.
+/// the host's native wake; `None` when it lies past the last instant the
+/// platform represents, a deadline no wake can reach.
 #[must_use]
 pub fn wake_instant(
     owner: &crate::GestureBinding,
     deadline: flui_platform_api::EventTime,
-) -> web_time::Instant {
+) -> Option<web_time::Instant> {
     owner.instant_at(deadline)
 }
 

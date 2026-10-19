@@ -1600,7 +1600,9 @@ impl GestureArena {
     /// and gesture details that keep [`web_time::Instant`]s.
     #[inline]
     pub(crate) fn instant_at(&self, time: EventTime) -> web_time::Instant {
-        crate::events::instant_at(self.clock.as_ref(), time)
+        // A sample past the last representable instant orders at the epoch:
+        // no clock reading produces one.
+        crate::events::instant_at(self.clock.as_ref(), time).unwrap_or_else(|| self.clock.epoch())
     }
 
     /// The current reading as an instant, for a recognizer that only stamps

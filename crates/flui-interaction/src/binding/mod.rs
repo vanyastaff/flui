@@ -513,8 +513,13 @@ impl GestureBinding {
         self.close.enter();
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             let value = body();
-            // A verdict the body reached hands its continuing contact over.
-            if let Some(failure) = self.settle_claims() {
+            // A verdict the body reached hands its continuing contact over,
+            // once the outermost packet reached its whole route: a dispatch
+            // nested in a callback must not cancel targets that packet has
+            // yet to reach.
+            if self.close.is_outermost()
+                && let Some(failure) = self.settle_claims()
+            {
                 failure.resume();
             }
             value
@@ -1447,8 +1452,11 @@ impl GestureBinding {
     }
 
     /// The instant `time` names on this binding's clock, so a host can turn a
-    /// deadline into a native wake.
-    pub(crate) fn instant_at(&self, time: flui_platform_api::EventTime) -> web_time::Instant {
+    /// deadline into a native wake; `None` past the last representable one.
+    pub(crate) fn instant_at(
+        &self,
+        time: flui_platform_api::EventTime,
+    ) -> Option<web_time::Instant> {
         crate::events::instant_at(self.clock.as_ref(), time)
     }
 
@@ -1574,15 +1582,6 @@ impl GestureBinding {
             return;
         }
         let refused_tail = self.contacts.refuses_tail(pointer_id, event.device_id());
-        // A Down mints its own sequence; a wheel or pan/zoom packet belongs to
-        // its latch or lease even while the pointer holds a button.
-        if !matches!(
-            event,
-            PointerEvent::Down(_) | PointerEvent::Scroll(_) | PointerEvent::PanZoom(_)
-        ) && let Some(sequence) = self.contacts.sequence_of(pointer_id)
-        {
-            self.publish_contact_sequence(pointer_id, sequence);
-        }
         if matches!(
             event,
             PointerEvent::Move(_)
@@ -1594,7 +1593,18 @@ impl GestureBinding {
                 .contacts
                 .observe(pointer, crate::events::event_time(event))
         {
+            // Another device's packet under this contact's pointer id belongs
+            // to no sequence of this binding.
             return;
+        }
+        // A Down mints its own sequence; a wheel or pan/zoom packet belongs to
+        // its latch or lease even while the pointer holds a button.
+        if !matches!(
+            event,
+            PointerEvent::Down(_) | PointerEvent::Scroll(_) | PointerEvent::PanZoom(_)
+        ) && let Some(sequence) = self.contacts.sequence_of(pointer_id)
+        {
+            self.publish_contact_sequence(pointer_id, sequence);
         }
         match event {
             PointerEvent::Down(_) => {

@@ -387,3 +387,81 @@ fn a_drain_callback_that_closes_again_settles_once() {
     );
     assert!(fixture.binding.arena().is_empty());
 }
+
+// ----------------------------------------------------------------------------
+// Nested dispatch
+// ----------------------------------------------------------------------------
+
+/// A claim reached while the winner's target is delivered owes the rest of
+/// the route its `Cancel(Claimed)` after that packet; a dispatch nested in
+/// the winner's callback leaves the outer packet's delivery in order.
+#[test]
+fn a_nested_dispatch_leaves_the_outer_claim_to_the_outer_dispatch() {
+    use flui_interaction::events::make_up_event_for_id;
+    use flui_interaction::{DragAxis, DragGestureRecognizer, RecognizerSet};
+    use flui_platform_api::pointer::CancelReason;
+
+    fn name(event: &PointerEvent) -> &'static str {
+        match event {
+            PointerEvent::Down(_) => "down",
+            PointerEvent::Move(_) => "move",
+            PointerEvent::Up(_) => "up",
+            PointerEvent::Cancel(cancel) if cancel.reason == CancelReason::Claimed => "claimed",
+            PointerEvent::Cancel(_) => "cancel",
+            _ => "other",
+        }
+    }
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let binding = Rc::new(GestureBinding::new());
+    let winner =
+        DragGestureRecognizer::builder(binding.arena().clone(), DragAxis::Horizontal).build();
+    // A rival, so the winner claims the contact instead of winning by default.
+    let loser = DragGestureRecognizer::builder(binding.arena().clone(), DragAxis::Vertical).build();
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let route = lane.enter(|| {
+        let handle = lane.dispatch_handle();
+        let mut set = RecognizerSet::default();
+        set.attach(&winner);
+        let nested = Rc::downgrade(&binding);
+        let inner = handle
+            .register_pointer(move |dispatch| {
+                set.dispatch(dispatch);
+                if matches!(dispatch.local, PointerEvent::Move(_)) {
+                    // A hover of another mouse, dispatched from the callback.
+                    let binding = nested.upgrade().expect("binding");
+                    binding.handle_pointer_event(&hover(9, Offset::ZERO), |_| HitTestResult::new());
+                }
+            })
+            .expect("winner target");
+        let log = Rc::clone(&observed);
+        let mut rival = RecognizerSet::default();
+        rival.attach(&loser);
+        let outer = handle
+            .register_pointer(move |dispatch| {
+                log.borrow_mut().push(name(dispatch.local));
+                rival.dispatch(dispatch);
+            })
+            .expect("rival target");
+        let mut route = HitTestResult::new();
+        route.add(HitTestEntry::new(RenderId::new(1)).pointer_target(inner));
+        route.add(HitTestEntry::new(RenderId::new(2)).pointer_target(outer));
+        route
+    });
+    let id = pointer(4);
+    let send = |event: PointerEvent| {
+        lane.enter(|| {
+            binding.handle_pointer_event(&event, |_| route.clone());
+            binding.flush_pending_moves();
+            binding.drain_deferred_arena_resolutions();
+        });
+    };
+    send(make_down_event_for_id(id, Offset::ZERO, PointerKind::Touch).expect("down"));
+    send(make_move_event_for_id(id, Offset::new(60.0, 0.0), PointerKind::Touch).expect("move"));
+    send(make_up_event_for_id(id, Offset::new(60.0, 0.0), PointerKind::Touch).expect("up"));
+    assert_eq!(
+        *observed.borrow(),
+        ["down", "move", "claimed"],
+        "the observer heard the claiming Move before its Cancel(Claimed)"
+    );
+}

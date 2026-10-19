@@ -48,15 +48,15 @@ pub(crate) fn event_time_of(
 }
 
 /// The instant `time` names on `clock`'s timeline, for consumers that keep
-/// [`web_time::Instant`]s (velocity samples, wake scheduling).
+/// [`web_time::Instant`]s (velocity samples, wake scheduling); `None` when it
+/// lies past the last instant this platform represents.
 pub(crate) fn instant_at(
     clock: &dyn flui_foundation::MonotonicClock,
     time: flui_platform_api::EventTime,
-) -> web_time::Instant {
-    let epoch = clock.epoch();
-    epoch
+) -> Option<web_time::Instant> {
+    clock
+        .epoch()
         .checked_add(core::time::Duration::from_nanos(time.as_nanos()))
-        .unwrap_or(epoch)
 }
 
 /// Extract the contact metadata when this event describes a contact.

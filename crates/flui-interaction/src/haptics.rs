@@ -619,7 +619,7 @@ impl HapticsHost {
             .iter()
             .map(|entry| entry.deadline)
             .min()
-            .map(|deadline| {
+            .and_then(|deadline| {
                 let after = EventTime::from_nanos(deadline.as_nanos().saturating_add(1));
                 crate::events::instant_at(state.clock.as_ref(), after)
             })

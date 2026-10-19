@@ -68,6 +68,17 @@ fn a_contact_carries_one_sequence_from_down_to_up() {
     assert_ne!(first, second);
     let other = send(&binding, &down(2)).expect("a second finger starts its own");
     assert_ne!(other, second);
+
+    // Another device reusing the contact's pointer id is refused, and belongs
+    // to no sequence.
+    let PointerEvent::Move(mut foreign) = moved(1) else {
+        unreachable!("a move helper builds a move")
+    };
+    foreign.pointer = foreign
+        .pointer
+        .with_device(DeviceId::try_from(7_u64).expect("nonzero device"));
+    assert_eq!(send(&binding, &PointerEvent::Move(foreign)), None);
+
     assert_eq!(send(&binding, &up(1)), Some(second));
     assert_eq!(send(&binding, &up(2)), Some(other));
 
