@@ -12,7 +12,7 @@
 //! `Platform::request_exit_policy_reevaluation` from any thread) is posted
 //! here as one coalesced message, so the hook always runs on a fresh owner
 //! turn rather than nested inside whatever code destroyed the window.
-use super::platform::{FrameCount, WindowIdentity, WindowMap};
+use super::platform::{FrameCount, ModalDelivery, WindowIdentity, WindowMap};
 use crate::{
     PlatformError, WakeRegistrationError,
     shared::{
@@ -29,7 +29,7 @@ use crate::{
 };
 use parking_lot::Mutex;
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     rc::Rc,
     sync::{
         Arc, OnceLock, Weak,
@@ -83,7 +83,7 @@ pub(super) struct OwnerControlContext {
     drag: Arc<super::drag::OleTransfer>,
     /// The last wake deadline the modal drag loop delivered, with the frame
     /// count it was delivered at (see `WindowsPlatform::deliver_modal_frames`).
-    modal_delivery: Rc<Cell<Option<(web_time::Instant, u64)>>>,
+    modal_delivery: Rc<ModalDelivery>,
 }
 
 /// Owner-thread handles cloned out of the [`OwnerControlContext`]. Holding
@@ -532,7 +532,12 @@ unsafe extern "system" fn procedure(
             let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OwnerControlContext;
             if message == WM_NCDESTROY && !pointer.is_null() {
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(pointer));
+                let context = Box::from_raw(pointer);
+                let drag = Arc::clone(&context.drag);
+                drop(context);
+                // The session this window was to start never runs: it is
+                // told so here, with nothing of the window left to reach.
+                drag.cancel_pending();
             } else if message == WAKE && !pointer.is_null() {
                 let signal = Arc::clone(&(*pointer).signal);
                 let turn = Rc::clone(&(*pointer).turn);

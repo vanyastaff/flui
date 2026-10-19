@@ -709,6 +709,7 @@ impl WindowsWindow {
             });
             let context_ptr = Box::into_raw(context);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_ptr as isize);
+            let this = super::platform::WindowRef::new(hwnd, identity);
 
             let window = Arc::new(Self {
                 hwnd,
@@ -722,14 +723,14 @@ impl WindowsWindow {
                 // requires; `hwnd` was validated just above.
                 #[cfg(feature = "a11y")]
                 accessibility: Arc::new(super::accessibility::WindowsAccessibility::new(hwnd)),
-                haptics: super::haptics::WindowsHaptics::new(hwnd),
-                drag_source: super::drag::Win32DragSource::new(Arc::clone(&drag), hwnd),
+                haptics: super::haptics::WindowsHaptics::new(this),
+                drag_source: super::drag::Win32DragSource::new(Arc::clone(&drag), this),
             });
             // The wrapper owns the window from here: a panic out of the
             // activation (or anything after it) drops it, which destroys the
             // window and retires its context.
             let touchpad_apartment = apartment.clone();
-            if !Self::activate_text_services(hwnd, apartment) {
+            if !Self::activate_text_services(this, apartment) {
                 return Err(OpenWindowError::Backend {
                     message: "the window was destroyed while its text services activated".into(),
                 });
@@ -737,7 +738,7 @@ impl WindowsWindow {
 
             // From here on the window takes drags, from this process or
             // another (ADR-0211).
-            super::drag::register_target(hwnd, identity, drag);
+            super::drag::register_target(this, drag);
 
             // The precision touchpad's viewport. Without one the window
             // reports no precise scrolling or trackpad gestures
@@ -863,9 +864,10 @@ impl WindowsWindow {
     /// Returns whether the window is still alive: a message the activation
     /// dispatched may have destroyed it, and the open then fails.
     fn activate_text_services(
-        hwnd: HWND,
+        window: super::platform::WindowRef,
         apartment: Option<Rc<super::com_apartment::ComApartment>>,
     ) -> bool {
+        let hwnd = window.hwnd();
         let Some(apartment) = apartment else {
             tracing::warn!(
                 ?hwnd,
@@ -877,7 +879,7 @@ impl WindowsWindow {
         if let Some(hook) = BEFORE_TSF_ACTIVATION.get() {
             hook(hwnd);
         }
-        match super::text_services::TextServices::activate(hwnd, apartment) {
+        match super::text_services::TextServices::activate(window, apartment) {
             Ok(services) => {
                 let installed = super::platform::with_window_context(hwnd, "text_services", |c| {
                     c.text_services.replace(Some(Rc::clone(&services)))

@@ -27,9 +27,9 @@ use windows::Devices::Haptics::{
 };
 use windows::Devices::Input::PenDevice;
 use windows::Foundation::TimeSpan;
-use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 
+use super::platform::WindowRef;
 use crate::shared::haptic_degradation::{
     PenCommand, PenController, PenWaveform, actuator_for, pen_feedback_step, pen_timeline,
     windows_capabilities, windows_feedback, windows_pattern,
@@ -375,9 +375,9 @@ fn play<S: PenSink>(mailbox: &Mailbox<Playback<S>>) {
 
 /// One window's haptic actuator.
 pub(super) struct WindowsHaptics {
-    /// The window, as its address: read only through `with_window_context`,
-    /// which refuses any thread but the window's owner.
-    hwnd: isize,
+    /// The window, reached only on its owner thread and only while its
+    /// handle still names it.
+    window: WindowRef,
     /// The worker's mailbox, started on the first playback.
     worker: OnceLock<Option<Arc<Mailbox<Playback<SimpleHapticsController>>>>>,
 }
@@ -394,36 +394,39 @@ impl Drop for WindowsHaptics {
 impl std::fmt::Debug for WindowsHaptics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WindowsHaptics")
-            .field("hwnd", &self.hwnd)
+            .field("window", &self.window)
             .finish_non_exhaustive()
     }
 }
 
 impl WindowsHaptics {
-    pub(super) fn new(hwnd: HWND) -> Arc<Self> {
+    pub(super) fn new(window: WindowRef) -> Arc<Self> {
         Arc::new(Self {
-            hwnd: hwnd.0 as isize,
+            window,
             worker: OnceLock::new(),
         })
     }
 
-    /// The pen `source` names while it is in range of the window, else the
-    /// pen read most recently: `None` with no pen in range, off the window's
-    /// owner thread, or after the window closed.
-    fn pen(&self, source: Option<DeviceId>) -> Option<Pen> {
-        let pointer = super::platform::with_window_context(
-            HWND(self.hwnd as *mut core::ffi::c_void),
-            "haptics",
-            |context| {
+    /// The pointer of the pen `source` names while it is in range of the
+    /// window, else of the pen read most recently: `None` with no pen in
+    /// range, off the window's owner thread, or after the window closed.
+    fn pen_pointer(&self, source: Option<DeviceId>) -> Option<u32> {
+        let pointer = self
+            .window
+            .with_context("haptics", |context| {
                 let registry = context.pointer_registry.try_borrow().ok()?;
                 let actuator = actuator_for(source, |device| {
                     registry.pen_contact(Some(device)).is_some()
                 });
                 registry.pen_contact(actuator)
-            },
-        )
-        .flatten()?;
-        Pen::of_pointer(u32::try_from(pointer.0).ok()?)
+            })
+            .flatten()?;
+        u32::try_from(pointer.0).ok()
+    }
+
+    /// The controller of [`Self::pen_pointer`]'s pen.
+    fn pen(&self, source: Option<DeviceId>) -> Option<Pen> {
+        Pen::of_pointer(self.pen_pointer(source)?)
     }
 
     /// Hand `commands` to the worker and report `outcome`, or
@@ -517,11 +520,11 @@ mod tests {
     };
     use flui_platform_api::pointer::{PenTool, PointerKind};
 
-    use super::super::platform::with_window_context;
+    use super::super::events::SURFACE;
+    use super::super::platform::{WindowRef, with_window_context};
     use super::super::{WindowsPlatform, WindowsWindow};
     use crate::shared::pointer_assembly::{
-        NativeContact, NativeDevice, NativeReading, NativeSurface, ReadingAction, ReadingTime,
-        decode,
+        NativeContact, NativeDevice, NativeReading, ReadingAction, ReadingTime, decode,
     };
     use crate::traits::{Platform as _, WindowOptions};
     use flui_platform_api::HapticFeedback;
@@ -582,7 +585,7 @@ mod tests {
             ReadingAction::Enter,
             ReadingTime::epoch(EventTime::from_nanos(1_000_000)),
         )
-        .on(NativeSurface(0))
+        .on(SURFACE)
         .at(10.0, 10.0, 1.0)
         .from_device(NativeDevice(0x51));
         with_window_context(hwnd, "test", |context| {
@@ -597,6 +600,53 @@ mod tests {
             haptics.as_ref(),
             "for a pen pointer the OS has no pen device for",
         );
+    }
+
+    /// An actuator reads the pen of the window it was made for, never of a
+    /// window the OS later built behind the same handle. Red-check: read
+    /// the context by handle alone in `pen_pointer`.
+    #[test]
+    fn an_actuator_reads_only_its_own_windows_pen() {
+        let platform = WindowsPlatform::new().expect("platform");
+        let open = |title: &str| {
+            platform
+                .open_window(
+                    WindowOptions::default()
+                        .with_title(title)
+                        .with_size(Size::new(160.0, 120.0)),
+                )
+                .expect("window")
+        };
+        let (first, second) = (open("flui haptics a"), open("flui haptics b"));
+        let win32 = |window: &Arc<dyn crate::traits::HostWindow>| {
+            let window = window
+                .as_any()
+                .downcast_ref::<WindowsWindow>()
+                .expect("Win32 window");
+            (window.hwnd(), window.identity)
+        };
+        let ((_, first_identity), (hwnd, identity)) = (win32(&first), win32(&second));
+        let hovering = NativeReading::new(
+            NativeContact(0x4242),
+            PointerKind::Pen { tool: PenTool::Tip },
+            ReadingAction::Enter,
+            ReadingTime::epoch(EventTime::from_nanos(1_000_000)),
+        )
+        .on(SURFACE)
+        .at(10.0, 10.0, 1.0)
+        .from_device(NativeDevice(0x51));
+        with_window_context(hwnd, "test", |context| {
+            decode(&mut context.pointer_registry.borrow_mut(), &hovering).expect("a valid reading");
+        })
+        .expect("the window's context");
+
+        let own = super::WindowsHaptics::new(WindowRef::new(hwnd, identity));
+        assert_eq!(own.pen_pointer(None), Some(0x4242));
+        // The handle names the second window; the identity is the first's,
+        // as for an actuator whose window closed and whose handle the OS
+        // recycled.
+        let recycled = super::WindowsHaptics::new(WindowRef::new(hwnd, first_identity));
+        assert_eq!(recycled.pen_pointer(None), None);
     }
 
     /// A controller that records each waveform it plays and blocks in the
