@@ -3,7 +3,10 @@
 - **Assistive requests take one path** (`flui-runtime`): `PresentationDispatcher::dispatch` queues
   `HostInput::Accessibility` in the runtime's command inbox, as the accessibility bridge does, and
   answers `InputOutcome::Queued`; the request runs at the next owner turn's Idle drain. A full
-  inbox refuses it with the new `DispatchError::InboxFull` (ADR-0207, amendment).
+  inbox refuses it with the new `DispatchError::InboxFull` (ADR-0207, amendment). A frame drains
+  the inbox before it records and renders, so a recording lists a queued request before the frame
+  it preceded; a panicking handler wakes the owner for the requests behind it, and a request whose
+  presentation closed first is dropped with a warning.
 - **Recordings mark dropped assistive requests** (`flui-runtime`): an AT request no handler ran
   for is recorded `InputOutcome::Unhandled` instead of `Handled`.
 

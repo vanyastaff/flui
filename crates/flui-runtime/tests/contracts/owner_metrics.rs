@@ -2225,12 +2225,15 @@ impl flui_platform_api::PlatformWindow for GeometryWindow {
     }
 }
 
-/// A window whose input-region backend fails once on request.
+/// A window whose input-region backend, or display query, fails once on
+/// request.
 struct RegionWindow {
     inner: std::sync::Arc<dyn flui_platform_api::PlatformWindow>,
     /// How many regions each call handed the backend.
     sent: std::sync::Mutex<Vec<usize>>,
     panic_next: std::sync::atomic::AtomicBool,
+    /// The next display query panics, failing the gesture-geometry refresh.
+    panic_display: std::sync::atomic::AtomicBool,
 }
 
 impl flui_platform_api::PlatformWindow for RegionWindow {
@@ -2276,6 +2279,15 @@ impl flui_platform_api::PlatformWindow for RegionWindow {
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+    fn display_id(&self) -> Option<flui_platform_api::DisplayId> {
+        if self
+            .panic_display
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            panic!("scripted display query failure");
+        }
+        None
     }
     fn set_input_regions(&self, regions: &[flui_platform_api::input_regions::InputRegion]) {
         self.sent.lock().expect("sent regions").push(regions.len());
@@ -2323,9 +2335,10 @@ impl flui_platform_api::WindowControl for SharedControl {
     fn request_close(&self) {}
 }
 
-/// A move whose input-region backend panics still reaches the window's state
-/// subscribers and the recording, and the committed regions survive the
-/// failure: the next move hands the backend the same regions again.
+/// Input regions survive a failing backend: a frame whose hand-off panics
+/// still commits them, a move whose gesture-geometry refresh panics still
+/// re-sends them, and a move whose re-send panics still reaches the window's
+/// state subscribers and the recording, with the regions kept for the next.
 fn a_failed_move_keeps_its_regions_subscribers_and_row() {
     use flui_foundation::geometry::Point;
     use flui_platform_api::WindowRevision;
@@ -2336,6 +2349,7 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
         inner: Arc::clone(crate::owner_publication::window().window()),
         sent: Mutex::new(Vec::new()),
         panic_next: AtomicBool::new(false),
+        panic_display: AtomicBool::new(false),
     });
     let mut runtime = UiRuntime::new(
         flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
@@ -2381,12 +2395,45 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
             SubmitVerdict::Presented
         }
     }
-    let _ = runtime.pump(
-        &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
-        &mut Sink,
-    );
+    let address = PresentationAddress {
+        ui_runtime_id: runtime.id(),
+        presentation_id: id,
+    };
+    let fail_next_regions = || {
+        window
+            .panic_next
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    };
+    // The frame's own hand-off fails: its regions are committed anyway.
+    fail_next_regions();
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.pump(
+            &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
+            &mut Sink,
+        )
+    }));
     let sent = || window.sent.lock().expect("sent regions").clone();
-    assert_eq!(sent(), [1], "the frame committed one exclusion region");
+    assert_eq!(sent(), [1], "the frame handed off one exclusion region");
+    runtime.apply_window_observation(address, WindowObservation::Moved, &|_, _| {});
+    assert_eq!(
+        sent(),
+        [1, 1],
+        "a failed frame hand-off still committed its region"
+    );
+
+    // The gesture-geometry refresh fails: the regions follow the move anyway.
+    window
+        .panic_display
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let moved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.apply_window_observation(address, WindowObservation::Moved, &|_, _| {});
+    }));
+    assert!(moved.is_err(), "the refresh failure resumes");
+    assert_eq!(
+        sent(),
+        [1, 1, 1],
+        "a failed geometry refresh still re-sends the regions"
+    );
 
     let rows = Rc::new(RefCell::new(Vec::new()));
     let tap = runtime
@@ -2402,17 +2449,11 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
             }
         })
         .expect("registration");
-    let address = PresentationAddress {
-        ui_runtime_id: runtime.id(),
-        presentation_id: id,
-    };
     {
         let mut position = control.position.lock().expect("position");
         *position = (Point::new(100.0, 0.0), position.1.next().expect("revision"));
     }
-    window
-        .panic_next
-        .store(true, std::sync::atomic::Ordering::Relaxed);
+    fail_next_regions();
     let moved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         runtime.apply_window_observation(address, WindowObservation::State, &|_, _| {});
     }));
@@ -2427,7 +2468,7 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
     runtime.apply_window_observation(address, WindowObservation::Moved, &|_, _| {});
     assert_eq!(
         sent(),
-        [1, 1, 1],
+        [1, 1, 1, 1, 1],
         "the next move hands the backend the committed region again"
     );
     tap.finish().expect("complete recording");

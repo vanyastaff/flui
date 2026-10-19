@@ -569,10 +569,26 @@ impl UiRuntime {
                     presentation_id,
                     request,
                 } => {
-                    if self.dispatch_accessibility(presentation_id, &request) {
-                        report.invoked += 1;
-                    } else {
+                    if self.presentations.get(presentation_id).is_none() {
+                        // Accepted earlier, but the presentation closed first:
+                        // the request was never applied.
+                        tracing::warn!(
+                            { flui_foundation::diagnostics::PRESENTATION_ID } =
+                                presentation_id.as_u64(),
+                            action = ?request.action,
+                            "dropping an accepted accessibility request: its presentation closed before the drain"
+                        );
                         report.dropped_stale += 1;
+                        continue;
+                    }
+                    // A panicking handler keeps the accepted tail live, as a
+                    // failed reassemble does, before resuming.
+                    match catch_unwind(AssertUnwindSafe(|| {
+                        self.dispatch_accessibility(presentation_id, &request)
+                    })) {
+                        Ok(true) => report.invoked += 1,
+                        Ok(false) => report.dropped_stale += 1,
+                        Err(payload) => self.rearm_after_command_panic(payload),
                     }
                 }
                 UiCommand::Motion {

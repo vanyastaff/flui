@@ -742,7 +742,13 @@ impl UiRuntime {
     ///
     /// This is where a [`HostInput::Frame`](crate::HostInput::Frame) is
     /// recorded; the verdicts the frame makes follow it when the pump ends.
+    ///
+    /// The command inbox is drained first. The frame applies what it holds
+    /// (assistive requests among it) before it renders, so their rows precede
+    /// the frame's row and a replay applies them before rendering it too. A
+    /// drain failure is resumed after the frame's row is recorded.
     pub fn note_frame_vsync(&self, presentation_id: PresentationId, vsync: EventTime) {
+        let drained = catch_unwind(AssertUnwindSafe(|| self.drain_commands())).err();
         let recording = self.begin_recorded_input();
         if let Some(presentation) = self.presentations.get(presentation_id) {
             presentation.frame_vsync.set(Some(vsync));
@@ -753,6 +759,9 @@ impl UiRuntime {
                 crate::HostInput::Frame { vsync },
                 crate::owner::InputOutcome::Handled,
             );
+        }
+        if let Some(payload) = drained {
+            resume_unwind(payload);
         }
     }
 

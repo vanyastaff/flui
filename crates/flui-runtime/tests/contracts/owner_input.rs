@@ -622,17 +622,21 @@ impl flui_semantics::platform::PlatformAccessibility for RecordingBridge {
 /// `HostInput::Accessibility` takes the accessibility bridge's path: it waits
 /// in the runtime's command inbox and is decoded and invoked by the addressed
 /// presentation's semantics owner at the next owner turn's Idle drain
-/// (ADR-0207, amendment); a request for a node the presentation never
-/// published runs nothing.
+/// (ADR-0207, amendment). A request for a node the presentation never
+/// published runs nothing; a panicking handler wakes the owner for the
+/// requests behind it; a request queued before a frame is applied, and
+/// recorded, before that frame; a full inbox refuses the request.
 fn accessibility_input_reaches_the_semantics_owner() {
-    use flui_runtime::HostInput;
     use flui_runtime::presentation::PresentationWindow;
-    use flui_widgets::{Semantics, SizedBox};
+    use flui_runtime::{HostInput, InputRecord};
+    use flui_widgets::{Row, Semantics, SizedBox};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     let bridge = std::sync::Arc::new(RecordingBridge::default());
     let window = flui_platform::headless_platform()
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless window");
+    let wakes = std::sync::Arc::new(AtomicUsize::new(0));
     let runtime = UiRuntime::new(
         PresentationWindow::new(
             window,
@@ -640,7 +644,12 @@ fn accessibility_input_reaches_the_semantics_owner() {
         ),
         1.0,
         flui_runtime::ui_runtime::RuntimeHostServices::new(
-            std::sync::Arc::new(|| {}),
+            {
+                let wakes = std::sync::Arc::clone(&wakes);
+                std::sync::Arc::new(move || {
+                    wakes.fetch_add(1, Ordering::Relaxed);
+                })
+            },
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             std::sync::Arc::new(flui_platform_api::InMemoryClipboard::new()),
             &flui_painting::FontCollection::new(),
@@ -652,11 +661,23 @@ fn accessibility_input_reaches_the_semantics_owner() {
     let clicked = Rc::clone(&clicks);
     runtime
         .attach_root_widget_with_size(
-            &Semantics::new()
-                .container(true)
-                .label("Send")
-                .on_click(move |_cx| clicked.set(clicked.get() + 1))
-                .child(SizedBox::new(10.0, 10.0)),
+            &Row::new((
+                Semantics::new()
+                    .container(true)
+                    .label("Send")
+                    .on_click(move |_cx| clicked.set(clicked.get() + 1))
+                    .child(SizedBox::new(10.0, 10.0)),
+                Semantics::new()
+                    .container(true)
+                    .label("Boom")
+                    .on_click(|_cx| {
+                        // Typed `()`: a handler that only diverges has no outcome.
+                        if std::hint::black_box(true) {
+                            std::panic::panic_any("assistive handler failure");
+                        }
+                    })
+                    .child(SizedBox::new(10.0, 10.0)),
+            )),
             40.0,
             40.0,
         )
@@ -675,15 +696,19 @@ fn accessibility_input_reaches_the_semantics_owner() {
         &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
         &mut Sink,
     );
-    let send = bridge
-        .updates
-        .lock()
-        .expect("updates")
-        .iter()
-        .flat_map(|update| update.nodes.iter())
-        .find(|(_, node)| node.label() == Some("Send"))
-        .map(|(id, _)| *id)
-        .expect("the node was published");
+    let node = |label: &str| {
+        bridge
+            .updates
+            .lock()
+            .expect("updates")
+            .iter()
+            .flat_map(|update| update.nodes.iter())
+            .find(|(_, node)| node.label() == Some(label))
+            .map(|(id, _)| *id)
+            .expect("the node was published")
+    };
+    let (send, boom) = (node("Send"), node("Boom"));
+    let taps = runtime.input_taps().clone();
 
     let owner = OwnerHost::new();
     let address = owner
@@ -706,6 +731,7 @@ fn accessibility_input_reaches_the_semantics_owner() {
             data: None,
         })
     };
+    let dispatch = |node| effects.input.dispatch(click(node), &effects);
     let owner_turn = || {
         owner
             .runtime_dispatcher(address.ui_runtime_id)
@@ -715,7 +741,7 @@ fn accessibility_input_reaches_the_semantics_owner() {
     };
     for (node, ran) in [(accesskit::NodeId(u64::MAX), 0), (send, 1)] {
         assert_eq!(
-            effects.input.dispatch(click(node), &effects),
+            dispatch(node),
             Ok(InputOutcome::Queued),
             "the request waits in the inbox, as the bridge's does"
         );
@@ -728,6 +754,68 @@ fn accessibility_input_reaches_the_semantics_owner() {
         );
         clicks.set(0);
     }
+
+    // A panicking handler: the request behind it is woken for, not stranded.
+    assert_eq!(dispatch(boom), Ok(InputOutcome::Queued));
+    assert_eq!(dispatch(send), Ok(InputOutcome::Queued));
+    let woken = wakes.load(Ordering::Relaxed);
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(owner_turn));
+    assert!(failed.is_err(), "the handler's panic resumes");
+    assert_eq!(clicks.get(), 0, "the request behind it waits");
+    assert!(
+        wakes.load(Ordering::Relaxed) > woken,
+        "the drain woke the owner for the accepted tail"
+    );
+    owner_turn();
+    assert_eq!(clicks.get(), 1, "the woken turn ran the request behind it");
+    clicks.set(0);
+
+    // A request queued before a frame is applied, and recorded, before it.
+    let rows = Rc::new(RefCell::new(Vec::new()));
+    let tap = taps
+        .install({
+            let rows = Rc::clone(&rows);
+            move |record: &InputRecord| {
+                if let InputRecord::Input(row) = record {
+                    rows.borrow_mut().push(match row.input {
+                        HostInput::Accessibility(_) => "accessibility",
+                        HostInput::Frame { .. } => "frame",
+                        _ => "other",
+                    });
+                }
+            }
+        })
+        .expect("registration");
+    assert_eq!(dispatch(send), Ok(InputOutcome::Queued));
+    owner
+        .frame_dispatcher(address)
+        .expect("frames")
+        .deliver(crate::VSYNC, &effects)
+        .expect("frame");
+    assert_eq!(clicks.get(), 1, "the frame applied the queued request");
+    assert_eq!(*rows.borrow(), ["accessibility", "frame"]);
+    tap.finish().expect("complete recording");
+    clicks.set(0);
+
+    // A full inbox refuses the request; the drain makes room again.
+    let mut admitted = 0;
+    let refused = loop {
+        match dispatch(accesskit::NodeId(u64::MAX)) {
+            Ok(InputOutcome::Queued) => admitted += 1,
+            other => break other,
+        }
+        assert!(admitted <= 4096, "the inbox is bounded");
+    };
+    assert_eq!(refused, Err(flui_runtime::owner::DispatchError::InboxFull));
+    assert!(admitted > 0, "it admitted requests until it was full");
+    owner_turn();
+    assert_eq!(
+        dispatch(send),
+        Ok(InputOutcome::Queued),
+        "the drain made room"
+    );
+    owner_turn();
+    assert_eq!(clicks.get(), 1);
 }
 
 #[test]

@@ -166,6 +166,13 @@ unwrapped at the next owner turn's Idle drain — inside that turn, before its f
 the same inbox and answers `InputOutcome::Queued` (`DispatchError::InboxFull` when it has no
 room), so there is one path and one ordering for every assistive request.
 
+`Queued` promises the request is applied at the next inbox drain and before the next frame: a
+frame drains the inbox before it records and renders, so a recording lists the request before the
+frame it preceded and a replay applies it there. It promises no order against other `HostInput`
+the same caller dispatches afterwards — those run through the owner FIFO first. A request whose
+presentation closed before the drain is dropped with a warning; a panicking handler wakes the
+owner, so the requests behind it run on the next turn, and then resumes.
+
 Re-admitting the drained request into the owner FIFO was rejected: the drain already runs inside
 an owner turn, so the request would join the FIFO behind the frame that turn is driving and reach
 the semantics owner one frame later than now, with nothing gained in ordering — no causal order

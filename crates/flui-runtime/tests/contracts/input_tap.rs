@@ -414,39 +414,52 @@ fn finishing_inside_a_tap_call_counts_the_rows_it_skips() {
         ui_runtime_id: runtime.id(),
         presentation_id: runtime.presentation_id(),
     };
+    let observe = move |runtime: &UiRuntime, observation| {
+        runtime.apply_window_observation(address, observation, &|_, _| {});
+    };
     let recorded = rows();
     let handle: Rc<RefCell<Option<InputTapHandle>>> = Rc::new(RefCell::new(None));
+    let calls = Rc::new(Cell::new(0));
     let tap = {
         let recorded = Rc::clone(&recorded);
         let runtime = Rc::downgrade(&runtime);
         let handle = Rc::clone(&handle);
+        let calls = Rc::clone(&calls);
         move |record: &InputRecord| {
             recorded.borrow_mut().push(describe(record));
-            let Some(handle) = handle.borrow_mut().take() else {
-                return;
-            };
+            calls.set(calls.get() + 1);
             let runtime = runtime.upgrade().expect("the runtime outlives its tap");
-            // Two rows admitted behind the running one, then a stop.
-            for visible in [false, true] {
-                runtime.apply_window_observation(
-                    address,
-                    WindowObservation::Visibility(visible),
-                    &|_, _| {},
-                );
+            match calls.get() {
+                // Two rows admitted during the first pass wait for the next.
+                1 => {
+                    for visible in [false, true] {
+                        observe(&runtime, WindowObservation::Visibility(visible));
+                    }
+                }
+                // The first row of that next pass stops the recording.
+                2 => {
+                    let handle = handle.borrow_mut().take().expect("registered");
+                    assert_eq!(
+                        handle.finish(),
+                        Ok(()),
+                        "the gap and the end row were delivered"
+                    );
+                }
+                _ => {}
             }
-            assert_eq!(
-                handle.finish(),
-                Ok(()),
-                "the gap and the end row were delivered"
-            );
         }
     };
     *handle.borrow_mut() = Some(runtime.input_taps().install(tap).expect("registration"));
-    runtime.apply_window_observation(address, WindowObservation::Focus(true), &|_, _| {});
+    observe(&runtime, WindowObservation::Focus(true));
+    // Its pass holds the two waiting rows and this one.
+    observe(&runtime, WindowObservation::Hover(true));
     let seen = recorded.borrow().clone();
-    assert_eq!(seen.len(), 3, "{seen:?}");
-    assert!(seen[0].starts_with("input"), "{seen:?}");
-    assert_eq!(seen[1..], ["gap 2", "end 2"]);
+    assert_eq!(seen.len(), 4, "{seen:?}");
+    assert!(
+        seen[..2].iter().all(|row| row.starts_with("input")),
+        "{seen:?}"
+    );
+    assert_eq!(seen[2..], ["gap 2", "end 2"], "{seen:?}");
     assert!(
         !runtime.input_taps().is_recording(),
         "finishing unregistered it"

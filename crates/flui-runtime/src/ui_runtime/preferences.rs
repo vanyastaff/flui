@@ -345,11 +345,18 @@ impl UiRuntime {
     /// geometry is re-read for new contacts when the display changed (ADR-0212 §2),
     /// and the window is handed its last committed input regions again, so its
     /// backend re-sends them when the display differs (ADR-0217 §5).
+    ///
+    /// Each step runs even when the other panics; the first panic resumes
+    /// afterwards.
     pub(crate) fn window_moved(&self, id: flui_foundation::PresentationId) {
-        self.refresh_gesture_context_for(id);
-        if let Some(presentation) = self.presentations.get(id) {
-            presentation.republish_input_regions();
-        }
+        let mut first = flui_foundation::panic::FirstPanic::new();
+        first.contain(|| self.refresh_gesture_context_for(id));
+        first.contain(|| {
+            if let Some(presentation) = self.presentations.get(id) {
+                presentation.republish_input_regions();
+            }
+        });
+        first.resume();
     }
 
     /// Replace presentation `id`'s per-kind gesture presets, as a replay
