@@ -216,13 +216,13 @@ fn collect_sources(
     let mut hits = Vec::new();
     for (path, whole) in &files {
         let rel = relative(root, path);
-        if in_kit_file(&rel) {
+        if in_kit_file(root, &rel) {
             continue;
         }
         let Ok(text) = std::fs::read_to_string(path) else {
             continue;
         };
-        hits.extend(scan_file(&rel, &text, *whole));
+        hits.extend(scan_file(root, &rel, &text, *whole));
     }
     (hits, problems)
 }
@@ -237,17 +237,33 @@ fn relative(root: &Path, path: &Path) -> String {
         .join("/")
 }
 
-/// Whether the whole file is a kit: the `flui-testing` crate or a `testing` module under `src/`.
-fn in_kit_file(rel: &str) -> bool {
-    rel.starts_with("crates/flui-testing/")
-        || rel.contains("/src/testing/")
-        || rel.ends_with("/src/testing.rs")
-        || rel.starts_with("src/testing/")
-        || rel == "src/testing.rs"
+/// What follows the `src/` of the package that owns `rel`: `Some` only when the directory before
+/// that `src/` holds a `Cargo.toml`, so a `src/` folder inside a test target is not a source root.
+fn package_source_rest<'a>(root: &Path, rel: &'a str) -> Option<&'a str> {
+    let mut start = 0;
+    loop {
+        let (prefix, rest) = if start == 0 && rel.starts_with("src/") {
+            ("", &rel["src/".len()..])
+        } else {
+            let at = rel[start..].find("/src/")? + start;
+            (&rel[..at], &rel[at + "/src/".len()..])
+        };
+        if root.join(prefix).join("Cargo.toml").is_file() {
+            return Some(rest);
+        }
+        start = rel.len() - rest.len();
+    }
 }
 
+/// Whether the whole file is a kit: the `flui-testing` crate or a `testing` module in the `src/`
+/// of a package.
+fn in_kit_file(root: &Path, rel: &str) -> bool {
+    rel.starts_with("crates/flui-testing/")
+        || package_source_rest(root, rel)
+            .is_some_and(|rest| rest == "testing.rs" || rest.starts_with("testing/"))
+}
 /// The hits in one file; `whole` when every item in it is test code.
-fn scan_file(rel: &str, text: &str, whole: bool) -> Vec<Hit> {
+fn scan_file(root: &Path, rel: &str, text: &str, whole: bool) -> Vec<Hit> {
     let parsed = syn::parse_file(text);
     // spans are per-thread and grow with every parse; nothing holds one past the visit
     let hits = match parsed {
@@ -256,7 +272,7 @@ fn scan_file(rel: &str, text: &str, whole: bool) -> Vec<Hit> {
                 path: rel.to_owned(),
                 in_scope: whole || implies_testing_attrs(&file.attrs),
                 in_kit: false,
-                kit_modules: rel.starts_with("src/") || rel.contains("/src/"),
+                kit_modules: package_source_rest(root, rel).is_some(),
                 hits: Vec::new(),
             };
             for item in &file.items {
@@ -386,11 +402,20 @@ fn is_double_name(name: &str) -> bool {
 fn implies_testing_attrs(attrs: &[Attribute]) -> bool {
     is_test_only(attrs)
         || attrs.iter().any(|attr| {
-            attr.path().is_ident("cfg")
-                && attr
-                    .parse_args::<Meta>()
-                    .is_ok_and(|predicate| implies_testing_feature(&predicate))
+            is_test_function_attr(attr.path())
+                || attr.path().is_ident("cfg")
+                    && attr
+                        .parse_args::<Meta>()
+                        .is_ok_and(|predicate| implies_testing_feature(&predicate))
         })
+}
+
+/// `#[test]`, `#[bench]` and the runtime-flavoured forms (`#[tokio::test]`): the item is a test
+/// function, so what it declares inside is test code.
+fn is_test_function_attr(path: &syn::Path) -> bool {
+    path.segments
+        .last()
+        .is_some_and(|segment| segment.ident == "test" || segment.ident == "bench")
 }
 
 /// Whether the `cfg` predicate can hold only with a testing feature on (or under `cfg(test)`).
@@ -698,6 +723,7 @@ fn findings_for(
 ) -> Vec<(String, &'static str)> {
     let dir = ScratchDir::new("testing").expect("scratch");
     let root = dir.path();
+    std::fs::write(root.join("Cargo.toml"), "").expect("writes");
     for (path, text) in files {
         let full = root.join(path);
         std::fs::create_dir_all(full.parent().expect("BUG: rows plant files in directories"))
@@ -864,6 +890,34 @@ fn row_a_testing_module_in_a_test_target_is_not_a_kit() {
     assert_eq!(found, [("tests/a.rs".to_owned(), "unlisted")]);
 }
 
+fn row_items_inside_a_test_function_are_test_code() {
+    let lib = "#[test]\nfn case() {\n    fn pump() {}\n    struct FakeClock;\n}\n";
+    let found = findings_for(&[("src/lib.rs", lib)], &[], HEADER);
+    assert_eq!(
+        found,
+        [
+            ("src/lib.rs".to_owned(), "unlisted"),
+            ("src/lib.rs".to_owned(), "unlisted"),
+        ]
+    );
+}
+
+fn row_a_src_folder_inside_a_test_target_is_not_a_kit() {
+    let found = findings_for(
+        &[
+            ("src/lib.rs", ""),
+            (
+                "tests/a.rs",
+                "#[path = \"a/src/testing.rs\"]\nmod helpers;\n",
+            ),
+            ("tests/a/src/testing.rs", "fn advance() {}\n"),
+        ],
+        &[],
+        HEADER,
+    );
+    assert_eq!(found, [("tests/a/src/testing.rs".to_owned(), "unlisted")]);
+}
+
 fn row_count_grew() {
     let allow =
         allowlist("[[allow]]\npath = \"tests/a.rs\"\nkind = \"pump\"\nnames = [\"pump\"]\n");
@@ -950,6 +1004,14 @@ fn rows() -> Vec<(&'static str, fn())> {
         (
             "a_testing_module_in_a_test_target_is_not_a_kit",
             row_a_testing_module_in_a_test_target_is_not_a_kit,
+        ),
+        (
+            "items_inside_a_test_function_are_test_code",
+            row_items_inside_a_test_function_are_test_code,
+        ),
+        (
+            "a_src_folder_inside_a_test_target_is_not_a_kit",
+            row_a_src_folder_inside_a_test_target_is_not_a_kit,
         ),
         ("count_grew", row_count_grew),
         ("count_fell", row_count_fell),
