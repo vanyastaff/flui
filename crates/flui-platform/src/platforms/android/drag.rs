@@ -191,11 +191,9 @@ impl AndroidTransfer {
         &self,
         view: &JavaView,
         position: (f64, f64),
-        mime_types: &[String],
         local: bool,
         clip: &DroppedClip,
     ) -> Option<DataTransferId> {
-        let _ = mime_types;
         let (event, taken) = {
             let mut offers = self.offers.lock();
             let (id, allowed) = offers.hover.take()?;

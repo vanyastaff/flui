@@ -80,9 +80,9 @@ pub(super) struct WebTransfer {
     offers: Mutex<Offers>,
 }
 
-// SAFETY: wasm32 has one thread, so the JS handles a held offer keeps (its
-// files) are never reached from another; the trait's bounds are those every
-// backend's transport meets.
+// SAFETY: the page has one thread (the module refuses `+atomics`), so the JS
+// handles a held offer keeps (its files) are never reached from another; the
+// trait's bounds are those every backend's transport meets.
 unsafe impl Send for WebTransfer {}
 // SAFETY: as for `Send`: there is no second thread to share it with.
 unsafe impl Sync for WebTransfer {}
@@ -307,8 +307,9 @@ pub(super) struct WebDragSource {
     open: Cell<bool>,
 }
 
-// SAFETY: wasm32 has one thread; the request a waiting session holds (its
-// provider and hook) is reached only from the owner thread there is.
+// SAFETY: the page has one thread (the module refuses `+atomics`); the request
+// a waiting session holds (its provider and hook) is reached only from the
+// owner thread there is.
 unsafe impl Send for WebDragSource {}
 // SAFETY: as for `Send`.
 unsafe impl Sync for WebDragSource {}

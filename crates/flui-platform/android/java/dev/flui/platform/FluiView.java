@@ -49,8 +49,8 @@ public final class FluiView extends View {
             String[] mimeTypes, boolean local, boolean result);
 
     /** The offer a taken drop holds until FLUI concludes it, or zero when it is refused. */
-    static native long nativeDrop(long handle, float x, float y, String[] mimeTypes,
-            boolean local, String text, String html, String[] uris);
+    static native long nativeDrop(long handle, float x, float y, boolean local, String text,
+            String html, String[] uris);
 
     static native void nativeImeState(long handle, String text, int selectionStart,
             int selectionEnd, int compositionStart, int compositionEnd, int generation);
@@ -373,7 +373,6 @@ public final class FluiView extends View {
 
     private boolean drop(DragEvent event, boolean local) {
         ClipData clip = event.getClipData();
-        String[] types = mimeTypes(event.getClipDescription());
         String text = null;
         String html = null;
         String[] uris = new String[0];
@@ -404,8 +403,7 @@ public final class FluiView extends View {
                 permissions = Api24.permissions(activity, event);
             }
         }
-        long offer = nativeDrop(handle, event.getX(), event.getY(), types, local, text, html,
-                uris);
+        long offer = nativeDrop(handle, event.getX(), event.getY(), local, text, html, uris);
         if (offer == 0) {
             release(permissions);
         } else if (permissions != null) {
