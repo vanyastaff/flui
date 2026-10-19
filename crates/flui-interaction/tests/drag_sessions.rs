@@ -2342,26 +2342,45 @@ fn one_offer_over_two_windows_is_two_hovers() {
 /// fetch resolves.
 fn a_drop_waits_for_a_fetch_made_over_another_window() {
     in_lane(|f| {
+        let (id, fetch) = dropped_while_fetching_elsewhere(f);
+        drop(fetch);
+        f.owner.tick(time_at(0));
+        assert_eq!(*f.source.concluded.lock(), [id]);
+        assert_eq!(
+            count(&f.log, "B:left"),
+            1,
+            "the other window's hover leaves with the offer"
+        );
+    });
+}
+
+/// The window the drop landed in closes while a fetch made over another
+/// window is outstanding: the OS is still not told until that fetch resolves.
+fn closing_the_dropped_window_waits_for_a_fetch_made_over_another() {
+    in_lane(|f| {
+        let (id, fetch) = dropped_while_fetching_elsewhere(f);
+        f.owner.detach_presentation(f.presentation);
+        assert!(
+            f.source.concluded.lock().is_empty(),
+            "the fetch over the other window is outstanding"
+        );
+        drop(fetch);
+        f.owner.tick(time_at(0));
+        assert_eq!(*f.source.concluded.lock(), [id]);
+    });
+}
+
+/// The same offer hovers two windows, each over an accepting receiver, and the
+/// pointer is over the first: the second window's receiver going away does not
+/// withdraw the first window's answer.
+fn another_windows_hover_keeps_the_answer_standing() {
+    in_lane(|f| {
         let second = presentation(2);
         f.owner
             .attach_presentation(second, WindowId(2), f.hit.clone());
         let _first_spot = f.spot("A", 0.0, 50.0, Some(COPY));
-        let fetcher = Rc::new(Spot {
-            name: "B",
-            log: Rc::clone(&f.log),
-            answer: Cell::new(Some(COPY)),
-            on_enter: RefCell::new(None),
-            on_leave: RefCell::new(None),
-            spring: None,
-            scopes: RefCell::default(),
-            values: RefCell::default(),
-            fetch_text: true,
-            fetched: RefCell::default(),
-            on_spring: RefCell::new(None),
-            on_autoscroll: RefCell::new(None),
-            on_drop: RefCell::new(None),
-        });
-        f.register(&fetcher, 50.0, 100.0);
+        let leaving = f.unregistered("B", Some(COPY), None);
+        let ticket = f.register(&leaving, 50.0, 100.0);
         let offer = f.text_offer();
         let id = offer.id();
         for (over, x) in [(second, 80.0), (f.presentation, 5.0)] {
@@ -2374,23 +2393,68 @@ fn a_drop_waits_for_a_fetch_made_over_another_window() {
                 },
             );
         }
-        let fetch = fetcher.fetched.borrow_mut().pop().expect("B fetched");
+        f.dispatch
+            .unregister_local_payload(ticket)
+            .expect("registered");
+        f.owner.tick(time_at(0));
+        assert_eq!(count(&f.log, "B:left"), 1, "{:?}", logged(&f.log));
+        assert_eq!(
+            f.source.feedback.lock().last(),
+            Some(&(id, DropFeedback { accept: Some(COPY) })),
+            "the window under the pointer still accepts"
+        );
+    });
+}
+
+/// An offer over two windows, a receiver over the second fetching from it,
+/// dropped over the first: the drop and the outstanding fetch.
+fn dropped_while_fetching_elsewhere(f: &Fixture) -> (DataTransferId, DragFetch) {
+    let second = presentation(2);
+    f.owner
+        .attach_presentation(second, WindowId(2), f.hit.clone());
+    let _first_spot = f.spot("A", 0.0, 50.0, Some(COPY));
+    let fetcher = Rc::new(Spot {
+        name: "B",
+        log: Rc::clone(&f.log),
+        answer: Cell::new(Some(COPY)),
+        on_enter: RefCell::new(None),
+        on_leave: RefCell::new(None),
+        spring: None,
+        scopes: RefCell::default(),
+        values: RefCell::default(),
+        fetch_text: true,
+        fetched: RefCell::default(),
+        on_spring: RefCell::new(None),
+        on_autoscroll: RefCell::new(None),
+        on_drop: RefCell::new(None),
+    });
+    f.register(&fetcher, 50.0, 100.0);
+    let offer = f.text_offer();
+    let id = offer.id();
+    for (over, x) in [(second, 80.0), (f.presentation, 5.0)] {
         f.deliver(
-            f.presentation,
-            DragDropEvent::Dropped {
-                id,
-                action: COPY,
-                position: None,
+            over,
+            DragDropEvent::Entered {
+                offer: offer.clone(),
+                allowed: COPY,
+                position: Some(Point::new(x, 5.0)),
             },
         );
-        assert!(
-            f.source.concluded.lock().is_empty(),
-            "the fetch over the other window is outstanding"
-        );
-        drop(fetch);
-        f.owner.tick(time_at(0));
-        assert_eq!(*f.source.concluded.lock(), [id]);
-    });
+    }
+    let fetch = fetcher.fetched.borrow_mut().pop().expect("B fetched");
+    f.deliver(
+        f.presentation,
+        DragDropEvent::Dropped {
+            id,
+            action: COPY,
+            position: None,
+        },
+    );
+    assert!(
+        f.source.concluded.lock().is_empty(),
+        "the fetch over the other window is outstanding"
+    );
+    (id, fetch)
 }
 
 #[test]
@@ -2401,6 +2465,14 @@ fn drag_sessions() {
             (
                 "a_drop_waits_for_a_fetch_made_over_another_window",
                 a_drop_waits_for_a_fetch_made_over_another_window,
+            ),
+            (
+                "closing_the_dropped_window_waits_for_a_fetch_made_over_another",
+                closing_the_dropped_window_waits_for_a_fetch_made_over_another,
+            ),
+            (
+                "another_windows_hover_keeps_the_answer_standing",
+                another_windows_hover_keeps_the_answer_standing,
             ),
             (
                 "an_os_session_ends_however_its_end_hook_goes",

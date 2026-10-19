@@ -8,7 +8,7 @@
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 
 use flui_foundation::geometry::Offset;
 use flui_foundation::{DataTransferId, DragSessionId, PresentationId, UiRuntimeId};
@@ -28,8 +28,8 @@ use super::cursor::{DragCursor, drag_cursor};
 use super::item::{DragItem, SessionData};
 use super::receiver::{DragPoint, DropReceiverSlot, ResolvedReceiver, receivers_on_path};
 use super::sessions::{
-    DragPhase, DragSessions, Entry, Incoming, OsStart, PendingOsDrag, SessionRef, Shared, Surface,
-    WeakShared, pointer_kind,
+    DragPhase, DragSessions, Entry, Incoming, OfferState, OsStart, PendingOsDrag, SessionRef,
+    Shared, Surface, WeakShared, pointer_kind,
 };
 use super::tracker::{DropTracker, Dropped, single_action};
 use super::view::{DragScope, DragView};
@@ -510,11 +510,18 @@ impl DragOwner {
                 }
             }
             Hovered::Offer(presentation, id) => {
-                let waiting = self
-                    .shared
-                    .borrow_mut()
-                    .incoming_mut(presentation, id)
-                    .is_some_and(|incoming| !incoming.dropped);
+                // Only the hover that answered the OS last can withdraw the
+                // answer: the pointer is over its window.
+                let waiting = {
+                    let mut state = self.shared.borrow_mut();
+                    let answering = state
+                        .offer_mut(id)
+                        .is_some_and(|offer| offer.answering == Some(presentation));
+                    answering
+                        && state
+                            .incoming_mut(presentation, id)
+                            .is_some_and(|incoming| !incoming.dropped)
+                };
                 if waiting {
                     self.source
                         .update_drop_feedback(id, DropFeedback { accept: None });
@@ -531,10 +538,7 @@ impl DragOwner {
     #[must_use]
     pub fn next_deadline(&self) -> Option<EventTime> {
         let state = self.shared.borrow();
-        let concludable = state
-            .incoming
-            .iter()
-            .any(|incoming| incoming.dropped && incoming.in_flight.load(Ordering::Acquire) == 0);
+        let concludable = state.offers.iter().any(|offer| state.concludable(offer));
         if concludable {
             return Some(EventTime::from_nanos(0));
         }
@@ -650,17 +654,13 @@ impl DragOwner {
                 None => (DragScope::OtherRuntime, None, None, PointerKind::Unknown),
             },
         };
-        // The OS concludes the offer, not a hover: its hovers over other
-        // windows share one count of the requests made from it, so a drop
-        // here is not concluded while one made over another window resolves.
-        let in_flight = state
-            .incoming
-            .iter()
-            .find(|incoming| incoming.offer.id() == offer.id())
-            .map_or_else(
-                || Arc::new(AtomicUsize::new(0)),
-                |incoming| Arc::clone(&incoming.in_flight),
-            );
+        if state.offer_mut(offer.id()).is_none() {
+            state.offers.push(OfferState {
+                id: offer.id(),
+                dropped: false,
+                answering: None,
+            });
+        }
         state.incoming.push(Incoming {
             offer,
             presentation,
@@ -670,7 +670,7 @@ impl DragOwner {
             source_allowed,
             os_allowed,
             tracker: DropTracker::new(),
-            in_flight,
+            in_flight: Arc::new(AtomicUsize::new(0)),
             dropped: false,
             position: None,
             pointer,
@@ -693,7 +693,11 @@ impl DragOwner {
                 return;
             }
             incoming.position = Some(position);
-            (incoming.tracker.clone(), ViewParts::of_incoming(incoming))
+            let found = (incoming.tracker.clone(), ViewParts::of_incoming(incoming));
+            if let Some(offer) = state.offer_mut(id) {
+                offer.answering = Some(presentation);
+            }
+            found
         };
         let (tracker, parts) = found;
         let hits = hit(position, parts.pointer)
@@ -728,7 +732,11 @@ impl DragOwner {
             if std::mem::replace(&mut incoming.dropped, true) {
                 return;
             }
-            (incoming.tracker.clone(), ViewParts::of_incoming(incoming))
+            let found = (incoming.tracker.clone(), ViewParts::of_incoming(incoming));
+            if let Some(offer) = state.offer_mut(id) {
+                offer.dropped = true;
+            }
+            found
         };
         // A receiver failing with the drop does not keep the OS from hearing
         // that the target is done, and stays the failure that propagates.
@@ -751,39 +759,66 @@ impl DragOwner {
             else {
                 return;
             };
-            state.incoming.remove(index)
+            let incoming = state.incoming.remove(index);
+            // An offer no window hovers and none dropped is over.
+            let hovered = state.incoming.iter().any(|other| other.offer.id() == id);
+            if !hovered {
+                state.offers.retain(|offer| offer.id != id || offer.dropped);
+            }
+            incoming
         };
-        if incoming.dropped {
-            // Its window went before the drop's requests resolved: nothing
-            // will conclude it later, and the OS holds the offer until told.
-            self.source.conclude_drop(id);
-        } else {
-            let parts = ViewParts::of_incoming(&incoming);
-            parts.with_view(&self.source, |view| incoming.tracker.finish(view, None));
+        let mut failure = ClosePanic::new();
+        if !incoming.dropped {
+            failure.invoke(|| {
+                let parts = ViewParts::of_incoming(&incoming);
+                parts.with_view(&self.source, |view| incoming.tracker.finish(view, None));
+            });
         }
         // The offer's data may be the last owner of user values: it retires
         // here, outside the table's borrow.
-        drop(incoming);
+        failure.invoke(|| drop(incoming));
+        // A dropped offer whose window went is concluded once no other
+        // window's hover has a request of it in flight.
+        failure.invoke(|| self.conclude_resolved_drops());
+        failure.finish();
     }
 
-    /// Tell the OS every dropped offer whose requests have all resolved that the
-    /// target is done with it.
+    /// Tell the OS every dropped offer that no hover has a request of in
+    /// flight that the target is done with it. Its hovers go with it: one
+    /// that did not take the drop leaves its receivers.
     fn conclude_resolved_drops(&self) {
-        let done: Vec<DataTransferId> = {
+        let (done, hovers) = {
             let mut state = self.shared.borrow_mut();
-            let mut done = Vec::new();
-            state.incoming.retain(|incoming| {
-                let finished = incoming.dropped && incoming.in_flight.load(Ordering::Acquire) == 0;
-                if finished {
-                    done.push(incoming.offer.id());
-                }
-                !finished
-            });
-            done
+            let done: Vec<DataTransferId> = state
+                .offers
+                .iter()
+                .filter(|offer| state.concludable(offer))
+                .map(|offer| offer.id)
+                .collect();
+            if done.is_empty() {
+                return;
+            }
+            state.offers.retain(|offer| !done.contains(&offer.id));
+            let (hovers, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut state.incoming)
+                .into_iter()
+                .partition(|incoming| done.contains(&incoming.offer.id()));
+            state.incoming = kept;
+            (done, hovers)
         };
-        for id in done {
-            self.source.conclude_drop(id);
+        let mut failure = ClosePanic::new();
+        for incoming in hovers {
+            if !incoming.dropped {
+                failure.invoke(|| {
+                    let parts = ViewParts::of_incoming(&incoming);
+                    parts.with_view(&self.source, |view| incoming.tracker.finish(view, None));
+                });
+            }
+            failure.invoke(|| drop(incoming));
         }
+        for id in done {
+            failure.invoke(|| self.source.conclude_drop(id));
+        }
+        failure.finish();
     }
 }
 

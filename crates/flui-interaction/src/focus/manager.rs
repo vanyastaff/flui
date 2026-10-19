@@ -1063,65 +1063,84 @@ impl FocusManager {
 
         // The ledger is updated before any handler runs and rebound after, so
         // a panicking handler leaves it describing the key-down it received.
-        let pointer = id == KeyId::PointerBack;
-        let unit = self.focused_unit();
-        let start = self.key_walk_start();
-        let admission = self
-            .key_ledger
-            .borrow_mut()
-            .admit(id.clone(), event, unit, start.as_ref());
-        let mut cancelled = None;
+        // Every handler this event reaches runs whatever an earlier one did;
+        // the first failure propagates once they all have.
+        let mut first = None;
+        let result = self.deliver_admitted_key(&id, event, &mut first);
+        if let Some(failure) = first {
+            failure.resume();
+        }
+        result
+    }
+
+    /// Admit `event` to the key ledger and deliver what it admits.
+    fn deliver_admitted_key(
+        &self,
+        id: &KeyId,
+        event: &KeyEvent,
+        first: &mut Option<RoutePanic>,
+    ) -> KeyEventResult {
+        let admission = loop {
+            let unit = self.focused_unit();
+            let start = self.key_walk_start();
+            let admission =
+                self.key_ledger
+                    .borrow_mut()
+                    .admit(id.clone(), event, unit, start.as_ref());
+            let Admission::Superseded(press) = admission else {
+                break admission;
+            };
+            // The key's earlier press never had its release: its path is told
+            // the key was cancelled before the new press is admitted, so the
+            // new press belongs to wherever focus is once that settles, and
+            // nothing the cancellation does to the ledger forgets it.
+            let failure = RoutePanic::capture(|| self.cancel_presses([press]));
+            RoutePanic::preserve_first(first, failure, "key cancellation");
+        };
         match admission {
-            Admission::Withheld => {
+            Admission::Withheld | Admission::Superseded(_) => {
                 tracing::trace!("key event withheld: its key-down went elsewhere");
-                return KeyEventResult::Ignored;
+                KeyEventResult::Ignored
             }
             Admission::Cancelled(press) => {
                 // Focus moved to another unit while the key was held: the
                 // release is no key event here, and the press's path is told
                 // its key was cancelled.
-                self.cancel_presses(std::iter::once(press));
-                return KeyEventResult::Ignored;
+                let failure = RoutePanic::capture(|| self.cancel_presses([press]));
+                RoutePanic::preserve_first(first, failure, "key cancellation");
+                KeyEventResult::Ignored
             }
-            Admission::Press { superseded } => {
-                // The earlier press's path is told first; a cancel handler
-                // that panics does not keep the new press from its walk.
-                if let Some(press) = superseded {
-                    cancelled = RoutePanic::capture(|| self.cancel_presses([press]));
-                    // A cancel handler may have moved focus: the new press
-                    // belongs to where its walk now starts.
-                    let unit = self.focused_unit();
-                    let start = self.key_walk_start();
-                    self.key_ledger
-                        .borrow_mut()
-                        .rebind(&id, event, unit, start.as_ref());
+            Admission::Press | Admission::Continuation => {
+                if matches!(admission, Admission::Press)
+                    && *id != KeyId::PointerBack
+                    && !key_ledger::is_modifier(&event.key)
+                {
+                    let failure =
+                        RoutePanic::capture(|| self.set_modality(InputModality::Keyboard));
+                    RoutePanic::preserve_first(first, failure, "input modality");
                 }
-                if !pointer && !key_ledger::is_modifier(&event.key) {
-                    self.set_modality(InputModality::Keyboard);
+                // The ledger is updated before any handler runs and rebound
+                // after, so a panicking handler leaves it describing the
+                // key-down it received.
+                let traversals = self.traversal_transitions.get();
+                match RoutePanic::try_run(|| self.walk_key_event(event)) {
+                    Ok(result) => {
+                        if self.traversal_transitions.get() != traversals {
+                            let unit = self.focused_unit();
+                            let start = self.key_walk_start();
+                            self.key_ledger
+                                .borrow_mut()
+                                .rebind(id, event, unit, start.as_ref());
+                        }
+                        result
+                    }
+                    Err(walked) => {
+                        RoutePanic::preserve_first(first, Some(walked), "key event");
+                        KeyEventResult::Ignored
+                    }
                 }
             }
-            Admission::Continuation => {}
         }
-        let traversals = self.traversal_transitions.get();
-        let result = match RoutePanic::try_run(|| self.walk_key_event(event)) {
-            Ok(result) => result,
-            Err(walked) => {
-                let mut first = cancelled;
-                RoutePanic::preserve_first(&mut first, Some(walked), "key event");
-                first.expect("BUG: a failure was just kept").resume();
-            }
-        };
-        if self.traversal_transitions.get() != traversals {
-            let unit = self.focused_unit();
-            let start = self.key_walk_start();
-            self.key_ledger
-                .borrow_mut()
-                .rebind(&id, event, unit, start.as_ref());
-        }
-        if let Some(cancelled) = cancelled {
-            cancelled.resume();
-        }
-        result
     }
 
     /// The traversal unit holding primary focus, as the key ledger names it.

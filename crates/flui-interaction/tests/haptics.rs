@@ -781,13 +781,25 @@ fn hiding_the_window_while_a_frame_plays_suppresses_the_request_once() {
     let _registration = handle.observe(move |ticket, outcome| {
         sink.borrow_mut().push((ticket, outcome));
     });
-    let HapticOutcome::Queued(ticket) = handle.perform(HapticFeedback::LightImpact, FRAME) else {
-        panic!("queued");
-    };
+    let tickets: Vec<_> = (0..2)
+        .map(
+            |_| match handle.perform(HapticFeedback::LightImpact, FRAME) {
+                HapticOutcome::Queued(ticket) => ticket,
+                outcome => panic!("expected a queued request, got {outcome:?}"),
+            },
+        )
+        .collect();
     hide.set(true);
     host.frame_presented();
     RecoveryScope::boundary(|recovery| host.service(recovery));
-    assert_eq!(*delivered.borrow(), [(ticket, HapticOutcome::Suppressed)]);
+    assert_eq!(
+        *delivered.borrow(),
+        [
+            (tickets[0], HapticOutcome::Suppressed),
+            (tickets[1], HapticOutcome::Suppressed)
+        ],
+        "each resolves once, in ticket order"
+    );
     assert!(fake.calls().is_empty(), "a suppressed request never plays");
 }
 

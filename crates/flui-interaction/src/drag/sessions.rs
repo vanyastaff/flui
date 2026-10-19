@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::{DataTransferId, DragSessionId, IdMint, PresentationId, UiRuntimeId};
 use flui_platform_api::data_transfer::{DataTransferOffer, TransferActions};
@@ -131,15 +131,28 @@ pub(crate) struct Incoming {
     /// The latest OS-permitted set.
     pub(crate) os_allowed: TransferActions,
     pub(crate) tracker: DropTracker,
-    /// Requests made from the offer that have not resolved, shared by its
-    /// hovers over every window.
+    /// Requests made over this window from the offer that have not resolved.
     pub(crate) in_flight: Arc<AtomicUsize>,
-    /// The target's callbacks are done; the OS is told once nothing is in flight.
+    /// This hover took the drop and its target's callbacks are done; its
+    /// offer's [`OfferState`] says when the OS is told.
     pub(crate) dropped: bool,
     pub(crate) position: Option<flui_foundation::geometry::Offset<f64>>,
     /// The kind of pointer that drags, when this runtime started the drag;
     /// `Unknown` for another application's.
     pub(crate) pointer: PointerKind,
+}
+
+/// What the OS sees of one offer, whichever of the runtime's windows it
+/// hovers: it answers and concludes the offer, not a hover.
+pub(crate) struct OfferState {
+    pub(crate) id: DataTransferId,
+    /// A hover took the drop. The OS is told the target is done once no hover
+    /// of the offer has a request in flight, the dropped one's window gone or
+    /// not.
+    pub(crate) dropped: bool,
+    /// The window whose hover last answered the OS: only its answer stands,
+    /// so a hover elsewhere cannot withdraw it.
+    pub(crate) answering: Option<PresentationId>,
 }
 
 impl Incoming {
@@ -163,7 +176,11 @@ pub(crate) struct DragSessions {
     pub(crate) runtime: UiRuntimeId,
     pub(crate) presentations: Vec<Surface>,
     pub(crate) pending: VecDeque<(DragSessionId, PendingOsDrag)>,
+    /// The hovers of OS offers, one per offer and window.
     pub(crate) incoming: Vec<Incoming>,
+    /// The offers those hovers belong to, kept until the OS is told a dropped
+    /// one is done or the last hover of one that was not dropped leaves.
+    pub(crate) offers: Vec<OfferState>,
     /// The session a keyboard or assistive cut or copy holds for the next
     /// paste: at most one per runtime, as a clipboard holds one content.
     pub(crate) held: Option<(usize, DragSessionId)>,
@@ -179,6 +196,7 @@ impl DragSessions {
             presentations: Vec::new(),
             pending: VecDeque::new(),
             incoming: Vec::new(),
+            offers: Vec::new(),
             held: None,
         }
     }
@@ -205,6 +223,20 @@ impl DragSessions {
             .map(|(_, entry)| entry)
             .find(|entry| entry.id == key.session())
             .filter(|entry| !matches!(entry.phase, DragPhase::Concluded { .. }))
+    }
+
+    pub(crate) fn offer_mut(&mut self, id: DataTransferId) -> Option<&mut OfferState> {
+        self.offers.iter_mut().find(|offer| offer.id == id)
+    }
+
+    /// Whether `offer` dropped and no hover of it has a request in flight.
+    pub(crate) fn concludable(&self, offer: &OfferState) -> bool {
+        offer.dropped
+            && self
+                .incoming
+                .iter()
+                .filter(|incoming| incoming.offer.id() == offer.id)
+                .all(|incoming| incoming.in_flight.load(Ordering::Acquire) == 0)
     }
 
     /// The offer `id` over `presentation`'s window. The same offer over two

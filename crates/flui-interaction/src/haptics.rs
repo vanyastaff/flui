@@ -154,6 +154,9 @@ struct State {
     /// The queued request a resolution is playing: a resolution the backend
     /// reenters leaves it to the one playing it.
     resolving: Cell<Option<HapticTicket>>,
+    /// Outcomes a reentered resolution decided, waiting for the request
+    /// being played to reach the mailbox first.
+    staged: RefCell<Vec<Entry>>,
 }
 
 /// Drop `outgoing` outside every borrow; a panic in its destructor must not
@@ -187,6 +190,17 @@ impl<'a> Playing<'a> {
 impl Drop for Playing<'_> {
     fn drop(&mut self) {
         self.resolving.set(self.outer);
+    }
+}
+
+/// Moves the outcomes a reentered resolution staged into the mailbox, after
+/// the request being played.
+struct StagedOutcomes<'a>(&'a State);
+
+impl Drop for StagedOutcomes<'_> {
+    fn drop(&mut self) {
+        let staged = std::mem::take(&mut *self.0.staged.borrow_mut());
+        self.0.mailbox.borrow_mut().extend(staged);
     }
 }
 
@@ -247,7 +261,8 @@ impl State {
         if request.timing == HapticTiming::Immediate {
             return self.play_now(&play, &request);
         }
-        let held = self.queue.borrow().len() + self.mailbox.borrow().len();
+        let held =
+            self.queue.borrow().len() + self.staged.borrow().len() + self.mailbox.borrow().len();
         if held >= MAILBOX_CAPACITY {
             return self.play_now(&play, &request);
         }
@@ -300,6 +315,10 @@ impl State {
             if self.resolving.get() == Some(ticket) {
                 continue;
             }
+            // What a reentered resolution decides waits until the request
+            // being played is in the mailbox, so outcomes keep ticket order;
+            // it reaches the mailbox when that play returns or unwinds.
+            let _staged = self.resolving.get().is_none().then(|| StagedOutcomes(self));
             let outcome = {
                 let _playing = Playing::enter(&self.resolving, ticket);
                 resolve(&entry)
@@ -313,11 +332,16 @@ impl State {
             };
             queue.remove(index);
             drop(queue);
-            self.mailbox.borrow_mut().push_back(Entry {
+            let resolved = Entry {
                 ticket,
                 outcome,
                 delivered: Vec::new(),
-            });
+            };
+            if self.resolving.get().is_some() {
+                self.staged.borrow_mut().push(resolved);
+            } else {
+                self.mailbox.borrow_mut().push_back(resolved);
+            }
         }
     }
 
@@ -586,6 +610,7 @@ impl HapticsHost {
                 registrations: IdMint::new(),
                 delivering: Cell::new(false),
                 resolving: Cell::new(None),
+                staged: RefCell::new(Vec::new()),
             },
         }
     }
