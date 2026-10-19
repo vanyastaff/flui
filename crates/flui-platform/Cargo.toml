@@ -154,6 +154,7 @@ objc2-foundation = { workspace = true, features = [
     "NSBundle",
     "NSRange",
     "NSNotification",
+    "NSDistributedNotificationCenter",
     "NSOperation",
     "block2",
 ] }
@@ -511,6 +512,7 @@ globals = [
     { item = "platforms::macos::view::get_or_create_view_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C view class, which the runtime holds once per process" },
     { item = "platforms::macos::wake_pump::base::BASE", grant = "ADR-0097", class = "immutable", reason = "the wake pump's time base, set once and read for the process's life" },
     { item = "platforms::macos::window::get_or_create_delegate_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C window delegate class, which the runtime holds once per process" },
+    { item = "platforms::macos::window::window_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C window class, which the runtime holds once per process" },
     { item = "platforms::windows::clipboard::owner_window::OWNER", grant = "ADR-0097", class = "process", reason = "the message-only window that owns the system clipboard, created once per process" },
     { item = "platforms::windows::owner_control::REGISTERED", grant = "ADR-0097", class = "process", reason = "the registered Win32 owner-control window class, which Windows holds once per process" },
     { item = "platforms::windows::platform::REGISTER_WINDOW_CLASS", grant = "ADR-0097", class = "process", reason = "registers the Win32 window class, which Windows holds once per process" },

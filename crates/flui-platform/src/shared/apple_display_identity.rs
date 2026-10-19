@@ -22,6 +22,23 @@ pub(crate) fn macos_display_key(
     uuid_of(display_id).map(flui_platform_api::DisplayKey::MacosUuid)
 }
 
+/// The text that names a macOS display across restarts: its UUID in the
+/// canonical form (`8-4-4-4-12` uppercase hexadecimal digits), which is how
+/// `CFUUIDCreateString` writes it.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn macos_display_persistent_key(uuid: [u8; 16]) -> String {
+    use std::fmt::Write as _;
+
+    let mut key = String::with_capacity(36);
+    for (index, byte) in uuid.iter().enumerate() {
+        if matches!(index, 4 | 6 | 8 | 10) {
+            key.push('-');
+        }
+        write!(key, "{byte:02X}").expect("BUG: writing to a String cannot fail");
+    }
+    key
+}
+
 /// An object that can tell whether another handle names the very same native
 /// object.
 #[cfg(any(target_os = "ios", test))]
@@ -102,10 +119,29 @@ impl<S: Clone + SameObject> ScreenLedger<S> {
 mod tests {
     use flui_platform_api::{DisplayKey, DisplayRegistry};
 
-    use super::{SameObject, ScreenLedger, change_screen, macos_display_key};
+    use super::{
+        SameObject, ScreenLedger, change_screen, macos_display_key, macos_display_persistent_key,
+    };
 
     const UUID_A: [u8; 16] = [0xA0; 16];
     const UUID_B: [u8; 16] = [0xB0; 16];
+
+    #[test]
+    fn a_display_uuid_is_written_in_the_canonical_form() {
+        let uuid = [
+            0x37, 0xD8, 0x83, 0x2A, 0x2D, 0x66, 0x02, 0xCA, 0x4A, 0x8F, 0x03, 0x0B, 0x15, 0x9C,
+            0xF2, 0x11,
+        ];
+        assert_eq!(
+            macos_display_persistent_key(uuid),
+            "37D8832A-2D66-02CA-4A8F-030B159CF211"
+        );
+        assert_ne!(
+            macos_display_persistent_key(UUID_A),
+            macos_display_persistent_key(UUID_B),
+            "two monitors have two keys"
+        );
+    }
 
     #[test]
     fn macos_display_key_is_the_display_uuid() {
