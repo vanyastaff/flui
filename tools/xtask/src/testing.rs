@@ -13,9 +13,9 @@
 //! module named `testing` under a crate's `src/`, and what it holds is exempt: it is where the
 //! shared helpers belong.
 //!
-//! What exists today sits in [`ALLOWLIST`] as exact counts per file and kind, with one reason and
-//! one exit for all of them ([`crate::ratchet`]). A count above the tree ("grew") and one below it
-//! ("lower it") are both findings, as are an entry whose file no longer has the kind and an
+//! What exists today sits in [`ALLOWLIST`] as exact helper names per file and kind, with one reason and
+//! one exit for all of them ([`crate::ratchet`]). A name the tree has and the entry lacks ("grew"), and one
+//! the entry has and the tree lacks ("lower it"), are both findings, as are an entry whose file no longer has the kind and an
 //! unknown kind. Exit 1 with one line per finding. `--self-test` runs the planted rows of
 //! [`rows`]; `--seed` prints the allowlist the tree needs.
 //!
@@ -256,6 +256,7 @@ fn scan_file(rel: &str, text: &str, whole: bool) -> Vec<Hit> {
                 path: rel.to_owned(),
                 in_scope: whole || implies_testing_attrs(&file.attrs),
                 in_kit: false,
+                kit_modules: rel.starts_with("src/") || rel.contains("/src/"),
                 hits: Vec::new(),
             };
             for item in &file.items {
@@ -275,7 +276,10 @@ struct Scan {
     path: String,
     /// Inside test code.
     in_scope: bool,
-    /// Inside a module named `testing`.
+    /// Whether a module named `testing` is a kit here: only under a crate's `src/`, never in a
+    /// test target, whose local `testing` module is just a module.
+    kit_modules: bool,
+    /// Inside a kit module.
     in_kit: bool,
     hits: Vec<Hit>,
 }
@@ -323,6 +327,7 @@ impl<'ast> Visit<'ast> for Scan {
                 _ => {}
             }
             if let Item::Mod(module) = item
+                && this.kit_modules
                 && module.ident == "testing"
             {
                 let before = this.in_kit;
@@ -431,15 +436,15 @@ struct Allowlist {
     allow: Vec<Entry>,
 }
 
-/// One file's exact count of one kind.
+/// One file's exact helpers of one kind.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Entry {
     /// Repository-relative, `/`-separated.
     path: String,
     kind: Kind,
-    /// How many of that kind the file has today.
-    count: usize,
+    /// The names of that kind the file has today, one per occurrence.
+    names: Vec<String>,
 }
 
 impl Allowlist {
@@ -460,14 +465,12 @@ enum Finding {
     Grew {
         path: String,
         kind: Kind,
-        count: usize,
-        allowed: usize,
+        added: String,
     },
     Shrank {
         path: String,
         kind: Kind,
-        count: usize,
-        allowed: usize,
+        removed: String,
     },
     Gone {
         path: String,
@@ -518,26 +521,19 @@ impl fmt::Display for Finding {
                  the layer's kit (ADR-0243), or move it into the kit",
                 kind.label()
             ),
-            Self::Grew {
-                path,
-                kind,
-                count,
-                allowed,
-            } => write!(
+            Self::Grew { path, kind, added } => write!(
                 f,
-                "{path}: {count} {}, the allowlist grants {allowed}: it grew; use the kit \
-                 instead of raising the entry",
+                "{path}: {} {added} not granted by the allowlist: use the kit instead of \
+                 adding to the entry",
                 kind.label()
             ),
             Self::Shrank {
                 path,
                 kind,
-                count,
-                allowed,
+                removed,
             } => write!(
                 f,
-                "{path}: {count} {}, the allowlist grants {allowed}: lower `count` to {count} \
-                 in {ALLOWLIST}",
+                "{path}: {} {removed} no longer found: remove it from `names` in {ALLOWLIST}",
                 kind.label()
             ),
             Self::Gone { path, kind } => write!(
@@ -586,23 +582,27 @@ fn judge(hits: &[Hit], allow: &Allowlist, exits: &Exits) -> Vec<Finding> {
         }
         let path = entry.path.clone();
         let kind = entry.kind;
-        let allowed = entry.count;
-        findings.extend(match seen.get(&(entry.path.as_str(), entry.kind)) {
-            None => Some(Finding::Gone { path, kind }),
-            Some(found) if found.len() > allowed => Some(Finding::Grew {
+        let Some(found) = seen.get(&(entry.path.as_str(), entry.kind)) else {
+            findings.push(Finding::Gone { path, kind });
+            continue;
+        };
+        let today: Vec<String> = found.iter().map(|hit| hit.name.clone()).collect();
+        let added = missing_from(&today, &entry.names);
+        let removed = missing_from(&entry.names, &today);
+        if !added.is_empty() {
+            findings.push(Finding::Grew {
+                path: path.clone(),
+                kind,
+                added: added.join(", "),
+            });
+        }
+        if !removed.is_empty() {
+            findings.push(Finding::Shrank {
                 path,
                 kind,
-                count: found.len(),
-                allowed,
-            }),
-            Some(found) if found.len() < allowed => Some(Finding::Shrank {
-                path,
-                kind,
-                count: found.len(),
-                allowed,
-            }),
-            Some(_) => None,
-        });
+                removed: removed.join(", "),
+            });
+        }
     }
     for ((path, kind), found) in &seen {
         if !entries.contains(&(*path, *kind)) {
@@ -638,23 +638,50 @@ fn names(found: &[&Hit]) -> String {
 
 /// The allowlist `hits` need, as TOML; `reason` and `exit` left for a person.
 fn seed(hits: &[Hit]) -> String {
-    let mut counts: BTreeMap<(&str, Kind), usize> = BTreeMap::new();
+    let mut names: BTreeMap<(&str, Kind), Vec<&str>> = BTreeMap::new();
     for hit in hits {
-        *counts.entry((hit.path.as_str(), hit.kind)).or_default() += 1;
+        names
+            .entry((hit.path.as_str(), hit.kind))
+            .or_default()
+            .push(hit.name.as_str());
     }
     let mut out = String::from(
         "# Test helpers outside a kit (ADR-0243), written by `cargo xtask testing --seed`.\n\
-         # Counts are exact and only go down. `reason` and `exit` apply to every entry.\n\
+         # The names are exact and only leave. `reason` and `exit` apply to every entry.\n\
          reason = \"\"\nexit = \"\"\n",
     );
-    for ((path, kind), count) in counts {
+    for ((path, kind), mut names) in names {
+        names.sort_unstable();
+        let names: Vec<String> = names.iter().map(|name| format!("\"{name}\"")).collect();
         let _ = write!(
             out,
-            "\n[[allow]]\npath = \"{path}\"\nkind = \"{}\"\ncount = {count}\n",
-            kind.label()
+            "\n[[allow]]\npath = \"{path}\"\nkind = \"{}\"\nnames = [{}]\n",
+            kind.label(),
+            names.join(", ")
         );
     }
     out
+}
+
+/// The elements of `left` that `right` does not account for, as multisets.
+fn missing_from(left: &[String], right: &[String]) -> Vec<String> {
+    let mut spare: BTreeMap<&str, usize> = BTreeMap::new();
+    for name in right {
+        *spare.entry(name.as_str()).or_default() += 1;
+    }
+    let mut missing: Vec<String> = left
+        .iter()
+        .filter(|name| match spare.get_mut(name.as_str()) {
+            Some(n) if *n > 0 => {
+                *n -= 1;
+                false
+            }
+            _ => true,
+        })
+        .cloned()
+        .collect();
+    missing.sort_unstable();
+    missing
 }
 
 /// The exits the rows resolve against.
@@ -705,7 +732,8 @@ fn allowlist(entries: &str) -> String {
 const PUMP_IN_TESTS: &str = "fn pump() {}\n#[test]\nfn works() {}\n";
 
 fn row_listed_helper_passes() {
-    let allow = allowlist("[[allow]]\npath = \"tests/a.rs\"\nkind = \"pump\"\ncount = 1\n");
+    let allow =
+        allowlist("[[allow]]\npath = \"tests/a.rs\"\nkind = \"pump\"\nnames = [\"pump\"]\n");
     let found = findings_for(
         &[("src/lib.rs", ""), ("tests/a.rs", PUMP_IN_TESTS)],
         &[],
@@ -807,15 +835,47 @@ fn row_names_match_on_a_word_boundary() {
     assert_eq!(found, [("src/lib.rs".to_owned(), "unlisted")]);
 }
 
+fn row_swapping_a_listed_helper_for_another_is_a_finding() {
+    let allow =
+        allowlist("[[allow]]\npath = \"tests/a.rs\"\nkind = \"pump\"\nnames = [\"pump\"]\n");
+    let found = findings_for(
+        &[("src/lib.rs", ""), ("tests/a.rs", "fn tick() {}\n")],
+        &[],
+        &allow,
+    );
+    assert_eq!(
+        found,
+        [
+            ("tests/a.rs".to_owned(), "grew"),
+            ("tests/a.rs".to_owned(), "shrank")
+        ]
+    );
+}
+
+fn row_a_testing_module_in_a_test_target_is_not_a_kit() {
+    let found = findings_for(
+        &[
+            ("src/lib.rs", ""),
+            ("tests/a.rs", "mod testing {\n    fn pump() {}\n}\n"),
+        ],
+        &[],
+        HEADER,
+    );
+    assert_eq!(found, [("tests/a.rs".to_owned(), "unlisted")]);
+}
+
 fn row_count_grew() {
-    let allow = allowlist("[[allow]]\npath = \"tests/a.rs\"\nkind = \"pump\"\ncount = 1\n");
+    let allow =
+        allowlist("[[allow]]\npath = \"tests/a.rs\"\nkind = \"pump\"\nnames = [\"pump\"]\n");
     let two = "fn pump() {}\nfn tick() {}\n";
     let found = findings_for(&[("src/lib.rs", ""), ("tests/a.rs", two)], &[], &allow);
     assert_eq!(found, [("tests/a.rs".to_owned(), "grew")]);
 }
 
 fn row_count_fell() {
-    let allow = allowlist("[[allow]]\npath = \"tests/a.rs\"\nkind = \"pump\"\ncount = 2\n");
+    let allow = allowlist(
+        "[[allow]]\npath = \"tests/a.rs\"\nkind = \"pump\"\nnames = [\"pump\", \"tick\"]\n",
+    );
     let found = findings_for(
         &[("src/lib.rs", ""), ("tests/a.rs", PUMP_IN_TESTS)],
         &[],
@@ -825,7 +885,8 @@ fn row_count_fell() {
 }
 
 fn row_entry_with_nothing_left_is_removed() {
-    let allow = allowlist("[[allow]]\npath = \"tests/a.rs\"\nkind = \"double\"\ncount = 1\n");
+    let allow =
+        allowlist("[[allow]]\npath = \"tests/a.rs\"\nkind = \"double\"\nnames = [\"FakeClock\"]\n");
     let found = findings_for(
         &[("src/lib.rs", ""), ("tests/a.rs", PUMP_IN_TESTS)],
         &[],
@@ -882,6 +943,14 @@ fn rows() -> Vec<(&'static str, fn())> {
             "names_match_on_a_word_boundary",
             row_names_match_on_a_word_boundary,
         ),
+        (
+            "swapping_a_listed_helper_for_another_is_a_finding",
+            row_swapping_a_listed_helper_for_another_is_a_finding,
+        ),
+        (
+            "a_testing_module_in_a_test_target_is_not_a_kit",
+            row_a_testing_module_in_a_test_target_is_not_a_kit,
+        ),
         ("count_grew", row_count_grew),
         ("count_fell", row_count_fell),
         (
@@ -928,6 +997,6 @@ mod tests {
             Allowlist::parse(&crate::util::read(ALLOWLIST).expect("reads")).expect("parses");
         let exits = Exits::from_repo(&repo_root()).expect("exits");
         assert_eq!(exits.check(&allow.exit), Ok(()));
-        assert!(allow.allow.iter().all(|entry| entry.count > 0));
+        assert!(allow.allow.iter().all(|entry| !entry.names.is_empty()));
     }
 }
