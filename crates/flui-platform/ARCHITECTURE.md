@@ -976,10 +976,16 @@ against what it already holds — that statelessness is the point, since a `fals
 can be lost and an "already present, do nothing" rule would then keep a surface
 built from a dead window for the rest of the process's life. The parameter is a
 `bool`, not an enum: a third state of the *surface* belongs in its own callback,
-per ADR-0035's split of this family by signal rather than by arity. Android is the
-only backend that emits it — `Pause` and `TerminateWindow` send `false`, `Resume`
-and `InitWindow` send `true` — and `platforms/android/mod.rs`'s module doc carries
-why that pair, and not `Pause` alone, is the correct mapping.
+per ADR-0035's split of this family by signal rather than by arity. Android and the Web
+emit it. Android's `Pause` and `TerminateWindow` send `false`, `Resume` and `InitWindow`
+send `true` — `platforms/android/mod.rs`'s module doc carries why that pair, and not
+`Pause` alone, is the correct mapping. The Web sends `false` on `webglcontextlost` and
+`true` on `webglcontextrestored`: the canvas stays, the context behind it is gone, and
+whatever was built on it must be rebuilt once the browser gives one back. The loss is
+cancelled with `preventDefault` — without that the browser never restores the context —
+and a browser that never restores it leaves the page without a surface, which is all the
+page can know. A lost WebGPU device is not a surface event, so it does not use this
+signal; the renderer reports it to its owner directly.
 
 **Alternatives considered:**
 

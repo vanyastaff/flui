@@ -9,6 +9,8 @@ use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
+use flui_platform_api::{SessionEndAnswer, SessionEndPhase};
+
 use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     error::PlatformError,
@@ -23,7 +25,7 @@ use crate::{
 
 use super::{
     clipboard::WebClipboard, display::WebDisplays, display_events::DisplayObservers,
-    executor::WebExecutor, window::WebWindow,
+    executor::WebExecutor, page_events::PageObservers, window::WebWindow,
 };
 
 /// The self-referencing `requestAnimationFrame` callback slot: the closure
@@ -40,6 +42,9 @@ pub struct WebPlatform {
     /// The browser listeners that keep `displays` current; present while the
     /// platform runs.
     display_observers: RefCell<Option<DisplayObservers>>,
+    /// The listener that reports the page being hidden; present while the
+    /// platform runs.
+    page_observers: RefCell<Option<PageObservers>>,
 }
 
 struct WebState {
@@ -103,6 +108,7 @@ impl WebPlatform {
             preferences: RefCell::new(preferences),
             displays: WebDisplays::new(),
             display_observers: RefCell::new(None),
+            page_observers: RefCell::new(None),
         })
     }
 
@@ -138,6 +144,35 @@ impl WebPlatform {
             resume_unwind(payload);
         }
         drop(callback);
+    }
+
+    /// The page was hidden or shown again: tell the session-end hook, so the
+    /// application saves what must survive.
+    ///
+    /// A page cannot be asked to wait, so the answer is not read. `pagehide`
+    /// also precedes a move into the back/forward cache: a page that comes back
+    /// reports `Cancelled`, and is hidden again later, which reports `Ending`
+    /// again. The browser may stop the page before an asynchronous write
+    /// started here finishes; only what the application hands over
+    /// synchronously is certain to be accepted.
+    fn report_session_phase(state: &Mutex<WebState>, phase: SessionEndPhase) {
+        let Some(mut hook) = state.lock().handlers.session_end.take() else {
+            return;
+        };
+        crate::shared::panic_boundary::contain_owner_callback(|| {
+            hook(phase);
+        });
+        // A hook registered while it ran replaces this one.
+        let replaced = {
+            let mut state = state.lock();
+            if state.handlers.session_end.is_none() {
+                state.handlers.session_end = Some(hook);
+                None
+            } else {
+                Some(hook)
+            }
+        };
+        crate::shared::panic_boundary::contain_owner_callback(|| drop(replaced));
     }
 
     /// Start the requestAnimationFrame render loop
@@ -280,6 +315,15 @@ impl Platform for WebPlatform {
             &platform.signal,
         ));
 
+        // The page being hidden is the end of the session: the browser may
+        // discard it without another event.
+        let state = Arc::downgrade(&platform.state);
+        *platform.page_observers.borrow_mut() = Some(PageObservers::start(move |phase| {
+            if let Some(state) = state.upgrade() {
+                Self::report_session_phase(&state, phase);
+            }
+        }));
+
         // Window creation is direct and always Ready. Wake and quit use the
         // shared owner signal, posted to the browser microtask queue.
         let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
@@ -311,6 +355,8 @@ impl Platform for WebPlatform {
         drop(preferences);
         let display_observers = self.display_observers.borrow_mut().take();
         drop(display_observers);
+        let page_observers = self.page_observers.borrow_mut().take();
+        drop(page_observers);
         let callback = self.with_state(|state| {
             state.is_running = false;
             state.handlers.quit.take()
@@ -413,6 +459,11 @@ impl Platform for WebPlatform {
 
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
         let previous = self.with_state(|state| state.handlers.quit.replace(callback));
+        drop(previous);
+    }
+
+    fn on_session_end(&self, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {
+        let previous = self.with_state(|state| state.handlers.session_end.replace(callback));
         drop(previous);
     }
 

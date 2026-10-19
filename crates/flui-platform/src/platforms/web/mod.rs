@@ -15,6 +15,7 @@ mod display_events;
 mod events;
 mod executor;
 mod features;
+mod page_events;
 mod platform;
 mod preferences;
 mod registration;

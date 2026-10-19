@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-18 · **Change:** minor (Windows two-monitor run) ·
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-18 · **Change:** minor (Web page lifecycle) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -60,9 +60,9 @@ Counted over every row of the core and system-service sections.
 | Reopen with no windows (Dock click) | — | ✅ | — | — | — | — | — | ❌ | `device macos-reopen`; headless can't drive it | 1 |
 | Focus and active state | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Android `is_focused()` is always true | 2–4 |
 | Visibility, minimize, occlusion | 🟡 | ✅ | ❌ | ✅ | ✅ | ❌ | 🟡 | ✅ | Windows sees minimize and restore only; winit never reports occlusion on Wayland; Android never dispatches visibility. Runs: macOS minimize and hide, the X11 cover window in `live-smoke`, iOS Home and return | 6–10 |
-| Suspend, resume, GPU-surface loss | — | — | — | — | ✅ | 🟡 | ❌ | ✅ | Android never dispatches execution-state changes; Web ignores page freeze, `webglcontextlost` and device loss | 4–8 |
+| Suspend, resume, GPU-surface loss | — | — | — | — | ✅ | 🟡 | 🟡 | ✅ | Android never dispatches execution-state changes. Web: `freeze` and `resume` set the execution state (run against a fake page), and `webglcontextlost`, `webglcontextrestored` and a lost WebGPU device rebuild the renderer at once, without a frame (compile-checked, its decisions unit-tested; not yet in Chrome) | 4–8 |
 | Sleep, wake, screen lock | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Not in the contract | 3–5 |
-| Session end (log off, shutdown) with veto | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | No backend handles it, and `flui-app` can't register the hook (`OwnerPlatform` doesn't expose it) | 4–6 |
+| Session end (log off, shutdown) with veto | ❌ | ❌ | ❌ | ❌ | — | — | 🟡 | ❌ | Web reports `pagehide` as the session ending and a restored cached page as cancelling it, without a veto and with writes best effort; run against a fake page, not yet in Chrome. `flui-app` registers the hook, but no native backend calls it yet | 4–6 |
 | Memory pressure | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | Not in the contract; Android only logs `LowMemory` | 3–5 |
 | Bring the app forward, request attention | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Windows `activate` re-foregrounds whatever is already in front; Wayland needs an `xdg-activation` token | 3–5 |
 | Single instance, forward arguments | ❌ | — | ❌ | ❌ | — | — | — | ❌ | macOS enforces one instance itself | 3–5 |
@@ -79,7 +79,7 @@ Counted over every row of the core and system-service sections.
 | Show without a blank first frame | 🟡 | ✅ | ❌ | 🟡 | — | — | — | ✅ | Windows and X11 show the window at creation; Wayland refuses `show`. macOS run: deferred first reveal | 3–5 |
 | Title | 🟡 | 🟡 | 🟡 | 🟡 | — | — | 🟡 | ✅ | No API for apps; winit can't read the title back | 2–3 |
 | Minimize, maximize, restore, state readback | 🟡 | 🟡 | 🟡 | 🟡 | — | — | — | ✅ | No API for apps; no readback on macOS or Linux; Wayland never reports minimized. macOS ran minimize and hide | 3–5 |
-| Fullscreen | 🟡 | 🟡 | 🟡 | 🟡 | — | — | 🟡 | ✅ | winit is borderless only; Web doesn't listen for `fullscreenchange`; mobile immersive mode is under System UI | 2–4 |
+| Fullscreen | 🟡 | 🟡 | 🟡 | 🟡 | — | — | 🟡 | ✅ | winit is borderless only; Web republishes the state on `fullscreenchange`; mobile immersive mode is under System UI | 2–4 |
 | Position, size, move and resize events | 🟡 | 🟡 | 🟡 | ❌ | — | — | 🟡 | ✅ | No `set_position` in the contract; winit `bounds()` and `resize` are missing; Wayland can't read or set a global position by design | 4–8 |
 | Size constraints, resizable and other flags | ❌ | 🟡 | 🟡 | 🟡 | — | — | — | ✅ | Windows ignores min/max size and resizable (no `WM_GETMINMAXINFO`); no runtime setter anywhere | 3–5 |
 | Live resize without jitter | ❔ | ❔ | ❔ | ❔ | — | — | ❔ | — | Not audited; Windows has no `WM_ENTERSIZEMOVE` handling | ❔ |
@@ -232,3 +232,4 @@ exists yet.
 | 2026-10-18 | minor | Linux displays and refresh rate: the outputs read from the compositor (Wayland `wl_output`/`zxdg_output_v1`, X11 RandR 1.5) on a thread that wakes the owner; the X11 cells ran live (XWayland under WSLg, `xrandr` changes under an Xorg dummy server), the Wayland cells read values live and stay 🟡 |
 | 2026-10-18 | minor | Windows two-monitor run (`examples/displays.rs`, a second 3440×1440 monitor connected live): a new snapshot with `id 2`, the window naming `DisplayId 2` after a drag and `DisplayId 1` back, the id kept when the monitor moved left, and live rate changes (144 Hz, 165 Hz) published with ids unchanged; the display cells keep their marks; a Windows disconnect was not run; the overall figure recounted from the tables (~26%, 54 ✅, 143 🟡, 477 applicable cells), the summary table brought in line, and the hours of the two display rows lowered to the runs still owed |
 | 2026-10-18 | minor | Wayland displays and refresh rate ran live (`examples/displays.rs` under WSLg: an output grown from 640×480 to 3440×1440 keeping `id 1`, then a second same-named output added as `id 2`); the two Wayland cells become ✅ and the overall figure is recounted: 56 ✅, 141 🟡, 477 applicable cells, (56 + 70.5) / 477 = 26.5%, ~27%; a Wayland scale change cannot be observed through WSLg and a window moved between the two outputs was not run |
+| 2026-10-18 | minor | Web page lifecycle: `freeze` and `resume` set the execution state, `pagehide` is reported as the session ending (and a page restored from the back/forward cache as cancelling it), `fullscreenchange` republishes the window state, and a lost WebGL context or WebGPU device rebuilds the renderer at once; the page events ran against a fake page and the renderer rebuild is compile-checked, so the cells are 🟡 and the figure is recounted: 56 ✅, 143 🟡, 478 applicable cells, (56 + 71.5) / 478 = 26.7%, ~27% |

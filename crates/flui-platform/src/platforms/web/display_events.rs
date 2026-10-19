@@ -93,7 +93,7 @@ fn wake(signal: &Weak<OwnerSignal>) {
     }
 }
 
-fn log_failure(what: &str, error: &JsValue) {
+pub(super) fn log_failure(what: &str, error: &JsValue) {
     // A tracing subscriber is application code: contain it.
     crate::shared::panic_boundary::contain_owner_callback(|| {
         tracing::warn!(?error, "{what}");
@@ -103,14 +103,14 @@ fn log_failure(what: &str, error: &JsValue) {
 // ==================== One event listener ====================
 
 /// One registered `addEventListener`, removed when dropped.
-struct Listener {
+pub(super) struct Listener {
     target: EventTarget,
     event: &'static str,
     callback: Option<Closure<dyn FnMut(Event)>>,
 }
 
 impl Listener {
-    fn add(
+    pub(super) fn add(
         target: &EventTarget,
         event: &'static str,
         handler: impl FnMut(Event) + 'static,
