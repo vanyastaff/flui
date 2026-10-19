@@ -1148,11 +1148,11 @@ use `cargo-zigbuild clippy` (validated locally with 0.23.4) and Zig (0.17.0)
 for the required-target configuration. iOS needs a
 genuine Apple SDK: generic Darwin libc headers are insufficient for native
 logging dependencies. Android needs the NDK's target compiler and archiver,
-for example `CC_aarch64_linux_android` set to its API-21 clang wrapper and
+for example `CC_aarch64_linux_android` set to its clang wrapper for the Android floor in `platform-support.toml` and
 `AR_aarch64_linux_android` to `llvm-ar`. CI uses its bundled NDK. Explicit
 target, `TARGET_CC`/`TARGET_AR`, and global compiler settings are preserved.
 `doctor full` checks that the selected Android compiler can parse the NDK's
-API-level header for Android API 21 or later and that the archiver runs. A
+API-level header for that floor or later and that the archiver runs. A
 host compiler's successful version output alone does not establish NDK support.
 
 The macOS `flui-log/apple-unified-logging` configuration also needs genuine

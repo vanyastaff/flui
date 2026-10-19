@@ -10,7 +10,7 @@ use anyhow::bail;
 use super::exec::{Cmd, Runner, installed, parsed};
 use crate::{
     change_scope, changelog, docs_links, docs_paths, file_length, fonts, globals, key_vocabulary,
-    markers, module_dag, perf, testing, toolchain, wgsl, workspace,
+    markers, module_dag, perf, platform_floor, testing, toolchain, wgsl, workspace,
 };
 
 /// A formatter or linter that is a binary of its own, not a cargo step.
@@ -100,7 +100,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// This crate's own checks, in the order they run: each `cargo xtask`
 /// command line and the command it names. lychee is skippable like
 /// [`TOOLS`], so `--strict` reaches `docs-links` too.
-fn in_process(strict: bool) -> [(&'static str, InProcess); 26] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 27] {
     [
         (
             if strict {
@@ -156,6 +156,9 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 26] {
         ("key-vocabulary", |args| {
             key_vocabulary::key_vocabulary(&parsed(args)?)
         }),
+        ("platform-floor", |args| {
+            platform_floor::platform_floor(&parsed(args)?)
+        }),
         ("perf --self-test", |args| perf::perf(&parsed(args)?)),
         ("changelog --self-test", |args| {
             changelog::changelog(&parsed(args)?)
@@ -207,6 +210,7 @@ mod tests {
                 "testing",
                 "key-vocabulary --self-test",
                 "key-vocabulary",
+                "platform-floor",
                 "perf --self-test",
                 "changelog --self-test",
                 "changelog --check",

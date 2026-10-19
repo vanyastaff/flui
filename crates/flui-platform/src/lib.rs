@@ -113,12 +113,10 @@
 //! fn test_window_creation() {
 //!     let platform = headless_platform();
 //!
-//!     let options = WindowOptions {
-//!         title: "Test".to_string(),
-//!         size: Size::new(800.0, 600.0),
-//!         visible: true,
-//!         ..Default::default()
-//!     };
+//!     let options = WindowOptions::default()
+//!         .with_title("Test")
+//!         .with_size(Size::new(800.0, 600.0))
+//!         .with_visible(true);
 //!
 //!     let window = platform
 //!         .open_window(options)
@@ -200,7 +198,6 @@ pub mod storage;
 mod table_test;
 pub mod task;
 pub mod traits;
-pub mod window;
 
 // Re-export configuration types
 // ==================== Platform Detection ====================
@@ -231,7 +228,8 @@ pub use platforms::MacOSPlatform;
 pub use platforms::{
     DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeHaptics,
     FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessDisplayControls,
-    HeadlessExitReevaluation, HeadlessOwnerTurns, HeadlessPlatform, MockWindow,
+    HeadlessExitReevaluation, HeadlessHostEvents, HeadlessOwnerTurns, HeadlessPlatform,
+    HeadlessWindowPolicy, MockWindow,
 };
 // Web platform
 #[cfg(target_arch = "wasm32")]
@@ -254,12 +252,15 @@ pub use task::{Task, TaskLabel};
 pub use traits::{
     AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem,
     CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, DisplayIdsExhausted,
-    DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision, DisplaySnapshot, HostWindow,
-    MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities,
-    PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow,
-    RefreshPeriod, SessionEndAnswer, SessionEndPhase, WebCapabilities, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowDisplay, WindowEvent, WindowExecutionState,
-    WindowId, WindowMode, WindowOptions, WindowReveal, WindowShowError,
+    DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision, DisplaySnapshot, HostNotice,
+    HostWindow, MemoryPressureLevel, MobileCapabilities, PathPromptOptions, Platform,
+    PlatformAccessibility, PlatformCapabilities, PlatformExecutor, PlatformHaptics,
+    PlatformReadyCallback, PlatformTextInput, PlatformWindow, RefreshPeriod, SessionEndAnswer,
+    SessionEndBlock, SessionEndBlockError, SessionEndPhase, SessionEndRequest, SizeConstraints,
+    SystemNotice, WebCapabilities, WindowAppearance, WindowBackgroundAppearance,
+    WindowCapabilities, WindowCommand, WindowCommandError, WindowControl, WindowDisplay,
+    WindowEvent, WindowExecutionState, WindowGeometry, WindowId, WindowMode, WindowOptions,
+    WindowReveal, WindowRevision, WindowRevisionExhausted, WindowShowError, WindowState,
 };
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.

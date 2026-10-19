@@ -356,6 +356,11 @@ pub struct PresentationState {
     /// handle themselves, so collection lasts while the hook keeps one.
     /// Owner thread only.
     pub(crate) dev_agent: RefCell<Option<crate::ui_runtime::DevAgentSlot>>,
+    /// The window this presentation is shown in, as the host controls it, once
+    /// `UiRuntime::install_window` has attached it. Closed before the
+    /// presentation's terminal notification, so a handle held past the close
+    /// answers closed. Owner thread only.
+    pub(crate) window_control: RefCell<Option<std::rc::Rc<flui_view::__runtime::WindowSource>>>,
     /// Owner-local widget framework state. One instance per presentation
     /// (ADR-0043) — the UI runtime-level singular binding this used to be
     /// dissolves here; every widget-tree operation for this surface enters
@@ -820,6 +825,7 @@ impl PresentationState {
             text_input,
             semantics,
             dev_agent: RefCell::new(None),
+            window_control: RefCell::new(None),
             widgets,
             renderer,
             frames_rendered: Cell::new(0),
@@ -923,6 +929,7 @@ impl PresentationState {
             text_input,
             semantics,
             dev_agent: RefCell::new(None),
+            window_control: RefCell::new(None),
             widgets,
             renderer,
             frames_rendered: Cell::new(0),
@@ -1863,6 +1870,10 @@ impl PresentationState {
         if let Some(agent) = &agent {
             agent.withdraw();
         }
+        let window_control = self.window_control.take();
+        if let Some(window) = &window_control {
+            failure.invoke(|| window.close());
+        }
         let (announce, event) = self.semantics.take_close_callbacks();
 
         let source = self.widgets.lifecycle_source();
@@ -1876,6 +1887,7 @@ impl PresentationState {
         failure.retire(announce);
         failure.retire(event);
         failure.retire(agent);
+        failure.release(window_control);
         let mode = failure.mode();
         failure.invoke(|| close_focus(&self.focus, mode));
         let mode = failure.mode();

@@ -65,6 +65,9 @@ pub enum WindowObservation {
     Brightness(Brightness),
     /// The display the window is on, or that display's refresh period, changed.
     Display(DisplayUpdate),
+    /// The window's published state may have changed. Carries nothing: the
+    /// owner reads the state when it delivers this.
+    State,
 }
 
 impl WindowObservation {
@@ -100,6 +103,7 @@ impl WindowObservation {
                 ..Default::default()
             }
             .apply(runtime, address, effects),
+            Self::State => runtime.publish_window_state(id),
             Self::Display(update) => PendingWindowState {
                 display: Some(update),
                 ..Default::default()

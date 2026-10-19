@@ -39,12 +39,10 @@ use crate::{
 };
 
 fn options(title: impl Into<String>) -> WindowOptions {
-    WindowOptions {
-        title: title.into(),
-        size: Size::new(320.0, 240.0),
-        visible: false,
-        ..WindowOptions::default()
-    }
+    WindowOptions::default()
+        .with_title(title)
+        .with_size(Size::new(320.0, 240.0))
+        .with_visible(false)
 }
 
 /// Manual WinitApp fixtures need the same owner signal as run_event_loop.
@@ -361,6 +359,8 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     let mut app = WinitApp {
         platform: platform.clone(),
         preference_source: None,
+        #[cfg(target_os = "linux")]
+        host_notices: None,
         #[cfg(target_os = "macos")]
         screen_observer: None,
         on_ready: Some(Box::new(move |owner| {
@@ -667,6 +667,8 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
     let app = WinitApp {
         platform: platform.clone(),
         preference_source: None,
+        #[cfg(target_os = "linux")]
+        host_notices: None,
         #[cfg(target_os = "macos")]
         screen_observer: None,
         on_ready: Some(Box::new(move |owner| {
@@ -892,6 +894,8 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
         platform: Arc::clone(&platform),
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         preference_source: None,
+        #[cfg(target_os = "linux")]
+        host_notices: None,
         #[cfg(target_os = "macos")]
         screen_observer: None,
         on_ready: None,
@@ -1103,6 +1107,8 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
             platform: Arc::clone(&platform),
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
+            #[cfg(target_os = "linux")]
+            host_notices: None,
             #[cfg(target_os = "macos")]
             screen_observer: None,
             on_ready: None,
@@ -1150,4 +1156,615 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     );
     let kept = kept_window.lock().take();
     drop(kept);
+}
+
+/// X11 window commands and snapshots on a real server (CI runs the suite under
+/// `xvfb-run`).
+///
+/// A bare server has no window manager, so a request that needs one (maximize,
+/// minimize) is not carried out; the test stands in for the window manager by
+/// setting the properties it would, and checks the snapshot follows what the
+/// server holds. The commands a server carries out alone (size, position,
+/// mapping) are checked as the commands themselves.
+#[cfg(target_os = "linux")]
+mod x11_window {
+    use flui_foundation::geometry::Point;
+    use x11rb::{
+        protocol::xproto::{AtomEnum, ConnectionExt as _, MapState, PropMode},
+        rust_connection::RustConnection,
+        wrapper::ConnectionExt as _,
+    };
+
+    use super::*;
+    use crate::{
+        platforms::winit::window::WinitWindow,
+        traits::{
+            WindowCapabilities, WindowCommand, WindowGeometry, WindowMode, WindowReveal,
+            WindowState,
+        },
+    };
+
+    fn build_x11_event_loop() -> EventLoop<()> {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        let mut builder = EventLoop::builder();
+        EventLoopBuilderExtX11::with_any_thread(&mut builder, true);
+        EventLoopBuilderExtX11::with_x11(&mut builder);
+        builder.build().expect("build a winit event loop on X11")
+    }
+
+    /// Poll (bounded, 5 s) until `check` holds of the window's snapshot.
+    fn until_state(window: &Arc<dyn HostWindow>, what: &str, check: impl Fn(&WindowState) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = window.state();
+            if check(&state) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {what}; last snapshot {state:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn map_state(connection: &RustConnection, id: u32) -> MapState {
+        connection
+            .get_window_attributes(id)
+            .expect("request")
+            .reply()
+            .expect("the server knows the window")
+            .map_state
+    }
+
+    fn until_map_state(connection: &RustConnection, id: u32, expected: MapState) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while map_state(connection, id) != expected {
+            assert!(
+                Instant::now() < deadline,
+                "the window did not reach {expected:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Set `_NET_WM_STATE` and `WM_STATE` the way a window manager does.
+    fn set_window_manager_state(
+        connection: &RustConnection,
+        id: u32,
+        wm_state: u32,
+        names: &[&str],
+    ) {
+        let atom = |name: &str| {
+            connection
+                .intern_atom(false, name.as_bytes())
+                .expect("request")
+                .reply()
+                .expect("the atom")
+                .atom
+        };
+        let atoms: Vec<u32> = names.iter().map(|name| atom(name)).collect();
+        let net_wm_state = atom("_NET_WM_STATE");
+        connection
+            .change_property32(PropMode::REPLACE, id, net_wm_state, AtomEnum::ATOM, &atoms)
+            .expect("request");
+        let wm_state_atom = atom("WM_STATE");
+        connection
+            .change_property32(
+                PropMode::REPLACE,
+                id,
+                wm_state_atom,
+                wm_state_atom,
+                &[wm_state, 0],
+            )
+            .expect("request")
+            .check()
+            .expect("the server sets the properties");
+    }
+
+    /// Open a window with `opening` on a real X server in a loop of its own and
+    /// run `scenario` on a worker thread against it, with the window, its X11
+    /// id and a connection to the server.
+    fn run_x11_scenario(
+        opening: WindowOptions,
+        scenario: impl FnOnce(Arc<dyn HostWindow>, u32, &RustConnection) + Send + 'static,
+    ) {
+        run_x11_window(
+            Arc::new(WinitPlatform::new()),
+            opening,
+            move |window, server| {
+                let id = window
+                    .as_any()
+                    .downcast_ref::<WinitWindow>()
+                    .and_then(WinitWindow::x11_id)
+                    .expect("an X11 window has an id once the probe is attached");
+                scenario(window, id, server);
+            },
+        );
+    }
+
+    /// [`run_x11_scenario`] on a platform the caller has prepared, for a
+    /// scenario that needs no X11 id.
+    fn run_x11_window(
+        platform: Arc<WinitPlatform>,
+        opening: WindowOptions,
+        scenario: impl FnOnce(Arc<dyn HostWindow>, &RustConnection) + Send + 'static,
+    ) {
+        let event_loop = build_x11_event_loop();
+        install_test_owner_signal(&platform, &event_loop);
+        let event_loop_proxy = event_loop.create_proxy();
+        let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = event_loop_proxy.send_event(());
+        });
+        let (control, receiver) = control_lane(wake_owner);
+        platform
+            .install_control_lane(thread::current().id(), control.clone())
+            .expect("first install succeeds");
+
+        let platform_for_worker = Arc::clone(&platform);
+        let control_for_worker = control;
+        let worker = thread::spawn(move || {
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                wait_for_running(&platform_for_worker);
+                let server = RustConnection::connect(None)
+                    .expect("an X server answers")
+                    .0;
+                let window = match control_for_worker
+                    .request_open_window(opening)
+                    .expect("lane accepts the request")
+                    .wait()
+                {
+                    ClaimOutcome::Delivered(result) => result.expect("window creation succeeds"),
+                    _ => panic!("the window request is delivered"),
+                };
+                scenario(window, &server);
+            }));
+            control_for_worker.request_quit();
+            if let Err(payload) = outcome {
+                resume_unwind(payload);
+            }
+        });
+
+        let mut app = WinitApp {
+            platform: Arc::clone(&platform),
+            preference_source: None,
+            host_notices: None,
+            on_ready: None,
+            control: receiver,
+            quit_notified: false,
+            in_flight_replies: Vec::new(),
+            bootstrap_error: None,
+            self_close_deadline: None,
+            self_close_route: SelfCloseRoute::default(),
+        };
+        event_loop
+            .run_app(&mut app)
+            .expect("event loop runs to completion");
+        worker.join().expect("worker thread does not panic");
+    }
+
+    #[test]
+    fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
+        let opening = WindowOptions::default()
+            .with_title("x11-window")
+            .with_size(Size::new(320.0, 240.0))
+            .with_position(Some(Point::new(40.0, 60.0)))
+            .with_reveal(WindowReveal::AfterFirstFrame);
+        run_x11_scenario(opening, |window, id, server| {
+            // Created hidden, to be shown with the first frame; the window
+            // already counts as visible, which is the intent.
+            assert_eq!(map_state(server, id), MapState::UNMAPPED);
+            assert!(window.state().visible);
+            assert_eq!(window.capabilities(), WindowCapabilities::ALL);
+            let changes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counter = Arc::clone(&changes);
+            window.on_state_changed(Box::new(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }));
+
+            window.reveal_after_first_frame();
+            until_map_state(server, id, MapState::VIEWABLE);
+
+            // The position it opened at, and the commands a server carries
+            // out without a window manager.
+            until_state(&window, "the opening position", |state| {
+                state.outer.position == Some(Point::new(40.0, 60.0))
+            });
+            window
+                .apply(WindowCommand::SetSize(Size::new(400.0, 300.0)))
+                .expect("a desktop window resizes");
+            until_state(&window, "the new size", |state| {
+                state.content_size == Size::new(400.0, 300.0)
+            });
+            window
+                .apply(WindowCommand::SetPosition(Point::new(100.0, 120.0)))
+                .expect("a desktop window moves");
+            until_state(&window, "the new position", |state| {
+                state.outer.position == Some(Point::new(100.0, 120.0))
+            });
+            window
+                .apply(WindowCommand::SetTitle("renamed".into()))
+                .expect("a title is set");
+            assert_eq!(window.state().title.as_deref(), Some("renamed"));
+
+            window
+                .apply(WindowCommand::Hide)
+                .expect("a desktop window hides");
+            until_map_state(server, id, MapState::UNMAPPED);
+            assert!(!window.state().visible);
+            window
+                .apply(WindowCommand::Show)
+                .expect("a desktop window shows");
+            until_map_state(server, id, MapState::VIEWABLE);
+            assert!(window.state().visible);
+
+            // The window manager minimizes the window: winit reports no
+            // event, the probe hears of it, and the snapshot follows with
+            // a notification.
+            let before = changes.load(Ordering::SeqCst);
+            set_window_manager_state(server, id, 3, &["_NET_WM_STATE_HIDDEN"]);
+            until_state(&window, "the minimized mode", |state| {
+                state.mode == WindowMode::Minimized
+            });
+            assert!(changes.load(Ordering::SeqCst) > before, "a notification");
+            assert_eq!(
+                window.state().normal_geometry.map(|geometry| geometry.size),
+                Some(Size::new(400.0, 300.0)),
+                "a minimized window still names the rectangle it returns to"
+            );
+
+            // It returns, maximized.
+            set_window_manager_state(
+                server,
+                id,
+                1,
+                &[
+                    "_NET_WM_STATE_MAXIMIZED_HORZ",
+                    "_NET_WM_STATE_MAXIMIZED_VERT",
+                ],
+            );
+            until_state(&window, "the maximized mode", |state| {
+                state.mode == WindowMode::Maximized
+            });
+            assert_eq!(
+                window.state().normal_geometry.map(|geometry| geometry.size),
+                Some(Size::new(400.0, 300.0)),
+                "it returns to the size it had in normal mode"
+            );
+        });
+    }
+
+    /// A window that opens maximized waits unmapped for its first frame, and
+    /// a window manager reads "maximized" from the window's properties when it
+    /// maps it, so the property is there before the map, and the snapshot
+    /// already shows the mode and the rectangle the window returns to.
+    #[test]
+    fn x11_window_opens_maximized_with_the_property_set_before_it_is_mapped() {
+        let returns_to = WindowGeometry::new(Some(Point::new(40.0, 60.0)), Size::new(500.0, 400.0));
+        let opening = WindowOptions::default()
+            .with_size(Size::new(320.0, 240.0))
+            .with_mode(WindowMode::Maximized)
+            .with_normal_geometry(Some(returns_to))
+            .with_reveal(WindowReveal::AfterFirstFrame);
+        run_x11_scenario(opening, move |window, id, server| {
+            assert_eq!(map_state(server, id), MapState::UNMAPPED);
+            let atom = |name: &str| {
+                server
+                    .intern_atom(false, name.as_bytes())
+                    .expect("request")
+                    .reply()
+                    .expect("the atom")
+                    .atom
+            };
+            let property = server
+                .get_property(false, id, atom("_NET_WM_STATE"), AtomEnum::ATOM, 0, 64)
+                .expect("request")
+                .reply()
+                .expect("the property");
+            let atoms: Vec<u32> = property.value32().expect("atoms").collect();
+            assert!(
+                atoms.contains(&atom("_NET_WM_STATE_MAXIMIZED_HORZ"))
+                    && atoms.contains(&atom("_NET_WM_STATE_MAXIMIZED_VERT")),
+                "the window manager reads the mode from the property: {atoms:?}"
+            );
+            let state = window.state();
+            assert_eq!(state.mode, WindowMode::Maximized);
+            assert_eq!(state.normal_geometry, Some(returns_to));
+            assert!(state.visible, "intended to be shown");
+
+            window.reveal_after_first_frame();
+            until_map_state(server, id, MapState::VIEWABLE);
+        });
+    }
+
+    /// A window opened in a mode, at once rather than after its first frame,
+    /// is still created unmapped and mapped only once the mode is in its
+    /// properties. On a bare server nothing but the window itself could have
+    /// set `_NET_WM_STATE`, so finding the mode there shows it was set.
+    fn opens_in_mode_with_the_property_set(mode: WindowMode, state_atoms: &'static [&'static str]) {
+        let opening = WindowOptions::default()
+            .with_size(Size::new(320.0, 240.0))
+            .with_mode(mode)
+            .with_reveal(WindowReveal::AtOpen);
+        run_x11_scenario(opening, move |window, id, server| {
+            until_map_state(server, id, MapState::VIEWABLE);
+            let atom = |name: &str| {
+                server
+                    .intern_atom(false, name.as_bytes())
+                    .expect("request")
+                    .reply()
+                    .expect("the atom")
+                    .atom
+            };
+            let property = server
+                .get_property(false, id, atom("_NET_WM_STATE"), AtomEnum::ATOM, 0, 64)
+                .expect("request")
+                .reply()
+                .expect("the property");
+            let atoms: Vec<u32> = property.value32().expect("atoms").collect();
+            for name in state_atoms {
+                assert!(atoms.contains(&atom(name)), "{name} is set: {atoms:?}");
+            }
+            assert_eq!(window.state().mode, mode);
+        });
+    }
+
+    #[test]
+    fn x11_window_opened_maximized_at_once_is_mapped_with_the_mode_set() {
+        opens_in_mode_with_the_property_set(
+            WindowMode::Maximized,
+            &[
+                "_NET_WM_STATE_MAXIMIZED_HORZ",
+                "_NET_WM_STATE_MAXIMIZED_VERT",
+            ],
+        );
+    }
+
+    #[test]
+    fn x11_window_opened_fullscreen_at_once_is_mapped_with_the_mode_set() {
+        opens_in_mode_with_the_property_set(WindowMode::Fullscreen, &["_NET_WM_STATE_FULLSCREEN"]);
+    }
+
+    /// The names of the atoms in the window's `_NET_WM_STATE`.
+    fn state_names(server: &RustConnection, id: u32) -> Vec<String> {
+        let atom = |name: &str| {
+            server
+                .intern_atom(false, name.as_bytes())
+                .expect("request")
+                .reply()
+                .expect("the atom")
+                .atom
+        };
+        let property = server
+            .get_property(false, id, atom("_NET_WM_STATE"), AtomEnum::ATOM, 0, 64)
+            .expect("request")
+            .reply()
+            .expect("the property");
+        property
+            .value32()
+            .map(|atoms| {
+                atoms
+                    .map(|atom| {
+                        let name = server
+                            .get_atom_name(atom)
+                            .expect("request")
+                            .reply()
+                            .expect("the name")
+                            .name;
+                        String::from_utf8(name).expect("an ASCII atom name")
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// A window the application opens hidden, in a mode, is unmapped with the
+    /// mode in its properties, and `Show` maps it from there.
+    #[test]
+    fn x11_window_opened_hidden_in_a_mode_keeps_the_mode_until_it_is_shown() {
+        let opening = WindowOptions::default()
+            .with_size(Size::new(320.0, 240.0))
+            .with_mode(WindowMode::Maximized)
+            .with_visible(false);
+        run_x11_scenario(opening, |window, id, server| {
+            assert_eq!(map_state(server, id), MapState::UNMAPPED);
+            let names = state_names(server, id);
+            assert!(
+                names.contains(&"_NET_WM_STATE_MAXIMIZED_HORZ".to_owned())
+                    && names.contains(&"_NET_WM_STATE_MAXIMIZED_VERT".to_owned()),
+                "{names:?}"
+            );
+            assert!(!window.state().visible);
+
+            window
+                .apply(WindowCommand::Show)
+                .expect("a desktop window shows");
+            until_map_state(server, id, MapState::VIEWABLE);
+        });
+    }
+
+    /// A mode asked for while the window waits unmapped for its first frame
+    /// replaces the one it opened in, in the properties the window manager
+    /// reads when it maps it.
+    #[test]
+    fn x11_window_asked_for_a_mode_before_its_first_frame_opens_in_that_mode() {
+        let opening = WindowOptions::default()
+            .with_size(Size::new(320.0, 240.0))
+            .with_mode(WindowMode::Maximized)
+            .with_reveal(WindowReveal::AfterFirstFrame);
+        run_x11_scenario(opening, |window, id, server| {
+            window
+                .apply(WindowCommand::SetMode(WindowMode::Fullscreen))
+                .expect("a desktop window enters fullscreen");
+            assert_eq!(state_names(server, id), ["_NET_WM_STATE_FULLSCREEN"]);
+
+            window
+                .apply(WindowCommand::SetMode(WindowMode::Normal))
+                .expect("a desktop window returns to normal");
+            assert_eq!(state_names(server, id), Vec::<String>::new());
+
+            // Minimizing it leaves no mode to be mapped in; the window is
+            // minimized once it is mapped.
+            window
+                .apply(WindowCommand::SetMode(WindowMode::Fullscreen))
+                .expect("a desktop window enters fullscreen");
+            assert_eq!(state_names(server, id), ["_NET_WM_STATE_FULLSCREEN"]);
+            window
+                .apply(WindowCommand::SetMode(WindowMode::Minimized))
+                .expect("a minimize is requested");
+            assert_eq!(state_names(server, id), Vec::<String>::new());
+
+            window.reveal_after_first_frame();
+            until_map_state(server, id, MapState::VIEWABLE);
+        });
+    }
+
+    /// A window whose probe could not be made does not claim to see a minimize
+    /// that nothing would tell it of: winit sends no event for one on X11.
+    #[test]
+    fn x11_window_without_a_probe_does_not_claim_to_observe_minimizing() {
+        let platform = Arc::new(WinitPlatform::new());
+        // The probe's connections failed: the platform remembers that.
+        assert!(
+            platform.x11_probe.set(None).is_ok(),
+            "no probe was made yet"
+        );
+        run_x11_window(platform, WindowOptions::default(), |window, _server| {
+            let capabilities = window.capabilities();
+            assert!(!capabilities.observes_minimized);
+            // Nothing else is taken away.
+            let mut expected = WindowCapabilities::ALL;
+            expected.observes_minimized = false;
+            assert_eq!(capabilities, expected);
+            // Asking is still allowed: the compositor or window manager acts.
+            window
+                .apply(WindowCommand::SetMode(WindowMode::Minimized))
+                .expect("a minimize is requested");
+        });
+    }
+}
+
+/// A Wayland window on a real compositor (skipped without `WAYLAND_DISPLAY`;
+/// the live-smoke job runs a headless weston for the Wayland close path).
+///
+/// A compositor places windows and a client cannot hide, focus or place one,
+/// so those commands are refused and the capabilities say so; what it does let
+/// a client do (title, mode, size, constraints) is accepted.
+#[cfg(target_os = "linux")]
+mod wayland_window {
+    use flui_foundation::geometry::Point;
+
+    use super::*;
+    use crate::traits::{WindowCapabilities, WindowCommand, WindowCommandError, WindowMode};
+
+    fn build_wayland_event_loop() -> EventLoop<()> {
+        use winit::platform::wayland::EventLoopBuilderExtWayland;
+        let mut builder = EventLoop::builder();
+        EventLoopBuilderExtWayland::with_any_thread(&mut builder, true);
+        EventLoopBuilderExtWayland::with_wayland(&mut builder);
+        builder
+            .build()
+            .expect("build a winit event loop on Wayland")
+    }
+
+    #[test]
+    fn wayland_window_refuses_what_a_compositor_does_not_let_a_client_do() {
+        if std::env::var_os("WAYLAND_DISPLAY").is_none_or(|socket| socket.is_empty()) {
+            eprintln!("skipped: no Wayland compositor (WAYLAND_DISPLAY is not set)");
+            return;
+        }
+        let platform = Arc::new(WinitPlatform::new());
+        let event_loop = build_wayland_event_loop();
+        install_test_owner_signal(&platform, &event_loop);
+        let event_loop_proxy = event_loop.create_proxy();
+        let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = event_loop_proxy.send_event(());
+        });
+        let (control, receiver) = control_lane(wake_owner);
+        platform
+            .install_control_lane(thread::current().id(), control.clone())
+            .expect("first install succeeds");
+
+        let platform_for_worker = Arc::clone(&platform);
+        let control_for_worker = control;
+        let worker = thread::spawn(move || {
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                wait_for_running(&platform_for_worker);
+                let window = match control_for_worker
+                    .request_open_window(
+                        WindowOptions::default()
+                            .with_title("wayland-window")
+                            .with_size(Size::new(320.0, 240.0))
+                            .with_position(Some(Point::new(40.0, 60.0))),
+                    )
+                    .expect("lane accepts the request")
+                    .wait()
+                {
+                    ClaimOutcome::Delivered(result) => result.expect("window creation succeeds"),
+                    _ => panic!("the window request is delivered"),
+                };
+                let capabilities = window.capabilities();
+                assert!(!capabilities.sets_position && !capabilities.places_at_open);
+                assert!(!capabilities.hides && !capabilities.shows && !capabilities.activates);
+                assert!(!capabilities.observes_position && !capabilities.observes_minimized);
+                assert!(
+                    capabilities.sets_title && capabilities.sets_size && capabilities.maximizes
+                );
+                assert_eq!(platform_for_worker.window_capabilities(), capabilities);
+                assert_ne!(capabilities, WindowCapabilities::ALL);
+
+                let state = window.state();
+                assert_eq!(
+                    state.outer.position, None,
+                    "a client cannot read a position"
+                );
+                assert_eq!(state.mode, WindowMode::Normal);
+
+                for refused in [
+                    WindowCommand::SetPosition(Point::new(10.0, 10.0)),
+                    WindowCommand::Hide,
+                    WindowCommand::Show,
+                    WindowCommand::Activate,
+                ] {
+                    assert_eq!(
+                        window.apply(refused.clone()),
+                        Err(WindowCommandError::Unsupported),
+                        "{refused:?}"
+                    );
+                }
+                window
+                    .apply(WindowCommand::SetTitle("renamed".into()))
+                    .expect("a title is set");
+                assert_eq!(window.state().title.as_deref(), Some("renamed"));
+                window
+                    .apply(WindowCommand::SetMode(WindowMode::Maximized))
+                    .expect("a maximize is requested");
+                // No first frame ever presents here, so there is nothing to
+                // reveal and the call changes nothing.
+                window.reveal_after_first_frame();
+                assert!(window.state().visible);
+            }));
+            control_for_worker.request_quit();
+            if let Err(payload) = outcome {
+                resume_unwind(payload);
+            }
+        });
+
+        let mut app = WinitApp {
+            platform: Arc::clone(&platform),
+            preference_source: None,
+            host_notices: None,
+            on_ready: None,
+            control: receiver,
+            quit_notified: false,
+            in_flight_replies: Vec::new(),
+            bootstrap_error: None,
+            self_close_deadline: None,
+            self_close_route: SelfCloseRoute::default(),
+        };
+        event_loop
+            .run_app(&mut app)
+            .expect("event loop runs to completion");
+        worker.join().expect("worker thread does not panic");
+    }
 }

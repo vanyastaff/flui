@@ -5,21 +5,41 @@
 //! which is why this type lives here, in the backend, and not beside the
 //! trait it implements).
 
-use std::{any::Any, sync::Arc};
+use std::{
+    any::Any,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
+use parking_lot::Mutex;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use winit::window::Window;
+use winit::{
+    dpi::{LogicalPosition, LogicalSize},
+    window::{Fullscreen, Window},
+};
 
+#[cfg(target_os = "linux")]
+use super::super::linux::x11_window_probe::X11WindowProbe;
 use super::control::ControlSender;
 use super::display::WinitDisplaySource;
+use super::window_plan::{FrameInset, OpenPlan, WindowShell};
+use crate::shared::window_state::{WindowStateCell, mode_of};
 #[cfg(all(target_os = "linux", feature = "a11y"))]
 use crate::traits::PlatformAccessibility;
 use crate::traits::{
-    CursorError, DisplayId, HostWindow, PlatformTextInput, PlatformWindow, WindowAppearance,
-    WindowId,
+    CursorError, DisplayId, HostWindow, PlatformTextInput, PlatformWindow, SizeConstraints,
+    WindowAppearance, WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry,
+    WindowId, WindowMode, WindowOptions, WindowState,
 };
+
+/// How long a window that opens unmapped waits for the window manager to say
+/// what frame it will have.
+#[cfg(target_os = "linux")]
+const FRAME_EXTENTS_WAIT: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// Concrete winit window wrapper
 ///
@@ -28,7 +48,7 @@ use crate::traits::{
 /// dispatch pattern for reentrancy safety.
 pub struct WinitWindow {
     id: WindowId,
-    closed: std::sync::atomic::AtomicBool,
+    closed: AtomicBool,
     window: Arc<Window>,
     is_focused: parking_lot::Mutex<bool>,
     is_visible: parking_lot::Mutex<bool>,
@@ -57,6 +77,57 @@ pub struct WinitWindow {
     /// The display last reported through `on_display_changed`, so a hint fires
     /// when the window really moved.
     reported_display: parking_lot::Mutex<Option<DisplayId>>,
+    /// The snapshot last published (ADR-0237). Shared with the platform so a
+    /// wake from sleep marks it stale.
+    window_state: Arc<WindowStateCell>,
+    /// What the window system lets a program do to this window.
+    shell: WindowShell,
+    /// What `apply` honours on this window.
+    capabilities: WindowCapabilities,
+    /// The title last set. winit cannot read one back on X11 or Wayland.
+    title: Mutex<String>,
+    /// The size limits last set. winit has no getter for them.
+    constraints: Mutex<SizeConstraints>,
+    /// The rectangle the window returns to from a maximized or fullscreen
+    /// mode: the geometry it had in normal mode, or the one it opened with.
+    normal_geometry: Mutex<Option<WindowGeometry>>,
+    /// Whether the window was created hidden and still waits for its first
+    /// frame (or an explicit show) to become visible.
+    reveal_pending: Mutex<bool>,
+    /// Whether the window was asked to minimize while it was unmapped: it is
+    /// minimized once mapped.
+    minimize_on_map: AtomicBool,
+    /// Whether the window was created unmapped to open maximized or fullscreen
+    /// and is mapped once its mode is set: see [`OpenPlan::map_after_setup`].
+    map_after_setup: bool,
+    /// The mode an unmapped window opens in. A window manager reads it from the
+    /// window's properties when it maps the window, so it is written there.
+    #[cfg(target_os = "linux")]
+    opens_in: WindowMode,
+    /// The outer size an unmapped window opened with a remembered rectangle
+    /// has to end up with once its frame is known.
+    #[cfg(target_os = "linux")]
+    outer_to_fit: Mutex<Option<Size<f64>>>,
+    /// The frame around decorated windows, measured from this and the
+    /// platform's other windows.
+    frame_inset: Arc<FrameInset>,
+    /// The X11 probe and this window's X11 id, once attached.
+    #[cfg(target_os = "linux")]
+    x11: std::sync::OnceLock<(Arc<X11WindowProbe>, u32)>,
+    /// Set when this is an X11 window and no probe could be attached: its
+    /// minimization then goes unseen until some other event samples it.
+    #[cfg(target_os = "linux")]
+    minimize_unobserved: AtomicBool,
+}
+
+/// What the window system lets a program do to `window`: a Wayland surface
+/// gets none of the placement, hiding and focus commands, every other shell
+/// gets them all.
+pub(super) fn shell_of(window: &impl HasDisplayHandle) -> WindowShell {
+    match window.display_handle().map(|display| display.as_raw()) {
+        Ok(raw_window_handle::RawDisplayHandle::Wayland(_)) => WindowShell::Wayland,
+        _ => WindowShell::Desktop,
+    }
 }
 
 /// [`PlatformTextInput`] for a winit window.
@@ -102,18 +173,68 @@ impl WinitWindow {
     /// programmatic `close()` reports to. Backend-private: only this
     /// backend's own window creation can supply that lane, so nothing
     /// outside it can construct a window whose close would go nowhere.
+    ///
+    /// `plan` is what the window was created from, so its snapshot starts from
+    /// the mode it opened in and, if it opened maximized, the rectangle it
+    /// returns to.
     pub(super) fn new(
         id: WindowId,
         window: Arc<Window>,
         close_lane: ControlSender,
         displays: Arc<WinitDisplaySource>,
+        options: &WindowOptions,
+        plan: &OpenPlan,
+        frame_inset: Arc<FrameInset>,
     ) -> Self {
+        let shell = shell_of(&window);
+        let capabilities = shell.capabilities();
+        let constraints = SizeConstraints::new(options.min_size, options.max_size);
+        let title = options.title.clone();
+        let display = displays.id_of_window(&window);
+        let initial = sample_state(
+            &window,
+            shell,
+            &RecordedState {
+                title: &title,
+                constraints,
+                focused: true,
+                visible: options.visible,
+                display,
+                probed_mode: None,
+            },
+        );
         Self {
             id,
-            closed: std::sync::atomic::AtomicBool::new(false),
+            closed: AtomicBool::new(false),
+            window_state: Arc::new(WindowStateCell::new(initial)),
+            shell,
+            capabilities,
+            title: Mutex::new(title),
+            constraints: Mutex::new(constraints),
+            normal_geometry: Mutex::new(plan.normal_geometry),
+            map_after_setup: plan.map_after_setup,
+            #[cfg(target_os = "linux")]
+            opens_in: if plan.unmapped_until_shown() {
+                plan.mode
+            } else {
+                WindowMode::Normal
+            },
+            #[cfg(target_os = "linux")]
+            outer_to_fit: Mutex::new(
+                plan.normal_geometry
+                    .filter(|_| plan.unmapped_until_shown())
+                    .map(|geometry| geometry.size),
+            ),
+            reveal_pending: Mutex::new(plan.hidden_until_first_frame),
+            minimize_on_map: AtomicBool::new(false),
+            frame_inset,
+            #[cfg(target_os = "linux")]
+            x11: std::sync::OnceLock::new(),
+            #[cfg(target_os = "linux")]
+            minimize_unobserved: AtomicBool::new(false),
             window,
             is_focused: parking_lot::Mutex::new(true),
-            is_visible: parking_lot::Mutex::new(true),
+            is_visible: parking_lot::Mutex::new(options.visible),
             callbacks: crate::shared::WindowCallbacks::new(),
             #[cfg(all(target_os = "linux", feature = "a11y"))]
             accessibility: Arc::new(crate::platforms::linux::UnixAccessibility::new()),
@@ -123,6 +244,80 @@ impl WinitWindow {
             displays,
             reported_display: parking_lot::Mutex::new(None),
         }
+    }
+
+    /// Read this window's mode, and hear of its changes, through the probe
+    /// `probe` makes. Does nothing, and makes none, for a window that is not
+    /// an X11 window.
+    #[cfg(target_os = "linux")]
+    pub(super) fn attach_x11_probe(&self, probe: impl FnOnce() -> Option<Arc<X11WindowProbe>>) {
+        use raw_window_handle::RawWindowHandle;
+
+        let id = match self.window.window_handle().map(|handle| handle.as_raw()) {
+            Ok(RawWindowHandle::Xlib(handle)) => u32::try_from(handle.window).ok(),
+            Ok(RawWindowHandle::Xcb(handle)) => Some(handle.window.get()),
+            _ => None,
+        };
+        let Some(id) = id else {
+            return;
+        };
+        let Some(probe) = probe() else {
+            // winit reports no event when an X11 window is minimized, so
+            // without the probe the snapshot cannot follow it.
+            self.minimize_unobserved.store(true, Ordering::Release);
+            return;
+        };
+        probe.watch(id);
+        // Only a window that stays unmapped has a mode to seed: one already
+        // mapped is the window manager's to place, and writing its properties
+        // would undo a rule that maximized it meanwhile.
+        if self.opens_in != WindowMode::Normal {
+            probe.set_mode_hint(id, self.opens_in);
+        }
+        let _ = self.x11.set((probe, id));
+        // The snapshot made at creation knew nothing of the probe.
+        self.refresh_state();
+    }
+
+    /// Map a window created hidden to open in a mode, now that the mode is set
+    /// where the window manager reads it. A no-op for every other window.
+    pub(super) fn finish_setup(&self) {
+        if !self.map_after_setup {
+            return;
+        }
+        {
+            let mut pending = self.reveal_pending.lock();
+            *pending = false;
+            self.map_window();
+        }
+        self.refresh_state();
+    }
+
+    /// The X11 id of this window, when a probe is attached.
+    #[cfg(target_os = "linux")]
+    pub(super) fn x11_id(&self) -> Option<u32> {
+        self.x11.get().map(|(_, id)| *id)
+    }
+
+    /// The mode the X server and window manager report, if a probe is attached
+    /// and can say.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(clippy::unused_self, reason = "only an X11 window has a probe to ask")
+    )]
+    fn probed_mode(&self) -> Option<WindowMode> {
+        #[cfg(target_os = "linux")]
+        {
+            let (probe, id) = self.x11.get()?;
+            probe.mode(*id)
+        }
+        #[cfg(not(target_os = "linux"))]
+        None
+    }
+
+    /// The cell a wake from sleep marks stale.
+    pub(super) fn state_cell(&self) -> &Arc<WindowStateCell> {
+        &self.window_state
     }
 
     /// Whether no display has been reported for this window yet (or the last
@@ -180,6 +375,219 @@ impl WinitWindow {
     pub fn set_visible(&self, visible: bool) {
         *self.is_visible.lock() = visible;
     }
+
+    /// The window may differ from its last snapshot: read it again, and raise
+    /// `on_state_changed` when the revision grew.
+    pub(super) fn refresh_state(&self) {
+        self.window_state.invalidate();
+        let _ = PlatformWindow::state(self);
+    }
+
+    /// The window as the operating system describes it now.
+    ///
+    /// Reads winit with no lock of the snapshot held, and keeps the rectangle
+    /// a maximized or fullscreen window returns to: the outer geometry the
+    /// window had the last time it was in normal mode.
+    fn sample(&self) -> WindowState {
+        let title = self.title.lock().clone();
+        let mut state = sample_state(
+            &self.window,
+            self.shell,
+            &RecordedState {
+                title: &title,
+                constraints: *self.constraints.lock(),
+                focused: *self.is_focused.lock(),
+                visible: *self.is_visible.lock(),
+                display: PlatformWindow::display_id(self),
+                probed_mode: self.probed_mode(),
+            },
+        );
+        let mut remembered = self.normal_geometry.lock();
+        match state.mode {
+            WindowMode::Normal => {
+                *remembered = Some(state.outer);
+                if state.visible {
+                    self.frame_inset.observe(
+                        state.decorated,
+                        device_size(self.window.outer_size()),
+                        device_size(self.window.inner_size()),
+                    );
+                }
+            }
+            WindowMode::Maximized | WindowMode::Fullscreen | WindowMode::Minimized => {
+                state.normal_geometry = *remembered;
+            }
+            _ => {}
+        }
+        state
+    }
+
+    /// Enter `mode`. Leaving fullscreen and minimized first keeps entering a
+    /// mode from depending on what the window manager makes of two requests at
+    /// once: it keeps a minimized window minimized under a maximize.
+    fn enter_mode(&self, mode: WindowMode) -> Result<(), WindowCommandError> {
+        if *self.reveal_pending.lock() || !*self.is_visible.lock() {
+            self.minimize_on_map
+                .store(mode == WindowMode::Minimized, Ordering::Release);
+        }
+        #[cfg(target_os = "linux")]
+        self.seed_unmapped_mode(mode);
+        match mode {
+            WindowMode::Minimized => self.window.set_minimized(true),
+            WindowMode::Maximized => {
+                self.window.set_fullscreen(None);
+                self.window.set_minimized(false);
+                self.window.set_maximized(true);
+            }
+            WindowMode::Fullscreen => {
+                self.window.set_minimized(false);
+                self.window
+                    .set_fullscreen(Some(Fullscreen::Borderless(None)));
+            }
+            WindowMode::Normal => {
+                self.window.set_fullscreen(None);
+                self.window.set_minimized(false);
+                self.window.set_maximized(false);
+            }
+            _ => return Err(WindowCommandError::Unsupported),
+        }
+        Ok(())
+    }
+
+    /// Name `mode` in the properties of a window that is not mapped. A window
+    /// manager opens a window in the mode its properties name, and ignores the
+    /// client message winit sends for a window it does not manage yet, so a
+    /// mode asked for before the window is first shown would be lost.
+    #[cfg(target_os = "linux")]
+    fn seed_unmapped_mode(&self, mode: WindowMode) {
+        let unmapped = *self.reveal_pending.lock() || !*self.is_visible.lock();
+        if unmapped && let Some((probe, id)) = self.x11.get() {
+            probe.set_mode_hint(*id, mode);
+        }
+    }
+
+    /// Give a window that opens at a remembered outer rectangle, unmapped, the
+    /// content size that makes its outer size that. The first window of a run
+    /// has no frame measured yet, so the window manager is asked for the one
+    /// it will add (`_NET_REQUEST_FRAME_EXTENTS`), waiting briefly for the
+    /// answer: without it, un-maximizing the window would leave it larger than
+    /// it was saved by the frame, and saving that again grows it every run.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            clippy::unused_self,
+            reason = "only an X11 window can ask for its frame"
+        )
+    )]
+    fn fit_to_remembered_rectangle(&self) {
+        #[cfg(target_os = "linux")]
+        {
+            // Once: the window is fitted when it is first mapped, not each time
+            // it is shown again.
+            let Some(outer) = self.outer_to_fit.lock().take() else {
+                return;
+            };
+            if self.frame_inset.is_known() || !self.window.is_decorated() {
+                return;
+            }
+            let Some((probe, id)) = self.x11.get() else {
+                return;
+            };
+            let Some(frame) = probe.frame_extents(*id, FRAME_EXTENTS_WAIT) else {
+                return;
+            };
+            self.frame_inset.record(frame);
+            let inset = self.frame_inset.logical(self.window.scale_factor());
+            let _ = self.window.request_inner_size(LogicalSize::new(
+                (outer.width - inset.width).max(1.0),
+                (outer.height - inset.height).max(1.0),
+            ));
+        }
+    }
+
+    /// Make the window visible, ending a wait for the first frame. Every change
+    /// of the native window's visibility is made holding `reveal_pending`, so a
+    /// reveal and a hide from two threads cannot interleave their halves.
+    fn make_visible(&self) {
+        let mut pending = self.reveal_pending.lock();
+        *pending = false;
+        self.map_window();
+        *self.is_visible.lock() = true;
+    }
+
+    /// Map the window, which is unmapped and holds `reveal_pending`: fitted to
+    /// the rectangle it was opened with, and minimized if that is what it was
+    /// last asked to be, which a window manager only honours for a window it
+    /// manages.
+    fn map_window(&self) {
+        self.fit_to_remembered_rectangle();
+        self.window.set_visible(true);
+        if self.minimize_on_map.swap(false, Ordering::AcqRel) {
+            self.window.set_minimized(true);
+        }
+    }
+
+    /// Hide the window. A hidden window has no first frame to wait for.
+    fn make_hidden(&self) {
+        let mut pending = self.reveal_pending.lock();
+        *pending = false;
+        self.window.set_visible(false);
+        *self.is_visible.lock() = false;
+    }
+}
+
+/// What the window's snapshot holds that winit cannot read back.
+struct RecordedState<'a> {
+    title: &'a str,
+    constraints: SizeConstraints,
+    focused: bool,
+    visible: bool,
+    display: Option<DisplayId>,
+    /// The mode the window system reports directly, where winit's flags fall
+    /// short of it (X11 minimization).
+    probed_mode: Option<WindowMode>,
+}
+
+/// A device-pixel extent as the signed one the frame measurement takes.
+fn device_size(size: winit::dpi::PhysicalSize<u32>) -> Size<i32> {
+    let clamp = |extent: u32| i32::try_from(extent).unwrap_or(i32::MAX);
+    Size::new(clamp(size.width), clamp(size.height))
+}
+
+/// The window as winit and `facts` describe it.
+fn sample_state(window: &Window, shell: WindowShell, facts: &RecordedState<'_>) -> WindowState {
+    let capabilities = shell.capabilities();
+    let scale = window.scale_factor();
+    let logical = |size: winit::dpi::PhysicalSize<u32>| {
+        Size::new(
+            f64::from(size.width) / scale,
+            f64::from(size.height) / scale,
+        )
+    };
+    let position = capabilities
+        .observes_position
+        .then(|| window.outer_position().ok())
+        .flatten()
+        .map(|at| Point::new(f64::from(at.x) / scale, f64::from(at.y) / scale));
+    let minimized = capabilities.observes_minimized && window.is_minimized() == Some(true);
+    WindowState::new(
+        WindowGeometry::new(position, logical(window.outer_size())),
+        logical(window.inner_size()),
+    )
+    .with_mode(facts.probed_mode.unwrap_or_else(|| {
+        mode_of(
+            minimized,
+            window.fullscreen().is_some(),
+            window.is_maximized(),
+        )
+    }))
+    .with_visible(facts.visible)
+    .with_focused(facts.focused)
+    .with_title(Some(facts.title.to_owned()))
+    .with_constraints(facts.constraints)
+    .with_resizable(window.is_resizable())
+    .with_decorated(window.is_decorated())
+    .with_display(facts.display)
 }
 
 impl Drop for WinitWindow {
@@ -257,63 +665,106 @@ impl PlatformWindow for WinitWindow {
         *self.is_visible.lock()
     }
 
-    fn set_title(&self, title: &str) {
-        self.window.set_title(title);
+    fn state(&self) -> WindowState {
+        let published = self.window_state.state_with(|| self.sample());
+        if published.changed {
+            self.callbacks.dispatch_state_changed();
+        }
+        published.state
+    }
+
+    fn capabilities(&self) -> WindowCapabilities {
+        #[cfg(target_os = "linux")]
+        if self.minimize_unobserved.load(Ordering::Acquire) {
+            let mut capabilities = self.capabilities;
+            capabilities.observes_minimized = false;
+            return capabilities;
+        }
+        self.capabilities
+    }
+
+    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(WindowCommandError::Closed);
+        }
+        command.admit(&self.capabilities)?;
+        match command {
+            WindowCommand::SetTitle(title) => {
+                self.window.set_title(&title);
+                *self.title.lock() = title;
+            }
+            WindowCommand::SetPosition(at) => self
+                .window
+                .set_outer_position(LogicalPosition::new(at.x, at.y)),
+            WindowCommand::SetSize(size) => {
+                // A maximized or fullscreen window has no size of its own to set:
+                // the window system either ignores the request or restores the
+                // window to honour it, and which differs between them. So the
+                // command is the second, everywhere: the window returns to
+                // normal mode at the size asked for.
+                if self.window.fullscreen().is_some() {
+                    self.window.set_fullscreen(None);
+                }
+                if self.window.is_maximized() {
+                    self.window.set_maximized(false);
+                }
+                // A window that cannot be resized yet answers later, through
+                // `Resized`; the request itself is all this reports.
+                let _ = self
+                    .window
+                    .request_inner_size(LogicalSize::new(size.width, size.height));
+            }
+            WindowCommand::SetConstraints(constraints) => {
+                let limit = |size: Size<f64>| LogicalSize::new(size.width, size.height);
+                self.window.set_min_inner_size(constraints.min.map(limit));
+                self.window.set_max_inner_size(constraints.max.map(limit));
+                *self.constraints.lock() = constraints;
+            }
+            WindowCommand::SetResizable(resizable) => self.window.set_resizable(resizable),
+            WindowCommand::SetDecorated(decorated) => self.window.set_decorations(decorated),
+            WindowCommand::SetMode(mode) => self.enter_mode(mode)?,
+            WindowCommand::Show => self.show().map_err(|error| match error {
+                crate::WindowShowError::Closed => WindowCommandError::Closed,
+                crate::WindowShowError::Native { message } => {
+                    WindowCommandError::Backend { message }
+                }
+                _ => WindowCommandError::Unsupported,
+            })?,
+            WindowCommand::Hide => self.make_hidden(),
+            WindowCommand::Activate => self.window.focus_window(),
+            // `admit` refuses a command this window does not know.
+            _ => return Err(WindowCommandError::Unsupported),
+        }
+        self.refresh_state();
+        Ok(())
     }
 
     fn show(&self) -> Result<(), crate::WindowShowError> {
-        if self.closed.load(std::sync::atomic::Ordering::Acquire) {
+        if self.closed.load(Ordering::Acquire) {
             return Err(crate::WindowShowError::Closed);
         }
-        let display =
-            self.window
-                .display_handle()
-                .map_err(|error| crate::WindowShowError::Native {
-                    message: error.to_string(),
-                })?;
-        // Winit cannot unminimize or focus Wayland windows. Mobile/web and
-        // other transports do not implement the complete desktop operation either.
-        if !matches!(
-            display.as_raw(),
-            raw_window_handle::RawDisplayHandle::Windows(_)
-                | raw_window_handle::RawDisplayHandle::AppKit(_)
-                | raw_window_handle::RawDisplayHandle::Xlib(_)
-                | raw_window_handle::RawDisplayHandle::Xcb(_)
-        ) {
+        // Winit cannot unminimize or focus Wayland windows.
+        if !self.capabilities.shows {
             return Err(crate::WindowShowError::Unsupported);
         }
-        self.window.set_visible(true);
+        self.make_visible();
         self.window.set_minimized(false);
         self.window.focus_window();
         Ok(())
     }
 
-    fn minimize(&self) {
-        self.window.set_minimized(true);
-    }
-
-    fn maximize(&self) {
-        self.window.set_maximized(true);
-    }
-
-    fn restore(&self) {
-        self.window.set_minimized(false);
-        self.window.set_maximized(false);
-    }
-
-    fn toggle_fullscreen(&self) {
-        use winit::window::Fullscreen;
-        let current = self.window.fullscreen();
-        if current.is_some() {
-            self.window.set_fullscreen(None);
-        } else {
-            self.window
-                .set_fullscreen(Some(Fullscreen::Borderless(None)));
+    fn reveal_after_first_frame(&self) {
+        {
+            let mut pending = self.reveal_pending.lock();
+            if self.closed.load(Ordering::Acquire) || !std::mem::take(&mut *pending) {
+                return;
+            }
+            self.map_window();
         }
+        self.refresh_state();
     }
 
     fn close(&self) {
-        self.mark_closed();
         // Hide now, from whichever thread this is called on: the visible
         // effect of a close should not wait for the owner's next turn. The
         // close itself — `on_close`, map removal, callback clear, exit
@@ -323,8 +774,16 @@ impl PlatformWindow for WinitWindow {
         // off its owner thread) would silently refuse it, and skipping the
         // map removal is precisely issue #919 — a hidden window that the
         // exit policy still counts, so the process never exits.
-        self.window.set_visible(false);
-        *self.is_visible.lock() = false;
+        {
+            // Closing is terminal for a deferred reveal: the flag is set and the
+            // window hidden holding the lock a reveal checks it under, so a
+            // reveal on another thread cannot map the window after this.
+            let mut pending = self.reveal_pending.lock();
+            self.mark_closed();
+            *pending = false;
+            self.window.set_visible(false);
+            *self.is_visible.lock() = false;
+        }
         self.close_lane.request_close_window(self.id);
     }
 

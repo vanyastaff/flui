@@ -29,8 +29,9 @@ use std::process::ExitCode;
 
 use anyhow::Context;
 use serde::Deserialize;
+use syn::ext::IdentExt;
 use syn::visit::{self, Visit};
-use syn::{Attribute, ImplItem, Item, Meta, TraitItem};
+use syn::{Attribute, Expr, ImplItem, Item, Local, Meta, TraitItem};
 
 use crate::file_length::modules::{self, is_test_only, item_attrs};
 use crate::ratchet::Exits;
@@ -148,12 +149,16 @@ fn targets(meta: &cargo_metadata::Metadata, tests: bool) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     for package in meta.workspace_packages() {
         for target in &package.targets {
+            let gated = target
+                .required_features
+                .iter()
+                .any(|feature| TESTING_FEATURES.contains(&feature.as_str()));
             let wanted = target.kind.iter().any(|kind| {
                 let kind = kind.to_string();
                 if tests {
-                    kind == "test" || kind == "bench"
+                    kind == "test" || kind == "bench" || gated
                 } else {
-                    PRODUCTION.contains(&kind.as_str())
+                    PRODUCTION.contains(&kind.as_str()) && !gated
                 }
             });
             if wanted {
@@ -196,13 +201,13 @@ fn collect_sources(
     for path in prod_tree.modules.keys() {
         files.entry(path.clone()).or_insert(false);
     }
-    for path in prod_tree
-        .test_files
-        .iter()
-        .chain(test_tree.modules.keys())
-        .chain(&test_tree.test_files)
-    {
+    for path in &prod_tree.test_files {
         files.insert(path.clone(), true);
+    }
+    // a file a test target shares with a production target is production code there: only its
+    // test-scoped items count
+    for path in test_tree.modules.keys().chain(&test_tree.test_files) {
+        files.entry(path.clone()).or_insert(true);
     }
     let prefix = format!("{}{}", root.display(), std::path::MAIN_SEPARATOR);
     let mut problems: Vec<String> = test_tree
@@ -305,7 +310,7 @@ impl Scan {
         if !self.in_scope || self.in_kit {
             return;
         }
-        let name = ident.to_string();
+        let name = ident.unraw().to_string();
         let matched = match kind {
             Kind::Pump => PUMP_NAMES.contains(&name.as_str()),
             Kind::Double => is_double_name(&name),
@@ -344,7 +349,7 @@ impl<'ast> Visit<'ast> for Scan {
             }
             if let Item::Mod(module) = item
                 && this.kit_modules
-                && module.ident == "testing"
+                && module.ident.unraw() == "testing"
             {
                 let before = this.in_kit;
                 this.in_kit = true;
@@ -356,6 +361,19 @@ impl<'ast> Visit<'ast> for Scan {
         });
     }
 
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        let attrs: &[Attribute] = match expr {
+            Expr::Block(e) => &e.attrs,
+            Expr::Unsafe(e) => &e.attrs,
+            _ => &[],
+        };
+        self.scoped(attrs, |this| visit::visit_expr(this, expr));
+    }
+
+    fn visit_local(&mut self, local: &'ast Local) {
+        self.scoped(&local.attrs, |this| visit::visit_local(this, local));
+    }
+
     fn visit_impl_item(&mut self, item: &'ast ImplItem) {
         let attrs: &[Attribute] = match item {
             ImplItem::Fn(i) => &i.attrs,
@@ -364,8 +382,10 @@ impl<'ast> Visit<'ast> for Scan {
             _ => &[],
         };
         self.scoped(attrs, |this| {
-            if let ImplItem::Fn(function) = item {
-                this.record(Kind::Pump, &function.sig.ident);
+            match item {
+                ImplItem::Fn(function) => this.record(Kind::Pump, &function.sig.ident),
+                ImplItem::Type(ty) => this.record(Kind::Double, &ty.ident),
+                _ => {}
             }
             visit::visit_impl_item(this, item);
         });
@@ -379,8 +399,10 @@ impl<'ast> Visit<'ast> for Scan {
             _ => &[],
         };
         self.scoped(attrs, |this| {
-            if let TraitItem::Fn(function) = item {
-                this.record(Kind::Pump, &function.sig.ident);
+            match item {
+                TraitItem::Fn(function) => this.record(Kind::Pump, &function.sig.ident),
+                TraitItem::Type(ty) => this.record(Kind::Double, &ty.ident),
+                _ => {}
             }
             visit::visit_trait_item(this, item);
         });
@@ -902,6 +924,68 @@ fn row_items_inside_a_test_function_are_test_code() {
     );
 }
 
+fn row_raw_identifiers_match_their_plain_names() {
+    let lib = "#[cfg(test)]\nmod t {\n    fn r#pump() {}\n    struct r#FakeClock;\n}\n";
+    let found = findings_for(&[("src/lib.rs", lib)], &[], HEADER);
+    assert_eq!(
+        found,
+        [
+            ("src/lib.rs".to_owned(), "unlisted"),
+            ("src/lib.rs".to_owned(), "unlisted"),
+        ]
+    );
+}
+
+fn row_items_in_a_test_only_block_are_test_code() {
+    let lib = "fn run() {\n    #[cfg(test)]\n    {\n        fn pump() {}\n        struct FakeClock;\n    }\n}\n";
+    let found = findings_for(&[("src/lib.rs", lib)], &[], HEADER);
+    assert_eq!(
+        found,
+        [
+            ("src/lib.rs".to_owned(), "unlisted"),
+            ("src/lib.rs".to_owned(), "unlisted"),
+        ]
+    );
+}
+
+fn row_a_file_shared_with_production_keeps_production_scope() {
+    let found = findings_for(
+        &[
+            ("src/lib.rs", "mod shared;\n"),
+            (
+                "src/shared.rs",
+                "fn tick() {}\n#[cfg(test)]\nmod t {\n    fn pump() {}\n}\n",
+            ),
+            (
+                "tests/a.rs",
+                "#[path = \"../src/shared.rs\"]\nmod shared;\n",
+            ),
+        ],
+        &[],
+        HEADER,
+    );
+    assert_eq!(found, [("src/shared.rs".to_owned(), "unlisted")]);
+}
+
+fn row_a_raw_testing_module_is_a_kit() {
+    let lib = "#[cfg(test)]\nmod r#testing {\n    struct FakeClock;\n}\n";
+    let found = findings_for(&[("src/lib.rs", lib)], &[], HEADER);
+    assert!(found.is_empty(), "{found:?}");
+}
+
+fn row_associated_types_are_doubles() {
+    let in_trait =
+        "#[cfg(test)]\nmod t {\n    trait Fixture {\n        type FakeClock;\n    }\n}\n";
+    let in_impl = "#[cfg(test)]\nmod t {\n    struct S;\n    impl Iterator for S {\n        type Item = u8;\n        type FakeClock = u8;\n    }\n}\n";
+    for lib in [in_trait, in_impl] {
+        let found = findings_for(&[("src/lib.rs", lib)], &[], HEADER);
+        assert!(
+            found.iter().any(|(_, kind)| *kind == "unlisted"),
+            "{lib}: {found:?}"
+        );
+    }
+}
+
 fn row_a_src_folder_inside_a_test_target_is_not_a_kit() {
     let found = findings_for(
         &[
@@ -1008,6 +1092,26 @@ fn rows() -> Vec<(&'static str, fn())> {
         (
             "items_inside_a_test_function_are_test_code",
             row_items_inside_a_test_function_are_test_code,
+        ),
+        (
+            "raw_identifiers_match_their_plain_names",
+            row_raw_identifiers_match_their_plain_names,
+        ),
+        (
+            "items_in_a_test_only_block_are_test_code",
+            row_items_in_a_test_only_block_are_test_code,
+        ),
+        (
+            "a_file_shared_with_production_keeps_production_scope",
+            row_a_file_shared_with_production_keeps_production_scope,
+        ),
+        (
+            "a_raw_testing_module_is_a_kit",
+            row_a_raw_testing_module_is_a_kit,
+        ),
+        (
+            "associated_types_are_doubles",
+            row_associated_types_are_doubles,
         ),
         (
             "a_src_folder_inside_a_test_target_is_not_a_kit",

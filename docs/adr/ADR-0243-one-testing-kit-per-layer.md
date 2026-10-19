@@ -1,6 +1,6 @@
 # ADR-0243: One testing kit per layer, one switch name, exceptions kept as counted data
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-19
 - **Related:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),
   [ADR-0082](ADR-0082-platform-api-contract-crate.md),

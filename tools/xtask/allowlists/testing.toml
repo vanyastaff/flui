@@ -46,6 +46,11 @@ kind = "double"
 names = ["ScriptedSurfaceBackend"]
 
 [[allow]]
+path = "crates/flui-app/src/app/window_control_tests.rs"
+kind = "double"
+names = ["RecordingWindow"]
+
+[[allow]]
 path = "crates/flui-app/tests/data_transfer_transport.rs"
 kind = "double"
 names = ["MockSource", "MockState"]

@@ -282,6 +282,19 @@ impl WindowInstall {
         self.observe(WindowObservation::Display(seed));
     }
 
+    /// Follow the window's published state into the subscribers of its
+    /// `WindowHandle`. The notification carries nothing: it wakes the owner,
+    /// which reads the state and delivers it only when its revision is new.
+    pub(super) fn observe_window_state(&self) {
+        let dispatcher = self.dispatcher();
+        self.window.native().on_state_changed(Box::new(move || {
+            let _ = dispatch_platform_ui_runtime(
+                dispatcher,
+                RuntimeTask::Event(super::owner_dispatch::RuntimeEvent::WindowStateChanged),
+            );
+        }));
+    }
+
     /// Complete Web bootstrap wiring before sampling and publishing native state.
     #[cfg(any(
         target_arch = "wasm32",
@@ -316,6 +329,12 @@ impl WindowInstall {
                 RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
             );
         }));
+        window.on_execution_state_change(Box::new(move |state| {
+            let _ = dispatch_platform_ui_runtime(
+                dispatcher,
+                RuntimeTask::Event(RuntimeEvent::WindowExecution(state)),
+            );
+        }));
         window.on_visibility_status_change(Box::new(move |visible| {
             let _ = dispatch_platform_ui_runtime(
                 dispatcher,
@@ -330,6 +349,7 @@ impl WindowInstall {
         }));
         self.observe_appearance();
         self.observe_display();
+        self.observe_window_state();
         // Observers precede the snapshot. Keep redraw ownership published
         // before lifecycle reconciliation can synchronously request a frame.
         let metrics = WindowObservation::Metrics {

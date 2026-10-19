@@ -27,9 +27,10 @@
 //! ## Deferred (named gaps, not silent ones)
 //!
 //! - **`Title` / `color`.** Forwarding the application label to the
-//!   platform needs a widget-to-window-title capability. FLUI has none yet (`PlatformWindow::set_title`
-//!   exists, but no `BuildContext` capability reaches it); adding one is a
-//!   new `LifecycleContext` capability and a change of its own.
+//!   platform is not done by this shell. The capability exists:
+//!   `LifecycleContext::window()` hands a lifecycle hook a `WindowHandle`
+//!   whose `set_title` queues `WindowCommand::SetTitle`; what is missing is a
+//!   widget that calls it from the shell's `title`.
 //! - **Custom locale-resolution callbacks.** Resolution uses
 //!   [`basic_locale_list_resolution`] against the nearest `MediaQuery`'s
 //!   preferred languages, unless [`locale`](WidgetsApp::locale) is set.

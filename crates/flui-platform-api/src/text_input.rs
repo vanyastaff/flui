@@ -40,6 +40,6 @@ pub trait PlatformTextInput: Send + Sync {
 
     /// Tell the platform IME where to draw its candidate/composition
     /// window, in logical window coordinates (origin + size, matching
-    /// [`PlatformWindow::bounds`](crate::PlatformWindow::bounds)'s convention).
+    /// [`WindowState::outer`](crate::WindowState::outer)'s convention).
     fn set_ime_cursor_area(&self, area: Bounds<f64>);
 }

@@ -237,16 +237,14 @@ fn main() {
     let platform = current_platform().expect("failed to initialize platform");
     tracing::info!("platform: {}", platform.name());
 
-    let options = WindowOptions {
-        title: "FLUI Color Filter Demo — Mode / Gamma / Matrix (SceneBuilder API)".to_string(),
-        size: Size::new(1100.0, 600.0),
-        resizable: true,
-        visible: true,
-        decorated: true,
-        min_size: None,
-        max_size: None,
-        ..Default::default()
-    };
+    let options = WindowOptions::default()
+        .with_title("FLUI Color Filter Demo — Mode / Gamma / Matrix (SceneBuilder API)".to_string())
+        .with_size(Size::new(1100.0, 600.0))
+        .with_resizable(true)
+        .with_visible(true)
+        .with_decorated(true)
+        .with_min_size(None)
+        .with_max_size(None);
 
     let window = platform
         .open_window(options)

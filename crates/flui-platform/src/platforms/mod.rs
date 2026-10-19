@@ -14,11 +14,15 @@ pub mod macos;
 #[cfg(target_os = "linux")]
 pub mod linux;
 
-// The Linux display models are pure, so every host checks them; the rest of
-// the Linux backend exists on Linux only.
+// The Linux display and lifecycle models are pure, so every host checks them;
+// the rest of the Linux backend exists on Linux only.
 #[cfg(all(test, not(target_os = "linux")))]
 #[path = "linux/display/mod.rs"]
 mod linux_display_models;
+
+#[cfg(all(test, not(target_os = "linux")))]
+#[path = "linux/lifecycle_model/mod.rs"]
+mod linux_lifecycle_models;
 
 // Mobile platforms
 #[cfg(target_os = "android")]
@@ -46,7 +50,8 @@ pub use android::AndroidPlatform;
 pub use headless::{
     DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeHaptics,
     FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessDisplayControls,
-    HeadlessExitReevaluation, HeadlessOwnerTurns, HeadlessPlatform, MockWindow,
+    HeadlessExitReevaluation, HeadlessHostEvents, HeadlessOwnerTurns, HeadlessPlatform,
+    HeadlessWindowPolicy, MockWindow,
 };
 #[cfg(target_os = "ios")]
 pub use ios::IOSPlatform;

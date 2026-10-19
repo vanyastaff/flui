@@ -223,16 +223,16 @@ mod appkit_ime_probe {
         // A VISIBLE window, ordered front: AppKit routes a key event into the
         // input context of a key window, and a window that is never ordered
         // front never becomes one.
-        let window: Arc<dyn PlatformWindow> = match owner.open_window(WindowOptions {
-            title: TITLE.to_string(),
-            size: Size::new(480.0, 320.0),
-            resizable: false,
-            visible: true,
-            decorated: true,
-            min_size: None,
-            max_size: None,
-            ..Default::default()
-        }) {
+        let window: Arc<dyn PlatformWindow> = match owner.open_window(
+            WindowOptions::default()
+                .with_title(TITLE)
+                .with_size(Size::new(480.0, 320.0))
+                .with_resizable(false)
+                .with_visible(true)
+                .with_decorated(true)
+                .with_min_size(None)
+                .with_max_size(None),
+        ) {
             Ok(pending) => match pending.try_ready() {
                 Ok(window) => window,
                 Err(error) => fatal(format!("the window was not ready: {error:?}")),

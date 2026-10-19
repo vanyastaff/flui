@@ -1,7 +1,9 @@
 //! Native show-mode probe. Run each case in a child with an external timeout.
 #[cfg(target_os = "macos")]
 mod native {
-    use flui_platform::{OwnerPlatform, PlatformWindow, WindowOptions, WindowShowError};
+    use flui_platform::{
+        OwnerPlatform, PlatformWindow, WindowCommand, WindowMode, WindowOptions, WindowShowError,
+    };
     use objc2_app_kit::{NSWindow, NSWindowStyleMask};
     use std::{
         cell::RefCell,
@@ -13,6 +15,11 @@ mod native {
     };
     thread_local! {
         static OWNER: RefCell<Option<OwnerPlatform>> = const { RefCell::new(None) };
+    }
+    fn set_mode(window: &dyn PlatformWindow, mode: WindowMode) {
+        window
+            .apply(WindowCommand::SetMode(mode))
+            .expect("the window takes the mode");
     }
     fn quit() {
         OWNER.with(|slot| slot.borrow().as_ref().expect("owner").quit());
@@ -61,9 +68,11 @@ mod native {
                 later(failure, Duration::from_millis(300), move || {
                     match mode.as_str() {
                         "hidden" => native_window(window.as_ref()).orderOut(None),
-                        "minimized" => window.minimize(),
-                        "maximized" | "maximized-minimized" => window.maximize(),
-                        "fullscreen" => window.toggle_fullscreen(),
+                        "minimized" => set_mode(window.as_ref(), WindowMode::Minimized),
+                        "maximized" | "maximized-minimized" => {
+                            set_mode(window.as_ref(), WindowMode::Maximized);
+                        }
+                        "fullscreen" => set_mode(window.as_ref(), WindowMode::Fullscreen),
                         _ => {}
                     }
                     let failure_last = Arc::clone(&failure_next);
@@ -73,7 +82,7 @@ mod native {
                                 native_window(window.as_ref()).isZoomed(),
                                 "maximize actually observed"
                             );
-                            window.minimize();
+                            set_mode(window.as_ref(), WindowMode::Minimized);
                         }
                         let failure_check = Arc::clone(&failure_last);
                         later(failure_last, Duration::from_millis(800), move || {
@@ -94,7 +103,7 @@ mod native {
                                 assert!(!native.isVisible(), "hidden state established");
                             }
                             if legacy {
-                                window.restore();
+                                set_mode(window.as_ref(), WindowMode::Normal);
                                 window.activate();
                             } else {
                                 window.show().expect("show");

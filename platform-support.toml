@@ -1,0 +1,44 @@
+# The lowest version of each environment FLUI runs on (ADR-0244).
+#
+# This is the only place a floor is written by hand. `cargo xtask platform-floor --write`
+# generates from it the floors `flui-platform` and `flui-cli` compile in and the version map
+# (`docs/version-map.md`); `cargo xtask platform-floor` fails when any of them, or a template
+# that states a floor, disagrees with this file.
+#
+# A floor is the highest of the Rust target's minimum, the minimum of the GPU backend FLUI enables
+# there and the minimum of each API the backend cannot work without. A newer API is a typed gate,
+# never a reason to raise a floor. A floor rises only when the stack moves: the change edits this
+# file, records the reason in `set-by`, and adds a `changelog.d` entry under `### Changed`.
+
+[windows]
+# The `dwBuildNumber` RtlGetVersion reports.
+build = 10240
+release = "Windows 10 1507"
+set-by = "the Rust target and D3D12; per-monitor DPI v2 (1703) and later APIs are gates"
+
+[macos]
+x86_64 = "10.13"
+aarch64 = "11.0"
+set-by = "wgpu's Metal backend on x86_64; 11.0 is the first arm64 release"
+
+[ios]
+version = "13.0"
+set-by = "UIScene and UIWindowScene, through which the backend gets its window"
+
+[android]
+# The API level, which the APK declares as `minSdk`.
+api = 23
+release = "Android 6.0"
+set-by = "the backend's own NDK use (`__system_property_get`, the API level read) and `View.getRootWindowInsets` for the safe area; Vulkan or GLES 3.0"
+
+[linux]
+glibc = "2.17"
+requires = [
+    "a Vulkan 1.0 or GLES 3.0 driver",
+    "Wayland with `xdg_wm_base` 1, or X11 with RandR 1.5",
+]
+set-by = "the Rust target, wgpu, and the window and display protocols the backend binds"
+
+[web]
+requires = ["WebGPU or WebGL2"]
+set-by = "the browser's graphics API, detected and never read from a browser version"
