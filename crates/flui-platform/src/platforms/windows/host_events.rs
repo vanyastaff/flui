@@ -62,6 +62,8 @@ pub(super) struct HostEvents {
     blocking: Cell<Option<HWND>>,
     session_notification: Cell<Option<HWND>>,
     memory: RefCell<Option<LowMemoryWait>>,
+    /// The timer that ends a low-memory hold could not be set and is retried.
+    rearm_timer_owed: Cell<bool>,
 }
 
 impl HostEvents {
@@ -76,6 +78,7 @@ impl HostEvents {
             blocking: Cell::new(None),
             session_notification: Cell::new(None),
             memory: RefCell::new(None),
+            rearm_timer_owed: Cell::new(false),
         }
     }
 
@@ -120,6 +123,9 @@ impl HostEvents {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> Option<LRESULT> {
+        if self.rearm_timer_owed.get() {
+            self.arm_rearm_timer(hwnd);
+        }
         if message == LOW_MEMORY {
             self.low_memory(hwnd);
             return Some(LRESULT(0));
@@ -249,7 +255,15 @@ impl HostEvents {
         if !owed {
             return;
         }
-        // The hold ends by timer; the wait is registered again then.
+        self.arm_rearm_timer(receiver);
+        self.notices
+            .dispatch(SystemNotice::MemoryPressure(MemoryPressureLevel::Critical));
+    }
+
+    /// Start the timer that ends the hold after a report. If the system will
+    /// not give one, the obligation stays: every later message to the receiver
+    /// tries again, so the wait is not lost for the life of the platform.
+    fn arm_rearm_timer(&self, receiver: HWND) {
         // SAFETY: a timer on the live receiver; the id is this file's.
         let timer = unsafe {
             SetTimer(
@@ -259,11 +273,25 @@ impl HostEvents {
                 None,
             )
         };
-        if timer == 0 {
-            tracing::warn!("low-memory notices cannot be re-armed; none will follow");
+        let failed = timer == 0;
+        if failed && !self.rearm_timer_owed.replace(true) {
+            tracing::warn!("the low-memory re-arm timer could not be set; retrying later");
         }
-        self.notices
-            .dispatch(SystemNotice::MemoryPressure(MemoryPressureLevel::Critical));
+        if !failed {
+            self.rearm_timer_owed.set(false);
+        }
+    }
+
+    /// Whether the timer that ends a hold is still to be set.
+    #[cfg(test)]
+    pub(super) fn rearm_timer_owed_for_test(&self) -> bool {
+        self.rearm_timer_owed.get()
+    }
+
+    /// Pretend the system refused the re-arm timer.
+    #[cfg(test)]
+    pub(super) fn owe_rearm_timer_for_test(&self) {
+        self.rearm_timer_owed.set(true);
     }
 
     fn rearm_low_memory(&self, receiver: HWND) {

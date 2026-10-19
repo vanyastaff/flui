@@ -234,13 +234,28 @@ fn low_memory_is_reported_once_per_hold() {
     assert_eq!(*heard.lock().expect("log"), [critical, critical]);
 }
 
+fn a_refused_rearm_timer_is_set_again_by_the_next_message() {
+    let (receiver, host, _heard) = hosted_receiver();
+    host.owe_rearm_timer_for_test();
+    assert!(host.rearm_timer_owed_for_test());
+    // Any message the receiver gets pays the debt.
+    receiver.send_with_for_test(windows::Win32::UI::WindowsAndMessaging::WM_NULL, 0, 0);
+    assert!(!host.rearm_timer_owed_for_test());
+}
+
 #[test]
 fn host_event_sources() {
     crate::table_test::run_table(
         "host_event_sources",
-        &[(
-            "low_memory_is_reported_once_per_hold",
-            low_memory_is_reported_once_per_hold as fn(),
-        )],
+        &[
+            (
+                "low_memory_is_reported_once_per_hold",
+                low_memory_is_reported_once_per_hold as fn(),
+            ),
+            (
+                "a_refused_rearm_timer_is_set_again_by_the_next_message",
+                a_refused_rearm_timer_is_set_again_by_the_next_message as fn(),
+            ),
+        ],
     );
 }

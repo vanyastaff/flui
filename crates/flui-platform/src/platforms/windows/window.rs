@@ -621,18 +621,26 @@ fn first_show_command(
 /// `WINDOWPLACEMENT::rcNormalPosition` uses: measured from the work area,
 /// which a taskbar on the top or left edge moves away from the monitor's origin
 /// by `origin`.
+///
+/// Saturating: a rectangle at the edge of the range stays there instead of
+/// wrapping to the other side of the desktop.
 fn to_workspace(rect: RECT, origin: (i32, i32)) -> RECT {
     RECT {
-        left: rect.left - origin.0,
-        top: rect.top - origin.1,
-        right: rect.right - origin.0,
-        bottom: rect.bottom - origin.1,
+        left: rect.left.saturating_sub(origin.0),
+        top: rect.top.saturating_sub(origin.1),
+        right: rect.right.saturating_sub(origin.0),
+        bottom: rect.bottom.saturating_sub(origin.1),
     }
 }
 
 /// The inverse of [`to_workspace`].
 fn to_screen(rect: RECT, origin: (i32, i32)) -> RECT {
-    to_workspace(rect, (-origin.0, -origin.1))
+    RECT {
+        left: rect.left.saturating_add(origin.0),
+        top: rect.top.saturating_add(origin.1),
+        right: rect.right.saturating_add(origin.0),
+        bottom: rect.bottom.saturating_add(origin.1),
+    }
 }
 
 /// What every Win32 window honours and observes, known before one exists
@@ -3322,6 +3330,15 @@ mod frame_tests {
         assert!(same(to_screen(workspace, (72, 0)), screen));
     }
 
+    fn a_rectangle_at_the_edge_of_the_range_saturates_in_both_directions() {
+        let edge = rect(i32::MIN, i32::MIN, i32::MIN + 10, i32::MIN + 10);
+        let moved = to_workspace(edge, (72, 48));
+        assert_eq!((moved.left, moved.top), (i32::MIN, i32::MIN));
+        let high = rect(i32::MAX - 5, i32::MAX - 5, i32::MAX, i32::MAX);
+        let back = to_screen(high, (72, 48));
+        assert_eq!((back.right, back.bottom), (i32::MAX, i32::MAX));
+    }
+
     fn a_taskbar_on_the_bottom_or_right_leaves_the_origin_alone() {
         let screen = rect(-1920, 10, -1000, 500);
         assert!(same(to_workspace(screen, (0, 0)), screen));
@@ -3379,6 +3396,10 @@ mod frame_tests {
                 (
                     "a_taskbar_on_the_left_edge_shifts_workspace_coordinates",
                     a_taskbar_on_the_left_edge_shifts_workspace_coordinates as fn(),
+                ),
+                (
+                    "a_rectangle_at_the_edge_of_the_range_saturates_in_both_directions",
+                    a_rectangle_at_the_edge_of_the_range_saturates_in_both_directions as fn(),
                 ),
                 (
                     "a_taskbar_on_the_bottom_or_right_leaves_the_origin_alone",
