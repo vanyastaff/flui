@@ -651,12 +651,13 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn capabilities(&self) -> WindowCapabilities {
-        let mut capabilities = self.capabilities;
         #[cfg(target_os = "linux")]
         if self.minimize_unobserved.load(Ordering::Acquire) {
+            let mut capabilities = self.capabilities;
             capabilities.observes_minimized = false;
+            return capabilities;
         }
-        capabilities
+        self.capabilities
     }
 
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
