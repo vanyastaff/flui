@@ -244,7 +244,7 @@ fn x11_probe_sets_the_mode_of_a_window_that_is_not_mapped() {
     let fixture = Fixture::new();
     assert_eq!(probe.mode(fixture.window), Some(WindowMode::Normal));
 
-    // Minimized is no state to set.
+    // Minimized is no mode to open in: it leaves the window with none.
     probe.set_mode_hint(fixture.window, WindowMode::Minimized);
     assert_eq!(fixture.state_names(), Vec::<String>::new());
 
@@ -255,6 +255,12 @@ fn x11_probe_sets_the_mode_of_a_window_that_is_not_mapped() {
     probe.set_mode_hint(fixture.window, WindowMode::Fullscreen);
     assert_eq!(probe.mode(fixture.window), Some(WindowMode::Fullscreen));
     assert_eq!(fixture.state_names(), ["_NET_WM_STATE_FULLSCREEN"]);
+
+    // Minimizing a window that opens maximized or fullscreen drops the mode it
+    // would otherwise be mapped in.
+    fixture.set_state(&["_NET_WM_STATE_ABOVE", "_NET_WM_STATE_FULLSCREEN"]);
+    probe.set_mode_hint(fixture.window, WindowMode::Minimized);
+    assert_eq!(fixture.state_names(), ["_NET_WM_STATE_ABOVE"]);
 
     // Normal clears the mode and leaves what is not a mode alone.
     fixture.set_state(&["_NET_WM_STATE_ABOVE", "_NET_WM_STATE_FULLSCREEN"]);

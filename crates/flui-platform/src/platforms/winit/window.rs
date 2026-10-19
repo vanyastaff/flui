@@ -94,6 +94,9 @@ pub struct WinitWindow {
     /// Whether the window was created hidden and still waits for its first
     /// frame (or an explicit show) to become visible.
     reveal_pending: Mutex<bool>,
+    /// Whether the window was asked to minimize while it was unmapped: it is
+    /// minimized once mapped.
+    minimize_on_map: AtomicBool,
     /// Whether the window was created unmapped to open maximized or fullscreen
     /// and is mapped once its mode is set: see [`OpenPlan::map_after_setup`].
     map_after_setup: bool,
@@ -223,6 +226,7 @@ impl WinitWindow {
                     .map(|geometry| geometry.size),
             ),
             reveal_pending: Mutex::new(plan.hidden_until_first_frame),
+            minimize_on_map: AtomicBool::new(false),
             frame_inset,
             #[cfg(target_os = "linux")]
             x11: std::sync::OnceLock::new(),
@@ -279,8 +283,7 @@ impl WinitWindow {
         {
             let mut pending = self.reveal_pending.lock();
             *pending = false;
-            self.fit_to_remembered_rectangle();
-            self.window.set_visible(true);
+            self.map_window();
         }
         self.refresh_state();
     }
@@ -418,6 +421,10 @@ impl WinitWindow {
     /// mode from depending on what the window manager makes of two requests at
     /// once: it keeps a minimized window minimized under a maximize.
     fn enter_mode(&self, mode: WindowMode) -> Result<(), WindowCommandError> {
+        if *self.reveal_pending.lock() || !*self.is_visible.lock() {
+            self.minimize_on_map
+                .store(mode == WindowMode::Minimized, Ordering::Release);
+        }
         #[cfg(target_os = "linux")]
         self.seed_unmapped_mode(mode);
         match mode {
@@ -499,9 +506,20 @@ impl WinitWindow {
     fn make_visible(&self) {
         let mut pending = self.reveal_pending.lock();
         *pending = false;
+        self.map_window();
+        *self.is_visible.lock() = true;
+    }
+
+    /// Map the window, which is unmapped and holds `reveal_pending`: fitted to
+    /// the rectangle it was opened with, and minimized if that is what it was
+    /// last asked to be, which a window manager only honours for a window it
+    /// manages.
+    fn map_window(&self) {
         self.fit_to_remembered_rectangle();
         self.window.set_visible(true);
-        *self.is_visible.lock() = true;
+        if self.minimize_on_map.swap(false, Ordering::AcqRel) {
+            self.window.set_minimized(true);
+        }
     }
 
     /// Hide the window. A hidden window has no first frame to wait for.
@@ -736,8 +754,7 @@ impl PlatformWindow for WinitWindow {
             if self.closed.load(Ordering::Acquire) || !std::mem::take(&mut *pending) {
                 return;
             }
-            self.fit_to_remembered_rectangle();
-            self.window.set_visible(true);
+            self.map_window();
         }
         self.refresh_state();
     }

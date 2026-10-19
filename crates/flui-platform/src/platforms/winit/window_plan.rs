@@ -68,6 +68,25 @@ pub(super) struct PlacementDisplay {
 }
 
 impl PlacementDisplay {
+    /// `geometry`, measured from this display's usable origin in its logical
+    /// pixels, as the global logical rectangle a window state publishes.
+    fn to_global(self, geometry: WindowGeometry) -> WindowGeometry {
+        let scale = self.scale_factor;
+        if !(scale.is_finite() && scale > 0.0) {
+            return geometry;
+        }
+        let origin = Point::new(
+            f64::from(self.origin.x) / scale,
+            f64::from(self.origin.y) / scale,
+        );
+        WindowGeometry::new(
+            geometry
+                .position
+                .map(|at| Point::new(at.x + origin.x, at.y + origin.y)),
+            geometry.size,
+        )
+    }
+
     /// The display options measure their position on: the one `wanted` names
     /// if the snapshot holds it, else global coordinates (origin zero) at the
     /// primary display's scale.
@@ -119,7 +138,8 @@ pub(super) struct OpenPlan {
     /// its properties like any other unmapped window's, and it stays unmapped
     /// until the application shows it.
     pub hidden_by_application: bool,
-    /// The rectangle the window returns to from `mode`, when it opens
+    /// The rectangle the window returns to from `mode`, in global logical
+    /// pixels, when it opens
     /// maximized or fullscreen with one remembered.
     pub normal_geometry: Option<WindowGeometry>,
 }
@@ -199,7 +219,7 @@ impl OpenPlan {
                 && !hidden_until_first_frame
                 && mode != WindowMode::Normal,
             hidden_by_application: !options.visible && shell.defers_reveal(),
-            normal_geometry: returns_to,
+            normal_geometry: returns_to.map(|geometry| display.to_global(geometry)),
         }
     }
 }
@@ -542,7 +562,37 @@ mod tests {
             Size::new(998.0, 670.0),
             "outer less the frame"
         );
-        assert_eq!(planned.normal_geometry, Some(returns_to));
+        // The state publishes global positions, whatever display the options
+        // measured theirs from.
+        assert_eq!(
+            planned.normal_geometry,
+            Some(WindowGeometry::new(
+                Some(Point::new(2220.0, 200.0)),
+                Size::new(1000.0, 700.0)
+            ))
+        );
+
+        // On a scaled display the usable origin is in device pixels.
+        let scaled = PlacementDisplay {
+            origin: Point::new(1920, 56),
+            scale_factor: 2.0,
+        };
+        let relative = WindowGeometry::new(Some(Point::new(100.0, 50.0)), Size::new(1000.0, 700.0));
+        let on_scaled = options()
+            .with_mode(WindowMode::Maximized)
+            .with_normal_geometry(Some(relative));
+        let planned = OpenPlan::new(
+            &on_scaled,
+            WindowShell::Desktop,
+            scaled,
+            Size::new(0.0, 0.0),
+        );
+        assert_eq!(
+            planned
+                .normal_geometry
+                .and_then(|geometry| geometry.position),
+            Some(Point::new(1060.0, 78.0))
+        );
 
         // A normal window ignores the rectangle it has no use for.
         let normal = options().with_normal_geometry(Some(returns_to));

@@ -193,11 +193,12 @@ impl X11WindowProbe {
     /// has a client do for a window that is not managed yet: the window manager
     /// reads the property when it maps the window, and ignores a client message
     /// about a window it does not manage. [`WindowMode::Normal`] clears the
-    /// mode. Minimized is no state to set here.
+    /// mode, and so does [`WindowMode::Minimized`], which is no mode to be
+    /// mapped in (the window is minimized after it is mapped).
     pub(crate) fn set_mode_hint(&self, window: u32, mode: WindowMode) {
         let states = &self.atoms.states;
         let wanted: &[u32] = match mode {
-            WindowMode::Normal => &[],
+            WindowMode::Normal | WindowMode::Minimized => &[],
             WindowMode::Maximized => &[states.maximized_horz, states.maximized_vert],
             WindowMode::Fullscreen => &[states.fullscreen],
             _ => return,
