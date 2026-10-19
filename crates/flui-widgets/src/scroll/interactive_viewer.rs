@@ -12,7 +12,7 @@
 //!
 //! Panning is scrolling (ADR-0209). A contact's pan is a sequence of
 //! [`ScrollCause::UserInput`] steps under the contact's
-//! [`InputSequenceId`](flui_interaction::InputSequenceId), dispatched through
+//! [`InputSequenceId`], dispatched through
 //! the chain of [`NestedScrollConnection`](crate::NestedScrollConnection)s
 //! and scrollables above the viewer: the viewer takes what its boundary
 //! admits and the remainder goes up, so a photo at its edge (or not zoomed

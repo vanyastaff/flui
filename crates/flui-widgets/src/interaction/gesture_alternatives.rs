@@ -6,7 +6,7 @@
 //! viewer, a context-menu area) takes a `GestureAlternatives` in its
 //! constructor. Its gesture performs one [`GestureCommand`], an [`Intent`]
 //! with a label; the alternatives perform the same intent through the same
-//! [`Actions`](super::actions::Actions) chain:
+//! [`Actions`] chain:
 //!
 //! | Path | What reaches the intent |
 //! |---|---|
@@ -77,7 +77,7 @@ use flui_rendering::parent_data::FlexFit;
 /// has a single-pointer path.
 ///
 /// Passing a closure instead of an intent does not compile: the gesture's
-/// effect is an intent bound with [`Actions`](super::actions::Actions), so
+/// effect is an intent bound with [`Actions`], so
 /// every path performs the same one.
 #[derive(Clone)]
 pub struct GestureCommand {
@@ -619,7 +619,7 @@ pub enum GestureAlternativesError {
 ///
 /// The widget's gesture performs the first command through
 /// [`handle`](Self::handle). Every path resolves the command's intent through
-/// the [`Actions`](super::actions::Actions) chain where the alternatives are
+/// the [`Actions`] chain where the alternatives are
 /// mounted, so every path has one outcome.
 #[derive(Clone, StatefulView)]
 pub struct GestureAlternatives {

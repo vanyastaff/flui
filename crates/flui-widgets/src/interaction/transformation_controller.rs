@@ -1,5 +1,5 @@
 //! [`TransformationController`] — the external handle for
-//! [`InteractiveViewer`](super::InteractiveViewer)'s transform.
+//! [`InteractiveViewer`](crate::InteractiveViewer)'s transform.
 
 use std::{cell::Cell, fmt, rc::Rc};
 

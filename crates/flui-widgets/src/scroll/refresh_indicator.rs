@@ -328,7 +328,7 @@ impl_inherited_view!(RefreshIndicatorStyle);
 type RefreshCallback = Rc<dyn Fn(&mut EventCx<'_>) -> BoxedTask>;
 
 /// Pull to refresh over the scrollables in its child (see the
-/// [module](self) documentation).
+/// `refresh_indicator` module documentation).
 ///
 /// ```rust
 /// use flui_widgets::{

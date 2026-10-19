@@ -1,7 +1,7 @@
 //! [`FocusRing`] — the keyboard focus indicator — and the inherited
 //! [`DefaultFocusRingStyle`] that themes it.
 //!
-//! The ring shows only while the enclosing [`Focus`](super::focus::Focus)
+//! The ring shows only while the enclosing [`Focus`]
 //! has *visible* focus
 //! ([`FocusNode::has_visible_focus`](flui_interaction::focus::FocusNode::has_visible_focus)): focus a key,
 //! traversal or assistive technology moved or used. Focus a pointer press set

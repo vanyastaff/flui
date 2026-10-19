@@ -1,7 +1,7 @@
 //! OLE drag and drop, as source and as target (ADR-0038, ADR-0211).
 //!
 //! [`OleTransfer`] is the platform's one [`DataTransferSource`]. Every window
-//! registers a [`WindowDropTarget`](com::WindowDropTarget) with
+//! registers a [`WindowDropTarget`] with
 //! `RegisterDragDrop`; a drag over it, from this process or another, mints an
 //! offer in the transfer's table, keeps the drag's `IDataObject` for lazy
 //! fetches, and answers the OS's synchronous hover queries from the feedback

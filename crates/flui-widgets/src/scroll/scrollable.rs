@@ -29,7 +29,7 @@
 //! # Runs
 //!
 //! A release starts a `ScrollPhysics` ballistic simulation (or a spring to a
-//! [`SnapPolicy`](super::SnapPolicy) target) on the scrollable's one
+//! [`SnapPolicy`] target) on the scrollable's one
 //! `AnimationController`, registered with the ambient [`VsyncScope`] so the
 //! binding ticks it each frame. Each tick is a step of the sequence that
 //! released it. A run that reaches a hard extent with velocity to spare
@@ -520,7 +520,7 @@ pub struct ScrollableState {
     fling_status_subscription: Option<StatusSubscription>,
     /// Listener ID on the *scroll* controller that services an
     /// `animate_to`/`jump_to`-queued command
-    /// ([`ScrollController::service_pending_command`]). Installed by
+    /// (`ScrollOwner::service_pending_command`). Installed by
     /// [`install_command_listener`](ScrollableState::install_command_listener)
     /// alongside the fling listeners, re-run on `did_update_view` so a
     /// controller swap moves it, removed in `dispose`.

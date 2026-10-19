@@ -87,7 +87,7 @@ pub(crate) type PassHook = Rc<dyn Fn() -> bool>;
 // ---------------------------------------------------------------------------
 
 /// A command queued by [`ScrollController::animate_to`]/[`jump_to`](ScrollController::jump_to)
-/// for [`ScrollController::service_pending_command`] to act on, called from
+/// for `ScrollOwner::service_pending_command` to act on, called from
 /// `ScrollableState`'s notify-triggered command listener
 /// (`scrollable.rs`).
 ///

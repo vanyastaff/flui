@@ -1178,7 +1178,7 @@ pub(super) fn capture_on_press(hwnd: HWND) {
 /// Releases `hwnd`'s mouse capture after a button release that leaves no
 /// button held (`wparam` is the release's `MK_*` mask, which no longer has
 /// the released button). The release itself sends `WM_CAPTURECHANGED`, which
-/// [`capture_changed_event`] recognizes as the sequence's own end.
+/// the `WM_CAPTURECHANGED` handler recognizes as the sequence's own end.
 pub(super) fn release_capture_after(hwnd: HWND, wparam: WPARAM) {
     if !held_buttons(wparam).is_empty() {
         return;
