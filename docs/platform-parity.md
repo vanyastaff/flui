@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-18 · **Change:** minor (Windows two-monitor run) ·
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-18 · **Change:** minor (Android lifecycle signals) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -58,12 +58,12 @@ Counted over every row of the core and system-service sections.
 | Quit, exit request, last-window policy | 🟡 | ✅ | ✅ | ✅ | — | 🟡 | 🟡 | ✅ | macOS Cmd+Q and close ran; `live-smoke` checks the exit code; iOS has no quit API | 2–3 |
 | Close request with veto | 🟡 | ✅ | 🟡 | 🟡 | — | — | ❌ | ✅ | Web has no `beforeunload` | 2–3 |
 | Reopen with no windows (Dock click) | — | ✅ | — | — | — | — | — | ❌ | `device macos-reopen`; headless can't drive it | 1 |
-| Focus and active state | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Android `is_focused()` is always true | 2–4 |
-| Visibility, minimize, occlusion | 🟡 | ✅ | ❌ | ✅ | ✅ | ❌ | 🟡 | ✅ | Windows sees minimize and restore only; winit never reports occlusion on Wayland; Android never dispatches visibility. Runs: macOS minimize and hide, the X11 cover window in `live-smoke`, iOS Home and return | 6–10 |
-| Suspend, resume, GPU-surface loss | — | — | — | — | ✅ | 🟡 | ❌ | ✅ | Android never dispatches execution-state changes; Web ignores page freeze, `webglcontextlost` and device loss | 4–8 |
+| Focus and active state | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Android follows `onWindowFocusChanged` alone, and focus no longer stands for the Activity being resumed; not run on a device yet | 2–4 |
+| Visibility, minimize, occlusion | 🟡 | ✅ | ❌ | ✅ | ✅ | 🟡 | 🟡 | ✅ | Windows sees minimize and restore only; winit never reports occlusion on Wayland; Android dispatches `onStart` and `onStop` as visibility (not run on a device yet). Runs: macOS minimize and hide, the X11 cover window in `live-smoke`, iOS Home and return | 6–10 |
+| Suspend, resume, GPU-surface loss | — | — | — | — | ✅ | 🟡 | ❌ | ✅ | Android dispatches `onResume` and `onPause` as the execution state, apart from focus (not run on a device yet); Web ignores page freeze, `webglcontextlost` and device loss | 4–8 |
 | Sleep, wake, screen lock | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Not in the contract | 3–5 |
-| Session end (log off, shutdown) with veto | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | No backend handles it, and `flui-app` can't register the hook (`OwnerPlatform` doesn't expose it) | 4–6 |
-| Memory pressure | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | Not in the contract; Android only logs `LowMemory` | 3–5 |
+| Session end (log off, shutdown) with veto | ❌ | ❌ | ❌ | ❌ | — | 🟡 | — | ❌ | Android sends the end notice only, from `onSaveInstanceState`, with no veto (not run on a device yet). No other backend delivers it yet | 4–6 |
+| Memory pressure | ❌ | ❌ | ❌ | ❌ | ❌ | 🟡 | — | ❌ | Android gives `Critical` for `onLowMemory` and reads `lastTrimLevel` through JNI on `LowMemory`, `Pause`, `Stop` and `Resume` (NativeActivity has no `onTrimMemory`); not run on a device yet | 3–5 |
 | Bring the app forward, request attention | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Windows `activate` re-foregrounds whatever is already in front; Wayland needs an `xdg-activation` token | 3–5 |
 | Single instance, forward arguments | ❌ | — | ❌ | ❌ | — | — | — | ❌ | macOS enforces one instance itself | 3–5 |
 | Deep links, URL schemes, file associations | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | `on_open_urls` is never called, at cold start or while running; the Web entry URL is under history routing | 12–20 |

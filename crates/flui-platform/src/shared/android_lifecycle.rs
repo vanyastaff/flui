@@ -16,12 +16,12 @@
 //!
 //! `onTrimMemory` is not delivered by `android-activity` 0.6 (it needs a Java
 //! `ComponentCallbacks2`, and this backend ships no Java), so memory pressure
-//! comes from two places: `onLowMemory` is [`Pressure::Critical`], and the
+//! comes from two places: `onLowMemory` is [`MemoryPressureLevel::Critical`], and the
 //! level `ActivityManager.getMyMemoryState(..).lastTrimLevel` holds is read
 //! when a callback that can change it arrives, never polled. This module
 //! decides what each of them means; reading the level is the backend's.
 
-use flui_platform_api::WindowExecutionState;
+use flui_platform_api::{MemoryPressureLevel, WindowExecutionState};
 
 /// The Activity callbacks that matter for the lifecycle, without the payloads
 /// `android_activity::MainEvent` carries.
@@ -77,28 +77,19 @@ pub(crate) enum ActivitySignal {
     SessionEnded,
 }
 
-/// How much memory the system wants back.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum Pressure {
-    Moderate,
-    Critical,
-}
-
-impl Pressure {
-    /// What an `ActivityManager.RunningAppProcessInfo.lastTrimLevel` asks for,
-    /// `None` for the levels that are not memory pressure.
-    ///
-    /// `TRIM_MEMORY_UI_HIDDEN` (20) says the UI went away, which `Stop` already
-    /// reports; `0` and unknown future values ask for nothing.
-    pub(crate) const fn from_trim_level(level: i32) -> Option<Self> {
-        match level {
-            TRIM_MEMORY_RUNNING_MODERATE
-            | TRIM_MEMORY_RUNNING_LOW
-            | TRIM_MEMORY_BACKGROUND
-            | TRIM_MEMORY_MODERATE => Some(Self::Moderate),
-            TRIM_MEMORY_RUNNING_CRITICAL | TRIM_MEMORY_COMPLETE => Some(Self::Critical),
-            _ => None,
-        }
+/// What an `ActivityManager.RunningAppProcessInfo.lastTrimLevel` asks for,
+/// `None` for the levels that are not memory pressure.
+///
+/// `TRIM_MEMORY_UI_HIDDEN` (20) says the UI went away, which `Stop` already
+/// reports; `0` and unknown future values ask for nothing.
+pub(crate) const fn pressure_for_trim_level(level: i32) -> Option<MemoryPressureLevel> {
+    match level {
+        TRIM_MEMORY_RUNNING_MODERATE
+        | TRIM_MEMORY_RUNNING_LOW
+        | TRIM_MEMORY_BACKGROUND
+        | TRIM_MEMORY_MODERATE => Some(MemoryPressureLevel::Moderate),
+        TRIM_MEMORY_RUNNING_CRITICAL | TRIM_MEMORY_COMPLETE => Some(MemoryPressureLevel::Critical),
+        _ => None,
     }
 }
 
@@ -114,7 +105,7 @@ const TRIM_MEMORY_COMPLETE: i32 = 80;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Reaction {
     pub signal: Option<ActivitySignal>,
-    pub pressure: Option<Pressure>,
+    pub pressure: Option<MemoryPressureLevel>,
 }
 
 /// The state the mapping needs between callbacks: the trim level last seen.
@@ -149,7 +140,8 @@ impl ActivityLifecycle {
             ActivityEvent::SaveState => Some(ActivitySignal::SessionEnded),
             ActivityEvent::LowMemory => None,
         };
-        let from_event = matches!(event, ActivityEvent::LowMemory).then_some(Pressure::Critical);
+        let from_event =
+            matches!(event, ActivityEvent::LowMemory).then_some(MemoryPressureLevel::Critical);
         let from_level = if event.may_move_trim_level() {
             self.observe_trim_level(read_trim_level())
         } else {
@@ -161,12 +153,12 @@ impl ActivityLifecycle {
         }
     }
 
-    fn observe_trim_level(&mut self, level: Option<i32>) -> Option<Pressure> {
+    fn observe_trim_level(&mut self, level: Option<i32>) -> Option<MemoryPressureLevel> {
         let level = level?;
         if self.last_trim_level.replace(level) == Some(level) {
             return None;
         }
-        Pressure::from_trim_level(level)
+        pressure_for_trim_level(level)
     }
 }
 
@@ -174,7 +166,7 @@ impl ActivityLifecycle {
 mod tests {
     use super::{
         ActivityEvent::{self, *},
-        ActivityLifecycle, ActivitySignal, Pressure, Reaction,
+        ActivityLifecycle, ActivitySignal, MemoryPressureLevel, Reaction, pressure_for_trim_level,
     };
     use flui_platform_api::WindowExecutionState::{Running, Suspended};
 
@@ -211,22 +203,25 @@ mod tests {
         }
 
         // The system's own low-memory call is `Critical` with no level read.
-        assert_eq!(react(LowMemory, None).pressure, Some(Pressure::Critical));
+        assert_eq!(
+            react(LowMemory, None).pressure,
+            Some(MemoryPressureLevel::Critical)
+        );
 
         // `lastTrimLevel` maps to the two levels.
         for (level, pressure) in [
             (0, None),
-            (5, Some(Pressure::Moderate)),
-            (10, Some(Pressure::Moderate)),
-            (15, Some(Pressure::Critical)),
+            (5, Some(MemoryPressureLevel::Moderate)),
+            (10, Some(MemoryPressureLevel::Moderate)),
+            (15, Some(MemoryPressureLevel::Critical)),
             (20, None),
-            (40, Some(Pressure::Moderate)),
-            (60, Some(Pressure::Moderate)),
-            (80, Some(Pressure::Critical)),
+            (40, Some(MemoryPressureLevel::Moderate)),
+            (60, Some(MemoryPressureLevel::Moderate)),
+            (80, Some(MemoryPressureLevel::Critical)),
             (-1, None),
             (81, None),
         ] {
-            assert_eq!(Pressure::from_trim_level(level), pressure, "level {level}");
+            assert_eq!(pressure_for_trim_level(level), pressure, "level {level}");
         }
 
         // Only a callback that can have moved the level reads it.
@@ -249,7 +244,7 @@ mod tests {
         let mut lifecycle = ActivityLifecycle::default();
         assert_eq!(
             lifecycle.react(Pause, || Some(40)).pressure,
-            Some(Pressure::Moderate)
+            Some(MemoryPressureLevel::Moderate)
         );
         assert_eq!(lifecycle.react(Stop, || None).pressure, None);
         assert_eq!(lifecycle.react(Resume, || Some(40)).pressure, None);
@@ -261,16 +256,16 @@ mod tests {
         let mut deliver = |event, level| lifecycle.react(event, || Some(level)).pressure;
 
         // `Pause` and `Stop` at the same level are one notice.
-        assert_eq!(deliver(Pause, 40), Some(Pressure::Moderate));
+        assert_eq!(deliver(Pause, 40), Some(MemoryPressureLevel::Moderate));
         assert_eq!(deliver(Stop, 40), None);
         // A deeper level is new, the level back to none and up again is new.
-        assert_eq!(deliver(LowMemory, 80), Some(Pressure::Critical));
+        assert_eq!(deliver(LowMemory, 80), Some(MemoryPressureLevel::Critical));
         assert_eq!(deliver(Resume, 0), None);
-        assert_eq!(deliver(Pause, 40), Some(Pressure::Moderate));
+        assert_eq!(deliver(Pause, 40), Some(MemoryPressureLevel::Moderate));
         // A level that asks for nothing is still remembered.
         assert_eq!(deliver(Stop, 20), None);
         assert_eq!(deliver(Resume, 20), None);
-        assert_eq!(deliver(Pause, 40), Some(Pressure::Moderate));
+        assert_eq!(deliver(Pause, 40), Some(MemoryPressureLevel::Moderate));
     }
 
     #[test]
@@ -279,19 +274,19 @@ mod tests {
         let mut lifecycle = ActivityLifecycle::default();
         assert_eq!(
             lifecycle.react(LowMemory, || Some(15)).pressure,
-            Some(Pressure::Critical)
+            Some(MemoryPressureLevel::Critical)
         );
         // A smaller level read at the same moment is subsumed...
         assert_eq!(
             lifecycle.react(LowMemory, || Some(40)).pressure,
-            Some(Pressure::Critical)
+            Some(MemoryPressureLevel::Critical)
         );
         // ...and the level is remembered, so `Stop` at it is silent.
         assert_eq!(lifecycle.react(Stop, || Some(40)).pressure, None);
         // `LowMemory` itself is delivered every time the system calls it.
         assert_eq!(
             lifecycle.react(LowMemory, || Some(40)).pressure,
-            Some(Pressure::Critical)
+            Some(MemoryPressureLevel::Critical)
         );
     }
 }
