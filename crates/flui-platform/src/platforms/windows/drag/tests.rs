@@ -1022,9 +1022,43 @@ fn releasing_request(
     request
 }
 
+/// A provider that panics serving a fetch is retained, not dropped, and is
+/// not called again: later fetches are refused and the data object's
+/// release leaves its captures alone (ADR-0127 §2). Red-check: put the
+/// panicked provider back in its slot.
+fn a_provider_that_panicked_is_retained_and_not_called_again() {
+    use crate::shared::ole_drag_drop::NativeFormat;
+
+    let (ended, released) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(false)));
+    let calls = Rc::new(Cell::new(0_u32));
+    let mut session = request(&ended);
+    let capture = Released(Rc::clone(&released));
+    let counted = Rc::clone(&calls);
+    session.provider = Box::new(move |_| {
+        let _ = &capture;
+        counted.set(counted.get() + 1);
+        panic!("a drag's provider panicked");
+    });
+    let data = data_object(session);
+    for _ in 0..2 {
+        assert!(super::fetch(&data, &NativeFormat::UnicodeText, 1 << 20).is_err());
+    }
+    assert_eq!(calls.get(), 1, "the panicked provider was called again");
+    drop(data);
+    assert!(!released.get(), "the panicked provider was dropped");
+}
+
 /// A platform with a window whose drag source accepted `session`, its
 /// `DoDragDrop` not yet run.
-fn pending(session: OsDragRequest) -> (WindowsPlatform, Window) {
+/// The window's drag source comes back too: holding it keeps the platform's
+/// transport, and the session state in it, alive past the platform.
+fn pending(
+    session: OsDragRequest,
+) -> (
+    WindowsPlatform,
+    Window,
+    Arc<dyn flui_platform_api::drag::PlatformDragSource>,
+) {
     let platform = WindowsPlatform::new().expect("platform");
     let source = open(&platform, "flui pending drag", |_| {});
     let drag = source
@@ -1035,7 +1069,7 @@ fn pending(session: OsDragRequest) -> (WindowsPlatform, Window) {
     let started = drag.start(session);
     hold_mouse_buttons(0);
     assert_eq!(started, Ok(()));
-    (platform, source)
+    (platform, source, drag)
 }
 
 /// A session accepted but never started is told `Cancelled` as its owner
@@ -1045,11 +1079,14 @@ fn pending(session: OsDragRequest) -> (WindowsPlatform, Window) {
 fn a_pending_session_is_cancelled_with_its_platform() {
     for end_panics in [false, true] {
         let (ended, released) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(false)));
-        let (platform, source) = pending(releasing_request(&ended, &released, end_panics));
+        let (platform, source, drag) = pending(releasing_request(&ended, &released, end_panics));
         drop(source);
         drop(platform);
+        // The transport outlives the platform here: the owner window's
+        // destruction told the session, not the transport's last release.
         assert_eq!(ended.get(), Some(OsDragEnd::Cancelled), "{end_panics}");
         assert_eq!(released.get(), !end_panics, "{end_panics}");
+        drop(drag);
     }
 }
 
@@ -1060,8 +1097,12 @@ fn a_pending_session_is_cancelled_with_its_platform() {
 fn a_pending_session_is_retained_when_its_platform_unwinds() {
     let (ended, released) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(false)));
     let session = releasing_request(&ended, &released, false);
+    let kept = Rc::new(RefCell::new(None));
+    let keeping = Rc::clone(&kept);
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _pending = pending(session);
+        let (platform, source, drag) = pending(session);
+        *keeping.borrow_mut() = Some(drag);
+        let _unwound_with = (source, platform);
         std::panic::panic_any("unwinding with a drag session pending");
     }));
     assert!(unwound.is_err());
@@ -1070,6 +1111,11 @@ fn a_pending_session_is_retained_when_its_platform_unwinds() {
         !released.get(),
         "the provider was dropped during the unwind"
     );
+    // The transport outlives the unwind: the session the owner window
+    // retained as it went is not run by the transport's later release.
+    drop(kept.borrow_mut().take());
+    assert_eq!(ended.get(), None, "the end hook ran after the unwind");
+    assert!(!released.get(), "the provider was dropped after the unwind");
 }
 
 /// A drag source reads the contacts of the window it was made for, never of
@@ -1319,6 +1365,10 @@ fn ole_drag_and_drop_on_real_windows() {
             (
                 "an_endless_format_enumerator_is_read_to_a_bound",
                 an_endless_format_enumerator_is_read_to_a_bound,
+            ),
+            (
+                "a_provider_that_panicked_is_retained_and_not_called_again",
+                a_provider_that_panicked_is_retained_and_not_called_again,
             ),
             (
                 "a_pending_session_is_cancelled_with_its_platform",

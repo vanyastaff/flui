@@ -12,7 +12,7 @@
 //! its start until that point, then follows the curve; where a backend can
 //! only step between values, a step takes the lower of its two ends.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use flui_platform_api::haptics::{
@@ -406,11 +406,9 @@ pub const fn android_feedback(
     (constant, exact_or_approximated(exact && available))
 }
 
-/// What the decor view said to `performHapticFeedback`.
+/// What the decor view said to one `performHapticFeedback` call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AndroidFeedbackAnswer {
-    /// No call has been answered yet.
-    Unanswered,
     /// It returned `true`: the feedback played.
     Played,
     /// It returned `false`: haptic feedback is off for the view or the
@@ -421,64 +419,82 @@ pub enum AndroidFeedbackAnswer {
     Failed,
 }
 
-/// The outcome Android tier 1 reports for `answer`, the view's answer to the
-/// call before this one: the table's (`android_feedback`) when it played or
-/// nothing has answered yet, [`HapticOutcome::Suppressed`] when the view
-/// declined, and [`HapticOutcome::Unavailable`] when the call could not be
-/// made.
-pub const fn android_feedback_outcome(
-    table: HapticOutcome,
-    answer: AndroidFeedbackAnswer,
-) -> HapticOutcome {
-    match answer {
-        AndroidFeedbackAnswer::Played | AndroidFeedbackAnswer::Unanswered => table,
-        AndroidFeedbackAnswer::Declined => HapticOutcome::Suppressed,
-        AndroidFeedbackAnswer::Failed => HapticOutcome::Unavailable,
+/// What the owner does with one semantic feedback request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AndroidFeedbackCall {
+    /// Post the call to the view and report this outcome.
+    Post(HapticOutcome),
+    /// The call posted before has not been made yet: another would only
+    /// play late behind it (ADR-0210 §4), so none is posted and the request
+    /// is [`HapticOutcome::Suppressed`].
+    Busy,
+}
+
+impl AndroidFeedbackCall {
+    /// What the request reports.
+    pub const fn outcome(self) -> HapticOutcome {
+        match self {
+            Self::Post(outcome) => outcome,
+            Self::Busy => HapticOutcome::Suppressed,
+        }
     }
 }
 
-/// The decor view's answer to the latest semantic feedback call, published by
-/// the Java main thread as it makes the call and read by the owner, which
-/// never waits for that thread (ADR-0247 §5). A request is therefore
-/// reported from the answer to the call before it: the view declines when
-/// feedback is off for it or the system, or it has no window, which are
-/// states, not answers to one call, so the request after the first one
-/// declined reports `Suppressed` while the state lasts.
+/// The decor view's semantic feedback calls as the owner posts them and the
+/// Java main thread answers them. The owner never waits for that thread
+/// (ADR-0247 §5): it posts at most one call at a time, and a request made
+/// while that call waits is [`AndroidFeedbackCall::Busy`], so a stalled
+/// Java thread never piles calls up to play together. A request reports the
+/// table's outcome, or `Suppressed` while the view declines: declining is a
+/// state of the view (feedback off for it or the system, or no window), so
+/// it is carried from the answer before. A failed call is one call's event:
+/// it is logged where it happens and changes nothing that follows.
 #[derive(Debug, Default)]
-pub struct AndroidViewAnswer(AtomicU8);
+pub struct AndroidViewAnswers {
+    /// Calls posted, wrapping.
+    posted: AtomicU64,
+    /// Calls answered, wrapping: equal to `posted` when none waits.
+    answered: AtomicU64,
+    /// Whether the view declined the last call it answered `Played` or
+    /// `Declined`.
+    declined: AtomicBool,
+}
 
-impl AndroidViewAnswer {
-    /// Nothing answered yet.
+impl AndroidViewAnswers {
+    /// No call posted.
     #[must_use]
     pub const fn new() -> Self {
-        Self(AtomicU8::new(0))
-    }
-
-    /// The Java main thread's answer to a call it just made.
-    pub fn publish(&self, answer: AndroidFeedbackAnswer) {
-        let raw = match answer {
-            AndroidFeedbackAnswer::Unanswered => 0,
-            AndroidFeedbackAnswer::Played => 1,
-            AndroidFeedbackAnswer::Declined => 2,
-            AndroidFeedbackAnswer::Failed => 3,
-        };
-        self.0.store(raw, Ordering::Release);
-    }
-
-    /// The answer published last.
-    #[must_use]
-    pub fn last(&self) -> AndroidFeedbackAnswer {
-        match self.0.load(Ordering::Acquire) {
-            1 => AndroidFeedbackAnswer::Played,
-            2 => AndroidFeedbackAnswer::Declined,
-            3 => AndroidFeedbackAnswer::Failed,
-            _ => AndroidFeedbackAnswer::Unanswered,
+        Self {
+            posted: AtomicU64::new(0),
+            answered: AtomicU64::new(0),
+            declined: AtomicBool::new(false),
         }
     }
 
-    /// The outcome of a request whose table outcome is `table`, made now.
-    pub fn outcome(&self, table: HapticOutcome) -> HapticOutcome {
-        android_feedback_outcome(table, self.last())
+    /// The owner's request whose table outcome (`android_feedback`) is
+    /// `table`. `Post` counts the call as posted: the caller posts it.
+    pub fn request(&self, table: HapticOutcome) -> AndroidFeedbackCall {
+        // Only the owner posts, so `posted` is its own to read and advance.
+        let posted = self.posted.load(Ordering::Relaxed);
+        if self.answered.load(Ordering::Acquire) != posted {
+            return AndroidFeedbackCall::Busy;
+        }
+        self.posted.store(posted.wrapping_add(1), Ordering::Relaxed);
+        AndroidFeedbackCall::Post(if self.declined.load(Ordering::Acquire) {
+            HapticOutcome::Suppressed
+        } else {
+            table
+        })
+    }
+
+    /// The Java main thread's answer to the call it was posted.
+    pub fn answer(&self, answer: AndroidFeedbackAnswer) {
+        match answer {
+            AndroidFeedbackAnswer::Played => self.declined.store(false, Ordering::Release),
+            AndroidFeedbackAnswer::Declined => self.declined.store(true, Ordering::Release),
+            AndroidFeedbackAnswer::Failed => {}
+        }
+        self.answered.fetch_add(1, Ordering::Release);
     }
 }
 

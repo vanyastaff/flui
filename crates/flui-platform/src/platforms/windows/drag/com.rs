@@ -190,33 +190,27 @@ impl SourceData {
             return Ok(identity.clone());
         }
         let Some(mut provider) = self.provider.borrow_mut().take() else {
-            // Asked from inside the provider itself.
+            // Asked from inside the provider itself, or after it panicked.
             return Err(E_UNEXPECTED.into());
         };
-        let served = contain_os_entry("a drag's provider", || provider(entry.representation));
-        let restored = {
-            let mut slot = self.provider.borrow_mut();
-            if slot.is_none() {
-                *slot = Some(provider);
-                None
-            } else {
-                Some(provider)
-            }
+        let Some(served) = contain_os_entry("a drag's provider", || provider(entry.representation))
+        else {
+            // A provider that panicked is neither called again nor dropped:
+            // it is retained and the slot stays empty, so every later fetch
+            // is refused (ADR-0127 §2).
+            std::mem::forget(provider);
+            return Err(E_UNEXPECTED.into());
         };
-        if served.is_some() {
-            crate::shared::panic_boundary::contain_owner_callback(|| drop(restored));
-        } else {
-            // After the provider's failure its captures are retained, not
-            // dropped (ADR-0127 §2).
-            std::mem::forget(restored);
-        }
+        // Nothing refills the slot while the provider is leased out.
+        let replaced = self.provider.borrow_mut().replace(provider);
+        debug_assert!(replaced.is_none(), "BUG: the provider slot was refilled");
+        crate::shared::panic_boundary::contain_owner_callback(|| drop(replaced));
         let payload = match served {
-            Some(Ok(payload)) => payload,
-            Some(Err(error)) => {
+            Ok(payload) => payload,
+            Err(error) => {
                 tracing::debug!(%error, "the drag's provider refused a representation");
                 return Err(DV_E_FORMATETC.into());
             }
-            None => return Err(E_UNEXPECTED.into()),
         };
         encode(&entry.native, &payload).ok_or_else(|| DV_E_FORMATETC.into())
     }

@@ -204,6 +204,9 @@ struct ComViewport {
     queue: ReadingQueue,
     /// The client size the viewport covers, in device pixels.
     size: Cell<(i32, i32)>,
+    /// Makes the next `update` fail, as a viewport whose `Update` errs.
+    #[cfg(test)]
+    fail_update: Cell<bool>,
     /// Released after the interfaces above.
     _apartment: Rc<ComApartment>,
 }
@@ -244,6 +247,8 @@ impl ComViewport {
                 hwnd,
                 queue: Rc::clone(&queue),
                 size: Cell::new(size),
+                #[cfg(test)]
+                fail_update: Cell::new(false),
                 _apartment: apartment,
             };
             // From here a failure drops `this`, which releases what exists.
@@ -282,6 +287,10 @@ impl ComViewport {
 
     /// Run the viewport and take what its handler reported.
     fn update(&self) -> windows_core::Result<Vec<ViewportReading>> {
+        #[cfg(test)]
+        if self.fail_update.replace(false) {
+            return Err(windows::Win32::Foundation::E_FAIL.into());
+        }
         // SAFETY: see the type for the thread and apartment; a null frame
         // info provider is documented as "no provider". `Update` runs the
         // handler synchronously, and the handler only appends to `queue`,
@@ -352,6 +361,9 @@ pub(super) struct TouchpadHost {
     /// The cursor where a frame last read it, in device pixels of the
     /// client area.
     cursor: Option<(f64, f64)>,
+    /// Reads the cursor as unreadable, as on another active desktop.
+    #[cfg(test)]
+    cursor_unreadable: bool,
 }
 
 impl TouchpadHost {
@@ -367,6 +379,8 @@ impl TouchpadHost {
             status: ViewportStatus::Ready,
             paused: false,
             cursor: None,
+            #[cfg(test)]
+            cursor_unreadable: false,
         })
     }
 
@@ -413,6 +427,8 @@ impl WindowContext {
             GetCursorPos(&raw mut cursor).is_ok()
                 && windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &raw mut cursor).as_bool()
         };
+        #[cfg(test)]
+        let read = read && !host.cursor_unreadable;
         let position = if read {
             (f64::from(cursor.x), f64::from(cursor.y))
         } else {
@@ -480,18 +496,26 @@ impl WindowContext {
         };
         let mut inputs = Vec::new();
         let mut reset = false;
-        let animating = {
+        let frame = {
             let mut host = self.touchpad.host.borrow_mut();
             // Released while `Update` ran (a failure seen by a nested pump).
             let Some(host) = host.as_mut() else { return };
-            let Some(frame) = self.frame(hwnd, host) else {
-                // No position to place them at yet: the readings wait, in
-                // order, for the next pump that can read the cursor.
-                host.viewport.queue.borrow_mut().splice(0..0, readings);
-                drop(viewport);
-                Self::keep_pumping(hwnd);
-                return;
-            };
+            self.frame(hwnd, host)
+        };
+        let Some(frame) = frame else {
+            // The cursor has never been read (another desktop is active):
+            // nothing can place this manipulation, so it is dropped rather
+            // than kept and pumped for as long as that lasts. The viewport
+            // stops, returns to the origin and drops its contacts; the next
+            // contact's hit test starts it again.
+            drop(readings);
+            drop(viewport);
+            self.abandon_touchpad(hwnd, false);
+            return;
+        };
+        let animating = {
+            let mut host = self.touchpad.host.borrow_mut();
+            let Some(host) = host.as_mut() else { return };
             let mut registry = self.pointer_registry.borrow_mut();
             for reading in readings {
                 if let ViewportReading::Status(status) = reading {
@@ -628,9 +652,9 @@ impl WindowContext {
     fn abandon_host(&self, hwnd: HWND, host: &mut TouchpadHost) -> Vec<PlatformInput> {
         host.viewport.stop();
         host.status = ViewportStatus::Ready;
-        // A host that never read the cursor decoded nothing (its readings
-        // wait for a frame), so nothing is open to cancel; its content is
-        // still returned to the origin.
+        // A host that never read the cursor decoded nothing (a pump that
+        // cannot place its readings drops them), so nothing is open to
+        // cancel; its content is still returned to the origin.
         let (inputs, reset) = match self.frame(hwnd, host) {
             Some(frame) => {
                 let delivered = host

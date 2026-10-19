@@ -288,23 +288,80 @@ fn capabilities(hwnd: HWND) -> InputCapabilities {
 /// A viewport whose `Update` fails is released, what it had open is
 /// cancelled, and the window stops claiming precise scrolling and trackpad
 /// gestures it now reads as wheel ticks. `Update` survives a deactivated
-/// manager and an abandoned viewport, so the case enters the failure path
-/// `pump_touchpad` takes on its error. Red-check: drop the capability
-/// republish from `touchpad_failed`.
+/// manager and an abandoned viewport, so the viewport is told to fail its
+/// next `Update`. Red-check: have `pump_touchpad` release the viewport
+/// without republishing the capabilities.
 #[test]
 fn a_failed_viewport_withdraws_the_touchpad_capabilities() {
     let f = fixture(None);
     assert_eq!(capabilities(f.hwnd), input_availability::windows(true));
     push(f.hwnd, &[status(Running), content(-8.0)]);
     pump(f.hwnd);
-    with_window_context(f.hwnd, "test", |context| context.touchpad_failed(f.hwnd))
-        .expect("a context");
+    with_window_context(f.hwnd, "test", |context| {
+        let host = context.touchpad.host.borrow();
+        let host = host.as_ref().expect("the window's viewport initialised");
+        host.viewport.fail_update.set(true);
+    })
+    .expect("a context");
+    pump(f.hwnd);
     assert_eq!(f.lines(), ["Began 8", "Cancelled 0"]);
     assert!(
         !with_window_context(f.hwnd, "test", WindowContext::has_touchpad).expect("a context"),
         "the failed viewport is released"
     );
     assert_eq!(capabilities(f.hwnd), input_availability::windows(false));
+    f.window.close();
+}
+
+/// Make the window's cursor unreadable, and forget where it was last read
+/// when `forget` is set.
+fn unreadable_cursor(hwnd: HWND, forget: bool) {
+    with_window_context(hwnd, "test", |context| {
+        let mut host = context.touchpad.host.borrow_mut();
+        let host = host.as_mut().expect("the window's viewport initialised");
+        host.cursor_unreadable = true;
+        if forget {
+            host.cursor = None;
+        }
+    })
+    .expect("a context");
+}
+
+fn queued(hwnd: HWND) -> usize {
+    with_window_context(hwnd, "test", |context| {
+        let host = context.touchpad.host.borrow();
+        let host = host.as_ref().expect("the window's viewport initialised");
+        host.viewport.queue.borrow().len()
+    })
+    .expect("a context")
+}
+
+/// While the cursor cannot be read a manipulation is placed where it was
+/// last read; one the cursor was never read for is dropped, with no timer
+/// left pumping it and nothing kept queued. Red-check: re-queue the
+/// readings and keep pumping when no frame can be made.
+#[test]
+fn an_unreadable_cursor_never_places_a_manipulation_at_the_origin() {
+    let f = fixture(None);
+    unreadable_cursor(f.hwnd, false);
+    push(f.hwnd, &[status(Running), content(-8.0)]);
+    pump(f.hwnd);
+    assert_eq!(
+        f.lines(),
+        ["Began 8"],
+        "placed where the cursor was last read"
+    );
+    push(f.hwnd, &[status(Ready)]);
+    pump(f.hwnd);
+    let _ = f.lines();
+    let _ = take_timer(f.hwnd);
+
+    unreadable_cursor(f.hwnd, true);
+    push(f.hwnd, &[status(Running), content(-8.0)]);
+    pump(f.hwnd);
+    assert_eq!(f.lines(), Vec::<String>::new(), "nothing to place it at");
+    assert!(!take_timer(f.hwnd), "nothing is left pumping");
+    assert_eq!(queued(f.hwnd), 0, "nothing is left queued");
     f.window.close();
 }
 

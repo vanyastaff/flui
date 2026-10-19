@@ -3,10 +3,11 @@
 //!
 //! Semantic feedback goes to the decor view on the Java main thread, which
 //! owns the view hierarchy, so the call is posted and the owner never waits
-//! for it (ADR-0247 §5). The view's answer is published as it plays, and a
-//! request reports the answer to the call before it (`AndroidViewAnswer`):
-//! `Suppressed` while the view declines, `Unavailable` after a failed call,
-//! and the degradation table's outcome otherwise.
+//! for it (ADR-0247 §5). One call waits at a time: a request made while it
+//! waits is `Suppressed` rather than queued to play late, and a request
+//! reports `Suppressed` while the view declines (an answer the Java thread
+//! publishes as it makes each call), the degradation table's outcome
+//! otherwise (`AndroidViewAnswers`).
 //! Patterns go to the `Vibrator`, which any thread may
 //! call: one envelope for the whole pattern on API 36 devices that have
 //! them, else a composition of primitives or an amplitude waveform, as
@@ -23,9 +24,9 @@ use jni::objects::JObject;
 use jni::{JValue, jni_sig, jni_str};
 
 use crate::shared::haptic_degradation::{
-    AndroidFeedbackAnswer, AndroidHapticsApi, AndroidPatternPlan, AndroidPrimitive,
-    AndroidVibrationUsage, AndroidVibrator, AndroidViewAnswer, ComposedPrimitive, EnvelopeStep,
-    android_feedback, android_pattern, android_vibration_usage,
+    AndroidFeedbackAnswer, AndroidFeedbackCall, AndroidHapticsApi, AndroidPatternPlan,
+    AndroidPrimitive, AndroidVibrationUsage, AndroidVibrator, AndroidViewAnswers,
+    ComposedPrimitive, EnvelopeStep, android_feedback, android_pattern, android_vibration_usage,
 };
 use crate::shared::os_version::android::{
     AndroidApi, EnvelopeEffects, HapticComposition, RoundPrimitives, SegmentFeedback,
@@ -55,7 +56,7 @@ pub(super) struct AndroidHaptics {
     api: AndroidHapticsApi,
     vibrator: OnceLock<AndroidVibrator>,
     /// What the decor view answered the latest semantic feedback call.
-    view_answer: Arc<AndroidViewAnswer>,
+    view_answers: Arc<AndroidViewAnswers>,
 }
 
 impl std::fmt::Debug for AndroidHaptics {
@@ -63,7 +64,7 @@ impl std::fmt::Debug for AndroidHaptics {
         f.debug_struct("AndroidHaptics")
             .field("api", &self.api)
             .field("vibrator", &self.vibrator.get())
-            .field("view_answer", &self.view_answer.last())
+            .field("view_answers", &self.view_answers)
             .finish_non_exhaustive()
     }
 }
@@ -95,7 +96,7 @@ impl AndroidHaptics {
             app,
             api: haptics_api(api),
             vibrator: OnceLock::new(),
-            view_answer: Arc::new(AndroidViewAnswer::new()),
+            view_answers: Arc::new(AndroidViewAnswers::new()),
         }
     }
 
@@ -394,12 +395,12 @@ fn waveform<'local>(
 
 /// Publishes the decor view's answer to one posted call; `Failed` when the
 /// call is dropped unrun.
-struct Answering(Option<Arc<AndroidViewAnswer>>);
+struct Answering(Option<Arc<AndroidViewAnswers>>);
 
 impl Answering {
     fn answer(mut self, answer: AndroidFeedbackAnswer) {
         if let Some(answers) = self.0.take() {
-            answers.publish(answer);
+            answers.answer(answer);
         }
     }
 }
@@ -407,7 +408,7 @@ impl Answering {
 impl Drop for Answering {
     fn drop(&mut self) {
         if let Some(answers) = self.0.take() {
-            answers.publish(AndroidFeedbackAnswer::Failed);
+            answers.answer(AndroidFeedbackAnswer::Failed);
         }
     }
 }
@@ -417,7 +418,7 @@ impl Drop for Answering {
 /// in a lifecycle callback, never stalls the owner (ADR-0247 §5). What
 /// `performHapticFeedback` returns is published to `answers`, which the next
 /// request reports from.
-fn perform_on_view(app: &AndroidApp, constant: i32, answers: &Arc<AndroidViewAnswer>) {
+fn perform_on_view(app: &AndroidApp, constant: i32, answers: &Arc<AndroidViewAnswers>) {
     let answering = Answering(Some(Arc::clone(answers)));
     let app = app.clone();
     app.clone().run_on_java_main_thread(Box::new(move || {
@@ -469,9 +470,11 @@ impl PlatformHaptics for AndroidHaptics {
 
     fn perform_with(&self, feedback: HapticFeedback, _request: &HapticRequest) -> HapticOutcome {
         let (constant, table) = android_feedback(feedback, self.api);
-        let outcome = self.view_answer.outcome(table);
-        perform_on_view(&self.app, constant.value, &self.view_answer);
-        outcome
+        let call = self.view_answers.request(table);
+        if let AndroidFeedbackCall::Post(_) = call {
+            perform_on_view(&self.app, constant.value, &self.view_answers);
+        }
+        call.outcome()
     }
 
     fn play(

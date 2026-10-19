@@ -2517,15 +2517,14 @@ that ran: a headless desktop has no vibration motor.
 Android tier 1 posts `performHapticFeedback` to the Java main thread, which
 owns the decor view, and the owner never waits for it (ADR-0247 §5): a busy
 Java thread, or one blocked on the native thread in a lifecycle callback,
-never stalls the owner. The Java thread publishes the view's answer to an
-`AndroidViewAnswer` as it makes the call, and a request reports the answer to
-the call before it (`android_feedback_outcome`): `false` (feedback off for the
-view or the system, or no window) reports `Suppressed`, a JNI failure or a
-posted call dropped unrun `Unavailable`, and `true`, or no answer yet, the
-table's outcome. Declining is a state of the view, not of one call, so from
-the request after the first declined one every request reports `Suppressed`
-while it lasts; only the first request after the state changes is reported
-from the old one.
+never stalls the owner. One call waits at a time (`AndroidViewAnswers`): a
+request made while it waits posts nothing and reports `Suppressed`, since a
+call queued behind a stalled thread would only play late. The Java thread
+answers each call as it makes it; `false` (feedback off for the view or the
+system, or no window) is a state of the view, so later requests report
+`Suppressed` until a call plays again, and otherwise a request reports the
+table's outcome. A JNI failure is logged; it, or a posted call dropped unrun, is
+counted as answered, one call's event that changes nothing after it.
 
 Android pattern vibrations go to the `Vibrator`, which needs the install-time
 `VIBRATE` permission (the CLI's manifest template declares it). Without it the
@@ -2616,8 +2615,8 @@ failing `Update` the window republishes its capabilities without
 `precise_scroll` and `trackpad_gestures`, since two-finger scrolling then
 reaches it as wheel ticks (`a_failed_viewport_withdraws_the_touchpad_capabilities`).
 A frame takes the cursor where it last read it when it cannot be read, and a
-viewport that has never read it leaves its readings queued rather than placing
-them at the origin. The
+viewport that has never read it stops and drops the manipulation (its next
+contact starts it again) rather than placing it at the origin. The
 viewport's content rectangle is far larger than the window so the system
 never rubber-bands a manipulation.
 

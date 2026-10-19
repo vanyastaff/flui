@@ -70,6 +70,7 @@ use windows_core::{IUnknown, Interface};
 
 use self::document::{DocumentState, TsfStore};
 use super::com_apartment::ComApartment;
+use super::platform::WindowRef;
 
 #[cfg(test)]
 thread_local! {
@@ -140,6 +141,9 @@ enum Serving {
 /// One window's TSF connection; see the module doc.
 pub(super) struct TextServices {
     hwnd: HWND,
+    /// The window with its identity, for the documents, which TSF may keep
+    /// past the window.
+    window: WindowRef,
     thread_manager: ITfThreadMgr,
     client_id: u32,
     empty: ITfDocumentMgr,
@@ -224,7 +228,7 @@ fn same_object(a: &impl Interface, b: &impl Interface) -> bool {
 }
 
 impl TextServices {
-    /// Activate TSF for `hwnd`'s thread and associate the empty document
+    /// Activate TSF for `window`'s thread and associate the empty document
     /// with the window. The thread must be the window's owner thread, inside
     /// the single-threaded COM apartment `apartment` holds, which these
     /// services keep entered until they are dropped.
@@ -234,9 +238,10 @@ impl TextServices {
     /// The COM error of the step that failed; the caller falls back to the
     /// `WM_CHAR` path.
     pub(super) fn activate(
-        hwnd: HWND,
+        window: WindowRef,
         apartment: Rc<ComApartment>,
     ) -> windows_core::Result<Rc<Self>> {
+        let hwnd = window.hwnd();
         // SAFETY: plain COM calls on this STA thread with no pointer
         // arguments of ours; each result is checked before the next step.
         let (thread_manager, client_id, empty) = unsafe {
@@ -259,7 +264,8 @@ impl TextServices {
         // Owned before anything runs application code: from here a failure
         // drops the services, and their drop deactivates TSF.
         let services = Rc::new_cyclic(|me| Self {
-            hwnd,
+            hwnd: window.hwnd(),
+            window,
             thread_manager,
             client_id,
             empty,
@@ -593,7 +599,7 @@ impl TextServices {
     }
 
     fn open_document(&self, store: Rc<dyn TextStore>) -> windows_core::Result<()> {
-        let state = DocumentState::new(store, self.hwnd, self.me.clone());
+        let state = DocumentState::new(store, self.window, self.me.clone());
         let tsf_store: ITextStoreACP = TsfStore::new(Rc::clone(&state)).into();
         let mut context = None;
         let mut edit_cookie = 0;

@@ -730,7 +730,7 @@ impl WindowsWindow {
             // activation (or anything after it) drops it, which destroys the
             // window and retires its context.
             let touchpad_apartment = apartment.clone();
-            if !Self::activate_text_services(hwnd, apartment) {
+            if !Self::activate_text_services(this, apartment) {
                 return Err(OpenWindowError::Backend {
                     message: "the window was destroyed while its text services activated".into(),
                 });
@@ -864,9 +864,10 @@ impl WindowsWindow {
     /// Returns whether the window is still alive: a message the activation
     /// dispatched may have destroyed it, and the open then fails.
     fn activate_text_services(
-        hwnd: HWND,
+        window: super::platform::WindowRef,
         apartment: Option<Rc<super::com_apartment::ComApartment>>,
     ) -> bool {
+        let hwnd = window.hwnd();
         let Some(apartment) = apartment else {
             tracing::warn!(
                 ?hwnd,
@@ -878,7 +879,7 @@ impl WindowsWindow {
         if let Some(hook) = BEFORE_TSF_ACTIVATION.get() {
             hook(hwnd);
         }
-        match super::text_services::TextServices::activate(hwnd, apartment) {
+        match super::text_services::TextServices::activate(window, apartment) {
             Ok(services) => {
                 let installed = super::platform::with_window_context(hwnd, "text_services", |c| {
                     c.text_services.replace(Some(Rc::clone(&services)))

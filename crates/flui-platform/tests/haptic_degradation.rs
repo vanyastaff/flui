@@ -6,12 +6,12 @@ use std::time::Duration;
 
 use flui_platform::shared::haptic_degradation::{
     ANDROID_USAGE_ASSISTANCE_SONIFICATION, ANDROID_USAGE_TOUCH, AndroidFeedbackAnswer,
-    AndroidHapticConstant, AndroidHapticsApi, AndroidPatternPlan, AndroidPrimitive,
-    AndroidVibrationUsage, AndroidVibrator, AndroidViewAnswer, CORE_HAPTICS_CURVE_POINTS,
-    ComposedPrimitive, CoreHapticsControl, CoreHapticsCurve, CoreHapticsEngine, CoreHapticsEvent,
-    EnvelopeStep, IosGenerator, IosImpact, IosNotification, MacFeedback, PEN_BUZZ, PenCommand,
-    PenController, PenWaveform, WebVibration, actuator_for, android_feedback,
-    android_feedback_outcome, android_pattern, android_vibration_usage, ios_feedback, ios_pattern,
+    AndroidFeedbackCall, AndroidHapticConstant, AndroidHapticsApi, AndroidPatternPlan,
+    AndroidPrimitive, AndroidVibrationUsage, AndroidVibrator, AndroidViewAnswers,
+    CORE_HAPTICS_CURVE_POINTS, ComposedPrimitive, CoreHapticsControl, CoreHapticsCurve,
+    CoreHapticsEngine, CoreHapticsEvent, EnvelopeStep, IosGenerator, IosImpact, IosNotification,
+    MacFeedback, PEN_BUZZ, PenCommand, PenController, PenWaveform, WebVibration, actuator_for,
+    android_feedback, android_pattern, android_vibration_usage, ios_feedback, ios_pattern,
     ios_pattern_parts, linux, macos_feedback, macos_pattern, pen_feedback_step, pen_timeline,
     web_feedback, web_pattern, windows_capabilities, windows_feedback, windows_pattern,
 };
@@ -234,48 +234,28 @@ fn android_feedback_rows() {
         AndroidHapticConstant::DRAG_START.since,
         AndroidHapticsApi::SegmentFeedback
     );
-    // The view's own answer decides what is reported: a declined call
-    // played nothing, whatever the table expected.
-    for (table, answer, reported) in [
-        (Submitted, AndroidFeedbackAnswer::Played, Submitted),
-        (Approximated, AndroidFeedbackAnswer::Played, Approximated),
-        (
-            Submitted,
-            AndroidFeedbackAnswer::Declined,
-            HapticOutcome::Suppressed,
-        ),
-        (
-            Approximated,
-            AndroidFeedbackAnswer::Declined,
-            HapticOutcome::Suppressed,
-        ),
-        (Submitted, AndroidFeedbackAnswer::Unanswered, Submitted),
-        (
-            Submitted,
-            AndroidFeedbackAnswer::Failed,
-            HapticOutcome::Unavailable,
-        ),
+    // The owner never waits for the Java main thread and posts one call at
+    // a time; a declined view is a state carried to later requests, a failed
+    // call is not.
+    let answers = AndroidViewAnswers::new();
+    let post = |table| answers.request(table);
+    use AndroidFeedbackAnswer::{Declined, Failed, Played};
+    use AndroidFeedbackCall::{Busy, Post};
+    assert_eq!(
+        post(Approximated),
+        Post(Approximated),
+        "nothing answered yet"
+    );
+    assert_eq!(post(Submitted), Busy, "the first call still waits");
+    assert_eq!(Busy.outcome(), HapticOutcome::Suppressed);
+    for (answer, table, reported) in [
+        (Declined, Submitted, Post(HapticOutcome::Suppressed)),
+        (Failed, Submitted, Post(HapticOutcome::Suppressed)),
+        (Played, Approximated, Post(Approximated)),
+        (Failed, Submitted, Post(Submitted)),
     ] {
-        assert_eq!(
-            android_feedback_outcome(table, answer),
-            reported,
-            "{table:?} answered {answer:?}"
-        );
-    }
-    // The owner never waits for the Java main thread: a request reports
-    // what the view answered the call before it, and a request before any
-    // answer reports the table's outcome.
-    let answers = AndroidViewAnswer::new();
-    assert_eq!(answers.outcome(Approximated), Approximated, "unanswered");
-    for (answer, reported) in [
-        (AndroidFeedbackAnswer::Declined, HapticOutcome::Suppressed),
-        (AndroidFeedbackAnswer::Played, Submitted),
-        (AndroidFeedbackAnswer::Failed, HapticOutcome::Unavailable),
-        (AndroidFeedbackAnswer::Unanswered, Submitted),
-    ] {
-        answers.publish(answer);
-        assert_eq!(answers.last(), answer);
-        assert_eq!(answers.outcome(Submitted), reported, "after {answer:?}");
+        answers.answer(answer);
+        assert_eq!(post(table), reported, "after {answer:?}");
     }
 }
 
