@@ -44,7 +44,7 @@ use wasm_bindgen::JsCast;
 use crate::shared::WindowCallbacks;
 use crate::shared::html_drag_drop::{
     DomSource, FILES_TYPE, action_of, allowed_of, drop_effect, effect_allowed_of, offered,
-    payload_of, stored,
+    payload_of, serve_stored,
 };
 use crate::shared::panic_boundary::contain_owner_callback;
 use crate::traits::PlatformInput;
@@ -378,24 +378,20 @@ impl WebDragSource {
             self.refused.set(true);
             return false;
         };
-        for (index, descriptor) in representations.iter().enumerate() {
-            let Ok(index) = u16::try_from(index) else {
-                break;
-            };
-            match provider(RepresentationIndex(index)) {
-                Ok(payload) => {
-                    if let Some((dom_type, text)) = stored(descriptor, &payload)
-                        && let Err(error) = transfer.set_data(&dom_type, &text)
-                    {
-                        tracing::debug!(?error, dom_type, "the browser refused a representation");
-                    }
-                }
-                Err(error) => {
-                    tracing::debug!(%error, index, "a representation could not be served");
-                }
+        let served = serve_stored(&representations, &mut provider);
+        contain_owner_callback(|| drop(provider));
+        // A provider that panicked ends its session here, before the drag
+        // is refused: no later `dragend` would reach it.
+        let Ok(served) = served else {
+            contain_owner_callback(|| on_end(OsDragEnd::Cancelled));
+            self.refused.set(true);
+            return false;
+        };
+        for (dom_type, text) in served {
+            if let Err(error) = transfer.set_data(&dom_type, &text) {
+                tracing::debug!(?error, dom_type, "the browser refused a representation");
             }
         }
-        contain_owner_callback(|| drop(provider));
         transfer.set_effect_allowed(effect_allowed_of(allowed));
         *self.outgoing.borrow_mut() = Outgoing::Running { allowed, on_end };
         true

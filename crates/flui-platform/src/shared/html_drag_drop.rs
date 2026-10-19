@@ -12,10 +12,10 @@
 use std::sync::Arc;
 
 use flui_platform_api::data_transfer::{
-    DropFeedback, Mime, RepresentationDescriptor, TransferActions, TransferFormat, TransferPayload,
-    TransferUri,
+    DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex, TransferActions,
+    TransferFormat, TransferPayload, TransferUri,
 };
-use flui_platform_api::drag::IDENTITY_ESSENCE;
+use flui_platform_api::drag::{IDENTITY_ESSENCE, OsDragProvider};
 
 /// The actions an `effectAllowed` value permits. `uninitialized` (a drag
 /// from outside the page) and unknown values permit every action, as the
@@ -202,6 +202,49 @@ pub fn payload_of(format: &TransferFormat, text: String) -> TransferPayload {
             }
         }
     }
+}
+
+/// A drag's provider panicked while it served a representation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderPanicked;
+
+/// What a source stores at `dragstart`: the `DataTransfer` type and string of
+/// each of `representations` that `provider` serves and the browser can
+/// carry, in order. A representation the provider refuses is left out.
+///
+/// # Errors
+///
+/// [`ProviderPanicked`] when the provider panics: the panic is contained and
+/// reported here, and nothing after it is asked for. The caller still owns
+/// the session and ends it.
+pub fn serve_stored(
+    representations: &[RepresentationDescriptor],
+    provider: &mut OsDragProvider,
+) -> Result<Vec<(String, String)>, ProviderPanicked> {
+    let mut out = Vec::new();
+    for (index, descriptor) in representations.iter().enumerate() {
+        let Ok(index) = u16::try_from(index) else {
+            break;
+        };
+        let served = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            provider(RepresentationIndex(index))
+        }));
+        match served {
+            Ok(Ok(payload)) => out.extend(stored(descriptor, &payload)),
+            Ok(Err(error)) => {
+                tracing::debug!(%error, index, "a representation could not be served");
+            }
+            Err(payload) => {
+                // A payload whose destructor panics must not unwind from here.
+                std::mem::forget(payload);
+                super::panic_boundary::contain_owner_callback(|| {
+                    tracing::error!("a drag's provider panicked");
+                });
+                return Err(ProviderPanicked);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// The `DataTransfer` type and string a source stores `payload` of

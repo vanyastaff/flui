@@ -3,19 +3,21 @@
 //! its `DataTransfer` types and files, and how payloads travel as strings.
 //! The DOM side runs in Chrome (`tests/web_browser.rs`).
 
+use std::cell::RefCell;
 use std::num::{NonZeroU32, NonZeroU64};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::{DataTransferId, DragSessionId, UiRuntimeId};
 use flui_platform::shared::html_drag_drop::{
-    DomSource, action_of, allowed_of, drop_effect, effect_allowed_of, format_of, offered,
-    payload_of, stored,
+    DomSource, ProviderPanicked, action_of, allowed_of, drop_effect, effect_allowed_of, format_of,
+    offered, payload_of, serve_stored, stored,
 };
 use flui_platform_api::data_transfer::{
-    DataTransferOffer, DropFeedback, Mime, RepresentationDescriptor, TransferActions,
-    TransferFormat, TransferPayload, TransferUri,
+    DataTransferOffer, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
+    TransferActions, TransferError, TransferFormat, TransferPayload, TransferUri,
 };
-use flui_platform_api::drag::{DragSessionKey, ProcessNonce};
+use flui_platform_api::drag::{DragSessionKey, OsDragProvider, ProcessNonce};
 
 fn effect_names_round_trip_the_actions() {
     for actions in [
@@ -165,6 +167,48 @@ fn payloads_travel_as_the_strings_the_browser_stores() {
     );
 }
 
+/// `dragstart` stores what the provider serves; a refusal leaves one
+/// representation out, a panic is contained and stops the serving, so the
+/// source can end its session.
+fn a_provider_panic_at_dragstart_is_contained_and_reported() {
+    let text = RepresentationDescriptor {
+        format: TransferFormat::Text,
+        declared_len: None,
+    };
+    let html = RepresentationDescriptor {
+        format: TransferFormat::Html,
+        declared_len: None,
+    };
+    let representations = [text.clone(), html, text];
+    let asked = Rc::new(RefCell::new(Vec::new()));
+    let serving = |panics: bool| -> OsDragProvider {
+        let asked = Rc::clone(&asked);
+        Box::new(move |RepresentationIndex(index)| {
+            asked.borrow_mut().push(index);
+            match index {
+                0 => Ok(TransferPayload::Text("dragged".to_owned())),
+                1 if panics => panic!("a lazy payload panicked"),
+                1 => Err(TransferError::SourceGone),
+                _ => Ok(TransferPayload::Text("again".to_owned())),
+            }
+        })
+    };
+    assert_eq!(
+        serve_stored(&representations, &mut serving(false)),
+        Ok(vec![
+            ("text/plain".to_owned(), "dragged".to_owned()),
+            ("text/plain".to_owned(), "again".to_owned()),
+        ]),
+        "a refused representation is left out"
+    );
+    asked.borrow_mut().clear();
+    assert_eq!(
+        serve_stored(&representations, &mut serving(true)),
+        Err(ProviderPanicked)
+    );
+    assert_eq!(*asked.borrow(), [0, 1], "nothing is asked after the panic");
+}
+
 #[test]
 fn html_drag_drop_table() {
     super::run_table(
@@ -185,6 +229,10 @@ fn html_drag_drop_table() {
             (
                 "payloads_travel_as_the_strings_the_browser_stores",
                 payloads_travel_as_the_strings_the_browser_stores,
+            ),
+            (
+                "a_provider_panic_at_dragstart_is_contained_and_reported",
+                a_provider_panic_at_dragstart_is_contained_and_reported,
             ),
         ],
     );

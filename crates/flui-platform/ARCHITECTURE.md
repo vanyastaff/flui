@@ -408,8 +408,11 @@ the `dragstart` is cancelled and the press continues as pointer input, which
 Chrome keeps delivering, and a session the runtime starts later in that press
 is refused as `DragError::Unavailable` so it stays in its window. A waiting
 session no `dragstart` takes by the release ends `Cancelled`; `dragend`'s
-`dropEffect` is the end it reports. Close restores the canvas's draggable
-attribute and ends a waiting or running session cancelled.
+`dropEffect` is the end it reports. A provider that panics at `dragstart` is
+contained and reported (`shared::html_drag_drop::serve_stored`), its session
+ends `Cancelled` and the `dragstart` is cancelled, since no `dragend` follows a
+refused drag. Close restores the canvas's draggable attribute and ends a
+waiting or running session cancelled.
 
 `html_drag_drop_table` pins the mapping in Linux CI. In headless Chrome,
 `an_html_drag_over_the_canvas_is_offered_and_dropped`,
