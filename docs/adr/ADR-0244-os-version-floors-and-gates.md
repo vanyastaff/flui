@@ -1,6 +1,6 @@
 # ADR-0244: The lowest floor the stack allows, and version gates that are types
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-19
 - **Supersedes:** [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) decision 9 only: its
   typed checks become the single style below, are compared against a declared floor, and the floor
