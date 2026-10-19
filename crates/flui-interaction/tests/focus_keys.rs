@@ -607,6 +607,10 @@ fn keyboard_focus_contracts() {
             a_press_again_without_its_release_cancels_the_first,
         ),
         (
+            "a_cancellation_that_moves_focus_takes_the_new_press_along",
+            a_cancellation_that_moves_focus_takes_the_new_press_along,
+        ),
+        (
             "traversal hands repeats to the new focus",
             traversal_hands_repeats_to_the_new_focus,
         ),
@@ -812,6 +816,35 @@ fn a_press_again_without_its_release_cancels_the_first() {
     let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
     let _ = manager.dispatch_key_event(&arrow(KeyState::Up));
     assert!(second_cancels.borrow().is_empty());
+}
+
+/// The cancelled press's handler moves focus: the new press is delivered to
+/// that focus, and so is its release.
+fn a_cancellation_that_moves_focus_takes_the_new_press_along() {
+    let (manager, nodes, _attachments) = manager_with_nodes(3);
+    let _ = nodes[0].request_focus();
+    let mover = Rc::downgrade(&nodes[2]);
+    let _cancel = nodes[0].register_on_key_cancel(Rc::new(move |_: &KeyEvent| {
+        if let Some(node) = mover.upgrade() {
+            let _ = node.request_focus();
+        }
+    }));
+    let (moved_cancels, _moved) = record_cancels(&nodes[2]);
+    let moved = count_keys(&nodes[2]);
+    let arrow = |state| key(state, Key::Named(NamedKey::ArrowDown), Code::ArrowDown);
+
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = nodes[1].request_focus();
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    assert!(nodes[2].has_primary_focus(), "the cancellation moved focus");
+    assert_eq!(
+        moved.get(),
+        1,
+        "the new press reaches the focus it moved to"
+    );
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Up));
+    assert_eq!(moved.get(), 2, "and so does its release");
+    assert!(moved_cancels.borrow().is_empty(), "nothing cancels it");
 }
 
 /// Tab moves focus by traversal; its repeats keep moving it.

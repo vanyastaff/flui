@@ -1086,8 +1086,16 @@ impl FocusManager {
             Admission::Press { superseded } => {
                 // The earlier press's path is told first; a cancel handler
                 // that panics does not keep the new press from its walk.
-                cancelled = superseded
-                    .and_then(|press| RoutePanic::capture(|| self.cancel_presses([press])));
+                if let Some(press) = superseded {
+                    cancelled = RoutePanic::capture(|| self.cancel_presses([press]));
+                    // A cancel handler may have moved focus: the new press
+                    // belongs to where its walk now starts.
+                    let unit = self.focused_unit();
+                    let start = self.key_walk_start();
+                    self.key_ledger
+                        .borrow_mut()
+                        .rebind(&id, event, unit, start.as_ref());
+                }
                 if !pointer && !key_ledger::is_modifier(&event.key) {
                     self.set_modality(InputModality::Keyboard);
                 }

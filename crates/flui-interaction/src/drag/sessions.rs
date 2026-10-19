@@ -131,7 +131,8 @@ pub(crate) struct Incoming {
     /// The latest OS-permitted set.
     pub(crate) os_allowed: TransferActions,
     pub(crate) tracker: DropTracker,
-    /// Requests made from the drop that have not resolved.
+    /// Requests made from the offer that have not resolved, shared by its
+    /// hovers over every window.
     pub(crate) in_flight: Arc<AtomicUsize>,
     /// The target's callbacks are done; the OS is told once nothing is in flight.
     pub(crate) dropped: bool,

@@ -750,6 +750,47 @@ fn sustained_requests_with_no_observer_degrade_to_immediate_when_the_mailbox_is_
     );
 }
 
+/// Reaching the actuator for a queued request hides the window: the request
+/// resolves once, suppressed, and does not play.
+#[test]
+fn hiding_the_window_while_a_frame_plays_suppresses_the_request_once() {
+    let clock = ManualClock::new();
+    let binding = GestureBinding::with_clock(Arc::new(clock));
+    let fake = Arc::new(FakeHaptics::new());
+    let host_slot: Rc<std::cell::OnceCell<std::rc::Weak<HapticsHost>>> = Rc::default();
+    let hide = Rc::new(Cell::new(false));
+    let host = {
+        let (fake, host_slot, hide) = (Arc::clone(&fake), Rc::clone(&host_slot), Rc::clone(&hide));
+        Rc::new(
+            HapticsHost::builder(&binding, move || {
+                if hide.replace(false)
+                    && let Some(host) = host_slot.get().and_then(std::rc::Weak::upgrade)
+                {
+                    host.set_visible(false);
+                }
+                Some(Arc::clone(&fake) as Arc<dyn PlatformHaptics>)
+            })
+            .refresh_period(|| Some(PERIOD))
+            .build(),
+        )
+    };
+    let _ = host_slot.set(Rc::downgrade(&host));
+    let handle = host.handle();
+    let delivered: Delivered = Rc::default();
+    let sink = Rc::clone(&delivered);
+    let _registration = handle.observe(move |ticket, outcome| {
+        sink.borrow_mut().push((ticket, outcome));
+    });
+    let HapticOutcome::Queued(ticket) = handle.perform(HapticFeedback::LightImpact, FRAME) else {
+        panic!("queued");
+    };
+    hide.set(true);
+    host.frame_presented();
+    RecoveryScope::boundary(|recovery| host.service(recovery));
+    assert_eq!(*delivered.borrow(), [(ticket, HapticOutcome::Suppressed)]);
+    assert!(fake.calls().is_empty(), "a suppressed request never plays");
+}
+
 /// Notes that it was dropped.
 struct DropFlag(Rc<Cell<bool>>);
 impl Drop for DropFlag {

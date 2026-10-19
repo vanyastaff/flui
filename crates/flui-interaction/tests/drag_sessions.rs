@@ -2337,11 +2337,71 @@ fn one_offer_over_two_windows_is_two_hovers() {
     });
 }
 
+/// A receiver over one window fetches from an OS offer, and the offer drops
+/// over another window: the OS is not told the target is done until that
+/// fetch resolves.
+fn a_drop_waits_for_a_fetch_made_over_another_window() {
+    in_lane(|f| {
+        let second = presentation(2);
+        f.owner
+            .attach_presentation(second, WindowId(2), f.hit.clone());
+        let _first_spot = f.spot("A", 0.0, 50.0, Some(COPY));
+        let fetcher = Rc::new(Spot {
+            name: "B",
+            log: Rc::clone(&f.log),
+            answer: Cell::new(Some(COPY)),
+            on_enter: RefCell::new(None),
+            on_leave: RefCell::new(None),
+            spring: None,
+            scopes: RefCell::default(),
+            values: RefCell::default(),
+            fetch_text: true,
+            fetched: RefCell::default(),
+            on_spring: RefCell::new(None),
+            on_autoscroll: RefCell::new(None),
+            on_drop: RefCell::new(None),
+        });
+        f.register(&fetcher, 50.0, 100.0);
+        let offer = f.text_offer();
+        let id = offer.id();
+        for (over, x) in [(second, 80.0), (f.presentation, 5.0)] {
+            f.deliver(
+                over,
+                DragDropEvent::Entered {
+                    offer: offer.clone(),
+                    allowed: COPY,
+                    position: Some(Point::new(x, 5.0)),
+                },
+            );
+        }
+        let fetch = fetcher.fetched.borrow_mut().pop().expect("B fetched");
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Dropped {
+                id,
+                action: COPY,
+                position: None,
+            },
+        );
+        assert!(
+            f.source.concluded.lock().is_empty(),
+            "the fetch over the other window is outstanding"
+        );
+        drop(fetch);
+        f.owner.tick(time_at(0));
+        assert_eq!(*f.source.concluded.lock(), [id]);
+    });
+}
+
 #[test]
 fn drag_sessions() {
     run_table(
         "drag sessions",
         &[
+            (
+                "a_drop_waits_for_a_fetch_made_over_another_window",
+                a_drop_waits_for_a_fetch_made_over_another_window,
+            ),
             (
                 "an_os_session_ends_however_its_end_hook_goes",
                 an_os_session_ends_however_its_end_hook_goes,

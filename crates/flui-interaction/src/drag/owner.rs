@@ -650,6 +650,17 @@ impl DragOwner {
                 None => (DragScope::OtherRuntime, None, None, PointerKind::Unknown),
             },
         };
+        // The OS concludes the offer, not a hover: its hovers over other
+        // windows share one count of the requests made from it, so a drop
+        // here is not concluded while one made over another window resolves.
+        let in_flight = state
+            .incoming
+            .iter()
+            .find(|incoming| incoming.offer.id() == offer.id())
+            .map_or_else(
+                || Arc::new(AtomicUsize::new(0)),
+                |incoming| Arc::clone(&incoming.in_flight),
+            );
         state.incoming.push(Incoming {
             offer,
             presentation,
@@ -659,7 +670,7 @@ impl DragOwner {
             source_allowed,
             os_allowed,
             tracker: DropTracker::new(),
-            in_flight: Arc::new(AtomicUsize::new(0)),
+            in_flight,
             dropped: false,
             position: None,
             pointer,

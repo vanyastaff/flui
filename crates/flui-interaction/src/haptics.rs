@@ -151,6 +151,9 @@ struct State {
     observers: RefCell<Vec<Slot>>,
     registrations: IdMint<NonZeroU64>,
     delivering: Cell<bool>,
+    /// The queued request a resolution is playing: a resolution the backend
+    /// reenters leaves it to the one playing it.
+    resolving: Cell<Option<HapticTicket>>,
 }
 
 /// Drop `outgoing` outside every borrow; a panic in its destructor must not
@@ -163,6 +166,27 @@ fn retire_outside_delivery(outgoing: Option<Observer>) {
             "a retired haptics observer panicked while it was dropped"
         );
         flui_foundation::panic::retain_opaque_payload(payload);
+    }
+}
+
+/// The queued request a resolution plays, for as long as it plays: the
+/// resolution it nests in, if any, takes over again when it returns or
+/// unwinds.
+struct Playing<'a> {
+    resolving: &'a Cell<Option<HapticTicket>>,
+    outer: Option<HapticTicket>,
+}
+
+impl<'a> Playing<'a> {
+    fn enter(resolving: &'a Cell<Option<HapticTicket>>, ticket: HapticTicket) -> Self {
+        let outer = resolving.replace(Some(ticket));
+        Self { resolving, outer }
+    }
+}
+
+impl Drop for Playing<'_> {
+    fn drop(&mut self) {
+        self.resolving.set(self.outer);
     }
 }
 
@@ -203,6 +227,10 @@ impl State {
         let Some(actuator) = (self.actuator)() else {
             return HapticOutcome::Unavailable;
         };
+        // Reaching the actuator may have hidden the window or turned haptics off.
+        if self.suppressed() {
+            return HapticOutcome::Suppressed;
+        }
         match play {
             Play::Feedback(kind) => actuator.perform_with(*kind, request),
             Play::Pattern { pattern, fallback } => actuator.play(pattern, *fallback, request),
@@ -267,7 +295,16 @@ impl State {
                 // A backend call resolved it already.
                 continue;
             };
-            let Some(outcome) = resolve(&entry) else {
+            // A resolution the backend reenters leaves the request being
+            // played to the resolution playing it.
+            if self.resolving.get() == Some(ticket) {
+                continue;
+            }
+            let outcome = {
+                let _playing = Playing::enter(&self.resolving, ticket);
+                resolve(&entry)
+            };
+            let Some(outcome) = outcome else {
                 continue;
             };
             let mut queue = self.queue.borrow_mut();
@@ -548,6 +585,7 @@ impl HapticsHost {
                 observers: RefCell::new(Vec::new()),
                 registrations: IdMint::new(),
                 delivering: Cell::new(false),
+                resolving: Cell::new(None),
             },
         }
     }
