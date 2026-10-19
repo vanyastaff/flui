@@ -2193,11 +2193,19 @@ message-only window could not be: `WM_QUERYENDSESSION` and `WM_ENDSESSION`, `WM_
 (`platforms::windows::host_events`; rules in `shared::windows_host_messages` and
 `shared::windows_memory_watch`). A session-end query the host answers with a block is refused and
 registered as a shutdown reason on the first visible window of the thread (the receiver otherwise);
-`Platform::release_session_end` withdraws it. The host's answer carries no reason text, so the system
-shows its generic one. A critical session end is never blocked, and a panicking hook answers
+`Platform::release_session_end` withdraws it. The host's answer carries no reason text, so the system is given
+a fixed neutral one. A critical session end is never blocked, and a panicking hook answers
 `Proceed`. The low-memory event is a level, not an edge: the watch reports once, stays deaf for
 `HOLD_INTERVAL`, and only then waits again. `WTSRegisterSessionNotification` asks for this session only.
 
 **Verified:** the pure rules by host tests; the window and the receiver against the real system by
 `windows_window_commands` and `windows_host_events` (messages sent to the real windows). A real
 log-off, sleep, lock or low-memory state, and the first frame seen by eye, have not run.
+
+**Modes on a window that is not shown:** `Normal` keeps a hidden window hidden and decides how it is
+first shown; `Minimized` and `Maximized` show it, as `ShowWindow` does; only a window waiting for its
+first frame stages a mode without showing it. Size limits also hold a window without a sizing border
+(`WM_WINDOWPOSCHANGING`), since the system asks for them only while sizing one that has it. A change
+that takes several steps (entering fullscreen, changing the frame) publishes one snapshot.
+`WTSRegisterSessionNotification` is asked once at startup; if it fails (an app started before
+Remote Desktop Services at logon), lock and unlock stay unreported for the process.

@@ -36,7 +36,7 @@ const MAX_BLOCK_REASON_UNITS: usize = 256;
 
 /// What the system shows when the application blocks the end of the session
 /// without saying why.
-const FALLBACK_BLOCK_REASON: &str = "Saving your work";
+const FALLBACK_BLOCK_REASON: &str = "Finishing up before closing";
 
 /// A system event the receiver reports to the owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

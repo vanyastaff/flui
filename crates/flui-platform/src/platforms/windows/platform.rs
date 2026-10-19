@@ -33,14 +33,14 @@ use windows::{
                 PostMessageW, PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU,
                 SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
                 SetWindowLongPtrW, SetWindowPos, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
-                WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DEADCHAR, WM_DESTROY,
-                WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_INPUTLANGCHANGE, WM_KEYDOWN,
-                WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
-                WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT,
-                WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT,
+                WINDOWPOS, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DEADCHAR,
+                WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_INPUTLANGCHANGE,
+                WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+                WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT,
+                WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT,
                 WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCHAR,
                 WM_SYSCOMMAND, WM_SYSDEADCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_WINDOWPOSCHANGED,
-                WNDCLASSW,
+                WM_WINDOWPOSCHANGING, WNDCLASSW,
             },
         },
     },
@@ -323,7 +323,7 @@ pub(super) struct WindowContext {
     pub window_id: WindowId,
     /// Which native window this context belongs to; see [`WindowIdentity`].
     pub identity: WindowIdentity,
-    /// Tracking and cache access do not keep wrappers or their state alive.
+    /// OwnerTracking and cache access do not keep wrappers or their state alive.
     pub windows: std::sync::Weak<WindowMap>,
     pub window_state: std::sync::Weak<Mutex<super::window::WindowRecord>>,
     /// The published window state, shared with the wrapper; refreshed by
@@ -384,6 +384,12 @@ pub(super) struct WindowContext {
     /// Whether the app wants the window resizable. A window without a frame
     /// cannot be, but gets the frame back with this still set.
     pub resizable: std::cell::Cell<bool>,
+    /// How many multi-step changes are in flight; see
+    /// [`Self::hold_publishing`].
+    pub publish_hold: std::cell::Cell<u32>,
+    /// Set while the window is being put into fullscreen, before its mode says
+    /// so: the size limits do not apply to the rectangle it is given.
+    pub limits_waived: std::cell::Cell<bool>,
     /// The mode the window takes the first time it is shown, until it is. A
     /// window opens hidden and in this mode, so the first sight of it is
     /// already maximized or fullscreen, not a normal window that jumps.
@@ -461,58 +467,9 @@ impl WindowContext {
         published.state
     }
 
-    /// Fill in `WM_GETMINMAXINFO` with the app's size limits at the window's
-    /// current DPI. A fullscreen window keeps the system's rectangle.
-    pub(super) fn constrain_track(&self, hwnd: HWND, info: &mut MINMAXINFO) {
-        use crate::shared::windows_window_limits::{
-            MinMaxInfo, PixelSize, constrain, track_limits,
-        };
-
-        let constraints = self.constraints.get();
-        if constraints.min.is_none() && constraints.max.is_none() {
-            return;
-        }
-        // SAFETY: plain queries of the live window the message was sent to.
-        let (dpi, style, ex_style) = unsafe {
-            (
-                windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd),
-                GetWindowLongPtrW(hwnd, windows::Win32::UI::WindowsAndMessaging::GWL_STYLE) as u32,
-                GetWindowLongPtrW(hwnd, windows::Win32::UI::WindowsAndMessaging::GWL_EXSTYLE)
-                    as u32,
-            )
-        };
-        // The frame the window adds around its content at this DPI, measured
-        // for the style it will have, not the rectangle it has.
-        let style = if self.mode.get().is_fullscreen() {
-            self.restore_style.get()
-        } else {
-            style
-        };
-        let (frame_width, frame_height) =
-            super::window::outer_size(style, ex_style, dpi, (0, 0)).unwrap_or((0, 0));
-        let limits = track_limits(
-            constraints.min,
-            constraints.max,
-            dpi,
-            PixelSize::new(frame_width, frame_height),
-        );
-        let os = MinMaxInfo {
-            max_size: PixelSize::new(info.ptMaxSize.x, info.ptMaxSize.y),
-            min_track: PixelSize::new(info.ptMinTrackSize.x, info.ptMinTrackSize.y),
-            max_track: PixelSize::new(info.ptMaxTrackSize.x, info.ptMaxTrackSize.y),
-        };
-        let constrained = constrain(os, limits, self.mode.get().is_fullscreen());
-        info.ptMaxSize.x = constrained.max_size.width;
-        info.ptMaxSize.y = constrained.max_size.height;
-        info.ptMinTrackSize.x = constrained.min_track.width;
-        info.ptMinTrackSize.y = constrained.min_track.height;
-        info.ptMaxTrackSize.x = constrained.max_track.width;
-        info.ptMaxTrackSize.y = constrained.max_track.height;
-    }
-
     /// What this context knows of the window beyond what Win32 reports.
-    pub(super) fn tracking(&self, hwnd: HWND) -> super::window::Tracking {
-        super::window::Tracking {
+    pub(super) fn tracking(&self, hwnd: HWND) -> super::window::OwnerTracking {
+        super::window::OwnerTracking {
             mode: self.mode.get(),
             restore_style: self.restore_style.get(),
             constraints: self.constraints.get(),
@@ -523,7 +480,19 @@ impl WindowContext {
     /// The window may differ from its published state: read it again.
     pub(super) fn publish_window_state(&self, hwnd: HWND) {
         self.snapshot.invalidate();
-        let _ = self.window_state(hwnd);
+        // A change that takes several steps publishes once, when it is done:
+        // a subscriber never sees the window half-changed.
+        if self.publish_hold.get() == 0 {
+            let _ = self.window_state(hwnd);
+        }
+    }
+
+    /// Hold back publishing until the returned guard drops; the caller then
+    /// publishes once.
+    pub(super) fn hold_publishing(&self) -> PublishHold<'_> {
+        self.publish_hold
+            .set(self.publish_hold.get().saturating_add(1));
+        PublishHold(&self.publish_hold)
     }
 
     /// Dispatch a window event to the platform-level handler.
@@ -1682,6 +1651,17 @@ impl WindowsPlatform {
                     LRESULT(0)
                 }
 
+                // A window without a sizing border is held to its size limits
+                // here; the system does it for one that has one.
+                WM_WINDOWPOSCHANGING => {
+                    if let Some(ctx) = ctx {
+                        // SAFETY: for this message `lParam` is the address of a
+                        // `WINDOWPOS` the system owns for the call.
+                        ctx.clamp_pending_size(hwnd, &mut *(lparam.0 as *mut WINDOWPOS));
+                    }
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+
                 WM_WINDOWPOSCHANGED => {
                     // `WM_MOVE` and `WM_SIZE` come from the default procedure;
                     // the monitor is checked once the move has landed.
@@ -1724,6 +1704,9 @@ impl WindowsPlatform {
                 super::window::REQUEST_FRAME => {
                     if let Some(ctx) = ctx {
                         ctx.request_frame();
+                        ctx.dispatch_event(WindowEvent::RedrawRequested {
+                            window_id: ctx.window_id,
+                        });
                     }
                     LRESULT(0)
                 }
@@ -3072,3 +3055,13 @@ fn restore_translated_sys_chars(hwnd: HWND, held: &[(WPARAM, LPARAM)]) {
 
 // Windows platform capabilities
 static WINDOWS_CAPABILITIES: DesktopCapabilities = DesktopCapabilities;
+
+/// While it lives, the window context does not sample and publish its state;
+/// see [`WindowContext::hold_publishing`].
+pub(super) struct PublishHold<'a>(&'a std::cell::Cell<u32>);
+
+impl Drop for PublishHold<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.0.get().saturating_sub(1));
+    }
+}

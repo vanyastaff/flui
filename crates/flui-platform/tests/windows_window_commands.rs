@@ -481,6 +481,105 @@ fn fullscreen_entered_from_minimized_returns_to_normal() {
     assert_eq!(window.state().mode, WindowMode::Normal);
 }
 
+fn a_minimized_fullscreen_window_answers_commands_as_fullscreen() {
+    let platform = platform();
+    let window = open(&platform, options());
+    let normal = window.state().outer;
+    apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+    apply(&window, WindowCommand::SetMode(WindowMode::Minimized));
+    apply(&window, WindowCommand::SetDecorated(false));
+    apply(&window, WindowCommand::SetDecorated(true));
+    // Asking for fullscreen again brings the window back, once.
+    apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+    assert_eq!(window.state().mode, WindowMode::Fullscreen);
+    assert!(covers_its_monitor(&window));
+    apply(&window, WindowCommand::SetMode(WindowMode::Normal));
+    let state = window.state();
+    assert_eq!(state.mode, WindowMode::Normal);
+    assert!(state.decorated, "the frame is back");
+    assert!(near(state.outer.size.width, normal.size.width), "{state:?}");
+    assert!(
+        near(state.outer.size.height, normal.size.height),
+        "{state:?}"
+    );
+}
+
+fn maximizing_a_fullscreen_window_leaves_fullscreen() {
+    let platform = platform();
+    let window = open(&platform, options());
+    apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+    apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
+    // SAFETY: a plain query of the live window.
+    assert!(unsafe { IsZoomed(hwnd_of(&window)) }.as_bool());
+    assert_eq!(window.state().mode, WindowMode::Maximized);
+    assert_ne!(style(&window) & WS_CAPTION.0, 0, "it has its frame");
+}
+
+fn entering_fullscreen_and_changing_the_frame_each_publish_one_snapshot() {
+    let platform = platform();
+    let window = open(&platform, options());
+    let before = window.state().revision.get();
+    apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+    assert_eq!(
+        window.state().revision.get(),
+        before + 1,
+        "a subscriber never sees the window half-way into fullscreen"
+    );
+    apply(&window, WindowCommand::SetMode(WindowMode::Normal));
+    let before = window.state().revision.get();
+    apply(&window, WindowCommand::SetDecorated(false));
+    assert_eq!(window.state().revision.get(), before + 1);
+}
+
+fn a_window_without_a_sizing_border_holds_its_limits() {
+    let platform = platform();
+    let window = open(
+        &platform,
+        hidden()
+            .with_decorated(false)
+            .with_max_size(Some(Size::new(500.0, 400.0))),
+    );
+    apply(&window, WindowCommand::SetSize(Size::new(900.0, 700.0)));
+    let content = window.state().content_size;
+    assert!(
+        content.width <= 502.0 && content.height <= 402.0,
+        "grew to {content:?} past the maximum"
+    );
+}
+
+fn a_position_beyond_the_screens_does_not_overflow() {
+    let platform = platform();
+    let window = open(&platform, options());
+    apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
+    let _ = window.apply(WindowCommand::SetPosition(Point::new(3.0e9, 3.0e9)));
+    apply(&window, WindowCommand::SetMode(WindowMode::Normal));
+}
+
+fn maximizing_a_hidden_window_shows_it_but_the_normal_mode_does_not() {
+    let platform = platform();
+    let window = open(&platform, hidden());
+    apply(&window, WindowCommand::SetMode(WindowMode::Normal));
+    assert!(!shown(&window));
+    apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
+    assert!(shown(&window), "Win32 shows a window it maximizes");
+}
+
+fn a_hidden_windows_frame_request_reaches_the_global_redraw_event() {
+    let platform = platform();
+    let redraws = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&redraws);
+    platform.on_window_event(Box::new(move |event| {
+        if matches!(event, flui_platform::WindowEvent::RedrawRequested { .. }) {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }
+    }));
+    let window = open(&platform, deferred());
+    window.request_redraw();
+    assert!(pump_until(Duration::from_secs(2), || redraws
+        .load(Ordering::SeqCst)
+        > 0));
+}
+
 fn a_resize_does_not_end_fullscreen() {
     let platform = platform();
     let window = open(&platform, options());
@@ -640,6 +739,34 @@ fn native_window_commands() {
         (
             "fullscreen_entered_from_minimized_returns_to_normal",
             fullscreen_entered_from_minimized_returns_to_normal,
+        ),
+        (
+            "a_minimized_fullscreen_window_answers_commands_as_fullscreen",
+            a_minimized_fullscreen_window_answers_commands_as_fullscreen,
+        ),
+        (
+            "maximizing_a_fullscreen_window_leaves_fullscreen",
+            maximizing_a_fullscreen_window_leaves_fullscreen,
+        ),
+        (
+            "entering_fullscreen_and_changing_the_frame_each_publish_one_snapshot",
+            entering_fullscreen_and_changing_the_frame_each_publish_one_snapshot,
+        ),
+        (
+            "a_window_without_a_sizing_border_holds_its_limits",
+            a_window_without_a_sizing_border_holds_its_limits,
+        ),
+        (
+            "a_position_beyond_the_screens_does_not_overflow",
+            a_position_beyond_the_screens_does_not_overflow,
+        ),
+        (
+            "maximizing_a_hidden_window_shows_it_but_the_normal_mode_does_not",
+            maximizing_a_hidden_window_shows_it_but_the_normal_mode_does_not,
+        ),
+        (
+            "a_hidden_windows_frame_request_reaches_the_global_redraw_event",
+            a_hidden_windows_frame_request_reaches_the_global_redraw_event,
         ),
         (
             "a_resize_does_not_end_fullscreen",

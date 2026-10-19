@@ -75,18 +75,7 @@ impl Hosted {
 
     /// The reason the system holds for the receiver, if one is registered.
     fn block_reason(&self) -> Option<String> {
-        let mut buffer = [0_u16; 300];
-        let mut length = buffer.len() as u32;
-        // SAFETY: `buffer` holds `length` units; the receiver is live.
-        unsafe {
-            ShutdownBlockReasonQuery(
-                self.receiver,
-                Some(PWSTR(buffer.as_mut_ptr())),
-                &raw mut length,
-            )
-        }
-        .ok()?;
-        Some(String::from_utf16_lossy(&buffer[..length as usize]))
+        reason_held_for(self.receiver)
     }
 
     fn phases(&self) -> Vec<SessionEndPhase> {
@@ -215,6 +204,14 @@ fn native_host_events() {
             releasing_the_block_withdraws_the_reason,
         ),
         (
+            "a_block_is_registered_on_the_visible_window",
+            a_block_is_registered_on_the_visible_window,
+        ),
+        (
+            "a_second_query_replaces_the_first_block",
+            a_second_query_replaces_the_first_block,
+        ),
+        (
             "a_query_the_host_lets_through_is_allowed",
             a_query_the_host_lets_through_is_allowed,
         ),
@@ -279,4 +276,43 @@ fn receiver_of_this_thread() -> HWND {
         );
     }
     found.expect("the platform's hidden receiver")
+}
+
+/// The reason the system holds for `window`, if one is registered.
+fn reason_held_for(window: HWND) -> Option<String> {
+    let mut buffer = [0_u16; 300];
+    let mut length = buffer.len() as u32;
+    // SAFETY: `buffer` holds `length` units; the window is live.
+    unsafe { ShutdownBlockReasonQuery(window, Some(PWSTR(buffer.as_mut_ptr())), &raw mut length) }
+        .ok()?;
+    Some(String::from_utf16_lossy(&buffer[..length as usize]))
+}
+
+fn a_block_is_registered_on_the_visible_window() {
+    let host = hosted(|_| SessionEndAnswer::Block);
+    let window = host
+        .platform
+        .open_window(flui_platform::WindowOptions::default().with_visible(true))
+        .expect("a window");
+    let window_hwnd = window
+        .as_any()
+        .downcast_ref::<flui_platform::platforms::windows::WindowsWindow>()
+        .expect("the Win32 backend")
+        .hwnd();
+    assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
+    assert!(
+        reason_held_for(window_hwnd).is_some(),
+        "the system lists the window the user can see"
+    );
+    assert_eq!(host.block_reason(), None, "not the hidden receiver");
+    host.platform.release_session_end();
+    assert_eq!(reason_held_for(window_hwnd), None);
+}
+
+fn a_second_query_replaces_the_first_block() {
+    let host = hosted(|_| SessionEndAnswer::Block);
+    assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
+    assert_eq!(host.send(WM_QUERYENDSESSION, 0, 0), FALSE);
+    host.platform.release_session_end();
+    assert_eq!(host.block_reason(), None, "no reason is left behind");
 }

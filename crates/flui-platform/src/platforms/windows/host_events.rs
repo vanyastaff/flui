@@ -13,10 +13,7 @@ use std::{
     ffi::c_void,
     panic::{AssertUnwindSafe, catch_unwind},
     rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicIsize, Ordering},
-    },
+    sync::Arc,
     time::Instant,
 };
 
@@ -161,9 +158,12 @@ impl HostEvents {
 
     /// Ask the host whether the session may end, and tell Windows.
     fn query_session_end(&self, receiver: HWND, critical: bool) -> LRESULT {
+        // A query that follows another without an end or a cancel in between
+        // replaces the earlier block rather than leaving its reason behind.
+        self.release_block();
         let block = self.ask_session_end(SessionEndPhase::Query) == SessionEndAnswer::Block;
-        // The host's answer carries no reason, so the system shows its generic
-        // one.
+        // The host's answer carries no reason, so the system is given a fixed,
+        // neutral one.
         let answer = windows_host_messages::query_answer(critical, block.then_some(""));
         if let Some(reason) = &answer.reason {
             let window = visible_window_of_this_thread().unwrap_or(receiver);
@@ -318,14 +318,14 @@ fn visible_window_of_this_thread() -> Option<HWND> {
 /// owner.
 struct LowMemoryShared {
     watch: Mutex<MemoryWatch>,
-    receiver: AtomicIsize,
+    receiver: isize,
 }
 
 /// A wait registered on the system's low-memory event.
 struct LowMemoryWait {
     event: HANDLE,
     wait: Option<HANDLE>,
-    shared: Arc<LowMemoryShared>,
+    shared: Box<LowMemoryShared>,
 }
 
 unsafe extern "system" fn low_memory_fired(context: *mut c_void, _timed_out: bool) {
@@ -334,7 +334,7 @@ unsafe extern "system" fn low_memory_fired(context: *mut c_void, _timed_out: boo
     // running callback has returned.
     let shared = unsafe { &*context.cast::<LowMemoryShared>() };
     if shared.watch.lock().signaled() {
-        let receiver = HWND(shared.receiver.load(Ordering::Acquire) as *mut _);
+        let receiver = HWND(shared.receiver as *mut _);
         // SAFETY: posting is legal from any thread; a destroyed receiver only
         // makes it fail.
         let _ = unsafe { PostMessageW(Some(receiver), LOW_MEMORY, WPARAM(0), LPARAM(0)) };
@@ -345,9 +345,9 @@ impl LowMemoryWait {
     fn start(receiver: HWND) -> windows::core::Result<Self> {
         // SAFETY: creating the event takes a plain enum value.
         let event = unsafe { CreateMemoryResourceNotification(LowMemoryResourceNotification)? };
-        let shared = Arc::new(LowMemoryShared {
+        let shared = Box::new(LowMemoryShared {
             watch: Mutex::new(MemoryWatch::armed()),
-            receiver: AtomicIsize::new(receiver.0 as isize),
+            receiver: receiver.0 as isize,
         });
         let mut wait = Self {
             event,
@@ -368,7 +368,7 @@ impl LowMemoryWait {
                 &raw mut handle,
                 self.event,
                 Some(low_memory_fired),
-                Some(Arc::as_ptr(&self.shared).cast()),
+                Some(std::ptr::from_ref::<LowMemoryShared>(&self.shared).cast()),
                 windows::Win32::System::Threading::INFINITE,
                 WT_EXECUTEONLYONCE,
             )?;
