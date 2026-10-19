@@ -1,8 +1,8 @@
 ### Changed
 
-- **`GestureAlternatives::new`** (`flui-widgets`): refuses two commands bound to one key with
-  `GestureAlternativesError::DuplicateKey`, instead of leaving which one the key performs to the
-  order of the bindings.
+- **`GestureAlternatives::new`** (`flui-widgets`): refuses two commands whose keys one key press
+  matches (the same key, the other letter case, Shift ignored beside Shift required) with
+  `GestureAlternativesError::DuplicateKey`, instead of performing both.
 - **`WidgetsLocalizations`** (`flui-widgets`): `search_results_found`, `no_results_found`,
   `context_menu_button_label` and `page_label` are required, so a locale states every string; the
   English ones are `DefaultWidgetsLocalizations`'.
@@ -22,7 +22,7 @@
 - **`RawGestureDetector`** (`flui-widgets`): a rebuild whose retired recognizer panics on
   cancellation still reconfigures the recognizers it keeps.
 - **`ContextMenuArea`** (`flui-widgets`): the menu's labels stay readable under any app text
-  colour, and the menu control that keyboard focus reveals draws in the text colour around its
-  row.
+  colour, and the menu control that keyboard focus reveals draws its glyph on a surface of its
+  own.
 - **Gesture alternatives** (`flui-widgets`): a command's reserved key is reported once, not on
   every rebuild.

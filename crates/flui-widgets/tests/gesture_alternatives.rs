@@ -729,15 +729,35 @@ pub(crate) fn labels_name_one_action_each() {
         GestureCommand::new(label.to_owned(), Delete("Alice"))
             .key(SingleActivator::character("d").control())
     };
-    let shared_key = GestureAlternatives::new(Alternative::ContextMenu(
-        MenuSpec::new(keyed("Delete"), |_cx, _request| {}).item(keyed("Archive")),
+    let ctrl_d = SingleActivator::character("d").control();
+    // A later key one press of `ctrl_d` also matches.
+    let overlapping = [
+        ("the same key", ctrl_d.clone()),
+        ("the other case", SingleActivator::character("D").control()),
+        (
+            "Shift ignored",
+            SingleActivator::character_ignoring_shift("d").control(),
+        ),
+        ("repeats refused", ctrl_d.allow_repeats(false)),
+    ];
+    for (label, key) in overlapping {
+        let shared_key = GestureAlternatives::new(Alternative::ContextMenu(
+            MenuSpec::new(keyed("Delete"), |_cx, _request| {})
+                .item(GestureCommand::new("Archive", Delete("Alice")).key(key.clone())),
+        ));
+        assert_eq!(
+            shared_key.err(),
+            Some(GestureAlternativesError::DuplicateKey { key }),
+            "{label}"
+        );
+    }
+    let distinct = GestureAlternatives::new(Alternative::ContextMenu(
+        MenuSpec::new(keyed("Delete"), |_cx, _request| {}).item(
+            GestureCommand::new("Archive", Delete("Alice"))
+                .key(SingleActivator::character("d").control().shift()),
+        ),
     ));
-    assert_eq!(
-        shared_key.err(),
-        Some(GestureAlternativesError::DuplicateKey {
-            key: SingleActivator::character("d").control()
-        })
-    );
+    assert!(distinct.is_ok(), "Ctrl+Shift+D is another key press");
     let repeated_on_one = GestureAlternatives::new(Alternative::ContextMenu(MenuSpec::new(
         keyed("Delete").key(SingleActivator::character("d").control()),
         |_cx, _request| {},
@@ -987,10 +1007,10 @@ pub(crate) fn the_revealed_menu_control_names_its_target() {
     }
 }
 
-/// The revealed menu control draws its glyph in the text colour around the
-/// row, so it shows on the row's background as the row's text does: white
-/// dots where the app's text is white.
-pub(crate) fn the_revealed_menu_control_draws_in_the_text_colour() {
+/// The revealed menu control paints its glyph on a surface of its own, so
+/// the row behind it cannot hide it: under an app's white text (a dark row),
+/// black dots on the glyph's white, not dots in a colour the row chose.
+pub(crate) fn the_revealed_menu_control_draws_its_glyph_on_its_own_surface() {
     use flui_painting::display_list::DrawOp;
     use flui_painting::typography::TextStyle;
     use flui_widgets::DefaultTextStyle;
@@ -1016,17 +1036,30 @@ pub(crate) fn the_revealed_menu_control_draws_in_the_text_colour() {
     );
     let _ = laid.focus_manager().dispatch_key_event(&tab);
     laid.pump();
-    let dots: Vec<Color> = laid
+    // Each filled rectangle, in paint order: its size and colour.
+    let rects: Vec<((f64, f64), Color)> = laid
         .draw_ops()
         .into_iter()
         .filter_map(|command| match command.op {
-            DrawOp::Rect { rect, paint } if rect.width() == 3.0 && rect.height() == 3.0 => {
-                Some(paint.color)
-            }
+            DrawOp::Rect { rect, paint } => Some(((rect.width(), rect.height()), paint.color)),
             _ => None,
         })
         .collect();
-    assert_eq!(dots, [Color::WHITE; 3], "the glyph's three dots");
+    let first_dot = rects
+        .iter()
+        .position(|(size, _)| *size == (3.0, 3.0))
+        .expect("the glyph's dots are painted");
+    let dots: Vec<Color> = rects[first_dot..]
+        .iter()
+        .filter(|(size, _)| *size == (3.0, 3.0))
+        .map(|(_, colour)| *colour)
+        .collect();
+    assert_eq!(dots, [Color::BLACK; 3], "the glyph's three dots");
+    // Three 3 px dots 1.5 px apart on each side, inset 4 px.
+    assert!(
+        rects[..first_dot].contains(&((26.0, 11.0), Color::WHITE)),
+        "the dots sit on the glyph's own white surface: {rects:?}"
+    );
 }
 
 /// A command whose intent nothing answers, and a command key the platform

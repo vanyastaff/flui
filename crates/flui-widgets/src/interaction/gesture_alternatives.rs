@@ -55,8 +55,8 @@ use crate::localization::{
     BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, WidgetsLocalizations,
 };
 use crate::{
-    Center, ColoredBox, ConstrainedBox, DefaultTextStyle, ExcludeSemantics, Flexible,
-    LayoutBuilder, Padding, Positioned, Row, Semantics, SizedBox, Stack,
+    Center, ColoredBox, ConstrainedBox, ExcludeSemantics, Flexible, LayoutBuilder, Padding,
+    Positioned, Row, Semantics, SizedBox, Stack,
 };
 use flui_objects::{CrossAxisAlignment, MainAxisSize, StackFit};
 use flui_painting::styling::Color;
@@ -681,10 +681,12 @@ pub enum GestureAlternativesError {
         /// The shared label.
         label: String,
     },
-    /// Two commands share a key: pressing it could perform either.
+    /// Two commands have keys one key press matches: `ctrl+d` and `ctrl+D`,
+    /// or Shift ignored beside Shift required, so pressing it could perform
+    /// either.
     #[error("two gesture commands share the key {key:?}")]
     DuplicateKey {
-        /// The shared key.
+        /// The later command's key that a press of an earlier one matches.
         key: SingleActivator,
     },
     /// A companion command performs an intent of a type its
@@ -754,7 +756,7 @@ impl GestureAlternatives {
             seen.push(command.label());
             let earlier = keys.len();
             for key in &command.keys {
-                if keys[..earlier].contains(&key) {
+                if keys[..earlier].iter().any(|earlier| earlier.overlaps(key)) {
                     return Err(GestureAlternativesError::DuplicateKey { key: key.clone() });
                 }
                 keys.push(key);
@@ -1313,16 +1315,24 @@ fn control_button(
     .boxed()
 }
 
+/// The theme-free glyph's surface and dots: the control paints both, as the
+/// theme-free menu does, so whatever the row draws behind it cannot hide it.
+const GLYPH_SURFACE: Color = Color::WHITE;
+const GLYPH_INK: Color = Color::BLACK;
+
 /// The theme-free "more" glyph the revealed menu control draws: three dots
-/// in `color`.
-fn more_glyph(color: Color) -> BoxedView {
+/// on a surface of their own.
+fn more_glyph() -> BoxedView {
     let dot = || {
         Padding::symmetric(1.5, 0.0)
-            .child(SizedBox::new(3.0, 3.0).child(ColoredBox::new(color)))
+            .child(SizedBox::new(3.0, 3.0).child(ColoredBox::new(GLYPH_INK)))
             .boxed()
     };
-    Row::new(vec![dot(), dot(), dot()])
-        .main_axis_size(MainAxisSize::Min)
+    ColoredBox::new(GLYPH_SURFACE)
+        .child(
+            Padding::all(4.0)
+                .child(Row::new(vec![dot(), dot(), dot()]).main_axis_size(MainAxisSize::Min)),
+        )
         .boxed()
 }
 
@@ -1391,15 +1401,9 @@ impl ViewState<FocusDecorations> for FocusDecorationsState {
         }
         if visible_in_row && let Some((label, opener)) = &view.menu_control {
             let opener = Rc::clone(opener);
-            // The glyph sits on the row's background, as the row's text does.
-            let ink = ctx
-                .depend_on::<DefaultTextStyle, _>(|style| style.ambient().0.color)
-                .flatten()
-                .unwrap_or(Color::BLACK);
-            let control =
-                control_button(label.clone(), more_glyph(ink), view.min_target, move |cx| {
-                    opener(cx, MenuCause::Control, None);
-                });
+            let control = control_button(label.clone(), more_glyph(), view.min_target, move |cx| {
+                opener(cx, MenuCause::Control, None);
+            });
             let trailing = Positioned::new(control).top(0.0).bottom(0.0);
             let trailing = match Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr) {
                 TextDirection::Rtl => trailing.left(0.0),

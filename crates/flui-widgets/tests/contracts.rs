@@ -1290,8 +1290,8 @@ fn gesture_alternatives() {
                 crate::gesture_alternatives::the_revealed_menu_control_names_its_target,
             ),
             (
-                "gesture_alternatives::the_revealed_menu_control_draws_in_the_text_colour",
-                crate::gesture_alternatives::the_revealed_menu_control_draws_in_the_text_colour,
+                "gesture_alternatives::the_revealed_menu_control_draws_its_glyph_on_its_own_surface",
+                crate::gesture_alternatives::the_revealed_menu_control_draws_its_glyph_on_its_own_surface,
             ),
             (
                 "gesture_alternatives::an_unanswered_intent_and_a_reserved_key_are_reported",

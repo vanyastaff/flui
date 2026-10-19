@@ -209,6 +209,24 @@ impl SingleActivator {
             && modifiers.contains(Modifiers::ALT) == self.alt
             && modifiers.contains(Modifiers::META) == self.meta
     }
+
+    /// Whether one key event can trigger both `self` and `other`, by the
+    /// rules of [`matches`](Self::matches): letters without case, an ignored
+    /// Shift beside either Shift state, and a first key-down whatever the
+    /// repeat policy.
+    pub(crate) fn overlaps(&self, other: &Self) -> bool {
+        let shift = match (self.shift, other.shift) {
+            (Some(ours), Some(theirs)) => ours == theirs,
+            _ => true,
+        };
+        self.on_release == other.on_release
+            && self.control == other.control
+            && self.alt == other.alt
+            && self.meta == other.meta
+            && shift
+            && (trigger_matches(&self.trigger, &other.trigger)
+                || trigger_matches(&other.trigger, &self.trigger))
+    }
 }
 
 /// `pressed` is `trigger`, an ASCII letter compared without case.
