@@ -356,10 +356,6 @@ pub struct PresentationState {
     /// The vsync of the frame being delivered, on the event timeline
     /// (`HostInput::Frame`): the interaction layer samples motion there.
     pub(super) frame_vsync: Cell<Option<flui_platform_api::EventTime>>,
-    /// The window's latest input capabilities (`PlatformInput::Capabilities`),
-    /// kept for the lifecycle capability that will expose them (ADR-0213).
-    pub(super) input_capabilities:
-        Cell<Option<flui_platform_api::input_capabilities::InputCapabilities>>,
     /// The system-bar overlay style its frames ask for, delivered on change.
     pub(crate) overlay_style: crate::overlay_style::OverlayStyleCoalescer,
     /// External textures its widgets register; the raster lane drains it.
@@ -400,10 +396,10 @@ pub struct PresentationState {
     held_pointer_input: RefCell<HeldPointerQueue>,
     /// The input regions collected when this frames scene was built, handed to the
     /// window once the sink accepts the scene (ADR-0217 §5).
-    staged_input_regions: RefCell<Vec<flui_platform_api::input_regions::InputRegion>>,
+    staged_input_regions: RefCell<Rc<[flui_platform_api::input_regions::InputRegion]>>,
     /// The input regions of the last committed frame, handed to the window again when
     /// it moves, so its backend can re-project them for a new display.
-    published_input_regions: RefCell<Vec<flui_platform_api::input_regions::InputRegion>>,
+    published_input_regions: RefCell<Rc<[flui_platform_api::input_regions::InputRegion]>>,
     focus: Rc<FocusManager>,
     text_input: Rc<TextInputOwner>,
     /// This presentation's semantics enablement gate and platform
@@ -915,7 +911,6 @@ impl PresentationState {
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
             frame_vsync: Cell::new(None),
-            input_capabilities: Cell::new(None),
             pipeline,
             completion_scope: Some(capabilities.completion_scope),
             text_preparation: RefCell::new(TextPreparation::default()),
@@ -1033,7 +1028,6 @@ impl PresentationState {
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
             frame_vsync: Cell::new(None),
-            input_capabilities: Cell::new(None),
             pipeline,
             completion_scope: None,
             text_preparation: RefCell::new(TextPreparation::default()),
@@ -1368,20 +1362,18 @@ impl PresentationState {
     // Window access, haptics (moved from the retired `AppBinding`)
     // ========================================================================
 
-    /// Access the presentation's window, if it is still live.
-    ///
-    /// `window` is `Weak`: the platform owns the strong `Arc`, and this
-    /// presentation must not keep it alive past the platform's own teardown.
-    /// Returns `None` once the window has been dropped — the same
-    /// degradation the retired `AppBinding::with_window` used before any
-    /// window was installed; here it is "the window this presentation was
-    /// built with is gone" instead of "no window installed yet", since a
-    /// presentation always has one from construction.
     /// The identity of the window this presentation was built for.
     pub(crate) fn window_id(&self) -> flui_platform_api::WindowId {
         self.window_id
     }
 
+    /// Access the presentation's window, if it is still live.
+    ///
+    /// `window` is `Weak`: the platform owns the strong `Arc`, and this
+    /// presentation must not keep it alive past the platform's own teardown.
+    /// Returns `None` once the window has been dropped: the window this
+    /// presentation was built with is gone, since a presentation always has
+    /// one from construction.
     pub(crate) fn with_window<R>(&self, f: impl FnOnce(&dyn PlatformWindow) -> R) -> Option<R> {
         self.window.upgrade().map(|window| f(window.as_ref()))
     }
@@ -1392,25 +1384,27 @@ impl PresentationState {
         let regions = self
             .pipeline
             .with(flui_rendering::pipeline::PipelineOwner::input_regions);
-        *self.staged_input_regions.borrow_mut() = regions;
+        *self.staged_input_regions.borrow_mut() = regions.into();
     }
 
     /// Hands the window the staged input regions of a frame the sink accepted. Called on
     /// every composited frame, changed or not: the backend compares its projection with
     /// what the OS holds (ADR-0217 §5).
+    ///
+    /// The regions are committed before the backend runs, and no borrow is held while it
+    /// does: a backend that panics or reenters leaves them committed for the next move.
     pub(crate) fn publish_input_regions(&self) {
         let regions = self.staged_input_regions.take();
+        *self.published_input_regions.borrow_mut() = Rc::clone(&regions);
         self.with_window(|window| window.set_input_regions(&regions));
-        *self.published_input_regions.borrow_mut() = regions;
     }
 
     /// Hands the window the last committed input regions again, after it moved: on another
     /// display the backend's projection key differs, so it re-sends them without waiting
     /// for a frame.
     pub(crate) fn republish_input_regions(&self) {
-        let regions = self.published_input_regions.take();
+        let regions = Rc::clone(&self.published_input_regions.borrow());
         self.with_window(|window| window.set_input_regions(&regions));
-        *self.published_input_regions.borrow_mut() = regions;
     }
 
     /// This presentation's haptics host: its frame queue and outcome

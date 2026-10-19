@@ -65,9 +65,10 @@ pub enum UiCommand {
     #[cfg(feature = "hot-reload")]
     HotReload(crate::reload::ReloadTier),
     /// [`HostInput::Accessibility`](crate::HostInput::Accessibility) from the
-    /// platform adapter's thread, addressed to the exact presentation that
-    /// was live when the sender stamped it and unwrapped on the owner thread
-    /// like any other host input (ADR-0207 §1).
+    /// platform adapter's thread, or dispatched on the owner thread, addressed
+    /// to the exact presentation that was live when the sender stamped it and
+    /// unwrapped on the owner thread at the next Idle drain: every assistive
+    /// request takes this path (ADR-0207, amendment).
     Accessibility {
         /// The presentation this request was stamped for.
         presentation_id: PresentationId,
@@ -568,10 +569,26 @@ impl UiRuntime {
                     presentation_id,
                     request,
                 } => {
-                    if self.dispatch_accessibility(presentation_id, &request) {
-                        report.invoked += 1;
-                    } else {
+                    if self.presentations.get(presentation_id).is_none() {
+                        // Accepted earlier, but the presentation closed first:
+                        // the request was never applied.
+                        tracing::warn!(
+                            { flui_foundation::diagnostics::PRESENTATION_ID } =
+                                presentation_id.as_u64(),
+                            action = ?request.action,
+                            "dropping an accepted accessibility request: its presentation closed before the drain"
+                        );
                         report.dropped_stale += 1;
+                        continue;
+                    }
+                    // A panicking handler keeps the accepted tail live, as a
+                    // failed reassemble does, before resuming.
+                    match catch_unwind(AssertUnwindSafe(|| {
+                        self.dispatch_accessibility(presentation_id, &request)
+                    })) {
+                        Ok(true) => report.invoked += 1,
+                        Ok(false) => report.dropped_stale += 1,
+                        Err(payload) => self.rearm_after_command_panic(payload),
                     }
                 }
                 UiCommand::Motion {

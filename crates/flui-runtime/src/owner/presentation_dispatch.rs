@@ -90,6 +90,45 @@ impl WindowObservation {
     }
 }
 
+/// A window observation applied on its own, in arrival order: every
+/// [`WindowObservation`] that never merges into [`PendingWindowState`].
+#[derive(Clone, Copy, Debug)]
+pub(super) enum OrderedObservation {
+    Focus(bool),
+    Visibility(bool),
+    Execution(WindowExecutionState),
+    Snapshot {
+        execution: WindowExecutionState,
+        focused: bool,
+        visible: bool,
+    },
+    Hover(bool),
+    Moved,
+    State,
+}
+
+impl From<OrderedObservation> for WindowObservation {
+    fn from(observation: OrderedObservation) -> Self {
+        match observation {
+            OrderedObservation::Focus(focused) => Self::Focus(focused),
+            OrderedObservation::Visibility(visible) => Self::Visibility(visible),
+            OrderedObservation::Execution(execution) => Self::Execution(execution),
+            OrderedObservation::Snapshot {
+                execution,
+                focused,
+                visible,
+            } => Self::Snapshot {
+                execution,
+                focused,
+                visible,
+            },
+            OrderedObservation::Hover(inside) => Self::Hover(inside),
+            OrderedObservation::Moved => Self::Moved,
+            OrderedObservation::State => Self::State,
+        }
+    }
+}
+
 impl UiRuntime {
     /// Apply one observation of `address`'s window, as
     /// [`HostInput::Window`] does: `resize_surface` takes accepted surface
@@ -101,63 +140,44 @@ impl UiRuntime {
         observation: WindowObservation,
         resize_surface: &dyn Fn(Size<f64>, f64),
     ) {
-        let id = address.presentation_id;
-        let pending = match observation {
-            WindowObservation::Metrics { size, scale_factor } => {
-                Some(PendingWindowState::metrics(size, scale_factor))
-            }
-            WindowObservation::SafeArea(insets) => Some(PendingWindowState {
-                safe_area: Some(insets),
-                ..Default::default()
-            }),
-            WindowObservation::Brightness(brightness) => Some(PendingWindowState {
-                brightness: Some(brightness),
-                ..Default::default()
-            }),
-            WindowObservation::Display(update) => Some(PendingWindowState {
-                display: Some(update),
-                ..Default::default()
-            }),
-            WindowObservation::Focus(_)
-            | WindowObservation::Visibility(_)
-            | WindowObservation::Execution(_)
-            | WindowObservation::Snapshot { .. }
-            | WindowObservation::Hover(_)
-            | WindowObservation::Moved
-            | WindowObservation::State => None,
-        };
-        if let Some(pending) = pending {
-            pending.apply(self, address, resize_surface);
-            return;
+        match PendingWindowState::from_observation(observation) {
+            Ok(pending) => pending.apply(self, address, resize_surface),
+            Err(ordered) => self.apply_ordered_observation(address, ordered),
         }
+    }
+
+    /// Apply an observation that is never merged; while a tap records, it is
+    /// recorded after it applied.
+    pub(super) fn apply_ordered_observation(
+        &self,
+        address: PresentationAddress,
+        observation: OrderedObservation,
+    ) {
+        let id = address.presentation_id;
         let recording = self.begin_recorded_input();
         // What the recording keeps of the observation. A state notification
         // carries nothing a replay could honour: the owner read this host's
         // live window. What it did to the presentation is recorded instead, as
         // the move it was when the content went somewhere else.
-        let mut recorded = Some(observation);
+        let mut recorded = Some(WindowObservation::from(observation));
         let applied = catch_unwind(AssertUnwindSafe(|| match observation {
-            WindowObservation::Focus(focused) => self.update_window_focus(id, focused),
-            WindowObservation::Visibility(visible) => self.update_window_visibility(id, visible),
-            WindowObservation::Execution(execution) => self.update_window_execution(id, execution),
-            WindowObservation::Snapshot {
+            OrderedObservation::Focus(focused) => self.update_window_focus(id, focused),
+            OrderedObservation::Visibility(visible) => self.update_window_visibility(id, visible),
+            OrderedObservation::Execution(execution) => {
+                self.update_window_execution(id, execution);
+            }
+            OrderedObservation::Snapshot {
                 execution,
                 focused,
                 visible,
             } => {
                 self.synchronize_window_snapshot(id, execution, focused, visible);
             }
-            WindowObservation::Hover(inside) => self.handle_window_hover_addressed(id, inside),
-            WindowObservation::Moved => self.window_moved(id),
-            WindowObservation::State => {
+            OrderedObservation::Hover(inside) => self.handle_window_hover_addressed(id, inside),
+            OrderedObservation::Moved => self.window_moved(id),
+            OrderedObservation::State => {
                 recorded = None;
                 self.publish_window_state(id, || recorded = Some(WindowObservation::Moved));
-            }
-            WindowObservation::Metrics { .. }
-            | WindowObservation::SafeArea(_)
-            | WindowObservation::Brightness(_)
-            | WindowObservation::Display(_) => {
-                unreachable!("BUG: mergeable observations apply as pending window state")
             }
         }));
         if recording && let Some(recorded) = recorded {
@@ -192,8 +212,25 @@ impl PendingWindowState {
 
     pub(super) fn from_observation(
         observation: WindowObservation,
-    ) -> Result<Self, WindowObservation> {
+    ) -> Result<Self, OrderedObservation> {
         match observation {
+            WindowObservation::Focus(focused) => Err(OrderedObservation::Focus(focused)),
+            WindowObservation::Visibility(visible) => Err(OrderedObservation::Visibility(visible)),
+            WindowObservation::Execution(execution) => {
+                Err(OrderedObservation::Execution(execution))
+            }
+            WindowObservation::Snapshot {
+                execution,
+                focused,
+                visible,
+            } => Err(OrderedObservation::Snapshot {
+                execution,
+                focused,
+                visible,
+            }),
+            WindowObservation::Hover(inside) => Err(OrderedObservation::Hover(inside)),
+            WindowObservation::Moved => Err(OrderedObservation::Moved),
+            WindowObservation::State => Err(OrderedObservation::State),
             WindowObservation::Metrics { size, scale_factor } => {
                 Ok(Self::metrics(size, scale_factor))
             }
@@ -209,7 +246,6 @@ impl PendingWindowState {
                 display: Some(update),
                 ..Self::default()
             }),
-            other => Err(other),
         }
     }
 
@@ -323,7 +359,8 @@ use super::{Delivery, DispatchError, OwnerCore, OwnerEffects, OwnerHost, Runtime
 pub enum InputOutcome {
     /// The framework handled the input.
     Handled,
-    /// Keyboard input ran synchronously and no framework handler consumed it.
+    /// Keyboard input ran synchronously and no framework handler consumed it,
+    /// or an assistive request reached no handler.
     Unhandled,
     /// Input was accepted for later delivery; suppress native default handling.
     Queued,
@@ -426,8 +463,13 @@ impl PresentationDispatcher {
     /// queue behind it, never dropped. The runtime unwraps the value: platform
     /// input goes to the presentation's gesture, focus and text-input owners,
     /// a window observation updates its metrics and lifecycle, a frame paces
-    /// its gesture sampling at the vsync and then renders, and an AT request
-    /// reaches its semantics owner.
+    /// its gesture sampling at the vsync and then renders.
+    ///
+    /// An AT request takes the path the window's accessibility bridge sends
+    /// it on (ADR-0207, amendment): it is queued in the runtime's command
+    /// inbox and reaches its semantics owner at the next owner turn's Idle
+    /// drain, before that turn's frame begins, and the answer is
+    /// [`InputOutcome::Queued`].
     ///
     /// Adjacent pending metrics, safe-area and brightness observations for
     /// this exact window keep their latest values together; any other input
@@ -439,7 +481,9 @@ impl PresentationDispatcher {
     /// input suppresses it because the framework cannot answer synchronously.
     ///
     /// # Errors
-    /// Refuses an expired target or host, or an active publication.
+    /// Refuses an expired target or host, or an active publication;
+    /// [`DispatchError::InboxFull`] for an AT request the runtime's inbox
+    /// has no room for.
     pub fn dispatch(
         &self,
         input: HostInput,
@@ -461,7 +505,7 @@ impl PresentationDispatcher {
                 core.deliver(RuntimeWork::Frame(self.address, vsync), effects)?
             }
             HostInput::Accessibility(request) => {
-                core.deliver(RuntimeWork::Accessibility(self.address, request), effects)?
+                return self.queue_accessibility(&core, request);
             }
         };
         Ok(match delivered {
@@ -485,6 +529,32 @@ impl PresentationDispatcher {
     ) -> Result<InputOutcome, DispatchError> {
         let core = self.owner.upgrade().ok_or(DispatchError::OwnerGone)?;
         self.platform_input(&core, surface, input, effects)
+    }
+
+    /// Queue an AT request in the addressed runtime's command inbox, stamped
+    /// for this presentation, as its accessibility bridge does.
+    fn queue_accessibility(
+        &self,
+        core: &OwnerCore,
+        request: accesskit::ActionRequest,
+    ) -> Result<InputOutcome, DispatchError> {
+        let sender = {
+            let state = core.state.try_borrow().map_err(|_| DispatchError::Busy)?;
+            let index = state.authorizer(self.address)?;
+            state.runtimes[index]
+                .factory
+                .command_sender_for(self.address.presentation_id)
+        };
+        // No owner borrow is held: the send wakes the host.
+        match sender.send_accessibility(request) {
+            Ok(()) => Ok(InputOutcome::Queued),
+            Err(crate::ui_runtime::CommandSendError::ChannelFull { .. }) => {
+                Err(DispatchError::InboxFull)
+            }
+            Err(crate::ui_runtime::CommandSendError::OwnerGone { .. }) => {
+                Err(DispatchError::UnknownRuntime)
+            }
+        }
     }
 
     fn platform_input(

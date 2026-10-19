@@ -31,15 +31,24 @@ use crate::input_tap::HeldInputRow;
 use crate::owner::InputOutcome;
 use crate::{HostInput, InputTaps};
 
-/// One arena decision an observer reported, not yet admitted: a verdict, or
-/// (with no disposition) a deadline the arena polled.
+/// One arena decision an observer reported, not yet admitted.
 struct Observed {
     window: WindowId,
-    contest: Option<GestureContest>,
     t: EventTime,
-    disposition: Option<GestureDisposition>,
+    decision: ObservedDecision,
     member: RecordedMember,
     member_type: &'static str,
+}
+
+/// What an observer saw decided.
+enum ObservedDecision {
+    /// A member won or lost its contest.
+    Verdict {
+        contest: GestureContest,
+        disposition: GestureDisposition,
+    },
+    /// The arena polled a member's deadline, in a contest or outside any.
+    Deadline { contest: Option<GestureContest> },
 }
 
 /// The numbers a recording gives arena members, in the order it first sees
@@ -162,7 +171,13 @@ impl UiRuntime {
                     .gestures()
                     .arena()
                     .observe(move |observation: &GestureObservation| {
-                        let (contest, member, t, disposition) = match observation {
+                        let verdict = |contest: &GestureContest, disposition| {
+                            ObservedDecision::Verdict {
+                                contest: *contest,
+                                disposition,
+                            }
+                        };
+                        let (decision, member, t) = match observation {
                             // A member is numbered when it joins, so members
                             // keep the join order whoever decides first.
                             GestureObservation::Joined { member, .. } => {
@@ -173,18 +188,22 @@ impl UiRuntime {
                                 contest,
                                 member,
                                 at,
-                            } => (Some(*contest), member, *at, Some(GestureDisposition::Accepted)),
+                            } => (verdict(contest, GestureDisposition::Accepted), member, *at),
                             GestureObservation::Rejected {
                                 contest,
                                 member,
                                 at,
                                 ..
-                            } => (Some(*contest), member, *at, Some(GestureDisposition::Rejected)),
+                            } => (verdict(contest, GestureDisposition::Rejected), member, *at),
                             GestureObservation::DeadlineElapsed {
                                 contest,
                                 member,
                                 now,
-                            } => (*contest, member, *now, None),
+                            } => (
+                                ObservedDecision::Deadline { contest: *contest },
+                                member,
+                                *now,
+                            ),
                             _ => return,
                         };
                         let Some(number) = members.borrow_mut().number(member) else {
@@ -196,9 +215,8 @@ impl UiRuntime {
                         };
                         observed.borrow_mut().push(Observed {
                             window,
-                            contest,
                             t,
-                            disposition,
+                            decision,
                             member: number,
                             member_type: member.type_name().unwrap_or("a retired member"),
                         });
@@ -296,28 +314,36 @@ impl UiRuntime {
     /// the report is admitted.
     pub(crate) fn admit_decisions(&self) {
         let observed = std::mem::take(&mut *self.decision_recorder.observed.borrow_mut());
-        for decision in observed {
-            let sequence = decision
-                .contest
-                .and_then(GestureContest::sequence)
-                .map(RecordedSequence::from);
-            let pointer = decision.contest.map(GestureContest::pointer);
-            let record = match (decision.disposition, pointer) {
-                (Some(disposition), Some(pointer)) => InputRecord::Decision(
+        for observed in observed {
+            let sequence = |contest: Option<GestureContest>| {
+                contest
+                    .and_then(GestureContest::sequence)
+                    .map(RecordedSequence::from)
+            };
+            let record = match observed.decision {
+                ObservedDecision::Verdict {
+                    contest,
+                    disposition,
+                } => InputRecord::Decision(
                     DecisionRow::new(
-                        decision.window,
-                        pointer,
-                        decision.t,
+                        observed.window,
+                        contest.pointer(),
+                        observed.t,
                         disposition,
-                        decision.member,
+                        observed.member,
                     )
-                    .in_sequence(sequence)
-                    .with_member_type(decision.member_type),
+                    .in_sequence(sequence(Some(contest)))
+                    .with_member_type(observed.member_type),
                 ),
-                _ => InputRecord::Deadline(
-                    DeadlineRow::new(decision.window, pointer, decision.t, decision.member)
-                        .in_sequence(sequence)
-                        .with_member_type(decision.member_type),
+                ObservedDecision::Deadline { contest } => InputRecord::Deadline(
+                    DeadlineRow::new(
+                        observed.window,
+                        contest.map(GestureContest::pointer),
+                        observed.t,
+                        observed.member,
+                    )
+                    .in_sequence(sequence(contest))
+                    .with_member_type(observed.member_type),
                 ),
             };
             self.input_taps.admit(record);

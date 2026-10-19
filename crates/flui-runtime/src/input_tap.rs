@@ -110,6 +110,8 @@ impl std::fmt::Debug for InputTaps {
 
 struct TapState {
     queue: RefCell<VecDeque<InputRecord>>,
+    /// The rows of the running delivery pass not yet offered.
+    in_flight: RefCell<VecDeque<InputRecord>>,
     current: RefCell<Option<Registered>>,
     /// Issues registration generations; never reuses one.
     generations: IdMint<NonZeroU64>,
@@ -131,6 +133,7 @@ impl InputTaps {
         Self {
             state: Rc::new(TapState {
                 queue: RefCell::new(VecDeque::new()),
+                in_flight: RefCell::new(VecDeque::new()),
                 current: RefCell::new(None),
                 generations: IdMint::new(),
                 pending_gap: Cell::new(0),
@@ -213,7 +216,8 @@ impl TapState {
             return;
         }
         let batch = std::mem::take(&mut *self.queue.borrow_mut());
-        for record in batch {
+        *self.in_flight.borrow_mut() = batch;
+        while let Some(record) = self.next_in_flight() {
             self.deliver_pending_gap();
             self.offer(&record);
         }
@@ -224,6 +228,23 @@ impl TapState {
                 self.report(payload, TapFailureSite::Wake);
             }
         }
+    }
+
+    fn next_in_flight(&self) -> Option<InputRecord> {
+        self.in_flight.borrow_mut().pop_front()
+    }
+
+    /// Count the rows a finishing registration will never be offered as
+    /// lost: the rest of a pass it finished inside, and rows admitted for a
+    /// later pass. They travel in the final `Gap` and `End` rows.
+    fn skip_undelivered(&self) {
+        let in_flight = std::mem::take(&mut *self.in_flight.borrow_mut());
+        let queued = std::mem::take(&mut *self.queue.borrow_mut());
+        let skipped = u64::try_from(in_flight.len() + queued.len()).unwrap_or(u64::MAX);
+        self.lost_total
+            .set(self.lost_total.get().saturating_add(skipped));
+        self.pending_gap
+            .set(self.pending_gap.get().saturating_add(skipped));
     }
 
     /// Hand `record` to the current tap; a panic loses the row and sends the
@@ -389,6 +410,10 @@ impl InputTapHandle {
     /// Deliver every queued row, the pending [`InputRecord::Gap`] and the
     /// [`InputRecord::End`] row, then unregister.
     ///
+    /// Called inside a tap call, the running pass keeps its rows: those it
+    /// has not offered yet, and rows admitted for a later pass, are lost and
+    /// counted in the final `Gap` and `End` rows.
+    ///
     /// # Errors
     ///
     /// [`RecordingIncomplete`] when the tap panicked on the final gap or the
@@ -403,7 +428,12 @@ impl InputTapHandle {
                 lost_rows: state.lost_total.get(),
             });
         }
+        // Inside a tap call this delivers nothing: the running pass owns the
+        // rows, and the ones it has not offered yet are counted as lost.
         state.deliver();
+        if state.is_current(self.generation) {
+            state.skip_undelivered();
+        }
         let complete = state.is_current(self.generation)
             && state.deliver_pending_gap()
             && state.is_current(self.generation)
