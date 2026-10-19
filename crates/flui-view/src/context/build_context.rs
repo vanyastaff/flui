@@ -486,9 +486,7 @@ pub trait LifecycleContext: BuildContext {
     /// where to re-acquire it. `None` only on a bare owner (an `ElementTree`
     /// in a unit test). Acquire it in a lifecycle hook (`init_state` /
     /// `did_change_dependencies`), the same rule `clipboard_handle` follows.
-    fn haptics(&self) -> Option<flui_interaction::HapticsHandle> {
-        None
-    }
+    fn haptics(&self) -> Option<flui_interaction::HapticsHandle>;
 
     /// The presentation's drag-and-drop (ADR-0211): drags that start in its
     /// window, and the transfers its keyboard and assistive technology cut,
@@ -498,9 +496,7 @@ pub trait LifecycleContext: BuildContext {
     /// `None` only on a bare owner (an `ElementTree` in a unit test). Acquire it
     /// in a lifecycle hook (`init_state` / `did_change_dependencies`), the same
     /// rule `haptics` follows.
-    fn drag_and_drop(&self) -> Option<flui_interaction::drag::DragAndDrop> {
-        None
-    }
+    fn drag_and_drop(&self) -> Option<flui_interaction::drag::DragAndDrop>;
 
     /// The presentation's external-texture registry: register a texture,
     /// feed it frames from any thread, and draw it with a `Texture` widget.

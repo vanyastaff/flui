@@ -116,6 +116,15 @@ impl GestureInspector {
             .collect()
     }
 
+    /// Calls `visit` with each retained contest, oldest first, without
+    /// copying them. The model is borrowed meanwhile, so `visit` must not
+    /// reach this inspector's arena.
+    pub(crate) fn visit_contests(&self, mut visit: impl FnMut(&ContestReport)) {
+        for tracked in &self.model.borrow().contests {
+            visit(&tracked.report);
+        }
+    }
+
     /// Forget every retained contest. Member and composition numbers keep
     /// counting, so a number never names two members.
     pub fn clear(&self) {
