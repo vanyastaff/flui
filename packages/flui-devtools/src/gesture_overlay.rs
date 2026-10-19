@@ -192,7 +192,17 @@ impl ViewState<GestureInspectorOverlay> for GestureInspectorOverlayState {
                 if let (Some(pointer), Some(at)) =
                     (dispatch.local.pointer_id(), dispatch.local.position())
                 {
-                    positions.borrow_mut().insert(pointer, at);
+                    let mut positions = positions.borrow_mut();
+                    // The inspector keeps at most this many contests, so no
+                    // more positions are ever read; a burst of downs between
+                    // two builds must not outgrow it.
+                    if positions.len() >= DEFAULT_CONTEST_CAPACITY
+                        && !positions.contains_key(&pointer)
+                        && let Some(oldest) = positions.keys().next().copied()
+                    {
+                        positions.remove(&oldest);
+                    }
+                    positions.insert(pointer, at);
                 }
             })
             .child(view.child.clone());
