@@ -22,7 +22,7 @@
 //! ```
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashSet, VecDeque};
 use std::fmt;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
@@ -123,8 +123,9 @@ impl fmt::Debug for GestureOverlayController {
     }
 }
 
-/// Where each contact went down, in the overlay's coordinates.
-type Positions = Rc<RefCell<HashMap<PointerId, Offset<f64>>>>;
+/// Where each contact went down, in the overlay's coordinates, oldest first
+/// like the inspector's contests.
+type Positions = Rc<RefCell<VecDeque<(PointerId, Offset<f64>)>>>;
 
 /// Draws the window's gesture contests over `child` while its controller
 /// shows it. Mount it at the application's root, below the window's
@@ -193,16 +194,15 @@ impl ViewState<GestureInspectorOverlay> for GestureInspectorOverlayState {
                     (dispatch.local.pointer_id(), dispatch.local.position())
                 {
                     let mut positions = positions.borrow_mut();
-                    // The inspector keeps at most this many contests, so no
-                    // more positions are ever read; a burst of downs between
-                    // two builds must not outgrow it.
-                    if positions.len() >= DEFAULT_CONTEST_CAPACITY
-                        && !positions.contains_key(&pointer)
-                        && let Some(oldest) = positions.keys().next().copied()
-                    {
-                        positions.remove(&oldest);
+                    // Ordered like the inspector's contests, which keeps the
+                    // newest `DEFAULT_CONTEST_CAPACITY`: the position dropped
+                    // is the one whose contest the inspector dropped, and a
+                    // burst of downs between builds cannot outgrow it.
+                    positions.retain(|(known, _)| *known != pointer);
+                    positions.push_back((pointer, at));
+                    if positions.len() > DEFAULT_CONTEST_CAPACITY {
+                        positions.pop_front();
                     }
-                    positions.insert(pointer, at);
                 }
             })
             .child(view.child.clone());
@@ -446,20 +446,26 @@ impl ViewState<OverlayLayer> for OverlayLayerState {
         // by it too.
         let retained = live.retained_pointers();
         let mut positions = view.positions.borrow_mut();
-        positions.retain(|pointer, _| retained.contains(pointer));
+        positions.retain(|(pointer, _)| retained.contains(pointer));
         let labels: Vec<BoxedView> = live
             .visible()
             .into_iter()
             .enumerate()
             .map(|(index, (contest, opacity))| {
-                let at = positions.get(&contest.pointer).copied().unwrap_or_else(|| {
-                    #[expect(
-                        clippy::cast_precision_loss,
-                        reason = "a stacking index for contests with no known position"
-                    )]
-                    let row = index as f64;
-                    Offset::new(0.0, row * 64.0)
-                });
+                let at = positions
+                    .iter()
+                    .find(|(pointer, _)| *pointer == contest.pointer)
+                    .map_or_else(
+                        || {
+                            #[expect(
+                                clippy::cast_precision_loss,
+                                reason = "a stacking index for contests with no known position"
+                            )]
+                            let row = index as f64;
+                            Offset::new(0.0, row * 64.0)
+                        },
+                        |(_, at)| *at,
+                    );
                 Positioned::new(label(&contest, opacity))
                     .left(at.dx + LABEL_OFFSET)
                     .top(at.dy + LABEL_OFFSET)
