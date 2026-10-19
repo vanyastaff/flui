@@ -538,7 +538,10 @@ impl DragOwner {
     #[must_use]
     pub fn next_deadline(&self) -> Option<EventTime> {
         let state = self.shared.borrow();
-        let concludable = state.offers.iter().any(|offer| state.concludable(offer));
+        let concludable = state
+            .offers
+            .iter()
+            .any(|offer| offer.concludable() || state.abandoned(offer));
         if concludable {
             return Some(EventTime::from_nanos(0));
         }
@@ -654,13 +657,20 @@ impl DragOwner {
                 None => (DragScope::OtherRuntime, None, None, PointerKind::Unknown),
             },
         };
-        if state.offer_mut(offer.id()).is_none() {
+        // A hover that left may have requests in flight still: the offer's
+        // record, and its count, outlive it.
+        let in_flight = if let Some(known) = state.offer_mut(offer.id()) {
+            Arc::clone(&known.in_flight)
+        } else {
+            let in_flight = Arc::new(AtomicUsize::new(0));
             state.offers.push(OfferState {
                 id: offer.id(),
+                in_flight: Arc::clone(&in_flight),
                 dropped: false,
                 answering: None,
             });
-        }
+            in_flight
+        };
         state.incoming.push(Incoming {
             offer,
             presentation,
@@ -670,7 +680,7 @@ impl DragOwner {
             source_allowed,
             os_allowed,
             tracker: DropTracker::new(),
-            in_flight: Arc::new(AtomicUsize::new(0)),
+            in_flight,
             dropped: false,
             position: None,
             pointer,
@@ -759,13 +769,7 @@ impl DragOwner {
             else {
                 return;
             };
-            let incoming = state.incoming.remove(index);
-            // An offer no window hovers and none dropped is over.
-            let hovered = state.incoming.iter().any(|other| other.offer.id() == id);
-            if !hovered {
-                state.offers.retain(|offer| offer.id != id || offer.dropped);
-            }
-            incoming
+            state.incoming.remove(index)
         };
         let mut failure = ClosePanic::new();
         if !incoming.dropped {
@@ -777,28 +781,37 @@ impl DragOwner {
         // The offer's data may be the last owner of user values: it retires
         // here, outside the table's borrow.
         failure.invoke(|| drop(incoming));
-        // A dropped offer whose window went is concluded once no other
-        // window's hover has a request of it in flight.
+        // The offer outlives its hover: a dropped one is concluded, and one
+        // no window hovers forgotten, once no request of it is in flight.
         failure.invoke(|| self.conclude_resolved_drops());
         failure.finish();
     }
 
-    /// Tell the OS every dropped offer that no hover has a request of in
-    /// flight that the target is done with it. Its hovers go with it: one
-    /// that did not take the drop leaves its receivers.
+    /// Tell the OS every dropped offer that has no request in flight that the
+    /// target is done with it. Its hovers go with it: one that did not take
+    /// the drop leaves its receivers. An offer no window hovers, never
+    /// dropped, goes once its last request resolves.
     fn conclude_resolved_drops(&self) {
         let (done, hovers) = {
             let mut state = self.shared.borrow_mut();
             let done: Vec<DataTransferId> = state
                 .offers
                 .iter()
-                .filter(|offer| state.concludable(offer))
+                .filter(|offer| offer.concludable())
                 .map(|offer| offer.id)
                 .collect();
+            let abandoned: Vec<DataTransferId> = state
+                .offers
+                .iter()
+                .filter(|offer| state.abandoned(offer))
+                .map(|offer| offer.id)
+                .collect();
+            state
+                .offers
+                .retain(|offer| !done.contains(&offer.id) && !abandoned.contains(&offer.id));
             if done.is_empty() {
                 return;
             }
-            state.offers.retain(|offer| !done.contains(&offer.id));
             let (hovers, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut state.incoming)
                 .into_iter()
                 .partition(|incoming| done.contains(&incoming.offer.id()));

@@ -1287,7 +1287,7 @@ fn a_cancel_whose_observer_panics_keeps_the_first_failure() {
 
 /// The window an OS drop landed in closes while a request made from the drop
 /// is outstanding: the offer is concluded then, once.
-fn detaching_a_window_concludes_a_drop_still_fetching() {
+fn closing_the_window_that_took_a_drop_waits_for_its_fetch() {
     in_lane(|f| {
         let target = Rc::new(Spot {
             name: "T",
@@ -1329,10 +1329,9 @@ fn detaching_a_window_concludes_a_drop_still_fetching() {
             "a fetch is outstanding"
         );
         f.owner.detach_presentation(f.presentation);
-        assert_eq!(
-            *f.source.concluded.lock(),
-            [id],
-            "the closing window concludes its drop"
+        assert!(
+            f.source.concluded.lock().is_empty(),
+            "the fetch its window made is still outstanding"
         );
         drop(
             target
@@ -1342,6 +1341,12 @@ fn detaching_a_window_concludes_a_drop_still_fetching() {
                 .expect("a request was made"),
         );
         f.owner.tick(EventTime::from_nanos(1));
+        assert_eq!(
+            *f.source.concluded.lock(),
+            [id],
+            "concluded once it resolves"
+        );
+        f.owner.tick(EventTime::from_nanos(2));
         assert_eq!(*f.source.concluded.lock(), [id], "concluded once");
     });
 }
@@ -2406,6 +2411,110 @@ fn another_windows_hover_keeps_the_answer_standing() {
     });
 }
 
+/// A receiver fetches from an OS offer over one window, and the pointer moves
+/// on: that window hears the offer exit, and the drop lands over another. The
+/// OS is not told the target is done until the fetch resolves.
+fn a_fetch_from_a_hover_that_left_holds_the_drop_open() {
+    in_lane(|f| {
+        let (offer, fetch) = fetched_over_a_window_that_left(f, true);
+        let id = offer.id();
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Dropped {
+                id,
+                action: COPY,
+                position: None,
+            },
+        );
+        assert!(
+            f.source.concluded.lock().is_empty(),
+            "the fetch made over the window the pointer left is outstanding"
+        );
+        drop(fetch);
+        f.owner.tick(time_at(0));
+        assert_eq!(*f.source.concluded.lock(), [id]);
+    });
+}
+
+/// The only hover of an offer leaves while a fetch it made is in flight, and
+/// the offer comes back over another window and drops: the earlier fetch
+/// still holds the drop open.
+fn an_offer_outlives_its_last_hover_while_a_fetch_is_in_flight() {
+    in_lane(|f| {
+        let (offer, fetch) = fetched_over_a_window_that_left(f, false);
+        let id = offer.id();
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Entered {
+                offer,
+                allowed: COPY,
+                position: Some(Point::new(5.0, 5.0)),
+            },
+        );
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Dropped {
+                id,
+                action: COPY,
+                position: None,
+            },
+        );
+        assert!(
+            f.source.concluded.lock().is_empty(),
+            "the fetch made before the offer left is outstanding"
+        );
+        drop(fetch);
+        f.owner.tick(time_at(0));
+        assert_eq!(*f.source.concluded.lock(), [id]);
+    });
+}
+
+/// An offer enters a second window, whose receiver fetches from it, and then
+/// exits that window; with `stay`, the offer is still over the first window
+/// meanwhile, otherwise the second window was its only hover.
+fn fetched_over_a_window_that_left(f: &Fixture, stay: bool) -> (DataTransferOffer, DragFetch) {
+    let second = presentation(2);
+    f.owner
+        .attach_presentation(second, WindowId(2), f.hit.clone());
+    let _first_spot = f.spot("A", 0.0, 50.0, Some(COPY));
+    let fetcher = Rc::new(Spot {
+        name: "B",
+        log: Rc::clone(&f.log),
+        answer: Cell::new(Some(COPY)),
+        on_enter: RefCell::new(None),
+        on_leave: RefCell::new(None),
+        spring: None,
+        scopes: RefCell::default(),
+        values: RefCell::default(),
+        fetch_text: true,
+        fetched: RefCell::default(),
+        on_spring: RefCell::new(None),
+        on_autoscroll: RefCell::new(None),
+        on_drop: RefCell::new(None),
+    });
+    f.register(&fetcher, 50.0, 100.0);
+    let offer = f.text_offer();
+    let id = offer.id();
+    let mut over = vec![(second, 80.0)];
+    if stay {
+        over.push((f.presentation, 5.0));
+    }
+    for (window, x) in over {
+        f.deliver(
+            window,
+            DragDropEvent::Entered {
+                offer: offer.clone(),
+                allowed: COPY,
+                position: Some(Point::new(x, 5.0)),
+            },
+        );
+    }
+    let fetch = fetcher.fetched.borrow_mut().pop().expect("B fetched");
+    f.deliver(second, DragDropEvent::Exited { id });
+    assert_eq!(count(&f.log, "B:left"), 1);
+    (offer, fetch)
+}
+
 /// An offer over two windows, a receiver over the second fetching from it,
 /// dropped over the first: the drop and the outstanding fetch.
 fn dropped_while_fetching_elsewhere(f: &Fixture) -> (DataTransferId, DragFetch) {
@@ -2465,6 +2574,14 @@ fn drag_sessions() {
             (
                 "a_drop_waits_for_a_fetch_made_over_another_window",
                 a_drop_waits_for_a_fetch_made_over_another_window,
+            ),
+            (
+                "a_fetch_from_a_hover_that_left_holds_the_drop_open",
+                a_fetch_from_a_hover_that_left_holds_the_drop_open,
+            ),
+            (
+                "an_offer_outlives_its_last_hover_while_a_fetch_is_in_flight",
+                an_offer_outlives_its_last_hover_while_a_fetch_is_in_flight,
             ),
             (
                 "closing_the_dropped_window_waits_for_a_fetch_made_over_another",
@@ -2580,8 +2697,8 @@ fn drag_sessions() {
                 a_paste_whose_receiver_panics_ends_the_held_cut,
             ),
             (
-                "detaching_a_window_concludes_a_drop_still_fetching",
-                detaching_a_window_concludes_a_drop_still_fetching,
+                "closing_the_window_that_took_a_drop_waits_for_its_fetch",
+                closing_the_window_that_took_a_drop_waits_for_its_fetch,
             ),
             (
                 "a_panicking_hover_before_an_os_drop_still_concludes_it",

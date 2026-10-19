@@ -131,7 +131,8 @@ pub(crate) struct Incoming {
     /// The latest OS-permitted set.
     pub(crate) os_allowed: TransferActions,
     pub(crate) tracker: DropTracker,
-    /// Requests made over this window from the offer that have not resolved.
+    /// The offer's count of requests in flight ([`OfferState::in_flight`]),
+    /// which a request made here bumps.
     pub(crate) in_flight: Arc<AtomicUsize>,
     /// This hover took the drop and its target's callbacks are done; its
     /// offer's [`OfferState`] says when the OS is told.
@@ -146,13 +147,24 @@ pub(crate) struct Incoming {
 /// hovers: it answers and concludes the offer, not a hover.
 pub(crate) struct OfferState {
     pub(crate) id: DataTransferId,
-    /// A hover took the drop. The OS is told the target is done once no hover
-    /// of the offer has a request in flight, the dropped one's window gone or
-    /// not.
+    /// Requests made from the offer, over any window, that have not resolved.
+    /// Each hover holds a clone; a request outlives the hover that made it.
+    pub(crate) in_flight: Arc<AtomicUsize>,
+    /// A hover took the drop. The OS is told the target is done once no
+    /// request of the offer is in flight, whichever windows its hovers have
+    /// left or closed.
     pub(crate) dropped: bool,
     /// The window whose hover last answered the OS: only its answer stands,
     /// so a hover elsewhere cannot withdraw it.
     pub(crate) answering: Option<PresentationId>,
+}
+
+impl OfferState {
+    /// Whether the offer dropped and no request of it is in flight: the OS is
+    /// owed its conclusion.
+    pub(crate) fn concludable(&self) -> bool {
+        self.dropped && self.in_flight.load(Ordering::Acquire) == 0
+    }
 }
 
 impl Incoming {
@@ -229,14 +241,15 @@ impl DragSessions {
         self.offers.iter_mut().find(|offer| offer.id == id)
     }
 
-    /// Whether `offer` dropped and no hover of it has a request in flight.
-    pub(crate) fn concludable(&self, offer: &OfferState) -> bool {
-        offer.dropped
-            && self
+    /// Whether `offer` is over with nothing to tell the OS: no window hovers
+    /// it, it was not dropped, and no request of it is in flight.
+    pub(crate) fn abandoned(&self, offer: &OfferState) -> bool {
+        !offer.dropped
+            && offer.in_flight.load(Ordering::Acquire) == 0
+            && !self
                 .incoming
                 .iter()
-                .filter(|incoming| incoming.offer.id() == offer.id)
-                .all(|incoming| incoming.in_flight.load(Ordering::Acquire) == 0)
+                .any(|incoming| incoming.offer.id() == offer.id)
     }
 
     /// The offer `id` over `presentation`'s window. The same offer over two

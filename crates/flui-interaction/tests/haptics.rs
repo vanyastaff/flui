@@ -803,6 +803,50 @@ fn hiding_the_window_while_a_frame_plays_suppresses_the_request_once() {
     assert!(fake.calls().is_empty(), "a suppressed request never plays");
 }
 
+/// Reaching the actuator for a queued request closes the presentation: the
+/// request being played and the one queued behind it are both reported with
+/// their tickets, as a close reports what it could not deliver.
+#[test]
+fn closing_while_a_frame_plays_reports_every_outcome() {
+    let clock = ManualClock::new();
+    let binding = GestureBinding::with_clock(Arc::new(clock));
+    let fake = Arc::new(FakeHaptics::new());
+    let host_slot: Rc<std::cell::OnceCell<std::rc::Weak<HapticsHost>>> = Rc::default();
+    let close = Rc::new(Cell::new(false));
+    let host = {
+        let (fake, host_slot, close) =
+            (Arc::clone(&fake), Rc::clone(&host_slot), Rc::clone(&close));
+        Rc::new(
+            HapticsHost::builder(&binding, move || {
+                if close.replace(false)
+                    && let Some(host) = host_slot.get().and_then(std::rc::Weak::upgrade)
+                {
+                    RecoveryScope::boundary(|recovery| host.close(recovery));
+                }
+                Some(Arc::clone(&fake) as Arc<dyn PlatformHaptics>)
+            })
+            .refresh_period(|| Some(PERIOD))
+            .build(),
+        )
+    };
+    let _ = host_slot.set(Rc::downgrade(&host));
+    let handle = host.handle();
+    for _ in 0..2 {
+        assert!(matches!(
+            handle.perform(HapticFeedback::LightImpact, FRAME),
+            HapticOutcome::Queued(_)
+        ));
+    }
+    close.set(true);
+    let ((), log) = flui_testing::log_capture::capture(|| host.frame_presented());
+    assert_eq!(
+        log.count_containing("not delivered before its presentation closed"),
+        2,
+        "both outcomes are reported: {log}"
+    );
+    assert!(fake.calls().is_empty(), "nothing plays once closed");
+}
+
 /// Notes that it was dropped.
 struct DropFlag(Rc<Cell<bool>>);
 impl Drop for DropFlag {

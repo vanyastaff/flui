@@ -56,6 +56,10 @@ pub const MAILBOX_CAPACITY: usize = 64;
 /// waits for a new registration (ADR-0210 §4).
 const RETRY_BOUND: u8 = 3;
 
+const CLOSED_UNDELIVERED: &str =
+    "a haptic outcome was not delivered before its presentation closed";
+const WITHDRAWN_UNDELIVERED: &str = "a haptic outcome was withdrawn with its failed presentation";
+
 /// The display period assumed until the window reports one: 60 Hz.
 pub const FALLBACK_REFRESH_PERIOD: Duration = Duration::from_nanos(16_666_667);
 
@@ -159,6 +163,9 @@ struct State {
     /// Outcomes a reentered resolution decided, waiting for the request
     /// being played to reach the mailbox first.
     staged: RefCell<Vec<Entry>>,
+    /// The reason a close that ran inside a play reports with: the outermost
+    /// resolution reports what reached the mailbox after that close.
+    report_after_play: Cell<Option<&'static str>>,
 }
 
 /// Drop `outgoing` outside every borrow; a panic in its destructor must not
@@ -201,8 +208,16 @@ struct StagedOutcomes<'a>(&'a State);
 
 impl Drop for StagedOutcomes<'_> {
     fn drop(&mut self) {
-        let staged = std::mem::take(&mut *self.0.staged.borrow_mut());
-        self.0.mailbox.borrow_mut().extend(staged);
+        let state = self.0;
+        let staged = std::mem::take(&mut *state.staged.borrow_mut());
+        state.mailbox.borrow_mut().extend(staged);
+        // The presentation closed while a request played: the request, and
+        // what the close resolved behind it, reached the mailbox only now,
+        // after the close reported what it held. They are reported too.
+        if let Some(reason) = state.report_after_play.take() {
+            state.suppress_queued();
+            state.report_undelivered(reason);
+        }
     }
 }
 
@@ -491,6 +506,14 @@ impl State {
         self.delivering.set(false);
     }
 
+    /// A close running inside a play leaves that play's request, and what it
+    /// resolved behind it, to be reported once the play returns.
+    fn report_after_the_play(&self, reason: &'static str) {
+        if self.resolving.get().is_some() {
+            self.report_after_play.set(Some(reason));
+        }
+    }
+
     fn report_undelivered(&self, reason: &'static str) {
         let undelivered = std::mem::take(&mut *self.mailbox.borrow_mut());
         for entry in undelivered {
@@ -613,6 +636,7 @@ impl HapticsHost {
                 delivering: Cell::new(false),
                 resolving: Cell::new(None),
                 staged: RefCell::new(Vec::new()),
+                report_after_play: Cell::new(None),
             },
         }
     }
@@ -720,9 +744,8 @@ impl HapticsHost {
             slot.failed_passes = 0;
         }
         state.deliver(recovery);
-        state.report_undelivered(
-            "a haptic outcome was not delivered before its presentation closed",
-        );
+        state.report_undelivered(CLOSED_UNDELIVERED);
+        state.report_after_the_play(CLOSED_UNDELIVERED);
         let observers = std::mem::take(&mut *state.observers.borrow_mut());
         for slot in observers {
             recovery.retire(slot.observer);
@@ -737,7 +760,8 @@ impl HapticsHost {
         let state = &*self.state;
         state.closed.set(true);
         state.suppress_queued();
-        state.report_undelivered("a haptic outcome was withdrawn with its failed presentation");
+        state.report_undelivered(WITHDRAWN_UNDELIVERED);
+        state.report_after_the_play(WITHDRAWN_UNDELIVERED);
         let observers = std::mem::take(&mut *state.observers.borrow_mut());
         for slot in observers {
             slot.observer.retain();

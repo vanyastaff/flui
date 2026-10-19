@@ -19,7 +19,9 @@ use crate::focus::focus_scope::{
     FocusCause, FocusNode, FocusScopeNode, KeyEventHandler, KeyEventResult, OrphanMarker,
     TraversalDirection,
 };
-use crate::focus::key_ledger::{self, Admission, HeldPress, InputModality, KeyId, KeyLedger};
+use crate::focus::key_ledger::{
+    self, Admission, HeldPress, InputModality, KeyId, KeyLedger, Superseded,
+};
 
 /// Callback invoked after primary focus or its focus-tree ancestry changes.
 pub type FocusChangeCallback = Rc<dyn Fn(Option<Rc<FocusNode>>, Option<Rc<FocusNode>>)>;
@@ -1083,12 +1085,13 @@ impl FocusManager {
         let admission = loop {
             let unit = self.focused_unit();
             let start = self.key_walk_start();
-            let admission =
+            let admitted =
                 self.key_ledger
                     .borrow_mut()
                     .admit(id.clone(), event, unit, start.as_ref());
-            let Admission::Superseded(press) = admission else {
-                break admission;
+            let Superseded(press) = match admitted {
+                Ok(admission) => break admission,
+                Err(superseded) => superseded,
             };
             // The key's earlier press never had its release: its path is told
             // the key was cancelled before the new press is admitted, so the
@@ -1098,7 +1101,7 @@ impl FocusManager {
             RoutePanic::preserve_first(first, failure, "key cancellation");
         };
         match admission {
-            Admission::Withheld | Admission::Superseded(_) => {
+            Admission::Withheld => {
                 tracing::trace!("key event withheld: its key-down went elsewhere");
                 KeyEventResult::Ignored
             }
