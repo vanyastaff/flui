@@ -141,6 +141,9 @@ impl MemoryPressureSource {
 
 impl Drop for MemoryPressureSource {
     fn drop(&mut self) {
+        // Cancelling is what ends the cycle between the source and its handler:
+        // libdispatch releases a canceled source's handler, and with it the
+        // clone of the source that the handler holds.
         self.source.cancel();
     }
 }

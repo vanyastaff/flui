@@ -65,9 +65,6 @@ pub struct MacOSPlatform {
     /// stale before the host hears of it.
     notices: Arc<SystemNotices>,
 
-    /// The live sources of `notices` and of session-end announcements.
-    _notice_sources: super::system_notices::SystemNoticeSources,
-
     /// Records the event-loop owner thread so the thread-affine AppKit
     /// operations below can `debug_assert` their caller (ADR-0039).
     affinity: OwnerAffinity,
@@ -185,8 +182,6 @@ impl MacOSPlatform {
                 display::ScreenObserver::new(&displays, &loop_control.owner_signal);
             let notices = Arc::new(SystemNotices::default());
             notices.mark_stale_on_wake(&displays);
-            let notice_sources =
-                super::system_notices::SystemNoticeSources::new(&notices, &loop_control);
             let platform = Self {
                 loop_control,
                 preferences,
@@ -199,7 +194,6 @@ impl MacOSPlatform {
                 displays,
                 _screen_observer: screen_observer,
                 notices,
-                _notice_sources: notice_sources,
                 affinity: OwnerAffinity::new(),
             };
             // The constructor requires the main thread (checked above), so
@@ -296,12 +290,20 @@ impl Platform for MacOSPlatform {
         let ownership =
             super::loop_control::LoopOwnership::acquire(&app, Arc::clone(&self.loop_control))?;
         let signal = Arc::clone(&self.loop_control.owner_signal);
+        let loop_control = Arc::clone(&self.loop_control);
+        let notices = Arc::clone(&self.notices);
         let platform: Arc<dyn Platform> = Arc::new(*self);
         let hooks: Arc<dyn OwnerHooks> =
             Arc::new(DirectOwnerHooks::with_signal(Arc::clone(&platform), signal));
         on_finish_launching(OwnerPlatform::new(platform, hooks))
             .map_err(PlatformError::bootstrap)?;
+        // The sources start listening only now: the application has installed
+        // its hooks while it bootstrapped, and a notice that arrived earlier
+        // would find none and be lost.
+        let notice_sources =
+            super::system_notices::SystemNoticeSources::new(&notices, &loop_control);
         ownership.run();
+        drop(notice_sources);
         drop(ownership);
 
         Ok(())

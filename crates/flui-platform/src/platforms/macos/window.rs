@@ -495,14 +495,14 @@ impl MacOSWindow {
             let _: () = msg_send![ns_window, setContentMaxSize: NSSize::new(max.width, max.height)];
 
             // A window must opt in to the full-screen transition for
-            // `toggleFullScreen:` to do anything.
-            if options.resizable {
-                let behavior: NSWindowCollectionBehavior = msg_send![ns_window, collectionBehavior];
-                let _: () = msg_send![
-                    ns_window,
-                    setCollectionBehavior: behavior | NSWindowCollectionBehavior::FullScreenPrimary
-                ];
-            }
+            // `toggleFullScreen:` to do anything. Every window does, so one
+            // that becomes resizable later can enter full screen too; a window
+            // that cannot be resized is refused the mode by `change_mode`.
+            let behavior: NSWindowCollectionBehavior = msg_send![ns_window, collectionBehavior];
+            let _: () = msg_send![
+                ns_window,
+                setCollectionBehavior: behavior | NSWindowCollectionBehavior::FullScreenPrimary
+            ];
 
             // Where the window opens. Placed before it is ordered front, so
             // it never shows at the system's choice first.
@@ -552,6 +552,14 @@ impl MacOSWindow {
                 let _: () = msg_send![ns_window, center];
             }
 
+            // The content size now: `normal_geometry` may have given the frame
+            // a size of its own, and no delegate exists yet to report it.
+            let content_size = {
+                let placed: NSRect = msg_send![ns_window, frame];
+                let content: NSRect = msg_send![ns_window, contentRectForFrameRect: placed];
+                Size::new(content.size.width, content.size.height)
+            };
+
             // Get backing scale factor
             let scale: f64 = msg_send![ns_window, backingScaleFactor];
 
@@ -590,7 +598,7 @@ impl MacOSWindow {
                 state: Arc::new(Mutex::new(MacOSWindowState {
                     bounds: Bounds {
                         origin: Point::new(frame.origin.x, frame.origin.y),
-                        size: options.size,
+                        size: content_size,
                     },
                     scale_factor: scale,
                     display: None,
