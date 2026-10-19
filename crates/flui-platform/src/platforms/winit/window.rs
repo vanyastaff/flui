@@ -395,7 +395,9 @@ impl WinitWindow {
                     );
                 }
             }
-            WindowMode::Maximized | WindowMode::Fullscreen => state.normal_geometry = *remembered,
+            WindowMode::Maximized | WindowMode::Fullscreen | WindowMode::Minimized => {
+                state.normal_geometry = *remembered;
+            }
             _ => {}
         }
         state

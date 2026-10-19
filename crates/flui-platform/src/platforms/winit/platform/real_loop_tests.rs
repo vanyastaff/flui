@@ -1392,6 +1392,11 @@ mod x11_window {
                 state.mode == WindowMode::Minimized
             });
             assert!(changes.load(Ordering::SeqCst) > before, "a notification");
+            assert_eq!(
+                window.state().normal_geometry.map(|geometry| geometry.size),
+                Some(Size::new(400.0, 300.0)),
+                "a minimized window still names the rectangle it returns to"
+            );
 
             // It returns, maximized.
             set_window_manager_state(
