@@ -55,7 +55,7 @@ Counted over every row of the core and system-service sections.
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes | Hours |
 |---|---|---|---|---|---|---|---|---|---|---|
 | Event loop, startup and wake-ups | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Runs: `device windows-input`, the macOS live check, `live-smoke` (Xvfb and `--wayland`), the iOS Simulator, the Android emulator, the Web counter | 0 |
-| Version floor: declared, packaged, refused below it | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ADR-0244 sets the floors (Windows 10 1507, macOS 10.13/11, iOS 13, Android API 23, glibc 2.17, a WebGPU or WebGL2 browser); none is packaged from one source or checked at start yet, and none has run on its floor version. Headless has no OS version | 12–20 |
+| Version floor: declared, packaged, refused below it | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | [ADR-0244](adr/ADR-0244-os-version-floors-and-gates.md) sets a floor per environment (the generated version map will list them); none is packaged from one source or checked at start yet, and none has run on its floor version. Headless has no OS version | 12–20 |
 | Quit, exit request, last-window policy | 🟡 | ✅ | ✅ | ✅ | — | 🟡 | 🟡 | ✅ | macOS Cmd+Q and close ran; `live-smoke` checks the exit code; iOS has no quit API | 2–3 |
 | Close request with veto | 🟡 | ✅ | 🟡 | 🟡 | — | — | ❌ | ✅ | Web has no `beforeunload` | 2–3 |
 | Reopen with no windows (Dock click) | — | ✅ | — | — | — | — | — | ❌ | `device macos-reopen`; headless can't drive it | 1 |

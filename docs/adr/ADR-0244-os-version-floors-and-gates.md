@@ -159,9 +159,22 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
    template agrees with `platform-support.toml`; the built artifacts carry the floor (Mach-O `minos`,
    the APK manifest's `minSdk`, the highest `GLIBC_` symbol version of the Linux ELF, no Windows import
    newer than the floor build); no source outside the version modules compares a version; the version
-   map is current. Each marker has a table row that builds the version at `SINCE` minus one and at
-   `SINCE`. `docs/platform-parity.md` gets a "Version floor" row per environment, ✅ only after an
-   executed run on the floor version.
+   map is current. `docs/platform-parity.md` has a "Version floor" row per environment, ✅ only after
+   an executed run on the floor version; the row links to the generated version map rather than
+   repeating the numbers. The tests, written through each crate's public API from its `tests/`:
+   - `platform_floor_sources_agree` (xtask): the root file, the generated sources, the templates and
+     the version map agree, and a planted drift in each is reported;
+   - `packaged_artifacts_carry_the_floor` (flui-cli): the generated `Info.plist`, Windows manifest,
+     APK manifest and Gradle property carry the floor, and an application `min` below it is rejected;
+   - `os_version_gate_table` (flui-platform): one row per marker, at `SINCE` minus one (no proof) and
+     at `SINCE` (proof), plus an unknown version that unlocks nothing;
+   - `floor_refusal_contract` (flui-platform, headless with an injected version and probe): a version
+     below the floor gives `UnsupportedOs`, a missing requirement gives `MissingRequirement`, and an
+     unreadable version starts;
+   - `gpu_backend_fallback_order` (flui-engine, fake adapters): the preferred backend first, then a
+     single-backend GL instance, WARP after hardware D3D12, and `NoSupportedGpu` when none answers;
+   - the pixel suites run under the GL backend on llvmpipe in CI, as the same tests with the backend
+     forced.
 
 9. **A floor moves only when the stack moves.** It rises when a dependency drops a version, when an
    essential API moves (decision 1), or when the floor can no longer be run for the proof of decision 8;
