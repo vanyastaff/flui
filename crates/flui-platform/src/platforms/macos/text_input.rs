@@ -31,13 +31,13 @@
 //!
 //! [`PlatformTextInput::set_ime_cursor_area`] receives the framework's window
 //! coordinates — top-left origin, Y down, the convention
-//! [`PlatformWindow::bounds`] and AppKit pointer conversion's Y flip establish — while
+//! [`WindowState`] and AppKit pointer conversion's Y flip establish — while
 //! `convertRectToScreen:` speaks AppKit's window base coordinates, bottom-left
 //! origin, Y up. `first_rect_for_character_range:actualRange:` is where the two
 //! meet, and it flips the axis before converting; without that flip the
 //! candidate window would sit mirrored about the window's vertical centre.
 //!
-//! [`PlatformWindow::bounds`]: crate::traits::PlatformWindow::bounds
+//! [`WindowState`]: crate::traits::WindowState
 
 use objc2::runtime::{AnyObject, Bool, ClassBuilder, Protocol, Sel};
 use objc2::{msg_send, sel};

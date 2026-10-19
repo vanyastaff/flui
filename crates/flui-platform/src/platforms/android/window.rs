@@ -13,11 +13,14 @@ use android_activity::AndroidApp;
 use android_activity::ndk::configuration::UiModeNight;
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{EdgeInsets, Point, Size};
-use flui_platform_api::{DisplayId, FrameRateHint, WindowAppearance};
+use flui_platform_api::{
+    DisplayId, FrameRateHint, WindowAppearance, WindowCapabilities, WindowCommand,
+    WindowCommandError, WindowGeometry, WindowState,
+};
 use parking_lot::Mutex;
 
 use crate::{
-    shared::WindowCallbacks,
+    shared::{WindowCallbacks, window_state::WindowStateCell},
     traits::{CursorError, PlatformWindow, WindowExecutionState, WindowId},
 };
 
@@ -48,6 +51,8 @@ pub struct AndroidWindow {
     /// The last refresh-rate request, applied again to every native window that
     /// replaces the one it was made on.
     frame_rate_hint: Arc<Mutex<FrameRateHint>>,
+    /// The published window state (ADR-0237).
+    snapshot: Arc<WindowStateCell>,
 }
 
 impl std::fmt::Debug for AndroidWindow {
@@ -67,6 +72,7 @@ impl AndroidWindow {
         displays: Arc<super::display::AndroidDisplays>,
     ) -> Self {
         let system_chrome = Arc::new(super::system_chrome::AndroidSystemChrome::new(app.clone()));
+        let snapshot = Arc::new(WindowStateCell::new(sample_state(&app, &displays)));
         Self {
             callbacks: Arc::new(WindowCallbacks::new()),
             redraw_requested: Arc::new(AtomicBool::new(true)),
@@ -80,6 +86,7 @@ impl AndroidWindow {
             appearance: Arc::new(Mutex::new(night_mode(&app))),
             displays,
             frame_rate_hint: Arc::new(Mutex::new(FrameRateHint::Default)),
+            snapshot,
             app,
         }
     }
@@ -201,12 +208,66 @@ impl AndroidWindow {
     /// Get native window dimensions, returning (0, 0) if window is not
     /// available
     fn native_size(&self) -> (i32, i32) {
-        if let Some(native_window) = self.app.native_window() {
-            (native_window.width(), native_window.height())
-        } else {
-            (0, 0)
-        }
+        native_extent(&self.app)
     }
+
+    /// The window's published state, read again first when something
+    /// invalidated it; `on_state_changed` is raised when that produced a new
+    /// revision.
+    fn current_state(&self) -> WindowState {
+        let published = self
+            .snapshot
+            .state_with(|| sample_state(&self.app, &self.displays));
+        if published.changed {
+            self.callbacks.dispatch_state_changed();
+        }
+        published.state
+    }
+
+    /// The activity surface may differ from its published state: read it again.
+    pub(crate) fn publish_state(&self) {
+        self.snapshot.invalidate();
+        let _ = self.current_state();
+    }
+}
+
+/// The native window's size in pixels, `(0, 0)` while there is none.
+fn native_extent(app: &AndroidApp) -> (i32, i32) {
+    if let Some(native_window) = app.native_window() {
+        (native_window.width(), native_window.height())
+    } else {
+        (0, 0)
+    }
+}
+
+/// Device pixels per logical pixel, from the configuration's density.
+fn native_scale(app: &AndroidApp) -> f64 {
+    if let Ok(ratio) = super::preferences::pixel_ratio(app) {
+        return ratio.get();
+    }
+    // android-activity config returns density as DPI / 160
+    // Default to 2.0 if config is unavailable
+    let config = app.config();
+    let density = config.density().unwrap_or(320);
+    density as f64 / 160.0
+}
+
+/// The activity surface as the system reports it now. The activity fills its
+/// display with no frame, title or position of its own.
+fn sample_state(app: &AndroidApp, displays: &super::display::AndroidDisplays) -> WindowState {
+    let (width, height) = native_extent(app);
+    let scale = native_scale(app);
+    let size = if scale > 0.0 {
+        Size::new(f64::from(width) / scale, f64::from(height) / scale)
+    } else {
+        Size::new(f64::from(width), f64::from(height))
+    };
+    WindowState::new(WindowGeometry::new(None, size), size)
+        .with_visible(app.native_window().is_some())
+        .with_focused(true)
+        .with_resizable(false)
+        .with_decorated(false)
+        .with_display(displays.activity_display())
 }
 
 fn take_deliverable_redraw_request(redraw_requested: &AtomicBool, execution_running: bool) -> bool {
@@ -283,14 +344,7 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn scale_factor(&self) -> f64 {
-        if let Ok(ratio) = super::preferences::pixel_ratio(&self.app) {
-            return ratio.get();
-        }
-        // android-activity config returns density as DPI / 160
-        // Default to 2.0 if config is unavailable
-        let config = self.app.config();
-        let density = config.density().unwrap_or(320);
-        density as f64 / 160.0
+        native_scale(&self.app)
     }
 
     fn gesture_geometry(
@@ -339,6 +393,27 @@ impl PlatformWindow for AndroidWindow {
     fn is_visible(&self) -> bool {
         self.app.native_window().is_some()
     }
+
+    fn capabilities(&self) -> WindowCapabilities {
+        WindowCapabilities::NONE
+    }
+
+    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+        // The system owns the surface: every command is refused unless it asks
+        // for what the window already is.
+        command.admit(&WindowCapabilities::NONE)?;
+        Ok(())
+    }
+
+    fn state(&self) -> WindowState {
+        self.current_state()
+    }
+
+    // The activity surface honours no window command and reports no position:
+    // `WindowCapabilities::NONE` is the trait default.
+    //
+    // `apply` is the trait default too: it refuses every command as
+    // unsupported.
 
     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
         Err(CursorError::Unsupported)
@@ -425,10 +500,6 @@ impl PlatformWindow for AndroidWindow {
     }
 
     // ==================== Additional query methods ====================
-
-    fn get_title(&self) -> String {
-        "FLUI Android".to_string()
-    }
 
     fn mouse_position(&self) -> Point<f64> {
         Point::default()

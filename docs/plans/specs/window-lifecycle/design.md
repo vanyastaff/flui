@@ -90,9 +90,12 @@ payload-free уведомление «состояние изменилось» 
   диагностика уходит в лог (R4).
 
 - **D-4. `WindowCapabilities`.** Значение-набор (`#[non_exhaustive]` struct с `bool`-полями, не
-  битовая маска наружу): `set_title`, `set_position`, `set_size`, `set_constraints`,
-  `set_resizable`, `set_decorated`, `minimize`, `maximize`, `fullscreen`, `hide`, `activate`,
-  `observes_position`, `observes_minimized`, `restores_position`. Бэкенд отдаёт его один раз на окно
+  битовая маска наружу): `sets_title`, `sets_position`, `sets_size`, `sets_constraints`,
+  `sets_resizable`, `sets_decorated`, `minimizes`, `maximizes`, `enters_fullscreen`, `hides`,
+  `shows`, `activates`, `observes_position`, `observes_minimized`, `places_at_open`; наборы
+  `WindowCapabilities::NONE` и `ALL` — константы. Набор известен до создания окна
+  (`Platform::window_capabilities`), чтобы восстановление подогнало размещение под то, что окно
+  умеет (`places_at_open`). Бэкенд отдаёт его один раз на окно
   (может уточнить после создания — тогда ревизия состояния растёт). `apply` обязан отказать
   `Unsupported` ровно тогда, когда соответствующее поле `false`; conformance-набор (R39) проверяет
   это для каждой команды.
@@ -104,7 +107,7 @@ payload-free уведомление «состояние изменилось» 
   существующий путь `request_close` с вето (ADR-0123), ручка его только вызывает.
   `PlatformWindow::apply(&self, WindowCommand) -> Result<(), WindowCommandError>` синхронен; ошибки:
   `Unsupported`, `InvalidGeometry` (неконечное, ≤ 0, `min > max` — проверяется в
-  `WindowCommand::validate` до ОС, R10), `Closed`, `Backend(String)`.
+  `WindowCommand::validate` до ОС, R10), `Closed`, `Backend { message }`.
 
 - **D-6. Путь команды и `WindowHandle`.** `WindowHandle` живёт в `flui-view` (`!Send`, слабая ссылка
   на ячейку презентации), выдаётся `LifecycleContext::window()` (R5; в `BuildContext` метода нет,
@@ -118,8 +121,13 @@ payload-free уведомление «состояние изменилось» 
   пользовательского кода (повторный вход). Ошибка `Backend` при вычерпывании не теряет остаток
   очереди; она уходит в диагностику с `WindowId`, следующая команда применяется. Ручка также даёт
   `state()` и `subscribe(FnMut(&WindowState))` с той же семантикой, что `LifecycleHandle::subscribe`
-  (FIFO, без синхронного вызова, сдерживание паники). `open_window` возвращает в `WindowRequest`
-  вместе с `PresentationAddress` и `WindowHandle` для владельца-отправителя.
+  (FIFO, без синхронного вызова, сдерживание паники). Отклонение от первоначального замысла:
+  `WindowRequest` возвращает только `PresentationAddress`, а ручку выдаёт отдельный
+  `flui_app::window_handle(address) -> Option<WindowHandle>` на потоке владельца. Причина:
+  `WindowHandle` — `!Send`, а `WindowRequest` уезжает через `Send`-future, так что ручку нельзя
+  положить в ответ. Цена — второй вызов после `await`, и окно между ними могло закрыться: поиск
+  возвращает `None` для закрытого окна (и для другого потока, и для неизвестного адреса), поэтому
+  вызывающий обязан обрабатывать `None`, как закрытое окно.
 
 - **D-7. Идентичность ручки.** Ручка хранит `WindowId` и поколение презентации; после закрытия
   окна (терминальное уведомление ADR-0123) ячейка закрыта, команды — `Closed`, подписки сняты. Новое
@@ -153,23 +161,36 @@ payload-free уведомление «состояние изменилось» 
   запасной вариант D-11.
 
 - **D-11. `WindowPlacement` и модель восстановления.** Значение `WindowPlacement { display:
-  Option<String>, offset: Point<f64>, size: Size<f64>, mode: WindowMode, scale: f64 }`, где `offset`
-  — позиция обычных границ относительно начала рабочей области своего дисплея в логических пикселях
-  этого дисплея (так смешанный DPI не искажает позицию). Сериализация — свой компактный формат
-  с версией (`flui-window-placement/1`, без новой зависимости), испорченная или чужая версия —
-  `PlacementError`, одна диагностика, окно открывается по `AppConfig` (R19). Чистая функция
-  `resolve(placement, &DisplaySnapshot) -> ResolvedPlacement` (модель, таблица): найден ли дисплей
-  по ключу; иначе основной; размер урезается до рабочей области, позиция сдвигается так, чтобы окно
-  целиком было на ней (R18); `Minimized` превращается в `Normal` или `Maximized` по
-  `was_maximized` (R19); без `restores_position` позиция не применяется (R20).
+  Option<String>, offset: Option<Point<f64>>, size: Size<f64>, mode: WindowMode, scale: f64,
+  maximized_before_minimize: bool }`, где `offset` — позиция внешних границ обычного окна
+  относительно начала рабочей области своего дисплея в логических пикселях этого дисплея (так
+  смешанный DPI не искажает позицию); `None`, если ОС позицию не сообщила, — тогда окно при
+  восстановлении не позиционируется. `size` — размер содержимого. Сериализация — свой компактный
+  формат с версией (`flui-window-placement/1`, без новой зависимости; `to_bytes`/`from_bytes`),
+  испорченная, повторяющая поле или чужая версия — `PlacementError`, одна диагностика, окно
+  открывается по `AppConfig` (R19). Чистая функция `resolve(placement, &DisplaySnapshot,
+  &WindowCapabilities, frame) -> Option<ResolvedPlacement>` (модель, таблица): найден ли дисплей по
+  ключу; иначе основной; дисплеи с нефинитным или неположительным масштабом и с пустой рабочей
+  областью не кандидаты; подгоняется внешний размер (содержимое плюс рамка, которую даёт
+  `Platform::window_frame_inset`, у headless — ноль) к рабочей области, позиция сдвигается так,
+  чтобы окно целиком было на ней (R18); `Minimized` превращается в `Normal` или `Maximized` по
+  `maximized_before_minimize` (R19); без `places_at_open` позиция не применяется (R20).
+  `ResolvedPlacement { display, offset_in_display, size, mode }` остаётся в логических пикселях
+  своего дисплея: бэкенд переводит в пиксели через масштаб этого дисплея. Геометрия — это обычные
+  границы окна; открытое развёрнутым или полноэкранным окно возвращается к ним
+  (`WindowOptions::normal_geometry`).
 
-- **D-12. Кто сохраняет.** `AppConfig::restore_placement(key)` включает `PlacementKeeper` в
+- **D-12. Кто сохраняет.** `AppConfig::restore_placement(name)` включает `PlacementRecorder` в
   `flui-app`: при открытии читает `storage` (до первого показа, R17 — чтение синхронно из
-  локального файла на desktop, ограничено по размеру), применяет `resolve` в `WindowOptions`;
-  подписан на `WindowState` и пишет не чаще раза в 2 с после изменения, плюс сразу при закрытии
-  окна, при `SessionEnding`/`SessionEnded` и при Android `SaveState`. Пишет через
-  `Storage::write`, который принимает значение синхронно (D-13 полагается на это). Имя записи —
-  `window-placement/<key>`. Свёрнутое окно сохраняется по `normal_geometry`.
+  локального файла на desktop, ограничено по размеру), применяет `resolve` в `WindowOptions`
+  (возможности и рамка — от платформы до создания окна: `Platform::window_capabilities`,
+  `Platform::window_frame_inset`); подписан на `WindowState` и пишет не чаще раза в 2 с после
+  изменения (изменение внутри интервала пишется, когда он истёк: хвостовая запись по таймеру
+  владельца), плюс сразу при закрытии окна и при `SessionEnded` (один общий бюджет на все окна) и
+  при Android `SaveState`. Запись считается сохранённой, только когда `Storage::publish` ответил
+  `Ok`. Имя записи — `StorageName` (`machine_local("window-main")`): имя `StorageName` — это
+  `&'static str` из `[a-z0-9_-]`, поэтому не `window-placement/<key>`. Свёрнутое окно
+  сохраняется по `normal_geometry`.
 
 - **D-13. Конец сессии.** `SessionEndPhase`/`SessionEndAnswer` переезжают в `flui-platform-api`
   как часть `HostNotice`; хук становится `OwnerPlatform::on_session_end` (сейчас его нет — главная
@@ -195,8 +216,10 @@ payload-free уведомление «состояние изменилось» 
 
 - **D-14. `HostNotice`.** `#[non_exhaustive]` enum в `flui-platform-api`: `SessionEnding(..)`,
   `SessionEndCancelled`, `SessionEnded`, `Sleep`, `Wake`, `SessionLocked`, `SessionUnlocked`,
-  `MemoryPressure(MemoryPressureLevel)`. Источник — `OwnerPlatform::on_host_notice(FnMut(&HostNotice))`
-  (у `SessionEnding` — отдельный хук с ответом, D-13). `flui-app` доставляет каждое уведомление во
+  `MemoryPressure(MemoryPressureLevel)`. Источник — `OwnerPlatform::on_host_notice(FnMut(SystemNotice))`
+  (`SystemNotice` — те же уведомления без `SessionEnding`, `Copy` и `Send`; у `SessionEnding` —
+  отдельный хук с ответом, D-13). Общая диспетчеризация уведомлений в `flui-platform` на `Wake`
+  сначала помечает устаревшими `DisplaySource` платформы и каждую ячейку состояния окна. `flui-app` доставляет каждое уведомление во
   все `UiRuntime` владельца; `flui-runtime` передаёт его в `LifecycleHandle` каждой презентации.
   `LifecycleHandle::subscribe_notices(FnMut(&HostNotice))` — та же реализация очереди и сдерживания,
   что `subscribe` (R22). `WidgetsBindingObserver::{did_have_memory_pressure, did_request_app_exit}` и
@@ -222,12 +245,15 @@ payload-free уведомление «состояние изменилось» 
   прав) источник молчит, это документировано. Слияние: в одной обработке владельца доставляется
   максимум один `MemoryPressure` на уровень (R27).
 
-- **D-16. Свои кэши первыми.** `flui-runtime` держит список `MemoryTrim` получателей служб
-  (`RuntimeServices`): кэш изображений `flui-assets` (новый синхронный `trim(level)` — `Moderate`
-  выбрасывает неиспользуемые записи, `Critical` — всё, кроме закреплённых), кэш раскладки текста
-  `flui-painting` (`text_painter/sizing.rs` `trim`), и рендерер — сообщением на raster-поток
-  (`evict_over_budget(0)` для пула буферов на `Critical`, половина бюджета на `Moderate`; атлас
-  глифов сбрасывается на `Critical`). Только после этого — подписчикам (R27).
+- **D-16. Свои кэши первыми.** Трейт `ReclaimMemory { fn reclaim(&self, level) }` в
+  `flui-foundation`. Общий для хоста `HostMemory` (`flui-app`) один раз на уведомление
+  освобождает получателей приложения (`AppConfig::with_memory_reclaim`, например
+  `AssetRegistry` — синхронный `reclaim`, оба уровня выбрасывают завершённые записи) и пулы
+  рендерера — сообщением на raster-поток (`evict_over_budget(0)` для пула буферов на `Critical`,
+  половина бюджета на `Moderate`; атлас глифов сбрасывается на `Critical`). Каждый `UiRuntime`
+  освобождает только свой текстовый сервис (`flui-painting`: буферы раскладки и файлы шрифтов,
+  которые никто не держит). Только после этого — подписчикам (R27). Первая паника собирается
+  `FirstPanic` и поднимается после доставки.
 
 - **D-17. Android видимость и выполнение.** `Start`/`Stop` → `dispatch_visibility_change(true/false)`,
   `Resume`/`Pause` → `dispatch_execution_state_change(Running/Suspended)`,
@@ -251,7 +277,7 @@ payload-free уведомление «состояние изменилось» 
   Разбор свойств X11 в состояние — чистая функция, таблица (M). logind — через уже имеющийся `zbus`.
 
 - **D-20. Headless.** `MockWindow` переходит на `WindowStateCell`; конструктор платформы принимает
-  `WindowCapabilities` и `HostLimits` (максимальный размер «экрана», отказ развернуть) для проверки R3;
+  `WindowCapabilities` и `HeadlessWindowPolicy` (максимальный размер «экрана», отказ развернуть) для проверки R3;
   `simulate_*` для всех уведомлений D-14, `simulate_session_end(phase) -> SessionEndAnswer` реально
   доходит до хука (снимается `#[ignore]`), `simulate_page_freeze`, `simulate_context_loss`.
 
@@ -284,7 +310,7 @@ pub enum WindowCommand {
 }
 #[non_exhaustive]
 #[derive(thiserror::Error)]
-pub enum WindowCommandError { Unsupported, InvalidGeometry, Closed, Backend(String) }
+pub enum WindowCommandError { Unsupported, InvalidGeometry, Closed, Backend { message: String } }
 
 pub trait PlatformWindow {
     fn state(&self) -> WindowState;
@@ -301,23 +327,29 @@ pub trait WindowControl {            // реализует flui-app, потре�
 }
 
 #[non_exhaustive]
-pub enum HostNotice<'a> {
-    SessionEnding(&'a SessionEndRequest), SessionEndCancelled, SessionEnded,
+pub enum HostNotice {
+    SessionEnding(SessionEndRequest), SessionEndCancelled, SessionEnded,
     Sleep, Wake, SessionLocked, SessionUnlocked, MemoryPressure(MemoryPressureLevel),
 }
 pub struct SessionEndRequest { /* … */ }
 impl SessionEndRequest {
-    pub fn block(&self, reason: impl Into<String>) -> SessionEndBlock;
+    pub fn block(&self, reason: impl Into<String>) -> Result<SessionEndBlock, SessionEndBlockError>;
+    pub fn on_release(self, release: impl FnOnce() + 'static) -> Self;
+    pub fn answer(&self) -> SessionEndAnswer;   // закрывает «книгу»: block() → Err(Answered)
 }
+// платформа сообщает хосту только SystemNotice (без SessionEnding):
+pub enum SystemNotice { Sleep, Wake, SessionLocked, SessionUnlocked, MemoryPressure(MemoryPressureLevel) }
 #[must_use] pub struct SessionEndBlock { /* drop = release */ }
 #[non_exhaustive]
 pub enum MemoryPressureLevel { Moderate, Critical }
 
 pub struct WindowPlacement { /* … */ }
 impl WindowPlacement {
-    pub fn encode(&self) -> Vec<u8>;
-    pub fn decode(bytes: &[u8]) -> Result<Self, PlacementError>;
-    pub fn resolve(&self, displays: &DisplaySnapshot, caps: &WindowCapabilities) -> ResolvedPlacement;
+    pub fn from_state(state: &WindowState, displays: &DisplaySnapshot, maximized_before_minimize: bool) -> Option<Self>;
+    pub fn to_bytes(&self) -> Vec<u8>;
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, PlacementError>;
+    pub fn resolve(&self, displays: &DisplaySnapshot, caps: &WindowCapabilities, frame: Size<f64>)
+        -> Option<ResolvedPlacement>;
 }
 
 // flui-view
@@ -336,20 +368,21 @@ impl WindowHandle {
     pub fn show(&self) -> Result<(), WindowCommandError>;
     pub fn hide(&self) -> Result<(), WindowCommandError>;
     pub fn activate(&self) -> Result<(), WindowCommandError>;
-    pub fn close(&self) -> Result<(), WindowCommandError>;
+    pub fn request_close(&self) -> Result<(), WindowClosed>;
     pub fn subscribe(&self, f: impl FnMut(&WindowState) + 'static)
         -> Result<(WindowState, WindowSubscription), WindowClosed>;
 }
 impl LifecycleHandle {
-    pub fn subscribe_notices(&self, f: impl FnMut(&HostNotice<'_>) + 'static)
-        -> Result<NoticeSubscription, LifecycleClosed>;
+    pub fn subscribe_notices(&self, f: impl FnMut(&HostNotice) + 'static)
+        -> Result<HostNoticeSubscription, LifecycleClosed>;
 }
 
 // flui-app
 impl AppConfig {
     pub fn with_position(self, at: Point<f64>) -> Self;
     pub fn with_mode(self, mode: WindowMode) -> Self;
-    pub fn restore_placement(self, key: impl Into<String>) -> Self;
+    pub fn restore_placement(self, name: StorageName) -> Self;
+    pub fn with_memory_reclaim(self, receiver: impl ReclaimMemory + Send + Sync + 'static) -> Self;
 }
 ```
 
@@ -388,7 +421,7 @@ impl AppConfig {
 Таблицы через публичный API (H), одна строка — одна функция:
 
 - `window_state_contract` (`flui-platform/tests`, headless): каждая команда меняет снимок и растит
-  ревизию на 1; повтор той же команды ревизию не трогает; урезанный `HostLimits` размер виден в
+  ревизию на 1; повтор той же команды ревизию не трогает; урезанный `HeadlessWindowPolicy` размер виден в
   снимке; отказ ёмкости — `Unsupported` без изменения; неверная геометрия — `InvalidGeometry`.
 - `window_handle_contract` (`flui-app` runner tests): `LifecycleContext::window` в `init_state`;
   команды применяются по порядку на следующем ходу; команда из подписчика — следующим ходом;
@@ -396,9 +429,9 @@ impl AppConfig {
 - `window_conformance` (`flui-testing`): набор R39 — для каждой команды ёмкость совпадает с
   `apply`, снимок сходится; запускается на headless в CI и из живой пробы.
 - `placement_resolve` (M): дисплей найден/не найден/ключ `None`; окно шире рабочей области; окно
-  за краем; смешанный масштаб; `Minimized` → `Normal`/`Maximized`; без `restores_position`; чужая
+  за краем; смешанный масштаб; `Minimized` → `Normal`/`Maximized`; без `places_at_open`; чужая
   версия и обрезанные байты.
-- `placement_keeper` (`flui-app`, headless + in-memory storage): закрыть → открыть
+- `placement_recorder` (`flui-app`, headless + in-memory storage): закрыть → открыть
   восстанавливает; запись не чаще раза в 2 с; запись на `SessionEnded`.
 - `host_notice_delivery` (`flui-app` + `flui-runtime`): каждое уведомление доходит до всех
   презентаций по FIFO; `MemoryPressure` сливается; кэши подрезаны до подписчика; `SessionEndBlock`

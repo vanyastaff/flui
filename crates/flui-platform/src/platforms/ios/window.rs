@@ -35,7 +35,10 @@ use objc2_ui_kit::{
 };
 
 use flui_foundation::geometry::{EdgeInsets, Size};
-use flui_platform_api::WindowAppearance;
+use flui_platform_api::{
+    WindowAppearance, WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry,
+    WindowState,
+};
 
 use super::display::{IosDisplays, ScreenIdentity};
 use super::events::TouchInputState;
@@ -46,6 +49,7 @@ use crate::shared::apple_os_version::Since;
 use crate::shared::display_link_rate::{
     FrameRatePreference, FrameRateRange, FrameRateRangeProperty, LinkPeriod,
 };
+use crate::shared::window_state::WindowStateCell;
 use crate::traits::{CursorError, DisplayId, PlatformWindow, WindowExecutionState, WindowId};
 
 /// The content view: a `UIView` subclass that forwards touches.
@@ -615,6 +619,9 @@ impl FluiView {
         if previous.size != next.size || previous.scale != next.scale {
             self.callbacks()
                 .dispatch_metrics_resize(next.size, next.scale);
+            // The published state follows the metrics: `state()` reads them
+            // again when the owner asks.
+            self.callbacks().dispatch_state_changed();
         }
         if self.ivars().sampling.get() != admission {
             // The resize dispatch above retired this view, so this snapshot's
@@ -716,6 +723,8 @@ pub struct IOSWindow {
     /// The screen the scene is on, kept by the view; read by `display_id`.
     screen: Arc<parking_lot::Mutex<ScreenIdentity>>,
     id: WindowId,
+    /// The published window state (ADR-0237).
+    snapshot: WindowStateCell,
 }
 
 impl IOSWindow {
@@ -760,6 +769,10 @@ impl IOSWindow {
             dark,
             screen,
             id,
+            snapshot: WindowStateCell::new(WindowState::new(
+                WindowGeometry::new(None, Size::new(0.0, 0.0)),
+                Size::new(0.0, 0.0),
+            )),
             closed: AtomicBool::new(false),
             lifecycle: parking_lot::Mutex::new(IOSLifecycle {
                 execution: WindowExecutionState::Detached,
@@ -960,6 +973,8 @@ impl IOSWindow {
                 }
             }
         }
+        // Visibility and focus are part of the published state.
+        self.callbacks.dispatch_state_changed();
         let current = || {
             !self.closed.load(Ordering::SeqCst) && self.lifecycle.lock().generation == generation
         };
@@ -1177,9 +1192,39 @@ impl PlatformWindow for IOSWindow {
         Err(CursorError::Unsupported)
     }
 
-    fn get_title(&self) -> String {
-        // `UIWindow` has no title; the bundle display name is the app's name.
-        "FLUI iOS".to_owned()
+    /// The scene's size, visibility and focus. `UIWindow` has no title, frame,
+    /// position or commands, so the capabilities stay at the trait default
+    /// (none) and `apply` refuses every command.
+    ///
+    /// The metrics and lifecycle live apart from this cell, so each call reads
+    /// them again. `on_state_changed` is raised where they change: when the
+    /// view's size or scale does, and on each lifecycle step.
+    fn capabilities(&self) -> WindowCapabilities {
+        WindowCapabilities::NONE
+    }
+
+    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+        // The system owns the surface: every command is refused unless it asks
+        // for what the window already is.
+        command.admit(&WindowCapabilities::NONE)?;
+        Ok(())
+    }
+
+    fn state(&self) -> WindowState {
+        self.snapshot.invalidate();
+        let published = self.snapshot.state_with(|| {
+            let size = self.metrics.lock().size;
+            WindowState::new(WindowGeometry::new(None, size), size)
+                .with_visible(self.is_visible())
+                .with_focused(self.is_focused())
+                .with_resizable(false)
+                .with_decorated(false)
+                .with_display(self.screen.lock().id)
+        });
+        if published.changed {
+            self.callbacks.dispatch_state_changed();
+        }
+        published.state
     }
 
     fn as_any(&self) -> &dyn Any {

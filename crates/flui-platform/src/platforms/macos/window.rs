@@ -16,7 +16,10 @@ use objc2_app_kit::{NSBackingStoreType, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform_api::WindowAppearance;
+use flui_platform_api::{
+    SizeConstraints, WindowAppearance, WindowCapabilities, WindowCommand, WindowCommandError,
+    WindowGeometry, WindowMode, WindowState,
+};
 use parking_lot::Mutex;
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
@@ -40,7 +43,7 @@ const NO: Bool = Bool::NO;
 use super::{display::MacosDisplays, view};
 use crate::{
     config::WindowConfiguration,
-    shared::WindowCallbacks,
+    shared::{WindowCallbacks, window_state::WindowStateCell},
     traits::{
         CursorError, DisplayId, OpenWindowError, PlatformWindow, WindowId, WindowOptions,
         WindowReveal,
@@ -127,6 +130,10 @@ pub struct MacOSWindow {
     /// `MacOSPlatform::open_window` right after construction, like the wake
     /// pump; a window built without a platform names no display.
     displays: std::sync::OnceLock<Arc<MacosDisplays>>,
+
+    /// The published window state (ADR-0237). Seeded from the creation
+    /// options; the first read replaces it with what AppKit reports.
+    snapshot: Arc<WindowStateCell>,
 }
 
 // SAFETY: the remaining fields are `Arc`/`Mutex`-protected, and sharing the
@@ -203,6 +210,10 @@ struct MacOSWindowState {
 
     /// Cursor selected by this exact window's presentation.
     cursor: CursorIcon,
+
+    /// The size limits the window was created with: AppKit enforces them but
+    /// this backend takes no command to change them.
+    constraints: SizeConstraints,
 
     /// Last surface-visibility value dispatched through
     /// `WindowCallbacks::dispatch_visibility_status_change` (hidden-surface
@@ -487,6 +498,7 @@ impl MacOSWindow {
                     scale_factor: scale,
                     display: None,
                     cursor: CursorIcon::default(),
+                    constraints: SizeConstraints::new(options.min_size, options.max_size),
                     occlusion_visible: true,
                     first_reveal_pending,
                 })),
@@ -502,6 +514,13 @@ impl MacOSWindow {
                 wake_pump: std::sync::OnceLock::new(),
                 text_input: std::sync::OnceLock::new(),
                 displays: std::sync::OnceLock::new(),
+                snapshot: Arc::new(WindowStateCell::new(
+                    WindowState::new(WindowGeometry::new(None, options.size), options.size)
+                        .with_title(Some(options.title.clone()))
+                        .with_constraints(SizeConstraints::new(options.min_size, options.max_size))
+                        .with_resizable(options.resizable)
+                        .with_decorated(options.decorated),
+                )),
             });
 
             let _: () = msg_send![ns_window, setContentView: content_view];
@@ -863,6 +882,21 @@ impl crate::traits::HostWindow for MacOSWindow {
     }
 }
 
+/// What every AppKit window honours and observes, known before one exists
+/// (`Platform::window_capabilities`).
+pub(crate) const fn window_capabilities() -> WindowCapabilities {
+    let mut capabilities = WindowCapabilities::NONE;
+    capabilities.sets_title = true;
+    capabilities.sets_size = true;
+    capabilities.minimizes = true;
+    capabilities.maximizes = true;
+    capabilities.enters_fullscreen = true;
+    capabilities.shows = true;
+    capabilities.activates = true;
+    capabilities.observes_minimized = true;
+    capabilities
+}
+
 impl PlatformWindow for MacOSWindow {
     fn id(&self) -> WindowId {
         WindowId(self.ns_window as u64)
@@ -1007,46 +1041,39 @@ impl PlatformWindow for MacOSWindow {
         })
     }
 
-    fn bounds(&self) -> Bounds<f64> {
-        self.state.lock().bounds
+    // ==================== State and commands (ADR-0237) ====================
+
+    fn state(&self) -> WindowState {
+        self.current_state()
     }
 
-    fn get_title(&self) -> String {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive; `title` returns an autoreleased
-            // NSString whose UTF8String buffer is copied before returning; the
-            // body runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // message is sent.
-            let ns_title: ObjcId = msg_send![self.ns_window, title];
-            if ns_title == NIL {
-                return String::new();
-            }
-            let c_str: *const i8 = msg_send![ns_title, UTF8String];
-            if c_str.is_null() {
-                String::new()
-            } else {
-                std::ffi::CStr::from_ptr(c_str)
-                    .to_string_lossy()
-                    .into_owned()
-            }
-        })
+    fn capabilities(&self) -> WindowCapabilities {
+        window_capabilities()
     }
 
-    fn set_title(&self, title: &str) {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive; the NSString is created from a
-            // valid Rust string and ownership passes to the window; the body
-            // runs on the owner thread — inline on the OS main thread for a
-            // main-lane owner, or dispatched onto the lane under the reentrancy
-            // guard — before the message is sent.
-            let ns_title = NSString::from_str(title);
-            let _: () = msg_send![self.ns_window, setTitle: &*ns_title];
-        });
+    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(WindowCommandError::Closed);
+        }
+        command.admit(&PlatformWindow::capabilities(self))?;
+        match command {
+            WindowCommand::SetTitle(title) => self.set_native_title(&title),
+            WindowCommand::SetSize(size) => self.set_content_size(size),
+            WindowCommand::SetMode(mode) => self.enter_native_mode(mode),
+            WindowCommand::Show => self.show().map_err(|error| match error {
+                crate::WindowShowError::Closed => WindowCommandError::Closed,
+                crate::WindowShowError::Native { message } => {
+                    WindowCommandError::Backend { message }
+                }
+                _ => WindowCommandError::Unsupported,
+            })?,
+            WindowCommand::Activate => self.activate(),
+            // Every other command is refused by `admit` through a capability
+            // this backend leaves `false`.
+            _ => return Err(WindowCommandError::Unsupported),
+        }
+        self.publish_state();
+        Ok(())
     }
 
     fn show(&self) -> Result<(), crate::WindowShowError> {
@@ -1112,85 +1139,6 @@ impl PlatformWindow for MacOSWindow {
                 let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
             }
             let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: NIL];
-        });
-    }
-
-    fn minimize(&self) {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // message is sent.
-            let _: () = msg_send![self.ns_window, miniaturize: NIL];
-        });
-    }
-
-    fn maximize(&self) {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // messages are sent.
-            let is_zoomed: bool = msg_send![self.ns_window, isZoomed];
-            if !is_zoomed {
-                let _: () = msg_send![self.ns_window, zoom: NIL];
-            }
-        });
-    }
-
-    fn restore(&self) {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // messages are sent.
-            let is_minimized: bool = msg_send![self.ns_window, isMiniaturized];
-            if is_minimized {
-                let _: () = msg_send![self.ns_window, deminiaturize: NIL];
-            }
-            let is_zoomed: bool = msg_send![self.ns_window, isZoomed];
-            if is_zoomed {
-                let _: () = msg_send![self.ns_window, zoom: NIL];
-            }
-        });
-    }
-
-    fn toggle_fullscreen(&self) {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // message is sent.
-            let _: () = msg_send![self.ns_window, toggleFullScreen: NIL];
-        });
-    }
-
-    fn resize(&self, size: Size<f64>) {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // message is sent.
-            // The stored size tracks the *content* area (see `handle_resize`
-            // using `contentRectForFrameRect:`), so resize the content, not
-            // the frame — on decorated windows a frame-sized `setFrame:`
-            // would shrink the content by the titlebar height.
-            let ns_size = NSSize::new(size.width, size.height);
-            let _: () = msg_send![self.ns_window, setContentSize: ns_size];
-
-            // Update state
-            let mut state = self.state.lock();
-            state.bounds.size = size;
         });
     }
 
@@ -1387,6 +1335,7 @@ impl Clone for MacOSWindow {
             text_input: self.text_input.clone(),
             // A clone shares the window, so it names the same display.
             displays: self.displays.clone(),
+            snapshot: Arc::clone(&self.snapshot),
         }
     }
 }
@@ -1487,359 +1436,6 @@ impl Drop for MacOSWindow {
             super::owner_lane::exec_async_guarded(owner, move || {
                 super::owner_lane::run_cleanup_guarded(teardown);
             });
-        }
-    }
-}
-
-// ============================================================================
-// Cross-Platform Window Trait Implementation
-// ============================================================================
-
-use crate::window::{
-    RawWindowHandle as CrossRawWindowHandle, Window as WindowTrait, WindowId as CrossWindowId,
-    WindowState,
-};
-
-impl WindowTrait for MacOSWindow {
-    fn id(&self) -> CrossWindowId {
-        CrossWindowId::new(self.ns_window as u64)
-    }
-
-    fn title(&self) -> String {
-        PlatformWindow::get_title(self)
-    }
-
-    fn set_title(&mut self, title: &str) {
-        PlatformWindow::set_title(self, title);
-    }
-
-    fn position(&self) -> Point<f64> {
-        let state = self.state.lock();
-        state.bounds.origin
-    }
-
-    fn set_position(&mut self, position: Point<f64>) {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        let this = &*self;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self` (which
-            // `this` reborrows), and the body runs on the owner thread — inline on
-            // the OS main thread for a main-lane owner, or dispatched onto the
-            // lane under the reentrancy guard — before the messages are sent.
-            // Capturing `this` (a `&MacOSWindow`)
-            // rather than the raw-pointer field is what keeps the closure
-            // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
-            let frame: NSRect = msg_send![this.ns_window, frame];
-            let new_frame = NSRect::new(NSPoint::new(position.x, position.y), frame.size);
-            let _: () = msg_send![this.ns_window, setFrame: new_frame display: YES];
-
-            // Update state
-            let mut state = this.state.lock();
-            state.bounds.origin = position;
-        });
-    }
-
-    fn size(&self) -> Size<f64> {
-        let state = self.state.lock();
-        state.bounds.size
-    }
-
-    fn set_size(&mut self, size: Size<f64>) {
-        PlatformWindow::resize(self, size);
-    }
-
-    fn state(&self) -> WindowState {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // messages are sent.
-            let is_minimized: bool = msg_send![self.ns_window, isMiniaturized];
-            let is_zoomed: bool = msg_send![self.ns_window, isZoomed];
-            let style_mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
-
-            if is_minimized {
-                WindowState::Minimized
-            } else if style_mask.contains(NSWindowStyleMask::FullScreen) {
-                WindowState::Fullscreen
-            } else if is_zoomed {
-                WindowState::Maximized
-            } else {
-                WindowState::Normal
-            }
-        })
-    }
-
-    fn set_state(&mut self, state: WindowState) {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        let this = &*self;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self` (which
-            // `this` reborrows), and the body runs on the owner thread — inline on
-            // the OS main thread for a main-lane owner, or dispatched onto the
-            // lane under the reentrancy guard — before the messages are sent.
-            // Capturing `this` (a `&MacOSWindow`)
-            // rather than the raw-pointer field is what keeps the closure
-            // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
-            match state {
-                WindowState::Normal => {
-                    // Restore from minimized
-                    let is_minimized: bool = msg_send![this.ns_window, isMiniaturized];
-                    if is_minimized {
-                        let _: () = msg_send![this.ns_window, deminiaturize: NIL];
-                    }
-
-                    // Restore from maximized
-                    let is_zoomed: bool = msg_send![this.ns_window, isZoomed];
-                    if is_zoomed {
-                        let _: () = msg_send![this.ns_window, zoom: NIL];
-                    }
-
-                    // Exit fullscreen
-                    let style_mask: NSWindowStyleMask = msg_send![this.ns_window, styleMask];
-                    if style_mask.contains(NSWindowStyleMask::FullScreen) {
-                        let _: () = msg_send![this.ns_window, toggleFullScreen: NIL];
-                    }
-                }
-                WindowState::Minimized => {
-                    let _: () = msg_send![this.ns_window, miniaturize: NIL];
-                }
-                WindowState::Maximized => {
-                    // First restore from minimized if needed
-                    let is_minimized: bool = msg_send![this.ns_window, isMiniaturized];
-                    if is_minimized {
-                        let _: () = msg_send![this.ns_window, deminiaturize: NIL];
-                    }
-
-                    // Then zoom (maximize)
-                    let is_zoomed: bool = msg_send![this.ns_window, isZoomed];
-                    if !is_zoomed {
-                        let _: () = msg_send![this.ns_window, zoom: NIL];
-                    }
-                }
-                WindowState::Fullscreen => {
-                    let style_mask: NSWindowStyleMask = msg_send![this.ns_window, styleMask];
-                    if !style_mask.contains(NSWindowStyleMask::FullScreen) {
-                        let _: () = msg_send![this.ns_window, toggleFullScreen: NIL];
-                    }
-                }
-            }
-        });
-    }
-
-    fn is_visible(&self) -> bool {
-        PlatformWindow::is_visible(self)
-    }
-
-    fn set_visible(&mut self, visible: bool) {
-        // Either direction settles a deferred first reveal: a show makes the
-        // window opaque along with ordering it, a hide orders it out and
-        // restores alpha so a later show is an ordinary one.
-        let settle_reveal = self.take_pending_first_reveal();
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        let this = &*self;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            if settle_reveal {
-                let _: () = msg_send![this.ns_window, setAlphaValue: 1.0f64];
-            }
-            // SAFETY: `ns_window` is alive for the lifetime of `self` (which
-            // `this` reborrows), and the body runs on the owner thread — inline on
-            // the OS main thread for a main-lane owner, or dispatched onto the
-            // lane under the reentrancy guard — before the message is sent.
-            // Capturing `this` (a `&MacOSWindow`)
-            // rather than the raw-pointer field is what keeps the closure
-            // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
-            if visible {
-                let _: () = msg_send![this.ns_window, makeKeyAndOrderFront: NIL];
-            } else {
-                let _: () = msg_send![this.ns_window, orderOut: NIL];
-            }
-        });
-    }
-
-    fn is_resizable(&self) -> bool {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // message is sent.
-            let style_mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
-            style_mask.contains(NSWindowStyleMask::Resizable)
-        })
-    }
-
-    fn set_resizable(&mut self, resizable: bool) {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        let this = &*self;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self` (which
-            // `this` reborrows), and the body runs on the owner thread — inline on
-            // the OS main thread for a main-lane owner, or dispatched onto the
-            // lane under the reentrancy guard — before the message is sent.
-            // Capturing `this` (a `&MacOSWindow`)
-            // rather than the raw-pointer field is what keeps the closure
-            // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
-            let mut style_mask: NSWindowStyleMask = msg_send![this.ns_window, styleMask];
-            if resizable {
-                style_mask |= NSWindowStyleMask::Resizable;
-            } else {
-                style_mask &= !NSWindowStyleMask::Resizable;
-            }
-            let _: () = msg_send![this.ns_window, setStyleMask: style_mask];
-        });
-    }
-
-    fn is_minimizable(&self) -> bool {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // message is sent.
-            let style_mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
-            style_mask.contains(NSWindowStyleMask::Miniaturizable)
-        })
-    }
-
-    fn set_minimizable(&mut self, minimizable: bool) {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        let this = &*self;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self` (which
-            // `this` reborrows), and the body runs on the owner thread — inline on
-            // the OS main thread for a main-lane owner, or dispatched onto the
-            // lane under the reentrancy guard — before the message is sent.
-            // Capturing `this` (a `&MacOSWindow`)
-            // rather than the raw-pointer field is what keeps the closure
-            // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
-            let mut style_mask: NSWindowStyleMask = msg_send![this.ns_window, styleMask];
-            if minimizable {
-                style_mask |= NSWindowStyleMask::Miniaturizable;
-            } else {
-                style_mask &= !NSWindowStyleMask::Miniaturizable;
-            }
-            let _: () = msg_send![this.ns_window, setStyleMask: style_mask];
-        });
-    }
-
-    fn is_closable(&self) -> bool {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
-            // body runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // message is sent.
-            let style_mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
-            style_mask.contains(NSWindowStyleMask::Closable)
-        })
-    }
-
-    fn set_closable(&mut self, closable: bool) {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        let this = &*self;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self` (which
-            // `this` reborrows), and the body runs on the owner thread — inline on
-            // the OS main thread for a main-lane owner, or dispatched onto the
-            // lane under the reentrancy guard — before the message is sent.
-            // Capturing `this` (a `&MacOSWindow`)
-            // rather than the raw-pointer field is what keeps the closure
-            // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
-            let mut style_mask: NSWindowStyleMask = msg_send![this.ns_window, styleMask];
-            if closable {
-                style_mask |= NSWindowStyleMask::Closable;
-            } else {
-                style_mask &= !NSWindowStyleMask::Closable;
-            }
-            let _: () = msg_send![this.ns_window, setStyleMask: style_mask];
-        });
-    }
-
-    fn focus(&mut self) {
-        PlatformWindow::activate(self);
-    }
-
-    fn is_focused(&self) -> bool {
-        PlatformWindow::is_focused(self)
-    }
-
-    fn close(&mut self) {
-        PlatformWindow::close(self);
-    }
-
-    fn request_redraw(&mut self) {
-        PlatformWindow::request_redraw(self);
-    }
-
-    fn set_min_size(&mut self, size: Option<Size<f64>>) {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        let this = &*self;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self` (which
-            // `this` reborrows), and the body runs on the owner thread — inline on
-            // the OS main thread for a main-lane owner, or dispatched onto the
-            // lane under the reentrancy guard — before the message is sent.
-            // Capturing `this` (a `&MacOSWindow`)
-            // rather than the raw-pointer field is what keeps the closure
-            // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
-            if let Some(size) = size {
-                let ns_size = NSSize::new(size.width, size.height);
-                let _: () = msg_send![this.ns_window, setMinSize: ns_size];
-            } else {
-                // Set to zero to remove constraint
-                let ns_size = NSSize::new(0.0, 0.0);
-                let _: () = msg_send![this.ns_window, setMinSize: ns_size];
-            }
-        });
-    }
-
-    fn set_max_size(&mut self, size: Option<Size<f64>>) {
-        let owner = self.owner;
-        let owner_is_main = self.owner_is_main;
-        let this = &*self;
-        route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive for the lifetime of `self` (which
-            // `this` reborrows), and the body runs on the owner thread — inline on
-            // the OS main thread for a main-lane owner, or dispatched onto the
-            // lane under the reentrancy guard — before the message is sent.
-            // Capturing `this` (a `&MacOSWindow`)
-            // rather than the raw-pointer field is what keeps the closure
-            // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
-            if let Some(size) = size {
-                let ns_size = NSSize::new(size.width, size.height);
-                let _: () = msg_send![this.ns_window, setMaxSize: ns_size];
-            } else {
-                // Set to max to remove constraint
-                let ns_size = NSSize::new(f64::MAX, f64::MAX);
-                let _: () = msg_send![this.ns_window, setMaxSize: ns_size];
-            }
-        });
-    }
-
-    fn scale_factor(&self) -> f64 {
-        let state = self.state.lock();
-        state.scale_factor
-    }
-
-    fn raw_window_handle(&self) -> CrossRawWindowHandle {
-        // The returned raw pointers are opaque handles for GPU integration;
-        // `ns_view` is the FLUI view, not whatever `contentView` holds.
-        CrossRawWindowHandle::MacOS {
-            ns_view: self.view.cast::<std::ffi::c_void>(),
-            ns_window: self.ns_window.cast::<std::ffi::c_void>(),
         }
     }
 }
@@ -2459,6 +2055,164 @@ unsafe fn get_window_from_delegate(delegate: &Object) -> Option<Arc<MacOSWindow>
 // ============================================================================
 
 impl MacOSWindow {
+    /// The window's published state, read from AppKit again first when
+    /// something invalidated it; `on_state_changed` is raised when that
+    /// produced a new revision.
+    fn current_state(&self) -> WindowState {
+        let published = self.snapshot.state_with(|| self.sample_state());
+        if published.changed {
+            self.callbacks.dispatch_state_changed();
+        }
+        published.state
+    }
+
+    /// The window may differ from its published state: read it again.
+    fn publish_state(&self) {
+        self.snapshot.invalidate();
+        let _ = self.current_state();
+    }
+
+    /// The window as AppKit reports it now.
+    fn sample_state(&self) -> WindowState {
+        let (display, constraints) = {
+            let state = self.state.lock();
+            (state.display, state.constraints)
+        };
+        route_on_owner(self.owner, self.owner_is_main, || {
+            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
+            // body runs on the owner thread — inline on the OS main thread for
+            // a main-lane owner, or dispatched onto the lane under the
+            // reentrancy guard — before the messages are sent. `title`
+            // returns an autoreleased NSString whose UTF8String buffer is
+            // copied before returning.
+            unsafe {
+                let frame: NSRect = msg_send![self.ns_window, frame];
+                let content: NSRect = msg_send![self.ns_window, contentRectForFrameRect: frame];
+                let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+                let miniaturized: bool = msg_send![self.ns_window, isMiniaturized];
+                let zoomed: bool = msg_send![self.ns_window, isZoomed];
+                let visible: bool = msg_send![self.ns_window, isVisible];
+                let focused: bool = msg_send![self.ns_window, isKeyWindow];
+                let ns_title: ObjcId = msg_send![self.ns_window, title];
+                let title = if ns_title == NIL {
+                    String::new()
+                } else {
+                    let c_str: *const i8 = msg_send![ns_title, UTF8String];
+                    if c_str.is_null() {
+                        String::new()
+                    } else {
+                        std::ffi::CStr::from_ptr(c_str)
+                            .to_string_lossy()
+                            .into_owned()
+                    }
+                };
+                let mode = if mask.contains(NSWindowStyleMask::FullScreen) {
+                    WindowMode::Fullscreen
+                } else if miniaturized {
+                    WindowMode::Minimized
+                } else if zoomed {
+                    WindowMode::Maximized
+                } else {
+                    WindowMode::Normal
+                };
+                WindowState::new(
+                    WindowGeometry::new(None, Size::new(frame.size.width, frame.size.height)),
+                    Size::new(content.size.width, content.size.height),
+                )
+                .with_mode(mode)
+                .with_visible(visible)
+                .with_focused(focused)
+                .with_title(Some(title))
+                .with_resizable(mask.contains(NSWindowStyleMask::Resizable))
+                .with_decorated(mask.contains(NSWindowStyleMask::Titled))
+                .with_constraints(constraints)
+                .with_display(display)
+            }
+        })
+    }
+
+    fn set_native_title(&self, title: &str) {
+        let owner = self.owner;
+        let owner_is_main = self.owner_is_main;
+        route_on_owner(owner, owner_is_main, || unsafe {
+            // SAFETY: `ns_window` is alive; the NSString is created from a
+            // valid Rust string and ownership passes to the window; the body
+            // runs on the owner thread — inline on the OS main thread for a
+            // main-lane owner, or dispatched onto the lane under the reentrancy
+            // guard — before the message is sent.
+            let ns_title = NSString::from_str(title);
+            let _: () = msg_send![self.ns_window, setTitle: &*ns_title];
+        });
+    }
+
+    /// Resize the content area, not the frame: on decorated windows a
+    /// frame-sized `setFrame:` would shrink the content by the title bar.
+    fn set_content_size(&self, size: Size<f64>) {
+        let owner = self.owner;
+        let owner_is_main = self.owner_is_main;
+        route_on_owner(owner, owner_is_main, || unsafe {
+            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
+            // body runs on the owner thread — inline on the OS main thread for
+            // a main-lane owner, or dispatched onto the lane under the
+            // reentrancy guard — before the message is sent.
+            let ns_size = NSSize::new(size.width, size.height);
+            let _: () = msg_send![self.ns_window, setContentSize: ns_size];
+        });
+    }
+
+    /// Enter `mode` from whichever mode the window is in: AppKit's zoom and
+    /// full-screen requests are toggles, so each is sent only when the window
+    /// is not already there.
+    fn enter_native_mode(&self, mode: WindowMode) {
+        let owner = self.owner;
+        let owner_is_main = self.owner_is_main;
+        route_on_owner(owner, owner_is_main, || unsafe {
+            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
+            // body runs on the owner thread — inline on the OS main thread for
+            // a main-lane owner, or dispatched onto the lane under the
+            // reentrancy guard — before the messages are sent.
+            let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            let fullscreen = mask.contains(NSWindowStyleMask::FullScreen);
+            let miniaturized: bool = msg_send![self.ns_window, isMiniaturized];
+            let zoomed: bool = msg_send![self.ns_window, isZoomed];
+            match mode {
+                WindowMode::Minimized => {
+                    let _: () = msg_send![self.ns_window, miniaturize: NIL];
+                }
+                WindowMode::Maximized => {
+                    if !zoomed {
+                        let _: () = msg_send![self.ns_window, zoom: NIL];
+                    }
+                }
+                WindowMode::Fullscreen => {
+                    if !fullscreen {
+                        let _: () = msg_send![self.ns_window, toggleFullScreen: NIL];
+                    }
+                }
+                WindowMode::Normal => {
+                    if fullscreen {
+                        let _: () = msg_send![self.ns_window, toggleFullScreen: NIL];
+                    }
+                    if miniaturized {
+                        let _: () = msg_send![self.ns_window, deminiaturize: NIL];
+                    }
+                    // `zoom:` toggles, and leaving full screen or the dock
+                    // changes both flags read above: ask again before deciding
+                    // whether the window is still zoomed.
+                    let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+                    let still_fullscreen = mask.contains(NSWindowStyleMask::FullScreen);
+                    let still_zoomed: bool = msg_send![self.ns_window, isZoomed];
+                    if still_zoomed && !still_fullscreen {
+                        let _: () = msg_send![self.ns_window, zoom: NIL];
+                    }
+                }
+                // `WindowMode` grows; a mode this backend does not know
+                // changes nothing.
+                _ => {}
+            }
+        });
+    }
+
     /// Handle window resize event
     fn handle_resize(&self) {
         // SAFETY: `ns_window` is alive for the lifetime of `self`.
@@ -2479,6 +2233,7 @@ impl MacOSWindow {
             };
 
             // Notify per-window callbacks
+            self.publish_state();
             self.callbacks.dispatch_resize(new_size, scale as f64);
 
             tracing::debug!("Window resized to {}x{}", new_size.width, new_size.height);
@@ -2499,7 +2254,7 @@ impl MacOSWindow {
                 state.bounds.origin = new_origin;
             }
 
-            self.callbacks.dispatch_moved();
+            self.publish_state();
 
             tracing::debug!("Window moved to ({}, {})", new_origin.x, new_origin.y);
         }
@@ -2507,6 +2262,7 @@ impl MacOSWindow {
 
     /// Handle focus gained event
     fn handle_focus_gained(&self) {
+        self.publish_state();
         self.callbacks.dispatch_active_status_change(true);
         // Key-window status is what VoiceOver treats as view focus; the
         // delegate delivers this on the main thread.
@@ -2519,6 +2275,7 @@ impl MacOSWindow {
 
     /// Handle focus lost event
     fn handle_focus_lost(&self) {
+        self.publish_state();
         self.callbacks.dispatch_active_status_change(false);
         #[cfg(feature = "a11y")]
         if let Some(bridge) = self.accessibility.get() {
@@ -2554,6 +2311,7 @@ impl MacOSWindow {
         // Dispatch outside the state lock, like every other handler here.
         if let Some(visible) = edge {
             tracing::debug!(?visible, "Window occlusion state changed");
+            self.publish_state();
             self.callbacks.dispatch_visibility_status_change(visible);
         }
     }
@@ -2654,6 +2412,7 @@ impl MacOSWindow {
             // of its scale is a hint to re-read the snapshot; it dispatches no
             // resize, because a refresh period does not invalidate layout.
             let moved = self.refresh_display();
+            self.publish_state();
 
             // Update the FLUI view's scale factor
             view::update_view_scale_factor(self.view, new_scale);

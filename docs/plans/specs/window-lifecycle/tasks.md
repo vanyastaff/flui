@@ -40,7 +40,7 @@ graph LR
 |---|---|---|---|---|---|---|---|
 | WL1 | PR 1. Контракт, ADR, `WindowStateCell`, headless, удаление второго trait'а, оболочки бэкендов | R1–R4, R7, R10, R12, R36, R37 | — | — | L | 5 | не начата |
 | WL2 | PR 1. Хост: `WindowHandle`, `WindowControl`, очередь команд, опции создания, `HostNotice` и `LifecycleHandle::subscribe_notices`, конец сессии через `OwnerPlatform` | R5, R6, R8, R9, R13, R21–R25 | WL1 | — | L | 4 | не начата |
-| WL3 | PR 1. Потребители: `WindowPlacement` и `PlacementKeeper`, подрезка кэшей, инвалидация после `Wake`, conformance-набор | R16–R20, R26, R27, R39 | WL2 | — | L | 2 | не начата |
+| WL3 | PR 1. Потребители: `WindowPlacement` и `PlacementRecorder`, подрезка кэшей, инвалидация после `Wake`, conformance-набор | R16–R20, R26, R27, R39 | WL2 | — | L | 2 | не начата |
 | WL4 | PR 2. Windows: команды, `WM_GETMINMAXINFO`, создание скрытым, показ по первому кадру, чтение `GetWindowPlacement`, конец сессии, сон, блокировка, память, `persistent_key` | R11, R14, R15, R33, D-10 | WL3 | [P] | L, W | 6 | не начата |
 | WL5 | PR 3. macOS и iOS: чтение режима, команды, `NSWorkspace`, блокировка, `dispatch` memory pressure, `NSTerminateLater`; iOS memory warning и terminate | R32, R34 | WL3 | [P] | L (типы) | 4 | не начата |
 | WL6 | PR 4. Linux: команды и чтение через winit, X11 `_NET_WM_STATE`, показ по первому кадру X11/Wayland, logind, PSI, `persistent_key` | R14, R35 | WL3 | [P] | L, X, WSL | 6 | не начата |
@@ -60,7 +60,7 @@ on_state_changed}`; удаление методов и вариантов `Windo
 `WindowBuilder`, `WindowManager`) и `macos/window_manager.rs`; Windows, macOS, winit, Web, Android,
 iOS переводят свои существующие реализации на `state`/`apply` без новых возможностей (ёмкости —
 только то, что уже работало). Headless (D-20): `MockWindow` на ячейке, `with_window_capabilities`,
-`HostLimits`. ADR-0237 в PR спеки — Proposed; этот PR делает его Accepted. Тесты:
+`HeadlessWindowPolicy`. ADR-0237 в PR спеки — Proposed; этот PR делает его Accepted. Тесты:
 `window_state_contract`, `window_command_validate` (M). Проверка: `cargo heli nextest run -p
 flui-platform-api` и `-p flui-platform`, clippy для `--target x86_64-unknown-linux-gnu`,
 `aarch64-apple-darwin`, `aarch64-linux-android`, `wasm32-unknown-unknown`.
@@ -79,13 +79,13 @@ WindowOptions`, агрегат `SessionEndBlock` по презентациям. 
 `tests/surface.rs`. Тесты: `window_handle_contract`, `host_notice_delivery` (без кэшей),
 `config_to_options_keeps_every_field`.
 
-**WL3. Потребители.** `flui-platform-api`: `WindowPlacement` (`encode`, `decode`, `resolve`),
-`PlacementError`, `ResolvedPlacement`. `flui-app`: `PlacementKeeper`, `AppConfig::restore_placement`,
+**WL3. Потребители.** `flui-platform-api`: `WindowPlacement` (`to_bytes`, `from_bytes`, `resolve`),
+`PlacementError`, `ResolvedPlacement`. `flui-app`: `PlacementRecorder`, `AppConfig::restore_placement`,
 запись на закрытии/`SessionEnded`/с ограничением частоты; инвалидация `DisplaySource` и ячеек после
-`Wake`. `flui-runtime`: `MemoryTrim` получатели в `RuntimeServices`; `flui-assets` синхронный
-`trim(level)`; `flui-painting` подрезка кэша раскладки; `flui-engine` сообщение подрезки на
+`Wake`. `flui-runtime`: `ReclaimMemory` получатели в `RuntimeServices`; `flui-assets` синхронный
+`reclaim(level)`; `flui-painting` подрезка кэша раскладки; `flui-engine` сообщение подрезки на
 raster-поток. `flui-testing`: `window_conformance` (набор R39). Тесты: `placement_resolve`,
-`placement_keeper`, `host_notice_delivery` (строки с кэшами, `Wake`), `window_conformance` на
+`placement_recorder`, `host_notice_delivery` (строки с кэшами, `Wake`), `window_conformance` на
 headless.
 
 **WL4. Windows.** `platforms/windows/window.rs`: создание без `WS_VISIBLE`, `resizable`
@@ -148,7 +148,7 @@ Facade-пример для восстановления положения (ну
 | R13 | `config_to_options_keeps_every_field` | WL2 | L |
 | R14, R15 | `first_reveal` тесты раннера, живой прогон | WL2, WL4, WL6, WL9 | L, W, WSL |
 | R16, R18–R20 | `placement_resolve` | WL3 | L |
-| R17 | `placement_keeper`, живой прогон | WL3, WL9 | L, W |
+| R17 | `placement_recorder`, живой прогон | WL3, WL9 | L, W |
 | R21, R22, R25, R27 | `host_notice_delivery` | WL2, WL3 | L |
 | R23, R24 | `host_notice_delivery`, `simulated_session_end_reaches_the_hook`, живой прогон | WL2, WL4, WL9 | L, W |
 | R26 | `host_notice_delivery` (строка `Wake`), живой прогон | WL3, WL9 | L, W |

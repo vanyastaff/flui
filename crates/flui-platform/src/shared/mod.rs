@@ -49,6 +49,8 @@ mod handlers;
 pub(crate) mod owner_signal;
 #[cfg(any(target_os = "android", target_os = "macos", test))]
 pub(crate) mod preference_read;
+pub(crate) mod system_notice;
+pub(crate) mod window_state;
 // `pub`, not `pub(crate)`, for the same reason `keys`/`keys_macos` are:
 // these cfg-free rule modules are consumed only by one target's backend
 // (here Win32), so on every other target a crate-private visibility flags

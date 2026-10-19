@@ -476,6 +476,27 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
         self.reported_full = false;
     }
 
+    /// Give back every glyph and both pages' textures: the pages start again at
+    /// their first size and each glyph is rasterized and placed anew when a run
+    /// next asks for it. The rasterizer, with the faces registered on it, stays.
+    ///
+    /// Call between frames, after the last submit: no recorded run still names a
+    /// slot, and dropping a texture only schedules the GPU free once the
+    /// submissions that read it finish.
+    pub(crate) fn reset(&mut self) {
+        self.entries.clear();
+        self.mask = Page::new(&self.device, false);
+        self.color = Page::new(&self.device, true);
+        self.bind_group = create_bind_group(
+            &self.device,
+            &self.layout,
+            &self.mask,
+            &self.color,
+            &self.sampler,
+        );
+        self.reported_full = false;
+    }
+
     /// How many glyphs the atlas holds, both pages, empty glyphs included.
     #[cfg(all(test, feature = "testing"))]
     pub(crate) fn len(&self) -> usize {
@@ -584,6 +605,20 @@ mod rasterizer_tests {
             first.iter().filter(|slot| !slot.is_empty()).count() > 100,
             "most glyphs have ink"
         );
+    }
+
+    #[test]
+    fn resetting_drops_every_glyph_and_the_next_one_places_again() {
+        let mut atlas = atlas(swash());
+        let before = atlas.slot(key(40, 18.0)).expect("placed");
+        assert!(atlas.len() > 0);
+
+        atlas.reset();
+
+        assert_eq!(atlas.len(), 0, "no glyph survives the reset");
+        let after = atlas.slot(key(40, 18.0)).expect("placed again");
+        assert_eq!(after.size, before.size, "the rasterizer kept its face");
+        assert_eq!(atlas.len(), 1);
     }
 
     // The public painter always owns SwashRasterizer. This private seam models

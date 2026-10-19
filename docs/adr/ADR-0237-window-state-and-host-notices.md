@@ -1,6 +1,6 @@
 # ADR-0237: A window publishes a state snapshot and takes commands; the host delivers system notices
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-18
 - **Related:** [ADR-0222](ADR-0222-window-appearance-is-a-presentation-observation.md) (the
   payload-free observation shape this follows),
@@ -52,7 +52,12 @@ Web ignored page freeze and GPU context loss.
    validated immediately, queued, and applied on the owner thread at the start of its next turn,
    before the frame, in submission order. Applying them later rather than inline keeps a native
    call that synchronously re-enters the window procedure out of user code. After the window closes
-   the handle answers `Closed`.
+   the handle answers `Closed`. The window-open request delivers the new window's
+   `PresentationAddress`, not the handle: a `WindowHandle` is `!Send` and the request travels
+   through a `Send` future, so the owner thread turns the address into a handle with
+   `flui_app::window_handle(address)`. The window can close between the request's completion and
+   that lookup; the lookup then returns `None`, as it does on another thread or for an unknown
+   address, and the caller treats `None` as a closed window.
 5. **Windows open revealed by their first frame.** Runner-opened windows are shown only after the
    first presented frame, already in their initial mode, with the existing bounded fallback.
    `WindowReveal::AtOpen` stays an explicit choice for direct platform users.
@@ -62,7 +67,7 @@ Web ignored page freeze and GPU context loss.
    always yields a window wholly on a live display. `DisplayInfo` gains `persistent_key`, a string
    that survives reboots (the monitor device path on Windows, not the LUID), compared only for
    equality. OS autosave facilities are not used, so behaviour is the same everywhere.
-7. **System notices are a separate stream.** `HostNotice` (session ending, cancelled, ended; sleep;
+7. **System notices are a separate stream.** The platform reports `SystemNotice` (the same events without a session end, which has its own hook); `HostNotice` (session ending, cancelled, ended; sleep;
    wake; session locked and unlocked; memory pressure at `Moderate` or `Critical`) is delivered by
    `OwnerPlatform` to `flui-app`, which fans it out to every presentation's `LifecycleHandle`
    (`subscribe_notices`, same FIFO and containment rules as lifecycle subscriptions).
@@ -73,9 +78,13 @@ Web ignored page freeze and GPU context loss.
    (`ShutdownBlockReasonCreate` on Windows, `NSTerminateLater` on macOS); dropping the last block
    releases it. Elsewhere the notice is informational. On session end the framework saves window
    placement and waits for accepted storage writes within a bounded budget before letting the OS
-   proceed. A panicking subscriber counts as "proceed".
-9. **The framework trims its own caches first.** On memory pressure the runtime trims the image
-   cache, the text layout cache and the renderer's pools (on the raster thread) according to the
+   proceed. A panicking subscriber counts as "proceed". The query is answered only after every
+   subscriber has run: when a runtime's turn is busy (a session end arriving inside another
+   callback) the answer is "proceed" with a diagnostic. The answer closes the request's book, so a
+   later block is refused (`SessionEndBlockError::Answered`), and dropping the last block after a
+   "wait" answer reaches the platform through `Platform::release_session_end`.
+9. **The framework reclaims its own caches first.** On memory pressure the host reclaims the image
+   cache, the text service's buffers and the renderer's pools (on the raster thread) according to the
    level, then notifies subscribers. Repeated notices of one level within one owner turn coalesce.
 10. **GPU context loss is a platform event.** Where the platform reports loss (WebGL context lost,
     WebGPU device lost), it marks the renderer lost and wakes the owner so recovery starts at once

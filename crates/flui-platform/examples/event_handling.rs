@@ -41,16 +41,14 @@ fn main() -> anyhow::Result<()> {
     tracing::info!("  - Touch input: {}", capabilities.supports_touch());
 
     // Create main window
-    let window_options = WindowOptions {
-        title: "Event Handling Demo - Click, type, resize!".to_string(),
-        size: Size::new(800.0, 600.0),
-        resizable: true,
-        visible: true,
-        decorated: true,
-        min_size: Some(Size::new(400.0, 300.0)),
-        max_size: None,
-        ..Default::default()
-    };
+    let window_options = WindowOptions::default()
+        .with_title("Event Handling Demo - Click, type, resize!".to_string())
+        .with_size(Size::new(800.0, 600.0))
+        .with_resizable(true)
+        .with_visible(true)
+        .with_decorated(true)
+        .with_min_size(Some(Size::new(400.0, 300.0)))
+        .with_max_size(None);
 
     tracing::info!("\n📱 Creating window...");
     let window = platform.open_window(window_options)?;

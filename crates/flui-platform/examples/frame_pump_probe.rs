@@ -102,16 +102,16 @@ mod appkit_frame_pump_probe {
         // gets none. Occlusion is the honest reason a run can produce no frames
         // at all, which is why the failure messages below distinguish "never
         // started" from "started and stalled".
-        let window = match owner.open_window(flui_platform::WindowOptions {
-            title: "FLUI frame-pump probe".to_string(),
-            size: Size::new(480.0, 320.0),
-            resizable: false,
-            visible: true,
-            decorated: true,
-            min_size: None,
-            max_size: None,
-            ..Default::default()
-        }) {
+        let window = match owner.open_window(
+            flui_platform::WindowOptions::default()
+                .with_title("FLUI frame-pump probe".to_string())
+                .with_size(Size::new(480.0, 320.0))
+                .with_resizable(false)
+                .with_visible(true)
+                .with_decorated(true)
+                .with_min_size(None)
+                .with_max_size(None),
+        ) {
             Ok(pending) => match pending.try_ready() {
                 Ok(window) => window,
                 Err(error) => fatal(format!("the window was not ready: {error:?}")),

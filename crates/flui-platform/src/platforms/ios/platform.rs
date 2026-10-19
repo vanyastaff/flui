@@ -388,6 +388,10 @@ struct DelegateState {
 }
 
 impl Platform for IOSPlatform {
+    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         self.background_executor.clone()
     }

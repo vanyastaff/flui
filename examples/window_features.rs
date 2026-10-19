@@ -47,16 +47,14 @@ fn main() -> anyhow::Result<()> {
         }
 
         tracing::info!("Creating window...");
-        let window_options = WindowOptions {
-            title: "Window Features Demo".to_string(),
-            size: Size::new(1000.0, 700.0),
-            resizable: true,
-            visible: true,
-            decorated: true,
-            min_size: Some(Size::new(600.0, 400.0)),
-            max_size: None,
-            ..Default::default()
-        };
+        let window_options = WindowOptions::default()
+            .with_title("Window Features Demo".to_string())
+            .with_size(Size::new(1000.0, 700.0))
+            .with_resizable(true)
+            .with_visible(true)
+            .with_decorated(true)
+            .with_min_size(Some(Size::new(600.0, 400.0)))
+            .with_max_size(None);
 
         let window = owner
             .open_window(window_options)
