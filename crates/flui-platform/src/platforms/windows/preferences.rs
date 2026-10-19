@@ -88,9 +88,21 @@ pub(crate) struct PreferenceSource {
 }
 
 impl PreferenceSource {
+    #[cfg(feature = "winit-backend")]
     pub(crate) fn new(
         signal: &Arc<OwnerSignal>,
         displays: &Arc<super::display::WindowsDisplays>,
+    ) -> Result<Self, PlatformError> {
+        Self::with_host(signal, displays, None)
+    }
+
+    /// A source whose receiver also forwards the system events `host` handles
+    /// (session end, power, lock, memory); `None` for a backend whose owner
+    /// hears them another way.
+    pub(super) fn with_host(
+        signal: &Arc<OwnerSignal>,
+        displays: &Arc<super::display::WindowsDisplays>,
+        host: Option<Rc<super::host_events::HostEvents>>,
     ) -> Result<Self, PlatformError> {
         let entry = WinRtEntry::enter().map_err(native_error)?;
         // SAFETY: this owner holds its WinRT entry; class strings are owned.
@@ -109,7 +121,8 @@ impl PreferenceSource {
             signal: Arc::downgrade(signal),
             displays: Arc::clone(displays),
         });
-        let receiver = receiver::Receiver::new(Arc::clone(&invalidation)).map_err(native_error)?;
+        let receiver =
+            receiver::Receiver::new(Arc::clone(&invalidation), host).map_err(native_error)?;
         let mut source = Self {
             invalidation,
             _receiver: receiver,

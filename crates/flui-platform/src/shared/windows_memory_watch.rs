@@ -79,16 +79,6 @@ impl MemoryWatch {
             _ => false,
         }
     }
-
-    /// The time, from `now`, until the hold ends; `None` when not holding.
-    pub(crate) fn hold_remaining(&self, now: Duration) -> Option<Duration> {
-        match self.phase {
-            Phase::Holding { since } => {
-                Some(HOLD_INTERVAL.saturating_sub(now.saturating_sub(since)))
-            }
-            _ => None,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -124,7 +114,7 @@ mod tests {
         assert!(!watch.signaled());
         assert!(!watch.take(START));
         assert!(
-            !watch.rearm(START + HOLD_INTERVAL - Duration::from_millis(1)),
+            !watch.rearm(START + HOLD_INTERVAL.saturating_sub(Duration::from_millis(1))),
             "armed too early"
         );
     }
@@ -153,24 +143,6 @@ mod tests {
         assert!(watch.signaled());
         assert!(watch.take(START));
         assert!(!watch.rearm(Duration::ZERO));
-        assert_eq!(watch.hold_remaining(Duration::ZERO), Some(HOLD_INTERVAL));
-    }
-
-    fn the_remaining_hold_counts_down_and_stops_at_zero() {
-        let mut watch = MemoryWatch::armed();
-        assert_eq!(watch.hold_remaining(START), None, "armed: not holding");
-        assert!(watch.signaled());
-        assert_eq!(watch.hold_remaining(START), None, "owed: not holding");
-        assert!(watch.take(START));
-        assert_eq!(watch.hold_remaining(START), Some(HOLD_INTERVAL));
-        assert_eq!(
-            watch.hold_remaining(START + Duration::from_secs(12)),
-            Some(HOLD_INTERVAL - Duration::from_secs(12))
-        );
-        assert_eq!(
-            watch.hold_remaining(START + HOLD_INTERVAL * 3),
-            Some(Duration::ZERO)
-        );
     }
 
     #[test]
@@ -201,10 +173,6 @@ mod tests {
                 (
                     "a_clock_that_reads_earlier_counts_as_no_time_passed",
                     a_clock_that_reads_earlier_counts_as_no_time_passed as fn(),
-                ),
-                (
-                    "the_remaining_hold_counts_down_and_stops_at_zero",
-                    the_remaining_hold_counts_down_and_stops_at_zero as fn(),
                 ),
             ],
         );

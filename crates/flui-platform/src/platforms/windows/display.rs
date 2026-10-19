@@ -75,6 +75,12 @@ pub(crate) struct WindowsDisplays {
     samples: std::sync::atomic::AtomicUsize,
 }
 
+impl crate::shared::system_notice::StaleOnWake for WindowsDisplays {
+    fn mark_stale(&self) {
+        self.invalidate();
+    }
+}
+
 impl WindowsDisplays {
     /// A source that has not sampled yet. Reads the OS build once.
     pub(crate) fn new() -> Self {

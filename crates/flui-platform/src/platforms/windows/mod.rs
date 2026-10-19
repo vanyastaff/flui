@@ -18,6 +18,7 @@ mod clipboard;
 mod com_apartment;
 pub(crate) mod display;
 mod events;
+mod host_events;
 mod platform;
 pub(crate) mod preferences;
 mod text_services;

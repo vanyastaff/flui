@@ -28,18 +28,19 @@ use windows::{
                 CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
                 DispatchMessageW, GWLP_USERDATA, GetClassNameW, GetClientRect, GetForegroundWindow,
                 GetWindowLongPtrW, GetWindowThreadProcessId, HICON, HTCLIENT, HWND_MESSAGE,
-                IDC_ARROW, ISMEX_NOSEND, InSendMessageEx, IsWindowVisible, MSG,
+                IDC_ARROW, ISMEX_NOSEND, InSendMessageEx, IsWindowVisible, MINMAXINFO, MSG,
                 MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW,
                 PostMessageW, PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU,
                 SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
                 SetWindowLongPtrW, SetWindowPos, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
                 WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DEADCHAR, WM_DESTROY,
-                WM_DPICHANGED, WM_ERASEBKGND, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP,
-                WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
+                WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_INPUTLANGCHANGE, WM_KEYDOWN,
+                WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
                 WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT,
-                WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE,
-                WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSDEADCHAR, WM_SYSKEYDOWN,
-                WM_SYSKEYUP, WM_WINDOWPOSCHANGED, WNDCLASSW,
+                WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT,
+                WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCHAR,
+                WM_SYSCOMMAND, WM_SYSDEADCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_WINDOWPOSCHANGED,
+                WNDCLASSW,
             },
         },
     },
@@ -65,7 +66,8 @@ use crate::{
     traits::{
         Clipboard, DesktopCapabilities, DisplaySnapshot, HostWindow, OpenWindowError,
         OwnerPlatform, Platform, PlatformCapabilities, PlatformExecutor, PlatformReadyCallback,
-        WindowAppearance, WindowEvent, WindowId, WindowOptions, owner::OwnerHooks,
+        SessionEndAnswer, SessionEndPhase, SystemNotice, WindowAppearance, WindowEvent, WindowId,
+        WindowOptions, owner::OwnerHooks,
     },
 };
 
@@ -376,6 +378,19 @@ pub(super) struct WindowContext {
     /// Stored here instead of in `NativeMode` to keep the cross-platform enum
     /// free of platform-specific fields.
     pub restore_style: std::cell::Cell<u32>,
+    /// The inner-size limits the app set, in logical pixels; `WM_GETMINMAXINFO`
+    /// turns them into outer limits at the window's current DPI.
+    pub constraints: std::cell::Cell<flui_platform_api::SizeConstraints>,
+    /// Whether the app wants the window resizable. A window without a frame
+    /// cannot be, but gets the frame back with this still set.
+    pub resizable: std::cell::Cell<bool>,
+    /// The mode the window takes the first time it is shown, until it is. A
+    /// window opens hidden and in this mode, so the first sight of it is
+    /// already maximized or fullscreen, not a normal window that jumps.
+    pub first_show: std::cell::Cell<Option<flui_platform_api::WindowMode>>,
+    /// Whether the first show waits for the embedder's first presented frame
+    /// (`reveal_after_first_frame`) rather than for an explicit show.
+    pub reveal_deferred: std::cell::Cell<bool>,
     /// Last surface-visibility value dispatched through
     /// `WindowCallbacks::dispatch_visibility_status_change` (hidden-surface
     /// gating). Two message families feed it — `WM_SIZE`
@@ -437,18 +452,72 @@ impl WindowContext {
         let Some(record) = self.window_state.upgrade() else {
             return self.snapshot.published();
         };
-        let published = self.snapshot.state_with(|| {
-            super::window::sample_state(
-                hwnd,
-                &record,
-                self.mode.get(),
-                self.displays.display_of_window(hwnd),
-            )
-        });
+        let published = self
+            .snapshot
+            .state_with(|| super::window::sample_state(hwnd, &record, self.tracking(hwnd)));
         if published.changed {
             self.callbacks.dispatch_state_changed();
         }
         published.state
+    }
+
+    /// Fill in `WM_GETMINMAXINFO` with the app's size limits at the window's
+    /// current DPI. A fullscreen window keeps the system's rectangle.
+    pub(super) fn constrain_track(&self, hwnd: HWND, info: &mut MINMAXINFO) {
+        use crate::shared::windows_window_limits::{
+            MinMaxInfo, PixelSize, constrain, track_limits,
+        };
+
+        let constraints = self.constraints.get();
+        if constraints.min.is_none() && constraints.max.is_none() {
+            return;
+        }
+        // SAFETY: plain queries of the live window the message was sent to.
+        let (dpi, style, ex_style) = unsafe {
+            (
+                windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd),
+                GetWindowLongPtrW(hwnd, windows::Win32::UI::WindowsAndMessaging::GWL_STYLE) as u32,
+                GetWindowLongPtrW(hwnd, windows::Win32::UI::WindowsAndMessaging::GWL_EXSTYLE)
+                    as u32,
+            )
+        };
+        // The frame the window adds around its content at this DPI, measured
+        // for the style it will have, not the rectangle it has.
+        let style = if self.mode.get().is_fullscreen() {
+            self.restore_style.get()
+        } else {
+            style
+        };
+        let (frame_width, frame_height) =
+            super::window::outer_size(style, ex_style, dpi, (0, 0)).unwrap_or((0, 0));
+        let limits = track_limits(
+            constraints.min,
+            constraints.max,
+            dpi,
+            PixelSize::new(frame_width, frame_height),
+        );
+        let os = MinMaxInfo {
+            max_size: PixelSize::new(info.ptMaxSize.x, info.ptMaxSize.y),
+            min_track: PixelSize::new(info.ptMinTrackSize.x, info.ptMinTrackSize.y),
+            max_track: PixelSize::new(info.ptMaxTrackSize.x, info.ptMaxTrackSize.y),
+        };
+        let constrained = constrain(os, limits, self.mode.get().is_fullscreen());
+        info.ptMaxSize.x = constrained.max_size.width;
+        info.ptMaxSize.y = constrained.max_size.height;
+        info.ptMinTrackSize.x = constrained.min_track.width;
+        info.ptMinTrackSize.y = constrained.min_track.height;
+        info.ptMaxTrackSize.x = constrained.max_track.width;
+        info.ptMaxTrackSize.y = constrained.max_track.height;
+    }
+
+    /// What this context knows of the window beyond what Win32 reports.
+    pub(super) fn tracking(&self, hwnd: HWND) -> super::window::Tracking {
+        super::window::Tracking {
+            mode: self.mode.get(),
+            restore_style: self.restore_style.get(),
+            constraints: self.constraints.get(),
+            display: self.displays.display_of_window(hwnd),
+        }
     }
 
     /// The window may differ from its published state: read it again.
@@ -870,10 +939,13 @@ impl WindowsPlatform {
         // retires its preference subscriptions and receiver through the guard.
         let windows = Arc::new(Mutex::new(HashMap::new()));
         let displays = Arc::new(WindowsDisplays::new());
+        let notices = Arc::new(crate::shared::system_notice::SystemNotices::default());
+        notices.mark_stale_on_wake(&displays);
         let owner_control = super::owner_control::OwnerControl::new(
             owner_identity,
             Arc::downgrade(&windows),
             Arc::clone(&displays),
+            notices,
         )?;
 
         // SAFETY: `GetModuleHandleW(None)` queries the current process
@@ -1315,7 +1387,19 @@ impl WindowsPlatform {
                             SIZE_MINIMIZED => {
                                 tracing::info!("📦 Window Minimized");
                                 // Validate transition
-                                let candidate = NativeMode::Minimized;
+                                // A fullscreen window that is minimized comes back
+                                // fullscreen, so it keeps what it returns to.
+                                let candidate = NativeMode::Minimized {
+                                    from_fullscreen: match prev_mode {
+                                        NativeMode::Fullscreen { restore_bounds } => {
+                                            Some(restore_bounds)
+                                        }
+                                        NativeMode::Minimized { from_fullscreen } => {
+                                            from_fullscreen
+                                        }
+                                        _ => None,
+                                    },
+                                };
                                 if prev_mode.can_transition_to(&candidate) {
                                     // Preserve the last non-minimized client size.
                                     (candidate, None)
@@ -1331,7 +1415,11 @@ impl WindowsPlatform {
                                 tracing::info!("📏 Window Maximized: {}x{}", width, height);
                                 // Validate transition
                                 let candidate = NativeMode::Maximized;
-                                if prev_mode.can_transition_to(&candidate) {
+                                if prev_mode.is_fullscreen() {
+                                    // A fullscreen window covers its monitor as a
+                                    // popup; it does not become maximized.
+                                    (prev_mode, None)
+                                } else if prev_mode.can_transition_to(&candidate) {
                                     ctx.last_size.set(size);
                                     (
                                         candidate,
@@ -1366,7 +1454,17 @@ impl WindowsPlatform {
                                     window_id: ctx.window_id,
                                     size,
                                 };
-                                (NativeMode::Normal, Some(event))
+                                let restored = match prev_mode {
+                                    // A resize does not end fullscreen.
+                                    NativeMode::Fullscreen { .. } => prev_mode,
+                                    // Restoring a minimized fullscreen window
+                                    // brings fullscreen back.
+                                    NativeMode::Minimized {
+                                        from_fullscreen: Some(restore_bounds),
+                                    } => NativeMode::Fullscreen { restore_bounds },
+                                    _ => NativeMode::Normal,
+                                };
+                                (restored, Some(event))
                             }
                             _ => {
                                 // Regular resize while in current state
@@ -1593,8 +1691,41 @@ impl WindowsPlatform {
                         if ctx.last_monitor.replace(monitor) != monitor {
                             ctx.callbacks.dispatch_display_changed();
                         }
+                        // Position, size and z-order changes all land here.
+                        ctx.publish_window_state(hwnd);
                     }
                     result
+                }
+
+                // The title and the style bits (resizable, decorated) are part
+                // of the published state and change without a size or a move.
+                WM_SETTEXT | WM_STYLECHANGED => {
+                    let result = DefWindowProcW(hwnd, msg, wparam, lparam);
+                    if let Some(ctx) = ctx {
+                        ctx.publish_window_state(hwnd);
+                    }
+                    result
+                }
+
+                WM_GETMINMAXINFO => {
+                    if let Some(ctx) = ctx {
+                        // SAFETY: for this message `lParam` is the address of a
+                        // `MINMAXINFO` the system owns for the call.
+                        let info = &mut *(lparam.0 as *mut MINMAXINFO);
+                        ctx.constrain_track(hwnd, info);
+                        LRESULT(0)
+                    } else {
+                        DefWindowProcW(hwnd, msg, wparam, lparam)
+                    }
+                }
+
+                // A frame request posted for a window nothing paints: a hidden
+                // window never receives `WM_PAINT`.
+                super::window::REQUEST_FRAME => {
+                    if let Some(ctx) = ctx {
+                        ctx.request_frame();
+                    }
+                    LRESULT(0)
                 }
 
                 WM_MOUSEMOVE => {
@@ -2455,6 +2586,28 @@ impl Platform for WindowsPlatform {
 
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
         self.register_handler("on_quit", callback, |handlers| &mut handlers.quit);
+    }
+
+    fn on_session_end(&self, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {
+        self.register_handler("on_session_end", callback, |handlers| {
+            &mut handlers.session_end
+        });
+    }
+
+    fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
+        match self.owner_control.shares("on_host_notice") {
+            Ok(shares) => shares.notices.set_hook(callback),
+            Err(reason) => {
+                tracing::debug!(?reason, "host notice registration refused");
+                drop(callback);
+            }
+        }
+    }
+
+    fn release_session_end(&self) {
+        if let Ok(shares) = self.owner_control.shares("release_session_end") {
+            shares.host.release_block();
+        }
     }
 
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {

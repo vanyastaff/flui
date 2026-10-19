@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-18 · **Change:** minor (Windows two-monitor run) ·
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-18 · **Change:** minor (Windows window commands and system events) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -39,7 +39,7 @@ Counted over every row of the core and system-service sections.
 
 | Environment | Backend | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready |
 |---|---|---|---|---|---|---|---|---|
-| Windows | Win32 (native) | 9 | 30 | 35 | 17 | 2 | 32% | no |
+| Windows | Win32 (native) | 9 | 34 | 31 | 17 | 2 | 35% | no |
 | macOS | AppKit (native) | 9 | 22 | 43 | 17 | 2 | 26% | no |
 | Wayland | winit (fallback) | 6 | 22 | 40 | 23 | 2 | 24% | no |
 | X11 | winit (fallback) | 8 | 22 | 37 | 24 | 2 | 28% | no |
@@ -61,9 +61,9 @@ Counted over every row of the core and system-service sections.
 | Focus and active state | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Android `is_focused()` is always true | 2–4 |
 | Visibility, minimize, occlusion | 🟡 | ✅ | ❌ | ✅ | ✅ | ❌ | 🟡 | ✅ | Windows sees minimize and restore only; winit never reports occlusion on Wayland; Android never dispatches visibility. Runs: macOS minimize and hide, the X11 cover window in `live-smoke`, iOS Home and return | 6–10 |
 | Suspend, resume, GPU-surface loss | — | — | — | — | ✅ | 🟡 | ❌ | ✅ | Android never dispatches execution-state changes; Web ignores page freeze, `webglcontextlost` and device loss | 4–8 |
-| Sleep, wake, screen lock | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Not in the contract | 3–5 |
-| Session end (log off, shutdown) with veto | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | No backend handles it, and `flui-app` can't register the hook (`OwnerPlatform` doesn't expose it) | 4–6 |
-| Memory pressure | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | Not in the contract; Android only logs `LowMemory` | 3–5 |
+| Sleep, wake, screen lock | 🟡 | ❌ | ❌ | ❌ | — | — | — | ❌ | Windows reads `WM_POWERBROADCAST` (suspend, automatic resume) and `WM_WTSSESSION_CHANGE` (lock, unlock) on its hidden receiver and marks the displays and window states stale on wake; checked with the real messages sent to the receiver, not through a real sleep or lock. The other backends deliver nothing yet | 3–5 |
+| Session end (log off, shutdown) with veto | 🟡 | ❌ | ❌ | ❌ | — | — | — | ❌ | Windows answers `WM_QUERYENDSESSION` through the host hook: a block refuses and registers the system's generic wait reason (`ShutdownBlockReasonCreate`, on the first visible window), released when the host lets go; a critical end is never blocked; `WM_ENDSESSION` reaches the hook as ending or cancelled. Checked with the real messages, not through a real log-off. No other backend handles it | 4–6 |
+| Memory pressure | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | Windows reports `Critical` when the system's low-memory event fires (`CreateMemoryResourceNotification`), at most once per 30 s while memory stays low; the hold and its re-arming are checked, not a real low-memory state. Android only logs `LowMemory` | 3–5 |
 | Bring the app forward, request attention | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Windows `activate` re-foregrounds whatever is already in front; Wayland needs an `xdg-activation` token | 3–5 |
 | Single instance, forward arguments | ❌ | — | ❌ | ❌ | — | — | — | ❌ | macOS enforces one instance itself | 3–5 |
 | Deep links, URL schemes, file associations | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | `on_open_urls` is never called, at cold start or while running; the Web entry URL is under history routing | 12–20 |
@@ -76,12 +76,12 @@ Counted over every row of the core and system-service sections.
 |---|---|---|---|---|---|---|---|---|---|---|
 | Open and close a window | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | iOS: the scene supplies the window; Android: one native window | 0 |
 | Multiple windows | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | — | ✅ | No iPad scenes, no Android multi-window | 8–14 |
-| Show without a blank first frame | 🟡 | ✅ | ❌ | 🟡 | — | — | — | ✅ | Windows and X11 show the window at creation; Wayland refuses `show`. macOS run: deferred first reveal | 3–5 |
+| Show without a blank first frame | 🟡 | ✅ | ❌ | 🟡 | — | — | — | ✅ | Windows creates the window hidden, puts it in its opening mode and shows it after the first presented frame (checked against the real system, no run watching the first frame); X11 shows the window at creation; Wayland refuses `show`. macOS run: deferred first reveal | 3–5 |
 | Title | 🟡 | 🟡 | 🟡 | 🟡 | — | — | 🟡 | ✅ | No API for apps; winit can't read the title back | 2–3 |
 | Minimize, maximize, restore, state readback | 🟡 | 🟡 | 🟡 | 🟡 | — | — | — | ✅ | No API for apps; no readback on macOS or Linux; Wayland never reports minimized. macOS ran minimize and hide | 3–5 |
 | Fullscreen | 🟡 | 🟡 | 🟡 | 🟡 | — | — | 🟡 | ✅ | winit is borderless only; Web doesn't listen for `fullscreenchange`; mobile immersive mode is under System UI | 2–4 |
 | Position, size, move and resize events | 🟡 | 🟡 | 🟡 | ❌ | — | — | 🟡 | ✅ | No `set_position` in the contract; winit `bounds()` and `resize` are missing; Wayland can't read or set a global position by design | 4–8 |
-| Size constraints, resizable and other flags | ❌ | 🟡 | 🟡 | 🟡 | — | — | — | ✅ | Windows ignores min/max size and resizable (no `WM_GETMINMAXINFO`); no runtime setter anywhere | 3–5 |
+| Size constraints, resizable and other flags | 🟡 | 🟡 | 🟡 | 🟡 | — | — | — | ✅ | Windows holds min/max size at the operating system through `WM_GETMINMAXINFO` at the window's DPI, takes `resizable` and `decorated` as style bits and changes them at run time (checked against the real system, not by dragging an edge); no other backend has a runtime setter | 3–5 |
 | Live resize without jitter | ❔ | ❔ | ❔ | ❔ | — | — | ❔ | — | Not audited; Windows has no `WM_ENTERSIZEMOVE` handling | ❔ |
 | Save and restore window placement | ✅ | ❌ | ❌ | ❌ | — | — | — | ✅ | `AppConfig::restore_placement`. Windows opens at the remembered position, size and mode (content size, `SetWindowPlacement`) and ran in a real window; winit and AppKit ignore a position, mode and normal geometry at open until they gain placement support, and no backend but headless and Windows reports a stable display key to match the display by | 3–5 |
 | Undecorated windows, custom title bar | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Undecorated Windows windows can't be dragged or resized; no caption hit-testing, drag regions, snap layouts or system window menu; compositors without server-side decorations need client-side ones | 12–20 |
