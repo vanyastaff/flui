@@ -44,6 +44,8 @@ use flui_platform_api::haptics::{
 };
 use flui_platform_api::{DeviceId, EventTime, HapticFeedback, PlatformHaptics};
 
+use crate::gesture::arena::{DispatchedInput, DispatchedInputCell};
+
 /// How many outcomes a presentation holds for its observers, counting the
 /// requests still queued for a frame (ADR-0210 §4).
 pub const MAILBOX_CAPACITY: usize = 64;
@@ -131,7 +133,7 @@ struct Slot {
 
 struct State {
     clock: Arc<dyn MonotonicClock>,
-    dispatched: crate::gesture::arena::DispatchedInputCell,
+    dispatched: DispatchedInputCell,
     actuator: Actuator,
     request_frame: Box<dyn Fn()>,
     refresh_period: Box<dyn Fn() -> Option<Duration>>,
@@ -211,7 +213,7 @@ impl State {
             return HapticOutcome::Suppressed;
         }
         if request.sequence.is_none() {
-            request.sequence = self.dispatched.get().map(|input| input.sequence());
+            request.sequence = self.dispatched.get().map(DispatchedInput::sequence);
         }
         if request.timing == HapticTiming::Immediate {
             return self.play_now(&play, &request);
