@@ -25,6 +25,7 @@ pub use hit_test::{
     TransformGuard,
 };
 pub(crate) use hit_test::{PanZoomRoute, ScrollRoute};
+pub use crate::containment::RoutePanic;
 pub(crate) use interaction_lane::OwnerLatch;
 pub(crate) use interaction_lane::active_dispatch_handle;
 pub use interaction_lane::{
