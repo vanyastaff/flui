@@ -68,6 +68,14 @@ struct State {
     unavailable: Option<String>,
 }
 
+/// A wake from sleep marks the snapshot stale: the next sample resolves the
+/// outputs the display thread holds again.
+impl crate::shared::system_notice::StaleOnWake for LinuxDisplays {
+    fn mark_stale(&self) {
+        self.source.invalidate();
+    }
+}
+
 impl LinuxDisplays {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {

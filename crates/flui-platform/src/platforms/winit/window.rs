@@ -5,16 +5,26 @@
 //! which is why this type lives here, in the backend, and not beside the
 //! trait it implements).
 
-use std::{any::Any, sync::Arc};
+use std::{
+    any::Any,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
 use parking_lot::Mutex;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use winit::window::Window;
+use winit::{
+    dpi::{LogicalPosition, LogicalSize},
+    window::{Fullscreen, Window},
+};
 
 use super::control::ControlSender;
 use super::display::WinitDisplaySource;
+use super::window_plan::{FrameInset, OpenPlan, WindowShell, mode_of};
 use crate::shared::window_state::WindowStateCell;
 #[cfg(all(target_os = "linux", feature = "a11y"))]
 use crate::traits::PlatformAccessibility;
@@ -31,7 +41,7 @@ use crate::traits::{
 /// dispatch pattern for reentrancy safety.
 pub struct WinitWindow {
     id: WindowId,
-    closed: std::sync::atomic::AtomicBool,
+    closed: AtomicBool,
     window: Arc<Window>,
     is_focused: parking_lot::Mutex<bool>,
     is_visible: parking_lot::Mutex<bool>,
@@ -60,38 +70,36 @@ pub struct WinitWindow {
     /// The display last reported through `on_display_changed`, so a hint fires
     /// when the window really moved.
     reported_display: parking_lot::Mutex<Option<DisplayId>>,
-    /// The snapshot last published (ADR-0237).
-    window_state: WindowStateCell,
+    /// The snapshot last published (ADR-0237). Shared with the platform so a
+    /// wake from sleep marks it stale.
+    window_state: Arc<WindowStateCell>,
+    /// What the window system lets a program do to this window.
+    shell: WindowShell,
     /// What `apply` honours on this window.
     capabilities: WindowCapabilities,
     /// The title last set. winit cannot read one back on X11 or Wayland.
     title: Mutex<String>,
-    /// What winit gives no readback for: fixed at creation until a command
-    /// changes them, and this backend takes none yet.
-    creation: CreationFacts,
+    /// The size limits last set. winit has no getter for them.
+    constraints: Mutex<SizeConstraints>,
+    /// The rectangle the window returns to from a maximized or fullscreen
+    /// mode: the geometry it had in normal mode, or the one it opened with.
+    normal_geometry: Mutex<Option<WindowGeometry>>,
+    /// Whether the window was created hidden and still waits for its first
+    /// frame (or an explicit show) to become visible.
+    reveal_pending: AtomicBool,
+    /// The frame around decorated windows, measured from this and the
+    /// platform's other windows.
+    frame_inset: Arc<FrameInset>,
 }
 
-/// The window facts winit cannot report, as the window was created.
-#[derive(Clone, Copy)]
-struct CreationFacts {
-    constraints: SizeConstraints,
-    resizable: bool,
-    decorated: bool,
-}
-
-/// Whether the window sits on a desktop shell where winit can show,
-/// unminimize and focus it and report minimization (Win32, AppKit, X11), as
-/// opposed to Wayland, where it cannot.
-fn desktop_shell(window: &Window) -> bool {
-    window.display_handle().is_ok_and(|display| {
-        matches!(
-            display.as_raw(),
-            raw_window_handle::RawDisplayHandle::Windows(_)
-                | raw_window_handle::RawDisplayHandle::AppKit(_)
-                | raw_window_handle::RawDisplayHandle::Xlib(_)
-                | raw_window_handle::RawDisplayHandle::Xcb(_)
-        )
-    })
+/// What the window system lets a program do to `window`: a Wayland surface
+/// gets none of the placement, hiding and focus commands, every other shell
+/// gets them all.
+pub(super) fn shell_of(window: &impl HasDisplayHandle) -> WindowShell {
+    match window.display_handle().map(|display| display.as_raw()) {
+        Ok(raw_window_handle::RawDisplayHandle::Wayland(_)) => WindowShell::Wayland,
+        _ => WindowShell::Desktop,
+    }
 }
 
 /// [`PlatformTextInput`] for a winit window.
@@ -137,39 +145,46 @@ impl WinitWindow {
     /// programmatic `close()` reports to. Backend-private: only this
     /// backend's own window creation can supply that lane, so nothing
     /// outside it can construct a window whose close would go nowhere.
+    ///
+    /// `plan` is what the window was created from, so its snapshot starts from
+    /// the mode it opened in and, if it opened maximized, the rectangle it
+    /// returns to.
     pub(super) fn new(
         id: WindowId,
         window: Arc<Window>,
         close_lane: ControlSender,
         displays: Arc<WinitDisplaySource>,
         options: &WindowOptions,
+        plan: &OpenPlan,
+        frame_inset: Arc<FrameInset>,
     ) -> Self {
-        let shell = desktop_shell(&window);
-        let mut capabilities = window_capabilities();
-        capabilities.shows = shell;
-        capabilities.activates = shell;
-        capabilities.observes_minimized = shell;
-        let creation = CreationFacts {
-            constraints: SizeConstraints::new(options.min_size, options.max_size),
-            resizable: options.resizable,
-            decorated: options.decorated,
-        };
+        let shell = shell_of(&window);
+        let capabilities = shell.capabilities();
+        let constraints = SizeConstraints::new(options.min_size, options.max_size);
+        let title = options.title.clone();
+        let display = displays.id_of_window(&window);
         let initial = sample_state(
             &window,
-            &options.title,
-            creation,
-            &capabilities,
-            true,
-            true,
-            displays.id_of_window(&window),
+            shell,
+            &Facts {
+                title: &title,
+                constraints,
+                focused: true,
+                visible: true,
+                display,
+            },
         );
         Self {
             id,
-            closed: std::sync::atomic::AtomicBool::new(false),
-            window_state: WindowStateCell::new(initial),
+            closed: AtomicBool::new(false),
+            window_state: Arc::new(WindowStateCell::new(initial)),
+            shell,
             capabilities,
-            title: Mutex::new(options.title.clone()),
-            creation,
+            title: Mutex::new(title),
+            constraints: Mutex::new(constraints),
+            normal_geometry: Mutex::new(plan.normal_geometry),
+            reveal_pending: AtomicBool::new(plan.hidden_until_first_frame),
+            frame_inset,
             window,
             is_focused: parking_lot::Mutex::new(true),
             is_visible: parking_lot::Mutex::new(true),
@@ -182,6 +197,11 @@ impl WinitWindow {
             displays,
             reported_display: parking_lot::Mutex::new(None),
         }
+    }
+
+    /// The cell a wake from sleep marks stale.
+    pub(super) fn state_cell(&self) -> &Arc<WindowStateCell> {
+        &self.window_state
     }
 
     /// Whether no display has been reported for this window yet (or the last
@@ -246,18 +266,93 @@ impl WinitWindow {
         self.window_state.invalidate();
         let _ = PlatformWindow::state(self);
     }
+
+    /// The window as the operating system describes it now.
+    ///
+    /// Reads winit with no lock of the snapshot held, and keeps the rectangle
+    /// a maximized or fullscreen window returns to: the outer geometry the
+    /// window had the last time it was in normal mode.
+    fn sample(&self) -> WindowState {
+        let title = self.title.lock().clone();
+        let mut state = sample_state(
+            &self.window,
+            self.shell,
+            &Facts {
+                title: &title,
+                constraints: *self.constraints.lock(),
+                focused: *self.is_focused.lock(),
+                visible: *self.is_visible.lock(),
+                display: PlatformWindow::display_id(self),
+            },
+        );
+        let mut remembered = self.normal_geometry.lock();
+        match state.mode {
+            WindowMode::Normal => {
+                *remembered = Some(state.outer);
+                if state.visible {
+                    self.frame_inset.observe(
+                        state.decorated,
+                        true,
+                        device_size(self.window.outer_size()),
+                        device_size(self.window.inner_size()),
+                    );
+                }
+            }
+            WindowMode::Maximized | WindowMode::Fullscreen => state.normal_geometry = *remembered,
+            _ => {}
+        }
+        state
+    }
+
+    /// Enter `mode`. Leaving fullscreen first keeps maximizing a fullscreen
+    /// window from depending on what the window manager makes of two requests
+    /// at once.
+    fn enter_mode(&self, mode: WindowMode) -> Result<(), WindowCommandError> {
+        match mode {
+            WindowMode::Minimized => self.window.set_minimized(true),
+            WindowMode::Maximized => {
+                self.window.set_fullscreen(None);
+                self.window.set_maximized(true);
+            }
+            WindowMode::Fullscreen => self
+                .window
+                .set_fullscreen(Some(Fullscreen::Borderless(None))),
+            WindowMode::Normal => {
+                self.window.set_fullscreen(None);
+                self.window.set_minimized(false);
+                self.window.set_maximized(false);
+            }
+            _ => return Err(WindowCommandError::Unsupported),
+        }
+        Ok(())
+    }
+
+    /// Make the window visible, ending a wait for the first frame.
+    fn make_visible(&self) {
+        self.reveal_pending.store(false, Ordering::Release);
+        self.window.set_visible(true);
+        *self.is_visible.lock() = true;
+    }
 }
 
-/// The window as winit and the facts recorded at creation describe it.
-fn sample_state(
-    window: &Window,
-    title: &str,
-    creation: CreationFacts,
-    capabilities: &WindowCapabilities,
+/// What the window's snapshot holds that winit cannot read back.
+struct Facts<'a> {
+    title: &'a str,
+    constraints: SizeConstraints,
     focused: bool,
     visible: bool,
     display: Option<DisplayId>,
-) -> WindowState {
+}
+
+/// A device-pixel extent as the signed one the frame measurement takes.
+fn device_size(size: winit::dpi::PhysicalSize<u32>) -> Size<i32> {
+    let clamp = |extent: u32| i32::try_from(extent).unwrap_or(i32::MAX);
+    Size::new(clamp(size.width), clamp(size.height))
+}
+
+/// The window as winit and `facts` describe it.
+fn sample_state(window: &Window, shell: WindowShell, facts: &Facts<'_>) -> WindowState {
+    let capabilities = shell.capabilities();
     let scale = window.scale_factor();
     let logical = |size: winit::dpi::PhysicalSize<u32>| {
         Size::new(
@@ -265,27 +360,28 @@ fn sample_state(
             f64::from(size.height) / scale,
         )
     };
-    let mode = if window.fullscreen().is_some() {
-        WindowMode::Fullscreen
-    } else if window.is_maximized() {
-        WindowMode::Maximized
-    } else if capabilities.observes_minimized && window.is_minimized() == Some(true) {
-        WindowMode::Minimized
-    } else {
-        WindowMode::Normal
-    };
+    let position = capabilities
+        .observes_position
+        .then(|| window.outer_position().ok())
+        .flatten()
+        .map(|at| Point::new(f64::from(at.x) / scale, f64::from(at.y) / scale));
+    let minimized = capabilities.observes_minimized && window.is_minimized() == Some(true);
     WindowState::new(
-        WindowGeometry::new(None, logical(window.outer_size())),
+        WindowGeometry::new(position, logical(window.outer_size())),
         logical(window.inner_size()),
     )
-    .with_mode(mode)
-    .with_visible(visible)
-    .with_focused(focused)
-    .with_title(Some(title.to_owned()))
-    .with_constraints(creation.constraints)
-    .with_resizable(creation.resizable)
-    .with_decorated(creation.decorated)
-    .with_display(display)
+    .with_mode(mode_of(
+        minimized,
+        window.fullscreen().is_some(),
+        window.is_maximized(),
+    ))
+    .with_visible(facts.visible)
+    .with_focused(facts.focused)
+    .with_title(Some(facts.title.to_owned()))
+    .with_constraints(facts.constraints)
+    .with_resizable(window.is_resizable())
+    .with_decorated(window.is_decorated())
+    .with_display(facts.display)
 }
 
 impl Drop for WinitWindow {
@@ -305,18 +401,6 @@ impl Drop for WinitWindow {
         // window whose final `Arc` unwinds anywhere else.
         self.callbacks.clear();
     }
-}
-
-/// What every winit window honours on every shell, known before one exists
-/// (`Platform::window_capabilities`); a desktop shell adds showing, activating
-/// and minimize observation (`WinitWindow::new`).
-pub(crate) const fn window_capabilities() -> WindowCapabilities {
-    let mut capabilities = WindowCapabilities::NONE;
-    capabilities.sets_title = true;
-    capabilities.minimizes = true;
-    capabilities.maximizes = true;
-    capabilities.enters_fullscreen = true;
-    capabilities
 }
 
 impl PlatformWindow for WinitWindow {
@@ -376,17 +460,7 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn state(&self) -> WindowState {
-        let published = self.window_state.state_with(|| {
-            sample_state(
-                &self.window,
-                &self.title.lock(),
-                self.creation,
-                &self.capabilities,
-                *self.is_focused.lock(),
-                *self.is_visible.lock(),
-                PlatformWindow::display_id(self),
-            )
-        });
+        let published = self.window_state.state_with(|| self.sample());
         if published.changed {
             self.callbacks.dispatch_state_changed();
         }
@@ -398,9 +472,7 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
-        use winit::window::Fullscreen;
-
-        if self.closed.load(std::sync::atomic::Ordering::Acquire) {
+        if self.closed.load(Ordering::Acquire) {
             return Err(WindowCommandError::Closed);
         }
         command.admit(&self.capabilities)?;
@@ -409,16 +481,25 @@ impl PlatformWindow for WinitWindow {
                 self.window.set_title(&title);
                 *self.title.lock() = title;
             }
-            WindowCommand::SetMode(WindowMode::Minimized) => self.window.set_minimized(true),
-            WindowCommand::SetMode(WindowMode::Maximized) => self.window.set_maximized(true),
-            WindowCommand::SetMode(WindowMode::Fullscreen) => self
+            WindowCommand::SetPosition(at) => self
                 .window
-                .set_fullscreen(Some(Fullscreen::Borderless(None))),
-            WindowCommand::SetMode(WindowMode::Normal) => {
-                self.window.set_fullscreen(None);
-                self.window.set_minimized(false);
-                self.window.set_maximized(false);
+                .set_outer_position(LogicalPosition::new(at.x, at.y)),
+            WindowCommand::SetSize(size) => {
+                // A window that cannot be resized yet answers later, through
+                // `Resized`; the request itself is all this reports.
+                let _ = self
+                    .window
+                    .request_inner_size(LogicalSize::new(size.width, size.height));
             }
+            WindowCommand::SetConstraints(constraints) => {
+                let limit = |size: Size<f64>| LogicalSize::new(size.width, size.height);
+                self.window.set_min_inner_size(constraints.min.map(limit));
+                self.window.set_max_inner_size(constraints.max.map(limit));
+                *self.constraints.lock() = constraints;
+            }
+            WindowCommand::SetResizable(resizable) => self.window.set_resizable(resizable),
+            WindowCommand::SetDecorated(decorated) => self.window.set_decorations(decorated),
+            WindowCommand::SetMode(mode) => self.enter_mode(mode)?,
             WindowCommand::Show => self.show().map_err(|error| match error {
                 crate::WindowShowError::Closed => WindowCommandError::Closed,
                 crate::WindowShowError::Native { message } => {
@@ -426,9 +507,14 @@ impl PlatformWindow for WinitWindow {
                 }
                 _ => WindowCommandError::Unsupported,
             })?,
+            WindowCommand::Hide => {
+                // A hidden window has no first frame to wait for.
+                self.reveal_pending.store(false, Ordering::Release);
+                self.window.set_visible(false);
+                *self.is_visible.lock() = false;
+            }
             WindowCommand::Activate => self.window.focus_window(),
-            // The capabilities of this backend leave every other command
-            // refused by `admit`.
+            // `admit` refuses a command this window does not know.
             _ => return Err(WindowCommandError::Unsupported),
         }
         self.refresh_state();
@@ -436,30 +522,27 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn show(&self) -> Result<(), crate::WindowShowError> {
-        if self.closed.load(std::sync::atomic::Ordering::Acquire) {
+        if self.closed.load(Ordering::Acquire) {
             return Err(crate::WindowShowError::Closed);
         }
-        let display =
-            self.window
-                .display_handle()
-                .map_err(|error| crate::WindowShowError::Native {
-                    message: error.to_string(),
-                })?;
-        // Winit cannot unminimize or focus Wayland windows. Mobile/web and
-        // other transports do not implement the complete desktop operation either.
-        if !matches!(
-            display.as_raw(),
-            raw_window_handle::RawDisplayHandle::Windows(_)
-                | raw_window_handle::RawDisplayHandle::AppKit(_)
-                | raw_window_handle::RawDisplayHandle::Xlib(_)
-                | raw_window_handle::RawDisplayHandle::Xcb(_)
-        ) {
+        // Winit cannot unminimize or focus Wayland windows.
+        if !self.capabilities.shows {
             return Err(crate::WindowShowError::Unsupported);
         }
-        self.window.set_visible(true);
+        self.make_visible();
         self.window.set_minimized(false);
         self.window.focus_window();
         Ok(())
+    }
+
+    fn reveal_after_first_frame(&self) {
+        if self.closed.load(Ordering::Acquire) {
+            return;
+        }
+        if self.reveal_pending.swap(false, Ordering::AcqRel) {
+            self.window.set_visible(true);
+            self.refresh_state();
+        }
     }
 
     fn close(&self) {

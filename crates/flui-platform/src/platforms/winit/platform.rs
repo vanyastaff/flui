@@ -93,6 +93,7 @@ use std::{
 };
 
 use flui_foundation::{ClaimOutcome, ClaimSlot};
+use flui_platform_api::{SessionEndAnswer, SessionEndPhase, SystemNotice};
 use parking_lot::Mutex;
 use ui_events_winit::keyboard::from_winit_modifier_state;
 use winit::{
@@ -105,7 +106,8 @@ use winit::{
 
 use flui_foundation::geometry::Point;
 
-use super::window::WinitWindow;
+use super::window::{WinitWindow, shell_of};
+use super::window_plan::{FrameInset, OpenPlan, PlacementDisplay, WindowShell};
 use super::{
     clipboard::ArboardClipboard,
     control::{
@@ -120,12 +122,12 @@ use crate::{
     data_transfer::DataTransferSource,
     error::{BootstrapError, PlatformError},
     executor::BackgroundExecutor,
-    shared::PlatformHandlers,
+    shared::{PlatformHandlers, system_notice::SystemNotices},
     traits::{
         Clipboard, DesktopCapabilities, DisplaySnapshot, HostWindow, OpenWindowError,
         OwnerPlatform, PendingWindow, Platform, PlatformCapabilities, PlatformExecutor,
         PlatformInput, PlatformReadyCallback, PlatformWindow, ProxySendError, WindowEvent,
-        WindowId, WindowOpen, WindowOptions,
+        WindowId, WindowMode, WindowOpen, WindowOptions,
         owner::{OwnerHooks, ProxyTransport},
     },
 };
@@ -210,6 +212,14 @@ pub struct WinitPlatform {
     /// every window so each can name its display; outside the state lock so a
     /// window's `display_id()` never contends with the platform state.
     displays: Arc<WinitDisplaySource>,
+
+    /// The frame measured around decorated windows, so a remembered outer size
+    /// can be fitted before the next window exists.
+    frame_inset: Arc<FrameInset>,
+
+    /// Where system notices go, and what a wake marks stale before the host
+    /// hears of it.
+    notices: Arc<SystemNotices>,
 
     state: Arc<Mutex<WinitPlatformState>>,
 }
@@ -359,11 +369,77 @@ impl Default for WinitPlatform {
 impl WinitPlatform {
     /// Create a new winit platform
     pub fn new() -> Self {
-        Self {
+        let platform = Self {
             owner_signal: Mutex::new(None),
             capabilities: DesktopCapabilities,
             displays: WinitDisplaySource::new(),
+            frame_inset: Arc::new(FrameInset::default()),
+            notices: Arc::new(SystemNotices::default()),
             state: Arc::new(Mutex::new(WinitPlatformState::new())),
+        };
+        #[cfg(target_os = "linux")]
+        platform
+            .notices
+            .mark_stale_on_wake(&platform.displays.native());
+        platform
+    }
+
+    /// One phase of a session end: the hook the host registered is asked and
+    /// its answer returned; [`SessionEndAnswer::Proceed`] when none is
+    /// registered. The hook runs outside the state lock (ADR-0039) and is
+    /// restored unless a newer one replaced it meanwhile.
+    #[cfg(target_os = "linux")]
+    fn session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
+        let Some(mut hook) = self.with_state(|state| state.handlers.session_end.take()) else {
+            return SessionEndAnswer::Proceed;
+        };
+        // The hook goes back even if it panicked: a later session end still
+        // reaches the host.
+        let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook(phase)));
+        self.with_state(|state| {
+            if state.handlers.session_end.is_none() {
+                state.handlers.session_end = Some(hook);
+            }
+        });
+        answer.unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+    }
+
+    /// The shell windows opened from here will be on, before any exists.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            clippy::unused_self,
+            reason = "only the Linux display source can say a shell is Wayland"
+        )
+    )]
+    fn expected_shell(&self) -> WindowShell {
+        #[cfg(target_os = "linux")]
+        if self.displays.speaks_wayland() {
+            return WindowShell::Wayland;
+        }
+        WindowShell::Desktop
+    }
+
+    /// The display a window's position is measured on: the one `wanted` names,
+    /// else global coordinates at the primary display's scale.
+    fn placement_display(&self, wanted: Option<flui_platform_api::DisplayId>) -> PlacementDisplay {
+        let snapshot = self.displays.snapshot().ok();
+        let named = snapshot
+            .as_ref()
+            .zip(wanted)
+            .and_then(|(snapshot, id)| snapshot.get(id));
+        match named {
+            Some(display) => PlacementDisplay {
+                origin: display.bounds.origin,
+                scale_factor: display.scale_factor,
+            },
+            None => PlacementDisplay {
+                origin: Point::new(0, 0),
+                scale_factor: snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.primary())
+                    .map_or(1.0, |display| display.scale_factor),
+            },
         }
     }
 
@@ -456,6 +532,8 @@ impl WinitPlatform {
             platform: Arc::clone(&self),
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
+            #[cfg(target_os = "linux")]
+            host_notices: None,
             #[cfg(target_os = "macos")]
             screen_observer: None,
             on_ready: Some(on_ready),
@@ -548,15 +626,30 @@ impl WinitPlatform {
                 rejected: Some(Box::new(options)),
             });
         };
+        let display = self.placement_display(options.display);
+        let plan = OpenPlan::new(
+            &options,
+            shell_of(event_loop),
+            display,
+            self.frame_inset.logical(display.scale_factor),
+        );
         let mut attributes = WindowAttributes::default()
             .with_title(options.title.clone())
             .with_inner_size(winit::dpi::LogicalSize::new(
-                options.size.width,
-                options.size.height,
+                plan.content_size.width,
+                plan.content_size.height,
             ))
             .with_resizable(options.resizable)
             .with_decorations(options.decorated)
-            .with_visible(options.visible);
+            .with_visible(options.visible && !plan.hidden_until_first_frame)
+            .with_maximized(plan.mode == WindowMode::Maximized);
+        if plan.mode == WindowMode::Fullscreen {
+            attributes =
+                attributes.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+        }
+        if let Some(at) = plan.position {
+            attributes = attributes.with_position(winit::dpi::PhysicalPosition::new(at.x, at.y));
+        }
 
         if let Some(min) = options.min_size {
             attributes =
@@ -583,6 +676,8 @@ impl WinitPlatform {
             close_lane,
             Arc::clone(&self.displays),
             &options,
+            &plan,
+            Arc::clone(&self.frame_inset),
         ));
         #[cfg(target_os = "linux")]
         if let Some(source) = self.with_state(|state| state.preferences.upgrade()) {
@@ -592,6 +687,7 @@ impl WinitPlatform {
         self.with_state(|state| {
             state.register_window(winit_id, platform_id, winit_window.clone());
         });
+        self.notices.mark_stale_on_wake(winit_window.state_cell());
         // A monitor attached since the last sample is first seen here.
         self.resample_displays(event_loop);
 
@@ -869,6 +965,10 @@ struct WinitApp {
     preference_source: Option<Arc<super::super::macos::preferences::PreferenceSource>>,
     #[cfg(target_os = "linux")]
     preference_source: Option<Arc<super::preferences::PreferenceSource>>,
+    /// Sleep, shutdown, lock and memory pressure from logind and the kernel;
+    /// owner-thread only.
+    #[cfg(target_os = "linux")]
+    host_notices: Option<super::super::linux::host_notices::HostNoticeSource>,
     /// Marks the screens stale when AppKit reports a change; owner-thread only.
     #[cfg(target_os = "macos")]
     screen_observer: Option<super::super::macos::display::ScreenObserver>,
@@ -1054,6 +1154,8 @@ impl ApplicationHandler for WinitApp {
             self.request_exit(event_loop);
             return;
         }
+        #[cfg(target_os = "linux")]
+        self.start_host_notices();
 
         // Call on_ready callback once. `ACTIVE_EVENT_LOOP` is published for
         // this exact nested call so `open_window` can create windows
@@ -1614,6 +1716,51 @@ impl WinitApp {
         Ok(())
     }
 
+    /// Start listening for sleep, shutdown, lock and memory pressure. A source
+    /// that cannot start says so in the log and leaves the others running.
+    #[cfg(target_os = "linux")]
+    fn start_host_notices(&mut self) {
+        if self.host_notices.is_some() {
+            return;
+        }
+        let Some(signal) = self.platform.owner_signal.lock().clone() else {
+            return;
+        };
+        let executor = self
+            .platform
+            .with_state(|state| Arc::clone(&state.background_executor));
+        self.host_notices = Some(super::super::linux::host_notices::HostNoticeSource::start(
+            &executor, &signal,
+        ));
+    }
+
+    /// Deliver the notices the Linux sources have queued, oldest first. The
+    /// source holds a sleep or shutdown until its event has been delivered, so
+    /// each runs to the end here before the next.
+    #[cfg(target_os = "linux")]
+    fn deliver_host_notices(&self) {
+        use super::super::linux::host_notices::HostEvent;
+
+        let Some(source) = &self.host_notices else {
+            return;
+        };
+        for delivery in source.take() {
+            delivery.deliver_with(|event| match event {
+                HostEvent::Notice(notice) => self.platform.notices.dispatch(notice),
+                // Linux cannot hold a shutdown for the user, so the answer to
+                // the query is not read; the application hears the query so
+                // that it can start saving, then the shutdown.
+                HostEvent::SessionEnding => {
+                    self.platform.session_end(SessionEndPhase::Query);
+                    self.platform.session_end(SessionEndPhase::Ending);
+                }
+                HostEvent::SessionEndCancelled => {
+                    self.platform.session_end(SessionEndPhase::Cancelled);
+                }
+            });
+        }
+    }
+
     /// Report a changed portal `color-scheme` to each window that has no winit
     /// theme of its own. The portal's wake reaches here on the owner; the
     /// window list is copied out so callbacks run without the state lock.
@@ -1858,6 +2005,8 @@ impl WinitApp {
         self.refresh_preferences();
         #[cfg(target_os = "linux")]
         self.deliver_portal_appearance();
+        #[cfg(target_os = "linux")]
+        self.deliver_host_notices();
         if let Some(signal) = signal
             && signal.drive()
         {
@@ -2162,6 +2311,8 @@ impl WinitApp {
         let preference_source = self.preference_source.take();
         #[cfg(target_os = "macos")]
         let screen_observer = self.screen_observer.take();
+        #[cfg(target_os = "linux")]
+        let host_notices = self.host_notices.take();
         let signal = self.platform.owner_signal.lock().clone();
         if let Some(signal) = signal {
             signal.close();
@@ -2174,6 +2325,8 @@ impl WinitApp {
         drop(screen_observer);
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         drop(preference_source);
+        #[cfg(target_os = "linux")]
+        drop(host_notices);
         self.release_open_window_callbacks();
         self.close_owner_lane();
         self.notify_quit_once();
@@ -2267,8 +2420,20 @@ impl Drop for WinitApp {
 }
 
 impl Platform for WinitPlatform {
+    fn on_session_end(&self, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {
+        self.with_state(|state| state.handlers.session_end = Some(callback));
+    }
+
+    fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
+        self.notices.set_hook(callback);
+    }
+
     fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
-        super::window::window_capabilities()
+        self.expected_shell().capabilities()
+    }
+
+    fn window_frame_inset(&self, scale_factor: f64) -> flui_foundation::geometry::Size<f64> {
+        self.frame_inset.logical(scale_factor)
     }
 
     #[cfg(target_os = "linux")]
@@ -2850,6 +3015,8 @@ mod tests {
             platform: Arc::clone(&platform),
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
+            #[cfg(target_os = "linux")]
+            host_notices: None,
             #[cfg(target_os = "macos")]
             screen_observer: None,
             on_ready: None,

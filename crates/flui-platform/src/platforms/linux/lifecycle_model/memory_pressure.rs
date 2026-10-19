@@ -15,8 +15,8 @@
 //! reader only when pressure is real, so the watcher sleeps otherwise.
 //!
 //! Two triggers give the two levels: a `some` stall is
-//! [`PressureLevel::Moderate`] (free what is easy to rebuild), a `full` stall
-//! [`PressureLevel::Critical`] (free all but what the frame needs).
+//! [`MemoryPressureLevel::Moderate`] (free what is easy to rebuild), a `full` stall
+//! [`MemoryPressureLevel::Critical`] (free all but what the frame needs).
 //!
 //! # Windows the kernel accepts
 //!
@@ -26,6 +26,8 @@
 //! proportionally longer threshold, tried when the kernel refuses the first.
 
 use std::time::Duration;
+
+use flui_foundation::memory::MemoryPressureLevel;
 
 /// How much of the system waits on memory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,23 +47,16 @@ impl Stall {
     }
 
     /// The level this stall is reported as.
-    pub(crate) fn level(self) -> PressureLevel {
+    pub(crate) fn level(self) -> MemoryPressureLevel {
         match self {
-            Self::Partial => PressureLevel::Moderate,
-            Self::Full => PressureLevel::Critical,
+            Self::Partial => MemoryPressureLevel::Moderate,
+            Self::Full => MemoryPressureLevel::Critical,
         }
     }
 }
 
-/// How hard to trim memory, lightest first.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum PressureLevel {
-    Moderate,
-    Critical,
-}
-
 /// The heaviest level any of `fired` asks for, `None` for none.
-pub(crate) fn level_of(fired: impl IntoIterator<Item = Stall>) -> Option<PressureLevel> {
+pub(crate) fn level_of(fired: impl IntoIterator<Item = Stall>) -> Option<MemoryPressureLevel> {
     fired.into_iter().map(Stall::level).max()
 }
 
@@ -213,7 +208,7 @@ impl Trigger {
     }
 
     /// The level a wake from this trigger reports.
-    pub(crate) fn level(&self) -> PressureLevel {
+    pub(crate) fn level(&self) -> MemoryPressureLevel {
         self.stall.level()
     }
 
@@ -236,12 +231,12 @@ impl Trigger {
     }
 }
 
-/// The triggers to try for `level`, in the order to try them: the one with a
+/// The triggers to try for `stall`, in the order to try them: the one with a
 /// 1 s window, then the one an unprivileged process may set.
-pub(crate) fn triggers_for(level: PressureLevel) -> [Trigger; 2] {
-    let (stall, threshold) = match level {
-        PressureLevel::Moderate => (Stall::Partial, Duration::from_millis(150)),
-        PressureLevel::Critical => (Stall::Full, Duration::from_millis(100)),
+pub(crate) fn triggers_for(stall: Stall) -> [Trigger; 2] {
+    let threshold = match stall {
+        Stall::Partial => Duration::from_millis(150),
+        Stall::Full => Duration::from_millis(100),
     };
     let window = Duration::from_secs(1);
     let unprivileged_window = UNPRIVILEGED_WINDOW_STEP;
@@ -419,29 +414,35 @@ mod tests {
 
     #[test]
     fn psi_trigger_requests() {
-        // (level, [first request, fallback request])
+        // (stall, level, [first request, fallback request])
         let table = [
             (
-                PressureLevel::Moderate,
+                Stall::Partial,
+                MemoryPressureLevel::Moderate,
                 ["some 150000 1000000", "some 300000 2000000"],
             ),
             (
-                PressureLevel::Critical,
+                Stall::Full,
+                MemoryPressureLevel::Critical,
                 ["full 100000 1000000", "full 200000 2000000"],
             ),
         ];
-        for (level, expected) in table {
-            let triggers = triggers_for(level);
+        for (stall, level, expected) in table {
+            let triggers = triggers_for(stall);
             let requests = triggers.map(|trigger| trigger.request());
-            assert_eq!(requests, expected, "{level:?}");
-            assert!(triggers.iter().all(|trigger| trigger.level() == level));
+            assert_eq!(requests, expected, "{stall:?}");
+            assert!(
+                triggers
+                    .iter()
+                    .all(|trigger| trigger.stall() == stall && trigger.level() == level)
+            );
             assert!(
                 !triggers[0].is_unprivileged(),
-                "{level:?}: the 1 s window needs a privilege"
+                "{stall:?}: the 1 s window needs a privilege"
             );
             assert!(
                 triggers[1].is_unprivileged(),
-                "{level:?}: the fallback needs none"
+                "{stall:?}: the fallback needs none"
             );
         }
     }
@@ -499,24 +500,28 @@ mod tests {
     fn psi_fired_triggers_make_one_level() {
         use Stall::{Full, Partial};
         // (case, fired stalls, level)
-        let table: &[(&str, &[Stall], Option<PressureLevel>)] = &[
+        let table: &[(&str, &[Stall], Option<MemoryPressureLevel>)] = &[
             ("nothing fired", &[], None),
-            ("some alone", &[Partial], Some(PressureLevel::Moderate)),
-            ("full alone", &[Full], Some(PressureLevel::Critical)),
+            (
+                "some alone",
+                &[Partial],
+                Some(MemoryPressureLevel::Moderate),
+            ),
+            ("full alone", &[Full], Some(MemoryPressureLevel::Critical)),
             (
                 "both in one poll",
                 &[Partial, Full],
-                Some(PressureLevel::Critical),
+                Some(MemoryPressureLevel::Critical),
             ),
             (
                 "both, full first",
                 &[Full, Partial],
-                Some(PressureLevel::Critical),
+                Some(MemoryPressureLevel::Critical),
             ),
             (
                 "the same one twice",
                 &[Partial, Partial],
-                Some(PressureLevel::Moderate),
+                Some(MemoryPressureLevel::Moderate),
             ),
         ];
         for (case, fired, expected) in table {

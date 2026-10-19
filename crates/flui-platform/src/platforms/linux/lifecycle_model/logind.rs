@@ -90,34 +90,33 @@ pub(crate) fn locked_hint_event(locked: bool) -> LogindEvent {
 }
 
 /// Which events to deliver: a lock that the signal and the hint both announce
-/// is one.
+/// is one, and a shutdown is cancelled only if it began.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LogindFilter {
     locked: bool,
+    shutting_down: bool,
 }
 
 impl LogindFilter {
     /// `locked` is the session's `LockedHint` when the adapter started
     /// listening; a session already locked then is not announced.
     pub(crate) fn new(locked: bool) -> Self {
-        Self { locked }
+        Self {
+            locked,
+            shutting_down: false,
+        }
     }
 
     /// The event to deliver, `None` for one that changes nothing.
     pub(crate) fn accept(&mut self, event: LogindEvent) -> Option<LogindEvent> {
-        match event {
-            LogindEvent::SessionLocked if self.locked => None,
-            LogindEvent::SessionUnlocked if !self.locked => None,
-            LogindEvent::SessionLocked => {
-                self.locked = true;
-                Some(event)
-            }
-            LogindEvent::SessionUnlocked => {
-                self.locked = false;
-                Some(event)
-            }
-            other => Some(other),
-        }
+        let (flag, now) = match event {
+            LogindEvent::SessionLocked => (&mut self.locked, true),
+            LogindEvent::SessionUnlocked => (&mut self.locked, false),
+            LogindEvent::ShutdownBegins => (&mut self.shutting_down, true),
+            LogindEvent::ShutdownCancelled => (&mut self.shutting_down, false),
+            LogindEvent::Sleep | LogindEvent::Wake => return Some(event),
+        };
+        (std::mem::replace(flag, now) != now).then_some(event)
     }
 }
 
@@ -287,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn logind_lock_is_announced_once() {
+    fn logind_events_are_announced_once() {
         // (case, locked at start, events in, events out)
         let table: &[(&str, bool, &[LogindEvent], &[LogindEvent])] = &[
             (
@@ -322,10 +321,34 @@ mod tests {
                 &[SessionUnlocked],
             ),
             (
-                "machine events pass through",
+                "sleep and wake always pass through",
                 true,
-                &[Sleep, Sleep, Wake, ShutdownBegins, ShutdownCancelled],
-                &[Sleep, Sleep, Wake, ShutdownBegins, ShutdownCancelled],
+                &[Sleep, Sleep, Wake, Wake],
+                &[Sleep, Sleep, Wake, Wake],
+            ),
+            (
+                "shutdown begins and is cancelled",
+                false,
+                &[ShutdownBegins, ShutdownCancelled],
+                &[ShutdownBegins, ShutdownCancelled],
+            ),
+            (
+                "shutdown announced twice",
+                false,
+                &[ShutdownBegins, ShutdownBegins],
+                &[ShutdownBegins],
+            ),
+            (
+                "cancel of a shutdown that never began",
+                false,
+                &[ShutdownCancelled],
+                &[],
+            ),
+            (
+                "shutdown can begin again after a cancel",
+                false,
+                &[ShutdownBegins, ShutdownCancelled, ShutdownBegins],
+                &[ShutdownBegins, ShutdownCancelled, ShutdownBegins],
             ),
         ];
         for (case, locked, input, expected) in table {

@@ -359,6 +359,8 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     let mut app = WinitApp {
         platform: platform.clone(),
         preference_source: None,
+        #[cfg(target_os = "linux")]
+        host_notices: None,
         #[cfg(target_os = "macos")]
         screen_observer: None,
         on_ready: Some(Box::new(move |owner| {
@@ -665,6 +667,8 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
     let app = WinitApp {
         platform: platform.clone(),
         preference_source: None,
+        #[cfg(target_os = "linux")]
+        host_notices: None,
         #[cfg(target_os = "macos")]
         screen_observer: None,
         on_ready: Some(Box::new(move |owner| {
@@ -890,6 +894,8 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
         platform: Arc::clone(&platform),
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         preference_source: None,
+        #[cfg(target_os = "linux")]
+        host_notices: None,
         #[cfg(target_os = "macos")]
         screen_observer: None,
         on_ready: None,
@@ -1100,6 +1106,8 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
         inner: WinitApp {
             platform: Arc::clone(&platform),
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+            #[cfg(target_os = "linux")]
+            host_notices: None,
             preference_source: None,
             #[cfg(target_os = "macos")]
             screen_observer: None,
