@@ -1,22 +1,16 @@
 name: Weekly
 
 # Scheduled maintenance that PR CI cannot catch (new RustSec advisories are
-# not here: ci.yml's nightly run checks them daily, blocking, in `deps`):
+# not here: advisories.yml checks them daily against main):
 #   latest-deps — upstream semver breakage: fresh `cargo update` + full build
 #                 and test run, so a breaking dependency release surfaces here
 #                 before it lands in someone's PR
-#   bench       — executes the criterion benches and uploads the numbers as
-#                 an artifact. TREND DATA ONLY, never a gate: shared runners
-#                 are noisy, so the numbers support "did this drift over
-#                 weeks", not "did this PR regress" — real A/B comparisons
-#                 happen locally with `cargo xtask bench-collect <name>` and `critcmp`.
 #   release-lints — clippy over the workspace in the RELEASE profile. PR CI
-#                 only ever compiles release through `cargo bench -p
-#                 flui-rendering --no-run`, so every crate outside that one
-#                 dependency graph is linted with `debug_assertions` on and
-#                 nothing else. Release turns it off, which deletes
-#                 `cfg(debug_assertions)` code and can strand imports, make
-#                 a receiver unused, or unfulfil an expectation. Advisory.
+#                 never compiles release, so every crate is linted with
+#                 `debug_assertions` on and nothing else. Release turns it
+#                 off, which deletes `cfg(debug_assertions)` code and can
+#                 strand imports, make a receiver unused, or unfulfil an
+#                 expectation. Advisory.
 #   nightly-canary — `cargo +nightly check` + `clippy` over the workspace,
 #                 then the future-incompatibility report and a duplicate-
 #                 versions metric. ADVISORY: nightly is where the next
@@ -29,7 +23,9 @@ name: Weekly
 #                 generated project (FLUI_CLI_LIVE_BUILD=1), the only run of
 #                 the CLI test that compiles a scaffolded app end to end.
 # Runs Monday ~05:17 UTC (off the :00/:30 herd marks). Not a merge gate;
-# failures surface in the Actions tab.
+# failures surface in the Actions tab. Benchmark numbers are not collected
+# here: shared runners are too noisy for a trend, and A/B comparisons happen
+# locally with `cargo xtask bench-collect <name>` and `critcmp`.
 
 on:
   schedule:
@@ -89,7 +85,11 @@ jobs:
 
       # `cargo xtask test`'s scope (TEST_SCOPE in tools/xtask/src/tasks.rs),
       # spelled out: the `cargo xtask` alias passes `--locked`, which the
-      # fresh lockfile above would fail.
+      # fresh lockfile above would fail. The trybuild suites (test group
+      # `trybuild`, .config/nextest.toml) stay out: they compare rustc's
+      # diagnostics against checked-in `.stderr` files, which track the
+      # locked dependency versions, so against a fresh lockfile they report
+      # wording changes, not breakage.
       - name: cargo nextest run (lib + integration)
         run: >
           cargo nextest run
@@ -97,37 +97,7 @@ jobs:
           --lib --bins --tests
           --features flui/cupertino,flui/localizations
           --no-fail-fast
-
-  bench:
-    name: bench (criterion numbers, trend artifact)
-    runs-on: ubuntu-26.04
-    timeout-minutes: 120
-    # Advisory by design: a noisy-runner outlier must not page anyone.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      # The script enumerates the real [[bench]] targets (plain `cargo bench`
-      # also selects libtest-harness targets, which reject criterion flags)
-      # and skips the feature-gated GPU benches. --noplot keeps the artifact
-      # to the raw estimates.json files, which is what comparisons consume.
-      - name: Run criterion benches (save weekly baseline)
-        run: cargo xtask bench-collect weekly
-
-      - name: Upload criterion numbers
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: criterion-weekly-${{ github.run_id }}
-          path: target/criterion
-          retention-days: 90
+          -E 'not (group(trybuild))'
 
   nightly-canary:
     name: nightly canary (check + clippy + future-incompat, advisory)
@@ -210,7 +180,7 @@ jobs:
   # proven end to end. `cargo fetch` first: the test copies the workspace
   # lockfile into the project and builds offline.
   cli-live-build:
-    name: flui create + build desktop / web + dev server (live)
+    name: flui create + build desktop (live)
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
@@ -236,34 +206,3 @@ jobs:
         env:
           FLUI_CLI_LIVE_BUILD: "1"
         run: cargo nextest run -p flui-cli --locked -E 'test(live_desktop_build_produces_an_artifact_on_disk)'
-
-      - name: Add the wasm32 target
-        run: rustup target add wasm32-unknown-unknown
-
-      # wasm-bindgen-cli must match the locked wasm-bindgen crate exactly
-      # (the runner refuses to start otherwise), so the version comes from
-      # Cargo.lock — same source of truth `cargo xtask wasm-test` and ci.yml's
-      # `wasm-check` job read. Installed as a prebuilt binary via
-      # taiki-e/install-action (same as `wasm-check`), not `cargo install
-      # --locked`: the latter compiles wasm-bindgen-cli from source on every
-      # run, which is minutes of build time for a leaf tool this job doesn't
-      # otherwise need to build.
-      - name: Resolve the locked wasm-bindgen version
-        id: wasm_bindgen_version
-        run: |
-          set -euo pipefail
-          version="$(cargo xtask locked-version wasm-bindgen)"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "locked wasm-bindgen: $version"
-
-      - name: Install wasm-bindgen-cli (matching the lockfile)
-        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
-        with:
-          tool: wasm-bindgen-cli@${{ steps.wasm_bindgen_version.outputs.version }}
-
-      # Chromium is preinstalled on the Ubuntu runner image, so `flui devices` lists a
-      # browser and the serve half runs; `--no-open` keeps it headless.
-      - name: live web build and dev server of a generated project
-        env:
-          FLUI_CLI_LIVE_WEB: "1"
-        run: cargo nextest run -p flui-cli --locked -E 'test(live_web_build_and_run_serve_the_generated_project)'
