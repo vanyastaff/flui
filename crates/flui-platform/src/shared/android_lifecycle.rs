@@ -9,7 +9,7 @@
 //! | `onStart` / `onStop` | the Activity is / is not on screen | visibility |
 //! | `onResume` / `onPause` | the Activity may / may not run | execution state |
 //! | `onWindowFocusChanged` | the window has / lost input focus | focus |
-//! | `onSaveInstanceState` | the process may be killed without notice | session end |
+//! | `onStop` / `onSaveInstanceState` | the process may be killed without notice | session end |
 //!
 //! Focus alone must never stand for the other two: a dialog or the notification
 //! shade takes focus from a running, visible Activity.
@@ -73,9 +73,6 @@ pub(crate) enum ActivitySignal {
     Visibility(bool),
     Execution(WindowExecutionState),
     Focus(bool),
-    /// The process may be killed now. `onSaveInstanceState` follows every
-    /// `onStop` (API 28+), so this repeats and the Activity may start again.
-    SessionEnded,
 }
 
 // `android.content.ComponentCallbacks2` constants.
@@ -106,6 +103,10 @@ const fn pressure_for_trim_level(level: i32) -> Option<MemoryPressureLevel> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Reaction {
     pub signal: Option<ActivitySignal>,
+    /// The process may be killed now. It asks for saving, not for closing:
+    /// the Activity may start again, and this repeats on every trip to the
+    /// background (see [`ActivityLifecycle::react`]).
+    pub session_end: bool,
     pub pressure: Option<MemoryPressureLevel>,
 }
 
@@ -114,7 +115,7 @@ pub(crate) trait ActivityTarget {
     fn visibility_changed(&self, visible: bool);
     fn execution_changed(&self, state: WindowExecutionState);
     fn focus_changed(&self, focused: bool);
-    /// The process may be killed now; see [`ActivitySignal::SessionEnded`].
+    /// The process may be killed now; see [`Reaction::session_end`].
     fn session_ended(&self);
     fn memory_pressure(&self, level: MemoryPressureLevel);
 }
@@ -126,18 +127,20 @@ impl ActivitySignal {
             Self::Visibility(visible) => target.visibility_changed(visible),
             Self::Execution(state) => target.execution_changed(state),
             Self::Focus(focused) => target.focus_changed(focused),
-            Self::SessionEnded => target.session_ended(),
         }
     }
 }
 
 impl Reaction {
     /// Hand what is left of this reaction to `target`: the signal, if the
-    /// caller did not take it to deliver at a point of its own, then the
-    /// memory pressure.
+    /// caller did not take it to deliver at a point of its own, then the end
+    /// of the session, then the memory pressure.
     pub(crate) fn deliver(self, target: &impl ActivityTarget) {
         if let Some(signal) = self.signal {
             signal.deliver(target);
+        }
+        if self.session_end {
+            target.session_ended();
         }
         if let Some(level) = self.pressure {
             target.memory_pressure(level);
@@ -145,9 +148,9 @@ impl Reaction {
     }
 }
 
-/// The mapping from Activity callbacks to [`Reaction`]s. It is stateless
-/// except for the trim level last seen, which suppresses a level that is read
-/// again unchanged.
+/// The mapping from Activity callbacks to [`Reaction`]s. It keeps two things
+/// between callbacks: the trim level last seen, which suppresses a level that is read
+/// again unchanged, and whether this start-to-stop cycle already ended the session.
 ///
 /// A level is remembered when it is read, not when a subscriber hears of it:
 /// notices are not replayed, so a level seen before the host listens (the
@@ -156,6 +159,7 @@ impl Reaction {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ActivityLifecycle {
     last_trim_level: Option<i32>,
+    session_end_announced: bool,
 }
 
 impl ActivityLifecycle {
@@ -181,8 +185,7 @@ impl ActivityLifecycle {
             }
             ActivityEvent::GainedFocus => Some(ActivitySignal::Focus(true)),
             ActivityEvent::LostFocus => Some(ActivitySignal::Focus(false)),
-            ActivityEvent::SaveState => Some(ActivitySignal::SessionEnded),
-            ActivityEvent::LowMemory => None,
+            ActivityEvent::LowMemory | ActivityEvent::SaveState => None,
         };
         let from_event =
             matches!(event, ActivityEvent::LowMemory).then_some(MemoryPressureLevel::Critical);
@@ -193,7 +196,26 @@ impl ActivityLifecycle {
         };
         Reaction {
             signal,
+            session_end: self.observe_session_end(event),
             pressure: from_event.or(from_level),
+        }
+    }
+
+    /// Whether `event` is the first of its cycle to say the process may be
+    /// killed. `onStop` says it, and `onSaveInstanceState` does too, before
+    /// `onStop` below API 28 and after it from there on; a Back that finishes the
+    /// Activity stops it without saving any state. The cycle ends at the next
+    /// `onStart`.
+    fn observe_session_end(&mut self, event: ActivityEvent) -> bool {
+        match event {
+            ActivityEvent::Start => {
+                self.session_end_announced = false;
+                false
+            }
+            ActivityEvent::Stop | ActivityEvent::SaveState => {
+                !std::mem::replace(&mut self.session_end_announced, true)
+            }
+            _ => false,
         }
     }
 
@@ -260,8 +282,8 @@ mod tests {
 
     #[test]
     fn android_lifecycle_mapping_reaches_the_target() {
-        // Each callback is told to the target once, signal before pressure,
-        // and nothing else.
+        // Each callback is told to the target once: signal, then the end of
+        // the session, then pressure, and nothing else.
         let mut lifecycle = ActivityLifecycle::default();
         let mut told = |event, level| {
             let target = Recorder::default();
@@ -269,17 +291,40 @@ mod tests {
             target.told()
         };
         assert_eq!(told(Start, 0), ["visible true"]);
-        assert_eq!(told(Stop, 0), ["visible false"]);
         assert_eq!(told(Resume, 0), ["execution Running"]);
         assert_eq!(told(GainedFocus, 0), ["focus true"]);
         assert_eq!(told(LostFocus, 0), ["focus false"]);
-        assert_eq!(told(SaveState, 0), ["session ended"]);
         assert_eq!(told(LowMemory, 0), ["pressure Critical"]);
         assert_eq!(
             told(Pause, 40),
             ["execution Suspended", "pressure Moderate"]
         );
-        assert_eq!(told(Stop, 40), ["visible false"], "the level is unchanged");
+        assert_eq!(
+            told(Stop, 40),
+            ["visible false", "session ended"],
+            "the level is unchanged"
+        );
+    }
+
+    #[test]
+    fn android_lifecycle_mapping_ends_the_session_once_per_cycle() {
+        // `Stop` ends the session itself (a Back that finishes the Activity
+        // saves no state), and the `SaveState` of the same cycle, before or
+        // after it, adds nothing; the next `Start` begins a new cycle.
+        let mut lifecycle = ActivityLifecycle::default();
+        let mut ends_session = |event| lifecycle.react(event, || None).session_end;
+        assert!(!ends_session(Start));
+        assert!(ends_session(Stop));
+        assert!(!ends_session(SaveState), "API 28 and later: after `Stop`");
+        assert!(!ends_session(Start));
+        assert!(ends_session(SaveState), "before API 28: before `Stop`");
+        assert!(!ends_session(Stop));
+        assert!(!ends_session(Resume));
+        assert!(!ends_session(Pause));
+        assert!(!ends_session(LostFocus));
+        assert!(!ends_session(LowMemory));
+        assert!(!ends_session(Start));
+        assert!(ends_session(Stop), "a second trip to the background");
     }
 
     #[test]
@@ -305,7 +350,7 @@ mod tests {
             (Pause, Some(ActivitySignal::Execution(Suspended))),
             (GainedFocus, Some(ActivitySignal::Focus(true))),
             (LostFocus, Some(ActivitySignal::Focus(false))),
-            (SaveState, Some(ActivitySignal::SessionEnded)),
+            (SaveState, None),
             (LowMemory, None),
         ] {
             assert_eq!(react(event, None).signal, signal, "{event:?}");

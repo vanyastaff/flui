@@ -17,7 +17,7 @@
 //!     -> MainEvent::TerminateWindow  -> surface released
 //!     -> MainEvent::LowMemory        -> memory pressure `Critical`
 //!     -> Resume/Pause/Stop/LowMemory -> memory pressure from the trim level (JNI)
-//!     -> MainEvent::SaveState        -> session end notice
+//!     -> MainEvent::Stop/SaveState   -> session end notice (once per start-to-stop cycle)
 //!     -> MainEvent::Destroy          -> break loop
 //!     -> each tick                   -> dispatch_request_frame()
 //!   -> loop exit                     -> window released, callbacks cleared, quit hook
