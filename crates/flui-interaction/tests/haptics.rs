@@ -223,6 +223,53 @@ fn hiding_drains_the_queue_and_nothing_plays_while_hidden() {
     );
 }
 
+fn turning_haptics_off_drains_the_queue_and_nothing_plays_while_off() {
+    let f = fixture();
+    let delivered = f.observe();
+    let first = f.queue();
+    let second = f.queue();
+    f.host.set_preference(false);
+    assert!(
+        f.host.has_pending_delivery(),
+        "the queued requests resolved when haptics were turned off, before any frame or deadline"
+    );
+    assert_eq!(
+        f.handle.perform(HapticFeedback::LightImpact, NOW),
+        HapticOutcome::Suppressed
+    );
+    assert_eq!(
+        f.handle.perform(HapticFeedback::LightImpact, FRAME),
+        HapticOutcome::Suppressed,
+        "haptics turned off queue nothing"
+    );
+    f.service();
+    assert_eq!(
+        *delivered.borrow(),
+        [
+            (first, HapticOutcome::Suppressed),
+            (second, HapticOutcome::Suppressed)
+        ]
+    );
+    f.host.frame_presented();
+    f.service();
+    assert_eq!(f.played(), 0, "a frame presented while off plays nothing");
+    assert_eq!(delivered.borrow().len(), 2);
+    f.host.set_preference(true);
+    assert_eq!(
+        f.handle.perform(HapticFeedback::LightImpact, NOW),
+        HapticOutcome::Submitted
+    );
+    let third = f.queue();
+    f.host.frame_presented();
+    f.service();
+    assert_eq!(
+        delivered.borrow().last(),
+        Some(&(third, HapticOutcome::Submitted)),
+        "turned on again, a frame-aligned request plays with its frame"
+    );
+    assert_eq!(f.played(), 2);
+}
+
 fn a_visible_surface_that_never_presents_resolves_by_its_wake() {
     let f = fixture();
     let delivered = f.observe();
@@ -292,6 +339,10 @@ fn frame_presented_haptics_play_with_the_frame() {
             (
                 "hiding_drains_the_queue_and_nothing_plays_while_hidden",
                 hiding_drains_the_queue_and_nothing_plays_while_hidden,
+            ),
+            (
+                "turning_haptics_off_drains_the_queue_and_nothing_plays_while_off",
+                turning_haptics_off_drains_the_queue_and_nothing_plays_while_off,
             ),
             (
                 "a_visible_surface_that_never_presents_resolves_by_its_wake",

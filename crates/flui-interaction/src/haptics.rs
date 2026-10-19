@@ -190,6 +190,12 @@ impl State {
         }
     }
 
+    /// Whether nothing may play: the presentation closed, the user turned
+    /// haptics off, or the window shows nothing.
+    fn suppressed(&self) -> bool {
+        self.closed.get() || !self.preference.get() || !self.visible.get()
+    }
+
     fn play_now(&self, play: &Play, request: &HapticRequest) -> HapticOutcome {
         let Some(actuator) = (self.actuator)() else {
             return HapticOutcome::Unavailable;
@@ -201,7 +207,7 @@ impl State {
     }
 
     fn submit(&self, play: Play, mut request: HapticRequest) -> HapticOutcome {
-        if self.closed.get() || !self.preference.get() || !self.visible.get() {
+        if self.suppressed() {
             return HapticOutcome::Suppressed;
         }
         if request.sequence.is_none() {
@@ -422,7 +428,8 @@ impl State {
 /// [`frame_presented`](Self::frame_presented) when a frame is presented,
 /// [`service`](Self::service) on each owner turn,
 /// [`set_visible`](Self::set_visible) when the window is hidden, occluded or
-/// shown, and [`close`](Self::close) with the presentation.
+/// shown, [`set_preference`](Self::set_preference) when the user's haptics
+/// setting changes, and [`close`](Self::close) with the presentation.
 pub struct HapticsHost {
     state: Rc<State>,
 }
@@ -537,9 +544,14 @@ impl HapticsHost {
     }
 
     /// Record the user's haptics setting: `false` suppresses both tiers
-    /// before they reach the backend (ADR-0212 §1).
+    /// before they reach the backend (ADR-0212 §1). Turning it off resolves
+    /// every queued request to [`HapticOutcome::Suppressed`], as hiding the
+    /// window does, and nothing plays until it is turned on again.
     pub fn set_preference(&self, enabled: bool) {
         self.state.preference.set(enabled);
+        if !enabled {
+            self.state.suppress_queued();
+        }
     }
 
     /// Record whether the window can show anything. Hiding, occluding or
@@ -561,11 +573,12 @@ impl HapticsHost {
 
     /// A frame was presented: every queued request whose deadline has not
     /// passed plays now, and the rest resolve to
-    /// [`HapticOutcome::Suppressed`]. Runs no observer: their outcomes wait
-    /// in the mailbox for the next [`service`](Self::service).
+    /// [`HapticOutcome::Suppressed`], as all of them do while haptics are off
+    /// or the window is hidden. Runs no observer: their outcomes wait in the
+    /// mailbox for the next [`service`](Self::service).
     pub fn frame_presented(&self) {
         let state = &*self.state;
-        if !state.visible.get() {
+        if state.suppressed() {
             state.suppress_queued();
             return;
         }

@@ -989,7 +989,8 @@ frame and background owner turns alike. The host's next wake (the first time
 after the earliest deadline, or now while a delivery pass is due) joins
 `next_wake`, so recovery and expiry need no unrelated input. Hiding, occluding or
 suspending the window drains the queue; the accepted haptics preference reaches
-every presentation, including one opened later; closing runs one final delivery
+every presentation, including one opened later, and turning haptics off drains
+its queue the same way; closing runs one final delivery
 pass, or, after a failure, withdraws the observers without running them. Any
 number of observers register through `HapticsHandle::observe`; each outcome
 reaches every one of them once, and leaves the mailbox when all have it. **Tests:** `frame_presented_widget_haptics_follow_the_presentation`,
