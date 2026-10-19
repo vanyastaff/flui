@@ -92,8 +92,7 @@ use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{Listenable, ListenerId};
 use flui_interaction::focus::{FocusNode, FocusNodeRegistration, KeyEventResult};
 use flui_interaction::gesture::{
-    GestureArena, GestureSettingsProvider, ScaleEndDetails, ScaleStartDetails, ScaleStartMode,
-    ScaleUpdateDetails,
+    GestureSettingsProvider, ScaleEndDetails, ScaleStartDetails, ScaleStartMode, ScaleUpdateDetails,
 };
 use flui_interaction::pointer::EventPropagation;
 use flui_interaction::{GestureEndReason, InputSequenceId, RemainderHandoff, Velocity};
@@ -121,7 +120,7 @@ use stretch::{Overlay, Travel};
 use super::WheelScrollDistances;
 use super::nested::{
     ChainNode, NestedScrollScope, PlaneSource, ScrollCause, ScrollDevice, ScrollEndReason,
-    ScrollSequence, follow_latch,
+    ScrollSequence, SequenceSource,
 };
 use super::wheel_axis_delta;
 use crate::anchored_box::AnchoredBox;
@@ -676,7 +675,7 @@ impl ViewerCallbacks {
 #[derive(Default)]
 struct ViewerLeaf {
     parent: RefCell<Option<Rc<ChainNode>>>,
-    arena: RefCell<Option<GestureArena>>,
+    sequences: SequenceSource,
     settings: RefCell<GestureSettingsProvider>,
     /// The device of the last contact that went down on the viewer.
     device: Cell<Option<ScrollDevice>>,
@@ -706,24 +705,12 @@ struct Contactless {
 
 impl ViewerLeaf {
     fn mint(&self) -> Option<InputSequenceId> {
-        let arena = self.arena.borrow().clone()?;
-        match arena.begin_contactless_sequence() {
-            Ok(sequence) => Some(sequence),
-            Err(error) => {
-                tracing::debug!(%error, "a viewer pans without a sequence: identities exhausted");
-                None
-            }
-        }
+        self.sequences.mint()
     }
 
     /// The sequence the binding is dispatching input of, or a fresh one.
     fn dispatched_or_mint(&self) -> Option<InputSequenceId> {
-        let dispatched = self
-            .arena
-            .borrow()
-            .as_ref()
-            .and_then(GestureArena::dispatched_sequence);
-        dispatched.or_else(|| self.mint())
+        self.sequences.dispatched_or_mint()
     }
 
     fn remainder_rule(&self, device: ScrollDevice) -> RemainderHandoff {
@@ -819,13 +806,17 @@ impl ViewerLeaf {
 
     /// The contact lifted with `velocity` (physical channel axes): the
     /// release settles every scrollable the pan moved. Returns the sequence,
-    /// for the viewer's own inertia, and the axes the viewer holds.
-    fn release(&self, velocity: Vec2) -> Option<(Rc<ScrollSequence>, [bool; 2])> {
+    /// for the viewer's own inertia, and the axes the viewer holds. A
+    /// participant's failure stays in `recovery`: the caller resumes it only
+    /// once the sequence has a run or an end.
+    fn release(
+        &self,
+        velocity: Vec2,
+        recovery: &mut PanicRecovery,
+    ) -> Option<(Rc<ScrollSequence>, [bool; 2])> {
         let sequence = self.contact.borrow_mut().take()?;
-        let mut recovery = PanicRecovery::new();
-        sequence.release(velocity, &mut recovery);
+        sequence.release(velocity, recovery);
         let held = sequence.leaf_holds();
-        recovery.finish();
         Some((sequence, held))
     }
 
@@ -895,24 +886,13 @@ impl ViewerLeaf {
     /// the sequence it leads for the packet's latch ends where the binding
     /// says the latch ends (ADR-0209 §5).
     fn wheel_latch(&self) {
-        let Some(arena) = self.arena.borrow().clone() else {
-            return;
-        };
-        let (Some(id), Some(end)) = (arena.dispatched_sequence(), arena.dispatched_latch_end())
-        else {
-            return;
-        };
-        let sequence = self
-            .contactless
-            .borrow()
-            .as_ref()
-            .filter(|current| current.key.is_none() && current.sequence.id() == id)
-            .map(|current| Rc::clone(&current.sequence));
-        if let Some(sequence) = sequence {
-            let mut recovery = PanicRecovery::new();
-            follow_latch(&sequence, &arena, end, &mut recovery);
-            recovery.finish();
-        }
+        self.sequences.follow_dispatched_latch(|id| {
+            self.contactless
+                .borrow()
+                .as_ref()
+                .filter(|current| current.key.is_none() && current.sequence.id() == id)
+                .map(|current| Rc::clone(&current.sequence))
+        });
     }
 
     /// The key sequence `code` held is continued by its auto-repeat.
@@ -957,7 +937,10 @@ impl ViewerLeaf {
     /// The viewer went away: what it leads ends cancelled.
     fn retire(&self) {
         let mut recovery = PanicRecovery::new();
-        if let Some(contact) = self.contact.borrow_mut().take() {
+        // Taken before its end tells a participant: no borrow is held while
+        // user code runs.
+        let contact = self.contact.borrow_mut().take();
+        if let Some(contact) = contact {
             contact.cancel_contact();
             contact.end(ScrollEndReason::Cancelled, &mut recovery);
         }
@@ -1969,7 +1952,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                 .as_ref()
                 .map(PipelineCell::downgrade),
         );
-        *leaf.arena.borrow_mut() = Some(GestureArenaScope::of(ctx));
+        leaf.sequences.bind(GestureArenaScope::of(ctx));
         *leaf.settings.borrow_mut() = GestureArenaScope::settings_or_default_of(ctx);
         self.wheel_preferences = Some(GestureArenaScope::wheel_preferences_of(ctx));
         self.bind_vsync(ctx);
@@ -2179,48 +2162,58 @@ impl InteractiveViewerState {
                 core.gesture.reset();
                 let native = core.gesture.native.replace(false);
                 let overlay = core.overlay.get();
+                // A participant that fails at the release still leaves the
+                // sequence to the run below, which owns its end; the failure
+                // resumes after it.
+                let mut recovery = PanicRecovery::new();
                 let sequence = if native {
                     None
                 } else {
-                    core.leaf.release(Vec2::new(-velocity.dx, -velocity.dy))
+                    core.leaf
+                        .release(Vec2::new(-velocity.dx, -velocity.dy), &mut recovery)
                 };
-                if !overlay.is_rest() {
-                    // Pulled past the bounds: the scene comes back, and no
-                    // inertia runs from outside them.
-                    core.fling.snap_back(
-                        core,
-                        Motion::Release(overlay),
-                        sequence.map(|(sequence, _)| sequence),
-                        end_post_frame.clone(),
-                    );
-                } else if native {
-                    if config.pan_enabled {
+                recovery.run(|| {
+                    if !overlay.is_rest() {
+                        // Pulled past the bounds: the scene comes back, and no
+                        // inertia runs from outside them.
+                        core.fling.snap_back(
+                            core,
+                            Motion::Release(overlay),
+                            sequence.map(|(sequence, _)| sequence),
+                            end_post_frame.clone(),
+                        );
+                    } else if native {
+                        if config.pan_enabled {
+                            core.fling
+                                .start(core, velocity, None, end_post_frame.clone());
+                        }
+                    } else if let Some((sequence, held)) = sequence {
+                        let own = Offset::new(
+                            if held[0] { velocity.dx } else { 0.0 },
+                            if held[1] { velocity.dy } else { 0.0 },
+                        );
+                        let own = if config.pan_enabled {
+                            own
+                        } else {
+                            Offset::ZERO
+                        };
                         core.fling
-                            .start(core, velocity, None, end_post_frame.clone());
+                            .start(core, own, Some(sequence), end_post_frame.clone());
                     }
-                } else if let Some((sequence, held)) = sequence {
-                    let own = Offset::new(
-                        if held[0] { velocity.dx } else { 0.0 },
-                        if held[1] { velocity.dy } else { 0.0 },
-                    );
-                    let own = if config.pan_enabled {
-                        own
-                    } else {
-                        Offset::ZERO
-                    };
-                    core.fling
-                        .start(core, own, Some(sequence), end_post_frame.clone());
-                }
+                });
                 if let Some(callback) = core.callbacks().end {
-                    callback(
-                        cx,
-                        InteractionEndDetails {
-                            reason: GestureEndReason::Completed,
-                            velocity: details.focal_velocity,
-                            scale_velocity: details.velocity,
-                        },
-                    );
+                    recovery.run(|| {
+                        callback(
+                            cx,
+                            InteractionEndDetails {
+                                reason: GestureEndReason::Completed,
+                                velocity: details.focal_velocity,
+                                scale_velocity: details.velocity,
+                            },
+                        );
+                    });
                 }
+                recovery.finish();
             };
 
             let cancel_core = Rc::clone(&core);
@@ -2385,12 +2378,7 @@ impl InteractiveViewerState {
 
     fn bind_vsync(&mut self, ctx: &dyn LifecycleContext) {
         let incoming = VsyncScope::maybe_of(ctx);
-        let unchanged = match (&self.clock, &incoming) {
-            (None, None) => true,
-            (Some(current), Some(incoming)) => current.is_same(incoming),
-            _ => false,
-        };
-        if unchanged {
+        if VsyncScope::same_registry(self.clock.as_ref(), incoming.as_ref()) {
             return;
         }
         self.clock = incoming;

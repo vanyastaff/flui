@@ -45,13 +45,12 @@ use flui_view::{
     ViewExt, ViewState,
 };
 
+use super::nested::presentation_device_pixel_ratio;
 use super::nested::{
-    AnchorSnap, AnchorSnapError, ChainNode, FlingHandoff, FlingStep, NestedScrollConnection,
-    NestedScrollScope, Participant, PlaneSource, ScrollCause, ScrollDevice, ScrollEndReason,
-    ScrollStep,
+    AnchorSnap, ChainNode, FlingHandoff, FlingStep, NestedScrollConnection, NestedScrollScope,
+    Participant, PlaneSource, ScrollCause, ScrollDevice, ScrollEndReason, ScrollStep,
 };
 use super::scroll_owner::{MotionHook, MoveOutcome, ScrollOwner, SharedSnapPolicy};
-use super::scrollable::presentation_device_pixel_ratio;
 use super::{ScrollController, Scrollable};
 use crate::anchored_box::AnchoredBox;
 use crate::interaction::raw_gesture_detector::ContactAdmission;
@@ -198,13 +197,8 @@ impl<K: Copy + Eq + 'static> DraggableAnchorsBuilder<K> {
             return Err(AnchorsError::Empty);
         }
         entries.sort_by(|(_, a), (_, b)| a.total_cmp(b));
-        let snap =
-            AnchorSnap::new(entries.iter().map(|&(_, offset)| offset)).map_err(
-                |error| match error {
-                    AnchorSnapError::NonFinite { index } => AnchorsError::NonFinite { index },
-                    _ => AnchorsError::Empty,
-                },
-            )?;
+        let snap = AnchorSnap::new(entries.iter().map(|&(_, offset)| offset))
+            .expect("BUG: the anchors were checked non-empty and finite above");
         Ok(DraggableAnchors {
             entries: entries.into(),
             policy: Arc::new(snap),
@@ -251,11 +245,6 @@ impl<K: Copy + Eq + 'static> DraggableAnchors<K> {
             (Some(below), None) => self.entries[below].0,
             (None, None) => self.entries[0].0,
         }
-    }
-
-    /// The anchors, ascending by offset.
-    pub fn iter(&self) -> impl Iterator<Item = (K, f64)> + '_ {
-        self.entries.iter().copied()
     }
 
     /// The same anchors, settled by `policy` instead of the nearest-anchor
@@ -1114,7 +1103,7 @@ impl<K: Copy + Eq + 'static> Action<AnchorIntent> for AnchorAction<K> {
 
 /// The hook that tracks the current anchor of `inner` and plays the anchor
 /// haptic (once per arrival at another anchor, for every cause but a
-// programmatic one).
+/// programmatic one).
 fn motion_hook<K: Copy + Eq + 'static>(
     inner: Weak<Inner<K>>,
     haptics: Rc<RefCell<Option<HapticsHandle>>>,

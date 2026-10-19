@@ -59,7 +59,6 @@ use flui_foundation::geometry::{Axis, Vec2};
 use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_interaction::InputSequenceId;
-use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_platform_api::TargetPlatform;
 use flui_platform_api::keyboard::NamedKey;
@@ -84,9 +83,6 @@ const DEFAULT_THRESHOLD_PX: f64 = 80.0;
 
 /// The indicator's band across the content (logical pixels): 56 dp.
 const INDICATOR_EXTENT_PX: f64 = 56.0;
-
-/// Indicator colour: Material Blue 500 at 80 % opacity.
-const INDICATOR_COLOR: Color = Color::rgba(33, 150, 243, 204);
 
 /// How long a released or abandoned pull takes to settle back.
 const SETTLE: Duration = Duration::from_millis(200);
@@ -785,12 +781,7 @@ impl StatefulView for RefreshIndicator {
 impl RefreshIndicatorState {
     fn bind_vsync(&mut self, ctx: &dyn LifecycleContext) {
         let incoming = VsyncScope::maybe_of(ctx);
-        let unchanged = match (&self.vsync, &incoming) {
-            (None, None) => true,
-            (Some(current), Some(incoming)) => current.is_same(incoming),
-            _ => false,
-        };
-        if unchanged {
+        if VsyncScope::same_registry(self.vsync.as_ref(), incoming.as_ref()) {
             return;
         }
         self.vsync = incoming;
@@ -1023,7 +1014,7 @@ impl ViewState<RefreshOverlay> for RefreshOverlayState {
                 Some(indicator) => indicator,
                 None => return SizedBox::shrink().boxed(),
             },
-            None => ActivityIndicator::new().color(INDICATOR_COLOR).boxed(),
+            None => ActivityIndicator::new().boxed(),
         };
         let lead = INDICATOR_EXTENT_PX * (progress - 1.0);
         let spinner = Center::new().child(indicator);

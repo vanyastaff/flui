@@ -73,7 +73,7 @@ use flui_foundation::geometry::{Axis, Point, Rect, Vec2};
 use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
-use flui_rendering::pipeline::{PipelineOwner, WeakPipelineCell};
+use flui_rendering::pipeline::WeakPipelineCell;
 use flui_rendering::view::{ScrollDirection, ScrollPosition};
 use flui_view::prelude::StatefulView;
 use flui_view::{BoxedView, BuildContext, Child, IntoView, LifecycleContext, ViewExt, ViewState};
@@ -84,7 +84,10 @@ use crate::interaction::focus_reveal::{
 };
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::drag_autoscroll::{DragAutoscroll, DragAutoscrollAnchor};
-use crate::scroll::nested::{NestedScrollScope, OverscrollBehavior, ScrollCause, ScrollDevice};
+use crate::scroll::nested::{
+    NestedScrollScope, OverscrollBehavior, ScrollCause, ScrollDevice,
+    presentation_device_pixel_ratio,
+};
 use crate::scroll::scroll_owner::{
     MoveOutcome, OwnerConfig, OwnerEnv, ScrollOwner, SharedSnapPolicy,
 };
@@ -110,6 +113,7 @@ use flui_rendering::semantics::{Reveal, ScrollUnit as SemanticsScrollUnit};
 use flui_scheduler::PostFrameHandle;
 
 use super::anchored_drag::AnchoredLeaf;
+use super::scroll_controller::ScrollableHooks;
 use super::scroll_position_scope::ScrollPositionScope;
 use crate::anchored_box::AnchoredBox;
 
@@ -480,11 +484,11 @@ pub struct ScrollableState {
     /// [`install_fling_listener`](ScrollableState::install_fling_listener))
     /// can reach it without re-capturing on every `build`. Updated in
     /// `did_update_view` BEFORE both `install_fling_listener` and
-    /// `install_stop_hook` re-run — each always reads whatever this field
+    /// `install_hooks` re-run — each always reads whatever this field
     /// currently holds, so a controller SWAP moves both onto the new
     /// controller in the same call.
     scroll_controller: ScrollController,
-    stop_hook: Option<super::scroll_controller::StopHook>,
+    hooks: Option<Rc<ScrollableHooks>>,
     /// The ballistic simulation driver. Bounds span `(NEG_INFINITY, INFINITY)`
     /// so pixel-space simulation positions are not clamped to `[0, 1]`.
     ///
@@ -550,16 +554,6 @@ pub struct ScrollableState {
     reveal: Rc<ScrollReveal>,
 }
 
-/// The device pixel ratio of the presentation `pipeline` belongs to, read at
-/// the moment of the call so a window moved to another monitor is honoured.
-/// `1.0` once the presentation is gone or while a frame holds the pipeline.
-pub(crate) fn presentation_device_pixel_ratio(pipeline: Option<&WeakPipelineCell>) -> f64 {
-    pipeline
-        .and_then(WeakPipelineCell::upgrade)
-        .and_then(|cell| cell.try_with(PipelineOwner::device_pixel_ratio))
-        .unwrap_or(1.0)
-}
-
 impl std::fmt::Debug for ScrollableState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScrollableState")
@@ -600,7 +594,7 @@ impl StatefulView for Scrollable {
             focus: Rc::clone(&focus),
             reveal: Rc::new(ScrollReveal::new(focus)),
             scroll_controller: self.controller.clone().unwrap_or_default(),
-            stop_hook: None,
+            hooks: None,
             fling_controller,
             fling_clock: None,
             wheel_motion: Rc::new(RefCell::new(None)),
@@ -620,12 +614,7 @@ impl StatefulView for Scrollable {
 impl ScrollableState {
     fn bind_vsync(&mut self, ctx: &dyn LifecycleContext) {
         let incoming = VsyncScope::maybe_of(ctx);
-        let unchanged = match (&self.fling_clock, &incoming) {
-            (None, None) => true,
-            (Some(current), Some(incoming)) => current.is_same(incoming),
-            _ => false,
-        };
-        if unchanged {
+        if VsyncScope::same_registry(self.fling_clock.as_ref(), incoming.as_ref()) {
             return;
         }
         self.fling_clock = incoming;
@@ -739,39 +728,44 @@ impl ScrollableState {
         }
     }
 
-    /// Installs the synchronous `jump_to` cancellation hook (ADR-0037) on
-    /// [`ScrollController`], closing over this state's own fling controller —
-    /// see `ScrollController`'s `stop_hook` field docs for why `jump_to`
-    /// needs a hook called AT jump_to time rather than a merely-queued
-    /// command serviced on the next rebuild.
+    /// Installs the hooks `jump_to` calls on [`ScrollController`]: the
+    /// synchronous cancellation (ADR-0037), closing over this state's own
+    /// fling controller — see `ScrollController`'s `hooks` field docs for why
+    /// `jump_to` needs one called AT jump_to time rather than a merely-queued
+    /// command serviced on the next rebuild — and the jump through the
+    /// owner's chain.
     ///
     /// Idempotent (mirrors `install_flush_handle`): called from `init_state`
-    /// AND `did_update_view` (a controller swap must move the hook onto the
+    /// AND `did_update_view` (a controller swap must move the hooks onto the
     /// NEW controller — see `scroll_controller`'s field doc), always against
     /// whatever `self.scroll_controller` currently is.
-    fn install_stop_hook(&mut self) {
+    fn install_hooks(&mut self) {
         let fling = self.fling_controller.controller().clone();
-        let hook: super::scroll_controller::StopHook = Rc::new(move || {
-            let _ = fling.stop();
-        });
         // A jump is a programmatic step through the owner's chain, and
         // waits while a pass of that chain runs.
-        let owner = Rc::clone(&self.owner);
-        let jump: super::scroll_controller::JumpHook = Rc::new(move |target| {
-            let owner = owner.borrow().clone();
-            owner.is_some_and(|owner| owner.jump(target))
+        let (jump_owner, pass_owner) = (Rc::clone(&self.owner), Rc::clone(&self.owner));
+        let hooks = Rc::new(ScrollableHooks {
+            stop: Box::new(move || {
+                let _ = fling.stop();
+            }),
+            jump: Box::new(move |target| {
+                let owner = jump_owner.borrow().clone();
+                owner.is_some_and(|owner| owner.jump(target))
+            }),
+            in_pass: Box::new(move || {
+                pass_owner
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|owner| owner.in_pass())
+            }),
         });
-        let owner = Rc::clone(&self.owner);
-        let in_pass: super::scroll_controller::PassHook =
-            Rc::new(move || owner.borrow().as_ref().is_some_and(|owner| owner.in_pass()));
-        self.scroll_controller
-            .set_stop_hook(hook.clone(), jump, in_pass);
-        self.stop_hook = Some(hook);
+        self.scroll_controller.attach_hooks(Rc::clone(&hooks));
+        self.hooks = Some(hooks);
     }
 
-    fn detach_stop_hook(&mut self) {
-        if let Some(hook) = self.stop_hook.take()
-            && self.scroll_controller.clear_stop_hook(&hook)
+    fn detach_hooks(&mut self) {
+        if let Some(hooks) = self.hooks.take()
+            && self.scroll_controller.detach_hooks(&hooks)
         {
             self.scroll_controller.retire_pending_command();
         }
@@ -781,7 +775,7 @@ impl ScrollableState {
     /// ballistic simulation's current pixel position into
     /// `self.scroll_controller` each tick.
     ///
-    /// Idempotent, mirroring `install_stop_hook`: called from `init_state`
+    /// Idempotent, mirroring `install_hooks`: called from `init_state`
     /// AND `did_update_view`, always against whatever `self.scroll_controller`
     /// currently is. Removes any previously-installed listener first — this
     /// is what closes the swap-blindness bug: without it, a controller SWAP
@@ -875,7 +869,7 @@ impl ViewState<Scrollable> for ScrollableState {
         self.post_frame = ctx.post_frame_handle();
         self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
         self.install_flush_handle(ctx);
-        self.install_stop_hook();
+        self.install_hooks();
         self.install_fling_listener();
         self.install_fling_status_listener();
         self.install_command_listener();
@@ -890,7 +884,7 @@ impl ViewState<Scrollable> for ScrollableState {
         self.install_flush_handle(ctx);
         self.bind_vsync(ctx);
         let arena = GestureArenaScope::of(ctx);
-        *self.env.arena.borrow_mut() = Some(arena.clone());
+        self.env.sequences.bind(arena.clone());
         *self.env.settings.borrow_mut() = GestureArenaScope::settings_or_default_of(ctx);
         self.hold = Some(self.hold_recognizer(arena));
     }
@@ -1457,13 +1451,13 @@ impl ViewState<Scrollable> for ScrollableState {
         let _ = self.fling_controller.controller().stop();
         self.scroll_controller.position().set_is_scrolling(false);
         self.remove_command_listener();
-        self.detach_stop_hook();
+        self.detach_hooks();
         self.scroll_controller = incoming;
         self.recognizer_owner = Rc::new(());
         self.install_fling_listener();
         self.install_fling_status_listener();
         self.install_command_listener();
-        self.install_stop_hook();
+        self.install_hooks();
     }
 
     fn dispose(&mut self) {
@@ -1493,7 +1487,7 @@ impl ViewState<Scrollable> for ScrollableState {
         // a command queued while still attached to THIS widget would
         // otherwise resurface against a DIFFERENT `ScrollableState` if the
         // same controller is later re-attached to a new `Scrollable`.
-        self.detach_stop_hook();
+        self.detach_hooks();
         self.fling_controller.dispose();
     }
 }
