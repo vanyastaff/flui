@@ -158,7 +158,9 @@ mod tests {
     }
 
     fn a_query_is_critical_only_with_the_critical_flag() {
-        const LOGOFF: isize = 0x8000_0000;
+        // The flags are the low 32 bits of `lParam`; on a 32-bit target the top
+        // bit makes it negative, which the rule must read the same.
+        const LOGOFF: isize = 0x8000_0000_u32 as isize;
         const CLOSEAPP: isize = 0x1;
         const CRITICAL: isize = 0x4000_0000;
         for (flags, critical) in [
@@ -178,7 +180,7 @@ mod tests {
 
     fn an_end_session_message_ends_or_cancels_by_its_flag() {
         assert_eq!(
-            classify(WM_ENDSESSION, 1, 0x8000_0000),
+            classify(WM_ENDSESSION, 1, 0x8000_0000_u32 as isize),
             Received::Event(HostEvent::SessionEnded)
         );
         assert_eq!(
