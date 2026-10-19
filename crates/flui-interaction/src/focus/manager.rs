@@ -1070,6 +1070,7 @@ impl FocusManager {
             .key_ledger
             .borrow_mut()
             .admit(id.clone(), event, unit, start.as_ref());
+        let mut cancelled = None;
         match admission {
             Admission::Withheld => {
                 tracing::trace!("key event withheld: its key-down went elsewhere");
@@ -1082,19 +1083,35 @@ impl FocusManager {
                 self.cancel_presses(std::iter::once(press));
                 return KeyEventResult::Ignored;
             }
-            Admission::Press if !pointer && !key_ledger::is_modifier(&event.key) => {
-                self.set_modality(InputModality::Keyboard);
+            Admission::Press { superseded } => {
+                // The earlier press's path is told first; a cancel handler
+                // that panics does not keep the new press from its walk.
+                cancelled = superseded
+                    .and_then(|press| RoutePanic::capture(|| self.cancel_presses([press])));
+                if !pointer && !key_ledger::is_modifier(&event.key) {
+                    self.set_modality(InputModality::Keyboard);
+                }
             }
-            Admission::Press | Admission::Continuation => {}
+            Admission::Continuation => {}
         }
         let traversals = self.traversal_transitions.get();
-        let result = self.walk_key_event(event);
+        let result = match RoutePanic::try_run(|| self.walk_key_event(event)) {
+            Ok(result) => result,
+            Err(walked) => {
+                let mut first = cancelled;
+                RoutePanic::preserve_first(&mut first, Some(walked), "key event");
+                first.expect("BUG: a failure was just kept").resume();
+            }
+        };
         if self.traversal_transitions.get() != traversals {
             let unit = self.focused_unit();
             let start = self.key_walk_start();
             self.key_ledger
                 .borrow_mut()
                 .rebind(&id, event, unit, start.as_ref());
+        }
+        if let Some(cancelled) = cancelled {
+            cancelled.resume();
         }
         result
     }

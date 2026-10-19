@@ -78,12 +78,16 @@ pub(super) struct HeldPress {
 #[derive(Debug)]
 pub(super) enum Admission {
     /// A first key-down: deliver, and it decides the input modality.
-    Press,
+    /// `superseded` is the key's earlier press, whose release never arrived,
+    /// when another unit's walk took it: its path is told the key was
+    /// cancelled, since no release reaches it now.
+    Press { superseded: Option<HeldPress> },
     /// A repeat or release of a key whose key-down this unit received.
     Continuation,
     /// The release of a key whose key-down another unit's walk took, after
-    /// focus moved: the release reaches no key handler, and the press's path
-    /// is told the key was cancelled.
+    /// focus moved, or an input method's key-down superseding such a press:
+    /// the event reaches no key handler, and the press's path is told the
+    /// key was cancelled.
     Cancelled(HeldPress),
     /// An input method's key, an orphan, or a repeat of a key whose key-down
     /// went to another unit: global handlers saw it, the walk does not.
@@ -122,11 +126,17 @@ impl KeyLedger {
                         },
                     }
                 };
-                self.pressed.insert(id, origin);
-                if ime {
-                    Admission::Withheld
-                } else {
-                    Admission::Press
+                let superseded = match self.pressed.insert(id, origin) {
+                    Some(KeyOrigin::Focus {
+                        unit: pressed,
+                        press,
+                    }) if pressed != unit => Some(press),
+                    _ => None,
+                };
+                match (ime, superseded) {
+                    (true, Some(press)) => Admission::Cancelled(press),
+                    (true, None) => Admission::Withheld,
+                    (false, superseded) => Admission::Press { superseded },
                 }
             }
             (KeyState::Down, KeyRepeat::AutoRepeat) => match self.pressed.get(&id) {

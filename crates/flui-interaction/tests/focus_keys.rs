@@ -603,6 +603,10 @@ fn keyboard_focus_contracts() {
             a_release_after_focus_moved_only_cancels_its_press,
         ),
         (
+            "a_press_again_without_its_release_cancels_the_first",
+            a_press_again_without_its_release_cancels_the_first,
+        ),
+        (
             "traversal hands repeats to the new focus",
             traversal_hands_repeats_to_the_new_focus,
         ),
@@ -774,6 +778,40 @@ fn a_release_after_focus_moved_only_cancels_its_press() {
         [KeyState::Down, KeyState::Down],
         "the next press is delivered"
     );
+}
+
+/// A key pressed again while its release never arrived, after focus moved to
+/// another unit: the new press belongs to the new focus, and the first
+/// press's path is told its key was cancelled, since no release will reach
+/// it now.
+fn a_press_again_without_its_release_cancels_the_first() {
+    let (manager, nodes, _attachments) = manager_with_nodes(2);
+    let _ = nodes[0].request_focus();
+    let (first_cancels, _first) = record_cancels(&nodes[0]);
+    let (second_cancels, _second) = record_cancels(&nodes[1]);
+    let second = count_keys(&nodes[1]);
+    let arrow = |state| key(state, Key::Named(NamedKey::ArrowDown), Code::ArrowDown);
+
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    assert!(manager.focus_next(), "focus moves to another unit");
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    assert_eq!(
+        *first_cancels.borrow(),
+        [Code::ArrowDown],
+        "the press whose release was lost is cancelled"
+    );
+    assert_eq!(second.get(), 1, "the new press reaches the new focus");
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Up));
+    assert_eq!(second.get(), 2, "and so does its release");
+    assert!(second_cancels.borrow().is_empty());
+    assert_eq!(first_cancels.borrow().len(), 1, "told once");
+
+    // Pressed again in the same unit, the next release still reaches the
+    // press's path: nothing is cancelled.
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Up));
+    assert!(second_cancels.borrow().is_empty());
 }
 
 /// Tab moves focus by traversal; its repeats keep moving it.
