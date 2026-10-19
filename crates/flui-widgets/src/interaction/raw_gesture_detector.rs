@@ -2,6 +2,7 @@
 //! [`GestureRecognizerFactory`] values and keeps each one alive across
 //! rebuilds, reconfiguring it in place.
 
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::{any::Any, any::TypeId, rc::Rc};
 
 use flui_foundation::ViewKey;
@@ -480,13 +481,27 @@ impl ViewState<RawGestureDetector> for RawGestureDetectorState {
             self.slots.push(slot);
         }
         self.factories.clone_from(&new_view.factories);
+        // A retired recognizer's callbacks may panic on cancellation, and a
+        // factory's update may panic too: every kept recognizer is still
+        // updated, and the first failure is resumed after the last.
         let retired: Vec<Slot> = outgoing.into_iter().flatten().collect();
-        cancel_slots(&retired);
+        let mut first = catch_unwind(AssertUnwindSafe(|| cancel_slots(&retired))).err();
         drop(retired);
         for index in updates {
-            self.factories[index]
-                .factory
-                .update_live(&*self.slots[index].live);
+            let updated = catch_unwind(AssertUnwindSafe(|| {
+                self.factories[index]
+                    .factory
+                    .update_live(&*self.slots[index].live);
+            }));
+            if let Err(payload) = updated {
+                match first {
+                    Some(_) => flui_foundation::panic::retain_opaque_payload(payload),
+                    None => first = Some(payload),
+                }
+            }
+        }
+        if let Some(payload) = first {
+            resume_unwind(payload);
         }
     }
 

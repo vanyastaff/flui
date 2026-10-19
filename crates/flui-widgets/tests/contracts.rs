@@ -236,6 +236,7 @@ fn pointer_and_gesture_recognition() {
             ("listener::presentation_resampling_uses_the_owner_frame_clock", crate::listener::presentation_resampling_uses_the_owner_frame_clock as fn()),
             ("gesture_detector::pan_claim_region_keeps_the_pan_from_an_enclosing_drag", crate::gesture_detector::pan_claim_region_keeps_the_pan_from_an_enclosing_drag),
             ("gesture_detector::recognizers_follow_a_changed_arena_scope", crate::gesture_detector::recognizers_follow_a_changed_arena_scope),
+            ("gesture_detector::a_retired_recognizer_panicking_on_cancel_leaves_the_kept_ones_updated", crate::gesture_detector::a_retired_recognizer_panicking_on_cancel_leaves_the_kept_ones_updated),
             ("gesture_detector::drag_and_transform_slots_carry_their_locks", crate::gesture_detector::drag_and_transform_slots_carry_their_locks),
             ("gesture_detector::a_composition_past_the_delay_ceiling_is_reported", crate::gesture_detector::a_composition_past_the_delay_ceiling_is_reported),
             ("gesture_detector::drag_and_transform_slots_split_one_contact_from_two", crate::gesture_detector::drag_and_transform_slots_split_one_contact_from_two),
