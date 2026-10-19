@@ -19,9 +19,8 @@
 //! unknown kind. Exit 1 with one line per finding. `--self-test` runs the planted rows of
 //! [`rows`]; `--seed` prints the allowlist the tree needs.
 //!
-//! Limits, not coverage: a file included only by a `mod name;` that is gated on a testing feature
-//! (not on `cfg(test)`) is read as production; modules declared inside a macro invocation are
-//! invisible to `syn`; a type produced by a macro is not seen.
+//! Limits, not coverage: modules declared inside a macro invocation are invisible to `syn`, and a
+//! type produced by a macro is not seen.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};
@@ -132,10 +131,10 @@ pub(crate) fn testing(args: &TestingArgs) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// The target root files of the workspace: test and bench targets when `tests`, else the rest
-/// a non-test build compiles.
+/// The target root files of the workspace: test and bench targets when `tests`, else every target
+/// a non-test build compiles, examples included (their `#[cfg(test)]` modules are test code).
 fn targets(meta: &cargo_metadata::Metadata, tests: bool) -> Vec<PathBuf> {
-    const PRODUCTION: [&str; 8] = [
+    const PRODUCTION: [&str; 9] = [
         "lib",
         "rlib",
         "dylib",
@@ -143,6 +142,7 @@ fn targets(meta: &cargo_metadata::Metadata, tests: bool) -> Vec<PathBuf> {
         "staticlib",
         "proc-macro",
         "bin",
+        "example",
         "custom-build",
     ];
     let mut roots = Vec::new();
@@ -189,8 +189,8 @@ fn collect_sources(
     production: &[PathBuf],
     test: &[PathBuf],
 ) -> (Vec<Hit>, Vec<String>) {
-    let prod_tree = modules::walk(production.iter().cloned());
-    let test_tree = modules::walk(test.iter().cloned());
+    let prod_tree = modules::walk_scoped(production.iter().cloned(), implies_testing_attrs);
+    let test_tree = modules::walk_scoped(test.iter().cloned(), implies_testing_attrs);
     // path -> whether the whole file is test code
     let mut files: BTreeMap<PathBuf, bool> = BTreeMap::new();
     for path in prod_tree.modules.keys() {
@@ -747,6 +747,21 @@ fn row_test_module_in_its_own_file_fails() {
     assert_eq!(found, [("src/tests.rs".to_owned(), "unlisted")]);
 }
 
+fn row_module_behind_the_testing_feature_in_its_own_file_fails() {
+    let found = findings_for(
+        &[
+            (
+                "src/lib.rs",
+                "#[cfg(feature = \"testing\")]\nmod fixtures;\n",
+            ),
+            ("src/fixtures.rs", "fn pump() {}\n"),
+        ],
+        &[],
+        HEADER,
+    );
+    assert_eq!(found, [("src/fixtures.rs".to_owned(), "unlisted")]);
+}
+
 fn row_old_feature_name_fails() {
     let found = findings_for(
         &[("src/lib.rs", "")],
@@ -848,6 +863,10 @@ fn rows() -> Vec<(&'static str, fn())> {
         (
             "test_module_in_its_own_file_fails",
             row_test_module_in_its_own_file_fails,
+        ),
+        (
+            "module_behind_the_testing_feature_in_its_own_file_fails",
+            row_module_behind_the_testing_feature_in_its_own_file_fails,
         ),
         ("old_feature_name_fails", row_old_feature_name_fails),
         (
