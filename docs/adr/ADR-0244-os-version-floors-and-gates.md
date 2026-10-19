@@ -2,9 +2,10 @@
 
 - **Status:** Proposed
 - **Date:** 2026-10-19
-- **Amends:** [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) decision 9 only: its
+- **Supersedes:** [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) decision 9 only: its
   typed checks become the single style below, are compared against a declared floor, and the floor
-  is enforced at build and at start.
+  is enforced at build and at start. Its Android refresh-rate behaviour (decision 9's API 30 hint)
+  stays in force as a gate of this shape.
 - **Related:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (where OS types live),
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (the runtime has no platform edge),
   [ADR-0097](ADR-0097-no-process-global-state-gate.md) (no process-wide version state).
@@ -65,20 +66,30 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
    the downlevel backend lacks: features stay optional, limits come from the adapter, and no shader
    reads a storage buffer in a fragment stage (gradient stops move to a uniform array or a texture).
    Every pixel suite runs on both backends; on Linux, Mesa's llvmpipe gives CI a GLES adapter.
+   The fallback is held to that proof: if the GLES path cannot pass the pixel suites at a cost in
+   proportion to the devices it serves, it is removed and the floors rise to what the preferred
+   backend needs (Android API 24 for Vulkan, a WebGPU browser), by decision 9.
 
 2. **Declared once.** `platform-support.toml` at the repository root holds, per environment, the floor
-   and what sets it (decision 1's last column). It is the only place a floor number is written.
-   `flui-platform`'s build script turns it into the floor constant of each version type; `flui-cli`
-   reads it for packaging (Android `minSdk`, the iOS and macOS deployment targets passed to rustc, the
-   Windows manifest's `supportedOS`); `xtask doctor` reads it for toolchain checks; the Linux release
-   build targets the floor glibc rather than the runner's.
+   and what sets it (decision 1's last column). It is the only place a floor number is written by
+   hand. `flui-platform` and `flui-cli` are published crates whose package archives cannot read a
+   repository-root file, so `cargo xtask platform-floor --write` generates a committed Rust source in
+   each (the floor constant of each version type; the packaging values: Android `minSdk`, the iOS and
+   macOS deployment targets passed to rustc, the Windows manifest's `supportedOS`), and the check mode
+   fails when a generated file differs from the root. `xtask doctor` reads the root file for
+   toolchain checks; the Linux release build targets the floor glibc rather than the runner's.
 
-3. **Below the floor, FLUI refuses to start, loudly.** Each backend reads its version once, when the
-   platform is built, and compares it with the floor before anything else. Below the floor the
-   platform constructor returns `PlatformError::UnsupportedOs { environment, found, floor }`, and the
-   app runner prints it and exits non-zero (Android and iOS show it as the launch failure). A version
-   that cannot be read is not below the floor: it starts and unlocks no gate. On the Web the same error
-   comes from a missing `navigator.gpu`.
+3. **Below the floor, FLUI refuses to start, loudly.** Where the system honours the packaged
+   minimum, the refusal is the system's, before any FLUI code runs: Android will not install an APK
+   below `minSdk`, iOS will not install below `MinimumOSVersion`, macOS will not launch a binary whose
+   `minos` or `LSMinimumSystemVersion` is newer, and the dynamic loader rejects a Linux binary whose
+   glibc symbols are newer. Everywhere the executable does start (Windows, whose manifest does not
+   block a launch; the Linux driver and protocol parts of the floor; the Web), the built-in backend
+   reads its version once, when the platform is built, and compares it with the floor before anything
+   else; below it the constructor returns
+   `PlatformError::UnsupportedOs { environment, found, floor }`, and the app runner prints it and exits
+   non-zero. A version that cannot be read is not below the floor: it starts and unlocks no gate. On
+   the Web the same error comes from a browser with neither WebGPU nor WebGL2.
 
 4. **Above the floor, a gate is a type.** One shape for every environment, in
    `flui-platform::shared::os_version`:
@@ -159,8 +170,9 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
   window-tiling `TODO`.
 - `WindowsBuild`, Apple `OsVersion` and `AndroidApi` move under one module sharing `Since<F>`; the
   version types stay per environment because their shapes differ.
-- `PlatformError::UnsupportedOs` is a new public error on `flui-platform-api`; an embedder's own
-  `Platform` returns it the same way.
+- `PlatformError::UnsupportedOs` is a new public error, returned by FLUI's built-in backends. An
+  external backend has no seam to return it through today (`Platform::run` takes an `OwnerPlatform`
+  outside code cannot mint); that seam is its own decision.
 - A low floor costs proof: each floor needs a machine, image, emulator or simulator to run on, and
   until that run is recorded the parity row stays 🟡.
 - The code changes land as separate PRs after this ADR is accepted: the file and its gate first, then
