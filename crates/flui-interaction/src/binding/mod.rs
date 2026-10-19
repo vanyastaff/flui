@@ -144,7 +144,9 @@ use crate::{
     gesture::settings::{GestureProfiles, GestureSettings, GestureSettingsSource},
     gesture::{
         ContestCancel,
-        arena::{DetachedArenaBatch, DispatchedSignal, GestureArena, ScrollLatchEnd},
+        arena::{
+            DetachedArenaBatch, DispatchedInput, DispatchedInputCell, GestureArena, ScrollLatchEnd,
+        },
     },
     ids::{EmbeddedSurfaceId, InputSurface, PointerId, SurfaceIdsExhausted},
     pointer::{
@@ -338,10 +340,6 @@ pub struct GestureBinding {
     /// latches and contactless sources carry; refuses at exhaustion
     /// (ADR-0207 §4).
     sequences: Rc<IdMint<InputSequenceId>>,
-    /// The sequence the input being dispatched belongs to, published by the
-    /// admission that resolved it; saved and restored around each dispatch so
-    /// a nested one cannot leak its own.
-    dispatched_sequence: Rc<Cell<Option<InputSequenceId>>>,
 }
 
 impl Default for GestureBinding {
@@ -404,17 +402,21 @@ impl GestureBinding {
             default_profiles,
             surfaces: IdMint::new(),
             sequences,
-            dispatched_sequence: Rc::new(Cell::new(None)),
         }
     }
 
-    /// Publish the sequence of the contact being dispatched: the outcome
-    /// reports it, and a contest the contact opens meanwhile decides it.
+    /// Publish the input being dispatched, in the arena's one cell: the
+    /// outcome reports its sequence, a consumer reads it from the arena, and
+    /// haptics requested meanwhile carry it. The admission that resolved the
+    /// input publishes it; each dispatch restores the outer value on leaving.
+    fn publish_dispatched(&self, input: DispatchedInput) {
+        self.arena.arena().set_dispatched(Some(input));
+    }
+
+    /// Publish the sequence of the contact being dispatched: a contest the
+    /// contact opens meanwhile decides it.
     fn publish_contact_sequence(&self, pointer: PointerId, sequence: InputSequenceId) {
-        self.dispatched_sequence.set(Some(sequence));
-        self.arena
-            .arena()
-            .set_dispatched_contact(Some((pointer, sequence)));
+        self.publish_dispatched(DispatchedInput::Contact { pointer, sequence });
     }
 
     /// Mint the identity of a surface embedded in this binding's window.
@@ -479,19 +481,16 @@ impl GestureBinding {
     ) -> R {
         struct Restore<'a> {
             arena: &'a GestureArena,
-            outer: Option<DispatchedSignal>,
+            outer: Option<DispatchedInput>,
         }
         impl Drop for Restore<'_> {
             fn drop(&mut self) {
-                self.arena.set_dispatched_signal(self.outer);
+                self.arena.set_dispatched(self.outer);
             }
         }
         let arena = self.arena.arena();
         let _restore = Restore {
-            outer: arena.set_dispatched_signal(Some(DispatchedSignal {
-                sequence,
-                latch_end: None,
-            })),
+            outer: arena.set_dispatched(Some(DispatchedInput::Contactless(sequence))),
             arena,
         };
         body()
@@ -804,28 +803,22 @@ impl GestureBinding {
         // A nested dispatch from a callback reports its own sequence, then
         // hands this one back, also when it unwinds.
         struct Restore<'a> {
-            binding: &'a GestureBinding,
-            outer: Option<InputSequenceId>,
-            outer_contact: Option<(PointerId, InputSequenceId)>,
-            outer_signal: Option<DispatchedSignal>,
+            arena: &'a GestureArena,
+            outer: Option<DispatchedInput>,
         }
         impl Drop for Restore<'_> {
             fn drop(&mut self) {
-                self.binding.dispatched_sequence.set(self.outer);
-                let arena = self.binding.arena.arena();
-                arena.set_dispatched_contact(self.outer_contact);
-                arena.set_dispatched_signal(self.outer_signal);
+                self.arena.set_dispatched(self.outer);
             }
         }
+        let arena = self.arena.arena();
         let restore = Restore {
-            outer: self.dispatched_sequence.take(),
-            outer_contact: self.arena.arena().set_dispatched_contact(None),
-            outer_signal: self.arena.arena().set_dispatched_signal(None),
-            binding: self,
+            outer: arena.set_dispatched(None),
+            arena,
         };
         self.dispatch_pointer_kernel(surface, event, hit_test_fn);
         let outcome = DispatchOutcome {
-            sequence: crate::PointerEventExt::pointer_id(event).and(self.dispatched_sequence.get()),
+            sequence: crate::PointerEventExt::pointer_id(event).and(arena.dispatched_sequence()),
         };
         drop(restore);
         outcome
@@ -1461,10 +1454,10 @@ impl GestureBinding {
         &self.clock
     }
 
-    /// The live cell holding the sequence of the input being dispatched, for
-    /// the haptics handle that tags its requests with it.
-    pub(crate) fn dispatched_sequence_cell(&self) -> Rc<Cell<Option<InputSequenceId>>> {
-        Rc::clone(&self.dispatched_sequence)
+    /// The live cell naming the input being dispatched, for the haptics
+    /// handle that tags its requests with its sequence.
+    pub(crate) fn dispatched_input_cell(&self) -> DispatchedInputCell {
+        self.arena.arena().dispatched_cell()
     }
 
     // ========================================================================
@@ -1577,8 +1570,12 @@ impl GestureBinding {
             return;
         }
         let refused_tail = self.contacts.refuses_tail(pointer_id, event.device_id());
-        if !matches!(event, PointerEvent::Down(_))
-            && let Some(sequence) = self.contacts.sequence_of(pointer_id)
+        // A Down mints its own sequence; a wheel or pan/zoom packet belongs to
+        // its latch or lease even while the pointer holds a button.
+        if !matches!(
+            event,
+            PointerEvent::Down(_) | PointerEvent::Scroll(_) | PointerEvent::PanZoom(_)
+        ) && let Some(sequence) = self.contacts.sequence_of(pointer_id)
         {
             self.publish_contact_sequence(pointer_id, sequence);
         }
@@ -1991,16 +1988,13 @@ impl GestureBinding {
             }
             ScrollAdmission::Terminal(None) | ScrollAdmission::Refused => None,
         };
-        if let Some((latch, latch_end)) = dispatched {
-            self.dispatched_sequence.set(Some(latch.id));
+        if let Some((latch, end)) = dispatched {
             // The consumer names the deltas it takes by the latch's sequence,
             // and ends that sequence where the latch ends.
-            self.arena
-                .arena()
-                .set_dispatched_signal(Some(DispatchedSignal {
-                    sequence: latch.id,
-                    latch_end,
-                }));
+            self.publish_dispatched(DispatchedInput::Latch {
+                sequence: latch.id,
+                end,
+            });
         }
         let position = event
             .position()
@@ -2068,7 +2062,7 @@ impl GestureBinding {
         {
             match crate::PointerEventExt::pointer_id(event) {
                 Some(pointer) => self.publish_contact_sequence(pointer, session.id),
-                None => self.dispatched_sequence.set(Some(session.id)),
+                None => self.publish_dispatched(DispatchedInput::Contactless(session.id)),
             }
         }
         pan_zoom_sequences::retire_tickets_capturing_panic(replaced, incoming, false);
