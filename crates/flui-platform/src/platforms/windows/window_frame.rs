@@ -119,6 +119,28 @@ pub(super) fn to_screen(rect: RECT, origin: (i32, i32)) -> RECT {
     }
 }
 
+impl super::platform::WindowContext {
+    /// Before a window is first shown in `mode`: a window shown minimized is
+    /// already minimized when the system announces the show, so the show does
+    /// not read as the window appearing.
+    pub(super) fn begin_first_show(&self, mode: WindowMode) {
+        if mode == WindowMode::Minimized {
+            self.mode.set(super::window::NativeMode::Minimized {
+                from_fullscreen: None,
+            });
+        }
+    }
+
+    /// After a window was first shown in `mode`. A window shown minimized is
+    /// not visible to the runtime, whatever it was told before (a deferred
+    /// window is told it is visible so that its frames run).
+    pub(super) fn end_first_show(&self, mode: WindowMode) {
+        if mode == WindowMode::Minimized && self.last_visibility_dispatched.replace(false) {
+            self.callbacks.dispatch_visibility_status_change(false);
+        }
+    }
+}
+
 #[cfg(test)]
 mod frame_tests {
     use windows::Win32::{

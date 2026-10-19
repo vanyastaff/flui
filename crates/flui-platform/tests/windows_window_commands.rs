@@ -699,6 +699,49 @@ fn a_hidden_windows_frame_request_reaches_the_global_redraw_event() {
         > 0));
 }
 
+fn record_visibility(window: &Arc<dyn HostWindow>) -> Arc<std::sync::Mutex<Vec<bool>>> {
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = Arc::clone(&events);
+    window.on_visibility_status_change(Box::new(move |visible| {
+        log.lock().expect("log").push(visible);
+    }));
+    events
+}
+
+fn a_window_first_shown_minimized_is_never_reported_visible() {
+    let platform = platform();
+    let window = open(&platform, deferred().with_mode(WindowMode::Minimized));
+    let events = record_visibility(&window);
+    window.reveal_after_first_frame();
+    // SAFETY: a plain query of the live window.
+    assert!(unsafe { IsIconic(hwnd_of(&window)) }.as_bool());
+    assert_eq!(
+        *events.lock().expect("log"),
+        [false],
+        "told visible while it waited for a frame, it is then told it is not"
+    );
+
+    let window = open(&platform, hidden().with_mode(WindowMode::Minimized));
+    let events = record_visibility(&window);
+    apply(&window, WindowCommand::Show);
+    assert!(events.lock().expect("log").is_empty());
+}
+
+fn restoring_a_hidden_minimized_window_reports_nothing_until_it_is_shown() {
+    let platform = platform();
+    let window = open(&platform, options());
+    apply(&window, WindowCommand::SetMode(WindowMode::Minimized));
+    apply(&window, WindowCommand::Hide);
+    let events = record_visibility(&window);
+    apply(&window, WindowCommand::SetMode(WindowMode::Normal));
+    assert!(
+        events.lock().expect("log").is_empty(),
+        "a hidden window did not become visible"
+    );
+    apply(&window, WindowCommand::Show);
+    assert_eq!(*events.lock().expect("log"), [true]);
+}
+
 fn a_resize_does_not_end_fullscreen() {
     let platform = platform();
     let window = open(&platform, options());
@@ -914,6 +957,14 @@ fn native_window_commands() {
         (
             "a_hidden_windows_frame_request_reaches_the_global_redraw_event",
             a_hidden_windows_frame_request_reaches_the_global_redraw_event,
+        ),
+        (
+            "a_window_first_shown_minimized_is_never_reported_visible",
+            a_window_first_shown_minimized_is_never_reported_visible,
+        ),
+        (
+            "restoring_a_hidden_minimized_window_reports_nothing_until_it_is_shown",
+            restoring_a_hidden_minimized_window_reports_nothing_until_it_is_shown,
         ),
         (
             "a_resize_does_not_end_fullscreen",
