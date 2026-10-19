@@ -78,7 +78,8 @@ impl PlaneSource {
                 Some(Plane {
                     to_root,
                     size,
-                    device_pixel_ratio: owner.device_pixel_ratio(),
+                    device_pixel_ratio: Some(owner.device_pixel_ratio())
+                        .filter(|ratio| ratio.is_finite() && *ratio > 0.0),
                 })
             })
             .flatten()
@@ -99,7 +100,9 @@ impl std::fmt::Debug for PlaneSource {
 pub(crate) struct Plane {
     to_root: Matrix4,
     size: Size,
-    device_pixel_ratio: f64,
+    /// The presentation's ratio, when it was read and is finite and
+    /// positive.
+    device_pixel_ratio: Option<f64>,
 }
 
 impl Plane {
@@ -107,13 +110,12 @@ impl Plane {
     pub(crate) const ROOT: Self = Self {
         to_root: Matrix4::IDENTITY,
         size: Size::ZERO,
-        device_pixel_ratio: f64::NAN,
+        device_pixel_ratio: None,
     };
 
     /// The presentation's device pixel ratio, when it was read.
     pub(crate) fn device_pixel_ratio(self) -> Option<f64> {
-        let ratio = self.device_pixel_ratio;
-        (ratio.is_finite() && ratio > 0.0).then_some(ratio)
+        self.device_pixel_ratio
     }
 
     /// The middle of the participant's box, in the presentation: the focal
