@@ -6,8 +6,10 @@
 //! `DragDropEvent`s for the owner. The drop is decided from the feedback the
 //! target cached, and copies the clip's text, HTML and URIs out before the
 //! event returns; a URI's bytes are read through the content resolver when
-//! requested, on a thread of their own. Concluding the drop retires the offer
-//! and gives back the drop's URI permissions.
+//! requested, on a thread of their own. Each taken drop holds its own URI
+//! permissions, keyed by its offer: concluding the drop retires the offer and
+//! gives back those permissions alone, and a refused drop gives them back at
+//! once.
 //!
 //! [`AndroidDragSource`] starts a system drag (`startDragAndDrop`, API 24)
 //! when the runtime escalates one leaving the window. Android takes the whole
@@ -180,9 +182,11 @@ impl AndroidTransfer {
         answer
     }
 
-    /// `ACTION_DROP`, on the Java main thread: whether the drop is taken,
-    /// from the target's cached feedback. A taken drop holds what the clip
-    /// carried until the target concludes it.
+    /// `ACTION_DROP`, on the Java main thread: the offer the drop is taken
+    /// as, from the target's cached feedback, or `None` when it is refused.
+    /// A taken drop holds what the clip carried until the target concludes
+    /// it; the view holds the drop's URI permissions under the offer's
+    /// [`java_key`] until then.
     pub(super) fn drop_clip(
         &self,
         view: &JavaView,
@@ -190,18 +194,16 @@ impl AndroidTransfer {
         mime_types: &[String],
         local: bool,
         clip: &DroppedClip,
-    ) -> bool {
+    ) -> Option<DataTransferId> {
         let _ = mime_types;
         let (event, taken) = {
             let mut offers = self.offers.lock();
-            let Some((id, allowed)) = offers.hover.take() else {
-                return false;
-            };
+            let (id, allowed) = offers.hover.take()?;
             let feedback = offers.feedback.get(&id).copied().unwrap_or_default();
             match drop_action(feedback, allowed) {
                 None => {
                     Self::close(&mut offers, id);
-                    (DragDropEvent::Exited { id }, false)
+                    (DragDropEvent::Exited { id }, None)
                 }
                 Some(action) => {
                     let representations = offers
@@ -225,7 +227,7 @@ impl AndroidTransfer {
                             action,
                             position: Some(Point::new(position.0, position.1)),
                         },
-                        true,
+                        Some(id),
                     )
                 }
             }
@@ -324,12 +326,25 @@ impl DataTransferSource for AndroidTransfer {
             live
         };
         if concluded && let Some(view) = self.view.upgrade() {
-            view.post(|env, view| {
-                env.call_method(view, jni_str!("releaseDrop"), jni_sig!("()V"), &[])
-                    .map(drop)
+            let offer = java_key(id);
+            view.post(move |env, view| {
+                env.call_method(
+                    view,
+                    jni_str!("releaseDrop"),
+                    jni_sig!("(J)V"),
+                    &[JValue::Long(offer)],
+                )
+                .map(drop)
             });
         }
     }
+}
+
+/// The key `FluiView` holds a taken drop's URI permissions under: the
+/// offer's whole identity, generation included, so a concluded offer never
+/// releases a later one's. Never zero, which the view reads as refused.
+pub(super) fn java_key(id: DataTransferId) -> i64 {
+    id.as_u64().cast_signed()
 }
 
 /// The bytes behind `uri`, read through the view's content resolver on the

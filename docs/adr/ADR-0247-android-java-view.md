@@ -70,8 +70,8 @@ handwriting, and brings Gradle and AppCompat with it. The research note compares
    hypothesis.
 7. **Drag and drop.** `onDragEvent` is the target: an offer is minted from the
    `ClipDescription` when a drag enters, the drop is answered from the target's cached feedback,
-   and the drop copies the clip's text, HTML and URIs out, holding the drop's URI permissions
-   until the target concludes it; a URI's bytes are read through the content resolver when
+   and the drop copies the clip's text, HTML and URIs out, holding the drop's URI permissions,
+   per offer, until the target concludes it (a refused drop releases them at once); a URI's bytes are read through the content resolver when
    requested. A drag from another app permits a copy; one this process started permits what its
    source advertised. `startDragAndDrop` (API 24) is the source when a drag leaves its window
    (`OsDragStart::OnLeavingWindow`); Android takes the whole clip at the start, `file:` URIs and

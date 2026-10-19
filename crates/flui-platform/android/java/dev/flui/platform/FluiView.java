@@ -26,6 +26,7 @@ import android.view.inputmethod.InputMethodManager;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.util.HashMap;
 
 /**
  * The one view FLUI adds over a NativeActivity's content: the input method's
@@ -47,7 +48,8 @@ public final class FluiView extends View {
     static native boolean nativeDrag(long handle, int action, float x, float y,
             String[] mimeTypes, boolean local, boolean result);
 
-    static native boolean nativeDrop(long handle, float x, float y, String[] mimeTypes,
+    /** The offer a taken drop holds until FLUI concludes it, or zero when it is refused. */
+    static native long nativeDrop(long handle, float x, float y, String[] mimeTypes,
             boolean local, String text, String html, String[] uris);
 
     static native void nativeImeState(long handle, String text, int selectionStart,
@@ -71,8 +73,8 @@ public final class FluiView extends View {
     private boolean handwriting;
     /** Whether this view started the drag the system runs now. */
     private boolean dragging;
-    /** The permissions of the last drop's content URIs, until FLUI concludes it. */
-    private Object dropPermissions;
+    /** The permissions of each taken drop's content URIs, by its offer, until FLUI concludes it. */
+    private final HashMap<Long, Object> dropPermissions = new HashMap<Long, Object>();
     /** The mirror's state last reported, so an unchanged state is not sent twice. */
     private String reportedText;
     private int reportedSelectionStart = -1;
@@ -113,7 +115,10 @@ public final class FluiView extends View {
     public void detach() {
         handle = 0;
         editing = false;
-        releaseDrop();
+        for (Object permissions : dropPermissions.values()) {
+            release(permissions);
+        }
+        dropPermissions.clear();
         inputMethods.restartInput(this);
         ViewGroup parent = (ViewGroup) getParent();
         if (parent != null) {
@@ -372,6 +377,7 @@ public final class FluiView extends View {
         String text = null;
         String html = null;
         String[] uris = new String[0];
+        Object permissions = null;
         if (clip != null) {
             StringBuilder plain = new StringBuilder();
             java.util.ArrayList<String> found = new java.util.ArrayList<String>();
@@ -392,20 +398,31 @@ public final class FluiView extends View {
                 text = plain.toString();
             }
             uris = found.toArray(new String[0]);
+            // Asked for before the native side answers: once it takes the drop,
+            // FLUI may read a URI before this method returns.
             if (uris.length > 0 && Build.VERSION.SDK_INT >= 24) {
-                releaseDrop();
-                dropPermissions = Api24.permissions(activity, event);
+                permissions = Api24.permissions(activity, event);
             }
         }
-        return nativeDrop(handle, event.getX(), event.getY(), types, local, text, html, uris);
+        long offer = nativeDrop(handle, event.getX(), event.getY(), types, local, text, html,
+                uris);
+        if (offer == 0) {
+            release(permissions);
+        } else if (permissions != null) {
+            dropPermissions.put(offer, permissions);
+        }
+        return offer != 0;
     }
 
-    /** FLUI concluded the last drop: give back the URI permissions it held. */
-    public void releaseDrop() {
-        if (dropPermissions != null && Build.VERSION.SDK_INT >= 24) {
-            Api24.release(dropPermissions);
+    /** FLUI concluded the drop of {@code offer}: give back the URI permissions it held. */
+    public void releaseDrop(long offer) {
+        release(dropPermissions.remove(offer));
+    }
+
+    private static void release(Object permissions) {
+        if (permissions != null && Build.VERSION.SDK_INT >= 24) {
+            Api24.release(permissions);
         }
-        dropPermissions = null;
     }
 
     private static String[] mimeTypes(ClipDescription description) {

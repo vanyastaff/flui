@@ -484,7 +484,7 @@ fn register_natives(env: &mut Env<'_>, class: &JClass<'_>) -> jni::errors::Resul
             NativeMethod::from_raw_parts(
                 jni_str!("nativeDrop"),
                 jni_str!(
-                    "(JFF[Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;[Ljava/lang/String;)Z"
+                    "(JFF[Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;[Ljava/lang/String;)J"
                 ),
                 native_drop as *mut std::ffi::c_void,
             ),
@@ -605,10 +605,10 @@ extern "system" fn native_drop<'local>(
     text: JString<'local>,
     html: JString<'local>,
     uris: JObjectArray<'local>,
-) -> jboolean {
+) -> jlong {
     contained(|| {
         let Some(view) = bridge(handle) else {
-            return false;
+            return 0;
         };
         let read = env
             .with_env(|env| -> jni::errors::Result<_> {
@@ -623,16 +623,18 @@ extern "system" fn native_drop<'local>(
             })
             .into_outcome();
         let jni::Outcome::Ok((mime_types, clip)) = read else {
-            return false;
+            return 0;
         };
         let scale = view.scale();
-        view.transfer.drop_clip(
-            &view,
-            (f64::from(x) / scale, f64::from(y) / scale),
-            &mime_types,
-            local,
-            &clip,
-        )
+        view.transfer
+            .drop_clip(
+                &view,
+                (f64::from(x) / scale, f64::from(y) / scale),
+                &mime_types,
+                local,
+                &clip,
+            )
+            .map_or(0, super::drag::java_key)
     })
 }
 
