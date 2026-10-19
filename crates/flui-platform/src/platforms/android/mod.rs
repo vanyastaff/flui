@@ -78,7 +78,7 @@ use crate::{
     shared::{
         PlatformHandlers,
         android_display::idle_wait_until,
-        android_lifecycle::{ActivityEvent, ActivityLifecycle, ActivitySignal, Reaction},
+        android_lifecycle::{ActivityEvent, ActivityLifecycle, ActivityTarget, Reaction},
         android_os_version::{AndroidApi, LoadedLibraries, SymbolSource},
         owner_signal::OwnerSignal,
     },
@@ -218,61 +218,18 @@ impl AndroidPlatform {
         &self.app
     }
 
-    /// Record what an Activity callback told, then tell the window (its state
-    /// is published first, so an observer reads the new value) or, for the end
-    /// of the session, the host.
-    fn announce(&self, signal: ActivitySignal) {
-        let window = || self.window.lock().clone();
-        match signal {
-            ActivitySignal::Visibility(visible) => {
-                self.activity.visible.store(visible, Ordering::SeqCst);
-                if let Some(window) = window() {
-                    window.publish_state();
-                    window
-                        .callbacks()
-                        .dispatch_visibility_status_change(visible);
-                }
-            }
-            ActivitySignal::Execution(state) => {
-                self.activity
-                    .resumed
-                    .store(state == WindowExecutionState::Running, Ordering::SeqCst);
-                if let Some(window) = window() {
-                    window.publish_state();
-                    window.callbacks().dispatch_execution_state_change(state);
-                }
-            }
-            ActivitySignal::Focus(focused) => {
-                self.activity.focused.store(focused, Ordering::SeqCst);
-                if let Some(window) = window() {
-                    window.publish_state();
-                    window.callbacks().dispatch_active_status_change(focused);
-                }
-            }
-            ActivitySignal::SessionEnded => self.end_session(),
-        }
-    }
-
-    /// Tell the host the system wants memory back.
-    fn announce_pressure(&self, pressure: Option<MemoryPressureLevel>) {
-        if let Some(level) = pressure {
-            self.notices.dispatch(SystemNotice::MemoryPressure(level));
-        }
-    }
-
-    /// Tell the host the process may be killed without notice. The system does
-    /// not wait for an answer, so this is [`SessionEndPhase::Ending`] only: no
-    /// query, no block.
-    ///
-    /// The hook is out of its slot while it runs, so a session end it causes
-    /// itself finds none and is dropped rather than recursed into.
-    fn end_session(&self) {
-        let hook = self.handlers.lock().session_end.take();
-        let Some(mut hook) = hook else { return };
-        let _ = hook(SessionEndPhase::Ending);
-        let mut handlers = self.handlers.lock();
-        if handlers.session_end.is_none() {
-            handlers.session_end = Some(hook);
+    /// Record one fact of the Activity's lifecycle and tell the window: its
+    /// state is published first, so an observer reads the new value.
+    fn window_fact_changed(
+        &self,
+        record: impl FnOnce(&ActivityFlags),
+        notify: impl FnOnce(&AndroidWindow),
+    ) {
+        record(&self.activity);
+        let window = self.window.lock().clone();
+        if let Some(window) = window {
+            window.publish_state();
+            notify(&window);
         }
     }
 
@@ -441,6 +398,51 @@ impl AndroidPlatform {
     }
 }
 
+impl ActivityTarget for AndroidPlatform {
+    fn visibility_changed(&self, visible: bool) {
+        self.window_fact_changed(
+            |flags| flags.visible.store(visible, Ordering::SeqCst),
+            |window| {
+                window
+                    .callbacks()
+                    .dispatch_visibility_status_change(visible);
+            },
+        );
+    }
+
+    fn execution_changed(&self, state: WindowExecutionState) {
+        self.window_fact_changed(
+            |flags| {
+                flags
+                    .resumed
+                    .store(state == WindowExecutionState::Running, Ordering::SeqCst);
+            },
+            |window| {
+                window.callbacks().dispatch_execution_state_change(state);
+            },
+        );
+    }
+
+    fn focus_changed(&self, focused: bool) {
+        self.window_fact_changed(
+            |flags| flags.focused.store(focused, Ordering::SeqCst),
+            |window| {
+                window.callbacks().dispatch_active_status_change(focused);
+            },
+        );
+    }
+
+    /// The system does not wait for an answer, so this is
+    /// [`SessionEndPhase::Ending`] only: no query, no block.
+    fn session_ended(&self) {
+        let _ = PlatformHandlers::run_session_end(&self.handlers, SessionEndPhase::Ending);
+    }
+
+    fn memory_pressure(&self, level: MemoryPressureLevel) {
+        self.notices.dispatch(SystemNotice::MemoryPressure(level));
+    }
+}
+
 impl Platform for AndroidPlatform {
     fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
         flui_platform_api::WindowCapabilities::NONE
@@ -574,11 +576,11 @@ impl Platform for AndroidPlatform {
                     };
                     platform.app.poll_events(Some(timeout), |event| {
                 if let PollEvent::Main(main_event) = event {
-                    // What the Activity callback means (`shared::android_lifecycle`):
-                    // the signal is delivered by the arm, at the point the
-                    // arm's other steps need it; the memory pressure follows
-                    // the arm.
-                    let reaction = ActivityEvent::from_main(&main_event).map_or_else(
+                    // What the Activity callback means (`shared::android_lifecycle`).
+                    // An arm that must act around its signal takes and delivers it
+                    // itself; what is left of the reaction (the signal of every other
+                    // callback, then the memory pressure) is delivered after the match.
+                    let mut reaction = ActivityEvent::from_main(&main_event).map_or_else(
                         Reaction::default,
                         |event| {
                             platform.lifecycle.lock().react(event, || {
@@ -588,15 +590,12 @@ impl Platform for AndroidPlatform {
                     );
                     match main_event {
                         // Visibility, focus gained and the end of the session
-                        // have nothing to do besides announcing themselves.
+                        // have nothing to do besides delivering their signal.
                         MainEvent::Start
                         | MainEvent::Stop
                         | MainEvent::GainedFocus
                         | MainEvent::SaveState { .. } => {
                             tracing::debug!(event = ?main_event, "Android: lifecycle callback");
-                            if let Some(signal) = reaction.signal {
-                                platform.announce(signal);
-                            }
                         }
                         MainEvent::Resume { .. } => {
                             tracing::info!(
@@ -613,8 +612,8 @@ impl Platform for AndroidPlatform {
                             // a `true` that finds a live surface simply
                             // replaces it — see
                             // `PlatformWindow::on_surface_status_change`.
-                            if let Some(signal) = reaction.signal {
-                                platform.announce(signal);
+                            if let Some(signal) = reaction.signal.take() {
+                                signal.deliver(&*platform);
                             }
                             // The window is cloned out of its lock: the surface
                             // observer runs embedder code that may call back
@@ -644,8 +643,8 @@ impl Platform for AndroidPlatform {
                             if let Some(w) = window {
                                 w.callbacks().dispatch_surface_status_change(false);
                             }
-                            if let Some(signal) = reaction.signal {
-                                platform.announce(signal);
+                            if let Some(signal) = reaction.signal.take() {
+                                signal.deliver(&*platform);
                             }
                         }
                         MainEvent::InitWindow { .. } => {
@@ -734,9 +733,6 @@ impl Platform for AndroidPlatform {
                         MainEvent::LostFocus => {
                             platform.cancel_input_contacts(flui_platform_api::pointer::CancelReason::FocusLost);
                             tracing::debug!("Android: Lost focus");
-                            if let Some(signal) = reaction.signal {
-                                platform.announce(signal);
-                            }
                         }
                         MainEvent::ConfigChanged { .. } => {
                             tracing::debug!("Android: Config changed");
@@ -762,7 +758,7 @@ impl Platform for AndroidPlatform {
                         }
                         _ => {}
                     }
-                    platform.announce_pressure(reaction.pressure);
+                    reaction.deliver(&*platform);
                 }
                     });
                 });

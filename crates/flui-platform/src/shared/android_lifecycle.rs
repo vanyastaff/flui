@@ -109,6 +109,42 @@ pub(crate) struct Reaction {
     pub pressure: Option<MemoryPressureLevel>,
 }
 
+/// Where a [`Reaction`] ends up: the backend's window and host callbacks.
+pub(crate) trait ActivityTarget {
+    fn visibility_changed(&self, visible: bool);
+    fn execution_changed(&self, state: WindowExecutionState);
+    fn focus_changed(&self, focused: bool);
+    /// The process may be killed now; see [`ActivitySignal::SessionEnded`].
+    fn session_ended(&self);
+    fn memory_pressure(&self, level: MemoryPressureLevel);
+}
+
+impl ActivitySignal {
+    /// Hand this signal to `target`.
+    pub(crate) fn deliver(self, target: &impl ActivityTarget) {
+        match self {
+            Self::Visibility(visible) => target.visibility_changed(visible),
+            Self::Execution(state) => target.execution_changed(state),
+            Self::Focus(focused) => target.focus_changed(focused),
+            Self::SessionEnded => target.session_ended(),
+        }
+    }
+}
+
+impl Reaction {
+    /// Hand what is left of this reaction to `target`: the signal, if the
+    /// caller did not take it to deliver at a point of its own, then the
+    /// memory pressure.
+    pub(crate) fn deliver(self, target: &impl ActivityTarget) {
+        if let Some(signal) = self.signal {
+            signal.deliver(target);
+        }
+        if let Some(level) = self.pressure {
+            target.memory_pressure(level);
+        }
+    }
+}
+
 /// The mapping from Activity callbacks to [`Reaction`]s. It is stateless
 /// except for the trim level last seen, which suppresses a level that is read
 /// again unchanged.
@@ -192,6 +228,71 @@ mod tests {
     /// One event with the trim level it finds, from a fresh lifecycle.
     fn react(event: ActivityEvent, trim_level: Option<i32>) -> Reaction {
         ActivityLifecycle::default().react(event, || trim_level)
+    }
+
+    /// Everything a target was told, in order.
+    #[derive(Default)]
+    struct Recorder(std::cell::RefCell<Vec<String>>);
+
+    impl Recorder {
+        fn told(&self) -> Vec<String> {
+            self.0.borrow().clone()
+        }
+    }
+
+    impl super::ActivityTarget for Recorder {
+        fn visibility_changed(&self, visible: bool) {
+            self.0.borrow_mut().push(format!("visible {visible}"));
+        }
+        fn execution_changed(&self, state: flui_platform_api::WindowExecutionState) {
+            self.0.borrow_mut().push(format!("execution {state:?}"));
+        }
+        fn focus_changed(&self, focused: bool) {
+            self.0.borrow_mut().push(format!("focus {focused}"));
+        }
+        fn session_ended(&self) {
+            self.0.borrow_mut().push("session ended".into());
+        }
+        fn memory_pressure(&self, level: MemoryPressureLevel) {
+            self.0.borrow_mut().push(format!("pressure {level:?}"));
+        }
+    }
+
+    #[test]
+    fn android_lifecycle_mapping_reaches_the_target() {
+        // Each callback is told to the target once, signal before pressure,
+        // and nothing else.
+        let mut lifecycle = ActivityLifecycle::default();
+        let mut told = |event, level| {
+            let target = Recorder::default();
+            lifecycle.react(event, || Some(level)).deliver(&target);
+            target.told()
+        };
+        assert_eq!(told(Start, 0), ["visible true"]);
+        assert_eq!(told(Stop, 0), ["visible false"]);
+        assert_eq!(told(Resume, 0), ["execution Running"]);
+        assert_eq!(told(GainedFocus, 0), ["focus true"]);
+        assert_eq!(told(LostFocus, 0), ["focus false"]);
+        assert_eq!(told(SaveState, 0), ["session ended"]);
+        assert_eq!(told(LowMemory, 0), ["pressure Critical"]);
+        assert_eq!(
+            told(Pause, 40),
+            ["execution Suspended", "pressure Moderate"]
+        );
+        assert_eq!(told(Stop, 40), ["visible false"], "the level is unchanged");
+    }
+
+    #[test]
+    fn android_lifecycle_mapping_lets_the_caller_deliver_the_signal_first() {
+        // `Pause` releases the surface before it suspends: the caller takes the
+        // signal, and the rest of the reaction is only the pressure.
+        let target = Recorder::default();
+        let mut reaction = ActivityLifecycle::default().react(Pause, || Some(15));
+        let signal = reaction.signal.take().expect("Pause has a signal");
+        reaction.deliver(&target);
+        assert_eq!(target.told(), ["pressure Critical"]);
+        signal.deliver(&target);
+        assert_eq!(target.told(), ["pressure Critical", "execution Suspended"]);
     }
 
     #[test]
