@@ -149,12 +149,16 @@ fn targets(meta: &cargo_metadata::Metadata, tests: bool) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     for package in meta.workspace_packages() {
         for target in &package.targets {
+            let gated = target
+                .required_features
+                .iter()
+                .any(|feature| TESTING_FEATURES.contains(&feature.as_str()));
             let wanted = target.kind.iter().any(|kind| {
                 let kind = kind.to_string();
                 if tests {
-                    kind == "test" || kind == "bench"
+                    kind == "test" || kind == "bench" || gated
                 } else {
-                    PRODUCTION.contains(&kind.as_str())
+                    PRODUCTION.contains(&kind.as_str()) && !gated
                 }
             });
             if wanted {
@@ -378,8 +382,10 @@ impl<'ast> Visit<'ast> for Scan {
             _ => &[],
         };
         self.scoped(attrs, |this| {
-            if let ImplItem::Fn(function) = item {
-                this.record(Kind::Pump, &function.sig.ident);
+            match item {
+                ImplItem::Fn(function) => this.record(Kind::Pump, &function.sig.ident),
+                ImplItem::Type(ty) => this.record(Kind::Double, &ty.ident),
+                _ => {}
             }
             visit::visit_impl_item(this, item);
         });
@@ -393,8 +399,10 @@ impl<'ast> Visit<'ast> for Scan {
             _ => &[],
         };
         self.scoped(attrs, |this| {
-            if let TraitItem::Fn(function) = item {
-                this.record(Kind::Pump, &function.sig.ident);
+            match item {
+                TraitItem::Fn(function) => this.record(Kind::Pump, &function.sig.ident),
+                TraitItem::Type(ty) => this.record(Kind::Double, &ty.ident),
+                _ => {}
             }
             visit::visit_trait_item(this, item);
         });
@@ -965,6 +973,19 @@ fn row_a_raw_testing_module_is_a_kit() {
     assert!(found.is_empty(), "{found:?}");
 }
 
+fn row_associated_types_are_doubles() {
+    let in_trait =
+        "#[cfg(test)]\nmod t {\n    trait Fixture {\n        type FakeClock;\n    }\n}\n";
+    let in_impl = "#[cfg(test)]\nmod t {\n    struct S;\n    impl Iterator for S {\n        type Item = u8;\n        type FakeClock = u8;\n    }\n}\n";
+    for lib in [in_trait, in_impl] {
+        let found = findings_for(&[("src/lib.rs", lib)], &[], HEADER);
+        assert!(
+            found.iter().any(|(_, kind)| *kind == "unlisted"),
+            "{lib}: {found:?}"
+        );
+    }
+}
+
 fn row_a_src_folder_inside_a_test_target_is_not_a_kit() {
     let found = findings_for(
         &[
@@ -1087,6 +1108,10 @@ fn rows() -> Vec<(&'static str, fn())> {
         (
             "a_raw_testing_module_is_a_kit",
             row_a_raw_testing_module_is_a_kit,
+        ),
+        (
+            "associated_types_are_doubles",
+            row_associated_types_are_doubles,
         ),
         (
             "a_src_folder_inside_a_test_target_is_not_a_kit",
