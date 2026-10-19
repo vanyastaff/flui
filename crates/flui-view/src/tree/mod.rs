@@ -15,10 +15,10 @@ pub mod reconcile_event;
 
 // `test_utils` carries the `ReconcileEventCollector` Layer fixture
 // (FR-035). Gated to `cfg(test)` for in-crate test use
-// and to `feature = "test-utils"` for downstream test crates that
+// and to `feature = "testing"` for downstream test crates that
 // install the collector to assert on the trace stream (the
 // 6-permutation corpus + GlobalKey reparenting tests).
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "testing"))]
 pub mod test_utils;
 
 pub use element_tree::{ElementNode, ElementTree};

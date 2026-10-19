@@ -92,7 +92,7 @@ impl HeldPointerQueue {
     }
 
     /// Admit one event without ever exposing more than the fixed capacity.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[doc(hidden)]
     pub fn append(&mut self, event: PointerEvent) {
         self.append_with_active_contact(event, false);
@@ -305,7 +305,7 @@ impl HeldPointerQueue {
     }
 
     /// Events held, counting those handed out for an in-flight replay.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[doc(hidden)]
     #[must_use]
     pub fn len(&self) -> usize {
