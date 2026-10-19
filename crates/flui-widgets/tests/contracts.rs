@@ -124,6 +124,7 @@ fn drag_and_drop() {
             ("drag_and_drop::spring_loading_fires_once_per_hover", crate::drag_and_drop::spring_loading_fires_once_per_hover),
             ("drag_and_drop::a_long_press_trigger_lifts_after_the_hold", crate::drag_and_drop::a_long_press_trigger_lifts_after_the_hold),
             ("drag_and_drop::a_drag_reports_to_the_callbacks_it_started_with", crate::drag_and_drop::a_drag_reports_to_the_callbacks_it_started_with),
+            ("drag_and_drop::the_feedback_keeps_its_anchor_in_an_inset_overlay", crate::drag_and_drop::the_feedback_keeps_its_anchor_in_an_inset_overlay),
             ("drag_and_drop::autoscroll_finds_the_target_scrolled_under_a_resting_pointer", crate::drag_and_drop::autoscroll_finds_the_target_scrolled_under_a_resting_pointer),
             ("drag_and_drop::unmounting_a_target_releases_its_receiver", crate::drag_and_drop::unmounting_a_target_releases_its_receiver),
             ("drag_and_drop::a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag", crate::drag_and_drop::a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag),

@@ -522,8 +522,10 @@ struct Feedback {
 struct FeedbackPlace {
     /// The pointer's offset from the feedback's top-left corner.
     anchor: Offset<f64>,
-    /// The top-left corner in the overlay's space.
-    at: Cell<Offset<f64>>,
+    /// The pointer in the window's space. The entry resolves it into the
+    /// overlay's space when it builds, once it knows its overlay node: a move
+    /// before the entry's first build has no overlay to resolve against.
+    pointer: Cell<Offset<f64>>,
     /// The render node the entry is laid out in, published by its anchor, and
     /// the tree that maps the window's space to it.
     overlay_node: Cell<Option<flui_foundation::RenderId>>,
@@ -540,7 +542,7 @@ impl Feedback {
     ) -> Rc<Self> {
         let place = Rc::new(FeedbackPlace {
             anchor,
-            at: Cell::new(Offset::ZERO),
+            pointer: Cell::new(Offset::ZERO),
             overlay_node: Cell::new(None),
             pipeline,
             rebuild: RefCell::new(None),
@@ -569,8 +571,7 @@ impl Feedback {
         if self.removed.get() {
             return;
         }
-        let origin = self.place.overlay_origin();
-        self.place.at.set(global - origin - self.place.anchor);
+        self.place.pointer.set(global);
         let rebuild = self.place.rebuild.borrow().clone();
         if let Some(rebuild) = rebuild {
             rebuild.schedule(flui_view::RebuildReason::StateChange);
@@ -585,6 +586,11 @@ impl Feedback {
 }
 
 impl FeedbackPlace {
+    /// The feedback's top-left corner in the overlay's space.
+    fn top_left(&self) -> Offset<f64> {
+        self.pointer.get() - self.overlay_origin() - self.anchor
+    }
+
     /// Where the overlay's origin is in the window: the feedback follows the
     /// pointer's window position wherever the overlay sits.
     fn overlay_origin(&self) -> Offset<f64> {
@@ -635,7 +641,7 @@ impl ViewState<FeedbackAnchor> for FeedbackAnchorState {
     }
 
     fn build(&self, view: &FeedbackAnchor, _ctx: &dyn BuildContext) -> impl IntoView {
-        let at = view.place.at.get();
+        let at = view.place.top_left();
         Stack::new(vec![
             // The feedback sits under the pointer, where the drag hit-tests:
             // a hit-testable one would hide every target beneath it.
