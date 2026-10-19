@@ -12,6 +12,7 @@ use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
 
 use crate::{
+    WindowExecutionState,
     shared::{WindowCallbacks, window_state::WindowStateCell},
     traits::{
         CursorError, OpenWindowError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance,
@@ -87,9 +88,14 @@ fn sample_state(
             state.visible,
         )
     };
-    let fullscreen = canvas
-        .owner_document()
-        .is_some_and(|document| document.fullscreen_element().is_some());
+    // The canvas, or an element that holds it: another element of the page (a
+    // video) can be fullscreen while this window is not, and an application
+    // that wraps the canvas in a container makes that container fullscreen.
+    let fullscreen = canvas.owner_document().is_some_and(|document| {
+        document
+            .fullscreen_element()
+            .is_some_and(|element| element.contains(Some(canvas)))
+    });
     WindowState::new(WindowGeometry::new(None, size), size)
         .with_mode(if fullscreen {
             WindowMode::Fullscreen
@@ -111,6 +117,8 @@ struct WebWindowState {
     scale_factor: f64,
     focused: bool,
     visible: bool,
+    /// What the Page Lifecycle API last said: a frozen page runs no script.
+    execution: WindowExecutionState,
 }
 
 // SAFETY: WASM is single-threaded — no data races possible
@@ -253,6 +261,7 @@ impl WebWindow {
             scale_factor,
             focused: effective_focus(&canvas),
             visible: !document.hidden(),
+            execution: WindowExecutionState::Running,
         };
 
         let state = Arc::new(Mutex::new(state));
@@ -327,6 +336,15 @@ impl WebWindow {
             callbacks: Arc::clone(&self.callbacks),
             observed: Cell::new(self.state.lock().focused),
             publisher: self.publisher(),
+        }
+    }
+
+    /// The handle by which the Page Lifecycle listeners `super::events`
+    /// registers set the window's execution state.
+    pub(super) fn execution_sync(&self) -> ExecutionSync {
+        ExecutionSync {
+            state: Arc::clone(&self.state),
+            callbacks: Arc::clone(&self.callbacks),
         }
     }
 
@@ -435,6 +453,28 @@ impl VisibilitySync {
     }
 }
 
+/// Records what the Page Lifecycle API says about the page and reports each
+/// change once; see [`WebWindow::execution_sync`].
+pub(super) struct ExecutionSync {
+    state: Arc<Mutex<WebWindowState>>,
+    callbacks: Arc<WindowCallbacks>,
+}
+
+impl ExecutionSync {
+    /// The page is frozen (`Suspended`) or runs again (`Running`). The state
+    /// lock is released before the dispatch, which runs embedder callbacks.
+    pub(super) fn set(&self, next: WindowExecutionState) {
+        {
+            let mut state = self.state.lock();
+            if state.execution == next {
+                return;
+            }
+            state.execution = next;
+        }
+        self.callbacks.dispatch_execution_state_change(next);
+    }
+}
+
 /// See [`WebWindow::layout_sync`].
 pub(super) struct LayoutSync {
     canvas: web_sys::HtmlCanvasElement,
@@ -522,6 +562,10 @@ impl PlatformWindow for WebWindow {
 
     fn is_visible(&self) -> bool {
         self.state.lock().visible
+    }
+
+    fn execution_state(&self) -> WindowExecutionState {
+        self.state.lock().execution
     }
 
     // ==================== State and commands (ADR-0237) ====================
