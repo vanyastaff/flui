@@ -39,6 +39,15 @@ pub(crate) struct TrackLimits {
     pub(crate) max: Option<PixelSize>,
 }
 
+impl TrackLimits {
+    /// `size` held within the limits: raised to the minimum, then cut to the
+    /// maximum (which is never below the minimum).
+    pub(crate) fn clamp(self, size: PixelSize) -> PixelSize {
+        let raised = self.min.map_or(size, |min| size.component_max(min));
+        self.max.map_or(raised, |max| raised.component_min(max))
+    }
+}
+
 /// The inner-size limits as outer sizes at `dpi`.
 ///
 /// `frame` is the width and height the window's non-client area adds to its
@@ -230,6 +239,20 @@ mod tests {
         );
     }
 
+    fn a_size_is_held_within_the_limits() {
+        let limits = track_limits(
+            Some(Size::new(400.0, 300.0)),
+            Some(Size::new(800.0, 600.0)),
+            96,
+            FRAME,
+        );
+        assert_eq!(limits.clamp(px(100, 100)), px(416, 339));
+        assert_eq!(limits.clamp(px(5000, 5000)), px(816, 639));
+        assert_eq!(limits.clamp(px(500, 400)), px(500, 400));
+        let none = track_limits(None, None, 96, FRAME);
+        assert_eq!(none.clamp(px(1, 1)), px(1, 1));
+    }
+
     fn a_maximum_below_the_smallest_size_is_that_size() {
         let capped = constrain(
             os_default(),
@@ -291,6 +314,10 @@ mod tests {
                 (
                     "the_maximum_caps_dragging_and_maximizing",
                     the_maximum_caps_dragging_and_maximizing as fn(),
+                ),
+                (
+                    "a_size_is_held_within_the_limits",
+                    a_size_is_held_within_the_limits as fn(),
                 ),
                 (
                     "a_maximum_below_the_smallest_size_is_that_size",

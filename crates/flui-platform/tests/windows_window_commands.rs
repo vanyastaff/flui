@@ -453,6 +453,24 @@ fn normal_on_a_hidden_maximized_window_restores_it_without_showing() {
     assert!(shown(&window));
 }
 
+fn limits_set_while_maximized_hold_when_it_is_restored() {
+    let platform = platform();
+    // Without a sizing border the system does not ask for the limits on its own.
+    let window = open(&platform, options().with_decorated(false));
+    apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
+    apply(
+        &window,
+        WindowCommand::SetConstraints(SizeConstraints::new(None, Some(Size::new(400.0, 300.0)))),
+    );
+    apply(&window, WindowCommand::SetMode(WindowMode::Normal));
+    let state = window.state();
+    assert!(
+        state.content_size.width <= 402.0 && state.content_size.height <= 302.0,
+        "restored to {:?} past the maximum",
+        state.content_size
+    );
+}
+
 fn limits_set_in_fullscreen_hold_when_it_ends() {
     let platform = platform();
     let window = open(&platform, options());
@@ -623,6 +641,8 @@ fn a_position_beyond_the_screens_does_not_overflow() {
     let window = open(&platform, options());
     apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
     let _ = window.apply(WindowCommand::SetPosition(Point::new(3.0e9, 3.0e9)));
+    let _ = window.apply(WindowCommand::SetSize(Size::new(3.0e9, 3.0e9)));
+    let _ = window.apply(WindowCommand::SetPosition(Point::new(-3.0e9, -3.0e9)));
     apply(&window, WindowCommand::SetMode(WindowMode::Normal));
 }
 
@@ -805,6 +825,10 @@ fn native_window_commands() {
         (
             "normal_on_a_hidden_maximized_window_restores_it_without_showing",
             normal_on_a_hidden_maximized_window_restores_it_without_showing,
+        ),
+        (
+            "limits_set_while_maximized_hold_when_it_is_restored",
+            limits_set_while_maximized_hold_when_it_is_restored,
         ),
         (
             "limits_set_in_fullscreen_hold_when_it_ends",

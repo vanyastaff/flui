@@ -21,25 +21,37 @@ impl WindowContext {
         &self,
         hwnd: HWND,
     ) -> Option<crate::shared::windows_window_limits::TrackLimits> {
+        if self.mode.get().holds_fullscreen() || self.limits_waived.get() {
+            return None;
+        }
+        // SAFETY: a plain query of the live window the message was sent to.
+        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
+        self.limits_with_frame_of(hwnd, style)
+    }
+
+    /// The app's size limits as outer sizes, whatever mode the window is in,
+    /// with the frame measured for `style`: the limits the rectangle a window
+    /// returns to must keep. `None` when there are none.
+    pub(super) fn limits_with_frame_of(
+        &self,
+        hwnd: HWND,
+        style: u32,
+    ) -> Option<crate::shared::windows_window_limits::TrackLimits> {
         use crate::shared::windows_window_limits::{PixelSize, track_limits};
 
         let constraints = self.constraints.get();
-        if (constraints.min.is_none() && constraints.max.is_none())
-            || self.mode.get().holds_fullscreen()
-            || self.limits_waived.get()
-        {
+        if constraints.min.is_none() && constraints.max.is_none() {
             return None;
         }
-        // SAFETY: plain queries of the live window the message was sent to.
-        let (dpi, style, ex_style) = unsafe {
+        // SAFETY: plain queries of the live window.
+        let (dpi, ex_style) = unsafe {
             (
                 windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd),
-                GetWindowLongPtrW(hwnd, GWL_STYLE) as u32,
                 GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32,
             )
         };
         // The frame the window adds around its content at this DPI, measured
-        // for the style it has, not the rectangle it has.
+        // for the style given, not the rectangle it has.
         let (frame_width, frame_height) =
             super::window::outer_size(style, ex_style, dpi, (0, 0)).unwrap_or((0, 0));
         Some(track_limits(
