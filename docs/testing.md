@@ -43,11 +43,12 @@ the same bug found by a whole-demo snapshot names a demo.
 
 Two structural rules hold across the stack:
 
-- **Test-only APIs live in `flui-testing`**, not behind a `testing` feature on a
-  shipped crate. It sits above the frame runtime and the widget catalog, so
+- **Test-only APIs live in the kit of their layer** (ADR-0243). From the frame layer up that kit is
+  `flui-testing`: it sits above the frame runtime and the widget catalog, so
   the widget harness lives there too and drives the product frame
   transaction: `lay_out` mounts its tree in a `HeadlessHost`, whose frames are
-  `UiRuntime::pump` (ADR-0083 §4).
+  `UiRuntime::pump` (ADR-0083 §4). A crate below it exposes its own kit behind a
+  feature named `testing`, never `test-support` or `test-utils`.
 - **On the substrate driver, mount through `HeadlessBinding::mount_root`.** It owns the eight-step
   bootstrap whose ordering is load-bearing, and its contract is that the
   bootstrap frame is the same frame `pump_frame` runs (same layout↔build
