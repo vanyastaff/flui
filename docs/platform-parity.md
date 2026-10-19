@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-18 · **Change:** minor (Windows window commands and system events; macOS, iOS and Android window lifecycle, Web page lifecycle) ·
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-19 · **Change:** minor (version floor row) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -20,7 +20,7 @@ test can drive the row.
 | ❔ | Not audited yet |
 
 **Overall: ~27% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments) ·
-455–755 h to full (estimated agent hours, ❔ rows excluded; the native Linux backend is counted once,
+467–775 h to full (estimated agent hours, ❔ rows excluded; the native Linux backend is counted once,
 in [`gaps.md`](gaps.md), not per row).**
 
 When work lands, update the row here and its entry in [`gaps.md`](gaps.md), and bump this file's
@@ -39,14 +39,14 @@ Counted over every row of the core and system-service sections.
 
 | Environment | Backend | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready |
 |---|---|---|---|---|---|---|---|---|
-| Windows | Win32 (native) | 9 | 34 | 31 | 17 | 2 | 35% | no |
-| macOS | AppKit (native) | 9 | 26 | 39 | 17 | 2 | 29% | no |
-| Wayland | winit (fallback) | 6 | 22 | 40 | 23 | 2 | 24% | no |
-| X11 | winit (fallback) | 8 | 22 | 37 | 24 | 2 | 28% | no |
-| iOS | UIKit (native) | 7 | 16 | 41 | 29 | 0 | 23% | no |
-| Android | android-activity (native) | 10 | 14 | 40 | 29 | 0 | 27% | no |
-| Web | wasm canvas (native) | 7 | 17 | 34 | 34 | 1 | 26% | no |
-| Headless | test double | 33 | 0 | 55 | 5 | 0 | 38% | — |
+| Windows | Win32 (native) | 9 | 34 | 32 | 17 | 2 | 34% | no |
+| macOS | AppKit (native) | 9 | 26 | 40 | 17 | 2 | 29% | no |
+| Wayland | winit (fallback) | 6 | 22 | 41 | 23 | 2 | 24% | no |
+| X11 | winit (fallback) | 8 | 22 | 38 | 24 | 2 | 27% | no |
+| iOS | UIKit (native) | 7 | 16 | 42 | 29 | 0 | 23% | no |
+| Android | android-activity (native) | 10 | 14 | 41 | 29 | 0 | 26% | no |
+| Web | wasm canvas (native) | 7 | 17 | 35 | 34 | 1 | 26% | no |
+| Headless | test double | 33 | 0 | 55 | 6 | 0 | 38% | — |
 
 ## Core
 
@@ -55,6 +55,7 @@ Counted over every row of the core and system-service sections.
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes | Hours |
 |---|---|---|---|---|---|---|---|---|---|---|
 | Event loop, startup and wake-ups | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Runs: `device windows-input`, the macOS live check, `live-smoke` (Xvfb and `--wayland`), the iOS Simulator, the Android emulator, the Web counter | 0 |
+| Version floor: declared, packaged, refused below it | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | [ADR-0244](adr/ADR-0244-os-version-floors-and-gates.md) sets a floor per environment (the generated version map will list them); none is packaged from one source or checked at start yet, and none has run on its floor version. Headless has no OS version | 12–20 |
 | Quit, exit request, last-window policy | 🟡 | ✅ | ✅ | ✅ | — | 🟡 | 🟡 | ✅ | macOS Cmd+Q and close ran; `live-smoke` checks the exit code; iOS has no quit API | 2–3 |
 | Close request with veto | 🟡 | ✅ | 🟡 | 🟡 | — | — | ❌ | ✅ | Web has no `beforeunload` | 2–3 |
 | Reopen with no windows (Dock click) | — | ✅ | — | — | — | — | — | ❌ | `device macos-reopen`; headless can't drive it | 1 |
@@ -234,3 +235,4 @@ exists yet.
 | 2026-10-18 | minor | Wayland displays and refresh rate ran live (`examples/displays.rs` under WSLg: an output grown from 640×480 to 3440×1440 keeping `id 1`, then a second same-named output added as `id 2`); the two Wayland cells become ✅ and the overall figure is recounted: 56 ✅, 141 🟡, 477 applicable cells, (56 + 70.5) / 477 = 26.5%, ~27%; a Wayland scale change cannot be observed through WSLg and a window moved between the two outputs was not run |
 | 2026-10-18 | minor | macOS and iOS window lifecycle: macOS reads and sets window state through `NSWindow`, delivers sleep, wake, lock and memory pressure, and holds a session end with `NSTerminateLater`; iOS maps the memory warning and `applicationWillTerminate:`; display bounds and persistent keys on macOS; type-checked only, the cells stay 🟡 until [#1736](https://github.com/vanyastaff/flui/issues/1736) runs |
 | 2026-10-18 | minor | Web page lifecycle: `freeze` and `resume` set the execution state, `pagehide` is reported as the session ending (and a page restored from the back/forward cache as cancelling it), `fullscreenchange` republishes the window state, and a lost WebGL context or WebGPU device rebuilds the renderer at once; the page events ran against a fake page and the renderer rebuild is compile-checked, so the cells are 🟡; the two cells it moves from ❌ and — to 🟡 leave the overall figure at ~27% |
+| 2026-10-19 | minor | A "Version floor" row: ADR-0244 declares a floor per environment; nothing enforces it yet, so every cell is ❌ |
