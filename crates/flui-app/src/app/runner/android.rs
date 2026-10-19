@@ -339,25 +339,29 @@ where
             installation.terminal_callbacks(&owner.shared());
         });
 
-        // Window active status. On Android this one callback conflates real
-        // window focus (`MainEvent::GainedFocus`/`LostFocus`) with the app's
-        // actual pause/resume signal (`MainEvent::Resume`/`Pause` currently fire
-        // the identical `dispatch_active_status_change` — see
-        // `flui-platform`'s `platforms/android/mod.rs`); a dedicated
-        // `MainEvent` -> lifecycle callback that tells them apart is a named
-        // follow-up (ADR-0035), not this PR. Until that split lands, this keeps
-        // the existing transport but fixes the mapping: `false` ladders all the
-        // way to `Paused` and `true` back to `Resumed` — Android's
-        // backgrounding signal needs the deeper ladder the desktop/web
-        // `(visible, focused)` derivation (which only ever reaches
-        // `Inactive`/`Hidden`) does not produce.
-        window.on_active_status_change(Box::new(move |resumed| {
-            let target = if resumed {
-                AppLifecycleState::Resumed
-            } else {
-                AppLifecycleState::Paused
-            };
-            let _ = owner_dispatch.runtime().lifecycle(target);
+        // The Activity's three lifecycle facts reach the runtime as they are,
+        // and `derive_lifecycle_state` builds the application state from them:
+        // on screen (`onStart`/`onStop`), allowed to run (`onResume`/`onPause`)
+        // and holding input focus. Focus alone must not stand for the other two
+        // (a dialog or the notification shade takes focus from a running
+        // Activity), so no callback here sets the lifecycle itself.
+        window.on_active_status_change(Box::new(move |focused| {
+            let _ = dispatch_platform_ui_runtime(
+                owner_dispatch,
+                RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
+            );
+        }));
+        window.on_visibility_status_change(Box::new(move |visible| {
+            let _ = dispatch_platform_ui_runtime(
+                owner_dispatch,
+                RuntimeTask::Event(RuntimeEvent::WindowVisibility(visible)),
+            );
+        }));
+        window.on_execution_state_change(Box::new(move |state| {
+            let _ = dispatch_platform_ui_runtime(
+                owner_dispatch,
+                RuntimeTask::Event(RuntimeEvent::WindowExecution(state)),
+            );
         }));
 
         // 8b. Surface availability (issue #1146): the release that has to
@@ -475,14 +479,23 @@ where
         installation.observe_appearance();
         installation.observe_display();
         installation.observe_window_state();
+        // Registered above, so a fact that changed during bootstrap is not lost
+        // between this sample and the first callback.
+        installation.observe(flui_runtime::owner::WindowObservation::Snapshot {
+            execution: window.execution_state(),
+            focused: window.is_focused(),
+            visible: window.is_visible(),
+        });
         installation.observe(flui_runtime::owner::WindowObservation::Metrics {
             size: window.logical_size(),
             scale_factor: window.scale_factor(),
         });
         APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
 
-        // Mark lifecycle as started (Resumed). Routed through dispatch --
-        // see `run_desktop`'s matching comment for why.
+        // Seed the host's own lifecycle as Resumed. It does not decide what a
+        // presentation is: the window's visible, running and focused facts,
+        // sampled above, do. Routed through dispatch -- see `run_desktop`'s
+        // matching comment for why.
         debug_assert_eq!(
             std::thread::current().id(),
             owner_dispatch.owner_thread,

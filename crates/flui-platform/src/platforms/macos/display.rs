@@ -30,14 +30,15 @@ use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{NSApplicationDidChangeScreenParametersNotification, NSScreen};
 use objc2_foundation::{
     NSArray, NSDictionary, NSNotification, NSNotificationCenter, NSNumber, NSObjectProtocol,
-    NSString,
+    NSRect, NSString,
 };
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform_api::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
 
 use crate::error::PlatformError;
-use crate::shared::apple_display_identity::macos_display_key;
+use crate::shared::appkit_window_geometry::device_bounds_of_screen;
+use crate::shared::apple_display_identity::{macos_display_key, macos_display_persistent_key};
 use crate::shared::display_period::core_graphics_refresh_period;
 use crate::shared::display_source::DisplaySource;
 use crate::shared::owner_signal::OwnerSignal;
@@ -110,6 +111,20 @@ fn refresh_period_for_screen(screen: &NSScreen) -> Option<RefreshPeriod> {
     core_graphics_refresh_period(mode.refresh_rate())
 }
 
+/// An AppKit rectangle as the geometry type the shared rules take.
+pub(super) fn bounds_of(rect: NSRect) -> Bounds<f64> {
+    Bounds {
+        origin: Point::new(rect.origin.x, rect.origin.y),
+        size: Size::new(rect.size.width, rect.size.height),
+    }
+}
+
+impl crate::shared::system_notice::StaleOnWake for MacosDisplays {
+    fn mark_stale(&self) {
+        self.invalidate();
+    }
+}
+
 /// The displays of one macOS platform: their ids and the last snapshot, which
 /// the [`DisplaySource`] keeps until an event invalidates it.
 pub(crate) struct MacosDisplays {
@@ -151,29 +166,25 @@ impl MacosDisplays {
     fn read(&self, mtm: MainThreadMarker) -> Vec<DisplayInfo> {
         let screens: Retained<NSArray<NSScreen>> = NSScreen::screens(mtm);
         let mut displays = Vec::with_capacity(screens.count());
-        // The first screen is always the primary (main) display.
+        // The first screen is always the primary (main) display, and its
+        // height is where every other screen's top edge is measured from.
+        let primary_height = screens
+            .iter()
+            .next()
+            .map_or(0.0, |screen| screen.frame().size.height);
         for (index, screen) in screens.iter().enumerate() {
             let Some(id) = display_key_of(&screen).and_then(|key| self.source.mint(&key)) else {
                 continue;
             };
             let scale = screen.backingScaleFactor();
-            // NSScreen frames are in points (logical units, bottom-left
-            // origin); the snapshot carries device pixels, so scale by
-            // `backingScaleFactor` before converting.
-            let to_device = |points: f64| (points * scale).round() as i32;
-            let frame = screen.frame();
-            let visible = screen.visibleFrame();
-            let bounds = Bounds {
-                origin: Point::new(to_device(frame.origin.x), to_device(frame.origin.y)),
-                size: Size::new(to_device(frame.size.width), to_device(frame.size.height)),
-            };
-            let usable_bounds = Bounds {
-                origin: Point::new(to_device(visible.origin.x), to_device(visible.origin.y)),
-                size: Size::new(
-                    to_device(visible.size.width),
-                    to_device(visible.size.height),
-                ),
-            };
+            // NSScreen frames are in points with a bottom-left origin on the
+            // primary screen; the snapshot carries device pixels of this
+            // screen from the primary screen's top-left corner, like every
+            // other platform's, so a window's top-left position and a
+            // display's origin are measured the same way.
+            let bounds = device_bounds_of_screen(bounds_of(screen.frame()), primary_height, scale);
+            let usable_bounds =
+                device_bounds_of_screen(bounds_of(screen.visibleFrame()), primary_height, scale);
             let mut display = DisplayInfo::new(
                 id,
                 format!("Display {}", display_id_of(&screen).unwrap_or_default()),
@@ -182,6 +193,12 @@ impl MacosDisplays {
             )
             .with_usable_bounds(usable_bounds)
             .with_primary(index == 0);
+            if let Some(uuid) = display_id_of(&screen)
+                .and_then(|number| u32::try_from(number).ok())
+                .and_then(display_uuid)
+            {
+                display = display.with_persistent_key(macos_display_persistent_key(uuid));
+            }
             display.refresh_period = refresh_period_for_screen(&screen);
             displays.push(display);
         }

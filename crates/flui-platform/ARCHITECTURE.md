@@ -2778,3 +2778,25 @@ host tests cover the level lookup (`os_capability_table`), the value
 classification (`android_display_table`) and the idle wait
 (`idle_wait_follows_the_real_period`), and CI type-checks the rest for
 `aarch64-linux-android`.
+
+### Android reads the Activity's lifecycle as three facts and a cycle
+
+**Rule:** an Activity callback is mapped by one pure rule
+(`shared/android_lifecycle.rs`) and delivered through `ActivityTarget`, which
+`AndroidPlatform` implements; nothing in the event loop decides what a callback
+means. The window's published state is refreshed before its observer is told.
+
+**Choice:** `onStart`/`onStop` give visibility, `onResume`/`onPause` the execution
+state, `onWindowFocusChanged` focus; none implies another. NativeActivity has no
+`onTrimMemory`, so `lastTrimLevel` is read through JNI (`android/memory.rs`) on
+`LowMemory`, `Pause`, `Stop` and `Resume`, never on a timer, and a level is
+remembered when it is read: notices are not replayed, so a level seen before the
+host listens is not announced later. The session ends once per start-to-stop
+cycle, by whichever of `Stop` and `SaveState` comes first (the order differs
+below and above API 28; a Back that finishes the Activity never saves state),
+so the notice repeats on every trip to the background and asks for saving. The
+session-end hook is out of its slot while it runs and is put back even when it
+panics (`PlatformHandlers::run_session_end`).
+
+**Verified by:** `android_lifecycle_mapping*` and `session_end_hook_*` on the
+host; the `MainEvent` match and the JNI read run only on a device.

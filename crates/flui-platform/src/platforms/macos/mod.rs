@@ -72,6 +72,7 @@ mod loop_control;
 mod owner_lane;
 mod platform;
 pub(super) mod preferences;
+mod system_notices;
 mod text_input;
 mod view;
 mod wake_pump;

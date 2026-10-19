@@ -1,6 +1,6 @@
 use flui_runtime::HostInput;
 use flui_runtime::owner::RuntimeOperation;
-#[cfg(any(test, target_os = "android"))]
+#[cfg(all(test, not(target_os = "android")))]
 use flui_scheduler::AppLifecycleState;
 
 use super::host::APP_RUNTIME;
@@ -13,7 +13,7 @@ pub(in crate::app) struct PresentationDispatcher {
     pub(super) address: flui_foundation::PresentationAddress,
 }
 
-#[cfg(any(test, target_os = "android", target_os = "ios"))]
+#[cfg(any(all(test, not(target_os = "android")), target_os = "ios"))]
 impl PresentationDispatcher {
     pub(super) fn runtime(self) -> RuntimeDispatcher {
         RuntimeDispatcher {
@@ -45,7 +45,7 @@ impl RuntimeDispatcher {
         ))
     }
 
-    #[cfg(any(test, target_os = "android"))]
+    #[cfg(all(test, not(target_os = "android")))]
     pub(super) fn lifecycle(self, state: AppLifecycleState) -> Result<(), DispatchError> {
         dispatch_owner_turn(OwnerTurn::Runtime(self, RuntimeOperation::Lifecycle(state)))
     }
@@ -145,11 +145,8 @@ pub(in crate::app) enum RuntimeEvent {
     WindowFocus(bool),
     /// Reversible native execution eligibility for one presentation.
     #[cfg_attr(
-        any(target_arch = "wasm32", target_os = "android"),
-        expect(
-            dead_code,
-            reason = "these runners retain their existing host lifecycle transport"
-        )
+        target_arch = "wasm32",
+        expect(dead_code, reason = "the Web runner wires no execution observer")
     )]
     WindowExecution(flui_platform::WindowExecutionState),
     /// Addressed logical content-view safe area.
