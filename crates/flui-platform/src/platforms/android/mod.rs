@@ -220,7 +220,7 @@ impl AndroidPlatform {
 
     /// Record one fact of the Activity's lifecycle and tell the window: its
     /// state is published first, so an observer reads the new value.
-    fn window_fact_changed(
+    fn publish_activity_fact(
         &self,
         record: impl FnOnce(&ActivityFlags),
         notify: impl FnOnce(&AndroidWindow),
@@ -400,7 +400,7 @@ impl AndroidPlatform {
 
 impl ActivityTarget for AndroidPlatform {
     fn visibility_changed(&self, visible: bool) {
-        self.window_fact_changed(
+        self.publish_activity_fact(
             |flags| flags.visible.store(visible, Ordering::SeqCst),
             |window| {
                 window
@@ -411,7 +411,7 @@ impl ActivityTarget for AndroidPlatform {
     }
 
     fn execution_changed(&self, state: WindowExecutionState) {
-        self.window_fact_changed(
+        self.publish_activity_fact(
             |flags| {
                 flags
                     .resumed
@@ -424,7 +424,7 @@ impl ActivityTarget for AndroidPlatform {
     }
 
     fn focus_changed(&self, focused: bool) {
-        self.window_fact_changed(
+        self.publish_activity_fact(
             |flags| flags.focused.store(focused, Ordering::SeqCst),
             |window| {
                 window.callbacks().dispatch_active_status_change(focused);
@@ -435,10 +435,11 @@ impl ActivityTarget for AndroidPlatform {
     /// The system does not wait for an answer, so this is
     /// [`SessionEndPhase::Ending`] only: no query, no block.
     fn session_ended(&self) {
-        let _ = PlatformHandlers::run_session_end(&self.handlers, SessionEndPhase::Ending);
+        // The system does not wait for an answer: there is nothing to veto.
+        let _answer = PlatformHandlers::run_session_end(&self.handlers, SessionEndPhase::Ending);
     }
 
-    fn memory_pressure(&self, level: MemoryPressureLevel) {
+    fn memory_pressure_raised(&self, level: MemoryPressureLevel) {
         self.notices.dispatch(SystemNotice::MemoryPressure(level));
     }
 }
@@ -580,7 +581,7 @@ impl Platform for AndroidPlatform {
                     // An arm that must act around its signal takes and delivers it
                     // itself; what is left of the reaction (the signal of every other
                     // callback, then the memory pressure) is delivered after the match.
-                    let mut reaction = ActivityEvent::from_main(&main_event).map_or_else(
+                    let mut reaction = ActivityEvent::from_main_event(&main_event).map_or_else(
                         Reaction::default,
                         |event| {
                             platform.lifecycle.lock().react(event, || {

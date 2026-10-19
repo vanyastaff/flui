@@ -145,6 +145,7 @@ impl PlatformHandlers {
     /// another hook or call back into the platform. It is out of its slot while
     /// it runs, and is put back afterwards even when it panics, unless a hook
     /// registered in the meantime took the slot: then the older one is dropped.
+    #[must_use]
     pub fn run_session_end(handlers: &Mutex<Self>, phase: SessionEndPhase) -> SessionEndAnswer {
         let Some(hook) = handlers.lock().session_end.take() else {
             return SessionEndAnswer::Proceed;
@@ -153,11 +154,10 @@ impl PlatformHandlers {
             handlers,
             hook: Some(hook),
         };
-        let hook = running
+        running
             .hook
             .as_mut()
-            .expect("BUG: the guard was built holding the hook");
-        hook(phase)
+            .map_or(SessionEndAnswer::Proceed, |hook| hook(phase))
     }
 
     /// Invoke the quit callback if registered

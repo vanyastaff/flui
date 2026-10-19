@@ -41,7 +41,7 @@ impl ActivityEvent {
     /// The lifecycle event `event` is, `None` for the ones that are not about
     /// the lifecycle (window creation, input, configuration).
     #[cfg(target_os = "android")]
-    pub(crate) fn from_main(event: &android_activity::MainEvent<'_>) -> Option<Self> {
+    pub(crate) fn from_main_event(event: &android_activity::MainEvent<'_>) -> Option<Self> {
         use android_activity::MainEvent;
         match event {
             MainEvent::Start => Some(Self::Start),
@@ -117,7 +117,7 @@ pub(crate) trait ActivityTarget {
     fn focus_changed(&self, focused: bool);
     /// The process may be killed now; see [`Reaction::session_end`].
     fn session_ended(&self);
-    fn memory_pressure(&self, level: MemoryPressureLevel);
+    fn memory_pressure_raised(&self, level: MemoryPressureLevel);
 }
 
 impl ActivitySignal {
@@ -143,7 +143,7 @@ impl Reaction {
             target.session_ended();
         }
         if let Some(level) = self.pressure {
-            target.memory_pressure(level);
+            target.memory_pressure_raised(level);
         }
     }
 }
@@ -156,7 +156,7 @@ impl Reaction {
 /// notices are not replayed, so a level seen before the host listens (the
 /// first callbacks precede the application's bootstrap) is not announced again
 /// later.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ActivityLifecycle {
     last_trim_level: Option<i32>,
     session_end_announced: bool,
@@ -275,7 +275,7 @@ mod tests {
         fn session_ended(&self) {
             self.0.borrow_mut().push("session ended".into());
         }
-        fn memory_pressure(&self, level: MemoryPressureLevel) {
+        fn memory_pressure_raised(&self, level: MemoryPressureLevel) {
             self.0.borrow_mut().push(format!("pressure {level:?}"));
         }
     }
