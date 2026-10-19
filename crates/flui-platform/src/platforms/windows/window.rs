@@ -382,7 +382,7 @@ fn backend_error(what: &str, error: windows::core::Error) -> WindowCommandError 
 }
 
 /// The window's placement: its show state and the rectangles it returns to.
-fn placement_of(hwnd: HWND) -> windows::core::Result<WINDOWPLACEMENT> {
+pub(super) fn placement_of(hwnd: HWND) -> windows::core::Result<WINDOWPLACEMENT> {
     let mut placement = WINDOWPLACEMENT {
         length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
         ..Default::default()
@@ -926,85 +926,6 @@ impl WindowsWindow {
         if let Err(error) = unsafe { UpdateWindow(self.hwnd) }.ok() {
             tracing::warn!(hwnd = ?self.hwnd, ?error, "UpdateWindow failed after the first show");
         }
-    }
-
-    /// Hold the window to its size limits: the size a normal window has, and
-    /// the rectangle any other window returns to.
-    fn enforce_constraints(&self) {
-        let mode = super::platform::with_window_context(self.hwnd, "enforce_constraints", |ctx| {
-            ctx.mode.get()
-        });
-        match mode {
-            Some(mode) if mode.is_normal() => self.ask_for_limits_on_current_size(),
-            Some(_) => self.clamp_restore_rectangle(),
-            None => {}
-        }
-    }
-
-    /// A size change makes the system ask for the limits: ask with the size the
-    /// window already has.
-    fn ask_for_limits_on_current_size(&self) {
-        let mut window = RECT::default();
-        // SAFETY: `window` is a stack local out-parameter; `SetWindowPos` takes
-        // plain integers and flags for this wrapper's live window.
-        unsafe {
-            if GetWindowRect(self.hwnd, &raw mut window).is_err() {
-                return;
-            }
-            if let Err(error) = SetWindowPos(
-                self.hwnd,
-                None,
-                0,
-                0,
-                window.right - window.left,
-                window.bottom - window.top,
-                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
-            ) {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowPos (size limits) failed");
-            }
-        }
-    }
-
-    /// Keep the rectangle a maximized, minimized or fullscreen window returns
-    /// to within the limits, so restoring it does not undo what the app set.
-    fn clamp_restore_rectangle(&self) {
-        use crate::shared::windows_window_limits::PixelSize;
-
-        super::platform::with_window_context(self.hwnd, "clamp_restore_rectangle", |ctx| {
-            let mode = ctx.mode.get();
-            if let Some(bounds) = mode.fullscreen_bounds() {
-                let Some(limits) = ctx.limits_with_frame_of(self.hwnd, ctx.restore_style.get())
-                else {
-                    return;
-                };
-                let size = limits.clamp(PixelSize::new(bounds.size.width, bounds.size.height));
-                ctx.mode.set(mode.with_fullscreen_bounds(Bounds {
-                    origin: bounds.origin,
-                    size: Size::new(size.width, size.height),
-                }));
-                return;
-            }
-            // SAFETY: a plain style query of this wrapper's window handle.
-            let style = unsafe { GetWindowLongPtrW(self.hwnd, GWL_STYLE) } as u32;
-            let Some(limits) = ctx.limits_with_frame_of(self.hwnd, style) else {
-                return;
-            };
-            let Ok(mut placement) = placement_of(self.hwnd) else {
-                return;
-            };
-            let normal = &mut placement.rcNormalPosition;
-            let size = limits.clamp(PixelSize::new(
-                normal.right.saturating_sub(normal.left),
-                normal.bottom.saturating_sub(normal.top),
-            ));
-            normal.right = normal.left.saturating_add(size.width);
-            normal.bottom = normal.top.saturating_add(size.height);
-            // SAFETY: `placement` is fully initialized; a stale handle only makes
-            // the call fail.
-            if let Err(error) = unsafe { SetWindowPlacement(self.hwnd, &raw const placement) } {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "the restore rectangle could not be limited");
-            }
-        });
     }
 
     /// Activate TSF for the window just installed, on its owner thread, and
