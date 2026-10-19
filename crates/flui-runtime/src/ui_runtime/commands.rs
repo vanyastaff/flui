@@ -375,7 +375,7 @@ impl UiCommandSender {
     /// and a request against a dropped runtime is a harmless no-op (the wake
     /// has no loop left to wake).
     // Test-only: the typed redraw capability is not yet vended externally.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     pub fn request_redraw(&self) {
         // `swap` (not store) so only the first request in a burst pays the
         // wake; a pending frame absorbs repeated wakes anyway, this just

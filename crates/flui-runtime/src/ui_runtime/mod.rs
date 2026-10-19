@@ -38,7 +38,7 @@ use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -236,7 +236,7 @@ pub struct UiRuntime {
     /// read it with a single relaxed load; `0u64` is the "not set" sentinel
     /// (see [`Self::set_now_secs_for_test`] for why a genuine `t=0.0` is
     /// nudged to the smallest positive subnormal instead).
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     now_secs_override: AtomicU64,
     rx: Receiver<UiCommand>,
     /// Prototype for [`Self::command_sender`]: crossbeam receivers cannot

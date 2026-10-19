@@ -141,11 +141,6 @@ kind = "double"
 names = ["Probe"]
 
 [[allow]]
-path = "crates/flui-runtime/Cargo.toml"
-kind = "feature"
-names = ["test-support"]
-
-[[allow]]
 path = "crates/flui-runtime/src/ui_runtime/tests/overlay_style.rs"
 kind = "double"
 names = ["RecordingChrome"]
@@ -174,11 +169,6 @@ names = ["ProbeFuture"]
 path = "crates/flui-scheduler/tests/frame_completion_recovery.rs"
 kind = "double"
 names = ["Probe"]
-
-[[allow]]
-path = "crates/flui-view/Cargo.toml"
-kind = "feature"
-names = ["test-utils"]
 
 [[allow]]
 path = "crates/flui-view/benches/shared/mock_node.rs"

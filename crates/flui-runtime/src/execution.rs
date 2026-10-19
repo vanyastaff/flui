@@ -179,7 +179,7 @@ pub(crate) fn default_compute_worker_count(available_parallelism: usize) -> usiz
 ///
 /// Defaults are deliberately generous — they are overload backstops, not
 /// throttles. Production always uses [`Default`]; tests inject small values
-/// through `ExecutionServices::with_limits` (behind `test-support`) to
+/// through `ExecutionServices::with_limits` (behind `testing`) to
 /// exercise refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AdmissionLimits {
@@ -375,7 +375,7 @@ impl DefaultPools {
     }
 
     /// Whether either default pool has actually started worker threads.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     fn any_started(&self) -> bool {
         matches!(&*self.io.lock(), PoolSlot::Running(_))
             || matches!(&*self.compute.lock(), PoolSlot::Running(_))
@@ -398,7 +398,7 @@ impl ExecutionServices {
 
     /// Test seam: custom admission windows (both backends), as the maximum
     /// in-flight compute jobs and IO futures.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn with_limits(host: Option<HostExecutors>, compute: usize, io: usize) -> Self {
         Self::build(host, AdmissionLimits { compute, io })
@@ -437,7 +437,7 @@ impl ExecutionServices {
     /// (`true` — the lazily-started default pools on native targets,
     /// sequential in-place execution on wasm32) rather than routing it to
     /// host-injected pools (`false`).
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn owns_default_pools(&self) -> bool {
         !matches!(self.backend, Backend::Host(_))
@@ -581,7 +581,7 @@ impl ExecutionServices {
     /// Whether either default pool has started worker threads. Always
     /// `false` with host-injected pools — the probe behind the
     /// "host injection avoids duplicate pools" evidence.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn default_pools_started(&self) -> bool {
         match &self.backend {
@@ -1136,7 +1136,7 @@ mod tests {
 /// These stay a lib test because they pin the private `Backend::Sequential` —
 /// the whole wasm execution model — next to its definition, and the
 /// `default_pools_started` probe they read exists only under `cfg(test)` or
-/// the `test-support` feature. That is why this crate's lib-test target builds
+/// the `testing` feature. That is why this crate's lib-test target builds
 /// for wasm32.
 ///
 /// Both assertions below are FALSE on native, which is the point: a wasm test

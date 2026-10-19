@@ -150,8 +150,8 @@ tempfile.workspace = true
 # `HeldPointerQueue::append`/`len`, `SemanticsHost::ensure_semantics`,
 # `ExecutionServices::with_limits`/`default_pools_started`, the UI runtime's test
 # constructors and the `testing` doubles, which this crate's tests use and
-# which exist only under `test-support`.
-flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev", features = ["test-support"] }
+# which exist only under `testing`.
+flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev", features = ["testing"] }
 # Enable flui-interaction's `testing` feature in test builds so tests can
 # construct synthetic pointer events via `events::make_*_event`. Feature
 # unification keeps these helpers out of the release `flui-app` binary.
@@ -160,10 +160,10 @@ flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", featu
 # seed pending child-build requests via `push_pending_child_request_for_test`.
 # Same dev-only feature-unification pattern; helper stays out of release builds.
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
-# Enable flui-view's `test-utils` feature in test builds so the
+# Enable flui-view's `testing` feature in test builds so the
 # wiring test can plant a layout-builder registry entry. Same pattern; the
 # `register_layout_builder_for_test` hook stays out of release builds.
-flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-utils"] }
+flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["testing"] }
 # `testing::host_fed`, which the font-collection tests check the app's
 # collection with. Same dev-only feature-unification pattern.
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", features = ["testing"] }

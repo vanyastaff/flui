@@ -200,7 +200,7 @@ impl UiRuntime {
     /// so a test can observe what a closing presentation still accepts.
     /// Production closes through [`Self::close_presentation_entered`], which
     /// stops and removes it in one step.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     pub fn stop_presentation_for_test(&self, id: PresentationId) {
         self.stop_presentation_after_failure(id, None);
     }

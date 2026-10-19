@@ -9,7 +9,7 @@
 //! retakes an inactive GlobalKey element — never both for one new-side
 //! view. The raw stream carries no reconcile-invocation or frame identifier
 //! and no batch delimiter. The `ReconcileEventCollector` test fixture (in the
-//! in-crate `tree::test_utils` module, gated behind `test-utils`) and other
+//! in-crate `tree::test_utils` module, gated behind `testing`) and other
 //! callers that externally scope capture around one reconcile call can
 //! aggregate that call's disposition multiset without a tree diff. Other
 //! trace-tooling subscribers receive non-causal diagnostic records, not a
@@ -229,7 +229,7 @@ pub const RECONCILE_TARGET: &str = "flui::reconcile";
 /// recorded via the typed `Visit` methods (`record_u64`,
 /// `record_bool`, `record_debug` for the type-id) so the
 /// `ReconcileEventCollector` (in the in-crate `tree::test_utils`
-/// module, behind the `test-utils` feature) reads structured values
+/// module, behind the `testing` feature) reads structured values
 /// without parsing Debug-format strings.
 ///
 /// Cost is zero when no subscriber is installed (tracing's per-target

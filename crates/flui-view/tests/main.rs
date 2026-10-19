@@ -91,11 +91,11 @@ fn dense_and_production_reconcile_matrix() {
             ("dense_reconcile_containment::repeated_dense_mount_panics_do_not_accumulate_ghosts", dense_reconcile_containment::repeated_dense_mount_panics_do_not_accumulate_ghosts as fn()),
             ("dense_update_containment::phase_one_did_update_view_panic_substitutes_at_same_slot", dense_update_containment::phase_one_did_update_view_panic_substitutes_at_same_slot as fn()),
             ("dense_update_containment::phase_five_a_shifted_suffix_update_panic_uses_final_slot", dense_update_containment::phase_five_a_shifted_suffix_update_panic_uses_final_slot as fn()),
-            #[cfg(feature = "test-utils")]
+            #[cfg(feature = "testing")]
             ("production_reconcile_emits::object_keys_follow_retained_allocations_through_reorder", production_reconcile_emits::object_keys_follow_retained_allocations_through_reorder as fn()),
-            #[cfg(feature = "test-utils")]
+            #[cfg(feature = "testing")]
             ("production_reconcile_emits::active_global_key_move_through_build_scope_updates_render_parent_links", production_reconcile_emits::active_global_key_move_through_build_scope_updates_render_parent_links as fn()),
-            #[cfg(feature = "test-utils")]
+            #[cfg(feature = "testing")]
             ("production_reconcile_emits::failed_dense_mount_production_reconcile_emits_only_final_slots", production_reconcile_emits::failed_dense_mount_production_reconcile_emits_only_final_slots as fn()),
         ],
     );
@@ -109,7 +109,7 @@ fn global_key_contract_matrix() {
             ("global_key::global_key_state_migrates_to_new_parent_slot", global_key::global_key_state_migrates_to_new_parent_slot as fn()),
             ("global_key_duplication::a_second_parent_grafts_the_same_element_rather_than_creating_another", global_key_duplication::a_second_parent_grafts_the_same_element_rather_than_creating_another as fn()),
             ("global_key_duplication::two_parents_declaring_one_key_in_one_frame_are_reported", global_key_duplication::two_parents_declaring_one_key_in_one_frame_are_reported as fn()),
-            #[cfg(feature = "test-utils")]
+            #[cfg(feature = "testing")]
             ("global_key_reparent::active_to_active_reparent_emits_from_parent_and_preserves_state", global_key_reparent::active_to_active_reparent_emits_from_parent_and_preserves_state as fn()),
         ],
     );

@@ -19,7 +19,7 @@ use flui_interaction::{
 };
 use flui_layer::{LayerTree, PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample};
 use flui_platform_api::HapticFeedback;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 use flui_platform_api::PlatformTextInput;
 use flui_platform_api::TextStoreHost;
 use flui_platform_api::{Clipboard, CursorError, CursorIcon, PlatformWindow};
@@ -103,7 +103,7 @@ pub(crate) struct RuntimeCapabilities<'a> {
 
 /// A fresh in-memory clipboard — the one the headless platform hands out —
 /// for a test UI runtime's `UiRuntime::new`.
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 #[must_use]
 pub fn test_clipboard() -> Arc<dyn Clipboard> {
     Arc::new(flui_platform_api::InMemoryClipboard::new())
@@ -224,7 +224,7 @@ impl PresentationWindow {
 /// window is a headless `MockWindow` carrying a `FakeAccessibility`. A test
 /// that needs the bridge wired names it in [`PresentationWindow::new`]
 /// instead.
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 impl From<Arc<dyn PlatformWindow>> for PresentationWindow {
     fn from(window: Arc<dyn PlatformWindow>) -> Self {
         Self::new(window, None)
@@ -234,7 +234,7 @@ impl From<Arc<dyn PlatformWindow>> for PresentationWindow {
 /// The `From<Arc<dyn PlatformWindow>>` conversion above
 /// for a borrowed window, for tests that reuse one window across several
 /// installs; it bypasses the window's bridge the same way.
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 impl From<&Arc<dyn PlatformWindow>> for PresentationWindow {
     fn from(window: &Arc<dyn PlatformWindow>) -> Self {
         Self::new(Arc::clone(window), None)
@@ -245,7 +245,7 @@ impl From<&Arc<dyn PlatformWindow>> for PresentationWindow {
 /// capability — for `UiRuntime::for_test_with_text_input`, which needs a real
 /// [`RuntimeCapabilities`]-assembled presentation (not the standalone
 /// `PresentationState::new_for_test` path), just with a test window.
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 pub(crate) fn test_platform_window(
     platform_text_input: Option<Arc<dyn PlatformTextInput>>,
 ) -> Arc<dyn PlatformWindow> {
@@ -1191,7 +1191,7 @@ impl PresentationState {
 
     #[must_use]
     #[cfg_attr(
-        not(any(test, feature = "test-support")),
+        not(any(test, feature = "testing")),
         expect(
             dead_code,
             reason = "Self::new wires set_text_input_handle from the local \

@@ -106,9 +106,9 @@ pub fn agent_answer<T>(pending: impl PendingAnswer<T> + 'static) -> AgentAnswer<
 #[derive(Debug)]
 pub struct FramePhaseMarker<T: Copy> {
     phase: Cell<T>,
-    /// Data-only fault injection for downstream test-utils consumers.
+    /// Data-only fault injection for downstream `testing` consumers.
     /// Consumed at the next build-to-finalize boundary.
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "testing"))]
     panic_once_at_boundary: Cell<bool>,
 }
 
@@ -117,7 +117,7 @@ impl<T: Copy> FramePhaseMarker<T> {
     pub fn new(initial_phase: T) -> Self {
         Self {
             phase: Cell::new(initial_phase),
-            #[cfg(any(test, feature = "test-utils"))]
+            #[cfg(any(test, feature = "testing"))]
             panic_once_at_boundary: Cell::new(false),
         }
     }
@@ -129,9 +129,9 @@ impl<T: Copy> FramePhaseMarker<T> {
 
     pub(crate) fn set_at_frame_boundary(&self, phase: T) {
         self.phase.set(phase);
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "testing"))]
         let should_panic = self.panic_once_at_boundary.replace(false);
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "testing"))]
         assert!(
             !should_panic,
             "frame phase marker — intentional one-shot test panic"
@@ -148,7 +148,7 @@ impl<T: Copy> FramePhaseMarker<T> {
     ///
     /// This is a data-only runtime test seam: it stores only a phase value
     /// and never accepts executable code across the widget binding's lock.
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "testing"))]
     pub fn arm_test_panic_once(&self) {
         self.panic_once_at_boundary.set(true);
     }
