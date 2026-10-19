@@ -96,10 +96,13 @@ pub struct WinitWindow {
     /// Whether the window was created hidden and still waits for its first
     /// frame (or an explicit show) to become visible.
     reveal_pending: Mutex<bool>,
-    /// Whether the window was created unmapped to open maximized: a window
-    /// manager only reads that from the window's properties.
+    /// Whether the window was created unmapped to open maximized or fullscreen
+    /// and is mapped once its mode is set: see [`OpenPlan::map_after_setup`].
+    map_after_setup: bool,
+    /// The mode an unmapped window opens in. A window manager reads it from the
+    /// window's properties when it maps the window, so it is written there.
     #[cfg(target_os = "linux")]
-    opens_maximized: bool,
+    opens_in: WindowMode,
     /// The outer size an unmapped window opened with a remembered rectangle
     /// has to end up with once its frame is known.
     #[cfg(target_os = "linux")]
@@ -204,12 +207,17 @@ impl WinitWindow {
             title: Mutex::new(title),
             constraints: Mutex::new(constraints),
             normal_geometry: Mutex::new(plan.normal_geometry),
+            map_after_setup: plan.map_after_setup,
             #[cfg(target_os = "linux")]
-            opens_maximized: plan.hidden_until_first_frame && plan.mode == WindowMode::Maximized,
+            opens_in: if plan.hidden_until_first_frame || plan.map_after_setup {
+                plan.mode
+            } else {
+                WindowMode::Normal
+            },
             #[cfg(target_os = "linux")]
             outer_to_fit: plan
                 .normal_geometry
-                .filter(|_| plan.hidden_until_first_frame)
+                .filter(|_| plan.hidden_until_first_frame || plan.map_after_setup)
                 .map(|geometry| geometry.size),
             reveal_pending: Mutex::new(plan.hidden_until_first_frame),
             frame_inset,
@@ -246,13 +254,26 @@ impl WinitWindow {
         };
         if let Some(probe) = probe() {
             probe.watch(id);
-            if self.opens_maximized {
-                probe.set_maximized_hint(id);
-            }
+            probe.set_mode_hint(id, x11_mode(self.opens_in));
             let _ = self.x11.set((probe, id));
             // The snapshot made at creation knew nothing of the probe.
             self.refresh_state();
         }
+    }
+
+    /// Map a window created hidden to open in a mode, now that the mode is set
+    /// where the window manager reads it. A no-op for every other window.
+    pub(super) fn finish_setup(&self) {
+        if !self.map_after_setup {
+            return;
+        }
+        {
+            let mut pending = self.reveal_pending.lock();
+            *pending = false;
+            self.fit_to_remembered_rectangle();
+            self.window.set_visible(true);
+        }
+        self.refresh_state();
     }
 
     /// The X11 id of this window, when a probe is attached.
@@ -387,19 +408,22 @@ impl WinitWindow {
         state
     }
 
-    /// Enter `mode`. Leaving fullscreen first keeps maximizing a fullscreen
-    /// window from depending on what the window manager makes of two requests
-    /// at once.
+    /// Enter `mode`. Leaving fullscreen and minimized first keeps entering a
+    /// mode from depending on what the window manager makes of two requests at
+    /// once: it keeps a minimized window minimized under a maximize.
     fn enter_mode(&self, mode: WindowMode) -> Result<(), WindowCommandError> {
         match mode {
             WindowMode::Minimized => self.window.set_minimized(true),
             WindowMode::Maximized => {
                 self.window.set_fullscreen(None);
+                self.window.set_minimized(false);
                 self.window.set_maximized(true);
             }
-            WindowMode::Fullscreen => self
-                .window
-                .set_fullscreen(Some(Fullscreen::Borderless(None))),
+            WindowMode::Fullscreen => {
+                self.window.set_minimized(false);
+                self.window
+                    .set_fullscreen(Some(Fullscreen::Borderless(None)));
+            }
             WindowMode::Normal => {
                 self.window.set_fullscreen(None);
                 self.window.set_minimized(false);
@@ -621,6 +645,17 @@ impl PlatformWindow for WinitWindow {
                 .window
                 .set_outer_position(LogicalPosition::new(at.x, at.y)),
             WindowCommand::SetSize(size) => {
+                // A maximized or fullscreen window has no size of its own to set:
+                // the window system either ignores the request or restores the
+                // window to honour it, and which differs between them. So the
+                // command is the second, everywhere: the window returns to
+                // normal mode at the size asked for.
+                if self.window.fullscreen().is_some() {
+                    self.window.set_fullscreen(None);
+                }
+                if self.window.is_maximized() {
+                    self.window.set_maximized(false);
+                }
                 // A window that cannot be resized yet answers later, through
                 // `Resized`; the request itself is all this reports.
                 let _ = self
@@ -742,5 +777,16 @@ impl HostWindow for WinitWindow {
     #[cfg(all(target_os = "linux", feature = "a11y"))]
     fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
         Some(Arc::clone(&self.accessibility) as _)
+    }
+}
+
+/// The mode as the X11 probe names it.
+#[cfg(target_os = "linux")]
+fn x11_mode(mode: WindowMode) -> X11WindowMode {
+    match mode {
+        WindowMode::Maximized => X11WindowMode::Maximized,
+        WindowMode::Fullscreen => X11WindowMode::Fullscreen,
+        WindowMode::Minimized => X11WindowMode::Minimized,
+        _ => X11WindowMode::Normal,
     }
 }

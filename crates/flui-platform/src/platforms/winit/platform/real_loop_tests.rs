@@ -1456,6 +1456,54 @@ mod x11_window {
             until_map_state(server, id, MapState::VIEWABLE);
         });
     }
+
+    /// A window opened in a mode, at once rather than after its first frame,
+    /// is still created unmapped and mapped only once the mode is in its
+    /// properties. On a bare server nothing but the window itself could have
+    /// set `_NET_WM_STATE`, so finding the mode there shows it was set.
+    fn opens_in_mode_with_the_property_set(mode: WindowMode, state_atoms: &'static [&'static str]) {
+        let opening = WindowOptions::default()
+            .with_size(Size::new(320.0, 240.0))
+            .with_mode(mode)
+            .with_reveal(WindowReveal::AtOpen);
+        run_x11_scenario(opening, move |window, id, server| {
+            until_map_state(server, id, MapState::VIEWABLE);
+            let atom = |name: &str| {
+                server
+                    .intern_atom(false, name.as_bytes())
+                    .expect("request")
+                    .reply()
+                    .expect("the atom")
+                    .atom
+            };
+            let property = server
+                .get_property(false, id, atom("_NET_WM_STATE"), AtomEnum::ATOM, 0, 64)
+                .expect("request")
+                .reply()
+                .expect("the property");
+            let atoms: Vec<u32> = property.value32().expect("atoms").collect();
+            for name in state_atoms {
+                assert!(atoms.contains(&atom(name)), "{name} is set: {atoms:?}");
+            }
+            assert_eq!(window.state().mode, mode);
+        });
+    }
+
+    #[test]
+    fn x11_window_opened_maximized_at_once_is_mapped_with_the_mode_set() {
+        opens_in_mode_with_the_property_set(
+            WindowMode::Maximized,
+            &[
+                "_NET_WM_STATE_MAXIMIZED_HORZ",
+                "_NET_WM_STATE_MAXIMIZED_VERT",
+            ],
+        );
+    }
+
+    #[test]
+    fn x11_window_opened_fullscreen_at_once_is_mapped_with_the_mode_set() {
+        opens_in_mode_with_the_property_set(WindowMode::Fullscreen, &["_NET_WM_STATE_FULLSCREEN"]);
+    }
 }
 
 /// A Wayland window on a real compositor (skipped without `WAYLAND_DISPLAY`;

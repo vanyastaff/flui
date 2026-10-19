@@ -121,6 +121,11 @@ pub(super) struct OpenPlan {
     /// Whether the window is created hidden, to be shown after its first
     /// frame.
     pub hidden_until_first_frame: bool,
+    /// Whether the window is created hidden and mapped as soon as it is set
+    /// up: a window that opens maximized or fullscreen is mapped only after
+    /// its mode is written into its properties, which a window manager reads
+    /// when it maps a window, so it never appears in normal mode first.
+    pub map_after_setup: bool,
     /// The rectangle the window returns to from `mode`, when it opens
     /// maximized or fullscreen with one remembered.
     pub normal_geometry: Option<WindowGeometry>,
@@ -153,6 +158,13 @@ impl OpenPlan {
             WindowMode::Maximized | WindowMode::Fullscreen => options.normal_geometry,
             _ => None,
         };
+        // An undecorated window has no frame to take from a remembered outer
+        // size, whatever the decorated windows before it measured.
+        let inset = if options.decorated {
+            inset
+        } else {
+            Size::new(0.0, 0.0)
+        };
         let (at, content_size) = match returns_to {
             Some(geometry) => (
                 geometry.position,
@@ -163,6 +175,9 @@ impl OpenPlan {
             ),
             None => (options.position, options.size),
         };
+        let hidden_until_first_frame = options.visible
+            && options.reveal == WindowReveal::AfterFirstFrame
+            && shell.defers_reveal();
         let position = if capabilities.places_at_open {
             at.and_then(|at| device_position(at, display))
         } else {
@@ -172,9 +187,11 @@ impl OpenPlan {
             position,
             content_size,
             mode,
-            hidden_until_first_frame: options.visible
-                && options.reveal == WindowReveal::AfterFirstFrame
-                && shell.defers_reveal(),
+            hidden_until_first_frame,
+            map_after_setup: options.visible
+                && shell.defers_reveal()
+                && !hidden_until_first_frame
+                && mode != WindowMode::Normal,
             normal_geometry: returns_to,
         }
     }
@@ -579,6 +596,95 @@ mod tests {
         );
     }
 
+    #[test]
+    fn open_plan_takes_no_frame_from_an_undecorated_window() {
+        let returns_to =
+            WindowGeometry::new(Some(Point::new(300.0, 200.0)), Size::new(1000.0, 700.0));
+        let frame = Size::new(2.0, 30.0);
+        // (case, decorated, content size)
+        let table = [
+            ("decorated", true, Size::new(998.0, 670.0)),
+            ("undecorated", false, Size::new(1000.0, 700.0)),
+        ];
+        for (case, decorated, expected) in table {
+            let options = options()
+                .with_decorated(decorated)
+                .with_mode(WindowMode::Maximized)
+                .with_normal_geometry(Some(returns_to));
+            let planned = OpenPlan::new(&options, WindowShell::Desktop, DISPLAY, frame);
+            assert_eq!(planned.content_size, expected, "{case}");
+        }
+    }
+
+    #[test]
+    fn open_plan_maps_a_window_that_opens_in_a_mode_after_setting_it_up() {
+        // (case, visible, reveal, mode, shell, hidden until first frame, mapped after setup)
+        let table = [
+            (
+                "normal at open",
+                true,
+                WindowReveal::AtOpen,
+                WindowMode::Normal,
+                WindowShell::Desktop,
+                false,
+                false,
+            ),
+            (
+                "maximized at open",
+                true,
+                WindowReveal::AtOpen,
+                WindowMode::Maximized,
+                WindowShell::Desktop,
+                false,
+                true,
+            ),
+            (
+                "fullscreen at open",
+                true,
+                WindowReveal::AtOpen,
+                WindowMode::Fullscreen,
+                WindowShell::Desktop,
+                false,
+                true,
+            ),
+            (
+                "maximized after the first frame",
+                true,
+                WindowReveal::AfterFirstFrame,
+                WindowMode::Maximized,
+                WindowShell::Desktop,
+                true,
+                false,
+            ),
+            (
+                "maximized, opened hidden",
+                false,
+                WindowReveal::AtOpen,
+                WindowMode::Maximized,
+                WindowShell::Desktop,
+                false,
+                false,
+            ),
+            (
+                "maximized on Wayland",
+                true,
+                WindowReveal::AtOpen,
+                WindowMode::Maximized,
+                WindowShell::Wayland,
+                false,
+                false,
+            ),
+        ];
+        for (case, visible, reveal, mode, shell, hidden, mapped) in table {
+            let options = options()
+                .with_visible(visible)
+                .with_reveal(reveal)
+                .with_mode(mode);
+            let planned = plan(&options, shell);
+            assert_eq!(planned.hidden_until_first_frame, hidden, "{case}");
+            assert_eq!(planned.map_after_setup, mapped, "{case}");
+        }
+    }
     #[test]
     fn open_plan_defers_the_reveal_only_where_it_can() {
         // (case, visible, reveal, shell, hidden until the first frame)

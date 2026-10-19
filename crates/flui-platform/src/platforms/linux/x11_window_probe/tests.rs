@@ -202,7 +202,7 @@ fn x11_probe_hears_of_a_change_to_a_watched_window() {
 }
 
 #[test]
-fn x11_probe_asks_for_maximized_on_a_window_that_is_not_mapped() {
+fn x11_probe_asks_for_a_mode_on_a_window_that_is_not_mapped() {
     if !x_server() {
         return;
     }
@@ -210,12 +210,16 @@ fn x11_probe_asks_for_maximized_on_a_window_that_is_not_mapped() {
     let fixture = Fixture::new();
     assert_eq!(probe.mode(fixture.window), Some(X11WindowMode::Normal));
 
-    probe.set_maximized_hint(fixture.window);
+    // Modes that are no state to set change nothing.
+    probe.set_mode_hint(fixture.window, X11WindowMode::Normal);
+    probe.set_mode_hint(fixture.window, X11WindowMode::Minimized);
+    assert_eq!(probe.mode(fixture.window), Some(X11WindowMode::Normal));
+
+    probe.set_mode_hint(fixture.window, X11WindowMode::Maximized);
     assert_eq!(probe.mode(fixture.window), Some(X11WindowMode::Maximized));
 
     // It adds to what the window already asks for rather than replacing it.
-    fixture.set_state(&["_NET_WM_STATE_FULLSCREEN"]);
-    probe.set_maximized_hint(fixture.window);
+    probe.set_mode_hint(fixture.window, X11WindowMode::Fullscreen);
     assert_eq!(probe.mode(fixture.window), Some(X11WindowMode::Fullscreen));
 }
 

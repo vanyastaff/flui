@@ -612,7 +612,9 @@ impl WinitPlatform {
             ))
             .with_resizable(options.resizable)
             .with_decorations(options.decorated)
-            .with_visible(options.visible && !plan.hidden_until_first_frame)
+            .with_visible(
+                options.visible && !plan.hidden_until_first_frame && !plan.map_after_setup,
+            )
             .with_maximized(plan.mode == WindowMode::Maximized);
         if plan.mode == WindowMode::Fullscreen {
             attributes =
@@ -661,6 +663,7 @@ impl WinitPlatform {
         self.notices.mark_stale_on_wake(winit_window.state_cell());
         #[cfg(target_os = "linux")]
         winit_window.attach_x11_probe(|| self.x11_probe());
+        winit_window.finish_setup();
         // A monitor attached since the last sample is first seen here.
         self.resample_displays(event_loop);
 

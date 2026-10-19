@@ -189,15 +189,18 @@ impl X11WindowProbe {
         }
     }
 
-    /// Set `_NET_WM_STATE` on the not yet mapped `window` to include
-    /// maximized, as EWMH has a client do for a window that is not managed
-    /// yet: the window manager reads the property when it maps the window, and
-    /// ignores a client message about a window it does not manage.
-    pub(crate) fn set_maximized_hint(&self, window: u32) {
-        let atoms = [
-            self.atoms.states.maximized_horz,
-            self.atoms.states.maximized_vert,
-        ];
+    /// Set `_NET_WM_STATE` on the not yet mapped `window` to include `mode`
+    /// (maximized or fullscreen), as EWMH has a client do for a window that is
+    /// not managed yet: the window manager reads the property when it maps the
+    /// window, and ignores a client message about a window it does not manage.
+    /// Any other mode is no state to set.
+    pub(crate) fn set_mode_hint(&self, window: u32, mode: X11WindowMode) {
+        let states = &self.atoms.states;
+        let atoms: &[u32] = match mode {
+            X11WindowMode::Maximized => &[states.maximized_horz, states.maximized_vert],
+            X11WindowMode::Fullscreen => &[states.fullscreen],
+            X11WindowMode::Normal | X11WindowMode::Minimized => return,
+        };
         let set = self
             .query
             .change_property32(
@@ -205,15 +208,14 @@ impl X11WindowProbe {
                 window,
                 self.atoms.net_wm_state,
                 AtomEnum::ATOM,
-                &atoms,
+                atoms,
             )
             .map_err(ProbeError::from_display)
             .and_then(|cookie| cookie.check().map_err(ProbeError::from_display));
         if let Err(error) = set {
-            tracing::debug!(%error, window, "cannot ask for a maximized X11 window");
+            tracing::debug!(%error, window, ?mode, "cannot ask for an X11 window's opening mode");
         }
     }
-
     /// The frame the window manager will put around the not yet mapped
     /// `window`, as the width and height it adds: asked for with
     /// `_NET_REQUEST_FRAME_EXTENTS` and read from `_NET_FRAME_EXTENTS`, waiting
