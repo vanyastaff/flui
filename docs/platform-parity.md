@@ -19,7 +19,7 @@ test can drive the row.
 | — | Not applicable: the environment has no such concept |
 | ❔ | Not audited yet |
 
-**Overall: ~27% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments) ·
+**Overall: ~28% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments) ·
 455–755 h to full (estimated agent hours, ❔ rows excluded; the native Linux backend is counted once,
 in [`gaps.md`](gaps.md), not per row).**
 
@@ -41,8 +41,8 @@ Counted over every row of the core and system-service sections.
 |---|---|---|---|---|---|---|---|---|
 | Windows | Win32 (native) | 9 | 30 | 35 | 17 | 2 | 32% | no |
 | macOS | AppKit (native) | 9 | 22 | 43 | 17 | 2 | 26% | no |
-| Wayland | winit (fallback) | 6 | 22 | 40 | 23 | 2 | 24% | no |
-| X11 | winit (fallback) | 8 | 22 | 37 | 24 | 2 | 28% | no |
+| Wayland | winit (fallback) | 6 | 27 | 35 | 23 | 2 | 29% | no |
+| X11 | winit (fallback) | 8 | 27 | 32 | 24 | 2 | 32% | no |
 | iOS | UIKit (native) | 7 | 14 | 42 | 30 | 0 | 22% | no |
 | Android | android-activity (native) | 10 | 14 | 40 | 29 | 0 | 27% | no |
 | Web | wasm canvas (native) | 7 | 17 | 34 | 34 | 1 | 26% | no |
@@ -232,4 +232,4 @@ exists yet.
 | 2026-10-18 | minor | Linux displays and refresh rate: the outputs read from the compositor (Wayland `wl_output`/`zxdg_output_v1`, X11 RandR 1.5) on a thread that wakes the owner; the X11 cells ran live (XWayland under WSLg, `xrandr` changes under an Xorg dummy server), the Wayland cells read values live and stay 🟡 |
 | 2026-10-18 | minor | Windows two-monitor run (`examples/displays.rs`, a second 3440×1440 monitor connected live): a new snapshot with `id 2`, the window naming `DisplayId 2` after a drag and `DisplayId 1` back, the id kept when the monitor moved left, and live rate changes (144 Hz, 165 Hz) published with ids unchanged; the display cells keep their marks; a Windows disconnect was not run; the overall figure recounted from the tables (~26%, 54 ✅, 143 🟡, 477 applicable cells), the summary table brought in line, and the hours of the two display rows lowered to the runs still owed |
 | 2026-10-18 | minor | Wayland displays and refresh rate ran live (`examples/displays.rs` under WSLg: an output grown from 640×480 to 3440×1440 keeping `id 1`, then a second same-named output added as `id 2`); the two Wayland cells become ✅ and the overall figure is recounted: 56 ✅, 141 🟡, 477 applicable cells, (56 + 70.5) / 477 = 26.5%, ~27%; a Wayland scale change cannot be observed through WSLg and a window moved between the two outputs was not run |
-| 2026-10-18 | minor | Linux windows (winit): commands and state through winit and, on X11, `WM_STATE`/`_NET_WM_STATE` through a connection of its own; the window opens in its mode and position and maps after the first frame on X11; logind sleep, wake, shutdown and lock, and kernel memory pressure, reach the host; displays report a persistent key. Ran on an Xvfb server and WSL 2, against a stand-in for logind; the Wayland and X11 cells become 🟡 and the summary figures are not recounted |
+| 2026-10-18 | minor | Linux windows (winit): commands and state through winit and, on X11, `WM_STATE`/`_NET_WM_STATE` through a connection of its own; the window opens in its mode and position and maps after the first frame on X11; logind sleep, wake, shutdown and lock, and kernel memory pressure, reach the host; displays report a persistent key. Ran on an Xvfb server and WSL 2, against a stand-in for logind; ten Wayland and X11 cells go from ❌ to 🟡, and the figures are recounted: Wayland 6 ✅, 27 🟡, 35 ❌ is 29%, X11 8 ✅, 27 🟡, 32 ❌ is 32%, and overall (56 + 75.5) / 477 = 27.6%, ~28% |
