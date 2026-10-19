@@ -29,8 +29,9 @@ use std::process::ExitCode;
 
 use anyhow::Context;
 use serde::Deserialize;
+use syn::ext::IdentExt;
 use syn::visit::{self, Visit};
-use syn::{Attribute, ImplItem, Item, Meta, TraitItem};
+use syn::{Attribute, Expr, ImplItem, Item, Local, Meta, TraitItem};
 
 use crate::file_length::modules::{self, is_test_only, item_attrs};
 use crate::ratchet::Exits;
@@ -305,7 +306,7 @@ impl Scan {
         if !self.in_scope || self.in_kit {
             return;
         }
-        let name = ident.to_string();
+        let name = ident.unraw().to_string();
         let matched = match kind {
             Kind::Pump => PUMP_NAMES.contains(&name.as_str()),
             Kind::Double => is_double_name(&name),
@@ -354,6 +355,19 @@ impl<'ast> Visit<'ast> for Scan {
                 visit::visit_item(this, item);
             }
         });
+    }
+
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        let attrs: &[Attribute] = match expr {
+            Expr::Block(e) => &e.attrs,
+            Expr::Unsafe(e) => &e.attrs,
+            _ => &[],
+        };
+        self.scoped(attrs, |this| visit::visit_expr(this, expr));
+    }
+
+    fn visit_local(&mut self, local: &'ast Local) {
+        self.scoped(&local.attrs, |this| visit::visit_local(this, local));
     }
 
     fn visit_impl_item(&mut self, item: &'ast ImplItem) {
@@ -902,6 +916,30 @@ fn row_items_inside_a_test_function_are_test_code() {
     );
 }
 
+fn row_raw_identifiers_match_their_plain_names() {
+    let lib = "#[cfg(test)]\nmod t {\n    fn r#pump() {}\n    struct r#FakeClock;\n}\n";
+    let found = findings_for(&[("src/lib.rs", lib)], &[], HEADER);
+    assert_eq!(
+        found,
+        [
+            ("src/lib.rs".to_owned(), "unlisted"),
+            ("src/lib.rs".to_owned(), "unlisted"),
+        ]
+    );
+}
+
+fn row_items_in_a_test_only_block_are_test_code() {
+    let lib = "fn run() {\n    #[cfg(test)]\n    {\n        fn pump() {}\n        struct FakeClock;\n    }\n}\n";
+    let found = findings_for(&[("src/lib.rs", lib)], &[], HEADER);
+    assert_eq!(
+        found,
+        [
+            ("src/lib.rs".to_owned(), "unlisted"),
+            ("src/lib.rs".to_owned(), "unlisted"),
+        ]
+    );
+}
+
 fn row_a_src_folder_inside_a_test_target_is_not_a_kit() {
     let found = findings_for(
         &[
@@ -1008,6 +1046,14 @@ fn rows() -> Vec<(&'static str, fn())> {
         (
             "items_inside_a_test_function_are_test_code",
             row_items_inside_a_test_function_are_test_code,
+        ),
+        (
+            "raw_identifiers_match_their_plain_names",
+            row_raw_identifiers_match_their_plain_names,
+        ),
+        (
+            "items_in_a_test_only_block_are_test_code",
+            row_items_in_a_test_only_block_are_test_code,
         ),
         (
             "a_src_folder_inside_a_test_target_is_not_a_kit",
