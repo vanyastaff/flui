@@ -1290,6 +1290,10 @@ fn gesture_alternatives() {
                 crate::gesture_alternatives::the_revealed_menu_control_names_its_target,
             ),
             (
+                "gesture_alternatives::the_revealed_menu_control_draws_in_the_text_colour",
+                crate::gesture_alternatives::the_revealed_menu_control_draws_in_the_text_colour,
+            ),
+            (
                 "gesture_alternatives::an_unanswered_intent_and_a_reserved_key_are_reported",
                 crate::gesture_alternatives::an_unanswered_intent_and_a_reserved_key_are_reported,
             ),
@@ -1343,6 +1347,10 @@ fn context_menu_area() {
             (
                 "context_menu_area::items_read_in_the_area_direction",
                 crate::context_menu_area::items_read_in_the_area_direction,
+            ),
+            (
+                "context_menu_area::the_menu_labels_contrast_with_its_surface_under_any_text_colour",
+                crate::context_menu_area::the_menu_labels_contrast_with_its_surface_under_any_text_colour,
             ),
             (
                 "context_menu_area::a_panicking_item_leaves_no_menu_open",

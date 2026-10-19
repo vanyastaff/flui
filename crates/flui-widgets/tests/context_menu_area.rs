@@ -655,6 +655,40 @@ pub(crate) fn items_read_in_the_area_direction() {
     }
 }
 
+/// The menu's labels stay readable on its surface whatever text colour the
+/// app sets around it: under white text, the items are not painted white on
+/// the menu's white.
+pub(crate) fn the_menu_labels_contrast_with_its_surface_under_any_text_colour() {
+    use flui_painting::display_list::DrawOp;
+    use flui_painting::typography::TextStyle;
+    use flui_widgets::DefaultTextStyle;
+
+    let shown = StateHandle::new(true);
+    let (view, log) = Scene::new().view(&shown);
+    let mut laid = lay_out(
+        DefaultTextStyle::new(TextStyle::default().with_color(Color::WHITE), view),
+        tight(400.0, 300.0),
+    );
+    laid.pump();
+    let mut mounted = Mounted { laid, log, shown };
+    mounted.secondary_click(Offset::new(150.0, 25.0));
+    mounted.laid.pump();
+    let label_colours: Vec<Color> = mounted
+        .laid
+        .draw_ops()
+        .into_iter()
+        .filter_map(|command| match command.op {
+            DrawOp::Paragraph { color, .. } => Some(color),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(label_colours.len(), 3, "the three items are painted");
+    assert!(
+        label_colours.iter().all(|colour| *colour != Color::WHITE),
+        "no label is painted white on the white menu: {label_colours:?}"
+    );
+}
+
 /// A command that panics leaves no menu behind: the menu closed before the
 /// command ran, the panic reaches the caller, and the next menu works.
 pub(crate) fn a_panicking_item_leaves_no_menu_open() {

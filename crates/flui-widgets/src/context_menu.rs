@@ -27,7 +27,7 @@ use flui_interaction::focus::FocusNode;
 use flui_objects::{MainAxisSize, SubtreeAnchor};
 use flui_painting::AlignmentDirectional;
 use flui_painting::styling::Color;
-use flui_painting::typography::TextDirection;
+use flui_painting::typography::{TextDirection, TextStyle};
 use flui_platform_api::keyboard::NamedKey;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::delegates::SingleChildLayoutDelegate;
@@ -473,7 +473,7 @@ impl ViewState<MenuPanel> for MenuPanelState {
             .collect();
         let mut keys = Shortcuts::new(
             Actions::new(
-                ColoredBox::new(Color::WHITE).child(
+                ColoredBox::new(MENU_SURFACE).child(
                     Padding::symmetric(0.0, 4.0).child(
                         IntrinsicWidth::new()
                             .child(Column::new(rows).main_axis_size(MainAxisSize::Min)),
@@ -499,6 +499,12 @@ impl ViewState<MenuPanel> for MenuPanelState {
     }
 }
 
+/// The theme-free menu's surface, and its labels' colour: the menu paints
+/// both, so an app's text colour, chosen for its own background, cannot
+/// make a label vanish on the menu's.
+const MENU_SURFACE: Color = Color::WHITE;
+const MENU_LABEL: Color = Color::BLACK;
+
 /// One item: a focusable row labelled by its command, chosen by a tap, the
 /// activation keys or assistive technology's click. The menu is a route of
 /// the navigator's overlay, outside the area's subtree, so its label reads in
@@ -516,11 +522,18 @@ fn menu_row(
         0.0
     };
     let content = ConstrainedBox::new(BoxConstraints::new(0.0, f64::INFINITY, side, f64::INFINITY))
-        .child(Padding::symmetric(12.0, 8.0).child(
-            Align::new(AlignmentDirectional::CENTER_START.resolve(direction.is_ltr())).child(
-                ExcludeSemantics::new().child(Text::new(label.to_owned()).direction(direction)),
+        .child(
+            Padding::symmetric(12.0, 8.0).child(
+                Align::new(AlignmentDirectional::CENTER_START.resolve(direction.is_ltr())).child(
+                    ExcludeSemantics::new().child(
+                        Text::new(label.to_owned())
+                        .direction(direction)
+                        // Only the colour: the app's type still reaches the label.
+                        .style(TextStyle::default().with_color(MENU_LABEL)),
+                    ),
+                ),
             ),
-        ));
+        );
     let focus = Actions::new(
         Focus::new(FocusRing::new(content))
             .focus_node(node)

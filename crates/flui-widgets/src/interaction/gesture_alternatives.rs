@@ -55,8 +55,8 @@ use crate::localization::{
     BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, WidgetsLocalizations,
 };
 use crate::{
-    Center, ColoredBox, ConstrainedBox, ExcludeSemantics, Flexible, LayoutBuilder, Padding,
-    Positioned, Row, Semantics, SizedBox, Stack,
+    Center, ColoredBox, ConstrainedBox, DefaultTextStyle, ExcludeSemantics, Flexible,
+    LayoutBuilder, Padding, Positioned, Row, Semantics, SizedBox, Stack,
 };
 use flui_objects::{CrossAxisAlignment, MainAxisSize, StackFit};
 use flui_painting::styling::Color;
@@ -1313,11 +1313,12 @@ fn control_button(
     .boxed()
 }
 
-/// The theme-free "more" glyph the revealed menu control draws: three dots.
-fn more_glyph() -> BoxedView {
+/// The theme-free "more" glyph the revealed menu control draws: three dots
+/// in `color`.
+fn more_glyph(color: Color) -> BoxedView {
     let dot = || {
         Padding::symmetric(1.5, 0.0)
-            .child(SizedBox::new(3.0, 3.0).child(ColoredBox::new(Color::BLACK)))
+            .child(SizedBox::new(3.0, 3.0).child(ColoredBox::new(color)))
             .boxed()
     };
     Row::new(vec![dot(), dot(), dot()])
@@ -1390,9 +1391,15 @@ impl ViewState<FocusDecorations> for FocusDecorationsState {
         }
         if visible_in_row && let Some((label, opener)) = &view.menu_control {
             let opener = Rc::clone(opener);
-            let control = control_button(label.clone(), more_glyph(), view.min_target, move |cx| {
-                opener(cx, MenuCause::Control, None);
-            });
+            // The glyph sits on the row's background, as the row's text does.
+            let ink = ctx
+                .depend_on::<DefaultTextStyle, _>(|style| style.ambient().0.color)
+                .flatten()
+                .unwrap_or(Color::BLACK);
+            let control =
+                control_button(label.clone(), more_glyph(ink), view.min_target, move |cx| {
+                    opener(cx, MenuCause::Control, None);
+                });
             let trailing = Positioned::new(control).top(0.0).bottom(0.0);
             let trailing = match Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr) {
                 TextDirection::Rtl => trailing.left(0.0),

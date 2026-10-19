@@ -987,6 +987,48 @@ pub(crate) fn the_revealed_menu_control_names_its_target() {
     }
 }
 
+/// The revealed menu control draws its glyph in the text colour around the
+/// row, so it shows on the row's background as the row's text does: white
+/// dots where the app's text is white.
+pub(crate) fn the_revealed_menu_control_draws_in_the_text_colour() {
+    use flui_painting::display_list::DrawOp;
+    use flui_painting::typography::TextStyle;
+    use flui_widgets::DefaultTextStyle;
+
+    let alternatives = GestureAlternatives::new(Alternative::ContextMenu(MenuSpec::new(
+        GestureCommand::new("Delete Alice", Delete("Alice")),
+        |_cx, _request| {},
+    )))
+    .expect("one labelled command");
+    let mut laid = lay_out(
+        DefaultTextStyle::new(
+            TextStyle::default().with_color(Color::WHITE),
+            alternatives.child(SizedBox::new(300.0, 50.0)),
+        ),
+        tight(400.0, 300.0),
+    );
+    laid.pump();
+    let tab = flui_platform_api::keyboard::KeyEvent::new(
+        flui_platform_api::keyboard::KeyState::Down,
+        flui_platform_api::keyboard::Key::Named(NamedKey::Tab),
+        flui_platform_api::keyboard::Code::Unidentified,
+        flui_platform_api::EventTime::from_nanos(0),
+    );
+    let _ = laid.focus_manager().dispatch_key_event(&tab);
+    laid.pump();
+    let dots: Vec<Color> = laid
+        .draw_ops()
+        .into_iter()
+        .filter_map(|command| match command.op {
+            DrawOp::Rect { rect, paint } if rect.width() == 3.0 && rect.height() == 3.0 => {
+                Some(paint.color)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(dots, [Color::WHITE; 3], "the glyph's three dots");
+}
+
 /// A command whose intent nothing answers, and a command key the platform
 /// reserves, each leave a `flui::a11y` warning naming the command: a gesture
 /// that silently does nothing is the defect the diagnostic exists for. The
