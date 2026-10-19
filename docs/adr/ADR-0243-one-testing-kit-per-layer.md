@@ -39,9 +39,11 @@ planned driver's headless target, has nothing uniform to adopt.
    `test-support` and `test-utils` are renamed. The feature exposes the crate's kit and nothing else.
 2. **One kit per layer.** Each layer has one kit, `<crate>::testing`, built on the kit of the layer
    below. From the frame layer up the kit is `flui-testing` (`HeadlessBinding`, `HeadlessHost`,
-   `lay_out`). `flui-testing` sits at layer 6, so crates below it cannot build on it without a
-   dependency cycle; they keep their own kit. The rule is one kit per layer, not one for the whole
-   workspace.
+   `lay_out`). A crate below `flui-testing` may use it from `tests/` through a dev-dependency: the
+   layer check skips dev-dependencies (`tools/xtask/src/workspace.rs`) and `flui-view` already does
+   so. What such a crate cannot do is pass its own types to `flui-testing` from a unit test inside
+   `src/`, because that test is built against a second copy of the crate. Unit tests that need the
+   crate's private types keep a small kit of their own, and the allowlist (6) names it.
 3. **Time and frames come from a kit.** A test that needs a clock, a frame or a pump takes them from
    its layer's kit. A hand-written `pump`, `advance` or `tick` under `tests/` is an exception (6).
 4. **Doubles live with the contract.** A test double for a contract lives in the kit of the crate
@@ -57,25 +59,28 @@ planned driver's headless target, has nothing uniform to adopt.
 7. **The gate.** `cargo xtask testing` fails on:
    - a Cargo feature named `test-support` or `test-utils`;
    - a `fn pump`, `fn advance` or `fn tick` added under `tests/` outside a kit and not listed;
-   - a type named `Mock*`, `Fake*`, `Scripted*`, `Recording*` or `Probe*` added outside a kit and not
-     listed.
+   - a type named `Mock*`, `Fake*`, `Scripted*`, `Recording*` or `Probe*` added in test code outside a
+     kit and not listed.
 
-   It joins `cargo xtask checks`.
+   Test code is a `tests/` or `benches/` target, a `#[cfg(test)]` module or a file only such a module
+   includes. Production items are not scanned, so a type such as `flui-engine`'s `RecordingBudget`,
+   which `DrawSegment` uses at run time, is never an exception. The starting allowlist is built from the
+   same scope. The gate joins `cargo xtask checks`.
 
 ## Consequences
 
 - The migration is gradual and measured: the allowlist starts at today's count and only goes down.
-- Crates below `flui-testing` keep small private kits. That duplication is deliberate and bounded by
-  layer, and the allowlist shows what remains.
+- Crates below `flui-testing` use it from `tests/` and keep small private kits only for unit tests
+  inside `src/`. That duplication is deliberate, and the allowlist shows what remains.
 - Renaming `test-support` and `test-utils` changes the dev-dependency feature lists of their users
   and nothing in a consumer's build, because the features are test-only.
 - `docs/testing.md` gains the layer-to-kit table when the first migration lands.
 
 ## Alternatives considered
 
-- **One test crate for the whole workspace.** Rejected: the lower layers would depend on a layer-6
-  crate, which is the cycle this ADR avoids, and a tier-wide crate is the micro-crate shape the
-  layering rules rule out.
+- **One test crate for the whole workspace, used by unit tests too.** Rejected: a unit test inside
+  `src/` of a lower crate would receive a second copy of that crate's types through the dev-dependency
+  cycle, so the private-type tests need a kit inside the crate.
 - **Guidance without a gate.** Rejected: `docs/testing.md` already is guidance, and the drift above
   grew under it.
 - **Delete the private helpers at once.** Rejected: some of them test the layer below the kit and
