@@ -321,6 +321,24 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                         "restored native focus reaches the installed owner"
                     );
                 }
+                if matches!(change, NativeChange::Unchanged) {
+                    native.simulate_execution_state(WindowExecutionState::Suspended);
+                    assert_eq!(
+                        observe_runtime(dispatcher, |runtime| runtime
+                            .scheduler()
+                            .lifecycle_state()),
+                        AppLifecycleState::Paused,
+                        "a frozen page reaches the installed owner"
+                    );
+                    native.simulate_execution_state(WindowExecutionState::Running);
+                    assert_eq!(
+                        observe_runtime(dispatcher, |runtime| runtime
+                            .scheduler()
+                            .lifecycle_state()),
+                        AppLifecycleState::Resumed,
+                        "a resumed page reaches the installed owner"
+                    );
+                }
                 teardown_platform_ui_runtime();
                 Ok(())
             }))

@@ -18,6 +18,8 @@ use wasm_bindgen_test::wasm_bindgen_test;
 mod display;
 #[path = "wasm32/page_store.rs"]
 mod page_store;
+#[path = "wasm32/web_page_lifecycle.rs"]
+mod web_page_lifecycle;
 
 #[wasm_bindgen(inline_js = r#"
 let restore;

@@ -76,6 +76,7 @@ class FakeCanvas extends EventTarget {
         this.ownerDocument = document;
     }
     getRootNode() { return document; }
+    contains(node) { return node === this; }
     setAttribute() {}
 }
 
@@ -258,7 +259,7 @@ export function nextOwnerTask() { return new Promise(resolve => setImmediate(res
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = installDisplayProbe)]
-    fn install_probe(window_management: &str);
+    pub(super) fn install_probe(window_management: &str);
     #[wasm_bindgen(js_name = restoreDisplayProbe)]
     fn restore_probe();
     #[wasm_bindgen(js_name = runFrames)]
@@ -315,7 +316,7 @@ extern "C" {
     fn next_task() -> js_sys::Promise;
 }
 
-struct Probe;
+pub(super) struct Probe;
 impl Drop for Probe {
     fn drop(&mut self) {
         restore_probe();
@@ -323,13 +324,13 @@ impl Drop for Probe {
 }
 
 /// A running platform and the number of owner wakes it has delivered.
-struct Running {
-    owner: Rc<RefCell<Option<OwnerPlatform>>>,
+pub(super) struct Running {
+    pub(super) owner: Rc<RefCell<Option<OwnerPlatform>>>,
     wakes: Arc<AtomicUsize>,
 }
 
 impl Running {
-    fn start() -> Self {
+    pub(super) fn start() -> Self {
         let owner = Rc::new(RefCell::new(None));
         let installed = Rc::clone(&owner);
         let wakes = Arc::new(AtomicUsize::new(0));
@@ -361,7 +362,7 @@ impl Running {
         self.wakes.load(Ordering::SeqCst)
     }
 
-    fn quit(&self) {
+    pub(super) fn quit(&self) {
         self.owner
             .borrow()
             .as_ref()
@@ -372,7 +373,7 @@ impl Running {
     }
 }
 
-async fn settle() {
+pub(super) async fn settle() {
     wasm_bindgen_futures::JsFuture::from(next_task())
         .await
         .expect("owner tasks");
