@@ -4,7 +4,7 @@
 //! repository-root file, so this command generates a committed Rust source in each holding the
 //! floors that crate compiles in, and the version map under `docs/`. Without arguments it checks
 //! that every generated file is what the root file generates and that every template stating a
-//! floor states the same one; `--write` regenerates the files.
+//! floor states the same one; `--write` regenerates the files and restates the template floors.
 
 use std::fmt::Write as _;
 use std::process::ExitCode;
@@ -29,7 +29,7 @@ const MAP_OUTPUT: &str = "docs/version-map.md";
 const GRADLE_TEMPLATE: &str = "crates/flui-cli/templates/platforms/android/build.gradle.kts";
 
 static GRADLE_MIN_SDK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*minSdk\s*=\s*([0-9]+)\s*$").expect("BUG: static regex"));
+    LazyLock::new(|| Regex::new(r"^(\s*minSdk\s*=\s*)([0-9]+)(\s*)$").expect("BUG: static regex"));
 
 /// Arguments for `cargo xtask platform-floor`.
 #[derive(Debug, clap::Args)]
@@ -48,8 +48,14 @@ pub(crate) fn platform_floor(args: &PlatformFloorArgs) -> anyhow::Result<ExitCod
         for (path, contents) in &generated {
             std::fs::write(root.join(path), contents).with_context(|| format!("writing {path}"))?;
         }
+        let template = read(GRADLE_TEMPLATE)?;
+        let restated = restate_min_sdk(&template, floors.android.api);
+        if restated != template {
+            std::fs::write(root.join(GRADLE_TEMPLATE), restated)
+                .with_context(|| format!("writing {GRADLE_TEMPLATE}"))?;
+        }
         println!(
-            "platform-floor: wrote {} file(s) from {SOURCE}",
+            "platform-floor: wrote {} file(s) and restated {GRADLE_TEMPLATE} from {SOURCE}",
             generated.len()
         );
         return Ok(ExitCode::SUCCESS);
@@ -271,6 +277,25 @@ fn version_map(floors: &Floors) -> String {
     page
 }
 
+/// `text` with every `minSdk = N` line stating `api`, its indentation and line endings kept.
+fn restate_min_sdk(text: &str, api: u32) -> String {
+    text.split_inclusive('\n')
+        .map(|line| {
+            let (body, ending) = match line.strip_suffix("\r\n") {
+                Some(body) => (body, "\r\n"),
+                None => match line.strip_suffix('\n') {
+                    Some(body) => (body, "\n"),
+                    None => (line, ""),
+                },
+            };
+            match GRADLE_MIN_SDK.captures(body) {
+                Some(caps) => format!("{}{api}{}{ending}", &caps[1], &caps[3]),
+                None => line.to_owned(),
+            }
+        })
+        .collect()
+}
+
 /// Every disagreement between the root file and what states a floor elsewhere.
 ///
 /// `committed` is each generated path with its checked-in contents (empty when missing);
@@ -294,7 +319,7 @@ fn check(
         let stated: Vec<u32> = text
             .lines()
             .filter_map(|line| GRADLE_MIN_SDK.captures(line))
-            .filter_map(|caps| caps[1].parse().ok())
+            .filter_map(|caps| caps[2].parse().ok())
             .collect();
         match stated.as_slice() {
             [] => findings.push(format!("{path} states no `minSdk = N`")),
@@ -414,6 +439,20 @@ mod tests {
         );
     }
 
+    fn write_restates_a_template_floor_that_differs() {
+        let (committed, _) = agreeing();
+        let drifted = "android {\r\n        minSdk = 21\r\n        targetSdk = 35\r\n}";
+        let restated = restate_min_sdk(drifted, floors().android.api);
+        assert_eq!(
+            restated,
+            "android {\r\n        minSdk = 23\r\n        targetSdk = 35\r\n}"
+        );
+        assert_eq!(
+            check(&floors(), &committed, &[(GRADLE_TEMPLATE, restated)]),
+            Vec::<String>::new()
+        );
+    }
+
     fn a_malformed_root_file_is_refused() {
         for (plant, needle) in [
             (ROOT.replace("version = \"13.0\"", "version = \"13\""), "ios.version"),
@@ -460,6 +499,10 @@ mod tests {
                 (
                     "a_template_floor_that_differs_is_reported",
                     a_template_floor_that_differs_is_reported as fn(),
+                ),
+                (
+                    "write_restates_a_template_floor_that_differs",
+                    write_restates_a_template_floor_that_differs as fn(),
                 ),
                 (
                     "a_malformed_root_file_is_refused",
