@@ -9,7 +9,7 @@ use flui_interaction::{
     GestureSettingsProvider, GestureSettingsSource, LongPressGestureRecognizer, ManualClock,
     PointerId,
     events::{PointerEventExt as _, PointerKind},
-    gesture::{PointerClass, RemainderHandoff},
+    gesture::RemainderHandoff,
     pointer::PointerDispatch,
 };
 use flui_platform_api::{GesturePreferences, TargetPlatform, pointer::PenTool};
@@ -25,7 +25,6 @@ fn ms(value: u64) -> Duration {
 fn preset_fallback_chain() {
     // Android's own pen row: Views apply ViewConfiguration.TOUCH_SLOP (8 dp)
     // to every contact, stylus included, although a pen is a fine pointer.
-    assert_eq!(PointerClass::of(PEN), PointerClass::Fine);
     let pen = GestureSettings::preset(TargetPlatform::Android, PEN);
     assert_eq!(pen.touch_slop(), 8.0, "Android pen keeps TOUCH_SLOP");
     // Android mouse has no kind row: it falls to the fine class row, whose

@@ -35,7 +35,7 @@ them. Compile-time assertions in `src/lib.rs` cover only those data types.
 
 | Site | Primitive | Reason |
 |---|---|---|
-| Arena slots | `Rc<RefCell<BTreeMap<..>>>` and per-slot `RefCell` | exact owner-local slot transactions; callbacks and user destruction run after releasing borrows |
+| Arena slots | `RefCell<BTreeMap<..>>` in the one `Rc` every arena handle shares, and per-slot `RefCell` | exact owner-local slot transactions; callbacks and user destruction run after releasing borrows |
 | Recognizer state | `Cell` / `RefCell` behind `Rc` identity | synchronous owner-local mutation; callback configuration is immutable |
 | Pointer router / interaction lane | `Rc` + `RefCell` | explicitly owner-local executable callbacks |
 | Pointer resampler | `Arc<parking_lot::Mutex<ResamplerInner>>` and shared output batches | source pressure coalescing and frozen delivery prefixes; no lock crosses a callback |
@@ -263,7 +263,10 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   arena queues a `GestureObservation` when it commits a decision, only while an
   observer is registered, and delivers the queue when its outermost operation
   returns or, for a binding's arena, when the outermost binding dispatch returns
-  (including a failed one: committed decisions are facts). A pass delivers what
+  (including a failed one: committed decisions are facts). A clock that fails
+  stamping a committed verdict loses none of it: the verdict is delivered
+  stamped as a clockless arena stamps it, and the clock's failure is raised
+  after delivery (`a_failing_clock_loses_no_committed_verdict`). A pass delivers what
   was queued at its start, each observation to the observers registered when it
   began; reentrant observations wait for the next pass, which a stored window
   wake schedules. Each call is contained, the first failure of a pass is the
@@ -355,7 +358,9 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   larger axial component wins and a tie goes to the innermost member. A
   `PanClaim` region, carried by the arena handle
   (`GestureArena::with_pan_claim`), intersects the axes an axial member outside
-  it may take, stopping at that member's own region. `allowed_devices` refuses
+  it may take, stopping at the first region that encloses that member too, so
+  a carousel inside a map's `None` region takes its axis whether or not it
+  declares a region of its own. `allowed_devices` refuses
   a Down in `RecognizerSet` before any rule runs. An accepted drag starts only
   once its contact crossed its own slop: a lone drag that wins by default holds
   until then and starts from Down, so the motion up to the slop still reaches
@@ -386,9 +391,13 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   a hold, and the arena refuses such members joining after it; moving
   members still compete and take the contact from the hold. Hit testing is
   untouched: the tap under a flinging list is admitted, then loses.
-  `HoldGestureRecognizer` reports the hold and its end (`HoldEnd::Lifted`,
-  `Yielded`, `Cancelled`); `Scrollable` attaches one only while its motion
-  runs and settles from rest on release.
+  `PrimaryContact::begin` records the hold's contact before the beaten members
+  hear their rejections, so one that fails or ends the contest finds the hold
+  tracking it. `HoldGestureRecognizer` reports the hold and its end
+  (`HoldEnd::Lifted`, `Yielded`, `Cancelled`), `on_release` only for a hold
+  `on_hold` announced; `Scrollable` attaches one only while its motion runs
+  and settles from rest on release.
+  `a_hold_tracks_its_contact_before_beaten_members_hear` pins the order.
   `hold_on_down_beats_tap_and_long_press_not_drag` pins the rule, the widget
   rows of `assert_ownership_table` the pager.
 - **Hover freezes while a moving member owns a contact (ADR-0208 rule 6).** A

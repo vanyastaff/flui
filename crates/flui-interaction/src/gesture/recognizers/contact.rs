@@ -18,8 +18,8 @@ use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{
-        AdmissionContext, GestureArena, GestureArenaEntry, GestureArenaMember,
-        GestureDeadlineRegistration, GestureDisposition, MotionRole, SweepModel,
+        AdmissionContext, ContactRole, GestureArena, GestureArenaEntry, GestureArenaMember,
+        GestureDeadlineRegistration, GestureDisposition, HeldOut, MotionRole, SweepModel,
     },
     gesture::observer::GestureContest,
     gesture::settings::GestureSettings,
@@ -33,8 +33,7 @@ use super::callback_containment::withdraw_cancelled;
 pub struct ArenaMembership {
     arena: GestureArena,
     this: Weak<dyn GestureArenaMember>,
-    role: Option<MotionRole>,
-    holds: bool,
+    role: ContactRole,
 }
 
 impl std::fmt::Debug for ArenaMembership {
@@ -51,31 +50,36 @@ impl ArenaMembership {
         Self {
             arena,
             this,
-            role: None,
-            holds: false,
+            role: ContactRole::Discrete,
         }
     }
 
     /// Join every contact as a moving member, for the ownership table
     /// (ADR-0208): a slop crossing claims through
-    /// [`GestureArenaEntry::claim_motion`].
+    /// [`GestureArenaEntry::claim_motion`]. A moving member does not hold,
+    /// so this replaces [`Self::holding_contact`].
     #[must_use]
     pub fn with_motion_role(mut self, role: MotionRole) -> Self {
-        self.role = Some(role);
+        self.role = ContactRole::Moving(role);
         self
     }
 
     /// Join every contact as a hold (ADR-0208 rule 4): the members of that
     /// contact that do not move, a tap or a long press, lose to it on
     /// admission, and such members joining after it are refused. Moving
-    /// members still compete, and take the contact from the hold.
+    /// members still compete, and take the contact from the hold. A hold
+    /// does not move, so this replaces [`Self::with_motion_role`].
     #[must_use]
     pub fn holding_contact(mut self) -> Self {
-        self.holds = true;
+        self.role = ContactRole::Hold;
         self
     }
 
     /// Join an open competition, refusing a dead owner or closed arena.
+    ///
+    /// A hold's beaten members learn they lost before this returns; a
+    /// recognizer that must record its contact first admits through
+    /// [`PrimaryContact::begin`].
     #[must_use]
     pub fn join(&self, pointer: PointerId) -> Option<GestureArenaEntry> {
         self.join_from(pointer, None)
@@ -88,13 +92,24 @@ impl ArenaMembership {
         pointer: PointerId,
         feeder: Option<ContactFeeder>,
     ) -> Option<GestureArenaEntry> {
+        let (entry, held_out) = self.admit_from(pointer, feeder)?;
+        self.arena.deliver_held_out(held_out);
+        Some(entry)
+    }
+
+    /// [`Self::join_from`], leaving the rejections a hold owes the members
+    /// it beat to the caller, who delivers them once its contact is recorded.
+    fn admit_from(
+        &self,
+        pointer: PointerId,
+        feeder: Option<ContactFeeder>,
+    ) -> Option<(GestureArenaEntry, HeldOut)> {
         let member = self.this.upgrade()?;
         self.arena.try_add_erased(
             pointer,
             &member,
             AdmissionContext {
                 role: self.role,
-                holds: self.holds,
                 feeder,
             },
         )
@@ -223,11 +238,41 @@ impl PrimaryContact {
     /// # Errors
     /// Refuses non-Down or non-finite input, an already active contact, closed
     /// arena membership, and permanently exhausted contact identities.
+    ///
+    /// The contact is recorded before the members a hold beats learn they
+    /// lost, so their callbacks find it tracking; one that ends the contest
+    /// leaves this contact no longer [current](Self::is_current) on return.
     pub fn begin(
         &self,
         down: PointerDispatch<'_>,
         settings: &GestureSettings,
     ) -> Result<ContactId, BeginContactError> {
+        let (id, held_out) = self.admit(down, settings)?;
+        self.arena().deliver_held_out(held_out);
+        Ok(id)
+    }
+
+    /// [`Self::begin`] inside the caller's recovery operation: a beaten
+    /// member's failure is captured there, not raised.
+    pub(crate) fn begin_with_recovery(
+        &self,
+        down: PointerDispatch<'_>,
+        settings: &GestureSettings,
+        recovery: &mut RecoveryScope<'_>,
+    ) -> Result<ContactId, BeginContactError> {
+        let (id, held_out) = self.admit(down, settings)?;
+        self.arena()
+            .deliver_held_out_with_recovery(held_out, recovery);
+        Ok(id)
+    }
+
+    /// Record the admitted contact, returning the rejections owed to the
+    /// members a hold beat.
+    fn admit(
+        &self,
+        down: PointerDispatch<'_>,
+        settings: &GestureSettings,
+    ) -> Result<(ContactId, HeldOut), BeginContactError> {
         let PointerEvent::Down(data) = down.local else {
             return Err(BeginContactError::NotDown);
         };
@@ -249,9 +294,9 @@ impl PrimaryContact {
             .membership
             .register_deadline(pointer)
             .ok_or(BeginContactError::ArenaClosed)?;
-        let entry = self
+        let (entry, held_out) = self
             .membership
-            .join_from(pointer, down.feeder())
+            .admit_from(pointer, down.feeder())
             .ok_or(BeginContactError::ArenaClosed)?;
         let contact = Contact {
             snapshot: ContactSnapshot {
@@ -272,7 +317,7 @@ impl PrimaryContact {
         tracing::debug!(name: "recognizer.start_tracking", ?pointer,
             event = %crate::gesture::observability::GestureEvent::StartedTracking,
             "recognizer started tracking");
-        Ok(id)
+        Ok((id, held_out))
     }
 
     /// Return an owned view without retaining an internal borrow.

@@ -24,6 +24,7 @@
 //! ```
 
 pub(crate) mod arena;
+mod constraints;
 mod details;
 mod lsq_solver;
 mod observability;
@@ -31,7 +32,6 @@ mod observer;
 mod one_euro;
 pub(crate) mod recognizers;
 pub(crate) mod settings;
-mod traits;
 mod velocity;
 mod velocity_tracker;
 
@@ -41,6 +41,8 @@ pub use arena::{
     GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition, MotionRole, PanClaim,
     ScrollLatchEnd, SequencedBranch, SweepModel,
 };
+pub(crate) use constraints::on_rail;
+pub use constraints::{AxisLock, DragAxis, TransformLock};
 pub use details::{
     ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, TapDownDetails,
     TapUpDetails,
@@ -54,7 +56,5 @@ pub use one_euro::{OneEuroFilter, OneEuroFilter2D, OneEuroFilterError, OneEuroTu
 pub(crate) use one_euro::{PositionSmoother, PublishedPosition};
 pub use recognizers::*;
 pub use settings::*;
-pub(crate) use traits::on_rail;
-pub use traits::{AxisLock, DragAxis, TransformLock};
 pub use velocity::{Velocity, VelocityEstimate};
 pub use velocity_tracker::{VelocityEstimator, VelocityTracker};
