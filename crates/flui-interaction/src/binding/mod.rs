@@ -144,7 +144,7 @@ use crate::{
     gesture::settings::{GestureProfiles, GestureSettings, GestureSettingsSource},
     gesture::{
         ContestCancel,
-        arena::{DetachedArenaBatch, GestureArena},
+        arena::{DetachedArenaBatch, DispatchedSignal, GestureArena, ScrollLatchEnd},
     },
     ids::{EmbeddedSurfaceId, InputSurface, PointerId, SurfaceIdsExhausted},
     pointer::{
@@ -479,7 +479,7 @@ impl GestureBinding {
     ) -> R {
         struct Restore<'a> {
             arena: &'a GestureArena,
-            outer: Option<InputSequenceId>,
+            outer: Option<DispatchedSignal>,
         }
         impl Drop for Restore<'_> {
             fn drop(&mut self) {
@@ -488,7 +488,10 @@ impl GestureBinding {
         }
         let arena = self.arena.arena();
         let _restore = Restore {
-            outer: arena.set_dispatched_signal(Some(sequence)),
+            outer: arena.set_dispatched_signal(Some(DispatchedSignal {
+                sequence,
+                latch_end: None,
+            })),
             arena,
         };
         body()
@@ -804,7 +807,7 @@ impl GestureBinding {
             binding: &'a GestureBinding,
             outer: Option<InputSequenceId>,
             outer_contact: Option<(PointerId, InputSequenceId)>,
-            outer_signal: Option<InputSequenceId>,
+            outer_signal: Option<DispatchedSignal>,
         }
         impl Drop for Restore<'_> {
             fn drop(&mut self) {
@@ -1979,10 +1982,25 @@ impl GestureBinding {
             self.default_profiles.latch_idle(scroll.pointer.kind),
             &self.sequences,
         );
-        if let ScrollAdmission::Active(latch) | ScrollAdmission::Terminal(Some(latch)) = &sequence {
+        let dispatched = match &sequence {
+            ScrollAdmission::Active(latch) => {
+                Some((latch, latch.lapses_at().map(ScrollLatchEnd::IdleAt)))
+            }
+            ScrollAdmission::Terminal(Some(latch)) => {
+                Some((latch, Some(ScrollLatchEnd::WithThisPacket)))
+            }
+            ScrollAdmission::Terminal(None) | ScrollAdmission::Refused => None,
+        };
+        if let Some((latch, latch_end)) = dispatched {
             self.dispatched_sequence.set(Some(latch.id));
-            // The consumer names the deltas it takes by the latch's sequence.
-            self.arena.arena().set_dispatched_signal(Some(latch.id));
+            // The consumer names the deltas it takes by the latch's sequence,
+            // and ends that sequence where the latch ends.
+            self.arena
+                .arena()
+                .set_dispatched_signal(Some(DispatchedSignal {
+                    sequence: latch.id,
+                    latch_end,
+                }));
         }
         let position = event
             .position()

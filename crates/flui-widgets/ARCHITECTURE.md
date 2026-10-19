@@ -3126,6 +3126,40 @@ stops never cuts its drag or its settle short. Rows:
 `a_fresh_ancestor_physics_mid_drag_keeps_taking_the_remainder` and
 `a_new_chain_above_keeps_the_leaf_run`.
 
+Each participant works in its own coordinate plane (`scroll/nested/plane.rs`): the local space of
+the box a `NestedScroll`, a `Scrollable` or an `InteractiveViewer` wraps, published by an
+`AnchoredBox` each of them mounts (`PlaneSource`, the presentation acquired in a lifecycle hook
+and the anchor's `RenderId`). A pass samples every plane of its chain once from the last
+complete layout (`transform_to` the root), keeping the last sample while a frame holds the
+layout, carries the rest of the step in the presentation's plane and converts the delta, the
+focal point, `consumed_by_child` and a velocity at each participant: the linear part of an
+affine plane, the chord and the tangent of a projection. A participant that takes all it was
+offered takes the presentation's offer exactly, so identity and translated planes, the common
+case, round nothing. The latch is per presentation axis; `held_above` and `leaf_holds` read it
+through the screen axis the leaf's own axis runs closest to. A plane that cannot be crossed
+offers its participant nothing, and a runner whose plane has no way back takes its step alone.
+Every step names its focal point (the contact, the wheel's pointer, else the middle of the
+leaf, set by `ScrollSequence::aim`) and the pixel ratio of the sequence's latest user input; a
+run keeps its release's. Rows: `steps_carry_the_focal_point_and_the_device_pixel_ratio` and
+`each_participant_is_offered_the_step_in_its_own_plane`.
+
+A programmatic sequence (`ScrollDevice::Programmatic`: a jump, an animation, a reveal and the
+settle after it) asks each connection `accepts_programmatic` once, at its start, and closes
+the links that decline (the default, or a panic) before anyone is told, so they hear no start,
+step or end; scrollable links are always closed for it, since each scrollable moves for a
+reveal in a sequence of its own. `CollapsingHeader`, `RefreshIndicator` and `AnchoredDrag`
+decline. Row: `a_participant_declining_programmatic_scrolls_hears_none_of_them`.
+
+A wheel or trackpad sequence ends at its binding latch's idle deadline
+(`scroll/nested/idle_end.rs`): after handling each packet, moved or not, the leaf (the
+`Scrollable`'s scroll claim, the viewer's plain-wheel pan) reads
+`GestureArena::dispatched_latch_end` and moves its sequence's one deadline registration
+(`GestureArena::register_deadline`) to the lapse the binding reports, or ends the sequence
+there for a packet that ends the latch (an end phase). The poll disarms before it ends the
+sequence, which then ends `Released` after its last run; ending any other way withdraws the
+registration. The time is the binding's (1500 ms phase-less, 3000 ms phased), so the latch and
+the sequence end together. Row: `an_idle_wheel_sequence_ends_at_its_latch_deadline`.
+
 A pass is one walk of a sequence through its chain: a step, a hand-off, a release, a start or an
 end (`ScrollSequence::pass`). It counts itself into every scrollable of the chain, through the
 owner that serves each chain node now (`ChainNode::owner`), for its length. While an owner's

@@ -161,7 +161,8 @@ pub use pointer::{WheelPreferencesProvider, WheelPreferencesSource};
 // ============================================================================
 pub use gesture::{
     GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineError,
-    GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition, SweepModel,
+    GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition, ScrollLatchEnd,
+    SweepModel,
 };
 // ============================================================================
 // Re-exports: Other

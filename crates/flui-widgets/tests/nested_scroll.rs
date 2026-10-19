@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::Vsync;
-use flui_foundation::geometry::{Axis, Offset, Vec2};
+use flui_foundation::geometry::{Axis, Offset, Point, Vec2};
 use flui_interaction::{
     GestureProfiles, GestureSettings, GestureSettingsSource, GestureValues, InputSequenceId,
     RemainderHandoff,
@@ -20,7 +20,7 @@ use flui_widgets::{
     AnchorSnap, AnchorSnapError, Column, FlingHandoff, FlingStep, ListView, NestedScroll,
     NestedScrollConnection, OverscrollBehavior, PageSnap, Row, ScrollCause, ScrollController,
     ScrollDevice, ScrollEndReason, ScrollMetrics, ScrollStep, Scrollable, SizedBox, SnapPolicy,
-    ViewportFraction, VsyncScope,
+    Transform, ViewportFraction, VsyncScope,
 };
 
 use crate::common::{LaidOut, lay_out_animated, tight};
@@ -56,11 +56,21 @@ pub(crate) struct Probe {
     /// Told of every call once it is recorded, from inside the callout.
     observe: RefCell<Option<Observer>>,
     takes_remainder: Cell<bool>,
+    /// Takes no part in programmatic sequences; a probe accepts them unless
+    /// told otherwise, so it records every sequence of its chain.
+    declines_programmatic: Cell<bool>,
 }
 
 impl Probe {
     pub(crate) fn new() -> Rc<Self> {
         Rc::new(Self::default())
+    }
+
+    /// A probe that leaves programmatic sequences to the rest of the chain.
+    pub(crate) fn declining_programmatic() -> Rc<Self> {
+        let probe = Self::new();
+        probe.declines_programmatic.set(true);
+        probe
     }
 
     fn record(&self, seen: Seen) {
@@ -130,6 +140,10 @@ impl Probe {
 }
 
 impl NestedScrollConnection for Probe {
+    fn accepts_programmatic(&self) -> bool {
+        !self.declines_programmatic.get()
+    }
+
     fn sequence_started(&self, sequence: InputSequenceId) {
         self.record(Seen::Started(sequence));
     }
@@ -387,6 +401,215 @@ pub(crate) fn remainder_preset(handoff: RemainderHandoff) -> GestureProfiles {
 // ---------------------------------------------------------------------------
 // Rows
 // ---------------------------------------------------------------------------
+
+/// Every step names where its input points and the presentation's pixel
+/// ratio (ADR-0209 §1): a contact's steps follow the finger, a fling's keep
+/// the release's point and ratio, a wheel's point at the pointer, and a
+/// programmatic step points at the middle of its leaf.
+pub(crate) fn steps_carry_the_focal_point_and_the_device_pixel_ratio() {
+    let (controller, probe, vsync) = (ScrollController::new(), Probe::new(), Vsync::new());
+    let tree = VsyncScope::new(
+        vsync.clone(),
+        NestedScroll::new(probe.connection(), list(&controller)),
+    )
+    .boxed();
+    let mut laid = mounted(tree, vsync);
+    laid.set_scale_factor(2.0);
+    probe.take();
+    let by_cause = |cause: ScrollCause| {
+        probe
+            .steps()
+            .into_iter()
+            .filter(move |step| step.cause == cause)
+            .collect::<Vec<_>>()
+    };
+
+    laid.replay(&fling(Device::Touch, at(150.0, 250.0), at(150.0, 160.0)));
+    settle(&mut laid);
+    let contact = by_cause(ScrollCause::UserInput);
+    assert!(!contact.is_empty(), "the drag offered steps");
+    for step in &contact {
+        assert_eq!(step.focal_point.x, 150.0, "{step:?}");
+        assert!((160.0..=250.0).contains(&step.focal_point.y), "{step:?}");
+        assert_eq!(step.device_pixel_ratio, 2.0, "{step:?}");
+    }
+    let lifted = contact.last().expect("a last drag step").focal_point;
+    assert_eq!(
+        lifted,
+        Point::new(150.0, 160.0),
+        "the last step is where the finger lifted"
+    );
+    let run = by_cause(ScrollCause::SideEffect);
+    assert!(!run.is_empty(), "the fling ran");
+    assert!(
+        run.iter()
+            .all(|step| step.focal_point == lifted && step.device_pixel_ratio == 2.0),
+        "the fling keeps the release's point and ratio: {run:?}"
+    );
+    let released = probe
+        .seen()
+        .into_iter()
+        .find_map(|seen| match seen {
+            Seen::Released(step) => Some(step),
+            _ => None,
+        })
+        .expect("the contact was released");
+    assert_eq!(released.focal_point, lifted);
+    assert_eq!(released.device_pixel_ratio, 2.0);
+
+    controller.jump_to(0.0);
+    laid.tick();
+    probe.take();
+    laid.replay(
+        &MouseScript::new("notch")
+            .move_to(at(120.0, 80.0))
+            .wheel(1.0)
+            .build()
+            .expect("a hovering mouse"),
+    );
+    settle(&mut laid);
+    let wheel = by_cause(ScrollCause::UserInput);
+    assert!(!wheel.is_empty(), "the notch offered steps");
+    assert!(
+        wheel
+            .iter()
+            .all(|step| step.focal_point == Point::new(120.0, 80.0)),
+        "a wheel step points at the pointer: {wheel:?}"
+    );
+
+    probe.take();
+    controller.jump_to(300.0);
+    laid.tick();
+    let jump = by_cause(ScrollCause::Programmatic);
+    assert_eq!(jump.len(), 1, "the jump is one step");
+    assert_eq!(
+        jump[0].focal_point,
+        Point::new(150.0, 150.0),
+        "a step without a position points at the middle of the leaf"
+    );
+    assert_eq!(jump[0].device_pixel_ratio, 2.0);
+}
+
+/// Each participant is offered a step in its own plane (ADR-0209 §1): above
+/// and below a scaling or a rotating `Transform`, the participants see one
+/// motion on screen in their own coordinates — its delta, its focal point
+/// and its release velocity — and the list moves by what reaches it in its
+/// own. A plane that cannot be crossed offers its participants nothing and
+/// publishes nothing that is not finite.
+pub(crate) fn each_participant_is_offered_the_step_in_its_own_plane() {
+    let mount = |transform: Transform, controller: &ScrollController| {
+        let (outer, inner, vsync) = (Probe::new(), Probe::new(), Vsync::new());
+        let tree = VsyncScope::new(
+            vsync.clone(),
+            NestedScroll::new(
+                outer.connection(),
+                transform.child(NestedScroll::new(inner.connection(), list(controller))),
+            ),
+        )
+        .boxed();
+        (mounted(tree, vsync), outer, inner)
+    };
+    let pre = |probe: &Probe| {
+        probe
+            .steps()
+            .into_iter()
+            .filter(|step| step.cause == ScrollCause::UserInput)
+            .collect::<Vec<_>>()
+    };
+    let released = |probe: &Probe| {
+        probe
+            .seen()
+            .into_iter()
+            .find_map(|seen| match seen {
+                Seen::Released(step) => Some(step.available.pixels_per_second),
+                _ => None,
+            })
+            .expect("the contact was released")
+    };
+    let close = |a: f64, b: f64| (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0);
+
+    // Twice the size about the centre: the screen's motion is twice the
+    // list's.
+    let controller = ScrollController::new();
+    let (mut laid, outer, inner) = mount(Transform::scale(2.0, 2.0), &controller);
+    laid.replay(&fling(Device::Touch, at(150.0, 280.0), at(150.0, 160.0)));
+    let (above, below) = (pre(&outer), pre(&inner));
+    assert!(!below.is_empty(), "the drag reached the list");
+    assert_eq!(above.len(), below.len(), "one step each per dispatch");
+    for (above, below) in above.iter().zip(&below) {
+        assert_eq!(
+            above.available,
+            below.available * 2.0,
+            "{above:?} {below:?}"
+        );
+        assert_eq!(
+            above.focal_point,
+            Point::new(
+                150.0 + 2.0 * (below.focal_point.x - 150.0),
+                150.0 + 2.0 * (below.focal_point.y - 150.0),
+            ),
+            "the focal point is the same point on screen"
+        );
+    }
+    let moved: f64 = below.iter().map(|step| step.available.y).sum();
+    assert_eq!(
+        controller.pixels(),
+        moved,
+        "the list moved by its own steps"
+    );
+    let (above, below) = (released(&outer), released(&inner));
+    assert!(below.dy > 0.0, "the release flings the list on");
+    assert_eq!(above.dy, below.dy * 2.0, "a velocity crosses the plane too");
+
+    // A quarter turn: a horizontal swipe on screen scrolls the vertical
+    // list, and the participant above sees it horizontal.
+    let controller = ScrollController::new();
+    let (mut laid, outer, inner) = mount(
+        Transform::rotation(std::f64::consts::FRAC_PI_2),
+        &controller,
+    );
+    laid.replay(&slow(Device::Touch, at(100.0, 150.0), at(200.0, 150.0)));
+    let (above, below) = (pre(&outer), pre(&inner));
+    assert!(!below.is_empty(), "the swipe reached the list");
+    assert_eq!(above.len(), below.len());
+    for (above, below) in above.iter().zip(&below) {
+        assert_eq!(
+            below.available.x, 0.0,
+            "the list sees its own axis: {below:?}"
+        );
+        assert_eq!(above.available.y, 0.0, "the screen sees a swipe: {above:?}");
+        assert!(
+            close(above.available.x, -below.available.y),
+            "{above:?} {below:?}"
+        );
+        // Local (x, y) shows at (150 - (y - 150), 150 + (x - 150)).
+        assert!(close(above.focal_point.x, 300.0 - below.focal_point.y));
+        assert!(close(above.focal_point.y, below.focal_point.x));
+    }
+    let moved: f64 = below.iter().map(|step| step.available.y).sum();
+    assert!(moved > 0.0, "the swipe scrolled the list");
+    assert!(
+        close(controller.pixels(), moved),
+        "the list moved by its own steps"
+    );
+
+    // Squashed flat: the leaf's plane cannot be crossed, so a jump moves the
+    // list alone and the participants are offered nothing.
+    let controller = ScrollController::new();
+    let (mut laid, outer, inner) = mount(Transform::scale(0.0, 1.0), &controller);
+    outer.take();
+    inner.take();
+    controller.jump_to(100.0);
+    laid.tick();
+    assert_eq!(controller.pixels(), 100.0, "the jump moves the list");
+    assert!(
+        outer.steps().is_empty() && inner.steps().is_empty(),
+        "no participant is offered a step it cannot see: {:?} {:?}",
+        outer.seen(),
+        inner.seen()
+    );
+    assert_eq!(outer.ended().len(), 1, "the jump is still a sequence");
+}
 
 /// A vertical list on a horizontal pager's page: a vertical drag moves the
 /// list, a horizontal or 30° drag the pager, and each step carries motion on
@@ -677,6 +900,148 @@ pub(crate) fn channel_latch_ends_exactly_when_binding_mints_a_new_sequence() {
             "{device:?}: each ends once, released"
         );
     }
+}
+
+/// A wheel sequence that no further packet follows ends at its latch's
+/// idle deadline, with no input to end it (ADR-0209 §5): a packet before
+/// the deadline moves it on, every participant hears the end exactly once,
+/// a panic in one of them or the leaf's removal neither loses nor repeats
+/// it, the next packet starts a new sequence, and a phased trackpad pan
+/// ends with its end phase.
+pub(crate) fn an_idle_wheel_sequence_ends_at_its_latch_deadline() {
+    let idle = GestureSettings::default().contactless_latch_idle();
+    let wheel = || {
+        MouseScript::new("notch")
+            .move_to(at(150.0, 150.0))
+            .wheel(1.0)
+            .build()
+            .expect("a hovering mouse")
+    };
+    let (controller, outer, inner, vsync) = (
+        ScrollController::new(),
+        Probe::new(),
+        Probe::new(),
+        Vsync::new(),
+    );
+    let tree = VsyncScope::new(
+        vsync.clone(),
+        NestedScroll::new(
+            outer.connection(),
+            NestedScroll::new(inner.connection(), list(&controller)),
+        ),
+    )
+    .boxed();
+    let mut laid = mounted(tree, vsync.clone());
+    let pump = |laid: &mut LaidOut, mut span: Duration| {
+        while span > Duration::ZERO {
+            let frame = span.min(SAMPLE);
+            laid.pump_for(frame);
+            span -= frame;
+        }
+    };
+
+    laid.replay(&wheel());
+    let first = outer.started();
+    assert_eq!(first.len(), 1, "the notch starts a sequence");
+    pump(&mut laid, idle / 2);
+    laid.replay(&wheel());
+    // Past the first notch's deadline, short of the second's.
+    pump(&mut laid, idle.saturating_sub(Duration::from_millis(1)));
+    assert_eq!(
+        outer.started(),
+        first,
+        "the second notch is a step of the same sequence"
+    );
+    assert_eq!(
+        outer.ended(),
+        Vec::new(),
+        "a notch before the deadline moves it on"
+    );
+    assert!(controller.pixels() > 0.0, "both notches scrolled the list");
+    pump(&mut laid, Duration::from_millis(2));
+    assert_eq!(
+        outer.ended(),
+        vec![(first[0], ScrollEndReason::Released)],
+        "the sequence ends at the deadline, with no input"
+    );
+    assert_eq!(inner.ended(), outer.ended(), "every participant hears it");
+    pump(&mut laid, idle * 2);
+    assert_eq!(outer.ended().len(), 1, "it ends once");
+
+    laid.replay(&wheel());
+    let started = outer.started();
+    assert_eq!(started.len(), 2, "the next notch starts a new sequence");
+    assert_ne!(started[0], started[1]);
+    pump(&mut laid, idle + SAMPLE);
+    assert_eq!(
+        outer.ended(),
+        vec![
+            (started[0], ScrollEndReason::Released),
+            (started[1], ScrollEndReason::Released),
+        ],
+        "a repeated sequence ends at its own deadline"
+    );
+
+    // A participant that panics at the end leaves the others' end and
+    // gets none twice.
+    outer.take();
+    inner.take();
+    let failed = Rc::new(Cell::new(false));
+    {
+        let failed = Rc::clone(&failed);
+        *inner.on_end.borrow_mut() = Some(Box::new(move || {
+            failed.set(true);
+            panic!("a participant fails at the end");
+        }));
+    }
+    laid.replay(&wheel());
+    // The frame driver contains the failure or resumes it; either way the
+    // end was delivered.
+    let _ = catch_unwind(AssertUnwindSafe(|| pump(&mut laid, idle + SAMPLE)));
+    assert!(failed.get(), "the participant failed at the end");
+    inner.on_end.borrow_mut().take();
+    pump(&mut laid, idle * 2);
+    let id = outer.started()[0];
+    assert_eq!(outer.ended(), vec![(id, ScrollEndReason::Released)]);
+    assert_eq!(inner.ended(), vec![(id, ScrollEndReason::Released)]);
+
+    // A leaf removed before the deadline ends its sequence once, cancelled;
+    // the deadline adds nothing.
+    outer.take();
+    laid.replay(&wheel());
+    let id = outer.started()[0];
+    laid.pump_widget(VsyncScope::new(
+        vsync,
+        NestedScroll::new(
+            outer.connection(),
+            NestedScroll::new(inner.connection(), SizedBox::new(300.0, 300.0)),
+        ),
+    ));
+    laid.tick();
+    pump(&mut laid, idle * 2);
+    assert_eq!(outer.ended(), vec![(id, ScrollEndReason::Cancelled)]);
+
+    // A phased pan ends with its end phase, not at the longer phased idle.
+    let (controller, probe, vsync) = (ScrollController::new(), Probe::new(), Vsync::new());
+    let tree = VsyncScope::new(
+        vsync.clone(),
+        NestedScroll::new(probe.connection(), list(&controller)),
+    )
+    .boxed();
+    let mut laid = mounted(tree, vsync);
+    laid.replay(
+        &TrackpadScript::new("pan", at(150.0, 150.0))
+            .pan(Offset::new(0.0, 40.0), 4, SAMPLE)
+            .build()
+            .expect("a whole pan"),
+    );
+    let pan = probe.started();
+    assert_eq!(pan.len(), 1);
+    assert_eq!(
+        probe.ended(),
+        vec![(pan[0], ScrollEndReason::Released)],
+        "the end phase ends the pan's sequence"
+    );
 }
 
 /// A fling the inner list cannot carry goes to the middle list and on to
@@ -1175,6 +1540,95 @@ pub(crate) fn user_input_preempts_programmatic_scroll() {
         assert!(
             probe.started().len() >= 2,
             "{device:?}: the drag is a sequence of its own"
+        );
+    }
+}
+
+/// A participant takes part in a programmatic sequence only by accepting
+/// programmatic scrolls (ADR-0209 §2): one that declines, however greedy,
+/// hears nothing of a jump or an animation, which move the list whole,
+/// while one that accepts hears each as a sequence; user input still
+/// reaches the declining one.
+pub(crate) fn a_participant_declining_programmatic_scrolls_hears_none_of_them() {
+    for device in DEVICES {
+        let (controller, accepting, greedy, vsync) = (
+            ScrollController::new(),
+            Probe::new(),
+            Probe::declining_programmatic(),
+            Vsync::new(),
+        );
+        // Takes every step it is offered, whatever its cause.
+        greedy.set_pre(|step| step.available);
+        let tree = VsyncScope::new(
+            vsync.clone(),
+            NestedScroll::new(
+                accepting.connection(),
+                NestedScroll::new(greedy.connection(), list(&controller)),
+            ),
+        )
+        .boxed();
+        let mut laid = mounted(tree, vsync);
+
+        controller.jump_to(200.0);
+        laid.tick();
+        assert_eq!(
+            controller.pixels(),
+            200.0,
+            "{device:?}: the jump moves the list"
+        );
+        controller.animate_to(
+            400.0,
+            Duration::from_millis(200),
+            flui_animation::ArcCurve::new(flui_animation::curves::LINEAR),
+        );
+        settle(&mut laid);
+        assert_eq!(
+            controller.pixels(),
+            400.0,
+            "{device:?}: the animation moves the list"
+        );
+        assert_eq!(
+            greedy.take(),
+            Vec::new(),
+            "{device:?}: the declining participant hears nothing of either"
+        );
+        let started = accepting.started();
+        assert_eq!(
+            started.len(),
+            2,
+            "{device:?}: the accepting one hears the jump and the animation: {:?}",
+            accepting.seen()
+        );
+        assert_eq!(
+            accepting.ended(),
+            vec![
+                (started[0], ScrollEndReason::Released),
+                (started[1], ScrollEndReason::Released),
+            ],
+            "{device:?}"
+        );
+        assert!(
+            accepting
+                .steps()
+                .iter()
+                .all(|step| step.device == ScrollDevice::Programmatic),
+            "{device:?}"
+        );
+        accepting.take();
+
+        laid.replay(&slow(device, at(150.0, 250.0), at(150.0, 150.0)));
+        settle(&mut laid);
+        assert_eq!(
+            controller.pixels(),
+            400.0,
+            "{device:?}: the greedy participant takes the drag whole"
+        );
+        assert!(
+            greedy
+                .steps()
+                .iter()
+                .any(|step| step.cause == ScrollCause::UserInput),
+            "{device:?}: user input reaches it"
         );
     }
 }
@@ -2180,6 +2634,10 @@ pub(crate) fn connection_defaults_take_nothing() {
         .next()
         .expect("a fresh mint issues");
     let silent = Silent;
+    assert!(
+        !silent.accepts_programmatic(),
+        "a connection takes part in programmatic sequences only by opting in"
+    );
     let devices = [
         ScrollDevice::Pointer {
             kind: flui_platform_api::pointer::PointerKind::Touch,

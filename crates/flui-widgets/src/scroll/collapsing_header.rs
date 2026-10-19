@@ -312,9 +312,6 @@ impl HeaderModel {
     /// toward the content's end (positive), expand toward its start
     /// (negative).
     fn take(&self, step: &ScrollStep, order: HeaderOrder) -> Vec2 {
-        if step.cause == ScrollCause::Programmatic {
-            return Vec2::ZERO;
-        }
         if matches!(step.cause, ScrollCause::UserInput | ScrollCause::Momentum) {
             // New user input takes the header from a settle in progress.
             let _ = self.settle.stop();

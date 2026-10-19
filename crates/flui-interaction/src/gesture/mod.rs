@@ -39,7 +39,7 @@ pub use arena::{
     CompositionBranch, CompositionError, CompositionKind, GestureArena, GestureArenaEntry,
     GestureArenaMember, GestureBranches, GestureComposition, GestureDeadlineError,
     GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition, MotionRole, PanClaim,
-    SequencedBranch, SweepModel,
+    ScrollLatchEnd, SequencedBranch, SweepModel,
 };
 pub use details::{
     ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, TapDownDetails,

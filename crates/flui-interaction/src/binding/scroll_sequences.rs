@@ -28,6 +28,15 @@ pub(super) struct ScrollSequence {
     idle: Cell<std::time::Duration>,
 }
 
+impl ScrollSequence {
+    /// When the latch lapses without another packet: its idle time after
+    /// the last one, on the owner clock [`prepare`](ScrollSequences::prepare)
+    /// reads. `None` only past the end of the event timeline.
+    pub(super) fn lapses_at(&self) -> Option<flui_platform_api::EventTime> {
+        self.last_packet.get().checked_add(self.idle.get())
+    }
+}
+
 pub(super) enum ScrollAdmission {
     Active(Rc<ScrollSequence>),
     Terminal(Option<Rc<ScrollSequence>>),

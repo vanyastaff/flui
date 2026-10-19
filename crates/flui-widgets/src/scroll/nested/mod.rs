@@ -22,12 +22,21 @@
 //!   first step and [`sequence_ended`](NestedScrollConnection::sequence_ended)
 //!   once, after the last run of the sequence.
 //! - **Direction.** [`ScrollStep::available`] and [`FlingStep::available`]
-//!   are in physical screen axes and point the way the content's offset
-//!   grows for an unreversed scrollable: a finger moving up scrolls down, so
-//!   it offers a positive `y`. Each scrollable projects a step onto its own
-//!   axis and orientation.
-//! - **Latch.** Per axis, the chain latches to the deepest participant that
-//!   consumes a non-zero part of the sequence's first non-zero delta (the
+//!   point the way the content's offset grows for an unreversed scrollable:
+//!   a finger moving up scrolls down, so it offers a positive `y`. Each
+//!   scrollable projects a step onto its own axis and orientation.
+//! - **Plane.** Each participant is offered a step in its own coordinate
+//!   plane, the local space of the box it wraps: a delta, a velocity and
+//!   the [focal point](ScrollStep::focal_point) are converted as the step
+//!   moves along the chain, so a participant inside a zoomed
+//!   `InteractiveViewer` or a scaled or rotated `Transform` sees the motion
+//!   as it appears to it, and the participants share one displacement on
+//!   screen. A plane that cannot be crossed (a singular or non-finite
+//!   transform, a focal point behind the camera) offers its participant
+//!   nothing.
+//! - **Latch.** Per axis of the presentation, the chain latches to the
+//!   deepest participant that consumes a non-zero part of the sequence's
+//!   first non-zero delta (the
 //!   leaf included; a leaf at its edge does not latch). Under the default
 //!   [`RemainderHandoff::NextSequence`](flui_interaction::RemainderHandoff)
 //!   the remainder goes nowhere else for the rest of the sequence; an
@@ -57,19 +66,25 @@
 //! without user connections.
 
 mod chain;
+mod idle_end;
+mod plane;
 mod snap;
 
 use std::rc::Rc;
 
-use flui_foundation::geometry::Vec2;
+use flui_foundation::geometry::{Point, Vec2};
 use flui_interaction::{InputSequenceId, Velocity};
 use flui_platform_api::pointer::{DeviceId, PointerKind};
 use flui_view::prelude::StatefulView;
-use flui_view::{BoxedView, BuildContext, IntoView, ViewExt, ViewState};
+use flui_view::{BoxedView, BuildContext, IntoView, LifecycleContext, ViewExt, ViewState};
+
+use crate::anchored_box::AnchoredBox;
 
 pub(crate) use chain::{
     Acceptance, ChainNode, Handoff, NestedScrollScope, Participant, ScrollSequence,
 };
+pub(crate) use idle_end::follow_latch;
+pub(crate) use plane::PlaneSource;
 pub use snap::{
     AnchorSnap, AnchorSnapError, InvalidViewportFraction, PageSnap, SnapPolicy, ViewportFraction,
 };
@@ -89,8 +104,8 @@ pub enum ScrollCause {
     /// back into range.
     SideEffect,
     /// An application request: a controller jump or animation, a reveal.
-    /// The default connection methods take none of it; a participant that
-    /// wants to react opts in by checking the cause.
+    /// It reaches only a participant that
+    /// [accepts programmatic scrolls](NestedScrollConnection::accepts_programmatic).
     Programmatic,
 }
 
@@ -155,7 +170,8 @@ pub enum OverscrollBehavior {
     Contain,
 }
 
-/// One delta a participant is offered (ADR-0209 §1).
+/// One delta a participant is offered (ADR-0209 §1), in the participant's
+/// own plane (see the [module](self) documentation).
 ///
 /// Only the channel builds steps.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -172,15 +188,23 @@ pub struct ScrollStep {
     /// assistive action and a programmatic scroll, which share a pointer
     /// kind or no pointer at all with it.
     pub contact: bool,
-    /// What is left of the delta when this participant is asked, in
-    /// physical axes (see the [module](self) documentation).
+    /// What is left of the delta when this participant is asked, in its
+    /// plane, logical pixels.
     pub available: Vec2,
+    /// Where the input points, in this participant's plane: the contact or
+    /// the pointer of a wheel packet; for input without a position (a key,
+    /// an assistive action, a programmatic scroll) the middle of the leaf;
+    /// a fling or a settle keeps its release's.
+    pub focal_point: Point,
+    /// The presentation's device pixel ratio at the sequence's latest user
+    /// input: a fling or a settle keeps its release's.
+    pub device_pixel_ratio: f64,
 }
 
 #[cfg(any(test, feature = "testing"))]
 impl ScrollStep {
-    /// A step for exercising a connection alone, in a test; the channel
-    /// builds every other one.
+    /// A step for exercising a connection alone, in a test, pointing at the
+    /// origin at a pixel ratio of one; the channel builds every other one.
     #[must_use]
     pub fn for_test(
         sequence: InputSequenceId,
@@ -194,26 +218,31 @@ impl ScrollStep {
             device,
             contact: false,
             available,
+            focal_point: Point::new(0.0, 0.0),
+            device_pixel_ratio: 1.0,
         }
     }
 }
 
 #[cfg(any(test, feature = "testing"))]
 impl FlingStep {
-    /// A fling step for exercising a connection alone, in a test; the
-    /// channel builds every other one.
+    /// A fling step for exercising a connection alone, in a test, pointing
+    /// at the origin at a pixel ratio of one; the channel builds every other
+    /// one.
     #[must_use]
     pub fn for_test(sequence: InputSequenceId, device: ScrollDevice, available: Velocity) -> Self {
         Self {
             sequence,
             device,
             available,
+            focal_point: Point::new(0.0, 0.0),
+            device_pixel_ratio: 1.0,
         }
     }
 }
 
 /// A fling residual a participant is offered, or the release velocity of a
-/// sequence (ADR-0209 §1).
+/// sequence (ADR-0209 §1), in the participant's own plane.
 ///
 /// Only the channel builds steps.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -223,8 +252,15 @@ pub struct FlingStep {
     pub sequence: InputSequenceId,
     /// The device the sequence runs on.
     pub device: ScrollDevice,
-    /// The velocity, logical pixels per second in physical axes.
+    /// The velocity, logical pixels per second in this participant's
+    /// plane, through the plane's tangent at the focal point.
     pub available: Velocity,
+    /// Where the input pointed when it was released, in this participant's
+    /// plane.
+    pub focal_point: Point,
+    /// The presentation's device pixel ratio at the release, which every
+    /// boundary probe and simulation of the fling reads.
+    pub device_pixel_ratio: f64,
 }
 
 /// A participant in the nested scroll channel (ADR-0209 §1).
@@ -243,6 +279,18 @@ pub struct FlingStep {
 /// The trait carries no `Send` bound: a connection lives on its owner's
 /// thread and may capture `Rc` state.
 pub trait NestedScrollConnection {
+    /// Whether this participant takes part in programmatic sequences: a
+    /// controller's jump or animation and a reveal, with the settle that
+    /// follows them ([`ScrollDevice::Programmatic`]).
+    ///
+    /// Asked once, when such a sequence starts. A participant that declines
+    /// (the default) hears nothing of the sequence: no start, no step, no
+    /// end, so a connection that takes every step it is offered never
+    /// swallows an application's scroll. One that panics here declines.
+    fn accepts_programmatic(&self) -> bool {
+        false
+    }
+
     /// A sequence reached this participant, before its first step.
     fn sequence_started(&self, _sequence: InputSequenceId) {}
 
@@ -332,6 +380,9 @@ impl NestedScroll {
 #[derive(Default)]
 pub struct NestedScrollState {
     node: std::cell::RefCell<Option<Rc<ChainNode>>>,
+    /// The plane the connection's steps are local to: the box around the
+    /// child.
+    plane: PlaneSource,
 }
 
 impl std::fmt::Debug for NestedScrollState {
@@ -349,6 +400,15 @@ impl StatefulView for NestedScroll {
 }
 
 impl ViewState<NestedScroll> for NestedScrollState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.did_change_dependencies(ctx);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.plane
+            .set_pipeline(ctx.pipeline_owner().map(|cell| cell.downgrade()));
+    }
+
     fn build(&self, view: &NestedScroll, ctx: &dyn BuildContext) -> impl IntoView {
         let parent = NestedScrollScope::parent_of(ctx);
         let connection = Rc::downgrade(&view.connection);
@@ -358,11 +418,18 @@ impl ViewState<NestedScroll> for NestedScrollState {
                 node
             }
             _ => {
-                let node = Rc::new(ChainNode::new(Participant::Connection(connection), parent));
+                let node = Rc::new(ChainNode::new(
+                    Participant::Connection(connection),
+                    parent,
+                    self.plane.clone(),
+                ));
                 *self.node.borrow_mut() = Some(Rc::clone(&node));
                 node
             }
         };
-        NestedScrollScope::new(node, view.child.clone())
+        AnchoredBox::new(
+            self.plane.anchor(),
+            NestedScrollScope::new(node, view.child.clone()),
+        )
     }
 }

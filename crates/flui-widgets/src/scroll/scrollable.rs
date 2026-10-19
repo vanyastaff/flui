@@ -69,7 +69,7 @@ use std::time::Duration;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, DrivenController, StatusSubscription, Vsync,
 };
-use flui_foundation::geometry::{Axis, Rect, Vec2};
+use flui_foundation::geometry::{Axis, Point, Rect, Vec2};
 use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
@@ -111,6 +111,7 @@ use flui_scheduler::PostFrameHandle;
 
 use super::anchored_drag::AnchoredLeaf;
 use super::scroll_position_scope::ScrollPositionScope;
+use crate::anchored_box::AnchoredBox;
 
 /// Authored logical distances used to resolve wheel input.
 ///
@@ -885,7 +886,7 @@ impl ViewState<Scrollable> for ScrollableState {
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.post_frame = ctx.post_frame_handle();
         self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
-        self.env.pipeline.borrow_mut().clone_from(&self.pipeline);
+        self.env.plane.set_pipeline(self.pipeline.clone());
         self.install_flush_handle(ctx);
         self.bind_vsync(ctx);
         let arena = GestureArenaScope::of(ctx);
@@ -1046,7 +1047,10 @@ impl ViewState<Scrollable> for ScrollableState {
                     if finger == 0.0 {
                         return;
                     }
-                    owner_update.drag(owner_update.finger_to_physical(finger));
+                    owner_update.drag(
+                        owner_update.finger_to_physical(finger),
+                        Point::new(details.local_position.dx, details.local_position.dy),
+                    );
                 })
                 .on_end(move |_cx, details| {
                     // Pointer velocity is in "screen coordinates": positive
@@ -1099,191 +1103,200 @@ impl ViewState<Scrollable> for ScrollableState {
             let owner_wheel = Rc::clone(&owner);
             let listener = Listener::new()
                 .on_scroll_claim(move |data: &ScrollEvent| {
-                    // A wheel does not drag to an anchor: it scrolls what
-                    // encloses the anchored drag.
-                    if anchored {
-                        return EventPropagation::Continue;
-                    }
-                    // Deliberately modifier-agnostic: a ctrl+wheel tick over a
-                    // plain list scrolls like any other. The ctrl+wheel-zooms contract needs no
-                    // decline here: a chord-gated zoom consumer sits INSIDE
-                    // the scrollable, and the leaf-first claim walk asks it
-                    // first.
-                    let axis_delta = wheel_axis_delta(
-                        scroll_direction,
-                        data,
-                        ctrl_wheel.position().viewport_dimension(),
-                        &wheel_preferences.snapshot(),
-                        wheel_distances,
-                    );
-                    // Platform deltas arrive already normalized —
-                    // positive = content scrolls down (each backend converts its native axes
-                    // and units at its own boundary). Only the reversed-axis
-                    // flip the drag arms use applies here.
-                    let mut delta = axis_delta;
-                    if axis_direction.is_reversed() {
-                        delta = -delta;
-                    }
-                    if delta == 0.0 || !delta.is_finite() {
-                        return EventPropagation::Continue;
-                    }
-                    let position = ctrl_wheel.position();
-                    let pixels = ctrl_wheel.pixels();
-                    let notched = data.precision == ScrollPrecision::Notched;
-                    let accepted = wheel_motion.borrow().clone();
-                    let base = if notched {
-                        accepted
-                            .filter(|motion| {
-                                motion.generation.get().is_none_or(|generation| {
-                                    generation == fling_wheel.run_generation()
-                                        && fling_wheel.status().is_directional()
+                    let handled = (|| {
+                        // A wheel does not drag to an anchor: it scrolls what
+                        // encloses the anchored drag.
+                        if anchored {
+                            return EventPropagation::Continue;
+                        }
+                        // Deliberately modifier-agnostic: a ctrl+wheel tick over a
+                        // plain list scrolls like any other. The ctrl+wheel-zooms contract needs no
+                        // decline here: a chord-gated zoom consumer sits INSIDE
+                        // the scrollable, and the leaf-first claim walk asks it
+                        // first.
+                        let axis_delta = wheel_axis_delta(
+                            scroll_direction,
+                            data,
+                            ctrl_wheel.position().viewport_dimension(),
+                            &wheel_preferences.snapshot(),
+                            wheel_distances,
+                        );
+                        // Platform deltas arrive already normalized —
+                        // positive = content scrolls down (each backend converts its native axes
+                        // and units at its own boundary). Only the reversed-axis
+                        // flip the drag arms use applies here.
+                        let mut delta = axis_delta;
+                        if axis_direction.is_reversed() {
+                            delta = -delta;
+                        }
+                        if delta == 0.0 || !delta.is_finite() {
+                            return EventPropagation::Continue;
+                        }
+                        let position = ctrl_wheel.position();
+                        let pixels = ctrl_wheel.pixels();
+                        let notched = data.precision == ScrollPrecision::Notched;
+                        let accepted = wheel_motion.borrow().clone();
+                        let base = if notched {
+                            accepted
+                                .filter(|motion| {
+                                    motion.generation.get().is_none_or(|generation| {
+                                        generation == fling_wheel.run_generation()
+                                            && fling_wheel.status().is_directional()
+                                    })
                                 })
-                            })
-                            .map_or(pixels, |motion| motion.target)
-                    } else {
-                        pixels
-                    };
-                    let proposed = base + delta;
-                    if !proposed.is_finite() {
-                        return EventPropagation::Continue;
-                    }
-                    let target =
-                        proposed.clamp(position.min_scroll_extent(), position.max_scroll_extent());
-                    tracing::trace!(
-                        delta,
-                        target,
-                        pixels = ctrl_wheel.pixels(),
-                        "pointer-scroll tick"
-                    );
-                    let device = ScrollDevice::Pointer {
-                        kind: data.pointer.kind,
-                        device: data.pointer.device,
-                    };
-                    let cause = match data.phase {
-                        Some(
-                            ScrollPhase::MomentumBegan
-                            | ScrollPhase::MomentumChanged
-                            | ScrollPhase::MomentumEnded,
-                        ) => ScrollCause::Momentum,
-                        _ => ScrollCause::UserInput,
-                    };
-                    if target == base {
-                        // At its extent the leaf still carries the packet to
-                        // a participant above it (a collapsing header), which
-                        // has no claim of its own.
-                        return if owner_wheel.wheel_at_extent(device, cause, delta) {
-                            EventPropagation::Stop
+                                .map_or(pixels, |motion| motion.target)
                         } else {
-                            EventPropagation::Continue
+                            pixels
                         };
-                    }
-                    // Commit admission before callbacks. A nested tick inherits
-                    // this destination and replaces its owner; the older handler
-                    // then stops without overwriting the newer accepted work.
-                    let motion = Rc::new(WheelMotion {
-                        target,
-                        generation: Cell::new(None),
-                    });
-                    *wheel_motion.borrow_mut() = Some(Rc::clone(&motion));
-                    let is_current = || {
-                        wheel_motion
-                            .borrow()
-                            .as_ref()
-                            .is_some_and(|current| Rc::ptr_eq(current, &motion))
-                    };
-                    // The packet is a step of the binding's latch for this
-                    // source; a new latch preempts the motion of the last one.
-                    let Some(sequence) = owner_wheel.wheel_sequence(device) else {
-                        wheel_motion.borrow_mut().take();
-                        return EventPropagation::Continue;
-                    };
-                    if !is_current() {
-                        return EventPropagation::Stop;
-                    }
-                    // A wheel tick interrupts whatever animation is driving
-                    // the position — otherwise the controller's run would
-                    // overwrite the wheel write on its next tick (the same
-                    // cancel the drag-grab and `jump_to` paths do).
-                    owner_wheel.halt(&sequence);
-                    let _ = fling_wheel.stop();
-                    if !is_current() {
-                        return EventPropagation::Stop;
-                    }
-                    if notched {
-                        // Start at the displayed position, never at the previous
-                        // destination or a stale programmatic animation value.
-                        fling_wheel.set_value(pixels);
+                        let proposed = base + delta;
+                        if !proposed.is_finite() {
+                            return EventPropagation::Continue;
+                        }
+                        let target = proposed
+                            .clamp(position.min_scroll_extent(), position.max_scroll_extent());
+                        tracing::trace!(
+                            delta,
+                            target,
+                            pixels = ctrl_wheel.pixels(),
+                            "pointer-scroll tick"
+                        );
+                        let pointer = data.position.get();
+                        let pointer = Point::new(pointer.x, pointer.y);
+                        let device = ScrollDevice::Pointer {
+                            kind: data.pointer.kind,
+                            device: data.pointer.device,
+                        };
+                        let cause = match data.phase {
+                            Some(
+                                ScrollPhase::MomentumBegan
+                                | ScrollPhase::MomentumChanged
+                                | ScrollPhase::MomentumEnded,
+                            ) => ScrollCause::Momentum,
+                            _ => ScrollCause::UserInput,
+                        };
+                        if target == base {
+                            // At its extent the leaf still carries the packet to
+                            // a participant above it (a collapsing header), which
+                            // has no claim of its own.
+                            return if owner_wheel.wheel_at_extent(device, cause, delta, pointer) {
+                                EventPropagation::Stop
+                            } else {
+                                EventPropagation::Continue
+                            };
+                        }
+                        // Commit admission before callbacks. A nested tick inherits
+                        // this destination and replaces its owner; the older handler
+                        // then stops without overwriting the newer accepted work.
+                        let motion = Rc::new(WheelMotion {
+                            target,
+                            generation: Cell::new(None),
+                        });
+                        *wheel_motion.borrow_mut() = Some(Rc::clone(&motion));
+                        let is_current = || {
+                            wheel_motion
+                                .borrow()
+                                .as_ref()
+                                .is_some_and(|current| Rc::ptr_eq(current, &motion))
+                        };
+                        // The packet is a step of the binding's latch for this
+                        // source; a new latch preempts the motion of the last one.
+                        let Some(sequence) = owner_wheel.wheel_sequence(device) else {
+                            wheel_motion.borrow_mut().take();
+                            return EventPropagation::Continue;
+                        };
+                        sequence.aim(pointer);
                         if !is_current() {
                             return EventPropagation::Stop;
                         }
-                        let started = owner_wheel.animate_wheel(
-                            &sequence,
-                            target,
-                            Duration::from_millis(150),
-                        );
-                        if is_current() {
-                            if started {
-                                motion.generation.set(Some(fling_wheel.run_generation()));
-                                position.set_is_scrolling(true);
-                                if !is_current() {
-                                    return EventPropagation::Stop;
-                                }
-                                position.set_user_scroll_direction(if delta > 0.0 {
-                                    ScrollDirection::Reverse
-                                } else {
-                                    ScrollDirection::Forward
-                                });
-                            } else {
-                                wheel_motion.borrow_mut().take();
-                            }
+                        // A wheel tick interrupts whatever animation is driving
+                        // the position — otherwise the controller's run would
+                        // overwrite the wheel write on its next tick (the same
+                        // cancel the drag-grab and `jump_to` paths do).
+                        owner_wheel.halt(&sequence);
+                        let _ = fling_wheel.stop();
+                        if !is_current() {
+                            return EventPropagation::Stop;
                         }
-                        return EventPropagation::Stop;
-                    }
-                    // The wheel pulse: direction is only recordable
-                    // while an activity is live, so raise first.
-                    position.set_is_scrolling(true);
-                    if !is_current() {
-                        return EventPropagation::Stop;
-                    }
-                    position.set_user_scroll_direction(if delta > 0.0 {
-                        ScrollDirection::Reverse
-                    } else {
-                        ScrollDirection::Forward
-                    });
-                    if !is_current() {
-                        return EventPropagation::Stop;
-                    }
-                    owner_wheel.wheel_step(&sequence, cause, target);
-                    if !is_current() {
-                        return EventPropagation::Stop;
-                    }
-                    wheel_motion.borrow_mut().take();
-                    match &post_frame_wheel {
-                        Some(post_frame) => {
-                            let pulse_end = position.clone();
-                            let motion_end = fling_wheel.clone();
-                            if post_frame
-                                .schedule(move |_timing| {
-                                    // A subsequent notch may have started after
-                                    // this immediate tick but before the frame.
-                                    if !motion_end.status().is_directional() {
-                                        pulse_end.set_is_scrolling(false);
+                        if notched {
+                            // Start at the displayed position, never at the previous
+                            // destination or a stale programmatic animation value.
+                            fling_wheel.set_value(pixels);
+                            if !is_current() {
+                                return EventPropagation::Stop;
+                            }
+                            let started = owner_wheel.animate_wheel(
+                                &sequence,
+                                target,
+                                Duration::from_millis(150),
+                            );
+                            if is_current() {
+                                if started {
+                                    motion.generation.set(Some(fling_wheel.run_generation()));
+                                    position.set_is_scrolling(true);
+                                    if !is_current() {
+                                        return EventPropagation::Stop;
                                     }
-                                })
-                                .is_err()
-                            {
-                                position.set_is_scrolling(false);
+                                    position.set_user_scroll_direction(if delta > 0.0 {
+                                        ScrollDirection::Reverse
+                                    } else {
+                                        ScrollDirection::Forward
+                                    });
+                                } else {
+                                    wheel_motion.borrow_mut().take();
+                                }
                             }
+                            return EventPropagation::Stop;
                         }
-                        // No post-frame capability (a bare harness without
-                        // the binding wiring): end the pulse synchronously
-                        // rather than leaving the activity stuck live. The
-                        // layout that consumes the pixels then sees an Idle
-                        // direction — degraded, not wrong: it matches a
-                        // plain programmatic jump.
-                        None => position.set_is_scrolling(false),
-                    }
-                    EventPropagation::Stop
+                        // The wheel pulse: direction is only recordable
+                        // while an activity is live, so raise first.
+                        position.set_is_scrolling(true);
+                        if !is_current() {
+                            return EventPropagation::Stop;
+                        }
+                        position.set_user_scroll_direction(if delta > 0.0 {
+                            ScrollDirection::Reverse
+                        } else {
+                            ScrollDirection::Forward
+                        });
+                        if !is_current() {
+                            return EventPropagation::Stop;
+                        }
+                        owner_wheel.wheel_step(&sequence, cause, target);
+                        if !is_current() {
+                            return EventPropagation::Stop;
+                        }
+                        wheel_motion.borrow_mut().take();
+                        match &post_frame_wheel {
+                            Some(post_frame) => {
+                                let pulse_end = position.clone();
+                                let motion_end = fling_wheel.clone();
+                                if post_frame
+                                    .schedule(move |_timing| {
+                                        // A subsequent notch may have started after
+                                        // this immediate tick but before the frame.
+                                        if !motion_end.status().is_directional() {
+                                            pulse_end.set_is_scrolling(false);
+                                        }
+                                    })
+                                    .is_err()
+                                {
+                                    position.set_is_scrolling(false);
+                                }
+                            }
+                            // No post-frame capability (a bare harness without
+                            // the binding wiring): end the pulse synchronously
+                            // rather than leaving the activity stuck live. The
+                            // layout that consumes the pixels then sees an Idle
+                            // direction — degraded, not wrong: it matches a
+                            // plain programmatic jump.
+                            None => position.set_is_scrolling(false),
+                        }
+                        EventPropagation::Stop
+                    })();
+                    // Moved or not, the packet tells the sequence this leaf
+                    // leads for its latch where the latch ends.
+                    owner_wheel.wheel_latch();
+                    handled
                 })
                 .child(if anchored {
                     // An anchored drag is no drop autoscroll target.
@@ -1314,6 +1327,9 @@ impl ViewState<Scrollable> for ScrollableState {
                 Axis::Vertical => wheel_distances.line,
                 Axis::Horizontal => wheel_distances.character,
             };
+            // The scrollable's own plane: its deltas and its pointer are
+            // local to this box.
+            let listener = AnchoredBox::new(self.env.plane.anchor(), listener);
             let content: BoxedView = if anchored {
                 // The anchored drag publishes its own adjustable node, and
                 // is no reveal scope: it is not a view onto its content.

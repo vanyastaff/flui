@@ -17,7 +17,11 @@
   a reveal moves each scroll ancestor by its own geometry in a programmatic sequence of its
   own, not as one sequence handing a remainder up; §4: new input on a leaf stops the run an
   ancestor drives for the fling the leaf handed it; §5: a contactless source finds its leaf by
-  the hit path's event propagation, not by `AxisLock`'s code.
+  the hit path's event propagation, not by `AxisLock`'s code. 2026-10-19 — §1: steps carry
+  their focal point and device pixel ratio, each participant is offered them in its own
+  coordinate plane, a participant opts in to programmatic sequences with
+  `accepts_programmatic`, and `FlingHandoff::Accepted` carries no future; §5: a wheel or
+  trackpad sequence ends at its latch's idle deadline, without a further packet.
 - **Supersedes:** [ADR-0169](ADR-0169-nested-scroll-ballistic-handoff.md)
 - **Related:** [ADR-0051](ADR-0051-anchor-stationary-scroll-correction.md),
   [ADR-0157](ADR-0157-native-scroll-range-actions.md),
@@ -45,10 +49,13 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    ```rust
    #[non_exhaustive] pub struct ScrollStep { pub sequence: InputSequenceId, pub cause: ScrollCause,
                                              pub device: ScrollDevice, pub contact: bool,
-                                             pub available: Vec2 }
+                                             pub available: Vec2, pub focal_point: Point,
+                                             pub device_pixel_ratio: f64 }
    #[non_exhaustive] pub struct FlingStep { pub sequence: InputSequenceId, pub device: ScrollDevice,
-                                            pub available: Velocity }
+                                            pub available: Velocity, pub focal_point: Point,
+                                            pub device_pixel_ratio: f64 }
    pub trait NestedScrollConnection {                    // object-safe, &self, !Send by design
+       fn accepts_programmatic(&self) -> bool { false }
        fn sequence_started(&self, sequence: InputSequenceId) {}
        fn pre_scroll(&self, step: &ScrollStep) -> Vec2 { Vec2::ZERO }
        fn post_scroll(&self, step: &ScrollStep, consumed_by_child: Vec2) -> Vec2 { Vec2::ZERO }
@@ -65,14 +72,57 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    `SideEffect` deltas (item 4) a parent can take first in `pre_scroll`; Compose's hook is
    `suspend` so the parent animates inside it, which a synchronous frame path forbids. Also
    `ScrollEndReason::{Released, Cancelled, Preempted, ArenaLost}`, `FlingHandoff::{Declined, Accepted}`.
+
+   **`Accepted` carries no future.** An answer that handed the channel the acceptor's run
+   as an `AnimationRunFuture` would make the channel await a run: an `async` value on the
+   frame path, which the framework forbids, and a second completion path beside the
+   acceptor's own. The acceptor runs the residual itself: a scrollable on its own
+   controller under the same sequence id, whose completion the channel already observes
+   like any run's, so the sequence ends after it (§4); a connection's motion is its own,
+   and the sequence ends for everyone once no scrollable runs for it, a connection's
+   coast included.
+
+   **Focal point and pixel ratio.** `focal_point` is where the input points: the contact,
+   or a wheel packet's pointer; input without a position (a key, an assistive action, a
+   programmatic scroll) points at the middle of the leaf's box. `device_pixel_ratio` is the
+   presentation's at the sequence's latest user input. A fling or a settle keeps its
+   release's point and ratio, so a run's steps and its `FlingStep`s match the release that
+   started it.
+
+   **Each participant works in its own plane.** A participant's plane is the local space of
+   the box it wraps (a `NestedScroll`'s child, a `Scrollable`'s viewport, an
+   `InteractiveViewer`'s box outside its own transform), read from the last complete
+   layout (`PipelineOwner::transform_to` the root) at each step, the last sample standing
+   while a frame holds the layout. The channel carries what is left of a step in the
+   presentation's plane and converts it at each participant: `available`, `focal_point` and
+   `consumed_by_child` into its plane before it is asked, what it took back out after.
+   Under an affine transform a delta and a velocity map through the linear part; under a
+   projection a delta is the chord the focal point travels and a velocity maps through the
+   projection's tangent at the focal point, not as a one-second chord. A conversion's
+   rounding below 10⁻¹² of the step reads as zero, so a quarter turn keeps a delta on one
+   axis. The per-axis latch (§5) is kept in the presentation's axes; a leaf asks it about
+   its own axis through the axis it runs closest to on screen. A plane that cannot be
+   crossed (a singular or non-finite transform, a focal point behind the camera) offers its
+   participant nothing, and a runner whose plane maps no way back (a transform that
+   squashes an axis) takes its step alone: no participant is offered a value that is not
+   finite, and nothing is published from one. Rows:
+   `steps_carry_the_focal_point_and_the_device_pixel_ratio` and
+   `each_participant_is_offered_the_step_in_its_own_plane` (a scale about the centre, a
+   quarter turn, a squashed axis).
 2. **Cause and device.** `ScrollCause::{UserInput, Momentum, SideEffect, Programmatic}`: a
    contact, wheel, key or assistive scroll action; platform inertia (`ScrollPhase::Momentum*`,
    DirectManipulation); framework motion (fling, DnD autoscroll); application and reveal requests.
    `ScrollDevice::{Pointer { kind, device }, Keyboard, Assistive, Programmatic}` reuses
    `PointerKind` and `DeviceId`. `ScrollCause`, `ScrollDevice` and `ScrollEndReason` are
    `#[non_exhaustive]` (Surface Dial, Digital Crown); `FlingHandoff` is exhaustive — a two-way
-   answer whose growth would be a contract change. Participants decide by these, never by delta size, and opt in to `Programmatic`: the
-   default methods ignore it (Compose deprecated `Relocate` for unintended consumption).
+   answer whose growth would be a contract change. Participants decide by these, never by
+   delta size, and opt in to programmatic sequences explicitly (Compose deprecated
+   `Relocate` for unintended consumption): `accepts_programmatic` is asked once, when a
+   sequence of `ScrollDevice::Programmatic` (a jump, an animation, a reveal, with the settle
+   that follows) starts, and a participant that declines — the default, or one that panics
+   while it answers — hears nothing of it: no start, no step, no end. A scrollable link
+   never takes part; it moves for such a request in a sequence of its own (§3). Row:
+   `a_participant_declining_programmatic_scrolls_hears_none_of_them`.
    `ScrollStep::contact` says whether a user contact (a finger, a pen, a mouse with a button
    held) drives the sequence: a mouse drag and a mouse wheel share `PointerKind::Mouse`, and a
    participant that only a dragging hand may move (pull-to-refresh) needs the difference.
@@ -160,11 +210,37 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    Home and End, from the keyboard device; the key's auto-repeats continue the sequence, its release
    or the next press ends it, and a scrollable that cannot move lets the key bubble to the enclosing
    one. A contact sequence latches until the contact ends; leaf and chain stay latched
-   for the lifetime of the `InputSequenceId` the binding minted. The idle timeout that ends a
-   contactless sequence (wheel, keyboard, assistive, autoscroll) is the binding's deadline on
-   `EventTime` from the preset, phased sources longer (Wayland can send Start without End). The
-   channel keeps no timer and never re-derives sequence boundaries; the only re-latch inside a
-   sequence is the preset-selected edge exception in §6.
+   for the lifetime of the `InputSequenceId` the binding minted. A key sequence ends with its
+   key's release, an assistive action and a drop autoscroll with their own input; the
+   channel never re-derives sequence boundaries, and the only re-latch inside a sequence is
+   the preset-selected edge exception in §6.
+
+   **A wheel sequence ends at its latch's idle deadline.** The binding latches a wheel or
+   trackpad source's packets into one sequence until the source idles past the preset's
+   time: `contactless_latch_idle`, 1500 ms, for a phase-less wheel, and
+   `phased_latch_idle`, 3000 ms, for a phased source, which may begin without ever ending
+   (Wayland). 1500 ms is Firefox's `mousewheel.transaction.timeout`: long enough that the
+   notches of one flick of the wheel, and a pause to read between them, stay one sequence,
+   short enough that the next gesture a moment later is a new one. The channel takes the
+   binding's value rather than a time of its own: a sequence that ended earlier than its
+   latch would see its next packet arrive under the same id, and one that ended later would
+   keep a latch the binding already let go. With each packet the binding reports when its
+   latch ends (`GestureArena::dispatched_latch_end`): at an event time, the idle time after
+   the packet, or with this packet, for an end phase. The leaf that leads the sequence
+   follows the report once it has handled the packet, moved or not: it keeps one deadline
+   registration on the arena's owner clock (`GestureArena::register_deadline`, a source that
+   joins no contest), whose time the host's wake already folds in (`next_wake`), and moves
+   it to each packet's time; the frame path stays synchronous and the poll runs at the
+   owner's deadline tick. When the deadline comes, or after a packet that ends the latch,
+   the sequence takes no further input and ends `Released` once its last run (a notch's eased
+   motion) comes to rest. The deadline is disarmed before anyone is told and withdrawn when
+   the sequence ends any other way, so each participant hears the end once: a participant
+   that panics in `sequence_ended` leaves the others theirs, and a leaf removed first ends
+   the sequence `Cancelled` and lets the deadline go. Input that still names an ended
+   sequence's id is no new sequence: it moves the leaf alone. Row:
+   `an_idle_wheel_sequence_ends_at_its_latch_deadline` (idle end, extension by a packet,
+   single delivery, a repeated sequence, a panicking participant, removal, and a phased pan
+   ending with its end phase).
 
    **A leaf at its extent still carries a wheel packet.** The binding routes a wheel or trackpad
    packet to the first listener on the hit path that claims it, leaf first, and a scrollable
@@ -262,7 +338,10 @@ cancel), `pull_to_refresh_ignores_wheel_and_momentum_and_resets_on_loss`,
 `anchor_correction_bypasses_the_channel`, `user_input_preempts_programmatic_scroll`,
 `participant_result_is_clamped`, `a_participant_cannot_dispatch_input_into_its_own_chain` and
 `participant_panic_consumes_all_and_next_sequence_recovers` (one panic, two competing, after
-containment). ADR-0169's `nested_fling_*` and `show_on_screen_*` witnesses stay as rows;
+containment), with `steps_carry_the_focal_point_and_the_device_pixel_ratio`,
+`each_participant_is_offered_the_step_in_its_own_plane`,
+`a_participant_declining_programmatic_scrolls_hears_none_of_them` and
+`an_idle_wheel_sequence_ends_at_its_latch_deadline`. ADR-0169's `nested_fling_*` and `show_on_screen_*` witnesses stay as rows;
 `snap_policy_targets` covers `PageSnap` and `AnchorSnap` on a `Scrollable`, and
 `AnchoredDrag`'s `anchored_drag_*` rows join the same table (release and fling, RTL, degenerate
 anchor sets, anchors replaced mid-drag, unmount mid-drag, assistive and key steps, haptics, leaf,

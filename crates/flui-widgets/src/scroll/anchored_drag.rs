@@ -47,11 +47,13 @@ use flui_view::{
 
 use super::nested::{
     AnchorSnap, AnchorSnapError, ChainNode, FlingHandoff, FlingStep, NestedScrollConnection,
-    NestedScrollScope, Participant, ScrollCause, ScrollDevice, ScrollEndReason, ScrollStep,
+    NestedScrollScope, Participant, PlaneSource, ScrollCause, ScrollDevice, ScrollEndReason,
+    ScrollStep,
 };
 use super::scroll_owner::{MotionHook, MoveOutcome, ScrollOwner, SharedSnapPolicy};
 use super::scrollable::presentation_device_pixel_ratio;
 use super::{ScrollController, Scrollable};
+use crate::anchored_box::AnchoredBox;
 use crate::interaction::raw_gesture_detector::ContactAdmission;
 use crate::transitions::transform_view::AnimatedTransformView;
 use crate::{
@@ -887,6 +889,9 @@ pub struct AnchoredDragState<K> {
     /// The chain node the scrollables inside see, kept while the ancestor
     /// and the chain above stay the same.
     node: RefCell<Option<Rc<ChainNode>>>,
+    /// The plane its connection takes remainders in: the box around the
+    /// translated child, the drag's own scrollable's.
+    plane: PlaneSource,
     /// The child's painted offset, which its transform follows; kept across
     /// controllers, its source replaced when the axis, the reading direction
     /// or the controller changes.
@@ -974,6 +979,7 @@ impl<K: Copy + Eq + 'static> AnchoredDragState<K> {
             haptics,
             pipeline,
             node: RefCell::new(None),
+            plane: PlaneSource::default(),
             offset: ProxyAnimation::new(Rc::new(ConstantAnimation::new(Offset::ZERO))),
             placement: Cell::new(None),
         }
@@ -982,6 +988,7 @@ impl<K: Copy + Eq + 'static> AnchoredDragState<K> {
     fn acquire(&self, ctx: &dyn LifecycleContext) {
         *self.haptics.borrow_mut() = ctx.haptics();
         *self.pipeline.borrow_mut() = ctx.pipeline_owner().map(|cell| cell.downgrade());
+        self.plane.set_pipeline(self.pipeline.borrow().clone());
     }
 
     /// The node the scrollables inside put this drag in their chains with.
@@ -995,7 +1002,11 @@ impl<K: Copy + Eq + 'static> AnchoredDragState<K> {
         {
             return node;
         }
-        let node = Rc::new(ChainNode::new(Participant::Connection(connection), parent));
+        let node = Rc::new(ChainNode::new(
+            Participant::Connection(connection),
+            parent,
+            self.plane.clone(),
+        ));
         *self.node.borrow_mut() = Some(Rc::clone(&node));
         node
     }
@@ -1185,18 +1196,22 @@ impl<K: Copy + Eq + 'static> ViewState<AnchoredDrag<K>> for AnchoredDragState<K>
             .behavior(HitTestBehavior::Opaque)
             .child(view.child.clone())
             .boxed();
+        let anchor = self.plane.anchor();
         let content = Rc::new(move |_position| {
             // A move patches the transform's layer: nothing rebuilds.
-            NestedScrollScope::new(
-                Rc::clone(&node),
-                AnimatedTransformView {
-                    motion: TransformMotion::Translate {
-                        offset: offset.clone(),
+            AnchoredBox::new(
+                anchor.clone(),
+                NestedScrollScope::new(
+                    Rc::clone(&node),
+                    AnimatedTransformView {
+                        motion: TransformMotion::Translate {
+                            offset: offset.clone(),
+                        },
+                        transform_hit_tests: true,
+                        text_direction: TextDirection::Ltr,
+                        child: child.clone(),
                     },
-                    transform_hit_tests: true,
-                    text_direction: TextDirection::Ltr,
-                    child: child.clone(),
-                },
+                ),
             )
             .boxed()
         });

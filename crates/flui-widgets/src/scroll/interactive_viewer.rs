@@ -120,7 +120,8 @@ use stretch::{Overlay, Travel};
 
 use super::WheelScrollDistances;
 use super::nested::{
-    ChainNode, NestedScrollScope, ScrollCause, ScrollDevice, ScrollEndReason, ScrollSequence,
+    ChainNode, NestedScrollScope, PlaneSource, ScrollCause, ScrollDevice, ScrollEndReason,
+    ScrollSequence, follow_latch,
 };
 use super::wheel_axis_delta;
 use crate::anchored_box::AnchoredBox;
@@ -683,6 +684,18 @@ struct ViewerLeaf {
     contact: RefCell<Option<Rc<ScrollSequence>>>,
     /// The latest contactless sequence: a wheel latch, or a key held down.
     contactless: RefCell<Option<Contactless>>,
+    /// The plane the viewer's deltas are local to: its own box, outside its
+    /// transform.
+    plane: PlaneSource,
+}
+
+/// The input a contactless step of the viewer comes from.
+#[derive(Debug, Clone, Copy)]
+enum ContactlessInput {
+    /// A key, whose auto-repeats continue its sequence.
+    Key(Code),
+    /// A wheel or trackpad packet pointing at this point of the viewer's box.
+    Wheel(Offset<f64>),
 }
 
 struct Contactless {
@@ -736,6 +749,7 @@ impl ViewerLeaf {
         let parent = self.parent.borrow().clone();
         let sequence = ScrollSequence::above(
             parent.as_ref(),
+            self.plane.clone(),
             id,
             device,
             contact,
@@ -774,13 +788,20 @@ impl ViewerLeaf {
         recovery.finish();
     }
 
-    /// One delta of the live contact through the chain; without a sequence
-    /// (identities exhausted) the viewer alone takes it.
-    fn contact_step(&self, available: Vec2, consume: impl FnOnce(Vec2) -> Vec2) -> Vec2 {
+    /// One delta of the live contact at `focal` (the viewer's box) through
+    /// the chain; without a sequence (identities exhausted) the viewer alone
+    /// takes it.
+    fn contact_step(
+        &self,
+        available: Vec2,
+        focal: Offset<f64>,
+        consume: impl FnOnce(Vec2) -> Vec2,
+    ) -> Vec2 {
         let sequence = self.contact.borrow().clone();
         let Some(sequence) = sequence.filter(|sequence| sequence.is_live()) else {
             return consume(available);
         };
+        sequence.aim(Point::new(focal.dx, focal.dy));
         let mut recovery = PanicRecovery::new();
         let consumed =
             sequence.dispatch(0, ScrollCause::UserInput, available, consume, &mut recovery);
@@ -834,7 +855,7 @@ impl ViewerLeaf {
         &self,
         id: InputSequenceId,
         device: ScrollDevice,
-        key: Option<Code>,
+        input: ContactlessInput,
         cause: ScrollCause,
         available: Vec2,
         consume: impl FnOnce(Vec2) -> Vec2,
@@ -844,7 +865,9 @@ impl ViewerLeaf {
             .contactless
             .borrow()
             .as_ref()
-            .filter(|current| current.sequence.id() == id && !current.sequence.is_ended())
+            // An id is one sequence: a packet still naming one whose latch
+            // lapsed pans the viewer alone.
+            .filter(|current| current.sequence.id() == id)
             .map(|current| Rc::clone(&current.sequence));
         let sequence = if let Some(sequence) = current {
             sequence
@@ -853,13 +876,43 @@ impl ViewerLeaf {
             let sequence = self.begin(id, device, false, &mut recovery);
             *self.contactless.borrow_mut() = Some(Contactless {
                 sequence: Rc::clone(&sequence),
-                key,
+                key: match input {
+                    ContactlessInput::Key(code) => Some(code),
+                    ContactlessInput::Wheel(_) => None,
+                },
             });
             sequence
         };
+        if let ContactlessInput::Wheel(pointer) = input {
+            sequence.aim(Point::new(pointer.dx, pointer.dy));
+        }
         let consumed = sequence.dispatch(0, cause, available, consume, &mut recovery);
         recovery.finish();
         consumed
+    }
+
+    /// A wheel or trackpad packet reached the viewer, panning it or not:
+    /// the sequence it leads for the packet's latch ends where the binding
+    /// says the latch ends (ADR-0209 §5).
+    fn wheel_latch(&self) {
+        let Some(arena) = self.arena.borrow().clone() else {
+            return;
+        };
+        let (Some(id), Some(end)) = (arena.dispatched_sequence(), arena.dispatched_latch_end())
+        else {
+            return;
+        };
+        let sequence = self
+            .contactless
+            .borrow()
+            .as_ref()
+            .filter(|current| current.key.is_none() && current.sequence.id() == id)
+            .map(|current| Rc::clone(&current.sequence));
+        if let Some(sequence) = sequence {
+            let mut recovery = PanicRecovery::new();
+            follow_latch(&sequence, &arena, end, &mut recovery);
+            recovery.finish();
+        }
     }
 
     /// The key sequence `code` held is continued by its auto-repeat.
@@ -1313,7 +1366,7 @@ impl ViewerCore {
             Some(id) => self.leaf.contactless_step(
                 id,
                 ScrollDevice::Keyboard,
-                Some(event.code),
+                ContactlessInput::Key(event.code),
                 ScrollCause::UserInput,
                 available,
                 |offer| self.consume(offer, [false, false]),
@@ -1378,15 +1431,20 @@ impl ViewerCore {
             ) => ScrollCause::Momentum,
             _ => ScrollCause::UserInput,
         };
+        let pointer = data.position.get();
+        let pointer = Offset::new(pointer.x, pointer.y);
         let device = ScrollDevice::Pointer {
             kind: data.pointer.kind,
             device: data.pointer.device,
         };
-        let _ = self
-            .leaf
-            .contactless_step(id, device, None, cause, available, |offer| {
-                self.consume(offer, [false, false])
-            });
+        let _ = self.leaf.contactless_step(
+            id,
+            device,
+            ContactlessInput::Wheel(pointer),
+            cause,
+            available,
+            |offer| self.consume(offer, [false, false]),
+        );
         true
     }
 }
@@ -1904,6 +1962,13 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
         self.writer = Some(ctx.writer_source());
         let leaf = &self.core.leaf;
         *leaf.parent.borrow_mut() = NestedScrollScope::parent_of(ctx);
+        leaf.plane.set_pipeline(
+            self.core
+                .pipeline
+                .borrow()
+                .as_ref()
+                .map(PipelineCell::downgrade),
+        );
         *leaf.arena.borrow_mut() = Some(GestureArenaScope::of(ctx));
         *leaf.settings.borrow_mut() = GestureArenaScope::settings_or_default_of(ctx);
         self.wheel_preferences = Some(GestureArenaScope::wheel_preferences_of(ctx));
@@ -2081,11 +2146,11 @@ impl InteractiveViewerState {
                         let _ = core.translate(locked, true);
                     }
                 } else if delta != Offset::ZERO {
-                    let _ = core
-                        .leaf
-                        .contact_step(Vec2::new(-delta.dx, -delta.dy), |offer| {
-                            core.consume(offer, core.leaf.contact_holds())
-                        });
+                    let _ = core.leaf.contact_step(
+                        Vec2::new(-delta.dx, -delta.dy),
+                        details.local_focal_point,
+                        |offer| core.consume(offer, core.leaf.contact_holds()),
+                    );
                 }
                 if let Some(callback) = core.callbacks().update {
                     callback(
@@ -2254,7 +2319,9 @@ impl InteractiveViewerState {
                     if core.config.get().wheel_scale_gate == WheelScaleGate::CtrlWheel
                         && !data.modifiers.contains(Modifiers::CONTROL)
                     {
-                        return if core.wheel_pan(data, wheel_preferences.as_ref()) {
+                        let panned = core.wheel_pan(data, wheel_preferences.as_ref());
+                        core.leaf.wheel_latch();
+                        return if panned {
                             EventPropagation::Stop
                         } else {
                             EventPropagation::Continue
@@ -2310,7 +2377,8 @@ impl InteractiveViewerState {
                 })
                 .on_scroll_claim(scroll_claim)
                 .child(recognized);
-            viewer_semantics(&core, &config, &matrix).child(listener)
+            viewer_semantics(&core, &config, &matrix)
+                .child(AnchoredBox::new(core.leaf.plane.anchor(), listener))
         })
         .boxed()
     }

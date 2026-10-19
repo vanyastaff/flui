@@ -113,6 +113,19 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   `resolved_route_move_invocation_allocates_no_heap_after_setup` pins unchanged-time
   measured Sample/Stop delivery without allocation after admission and the
   saturated source enqueue allocation bound.
+- **A wheel packet's dispatch says when its latch ends (ADR-0209 §5).** The
+  binding's `ScrollSequences` latch a source's packets until it idles past
+  the preset's time; with each packet it publishes, beside the latch's
+  sequence, `ScrollLatchEnd::IdleAt` (the packet's time plus the idle) or
+  `WithThisPacket` for an end phase, read through
+  `GestureArena::dispatched_latch_end` and restored with the dispatched
+  sequence when a nested dispatch returns. The latch itself still lapses
+  lazily, on the next packet; a consumer that must end its own sequence on
+  time arms `GestureArena::register_deadline`, a deadline source that joins
+  no contest, so the owner wakes and polls it like a recognizer's. The
+  binding's and the consumer's ends agree because both read the same owner
+  clock and compare the same instant. `flui-widgets`'
+  `an_idle_wheel_sequence_ends_at_its_latch_deadline` pins it.
 - **The binding owns mounted gesture progression.** `GestureBinding` admits
   at most 32 simultaneous contacts, retains each admitted Down route, closes
   its arena after routing Down, and sweeps or abandons its exact generation on

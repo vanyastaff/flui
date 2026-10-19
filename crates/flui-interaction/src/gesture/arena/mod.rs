@@ -878,6 +878,29 @@ pub struct GestureArena {
     observers: Rc<ObserverHub>,
 }
 
+/// When a binding's wheel or trackpad latch ends, as the packet being
+/// dispatched leaves it ([`GestureArena::dispatched_latch_end`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ScrollLatchEnd {
+    /// It lapses at this event time, its idle time after the packet, unless
+    /// another packet of its source comes first and moves the time on: the
+    /// preset's contactless idle for a phase-less wheel, its longer phased
+    /// idle for a phased source that may never send its end phase.
+    IdleAt(EventTime),
+    /// This packet is its last: an end phase, a cancellation or the end of
+    /// platform momentum. The next packet begins a new latch.
+    WithThisPacket,
+}
+
+/// The contactless input a binding is dispatching: its sequence and, for a
+/// wheel or trackpad packet, when its latch ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DispatchedSignal {
+    pub(crate) sequence: InputSequenceId,
+    pub(crate) latch_end: Option<ScrollLatchEnd>,
+}
+
 /// Per-contact state the arena keeps beside its competitions.
 #[derive(Default)]
 struct ContactLedger {
@@ -886,7 +909,7 @@ struct ContactLedger {
     dispatched: Cell<Option<(PointerId, InputSequenceId)>>,
     /// The contactless sequence its binding is dispatching input of: a wheel
     /// or trackpad latch, or an assistive action; `None` otherwise.
-    signal: Cell<Option<InputSequenceId>>,
+    signal: Cell<Option<DispatchedSignal>>,
     /// The issuer of every sequence identity: the binding's own mint once a
     /// binding drives this arena, a private one for a standalone arena.
     sequences: RefCell<Rc<IdMint<InputSequenceId>>>,
@@ -1129,9 +1152,9 @@ impl GestureArena {
     /// the value it replaces, for the binding to restore.
     pub(crate) fn set_dispatched_signal(
         &self,
-        sequence: Option<InputSequenceId>,
-    ) -> Option<InputSequenceId> {
-        self.contacts.signal.replace(sequence)
+        signal: Option<DispatchedSignal>,
+    ) -> Option<DispatchedSignal> {
+        self.contacts.signal.replace(signal)
     }
 
     /// Share `mint` as this arena's issuer of sequence identities: the
@@ -1154,7 +1177,24 @@ impl GestureArena {
             .dispatched
             .get()
             .map(|(_, sequence)| sequence)
-            .or_else(|| self.contacts.signal.get())
+            .or_else(|| self.contacts.signal.get().map(|signal| signal.sequence))
+    }
+
+    /// When the binding's latch of the wheel or trackpad packet being
+    /// dispatched ends: the event time it lapses at unless another packet
+    /// of its source comes first, or with this packet. `None` outside such
+    /// a dispatch, and for a contact or an assistive action, whose ends the
+    /// binding reports otherwise.
+    ///
+    /// A scroll consumer ends the sequence of its deltas there (ADR-0209
+    /// §5), so the latch and the consumer's sequence end together and the
+    /// next packet's new latch is a new sequence for both.
+    #[must_use]
+    pub fn dispatched_latch_end(&self) -> Option<ScrollLatchEnd> {
+        if self.contacts.dispatched.get().is_some() {
+            return None;
+        }
+        self.contacts.signal.get()?.latch_end
     }
 
     /// Issue the identity of a contactless input sequence from the issuer the
@@ -1581,6 +1621,25 @@ impl GestureArena {
             .map_or_else(SmallVec::new, |poll| poll.generations);
         let contest = self.current_slot(pointer).map(|slot| slot.contest());
         self.deadlines.register(contest, member, generations)
+    }
+
+    /// Register a deadline source that joins no contest with the owner frame
+    /// clock: a timer of contactless input, such as the idle end of a wheel
+    /// sequence's consumer. It is never offered a gesture; the arena polls
+    /// it when its published deadline is due, and wakes the owner for it as
+    /// it does for a recognizer's.
+    ///
+    /// Registration is inert, as with
+    /// [`register_deadline_member`](Self::register_deadline_member): publish
+    /// timing with the token's update handle.
+    ///
+    /// # Errors
+    /// Refuses a closed arena, a duplicate member registration or exhausted IDs.
+    pub fn register_deadline(
+        &self,
+        member: &Rc<dyn GestureArenaMember>,
+    ) -> Result<GestureDeadlineRegistration, GestureDeadlineError> {
+        self.deadlines.register(None, member, SmallVec::new())
     }
 
     pub(crate) fn set_deadline_wake(

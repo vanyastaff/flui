@@ -4,18 +4,22 @@
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
-use flui_foundation::geometry::{Offset, Vec2};
+use flui_foundation::geometry::{Offset, Point, Vec2};
 use flui_foundation::panic::PanicRecovery;
 use flui_interaction::RemainderHandoff;
-use flui_interaction::{InputSequenceId, Velocity};
+use flui_interaction::{GestureArena, InputSequenceId, Velocity};
+use flui_platform_api::EventTime;
 use flui_view::{BoxedView, BuildContext, BuildContextExt, InheritedView, IntoView, View, ViewExt};
 use smallvec::SmallVec;
 
+use super::idle_end::IdleEnd;
+use super::plane::{Plane, PlaneSource};
 use super::{
     FlingHandoff, FlingStep, NestedScrollConnection, OverscrollBehavior, ScrollCause, ScrollDevice,
     ScrollEndReason, ScrollStep,
 };
 use crate::scroll::scroll_owner::ScrollOwner;
+use crate::scroll::scrollable::presentation_device_pixel_ratio;
 
 /// What sits at one place of a scroll chain.
 #[derive(Clone)]
@@ -33,6 +37,8 @@ pub(crate) enum Participant {
 pub(crate) struct ChainNode {
     participant: Participant,
     parent: Option<Rc<ChainNode>>,
+    /// The participant's own coordinate plane.
+    plane: PlaneSource,
     /// Sequences this node's connection was told started and not yet ended,
     /// each with how many snapshots hold it: two scrollables on one contact
     /// (a press holding both a moving list and the list moving it) put the
@@ -53,6 +59,7 @@ impl std::fmt::Debug for ChainNode {
         f.debug_struct("ChainNode")
             .field("participant", &kind)
             .field("has_parent", &self.parent.is_some())
+            .field("plane", &self.plane)
             .field("live_sequences", &self.live.borrow().len())
             .field("handed_on", &self.successor.borrow().is_some())
             .finish()
@@ -60,13 +67,24 @@ impl std::fmt::Debug for ChainNode {
 }
 
 impl ChainNode {
-    pub(crate) fn new(participant: Participant, parent: Option<Rc<ChainNode>>) -> Self {
+    /// A place for `participant` under `parent`, whose deltas are local to
+    /// `plane`.
+    pub(crate) fn new(
+        participant: Participant,
+        parent: Option<Rc<ChainNode>>,
+        plane: PlaneSource,
+    ) -> Self {
         Self {
             participant,
             parent,
+            plane,
             live: RefCell::new(SmallVec::new()),
             successor: RefCell::new(None),
         }
+    }
+
+    pub(crate) fn plane(&self) -> &PlaneSource {
+        &self.plane
     }
 
     /// The scrollable owner this node stands for now: its own while it
@@ -184,6 +202,14 @@ impl InheritedView for NestedScrollScope {
 
 flui_view::impl_inherited_view!(NestedScrollScope);
 
+/// The leaf a snapshot is taken for: the scrollable (none for a leaf that
+/// is no scrollable), its plane and its remainder policy.
+struct SnapshotLeaf {
+    owner: Weak<ScrollOwner>,
+    plane: PlaneSource,
+    overscroll: OverscrollBehavior,
+}
+
 /// One participant of a snapshot; a link closes when its participant
 /// panicked, and is skipped from then on.
 struct Link {
@@ -195,6 +221,9 @@ struct Link {
     /// end without one. Set before the scrollable publishes, so a failure
     /// while it does keeps the debt.
     owed: Cell<bool>,
+    /// The participant's plane as last sampled, for a step a frame
+    /// dispatches while its layout is checked out.
+    plane: Cell<Option<Plane>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -267,6 +296,17 @@ pub(crate) struct ScrollSequence {
     held: Cell<bool>,
     /// The leaf's drag never started: the arena gave the contact away.
     drag_lost: Cell<bool>,
+    /// A wheel or trackpad sequence's idle end, armed at its latch's lapse.
+    idle_end: RefCell<Option<IdleEnd>>,
+    /// The leaf's plane, and the plane it had when last sampled.
+    leaf_plane: PlaneSource,
+    leaf_sample: Cell<Option<Plane>>,
+    /// Where the input points, in the presentation: the contact or the
+    /// pointer, else the middle of the leaf. A run keeps its release's.
+    focal: Cell<Option<Point>>,
+    /// The presentation's pixel ratio at the sequence's latest user input:
+    /// a run keeps its release's.
+    device_pixel_ratio: Cell<f64>,
 }
 
 impl std::fmt::Debug for ScrollSequence {
@@ -282,8 +322,9 @@ impl std::fmt::Debug for ScrollSequence {
 
 impl ScrollSequence {
     /// Snapshot the chain above `leaf` for sequence `id`. A `contact`
-    /// sequence lasts until its contact lifts; a contactless one until the
-    /// next sequence reaches its leaf. Nobody is told until
+    /// sequence lasts until its contact lifts; a contactless one until its
+    /// input ends (a key's release, a wheel latch's lapse) or the next
+    /// sequence reaches its leaf. Nobody is told until
     /// [`start`](Self::start).
     pub(crate) fn new(
         leaf: &Rc<ScrollOwner>,
@@ -293,8 +334,11 @@ impl ScrollSequence {
         handoff: RemainderHandoff,
     ) -> Rc<Self> {
         Self::snapshot(
-            Rc::downgrade(leaf),
-            leaf.overscroll(),
+            SnapshotLeaf {
+                owner: Rc::downgrade(leaf),
+                plane: leaf.node().plane().clone(),
+                overscroll: leaf.overscroll(),
+            },
             leaf.node().parent(),
             id,
             device,
@@ -304,19 +348,24 @@ impl ScrollSequence {
     }
 
     /// Snapshot the chain from `parent` up for sequence `id` of a leaf that
-    /// is no scrollable (an `InteractiveViewer`): it consumes through the
-    /// closure it passes to [`dispatch`](Self::dispatch) and hands its
-    /// remainder to everything above.
+    /// is no scrollable (an `InteractiveViewer`), whose deltas are local to
+    /// `plane`: it consumes through the closure it passes to
+    /// [`dispatch`](Self::dispatch) and hands its remainder to everything
+    /// above.
     pub(crate) fn above(
         parent: Option<&Rc<ChainNode>>,
+        plane: PlaneSource,
         id: InputSequenceId,
         device: ScrollDevice,
         contact: bool,
         handoff: RemainderHandoff,
     ) -> Rc<Self> {
         Self::snapshot(
-            Weak::new(),
-            OverscrollBehavior::Auto,
+            SnapshotLeaf {
+                owner: Weak::new(),
+                plane,
+                overscroll: OverscrollBehavior::Auto,
+            },
             parent,
             id,
             device,
@@ -326,8 +375,7 @@ impl ScrollSequence {
     }
 
     fn snapshot(
-        leaf: Weak<ScrollOwner>,
-        leaf_overscroll: OverscrollBehavior,
+        leaf: SnapshotLeaf,
         parent: Option<&Rc<ChainNode>>,
         id: InputSequenceId,
         device: ScrollDevice,
@@ -336,7 +384,7 @@ impl ScrollSequence {
     ) -> Rc<Self> {
         let mut links = SmallVec::new();
         let mut post_end = None;
-        if leaf_overscroll == OverscrollBehavior::Contain {
+        if leaf.overscroll == OverscrollBehavior::Contain {
             post_end = Some(0);
         }
         let mut node = parent;
@@ -353,15 +401,21 @@ impl ScrollSequence {
                 participant: current.participant.clone(),
                 closed: Cell::new(false),
                 owed: Cell::new(false),
+                plane: Cell::new(None),
             });
             node = current.parent();
         }
         let post_end = post_end.unwrap_or(links.len());
+        let device_pixel_ratio = presentation_device_pixel_ratio(leaf.plane.pipeline().as_ref());
         Rc::new(Self {
             id,
             device,
             contact,
-            leaf: RefCell::new(leaf),
+            leaf: RefCell::new(leaf.owner),
+            leaf_plane: leaf.plane,
+            leaf_sample: Cell::new(None),
+            focal: Cell::new(None),
+            device_pixel_ratio: Cell::new(device_pixel_ratio),
             links,
             post_end,
             handoff,
@@ -371,13 +425,22 @@ impl ScrollSequence {
             runs: Cell::new(0),
             held: Cell::new(false),
             drag_lost: Cell::new(false),
+            idle_end: RefCell::new(None),
         })
     }
 
-    /// Tell every participant the sequence started.
+    /// Tell every participant the sequence started. A programmatic sequence
+    /// first leaves out every participant that does not accept one: such a
+    /// link is closed before anyone is told, so it hears nothing of it.
     pub(crate) fn start(&self, recovery: &mut PanicRecovery) {
         self.pass(recovery, |recovery| {
             for index in 0..self.links.len() {
+                if self.device == ScrollDevice::Programmatic
+                    && !self.accepts_programmatic(index, recovery)
+                {
+                    self.links[index].closed.set(true);
+                    continue;
+                }
                 if !self.links[index].node.acquire(self.id) {
                     continue;
                 }
@@ -388,16 +451,77 @@ impl ScrollSequence {
         });
     }
 
+    /// Whether the participant at link `index` takes part in a programmatic
+    /// sequence. A scrollable never does: it moves for a reveal or a jump
+    /// in a sequence of its own (ADR-0209 §3). A connection says so itself;
+    /// one that panics while it answers declines, and the first failure
+    /// stays in `recovery`.
+    fn accepts_programmatic(&self, index: usize, recovery: &mut PanicRecovery) -> bool {
+        let Participant::Connection(connection) = &self.links[index].participant else {
+            return false;
+        };
+        let Some(connection) = connection.upgrade() else {
+            return false;
+        };
+        let mut answer = None;
+        recovery.run(|| answer = Some(connection.accepts_programmatic()));
+        if answer.is_none() {
+            tracing::error!(
+                sequence = self.id.get(),
+                "a nested scroll participant panicked while asked whether it accepts \
+                 programmatic scrolls; it takes no part in the sequence"
+            );
+        }
+        recovery.retire(connection);
+        answer.unwrap_or(false)
+    }
+
     pub(crate) fn is_contact(&self) -> bool {
         self.contact
     }
 
     /// A one-shot contactless input (a jump, an animation command, an
     /// assistive action) delivered its step: the sequence ends once its run
-    /// comes to rest. A wheel burst stays live until the next sequence.
+    /// comes to rest. A wheel burst stays live until its latch lapses.
     pub(crate) fn finish_input(&self) {
         if self.phase.get() == Phase::Live {
             self.phase.set(Phase::Released);
+        }
+    }
+
+    /// The binding's latch of this wheel or trackpad sequence lapses at
+    /// `due` unless another packet moves it on: the idle end is armed for
+    /// it on `arena`'s owner clock ([`idle_end`](super::idle_end)).
+    pub(crate) fn lapse_at(self: &Rc<Self>, arena: &GestureArena, due: EventTime) {
+        if self.phase.get() != Phase::Live {
+            return;
+        }
+        let update = {
+            let mut idle_end = self.idle_end.borrow_mut();
+            if idle_end.is_none() {
+                *idle_end = IdleEnd::arm(arena, self);
+            }
+            let Some(timer) = idle_end.as_ref() else {
+                return;
+            };
+            timer.move_to(due)
+        };
+        IdleEnd::publish(&update, due);
+    }
+
+    /// The latch of this contactless sequence lapsed, or its last packet
+    /// was dispatched: no further input belongs to it, and it ends
+    /// [`Released`](ScrollEndReason::Released) once its last run comes to
+    /// rest (at once without one).
+    pub(crate) fn lapse(&self, recovery: &mut PanicRecovery) {
+        let timer = self.idle_end.borrow_mut().take();
+        drop(timer);
+        if self.phase.get() != Phase::Live {
+            return;
+        }
+        self.finish_input();
+        if !self.has_runs() {
+            self.end(self.end_reason(), recovery);
         }
     }
 
@@ -460,28 +584,105 @@ impl ScrollSequence {
         self.drag_lost.get()
     }
 
-    fn fling_step(&self, velocity: Vec2) -> FlingStep {
+    // -- Planes -------------------------------------------------------------
+
+    /// The plane of the participant at `position` (`0` is the leaf),
+    /// sampled now, or as last sampled while a frame holds the layout; the
+    /// presentation's own until it was ever sampled.
+    fn plane_at(&self, position: usize) -> Plane {
+        let (source, sample) = match position.checked_sub(1) {
+            None => (&self.leaf_plane, &self.leaf_sample),
+            Some(index) => {
+                let link = &self.links[index];
+                (link.node.plane(), &link.plane)
+            }
+        };
+        if let Some(plane) = source.sample() {
+            sample.set(Some(plane));
+            return plane;
+        }
+        sample.get().unwrap_or(Plane::ROOT)
+    }
+
+    /// Where the input points, in the presentation: the middle of the leaf
+    /// until it pointed anywhere.
+    fn focal(&self) -> Point {
+        if let Some(focal) = self.focal.get() {
+            return focal;
+        }
+        let focal = self
+            .plane_at(0)
+            .centre()
+            .unwrap_or_else(|| Point::new(0.0, 0.0));
+        self.focal.set(Some(focal));
+        focal
+    }
+
+    /// The input points at `local`, in the leaf's plane, from its next step
+    /// on: a contact or a wheel's pointer.
+    pub(crate) fn aim(&self, local: Point) {
+        if !local.is_finite() {
+            return;
+        }
+        let root = self.plane_at(0).to_root_point(local).unwrap_or(local);
+        self.focal.set(Some(root));
+    }
+
+    /// The presentation's pixel ratio, read again at user input; a run and
+    /// a programmatic step keep the one of the input before them.
+    fn device_pixel_ratio(&self, cause: ScrollCause, leaf: &Plane) -> f64 {
+        if matches!(cause, ScrollCause::UserInput | ScrollCause::Momentum)
+            && let Some(ratio) = leaf.device_pixel_ratio()
+        {
+            self.device_pixel_ratio.set(ratio);
+        }
+        self.device_pixel_ratio.get()
+    }
+
+    /// The presentation axis (`0` is `x`) the leaf's own `axis` runs along.
+    fn leaf_axis(&self, axis: usize) -> usize {
+        self.plane_at(0).root_axis(axis, self.focal())
+    }
+
+    fn fling_step(
+        &self,
+        velocity: Vec2,
+        plane: &Plane,
+        focal: Point,
+        device_pixel_ratio: f64,
+    ) -> FlingStep {
         FlingStep {
             sequence: self.id,
             device: self.device,
             available: Velocity::new(Offset::new(velocity.x, velocity.y)),
+            focal_point: plane.to_local_point(focal).unwrap_or(focal),
+            device_pixel_ratio,
         }
     }
 
-    /// The last user contact lifted with `velocity` (physical axes), before
-    /// any run starts: every participant hears it, then every scrollable
-    /// the sequence moved settles under the same sequence id, with the
-    /// release velocity on the axes whose latch it holds and from rest on
-    /// the others. The leaf runs motion only on the axes no ancestor holds
-    /// ([`held_above`](Self::held_above)).
+    /// The last user contact lifted with `velocity` (the leaf's plane),
+    /// before any run starts: every participant hears it in its own plane,
+    /// then every scrollable the sequence moved settles under the same
+    /// sequence id, with the release velocity on the axes whose latch it
+    /// holds and from rest on the others. The leaf runs motion only on the
+    /// axes no ancestor holds ([`held_above`](Self::held_above)).
     pub(crate) fn release(&self, velocity: Vec2, recovery: &mut PanicRecovery) {
         if self.phase.get() != Phase::Live {
             return;
         }
         self.phase.set(Phase::Released);
-        let step = self.fling_step(velocity);
+        let focal = self.focal();
+        let leaf = self.plane_at(0);
+        let device_pixel_ratio = self.device_pixel_ratio(ScrollCause::UserInput, &leaf);
+        // A plane that cannot be crossed releases nothing up the chain.
+        let velocity = leaf.to_root_velocity(velocity, focal).unwrap_or(Vec2::ZERO);
         self.pass(recovery, |recovery| {
             for index in 0..self.links.len() {
+                let plane = self.plane_at(index + 1);
+                let local = plane
+                    .to_local_velocity(velocity, focal)
+                    .unwrap_or(Vec2::ZERO);
+                let step = self.fling_step(local, &plane, focal, device_pixel_ratio);
                 self.call(index, recovery, |connection| connection.released(&step));
             }
             self.settle_owed(velocity, recovery);
@@ -495,6 +696,9 @@ impl ScrollSequence {
         if self.phase.replace(Phase::Ended) == Phase::Ended {
             return;
         }
+        // Nothing lapses for an ended sequence.
+        let timer = self.idle_end.borrow_mut().take();
+        drop(timer);
         self.pass(recovery, |recovery| {
             self.settle_owed(Vec2::ZERO, recovery);
             for index in 0..self.links.len() {
@@ -509,9 +713,10 @@ impl ScrollSequence {
     }
 
     /// Settle every scrollable this sequence moved and still owes a settle,
-    /// through the owner that serves it now: `velocity` on the axes whose
-    /// latch it holds, rest on the others. Its own live contact settles it
-    /// instead. A connection settles itself from `released`.
+    /// through the owner that serves it now: `velocity` (the presentation's
+    /// plane) on the axes whose latch it holds, rest on the others, each in
+    /// its own plane. Its own live contact settles it instead. A connection
+    /// settles itself from `released`.
     fn settle_owed(&self, velocity: Vec2, recovery: &mut PanicRecovery) {
         for (index, link) in self.links.iter().enumerate() {
             if !link.owed.replace(false) {
@@ -529,6 +734,10 @@ impl ScrollSequence {
                 }
             };
             let velocity = Vec2::new(along(0, velocity.x), along(1, velocity.y));
+            let velocity = self
+                .plane_at(index + 1)
+                .to_local_velocity(velocity, self.focal())
+                .unwrap_or(Vec2::ZERO);
             let _ = owner.settle_owed(self.id, self.device, velocity, recovery);
         }
     }
@@ -574,27 +783,62 @@ impl ScrollSequence {
         if self.is_ended() {
             return consume(available);
         }
-        let mut remaining = available;
-        let ancestors = runner.min(self.links.len())..self.links.len();
-        for index in ancestors.rev() {
+        let runner = runner.min(self.links.len());
+        // Every plane once per step, the runner's at `runner`.
+        let planes: SmallVec<[Plane; 5]> = (0..=self.links.len())
+            .map(|position| self.plane_at(position))
+            .collect();
+        let focal = self.focal();
+        let device_pixel_ratio = self.device_pixel_ratio(cause, &planes[0]);
+        let plane = planes[runner];
+        // The step travels in the presentation's plane; each participant
+        // is offered it in its own.
+        // A runner whose plane maps no way back (a singular transform) could
+        // be offered no part of its own step: it takes the step alone.
+        let Some(total) = plane
+            .to_root_delta(available, focal)
+            .filter(|total| plane.to_local_delta(*total, focal).is_some())
+        else {
+            tracing::debug!(
+                sequence = self.id.get(),
+                "a scroll runner's plane cannot be crossed; the step reaches no participant"
+            );
+            return clamp_consumed(consume(available), available, "leaf");
+        };
+        let mut remaining = total;
+        for index in (runner..self.links.len()).rev() {
             if remaining == Vec2::ZERO {
                 break;
             }
-            let step = self.step(cause, remaining);
+            let plane = planes[index + 1];
+            let Some(offer) = plane
+                .to_local_delta(remaining, focal)
+                .filter(|offer| *offer != Vec2::ZERO)
+            else {
+                continue;
+            };
+            let step = self.step(cause, offer, &plane, focal, device_pixel_ratio);
             let taken = match self.call(index, recovery, |connection| connection.pre_scroll(&step))
             {
-                Called::Answered(taken) => clamp_consumed(taken, remaining, "pre_scroll"),
+                Called::Answered(taken) => {
+                    let taken = clamp_consumed(taken, offer, "pre_scroll");
+                    root_taken(&plane, taken, offer, remaining, focal)
+                }
                 Called::Panicked => remaining,
                 Called::Absent => Vec2::ZERO,
             };
-            remaining -= taken;
+            remaining = rest_of(remaining - taken, total);
         }
         let offer = self.latch_mask(runner, remaining);
         let mut taken = Vec2::ZERO;
-        if offer != Vec2::ZERO {
-            taken = clamp_consumed(consume(offer), offer, "leaf");
+        if let Some(local) = plane
+            .to_local_delta(offer, focal)
+            .filter(|local| *local != Vec2::ZERO)
+        {
+            let local_taken = clamp_consumed(consume(local), local, "leaf");
+            taken = root_taken(&plane, local_taken, local, offer, focal);
         }
-        remaining -= taken;
+        remaining = rest_of(remaining - taken, total);
         let mut at_edge = [false; 2];
         for (axis, edge) in at_edge.iter_mut().enumerate() {
             let latched = self.latched(axis, runner);
@@ -606,7 +850,7 @@ impl ScrollSequence {
                 *edge = true;
             }
         }
-        let mut below = available - remaining;
+        let mut below = total - remaining;
         for index in runner..self.post_end {
             if remaining == Vec2::ZERO {
                 break;
@@ -616,17 +860,22 @@ impl ScrollSequence {
                 self.post_offer(0, position, runner, at_edge[0], remaining.x),
                 self.post_offer(1, position, runner, at_edge[1], remaining.y),
             );
-            if offer == Vec2::ZERO {
+            let plane = planes[position];
+            let Some(local) = plane
+                .to_local_delta(offer, focal)
+                .filter(|local| *local != Vec2::ZERO)
+            else {
                 continue;
-            }
-            let step = self.step(cause, offer);
-            let taken = match &self.links[index].participant {
+            };
+            let step = self.step(cause, local, &plane, focal, device_pixel_ratio);
+            let local_taken = match &self.links[index].participant {
                 Participant::Connection(_) => {
+                    let below = plane.to_local_delta(below, focal).unwrap_or(Vec2::ZERO);
                     match self.call(index, recovery, |connection| {
                         connection.post_scroll(&step, below)
                     }) {
-                        Called::Answered(taken) => clamp_consumed(taken, offer, "post_scroll"),
-                        Called::Panicked => offer,
+                        Called::Answered(taken) => clamp_consumed(taken, local, "post_scroll"),
+                        Called::Panicked => local,
                         Called::Absent => Vec2::ZERO,
                     }
                 }
@@ -639,7 +888,7 @@ impl ScrollSequence {
                             let owed = link.owed.replace(true);
                             let taken = clamp_consumed(
                                 owner.take_remainder(&step, recovery),
-                                offer,
+                                local,
                                 "scrollable",
                             );
                             if taken == Vec2::ZERO && !owed {
@@ -651,7 +900,8 @@ impl ScrollSequence {
                     }
                 }
             };
-            remaining -= taken;
+            let taken = root_taken(&plane, local_taken, local, offer, focal);
+            remaining = rest_of(remaining - taken, total);
             below += taken;
             for (axis, edge) in at_edge.iter_mut().enumerate() {
                 let latched = self.latched(axis, runner);
@@ -667,11 +917,15 @@ impl ScrollSequence {
                 }
             }
         }
-        available - remaining
+        // What everyone took, as the runner sees it.
+        plane
+            .to_local_delta(total - remaining, focal)
+            .unwrap_or(Vec2::ZERO)
     }
 
-    /// Offer a fling residual of `velocity` to the participants above
-    /// `from`, nearest first, projected onto each scrollable's axis.
+    /// Offer a fling residual of `velocity` (the plane of the runner at
+    /// `from`) to the participants above it, nearest first, each in its own
+    /// plane and projected onto each scrollable's axis.
     pub(crate) fn hand_off(
         self: &Rc<Self>,
         from: usize,
@@ -679,14 +933,26 @@ impl ScrollSequence {
         dpr: f64,
         recovery: &mut PanicRecovery,
     ) -> Handoff {
-        let step = self.fling_step(velocity);
+        let focal = self.focal();
+        let Some(velocity) = self
+            .plane_at(from.min(self.links.len()))
+            .to_root_velocity(velocity, focal)
+        else {
+            return Handoff::Over;
+        };
         self.pass(recovery, |recovery| {
             for index in from.min(self.post_end)..self.post_end {
                 if self.links[index].closed.get() {
                     continue;
                 }
+                let plane = self.plane_at(index + 1);
+                // A plane that cannot be crossed declines.
+                let Some(local) = plane.to_local_velocity(velocity, focal) else {
+                    continue;
+                };
                 match &self.links[index].participant {
                     Participant::Connection(_) => {
+                        let step = self.fling_step(local, &plane, focal, dpr);
                         if let Called::Answered(FlingHandoff::Accepted) =
                             self.call(index, recovery, |connection| connection.post_fling(&step))
                         {
@@ -694,9 +960,11 @@ impl ScrollSequence {
                         }
                     }
                     Participant::Scrollable(_) => {
-                        match self.links[index].node.owner().map(|owner| {
-                            owner.accept_fling(self, index + 1, velocity, dpr, recovery)
-                        }) {
+                        match self.links[index]
+                            .node
+                            .owner()
+                            .map(|owner| owner.accept_fling(self, index + 1, local, dpr, recovery))
+                        {
                             Some(Acceptance::Running) => return Handoff::Running,
                             // Reentrant user code moved the owner while it
                             // was asked: the residual is stale for everyone
@@ -711,25 +979,39 @@ impl ScrollSequence {
         })
     }
 
-    /// Per axis (`x`, `y`), whether the leaf itself holds the latch.
+    /// Per axis of the leaf's own plane (`x`, `y`), whether the leaf itself
+    /// holds the latch.
     pub(crate) fn leaf_holds(&self) -> [bool; 2] {
-        [self.latch[0].get(), self.latch[1].get()].map(|position| position == Some(0))
+        [0, 1].map(|axis| self.latch[self.leaf_axis(axis)].get() == Some(0))
     }
 
-    /// Whether a participant above the leaf holds the latch on `axis`
-    /// (`0` is `x`): the leaf then runs no motion of its own on that axis,
-    /// which settles where the latch is.
+    /// Whether a participant above the leaf holds the latch on the leaf's
+    /// own `axis` (`0` is `x`): the leaf then runs no motion of its own on
+    /// that axis, which settles where the latch is.
     pub(crate) fn held_above(&self, axis: usize) -> bool {
-        self.latch[axis].get().is_some_and(|position| position > 0)
+        self.latch[self.leaf_axis(axis)]
+            .get()
+            .is_some_and(|position| position > 0)
     }
 
-    fn step(&self, cause: ScrollCause, available: Vec2) -> ScrollStep {
+    /// The step a participant in `plane` is offered: `available` in that
+    /// plane, the presentation's `focal` point mapped into it.
+    fn step(
+        &self,
+        cause: ScrollCause,
+        available: Vec2,
+        plane: &Plane,
+        focal: Point,
+        device_pixel_ratio: f64,
+    ) -> ScrollStep {
         ScrollStep {
             sequence: self.id,
             cause,
             device: self.device,
             contact: self.contact,
             available,
+            focal_point: plane.to_local_point(focal).unwrap_or(focal),
+            device_pixel_ratio,
         }
     }
 
@@ -899,6 +1181,24 @@ impl Drop for PassScope {
     }
 }
 
+/// What a participant in `plane` that took `taken` of its `offer` (the
+/// presentation's `root_offer`) took in the presentation's plane: all of
+/// it exactly when it took all, so no rounding is left over.
+fn root_taken(plane: &Plane, taken: Vec2, offer: Vec2, root_offer: Vec2, focal: Point) -> Vec2 {
+    if taken == offer {
+        return root_offer;
+    }
+    plane.to_root_delta(taken, focal).unwrap_or(Vec2::ZERO)
+}
+
+/// `left` of a step of `total`, with the rounding of a conversion, far
+/// below the step's own scale, read as nothing left.
+fn rest_of(left: Vec2, total: Vec2) -> Vec2 {
+    let scale = total.x.abs().max(total.y.abs()) * 1e-12;
+    let clear = |value: f64| if value.abs() <= scale { 0.0 } else { value };
+    Vec2::new(clear(left.x), clear(left.y))
+}
+
 fn component(vector: Vec2, axis: usize) -> f64 {
     if axis == 0 { vector.x } else { vector.y }
 }
@@ -950,7 +1250,7 @@ mod tests {
 
     use flui_animation::AnimationController;
     use flui_foundation::IdMint;
-    use flui_foundation::geometry::{Axis, Vec2};
+    use flui_foundation::geometry::{Axis, Point, Vec2};
     use flui_interaction::InputSequenceId;
     use flui_platform_api::pointer::PointerKind;
 
@@ -1021,6 +1321,7 @@ mod tests {
         let parent = Rc::new(ChainNode::new(
             Participant::Connection(Rc::downgrade(&connection)),
             None,
+            super::PlaneSource::default(),
         ));
         let owner = ScrollOwner::new(
             OwnerConfig {
@@ -1040,14 +1341,14 @@ mod tests {
             .expect("a fresh mint issues");
         owner.begin_contact(Some(sequence), PointerKind::Touch, None);
         for _ in 0..4 {
-            owner.drag(Vec2::new(0.0, 3.0));
+            owner.drag(Vec2::new(0.0, 3.0), Point::new(0.0, 0.0));
         }
         let control = allocations();
         drop(std::hint::black_box(Box::new(0_u8)));
         assert!(allocations() > control, "the allocator counts");
         let before = allocations();
         for _ in 0..64 {
-            owner.drag(Vec2::new(0.0, 3.0));
+            owner.drag(Vec2::new(0.0, 3.0), Point::new(0.0, 0.0));
         }
         assert_eq!(allocations() - before, 0, "a step allocates nothing");
         assert_eq!(controller.pixels(), 68.0 * 2.0, "each step moved the leaf");

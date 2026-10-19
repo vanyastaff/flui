@@ -26,18 +26,17 @@ use std::sync::Arc;
 
 use flui_animation::simulation::{SpringDescription, SpringSimulation};
 use flui_animation::{Animation, AnimationController, AnimationRunFuture, Simulation};
-use flui_foundation::geometry::{Axis, Vec2};
+use flui_foundation::geometry::{Axis, Point, Vec2};
 use flui_foundation::panic::PanicRecovery;
 use flui_interaction::gesture::{GestureArena, GestureSettingsProvider};
 use flui_interaction::{HoldEnd, InputSequenceId, RemainderHandoff};
 use flui_platform_api::keyboard::Code;
 use flui_platform_api::pointer::{DeviceId, PointerKind};
-use flui_rendering::pipeline::WeakPipelineCell;
 use flui_rendering::view::ScrollDirection;
 
 use super::nested::{
-    Acceptance, ChainNode, Handoff, OverscrollBehavior, Participant, ScrollCause, ScrollDevice,
-    ScrollEndReason, ScrollSequence, ScrollStep, SnapPolicy,
+    Acceptance, ChainNode, Handoff, OverscrollBehavior, Participant, PlaneSource, ScrollCause,
+    ScrollDevice, ScrollEndReason, ScrollSequence, ScrollStep, SnapPolicy, follow_latch,
 };
 use super::scroll_controller::PendingScrollCommand;
 use super::scrollable::presentation_device_pixel_ratio;
@@ -61,9 +60,9 @@ pub(crate) struct OwnerEnv {
     /// Told of every offset change the owner makes, with its cause: an
     /// [`AnchoredDrag`](super::AnchoredDrag) tracks its anchors through it.
     pub(crate) motion: RefCell<Option<MotionHook>>,
-    /// The presentation, whose device pixel ratio a settle the channel
-    /// starts on this owner reads.
-    pub(crate) pipeline: RefCell<Option<WeakPipelineCell>>,
+    /// The scrollable's own plane: the presentation, whose device pixel
+    /// ratio a settle the channel starts on this owner reads, and its box.
+    pub(crate) plane: PlaneSource,
 }
 
 /// Hears an owner move its offset `from` one value `to` another, for `cause`.
@@ -239,6 +238,7 @@ impl ScrollOwner {
             node: Rc::new(ChainNode::new(
                 Participant::Scrollable(this.clone()),
                 config.parent,
+                env.plane.clone(),
             )),
             controller: config.controller,
             fling: config.fling,
@@ -335,7 +335,7 @@ impl ScrollOwner {
 
     /// The device pixel ratio of the presentation this owner scrolls in.
     fn device_pixel_ratio(&self) -> f64 {
-        presentation_device_pixel_ratio(self.env.pipeline.borrow().as_ref())
+        presentation_device_pixel_ratio(self.env.plane.pipeline().as_ref())
     }
 
     /// A pass of the channel through this owner begins.
@@ -712,10 +712,11 @@ impl ScrollOwner {
         device: ScrollDevice,
         recovery: &mut PanicRecovery,
     ) -> Rc<ScrollSequence> {
+        // An id is one sequence: input still naming one that already ended
+        // (its latch lapsed) is no new sequence, and moves the leaf alone.
         if let Some(driving) = self.driving.borrow().as_ref()
             && driving.sequence.id() == id
             && driving.position == 0
-            && !driving.sequence.is_ended()
         {
             return Rc::clone(&driving.sequence);
         }
@@ -768,9 +769,10 @@ impl ScrollOwner {
 
     // -- Steps --------------------------------------------------------------
 
-    /// Dispatch a user delta of the live contact: `physical` through the
-    /// chain, the leaf taking what its physics admits.
-    pub(crate) fn drag(&self, physical: Vec2) {
+    /// Dispatch a user delta of the live contact pointing at `focal` (this
+    /// leaf's plane): `physical` through the chain, the leaf taking what its
+    /// physics admits.
+    pub(crate) fn drag(&self, physical: Vec2, focal: Point) {
         let Some(sequence) = self.contact() else {
             return;
         };
@@ -779,6 +781,7 @@ impl ScrollOwner {
         }
         let mut recovery = PanicRecovery::new();
         let position = self.controller.position();
+        sequence.aim(focal);
         sequence.dispatch(
             0,
             ScrollCause::UserInput,
@@ -869,6 +872,7 @@ impl ScrollOwner {
         device: ScrollDevice,
         cause: ScrollCause,
         delta: f64,
+        focal: Point,
     ) -> bool {
         if !self.alive.get()
             || self.refused()
@@ -882,6 +886,7 @@ impl ScrollOwner {
         let Some(sequence) = self.wheel_sequence(device) else {
             return false;
         };
+        sequence.aim(focal);
         let mut recovery = PanicRecovery::new();
         let consumed = sequence.dispatch(
             0,
@@ -1283,6 +1288,32 @@ impl ScrollOwner {
         let sequence = self.begin_contactless(id, device, &mut recovery);
         recovery.finish();
         Some(sequence)
+    }
+
+    /// A wheel or trackpad packet reached this leaf, moving it or not: the
+    /// sequence it leads for the packet's latch ends where the binding says
+    /// the latch ends, at its idle deadline or with this packet (ADR-0209
+    /// §5). Call once the packet is handled, so a last packet's delta is
+    /// still a step of the sequence.
+    pub(crate) fn wheel_latch(&self) {
+        let Some(arena) = self.env.arena.borrow().clone() else {
+            return;
+        };
+        let (Some(id), Some(end)) = (arena.dispatched_sequence(), arena.dispatched_latch_end())
+        else {
+            return;
+        };
+        let sequence = self
+            .driving
+            .borrow()
+            .as_ref()
+            .filter(|driving| driving.position == 0 && driving.sequence.id() == id)
+            .map(|driving| Rc::clone(&driving.sequence));
+        if let Some(sequence) = sequence {
+            let mut recovery = PanicRecovery::new();
+            follow_latch(&sequence, &arena, end, &mut recovery);
+            recovery.finish();
+        }
     }
 
     /// Detach the run the owner drives before new input of `sequence`
