@@ -311,7 +311,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # test — the workspace suite on Linux (`cargo xtask test --fast`: nextest
   # over TEST_SCOPE, then flui-platform under Xvfb), then the build that
-  # links the examples and benches with the same features, so it compiles
+  # links the examples and benches with the same packages and features, so it compiles
   # nothing twice (a target whose `required-features` the test scope leaves
   # off is compiled per feature by `feature-matrix`, not linked). The nested-cargo group runs beside it in `test-nested`.
   # `cross-typecheck` is the only job touching the AppKit/Win32/Android
