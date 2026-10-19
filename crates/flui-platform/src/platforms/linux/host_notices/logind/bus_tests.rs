@@ -68,6 +68,8 @@ struct Held {
     taken: AtomicUsize,
     /// The stand-in's end of each inhibitor's socket.
     ends: Mutex<Vec<StdOwnedFd>>,
+    /// How long the stand-in takes to answer a session lookup.
+    session_delay: Mutex<Duration>,
 }
 
 impl Held {
@@ -98,7 +100,9 @@ impl Manager {
     }
 
     #[zbus(name = "GetSessionByPID")]
-    fn get_session_by_pid(&self, pid: u32) -> OwnedObjectPath {
+    async fn get_session_by_pid(&self, pid: u32) -> OwnedObjectPath {
+        let delay = *self.0.session_delay.lock();
+        tokio::time::sleep(delay).await;
         assert_eq!(pid, std::process::id(), "the adapter asks about itself");
         OwnedObjectPath::try_from(self.1).expect("a valid path")
     }
@@ -163,11 +167,20 @@ struct Harness {
 
 impl Harness {
     async fn start(delivery_budget: Duration, locked: bool) -> Option<Self> {
+        Self::start_with(delivery_budget, locked, Duration::ZERO).await
+    }
+
+    async fn start_with(
+        delivery_budget: Duration,
+        locked: bool,
+        session_delay: Duration,
+    ) -> Option<Self> {
         let bus = PrivateBus::start().or_else(|| {
             eprintln!("skipped: no dbus-daemon to host a stand-in for logind");
             None
         })?;
         let held = Arc::new(Held::default());
+        *held.session_delay.lock() = session_delay;
         let server = zbus::connection::Builder::address(bus.address.as_str())
             .expect("an address")
             .name(DESTINATION)
@@ -325,5 +338,28 @@ async fn logind_session_locked_at_start_is_announced_once() {
         next_delivery(&harness.inbox).await.event,
         HostEvent::Notice(SystemNotice::SessionUnlocked)
     );
+    harness.adapter.abort();
+}
+
+/// A logind that is slow to say which session is this process's must not
+/// hold up a sleep: the inhibitor's time starts when logind sends the signal.
+#[tokio::test(flavor = "multi_thread")]
+async fn logind_sleep_is_delivered_while_the_session_is_still_being_looked_up() {
+    let Some(harness) =
+        Harness::start_with(Duration::from_secs(5), false, Duration::from_secs(4)).await
+    else {
+        return;
+    };
+    let asked = Instant::now();
+    Manager::prepare_for_sleep(&harness.manager_signals(), true)
+        .await
+        .expect("the signal is sent");
+    let delivery = next_delivery(&harness.inbox).await;
+    assert!(
+        asked.elapsed() < Duration::from_secs(2),
+        "the sleep waited for the session lookup: {:?}",
+        asked.elapsed()
+    );
+    assert_eq!(delivery.event, HostEvent::Notice(SystemNotice::Sleep));
     harness.adapter.abort();
 }

@@ -75,17 +75,16 @@ async fn serve(
     let mut sleeps = manager.receive_signal("PrepareForSleep").await?;
     let mut shutdowns = manager.receive_signal("PrepareForShutdown").await?;
     let mut inhibitor = take_inhibitor(&manager).await;
-    let mut session = SessionWatch::start(connection, &manager).await;
-    // The filter starts unlocked and is told of a session that is locked now,
-    // so the owner hears of it once. Seeding it as locked instead would turn
-    // a lock that landed between the subscription and this read (its signal is
-    // queued) into a duplicate and drop it.
+    // The session is found while the loop already listens: a slow logind must
+    // not keep a sleep or shutdown signal waiting, since the inhibitor's time
+    // runs from the moment logind sends it.
+    let mut starting = Some(Box::pin(SessionWatch::start(connection, &manager)));
+    let mut session: Option<SessionWatch> = None;
+    // The filter starts unlocked and is told of a session that is locked when
+    // found, so the owner hears of it once. Seeding it as locked instead would
+    // turn a lock that landed between the subscription and the read (its
+    // signal is queued) into a duplicate and drop it.
     let mut filter = LogindFilter::default();
-    if session.as_ref().is_some_and(|session| session.locked)
-        && let Some(event) = filter.accept(LogindEvent::SessionLocked)
-    {
-        inbox.post(host_event(event));
-    }
 
     loop {
         let event = tokio::select! {
@@ -96,6 +95,16 @@ async fn serve(
             message = shutdowns.next() => {
                 let message = message.ok_or_else(closed)?;
                 decode_signal(MANAGER_INTERFACE, "PrepareForShutdown", message.body().deserialize::<bool>().ok())
+            }
+            found = async { starting.as_mut().expect("BUG: guarded by the branch condition").await }, if starting.is_some() => {
+                starting = None;
+                session = found;
+                if session.as_ref().is_some_and(|session| session.locked)
+                    && let Some(event) = filter.accept(LogindEvent::SessionLocked)
+                {
+                    inbox.post(host_event(event));
+                }
+                continue;
             }
             event = next_session_event(&mut session) => event?,
         };
