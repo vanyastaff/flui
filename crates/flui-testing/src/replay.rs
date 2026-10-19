@@ -1125,14 +1125,21 @@ impl TrackpadScript {
 
     /// A two-finger pan of `delta` in `steps` phased scroll events, `sample`
     /// apart, between its `Began` and `Ended` events.
-    pub fn pan(mut self, delta: Offset<f64>, steps: u32, sample: Duration) -> Self {
+    pub fn pan(self, delta: Offset<f64>, steps: u32, sample: Duration) -> Self {
+        self.unended_pan(delta, steps, sample)
+            .scroll(Offset::new(0.0, 0.0), ScrollPhase::Ended)
+    }
+
+    /// A pan as [`pan`](Self::pan) whose `Ended` event never comes: a
+    /// platform that may begin a phased scroll without ending it (Wayland).
+    pub fn unended_pan(mut self, delta: Offset<f64>, steps: u32, sample: Duration) -> Self {
         self = self.scroll(Offset::new(0.0, 0.0), ScrollPhase::Began);
         let steps = steps.max(1);
         let each = Offset::new(delta.dx / f64::from(steps), delta.dy / f64::from(steps));
         for _ in 0..steps {
             self = self.wait(sample).scroll(each, ScrollPhase::Changed);
         }
-        self.scroll(Offset::new(0.0, 0.0), ScrollPhase::Ended)
+        self
     }
 
     /// The platform's inertia after a pan: `delta` in `steps` momentum
