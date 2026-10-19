@@ -427,6 +427,16 @@ impl PlatformDragSource for WebDragSource {
     }
 }
 
+/// The canvas's `draggable` as the page left it. Read through `Reflect`
+/// rather than the typed getter, which throws on a canvas-like object whose
+/// property is missing or not a boolean; such a canvas counts as not draggable.
+fn page_draggable(canvas: &web_sys::HtmlCanvasElement) -> bool {
+    js_sys::Reflect::get(canvas, &wasm_bindgen::JsValue::from_str("draggable"))
+        .ok()
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
 /// The source and target of one canvas, from registration to retirement.
 pub(super) struct CanvasDrag {
     pub(super) source: Arc<WebDragSource>,
@@ -638,6 +648,6 @@ pub(super) fn register(
     Ok(CanvasDrag {
         source,
         canvas: canvas.clone(),
-        was_draggable: canvas.draggable(),
+        was_draggable: page_draggable(canvas),
     })
 }

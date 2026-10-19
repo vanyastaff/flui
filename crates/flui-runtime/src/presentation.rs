@@ -547,7 +547,7 @@ impl PresentationState {
     ///   zero node id, an action with no counterpart, a full inbox) are
     ///   traced drops, since screen readers may act on a stale snapshot. Typed action payloads
     ///   (`accesskit::ActionData`) translate with the whole request through
-    ///   [`semantics_action_request_for`]. Numeric setters remain distinct from
+    ///   [`semantics_action_request_for`](flui_semantics::semantics_action_request_for). Numeric setters remain distinct from
     ///   text edits, and expand/collapse preserve their explicit direction.
     ///   The current owner validates payloads before invoking a handler.
     ///

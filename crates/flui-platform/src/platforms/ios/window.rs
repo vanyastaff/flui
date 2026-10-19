@@ -31,7 +31,7 @@ use objc2_foundation::{
 use objc2_quartz_core::{CADisplayLink, CAFrameRateRange};
 use objc2_ui_kit::{
     UIHoverGestureRecognizer, UIRectEdge, UIScreen, UITouch, UITouchType, UITraitCollection,
-    UITraitEnvironment, UIUserInterfaceStyle, UIView, UIViewController, UIWindow, UIWindowScene,
+    UITraitEnvironment, UIUserInterfaceStyle, UIView, UIWindow, UIWindowScene,
 };
 
 use flui_foundation::geometry::{EdgeInsets, Size};
