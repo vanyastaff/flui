@@ -21,12 +21,15 @@ pub(crate) mod display;
 mod drag;
 mod events;
 mod haptics;
+mod host_events;
 mod platform;
 pub(crate) mod preferences;
 mod text_services;
 mod util;
 mod window;
 mod window_ext;
+mod window_frame;
+mod window_limits;
 
 #[cfg(feature = "a11y")]
 pub use accessibility::WindowsAccessibility;

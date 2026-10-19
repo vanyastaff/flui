@@ -20,6 +20,7 @@ use crate::{
         hwnd_affinity::{UserDataRefusal, UserDataVerdict, classify_user_data_access},
         owner_signal::{OwnerSignal, OwnerTurnSlot},
         panic_boundary::contain_owner_callback,
+        system_notice::SystemNotices,
     },
     traits::{
         OpenWindowError, Platform, WindowOptions,
@@ -67,6 +68,10 @@ pub(super) struct OwnerControlContext {
     turn: Rc<OwnerTurnSlot>,
     frames: Rc<FrameCount>,
     preferences: Rc<super::preferences::PreferenceSource>,
+    /// The system events the preferences receiver forwards.
+    host: Rc<super::host_events::HostEvents>,
+    /// Where system notices go; see [`SystemNotices`].
+    notices: Arc<SystemNotices>,
     displays: Arc<super::display::WindowsDisplays>,
     /// The platform's tracked top-level windows, read by the exit-policy
     /// check. Weak: the owner window does not keep the platform's state alive.
@@ -93,6 +98,10 @@ pub(super) struct OwnerShares {
     /// Frame callbacks dispatched by every window this platform opens.
     pub(super) frames: Rc<FrameCount>,
     pub(super) preferences: Rc<super::preferences::PreferenceSource>,
+    /// The system events the receiver forwards to the owner.
+    pub(super) host: Rc<super::host_events::HostEvents>,
+    /// Where the platform hands system notices to the host.
+    pub(super) notices: Arc<SystemNotices>,
     /// The platform's monitors; a window invalidates them on a DPI change and
     /// names its display through them.
     pub(super) displays: Arc<super::display::WindowsDisplays>,
@@ -160,6 +169,7 @@ impl OwnerControl {
         windows: Weak<WindowMap>,
         drag: Arc<super::drag::OleTransfer>,
         displays: Arc<super::display::WindowsDisplays>,
+        notices: Arc<SystemNotices>,
     ) -> Result<Self, PlatformError> {
         let registration = REGISTERED.get_or_init(|| {
             // SAFETY: class name lives forever; this exact procedure implements its ABI.
@@ -201,15 +211,24 @@ impl OwnerControl {
                 })
         }));
         let exit_policy_pending = Arc::new(AtomicBool::new(false));
+        let handlers = Rc::new(RefCell::new(PlatformHandlers::default()));
+        let host = Rc::new(super::host_events::HostEvents::new(
+            Rc::clone(&handlers),
+            Arc::clone(&notices),
+        ));
         let context = Box::new(OwnerControlContext {
             identity,
             signal: Arc::clone(&signal),
-            handlers: Rc::new(RefCell::new(PlatformHandlers::default())),
+            handlers,
             turn: Rc::new(OwnerTurnSlot::default()),
             frames: Rc::new(FrameCount::default()),
-            preferences: Rc::new(super::preferences::PreferenceSource::new(
-                &signal, &displays,
+            preferences: Rc::new(super::preferences::PreferenceSource::with_host(
+                &signal,
+                &displays,
+                Some(Rc::clone(&host)),
             )?),
+            host,
+            notices,
             displays,
             windows,
             exit_policy_pending: Arc::clone(&exit_policy_pending),
@@ -364,6 +383,8 @@ impl OwnerGate {
                     turn: Rc::clone(&context.turn),
                     frames: Rc::clone(&context.frames),
                     preferences: Rc::clone(&context.preferences),
+                    host: Rc::clone(&context.host),
+                    notices: Arc::clone(&context.notices),
                     displays: Arc::clone(&context.displays),
                     exit_policy: self.exit_policy_request(),
                 })

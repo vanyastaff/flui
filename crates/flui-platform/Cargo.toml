@@ -140,6 +140,9 @@ windows = { workspace = true, features = [
     # Session end: `ShutdownBlockReasonCreate`/`Destroy` while the
     # registry is flushed on log-off.
     "Win32_System_Shutdown",
+    # Session lock and unlock: `WTSRegisterSessionNotification` on the hidden
+    # top-level receiver.
+    "Win32_System_RemoteDesktop",
 ] }
 # `#[implement]` (the COM objects the text services hand TSF) expands to
 # `::windows_core` paths.
