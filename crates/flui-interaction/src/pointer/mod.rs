@@ -20,12 +20,12 @@ mod resampler;
 mod sampling_clock;
 mod wheel_preferences;
 
+pub use crate::containment::RoutePanic;
 pub use hit_test::{
     CursorRequest, EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, RenderId,
     TransformGuard,
 };
 pub(crate) use hit_test::{PanZoomRoute, ScrollRoute};
-pub use crate::containment::RoutePanic;
 pub(crate) use interaction_lane::OwnerLatch;
 pub(crate) use interaction_lane::active_dispatch_handle;
 pub use interaction_lane::{

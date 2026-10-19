@@ -262,6 +262,14 @@ impl ClosingBinding {
 }
 
 fn closing_binding(on_reject: impl Fn(&Weak<GestureBinding>) + 'static) -> ClosingBinding {
+    closing_binding_then(|| {}, on_reject)
+}
+
+/// [`closing_binding`] whose closing handler runs `after_close` once it closed.
+fn closing_binding_then(
+    after_close: impl Fn() + 'static,
+    on_reject: impl Fn(&Weak<GestureBinding>) + 'static,
+) -> ClosingBinding {
     let binding = Rc::new(GestureBinding::new());
     let log = Rc::new(RefCell::new(Vec::new()));
     let weak = Rc::downgrade(&binding);
@@ -277,6 +285,7 @@ fn closing_binding(on_reject: impl Fn(&Weak<GestureBinding>) + 'static) -> Closi
             let binding = closer_binding.upgrade().expect("binding");
             close_gestures(&binding, CloseMode::Ordinary);
             closer_log.borrow_mut().push("closed");
+            after_close();
         }
     });
     binding.pointer_router().add_global_handler(closer);
@@ -305,7 +314,37 @@ fn a_closed_binding_drains_services_after_dispatch() {
             "a_drain_callback_that_closes_again_settles_once",
             a_drain_callback_that_closes_again_settles_once,
         ),
+        (
+            "a_callback_that_closes_then_panics_retires_preserving_its_failure",
+            a_callback_that_closes_then_panics_retires_preserving_its_failure,
+        ),
     ]);
+}
+
+fn a_callback_that_closes_then_panics_retires_preserving_its_failure() {
+    let fixture = closing_binding_then(
+        || std::panic::panic_any("closer failed"),
+        |_| panic!("a preserving retirement runs no rejection"),
+    );
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fixture.press()))
+        .expect_err("the callback's failure reaches the dispatch's caller");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"closer failed"),
+        "the first failure is the callback's, not the retirement's"
+    );
+    assert_eq!(
+        fixture.log(),
+        ["closed"],
+        "neither the later handler nor the arena member ran after the failure"
+    );
+    let binding = &fixture.binding;
+    assert_eq!(binding.active_pointer_count(), 0);
+    assert!(binding.arena().is_empty(), "the arena retired its members");
+    binding.handle_pointer_event(
+        &make_down_event_for_id(pointer(2), Offset::ZERO, PointerKind::Touch).expect("down"),
+        |_| panic!("a closed binding hit-tests nothing"),
+    );
 }
 
 fn a_close_from_a_callback_retires_after_the_dispatch() {
