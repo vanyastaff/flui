@@ -101,6 +101,8 @@ pub(crate) fn constrain(info: MinMaxInfo, limits: TrackLimits, fullscreen: bool)
         constrained.min_track = info.min_track.component_max(min);
     }
     if let Some(max) = limits.max {
+        // A maximum below the smallest size the window can have is that size.
+        let max = max.component_max(constrained.min_track);
         constrained.max_track = max;
         constrained.max_size = info.max_size.component_min(max);
     }
@@ -245,6 +247,28 @@ mod tests {
         assert_eq!(constrain(os_default(), limits, true), os_default());
     }
 
+    fn a_maximum_below_the_smallest_size_is_that_size() {
+        let capped = constrain(
+            os_default(),
+            track_limits(None, Some(Size::new(1.0, 1.0)), 96, px(0, 0)),
+            false,
+        );
+        assert_eq!(capped.max_track, os_default().min_track);
+        assert_eq!(capped.max_size, os_default().min_track);
+        let raised = constrain(
+            os_default(),
+            track_limits(
+                Some(Size::new(400.0, 300.0)),
+                Some(Size::new(1.0, 1.0)),
+                96,
+                px(0, 0),
+            ),
+            false,
+        );
+        assert!(raised.max_track.width >= raised.min_track.width);
+        assert!(raised.max_track.height >= raised.min_track.height);
+    }
+
     fn no_limits_keep_the_os_rectangle() {
         let none = track_limits(None, None, 96, FRAME);
         assert_eq!(constrain(os_default(), none, false), os_default());
@@ -290,6 +314,10 @@ mod tests {
                 (
                     "fullscreen_keeps_the_os_rectangle",
                     fullscreen_keeps_the_os_rectangle as fn(),
+                ),
+                (
+                    "a_maximum_below_the_smallest_size_is_that_size",
+                    a_maximum_below_the_smallest_size_is_that_size as fn(),
                 ),
                 (
                     "no_limits_keep_the_os_rectangle",

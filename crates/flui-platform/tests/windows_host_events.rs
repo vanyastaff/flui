@@ -100,12 +100,15 @@ fn a_blocked_query_refuses_and_gives_the_system_a_reason() {
     let reason = host.block_reason().expect("the system holds a reason");
     assert!(!reason.is_empty(), "a blank reason shows the user nothing");
 
-    // Another application cancelled: the reason goes with the block.
+    // The end was cancelled (the system sends this after a refusal too): the
+    // reason stays until the host lets go, because its work is not done.
     host.send(WM_ENDSESSION, 0, 0);
     assert_eq!(
         host.phases(),
         [SessionEndPhase::Query, SessionEndPhase::Cancelled]
     );
+    assert!(host.block_reason().is_some());
+    host.platform.release_session_end();
     assert_eq!(host.block_reason(), None);
 }
 

@@ -465,8 +465,8 @@ fn open_spot(
     });
     let place = |at: Point<f64>| {
         (
-            anchor.0 + logical_to_device(at.x, scale),
-            anchor.1 + logical_to_device(at.y, scale),
+            anchor.0.saturating_add(logical_to_device(at.x, scale)),
+            anchor.1.saturating_add(logical_to_device(at.y, scale)),
         )
     };
     let origin = options.position.map(place);
@@ -475,8 +475,8 @@ fn open_spot(
         Some((
             left,
             top,
-            left + logical_to_device(geometry.size.width, scale),
-            top + logical_to_device(geometry.size.height, scale),
+            left.saturating_add(logical_to_device(geometry.size.width, scale)),
+            top.saturating_add(logical_to_device(geometry.size.height, scale)),
         ))
     });
     OpenSpot {
@@ -1350,9 +1350,44 @@ impl WindowsWindow {
         };
         let fullscreen = super::platform::with_window_context(self.hwnd, "restyle_frame", |ctx| {
             ctx.resizable.set(resizable);
-            ctx.mode.get().holds_fullscreen().then(|| {
-                ctx.restore_style
-                    .set(restyled(ctx.restore_style.get(), decorated, resizable));
+            let mode = ctx.mode.get();
+            mode.fullscreen_bounds().map(|bounds| {
+                let old = ctx.restore_style.get();
+                let new = restyled(old, decorated, resizable);
+                ctx.restore_style.set(new);
+                // The frame it returns to changes size: the outer rectangle
+                // follows, so the content it returns to is the one it had.
+                // SAFETY: plain queries of this wrapper's live window.
+                let (dpi, ex_style) = unsafe {
+                    (
+                        GetDpiForWindow(self.hwnd).max(USER_DEFAULT_SCREEN_DPI),
+                        GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) as u32,
+                    )
+                };
+                if let (Ok(was), Ok(now)) = (
+                    outer_size(old, ex_style, dpi, (0, 0)),
+                    outer_size(new, ex_style, dpi, (0, 0)),
+                ) {
+                    ctx.mode.set(
+                        mode.with_fullscreen_bounds(Bounds {
+                            origin: bounds.origin,
+                            size: Size::new(
+                                bounds
+                                    .size
+                                    .width
+                                    .saturating_sub(was.0)
+                                    .saturating_add(now.0)
+                                    .max(1),
+                                bounds
+                                    .size
+                                    .height
+                                    .saturating_sub(was.1)
+                                    .saturating_add(now.1)
+                                    .max(1),
+                            ),
+                        }),
+                    );
+                }
             })
         })
         .flatten()
@@ -3004,6 +3039,21 @@ mod open_tests {
         assert_eq!(open_spot(&unplaced, None, 1.0, with_frame).normal, None);
     }
 
+    fn an_opening_rectangle_at_the_edge_of_the_range_saturates() {
+        let options = WindowOptions::default()
+            .with_mode(WindowMode::Maximized)
+            .with_normal_geometry(Some(WindowGeometry::new(
+                Some(Point::new(3.0e9, 3.0e9)),
+                Size::new(700.0, 500.0),
+            )));
+        let spot = open_spot(&options, None, 1.0, with_frame);
+        assert_eq!(
+            spot.normal,
+            Some((i32::MAX, i32::MAX, i32::MAX, i32::MAX)),
+            "no wrap into a rectangle on the other side of the desktop"
+        );
+    }
+
     #[test]
     fn open_geometry() {
         crate::table_test::run_table(
@@ -3024,6 +3074,10 @@ mod open_tests {
                 (
                     "the_normal_rectangle_is_the_outer_geometry_it_returns_to",
                     the_normal_rectangle_is_the_outer_geometry_it_returns_to as fn(),
+                ),
+                (
+                    "an_opening_rectangle_at_the_edge_of_the_range_saturates",
+                    an_opening_rectangle_at_the_edge_of_the_range_saturates as fn(),
                 ),
                 (
                     "a_normal_rectangle_without_a_position_follows_the_windows_own",

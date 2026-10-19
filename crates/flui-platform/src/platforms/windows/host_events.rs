@@ -40,6 +40,7 @@ use windows::core::{BOOL, PCWSTR};
 
 use crate::shared::{
     PlatformHandlers,
+    panic_boundary::contain_owner_callback,
     system_notice::SystemNotices,
     windows_host_messages::{self, HostEvent, Received},
     windows_memory_watch::{HOLD_INTERVAL, MemoryWatch},
@@ -146,7 +147,10 @@ impl HostEvents {
                 self.ask_session_end(SessionEndPhase::Ending);
             }
             HostEvent::SessionEndCancelled => {
-                self.release_block();
+                // A block this platform answered a query with is itself followed by
+                // this message: the reason stays until the host releases it
+                // (`release_session_end`), since the work that took the block is
+                // not done because the end was cancelled.
                 self.ask_session_end(SessionEndPhase::Cancelled);
             }
             HostEvent::Sleep => self.notices.dispatch(SystemNotice::Sleep),
@@ -219,7 +223,9 @@ impl HostEvents {
                 Some(hook)
             }
         };
-        drop(superseded);
+        // The superseded hook is retired in a boundary of its own: a capture that
+        // panics in `Drop` must not turn the answer below into the default one.
+        contain_owner_callback(|| drop(superseded));
         answer
     }
 
@@ -384,7 +390,11 @@ impl LowMemoryWait {
         }
         self.unregister();
         if let Err(error) = self.register() {
-            tracing::warn!(%error, "low-memory notices could not be re-armed");
+            // No wait is registered: the hold starts over, and the timer, which
+            // keeps firing, tries again.
+            tracing::warn!(%error, "low-memory notices could not be re-armed; retrying");
+            self.shared.watch.lock().rearm_failed(now);
+            return false;
         }
         true
     }

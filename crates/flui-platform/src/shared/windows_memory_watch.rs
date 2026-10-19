@@ -79,6 +79,14 @@ impl MemoryWatch {
             _ => false,
         }
     }
+
+    /// The wait could not be registered again after [`rearm`](Self::rearm): hold
+    /// for another interval from `now`, then try again.
+    pub(crate) fn rearm_failed(&mut self, now: Duration) {
+        if self.phase == Phase::Armed {
+            self.phase = Phase::Holding { since: now };
+        }
+    }
 }
 
 #[cfg(test)]
@@ -138,6 +146,18 @@ mod tests {
         assert!(watch.signaled(), "an armed watch is still armed");
     }
 
+    fn a_wait_that_cannot_be_registered_is_tried_again_after_another_hold() {
+        let mut watch = MemoryWatch::armed();
+        assert!(watch.signaled());
+        assert!(watch.take(START));
+        let later = START + HOLD_INTERVAL;
+        assert!(watch.rearm(later));
+        watch.rearm_failed(later);
+        assert!(!watch.rearm(later), "not at once");
+        assert!(watch.rearm(later + HOLD_INTERVAL), "after another hold");
+        assert!(watch.signaled(), "armed again");
+    }
+
     fn a_clock_that_reads_earlier_counts_as_no_time_passed() {
         let mut watch = MemoryWatch::armed();
         assert!(watch.signaled());
@@ -169,6 +189,10 @@ mod tests {
                 (
                     "the_owner_taking_nothing_changes_nothing",
                     the_owner_taking_nothing_changes_nothing as fn(),
+                ),
+                (
+                    "a_wait_that_cannot_be_registered_is_tried_again_after_another_hold",
+                    a_wait_that_cannot_be_registered_is_tried_again_after_another_hold as fn(),
                 ),
                 (
                     "a_clock_that_reads_earlier_counts_as_no_time_passed",

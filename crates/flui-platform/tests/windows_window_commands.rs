@@ -418,6 +418,27 @@ fn limits_set_later_apply_to_the_size_the_window_has() {
     );
 }
 
+fn a_frame_changed_in_fullscreen_keeps_the_content_it_returns_to() {
+    let platform = platform();
+    let window = open(&platform, options());
+    apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+    apply(&window, WindowCommand::SetDecorated(false));
+    apply(&window, WindowCommand::SetDecorated(true));
+    apply(&window, WindowCommand::SetResizable(false));
+    apply(&window, WindowCommand::SetMode(WindowMode::Normal));
+    let state = window.state();
+    assert!(content_is(&state, 640.0, 480.0), "{state:?}");
+    assert!(!state.resizable);
+    apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+    apply(&window, WindowCommand::SetDecorated(false));
+    apply(&window, WindowCommand::SetMode(WindowMode::Normal));
+    let state = window.state();
+    assert!(
+        !state.decorated && content_is(&state, 640.0, 480.0),
+        "{state:?}"
+    );
+}
+
 fn a_maximum_caps_maximizing() {
     let platform = platform();
     let window = open(&platform, options());
@@ -726,6 +747,10 @@ fn native_window_commands() {
         (
             "limits_set_later_apply_to_the_size_the_window_has",
             limits_set_later_apply_to_the_size_the_window_has,
+        ),
+        (
+            "a_frame_changed_in_fullscreen_keeps_the_content_it_returns_to",
+            a_frame_changed_in_fullscreen_keeps_the_content_it_returns_to,
         ),
         ("a_maximum_caps_maximizing", a_maximum_caps_maximizing),
         (
