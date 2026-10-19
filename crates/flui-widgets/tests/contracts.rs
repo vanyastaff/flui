@@ -793,6 +793,7 @@ fn animation_and_visibility() {
             ("dismissible::a_dismissible_collapses_its_laid_out_size", crate::dismissible::a_dismissible_collapses_its_laid_out_size as fn()),
             ("dismissible::resize_delivery_keeps_accepted_ticks_before_completion", crate::dismissible::resize_delivery_keeps_accepted_ticks_before_completion as fn()),
             ("dismissible::a_dismissible_goes_out_only_where_its_direction_and_threshold_allow", crate::dismissible::a_dismissible_goes_out_only_where_its_direction_and_threshold_allow),
+            ("dismissible::a_row_scrolled_out_of_a_lazy_list_mid_slide_keeps_its_slide", crate::dismissible::a_row_scrolled_out_of_a_lazy_list_mid_slide_keeps_its_slide),
             ("animated_size::animated_size_interpolates_to_a_new_child_size_over_frames", crate::animated_size::animated_size_interpolates_to_a_new_child_size_over_frames as fn()),
             ("animated_size::an_active_size_run_migrates_between_registries", crate::animated_size::an_active_size_run_migrates_between_registries),
             ("animated_size::animated_size_defaults_to_a_critically_damped_spring", crate::animated_size::animated_size_defaults_to_a_critically_damped_spring),
