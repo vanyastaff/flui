@@ -5,11 +5,11 @@ use std::sync::Arc;
 
 use flui_foundation::{DragSessionId, IdMint, UiRuntimeId};
 use flui_platform_api::data_transfer::{
-    DataTransferOffer, OfferRecord, OfferTable, TransferActions,
+    DataTransferOffer, DropFeedback, Mime, OfferRecord, OfferTable, TransferActions, TransferFormat,
 };
 use flui_platform_api::drag::{
-    AllowedActions, DragError, DragMoment, DragReach, DragSessionKey, OsDragStart, OsOffer,
-    OsSessionPlan, ProcessNonce, plan_os_session, validate_session,
+    AllowedActions, DragError, DragMoment, DragReach, DragSessionKey, IDENTITY_ESSENCE,
+    OsDragStart, OsOffer, OsSessionPlan, ProcessNonce, plan_os_session, validate_session,
 };
 
 const COPY: TransferActions = TransferActions::COPY;
@@ -57,6 +57,47 @@ fn the_identity_survives_the_offer() {
 #[test]
 fn a_foreign_offer_carries_no_identity() {
     assert_eq!(DragSessionKey::from_offer(&offer_of(Vec::new())), None);
+}
+
+#[test]
+fn the_identity_format_is_known_by_its_media_type_alone() {
+    assert!(key().representation().format.is_drag_identity());
+    for (format, identity) in [
+        (custom(IDENTITY_ESSENCE), true),
+        (custom("application/x-flui-drag-session-other"), false),
+        (custom("text/plain"), false),
+        (TransferFormat::Text, false),
+    ] {
+        assert_eq!(format.is_drag_identity(), identity, "{format:?}");
+    }
+}
+
+/// A target's cached answer resolves to the one action a drop takes: the
+/// accepted actions the source permits, copy before move before link.
+#[test]
+fn a_drop_answer_resolves_to_one_permitted_action() {
+    const LINK: TransferActions = TransferActions::LINK;
+    for (accept, allowed, resolved) in [
+        (Some(COPY | MOVE), COPY | MOVE, Some(COPY)),
+        (Some(COPY | MOVE), MOVE | LINK, Some(MOVE)),
+        (Some(COPY | MOVE | LINK), LINK, Some(LINK)),
+        (Some(COPY), COPY, Some(COPY)),
+        (Some(MOVE), COPY, None),
+        (Some(TransferActions::empty()), COPY, None),
+        (None, COPY, None),
+    ] {
+        assert_eq!(
+            DropFeedback { accept }.resolve(allowed),
+            resolved,
+            "{accept:?} within {allowed:?}"
+        );
+    }
+}
+
+fn custom(mime: &str) -> TransferFormat {
+    TransferFormat::Custom {
+        mime: Mime::new(mime),
+    }
 }
 
 #[test]

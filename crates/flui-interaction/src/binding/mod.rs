@@ -57,7 +57,11 @@
 //! target and admitted transform through the sequence, including at an extent
 //! or after the target retires. End/Cancel, device removal and owner lifecycle
 //! withdrawal release selection before callbacks. A phase-less wheel burst
-//! expires after 500 ms without a packet on the presentation's monotonic clock.
+//! expires after its preset's
+//! [`contactless_latch_idle`](crate::gesture::GestureSettings::contactless_latch_idle)
+//! (1500 ms by default) without a packet on the presentation's monotonic clock,
+//! and a phased latch that never sends its end phase after
+//! [`phased_latch_idle`](crate::gesture::GestureSettings::phased_latch_idle).
 //! Source identity is the native `DeviceId`, or `PointerId` when the platform
 //! supplies no device; tool and role remain mutable metadata. At most 32 sources
 //! are admitted; overflow reaches fresh observers but cannot start an unlatched
@@ -144,7 +148,9 @@ use crate::{
     gesture::settings::{GestureProfiles, GestureSettings, GestureSettingsSource},
     gesture::{
         ContestCancel,
-        arena::{DetachedArenaBatch, DispatchedSignal, GestureArena, ScrollLatchEnd},
+        arena::{
+            DetachedArenaBatch, DispatchedInput, DispatchedInputCell, GestureArena, ScrollLatchEnd,
+        },
     },
     ids::{EmbeddedSurfaceId, InputSurface, PointerId, SurfaceIdsExhausted},
     pointer::{
@@ -170,6 +176,17 @@ impl From<PointerInfo> for SignalSource {
         pointer
             .device
             .map_or(Self::Pointer(pointer.id), Self::Device)
+    }
+}
+
+/// One contact's packet in flight; dropping it, also in an unwind, pops it.
+struct InFlight<'a> {
+    stack: &'a RefCell<SmallVec<[PointerId; 2]>>,
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.stack.borrow_mut().pop();
     }
 }
 
@@ -338,10 +355,9 @@ pub struct GestureBinding {
     /// latches and contactless sources carry; refuses at exhaustion
     /// (ADR-0207 §4).
     sequences: Rc<IdMint<InputSequenceId>>,
-    /// The sequence the input being dispatched belongs to, published by the
-    /// admission that resolved it; saved and restored around each dispatch so
-    /// a nested one cannot leak its own.
-    dispatched_sequence: Rc<Cell<Option<InputSequenceId>>>,
+    /// Contacts whose packet a dispatch on the stack is delivering, innermost
+    /// last.
+    in_flight: RefCell<SmallVec<[PointerId; 2]>>,
 }
 
 impl Default for GestureBinding {
@@ -404,17 +420,22 @@ impl GestureBinding {
             default_profiles,
             surfaces: IdMint::new(),
             sequences,
-            dispatched_sequence: Rc::new(Cell::new(None)),
+            in_flight: RefCell::default(),
         }
     }
 
-    /// Publish the sequence of the contact being dispatched: the outcome
-    /// reports it, and a contest the contact opens meanwhile decides it.
+    /// Publish the input being dispatched, in the arena's one cell: the
+    /// outcome reports its sequence, a consumer reads it from the arena, and
+    /// haptics requested meanwhile carry it. The admission that resolved the
+    /// input publishes it; each dispatch restores the outer value on leaving.
+    fn publish_dispatched(&self, input: DispatchedInput) {
+        self.arena.arena().set_dispatched(Some(input));
+    }
+
+    /// Publish the sequence of the contact being dispatched: a contest the
+    /// contact opens meanwhile decides it.
     fn publish_contact_sequence(&self, pointer: PointerId, sequence: InputSequenceId) {
-        self.dispatched_sequence.set(Some(sequence));
-        self.arena
-            .arena()
-            .set_dispatched_contact(Some((pointer, sequence)));
+        self.publish_dispatched(DispatchedInput::Contact { pointer, sequence });
     }
 
     /// Mint the identity of a surface embedded in this binding's window.
@@ -479,19 +500,16 @@ impl GestureBinding {
     ) -> R {
         struct Restore<'a> {
             arena: &'a GestureArena,
-            outer: Option<DispatchedSignal>,
+            outer: Option<DispatchedInput>,
         }
         impl Drop for Restore<'_> {
             fn drop(&mut self) {
-                self.arena.set_dispatched_signal(self.outer);
+                self.arena.set_dispatched(self.outer);
             }
         }
         let arena = self.arena.arena();
         let _restore = Restore {
-            outer: arena.set_dispatched_signal(Some(DispatchedSignal {
-                sequence,
-                latch_end: None,
-            })),
+            outer: arena.set_dispatched(Some(DispatchedInput::Contactless(sequence))),
             arena,
         };
         body()
@@ -804,28 +822,22 @@ impl GestureBinding {
         // A nested dispatch from a callback reports its own sequence, then
         // hands this one back, also when it unwinds.
         struct Restore<'a> {
-            binding: &'a GestureBinding,
-            outer: Option<InputSequenceId>,
-            outer_contact: Option<(PointerId, InputSequenceId)>,
-            outer_signal: Option<DispatchedSignal>,
+            arena: &'a GestureArena,
+            outer: Option<DispatchedInput>,
         }
         impl Drop for Restore<'_> {
             fn drop(&mut self) {
-                self.binding.dispatched_sequence.set(self.outer);
-                let arena = self.binding.arena.arena();
-                arena.set_dispatched_contact(self.outer_contact);
-                arena.set_dispatched_signal(self.outer_signal);
+                self.arena.set_dispatched(self.outer);
             }
         }
+        let arena = self.arena.arena();
         let restore = Restore {
-            outer: self.dispatched_sequence.take(),
-            outer_contact: self.arena.arena().set_dispatched_contact(None),
-            outer_signal: self.arena.arena().set_dispatched_signal(None),
-            binding: self,
+            outer: arena.set_dispatched(None),
+            arena,
         };
         self.dispatch_pointer_kernel(surface, event, hit_test_fn);
         let outcome = DispatchOutcome {
-            sequence: crate::PointerEventExt::pointer_id(event).and(self.dispatched_sequence.get()),
+            sequence: crate::PointerEventExt::pointer_id(event).and(arena.dispatched_sequence()),
         };
         drop(restore);
         outcome
@@ -846,6 +858,8 @@ impl GestureBinding {
             return;
         }
         self.dispatch(|| {
+            let _in_flight = crate::PointerEventExt::pointer_id(event)
+                .map(|pointer| self.deliver_packet_of(pointer));
             let ending = matches!(
                 event,
                 PointerEvent::Down(_) | PointerEvent::Up(_) | PointerEvent::Cancel(_)
@@ -1009,6 +1023,7 @@ impl GestureBinding {
                         .contacts
                         .is_current(snapshot.pointer_id, snapshot.sequence)
                     {
+                        let _in_flight = self.deliver_packet_of(snapshot.pointer_id);
                         let delivered = self.dispatch_event_with_capture(
                             &event,
                             snapshot.token,
@@ -1042,6 +1057,7 @@ impl GestureBinding {
                 let delivery = capture.begin_delivery();
                 resampler.sample(sample_time, next_sample_time, |resampled| {
                     if self.contacts.is_current(pointer_id, sequence) {
+                        let _in_flight = self.deliver_packet_of(pointer_id);
                         let delivered = self.dispatch_event(&resampled, token);
                         RoutePanic::preserve_first(
                             &mut first_panic,
@@ -1076,6 +1092,7 @@ impl GestureBinding {
             match pending {
                 PendingMove::Contact { event, sequence } => {
                     if self.contacts.is_current(pointer_id, sequence) {
+                        let _in_flight = self.deliver_packet_of(pointer_id);
                         let delivered = self.dispatch_on_cached_route(pointer_id, &event);
                         RoutePanic::preserve_first(
                             &mut first_panic,
@@ -1450,8 +1467,11 @@ impl GestureBinding {
     }
 
     /// The instant `time` names on this binding's clock, so a host can turn a
-    /// deadline into a native wake.
-    pub(crate) fn instant_at(&self, time: flui_platform_api::EventTime) -> web_time::Instant {
+    /// deadline into a native wake; `None` past the last representable one.
+    pub(crate) fn instant_at(
+        &self,
+        time: flui_platform_api::EventTime,
+    ) -> Option<web_time::Instant> {
         crate::events::instant_at(self.clock.as_ref(), time)
     }
 
@@ -1461,10 +1481,10 @@ impl GestureBinding {
         &self.clock
     }
 
-    /// The live cell holding the sequence of the input being dispatched, for
-    /// the haptics handle that tags its requests with it.
-    pub(crate) fn dispatched_sequence_cell(&self) -> Rc<Cell<Option<InputSequenceId>>> {
-        Rc::clone(&self.dispatched_sequence)
+    /// The live cell naming the input being dispatched, for the haptics
+    /// handle that tags its requests with its sequence.
+    pub(crate) fn dispatched_input_cell(&self) -> DispatchedInputCell {
+        self.arena.arena().dispatched_cell()
     }
 
     // ========================================================================
@@ -1577,11 +1597,6 @@ impl GestureBinding {
             return;
         }
         let refused_tail = self.contacts.refuses_tail(pointer_id, event.device_id());
-        if !matches!(event, PointerEvent::Down(_))
-            && let Some(sequence) = self.contacts.sequence_of(pointer_id)
-        {
-            self.publish_contact_sequence(pointer_id, sequence);
-        }
         if matches!(
             event,
             PointerEvent::Move(_)
@@ -1593,7 +1608,25 @@ impl GestureBinding {
                 .contacts
                 .observe(pointer, crate::events::event_time(event))
         {
+            // Another device's packet under this contact's pointer id belongs
+            // to no sequence of this binding.
             return;
+        }
+        // A revision corrects a reading it names by time, so it moves the
+        // contact's state on in nothing, but it speaks for the same device.
+        if let PointerEvent::Revise(revision) = event
+            && !self.contacts.admits_device(&revision.pointer)
+        {
+            return;
+        }
+        // A Down mints its own sequence; a wheel or pan/zoom packet belongs to
+        // its latch or lease even while the pointer holds a button.
+        if !matches!(
+            event,
+            PointerEvent::Down(_) | PointerEvent::Scroll(_) | PointerEvent::PanZoom(_)
+        ) && let Some(sequence) = self.contacts.sequence_of(pointer_id)
+        {
+            self.publish_contact_sequence(pointer_id, sequence);
         }
         match event {
             PointerEvent::Down(_) => {
@@ -1991,16 +2024,13 @@ impl GestureBinding {
             }
             ScrollAdmission::Terminal(None) | ScrollAdmission::Refused => None,
         };
-        if let Some((latch, latch_end)) = dispatched {
-            self.dispatched_sequence.set(Some(latch.id));
+        if let Some((latch, end)) = dispatched {
             // The consumer names the deltas it takes by the latch's sequence,
             // and ends that sequence where the latch ends.
-            self.arena
-                .arena()
-                .set_dispatched_signal(Some(DispatchedSignal {
-                    sequence: latch.id,
-                    latch_end,
-                }));
+            self.publish_dispatched(DispatchedInput::Latch {
+                sequence: latch.id,
+                end,
+            });
         }
         let position = event
             .position()
@@ -2068,7 +2098,7 @@ impl GestureBinding {
         {
             match crate::PointerEventExt::pointer_id(event) {
                 Some(pointer) => self.publish_contact_sequence(pointer, session.id),
-                None => self.dispatched_sequence.set(Some(session.id)),
+                None => self.publish_dispatched(DispatchedInput::Contactless(session.id)),
             }
         }
         pan_zoom_sequences::retire_tickets_capturing_panic(replaced, incoming, false);
@@ -2298,38 +2328,65 @@ impl GestureBinding {
     /// The hand-off already restricts later packets to the owner's target,
     /// so a target that receives this cancellation hears nothing more of the
     /// contact.
+    ///
+    /// A contact whose packet an enclosing dispatch is still delivering keeps
+    /// its debt for that dispatch: its targets past the callback that nested
+    /// this one have yet to hear the packet.
     fn settle_claims(&self) -> Option<RoutePanic> {
         let mut first = None;
         for debt in self.contacts.claim_debts() {
+            if self.in_flight.borrow().contains(&debt.contact.pointer.id)
+                || debt.capture.is_delivering()
+            {
+                continue;
+            }
             let Some(owner) = debt.capture.take_claim_debt() else {
                 continue;
             };
             let contact = debt.contact;
             let Some(token) = debt.token.filter(|_| {
-                !self.close.withholds_delivery()
-                    && self
-                        .contacts
-                        .is_current(contact.pointer.id, contact.sequence)
+                self.contacts
+                    .is_current(contact.pointer.id, contact.sequence)
             }) else {
                 continue;
             };
-            let cancel = PointerEvent::Cancel(PointerCancel::new(
-                contact.pointer,
-                contact.time,
-                CancelReason::Claimed,
-            ));
-            let delivered = match active_dispatch_handle()
-                .and_then(|handle| handle.invoke_pointer_route_except(token, &cancel, owner))
-            {
-                Ok(panic) => panic,
-                Err(error) => {
-                    tracing::error!(?error, "claimed-contact cancellation failed");
-                    None
-                }
-            };
+            let delivered = self.cancel_claimed(contact.pointer, contact.time, token, owner);
             RoutePanic::preserve_first(&mut first, delivered, "claimed-contact cancellation");
         }
         first
+    }
+
+    /// Deliver `Cancel(Claimed)` to every target of `token`'s route but the
+    /// claim's `owner`.
+    fn cancel_claimed(
+        &self,
+        pointer: PointerInfo,
+        time: flui_platform_api::EventTime,
+        token: ResolvedRouteToken,
+        owner: crate::pointer::PointerTarget,
+    ) -> Option<RoutePanic> {
+        if self.close.withholds_delivery() {
+            return None;
+        }
+        let cancel = PointerEvent::Cancel(PointerCancel::new(pointer, time, CancelReason::Claimed));
+        match active_dispatch_handle()
+            .and_then(|handle| handle.invoke_pointer_route_except(token, &cancel, owner))
+        {
+            Ok(panic) => panic,
+            Err(error) => {
+                tracing::error!(?error, "claimed-contact cancellation failed");
+                None
+            }
+        }
+    }
+
+    /// Mark `pointer`'s packet in flight until the guard drops: a dispatch
+    /// nested in its callbacks leaves the contact's claim to this one.
+    fn deliver_packet_of(&self, pointer: PointerId) -> InFlight<'_> {
+        self.in_flight.borrow_mut().push(pointer);
+        InFlight {
+            stack: &self.in_flight,
+        }
     }
 
     fn queue_pending_move(&self, key: MoveKey, mut pending: PendingMove) {

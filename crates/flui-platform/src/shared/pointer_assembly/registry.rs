@@ -144,6 +144,37 @@ impl DeviceRegistry {
             })
     }
 
+    /// The device whose identity is `id`, while it is present.
+    #[must_use]
+    pub fn native(&self, id: DeviceId) -> Option<NativeDevice> {
+        self.devices
+            .iter()
+            .find(|entry| entry.id == id)
+            .map(|entry| entry.native)
+    }
+
+    /// Announce `native` of `kind`; `None` when it is already present or no
+    /// identity is left.
+    pub fn add_device(
+        &mut self,
+        native: NativeDevice,
+        kind: PointerKind,
+        time: EventTime,
+    ) -> Option<PointerDeviceChange> {
+        let (id, added) = self.admit(native, kind)?;
+        added.then(|| PointerDeviceChange::new(id, kind, time))
+    }
+
+    /// Retire `native`: its removal, if it was present.
+    pub fn remove_device(
+        &mut self,
+        native: NativeDevice,
+        time: EventTime,
+    ) -> Option<PointerDeviceChange> {
+        self.remove(native)
+            .map(|entry| PointerDeviceChange::new(entry.id, entry.kind.reported(), time))
+    }
+
     fn entry(&self, native: NativeDevice) -> Option<&DeviceEntry> {
         self.devices.iter().find(|entry| entry.native == native)
     }
@@ -530,8 +561,7 @@ impl ContactRegistry {
                 time,
             }
         );
-        let (id, added) = self.devices.admit(native, kind)?;
-        added.then(|| PointerDeviceChange::new(id, kind, time))
+        self.devices.add_device(native, kind, time)
     }
 
     /// Retire `native`: its contacts' sequences end with
@@ -557,10 +587,7 @@ impl ContactRegistry {
             time,
             CancelReason::DeviceRemoved,
         );
-        let removed = self
-            .devices
-            .remove(native)
-            .map(|entry| PointerDeviceChange::new(entry.id, entry.kind.reported(), time));
+        let removed = self.devices.remove_device(native, time);
         (ended, removed)
     }
 
@@ -930,16 +957,10 @@ impl ContactRegistry {
                             .with_modifiers(modifiers);
                         let raw = contact
                             .last_position
-                            .map_or((0.0, 0.0), |(_, raw)| (raw.x, raw.y));
+                            .map_or(RawPoint { x: 0.0, y: 0.0 }, |(_, raw)| raw);
                         let count = reading.click_count.or_else(|| {
-                            (info.kind == PointerKind::Mouse).then(|| {
-                                self.clicks.press(
-                                    (reading.surface.0, reading.contact.0),
-                                    button,
-                                    time,
-                                    raw,
-                                )
-                            })?
+                            (info.kind == PointerKind::Mouse)
+                                .then(|| self.clicks.press(info.id, button, time, raw))?
                         });
                         if let Some(count) = count {
                             press = press.with_click_count(count);

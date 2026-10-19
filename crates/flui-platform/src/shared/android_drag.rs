@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use flui_platform_api::data_transfer::{
-    DropFeedback, Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat,
+    Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat,
     TransferPayload, TransferUri,
 };
 use flui_platform_api::drag::{IDENTITY_ESSENCE, OsDragEnd};
@@ -78,7 +78,7 @@ pub fn offered<'a>(
         if offered.iter().any(|(_, known)| known.format == format) {
             continue;
         }
-        let identity = super::html_drag_drop::is_identity(&format);
+        let identity = format.is_drag_identity();
         let source = match &format {
             TransferFormat::Text => ClipSource::Text,
             TransferFormat::Html => ClipSource::Html,
@@ -198,14 +198,6 @@ pub fn incoming_allowed(own: Option<TransferActions>) -> TransferActions {
     own.unwrap_or(TransferActions::COPY)
 }
 
-/// The action a drop takes: the one the target's cached feedback accepts
-/// among those the drag permits (copy, then move, then link), or `None`,
-/// which refuses the drop.
-#[must_use]
-pub fn drop_action(feedback: DropFeedback, allowed: TransferActions) -> Option<TransferActions> {
-    super::ole_drag_drop::answered_action(feedback, allowed)
-}
-
 /// What a FLUI drag puts in its `ClipData`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ClipParts {
@@ -249,7 +241,7 @@ pub fn clip_parts(
 ) -> ClipParts {
     let mut parts = ClipParts::default();
     for (descriptor, payload) in representations.iter().zip(payloads) {
-        let identity = super::html_drag_drop::is_identity(&descriptor.format);
+        let identity = descriptor.format.is_drag_identity();
         let carried = match payload {
             _ if identity => true,
             Some(TransferPayload::Text(text)) => {

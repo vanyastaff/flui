@@ -15,7 +15,7 @@ use flui_platform_api::data_transfer::{
     DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex, TransferActions,
     TransferFormat, TransferImage, TransferPayload, TransferUri,
 };
-use flui_platform_api::drag::{IDENTITY_ESSENCE, OsDragProvider};
+use flui_platform_api::drag::OsDragProvider;
 
 /// The actions an `effectAllowed` value permits. `uninitialized` (a drag
 /// from outside the page) and unknown values permit every action, as the
@@ -59,7 +59,7 @@ pub fn effect_allowed_of(actions: TransferActions) -> &'static str {
 /// link), or `"none"`, which refuses the drop.
 #[must_use]
 pub fn drop_effect(feedback: DropFeedback, allowed: TransferActions) -> &'static str {
-    match super::ole_drag_drop::answered_action(feedback, allowed) {
+    match feedback.resolve(allowed) {
         Some(action) if action == TransferActions::COPY => "copy",
         Some(action) if action == TransferActions::MOVE => "move",
         Some(action) if action == TransferActions::LINK => "link",
@@ -114,12 +114,6 @@ pub fn format_of(dom_type: &str) -> Option<TransferFormat> {
     }
 }
 
-/// Whether `format` is FLUI's session identity.
-#[must_use]
-pub fn is_identity(format: &TransferFormat) -> bool {
-    matches!(format, TransferFormat::Custom { mime } if mime.as_str().split(';').next() == Some(IDENTITY_ESSENCE))
-}
-
 /// Where one announced representation comes from at the drop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DomSource {
@@ -146,7 +140,7 @@ pub fn offered<'a>(
         if offered.iter().any(|(_, known)| known.format == format) {
             continue;
         }
-        let declared_len = is_identity(&format).then_some(0);
+        let declared_len = format.is_drag_identity().then_some(0);
         offered.push((
             DomSource::Data(dom_type.to_owned()),
             RepresentationDescriptor {

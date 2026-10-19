@@ -590,9 +590,11 @@ impl UiRuntime {
             let motion = catch_unwind(AssertUnwindSafe(|| {
                 let gestures = presentation.gestures();
                 if gestures.is_resampling_enabled() {
-                    let frame_time = vsync.map_or(frame_time, |vsync| {
-                        flui_interaction::__runtime::wake_instant(gestures, vsync)
-                    });
+                    let frame_time = vsync
+                        .and_then(|vsync| {
+                            flui_interaction::__runtime::wake_instant(gestures, vsync)
+                        })
+                        .unwrap_or(frame_time);
                     let sample = frame_time
                         .checked_sub(flui_interaction::pointer::DEFAULT_RESAMPLE_LOOKBACK)
                         .unwrap_or(frame_time);

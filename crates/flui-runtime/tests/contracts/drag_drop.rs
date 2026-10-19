@@ -451,21 +451,27 @@ fn a_drag_from_another_application_reaches_the_receiver_under_it() {
     let (first_seen, first) = receiver(Some(COPY), true);
     let (_second_seen, second) = receiver(None, false);
     let world = world(&first, &second, OsDragStart::OnLeavingWindow);
-    world.dnd.start_foreign(
-        vec![(
-            TransferFormat::Text,
-            TransferPayload::Text("from afar".to_owned()),
-        )],
-        COPY,
-    );
-    world.dnd.hover(world.first.id(), Point::new(10.0, 10.0));
+    world
+        .dnd
+        .start_foreign(
+            vec![(
+                TransferFormat::Text,
+                TransferPayload::Text("from afar".to_owned()),
+            )],
+            COPY,
+        )
+        .expect("no session runs yet");
+    world
+        .dnd
+        .hover(world.first.id(), Point::new(10.0, 10.0))
+        .expect("a session runs");
     assert_eq!(*first_seen.scopes.borrow(), [DragScope::External]);
     assert_eq!(
         world.dnd.cached_feedback(),
         Some(DropFeedback { accept: Some(COPY) }),
         "the receiver's answer is what the OS is told"
     );
-    assert_eq!(world.dnd.drop_here(), Some(COPY));
+    assert_eq!(world.dnd.drop_here().expect("a session runs"), Some(COPY));
     assert_eq!(
         *first_seen.events.borrow(),
         ["enter".to_owned(), format!("dropped {}", COPY.bits())]
@@ -483,15 +489,21 @@ fn a_drop_stays_open_at_the_os_until_its_request_resolves() {
     let (seen, first) = receiver(Some(COPY), true);
     let (_unused, second) = receiver(None, false);
     let world = world(&first, &second, OsDragStart::OnLeavingWindow);
-    world.dnd.start_foreign(
-        vec![(
-            TransferFormat::Text,
-            TransferPayload::Text("later".to_owned()),
-        )],
-        COPY,
-    );
-    world.dnd.hover(world.first.id(), Point::new(10.0, 10.0));
-    assert_eq!(world.dnd.drop_here(), Some(COPY));
+    world
+        .dnd
+        .start_foreign(
+            vec![(
+                TransferFormat::Text,
+                TransferPayload::Text("later".to_owned()),
+            )],
+            COPY,
+        )
+        .expect("no session runs yet");
+    world
+        .dnd
+        .hover(world.first.id(), Point::new(10.0, 10.0))
+        .expect("a session runs");
+    assert_eq!(world.dnd.drop_here().expect("a session runs"), Some(COPY));
     assert_eq!(
         world.dnd.open_offers(),
         1,
@@ -532,14 +544,17 @@ fn a_drag_between_presentations_of_one_runtime_redeems_its_value() {
         "within_app is advertised"
     );
 
-    world.dnd.hover(world.second.id(), Point::new(10.0, 10.0));
+    world
+        .dnd
+        .hover(world.second.id(), Point::new(10.0, 10.0))
+        .expect("a session runs");
     assert_eq!(*second_seen.scopes.borrow(), [DragScope::Runtime]);
     assert_eq!(
         *second_seen.values.borrow(),
         [Some(42)],
         "the sibling redeems the value"
     );
-    assert_eq!(world.dnd.drop_here(), Some(MOVE));
+    assert_eq!(world.dnd.drop_here().expect("a session runs"), Some(MOVE));
     assert_eq!(
         second_seen.events.borrow().last(),
         Some(&format!("dropped {}", MOVE.bits()))
@@ -605,7 +620,8 @@ fn a_drag_between_runtimes_delivers_serialized_representations_only() {
     assert_eq!(outcome.get(), Some(Ok(MoveOutcome::Escalating)));
     assert!(dnd.is_active());
 
-    dnd.hover(window_b.id(), Point::new(10.0, 10.0));
+    dnd.hover(window_b.id(), Point::new(10.0, 10.0))
+        .expect("a session runs");
     assert_eq!(*target_seen.scopes.borrow(), [DragScope::OtherRuntime]);
     assert_eq!(
         *target_seen.values.borrow(),
@@ -622,7 +638,7 @@ fn a_drag_between_runtimes_delivers_serialized_representations_only() {
         "hello",
         "the serialized representation is what it gets"
     );
-    assert_eq!(dnd.drop_here(), Some(COPY));
+    assert_eq!(dnd.drop_here().expect("a session runs"), Some(COPY));
     assert_eq!(target_seen.values.borrow().last(), Some(&None));
     assert_eq!(
         session.outcome(),

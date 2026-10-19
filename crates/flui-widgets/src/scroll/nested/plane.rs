@@ -21,7 +21,7 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::{Matrix4, Point, Size, Vec2};
 use flui_objects::SubtreeAnchor;
-use flui_rendering::pipeline::WeakPipelineCell;
+use flui_rendering::pipeline::{PipelineOwner, WeakPipelineCell};
 
 /// A conversion's result below this share of its largest component is the
 /// rounding of a quarter turn or of an inverse, not motion: it reads as
@@ -30,6 +30,16 @@ const ROUNDING: f64 = 1e-12;
 
 /// The 2×2 identity, row by row.
 const IDENTITY: [f64; 4] = [1.0, 0.0, 0.0, 1.0];
+
+/// The device pixel ratio of the presentation `pipeline` belongs to, read at
+/// the moment of the call so a window moved to another monitor is honoured.
+/// `1.0` once the presentation is gone or while a frame holds the pipeline.
+pub(crate) fn presentation_device_pixel_ratio(pipeline: Option<&WeakPipelineCell>) -> f64 {
+    pipeline
+        .and_then(WeakPipelineCell::upgrade)
+        .and_then(|cell| cell.try_with(PipelineOwner::device_pixel_ratio))
+        .unwrap_or(1.0)
+}
 
 /// Where one participant's plane is read: the presentation, acquired in a
 /// lifecycle hook, and the render node its deltas are local to, published
@@ -68,7 +78,8 @@ impl PlaneSource {
                 Some(Plane {
                     to_root,
                     size,
-                    device_pixel_ratio: owner.device_pixel_ratio(),
+                    device_pixel_ratio: Some(owner.device_pixel_ratio())
+                        .filter(|ratio| ratio.is_finite() && *ratio > 0.0),
                 })
             })
             .flatten()
@@ -89,7 +100,9 @@ impl std::fmt::Debug for PlaneSource {
 pub(crate) struct Plane {
     to_root: Matrix4,
     size: Size,
-    device_pixel_ratio: f64,
+    /// The presentation's ratio, when it was read and is finite and
+    /// positive.
+    device_pixel_ratio: Option<f64>,
 }
 
 impl Plane {
@@ -97,13 +110,12 @@ impl Plane {
     pub(crate) const ROOT: Self = Self {
         to_root: Matrix4::IDENTITY,
         size: Size::ZERO,
-        device_pixel_ratio: f64::NAN,
+        device_pixel_ratio: None,
     };
 
     /// The presentation's device pixel ratio, when it was read.
     pub(crate) fn device_pixel_ratio(self) -> Option<f64> {
-        let ratio = self.device_pixel_ratio;
-        (ratio.is_finite() && ratio > 0.0).then_some(ratio)
+        self.device_pixel_ratio
     }
 
     /// The middle of the participant's box, in the presentation: the focal

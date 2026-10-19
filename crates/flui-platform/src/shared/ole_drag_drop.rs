@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use flui_platform_api::data_transfer::{
-    DropFeedback, Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat,
-    TransferImage, TransferPayload, TransferUri,
+    Mime, RepresentationDescriptor, TransferActions, TransferError, TransferFormat, TransferImage,
+    TransferPayload, TransferUri,
 };
 use flui_platform_api::drag::IDENTITY_ESSENCE;
 use flui_platform_api::pointer::PointerKind;
@@ -54,25 +54,6 @@ pub fn actions_of(effect: u32) -> TransferActions {
         actions |= TransferActions::LINK;
     }
     actions
-}
-
-/// The single action a target's cached `feedback` answers the OS with while
-/// the source permits `allowed`: the accepted actions the source permits,
-/// narrowed to one (copy, then move, then link) because OLE reports one
-/// effect. `None` refuses.
-#[must_use]
-pub fn answered_action(
-    feedback: DropFeedback,
-    allowed: TransferActions,
-) -> Option<TransferActions> {
-    let permitted = feedback.accept? & allowed;
-    [
-        TransferActions::COPY,
-        TransferActions::MOVE,
-        TransferActions::LINK,
-    ]
-    .into_iter()
-    .find(|action| permitted.contains(*action))
 }
 
 /// The registered name of the `text/html` clipboard format (CF_HTML).

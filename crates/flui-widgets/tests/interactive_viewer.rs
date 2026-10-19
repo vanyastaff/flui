@@ -27,7 +27,9 @@ use flui_widgets::{
 };
 
 use crate::common::{LaidOut, lay_out, tight, viewer_alternatives};
-use crate::nested_scroll::{DEVICES, Device, Probe, Seen, at, drag, line, mounted, settle, slow};
+use crate::nested_scroll::{
+    DEVICES, Device, Probe, Seen, at, drag, line, mounted, replay_contained, settle, slow,
+};
 
 const PAGE: f64 = 300.0;
 
@@ -350,6 +352,64 @@ pub(crate) fn viewer_inertia_is_a_side_effect_of_the_releasing_sequence() {
             probe.ended(),
             [(sequence, ScrollEndReason::Released)],
             "{device:?}: the sequence ends once, after the run"
+        );
+    }
+}
+
+/// A participant that panics at the release costs the others nothing: the
+/// viewer's inertia still runs as the sequence's motion, the sequence ends
+/// once for every participant, and the failure resumes once.
+pub(crate) fn viewer_release_failure_still_ends_the_sequence() {
+    for device in DEVICES {
+        let (transform, near, far, vsync) = (
+            TransformationController::new(),
+            Probe::new(),
+            Probe::new(),
+            Vsync::new(),
+        );
+        near.set_observe(|seen| {
+            if matches!(seen, Seen::Released(_)) {
+                panic!("a participant fails at the release");
+            }
+        });
+        let viewer = photo(&transform).boundary_margin(EdgeInsets::all(400.0));
+        let mut laid = mounted(
+            VsyncScope::new(
+                vsync.clone(),
+                NestedScroll::new(
+                    far.connection(),
+                    NestedScroll::new(near.connection(), viewer),
+                ),
+            )
+            .boxed(),
+            vsync,
+        );
+        let failures = replay_contained(
+            &mut laid,
+            &drag(
+                device,
+                &line(at(250.0, 150.0), at(130.0, 150.0), 6),
+                Duration::from_millis(8),
+                Duration::ZERO,
+            ),
+        );
+        settle(&mut laid);
+        assert_eq!(
+            failures,
+            vec!["a participant fails at the release".to_owned()],
+            "{device:?}: the failure resumes, once"
+        );
+        let sequence = far.started()[0];
+        assert_eq!(
+            far.ended(),
+            [(sequence, ScrollEndReason::Released)],
+            "{device:?}: the sequence still ends for the others: {:?}",
+            far.seen()
+        );
+        assert_eq!(
+            translation_x(&transform),
+            -400.0,
+            "{device:?}: and the photo's inertia still runs to its boundary"
         );
     }
 }

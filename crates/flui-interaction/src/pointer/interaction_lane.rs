@@ -2290,26 +2290,7 @@ impl InteractionDispatchHandle {
         event: &PointerEvent,
         capture: Option<&Rc<ContactCapture>>,
     ) -> Result<Option<RoutePanic>, InteractionDispatchError> {
-        let lane = self.active_lane()?;
-        self.validate_lane(token.lane_id)?;
-        let route = lane
-            .routes
-            .borrow()
-            .get(&token.route_id)
-            .cloned()
-            .ok_or(InteractionDispatchError::StaleRoute)?;
-        let mut first_panic = route.invoke(event, capture, None);
-        // A hit callback may release this token re-entrantly, leaving the
-        // invocation snapshot as the route's final owner. Keep its entry and
-        // HandlerCell destructors in the transaction returned to the binding,
-        // rather than unwinding before the root router and arena lifecycle.
-        let snapshot_cleanup = RoutePanic::capture(|| drop(route));
-        RoutePanic::preserve_first(
-            &mut first_panic,
-            snapshot_cleanup,
-            "resolved pointer route snapshot cleanup",
-        );
-        Ok(first_panic)
+        self.invoke_resolved_route(token, event, capture, None)
     }
 
     /// Deliver `event` to every entry of the route but `excluded`: the
@@ -2321,6 +2302,16 @@ impl InteractionDispatchHandle {
         event: &PointerEvent,
         excluded: PointerTarget,
     ) -> Result<Option<RoutePanic>, InteractionDispatchError> {
+        self.invoke_resolved_route(token, event, None, Some(excluded))
+    }
+
+    fn invoke_resolved_route(
+        &self,
+        token: ResolvedRouteToken,
+        event: &PointerEvent,
+        capture: Option<&Rc<ContactCapture>>,
+        excluded: Option<PointerTarget>,
+    ) -> Result<Option<RoutePanic>, InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(token.lane_id)?;
         let route = lane
@@ -2329,7 +2320,11 @@ impl InteractionDispatchHandle {
             .get(&token.route_id)
             .cloned()
             .ok_or(InteractionDispatchError::StaleRoute)?;
-        let mut first_panic = route.invoke(event, None, Some(excluded));
+        let mut first_panic = route.invoke(event, capture, excluded);
+        // A hit callback may release this token re-entrantly, leaving the
+        // invocation snapshot as the route's final owner. Keep its entry and
+        // HandlerCell destructors in the transaction returned to the binding,
+        // rather than unwinding before the root router and arena lifecycle.
         let snapshot_cleanup = RoutePanic::capture(|| drop(route));
         RoutePanic::preserve_first(
             &mut first_panic,

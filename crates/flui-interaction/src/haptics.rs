@@ -38,11 +38,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::panic::{FailureClass, RecoveryScope};
-use flui_foundation::{IdMint, InputSequenceId, MonotonicClock};
+use flui_foundation::{IdMint, MonotonicClock};
 use flui_platform_api::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTicket, HapticTiming,
 };
 use flui_platform_api::{DeviceId, EventTime, HapticFeedback, PlatformHaptics};
+
+use crate::gesture::arena::{DispatchedInput, DispatchedInputCell};
 
 use crate::retain::Retain;
 
@@ -134,7 +136,7 @@ struct Slot {
 
 struct State {
     clock: Arc<dyn MonotonicClock>,
-    sequence: Rc<Cell<Option<InputSequenceId>>>,
+    dispatched: DispatchedInputCell,
     actuator: Actuator,
     request_frame: Box<dyn Fn()>,
     refresh_period: Box<dyn Fn() -> Option<Duration>>,
@@ -256,7 +258,7 @@ impl State {
             return HapticOutcome::Suppressed;
         }
         if request.sequence.is_none() {
-            request.sequence = self.sequence.get();
+            request.sequence = self.dispatched.get().map(DispatchedInput::sequence);
         }
         if request.timing == HapticTiming::Immediate {
             return self.play_now(&play, &request);
@@ -594,7 +596,7 @@ impl HapticsHost {
         HapticsHostBuilder {
             state: State {
                 clock: Arc::clone(binding.clock()),
-                sequence: binding.dispatched_sequence_cell(),
+                dispatched: binding.dispatched_input_cell(),
                 actuator: Box::new(actuator),
                 request_frame: Box::new(|| {}),
                 refresh_period: Box::new(|| None),
@@ -693,7 +695,7 @@ impl HapticsHost {
             .iter()
             .map(|entry| entry.deadline)
             .min()
-            .map(|deadline| {
+            .and_then(|deadline| {
                 let after = EventTime::from_nanos(deadline.as_nanos().saturating_add(1));
                 crate::events::instant_at(state.clock.as_ref(), after)
             })

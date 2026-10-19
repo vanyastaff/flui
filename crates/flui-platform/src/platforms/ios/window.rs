@@ -1190,10 +1190,6 @@ impl PlatformWindow for IOSWindow {
         self.metrics.lock().safe_area
     }
 
-    /// UIKit defers system gestures per screen edge, not per rectangle: the window
-    /// projects the regions, and when the projection changed defers each edge an
-    /// exclusion region reaches (`preferredScreenEdgesDeferringSystemGestures`). A region
-    /// clear of every edge has no UIKit equivalent and defers nothing.
     fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
         let marker = MainThreadMarker::new()?;
         let haptics = self.haptics.get_or_init(|| {
@@ -1204,6 +1200,10 @@ impl PlatformWindow for IOSWindow {
         Some(Arc::clone(haptics) as Arc<dyn crate::traits::PlatformHaptics>)
     }
 
+    /// UIKit defers system gestures per screen edge, not per rectangle: the window
+    /// projects the regions, and when the projection changed defers each edge an
+    /// exclusion region reaches (`preferredScreenEdgesDeferringSystemGestures`). A region
+    /// clear of every edge has no UIKit equivalent and defers nothing.
     fn set_input_regions(&self, regions: &[flui_platform_api::input_regions::InputRegion]) {
         let Some(marker) = MainThreadMarker::new() else {
             return;
