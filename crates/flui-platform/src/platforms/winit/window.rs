@@ -250,6 +250,8 @@ impl WinitWindow {
                 probe.set_maximized_hint(id);
             }
             let _ = self.x11.set((probe, id));
+            // The snapshot made at creation knew nothing of the probe.
+            self.refresh_state();
         }
     }
 
@@ -259,7 +261,6 @@ impl WinitWindow {
         self.x11.get().map(|(_, id)| *id)
     }
 
-    /// The mode the X server and window manager report, if a probe is attached
     /// The mode the X server and window manager report, if a probe is attached
     /// and can say.
     #[cfg_attr(
