@@ -302,3 +302,34 @@ pub(crate) fn unmounting_the_tab_bar_unregisters_it() {
     laid.pump();
     assert!(spec.node_for(&command).is_ok(), "a new bar registers");
 }
+
+/// Replacing the controller under a mounted pager and bar moves both to the
+/// new one: its steps work, the old one's are no longer fulfilled, and the old
+/// controller keeps the tab it had.
+pub(crate) fn replacing_the_controller_moves_the_pager_and_bar_to_the_new_one() {
+    let old = TabController::new(3, 0);
+    let new = TabController::new(3, 2);
+    let mut laid = lay_out(tabs(&old, true), tight(SIZE, SIZE));
+    laid.enable_semantics();
+    laid.pump();
+    invoke_custom_action(&mut laid, "Next tab");
+    assert_eq!(old.index(), 1, "the old controller steps while mounted");
+
+    laid.pump_widget(tabs(&new, true));
+    laid.pump();
+    let (old_spec, old_command) = step(&old, "Next tab");
+    assert_eq!(
+        old_spec.node_for(&old_command),
+        Err(CompanionGap::Unregistered),
+        "the replaced controller has no bar"
+    );
+    let (new_spec, new_command) = step(&new, "Previous tab");
+    assert!(
+        new_spec.node_for(&new_command).is_ok(),
+        "the new controller has the bar"
+    );
+
+    invoke_custom_action(&mut laid, "Previous tab");
+    assert_eq!(new.index(), 1, "the new controller steps");
+    assert_eq!(old.index(), 1, "the old controller is left where it was");
+}

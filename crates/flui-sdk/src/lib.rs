@@ -82,13 +82,11 @@ pub mod platform {
         pub use flui_platform_api::input_capabilities::PointerKindSet;
     }
 
-    /// Haptic patterns, requests and outcomes, and the widget handle that
-    /// takes them (ADR-0210). Unstable: present only under the additive
-    /// `unstable-input` feature.
+    /// Haptic patterns, requests and outcomes (ADR-0210); the widget handle
+    /// that takes them is `interaction::HapticsHandle`, as in the facade.
+    /// Unstable: present only under the additive `unstable-input` feature.
     #[cfg(feature = "unstable-input")]
     pub mod haptics {
-        pub use flui_interaction::HapticObserver;
-        pub use flui_interaction::HapticsHandle;
         pub use flui_platform_api::haptics::ControlPoint;
         pub use flui_platform_api::haptics::HapticCapabilities;
         pub use flui_platform_api::haptics::HapticEvent;
@@ -136,6 +134,10 @@ pub mod interaction {
     pub use flui_interaction::GestureRecognizer;
     pub use flui_interaction::GestureSettings;
     pub use flui_interaction::GestureSettingsProvider;
+    #[cfg(feature = "unstable-input")]
+    pub use flui_interaction::HapticObserver;
+    #[cfg(feature = "unstable-input")]
+    pub use flui_interaction::HapticsHandle;
     pub use flui_interaction::ObserverHandle;
     pub use flui_interaction::PointerDispatch;
     pub use flui_interaction::PointerEvent;
@@ -217,15 +219,10 @@ pub mod painting {
     pub use flui_rendering::semantics::SemanticsRegionKey;
 }
 
-/// Render-object authoring, at the paths `flui::rendering` uses, and the input
-/// regions a render object claims for the application's own input (ADR-0217;
-/// the widget is `widgets::SystemGestureExclusion`).
+/// Render-object authoring, at the paths `flui::rendering` uses.
 pub mod rendering {
     pub use flui_rendering::constraints::BoxConstraints;
     pub use flui_rendering::hit_testing::HitTestBehavior;
-    pub use flui_rendering::input_regions::InputRegion;
-    pub use flui_rendering::input_regions::InputRegionKind;
-    pub use flui_rendering::input_regions::InputRegionSink;
     pub use flui_rendering::protocol::BoxProtocol;
     pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};
 }

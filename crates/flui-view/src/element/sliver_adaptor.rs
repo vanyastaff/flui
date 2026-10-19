@@ -735,14 +735,8 @@ impl<R: LazyMultiBoxRender> ChildManager for SliverAdaptorManager<R> {
                 owner,
             ) {
                 Some(view) => {
-                    self.sparse_children.ensure(
-                        logical_index,
-                        view.as_view(),
-                        host,
-                        tree,
-                        owner,
-                        pipeline,
-                    );
+                    self.sparse_children
+                        .ensure(logical_index, &view, host, tree, owner, pipeline);
                     any_new_build = true;
                 }
                 None => {
