@@ -336,7 +336,8 @@ jobs:
         with:
           cache-bin: false
           cache-on-failure: true
-          # `test-nested` restores this entry: the same TEST_SCOPE build.
+          # The nested jobs keep their own entries: this one is saved from
+          # `test --fast`, which never builds their nested target dirs.
           shared-key: workspace-tests-v2
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -387,7 +388,11 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # Nested cargo tests run in two parallel jobs: generated projects and
   # facade consumers in test-nested, compile-fail suites in test-trybuild.
-  # Both restore the test build cache; neither writes nested build artifacts.
+  # Each keeps its own cache entry, saved on main: the nested builds live in
+  # their own target dirs (target/tests/trybuild, target/cli-template-check,
+  # target/facade-consumer-check), which `test`'s entry never contains, and
+  # rust-cache keeps their dependency artifacts. Restoring `test`'s entry
+  # instead rebuilt every nested dependency on each run.
   test-nested:
     name: test-nested
     needs: [checks, plan]
@@ -407,10 +412,8 @@ jobs:
         with:
           cache-bin: false
           cache-on-failure: true
-          # `test`'s entry: the same TEST_SCOPE build. Restore only, so the
-          # nested-cargo builds add no cache entry of their own.
-          shared-key: workspace-tests-v2
-          save-if: false
+          shared-key: workspace-nested-v1
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
@@ -442,10 +445,8 @@ jobs:
         with:
           cache-bin: false
           cache-on-failure: true
-          # `test`'s entry: the same TEST_SCOPE build. Restore only, so the
-          # nested-cargo builds add no cache entry of their own.
-          shared-key: workspace-tests-v2
-          save-if: false
+          shared-key: workspace-trybuild-v1
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
@@ -803,12 +804,16 @@ jobs:
   # `--all-targets` pass would hide a library that compiles only because a
   # dev-dependency enabled a feature for it.
   #
-  # The per-feature passes run as cargo-hack `--partition k/3` shards: its
+  # The per-feature passes run as cargo-hack `--partition k/5` shards: its
   # command list splits into contiguous blocks, so the shards cover every
   # package and feature exactly once with no hand-kept package lists. That
   # holds only while every shard runs the same cargo-hack, hence the exact
   # version pin. The commands live in `cargo xtask feature-matrix`, so a local
-  # run and CI cannot drift apart.
+  # run and CI cannot drift apart. Five, not three or four: the facade and
+  # the engine sit next to each other in the command list, and with fewer
+  # contiguous blocks one shard takes both (three shards took 11, 22 and
+  # 18 min on main); with five the slowest should take about 15 min, beside
+  # `test`.
   # ─────────────────────────────────────────────────────────────────────────
   feature-matrix:
     name: feature-matrix (${{ matrix.slice }})
@@ -819,7 +824,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        slice: ["1/3", "2/3", "3/3", combinations]
+        slice: ["1/5", "2/5", "3/5", "4/5", "5/5", combinations]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

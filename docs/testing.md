@@ -978,7 +978,7 @@ cargo test -p xtask --locked                                  # xtask's own test
 actionlint                                                    # workflow semantics
 zizmor .                                                      # workflow security audit
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo xtask feature-matrix --slice 1/3                        # feature-matrix job: cargo-hack per-feature clippy, shards 1/3..3/3 (--partition)
+cargo xtask feature-matrix --slice 1/5                        # feature-matrix job: cargo-hack per-feature clippy, shards 1/5..5/5 (--partition)
 cargo xtask feature-matrix --slice combinations               # same job: each facade feature combination built in isolation
 cargo check --workspace --locked --target wasm32-unknown-unknown --exclude ...                   # wasm-capable set — cargo xtask wasm-check
 cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown --exclude ... -- -D warnings  # the only lint pass over the wasm32-only web backend — cargo xtask wasm-check
@@ -1088,7 +1088,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `deps` | `cargo xtask deps` | CI runs `--only policy` and `--only advisories` as two steps, with `--strict` (a missing cargo-deny or cargo-shear fails instead of being skipped); every lane but `docs` runs it; the advisories step blocks on main and on a pull request whose change is workspace-wide or touches `deny.toml`, and only reports on other pull requests, because a new RustSec entry can fail a commit that passed the day before; `advisories.yml` runs the same step against main every day |
 | `doc-test` | `cargo test --workspace --locked --doc` (in `cargo xtask ci`) | — |
 | `miri` | `cargo xtask miri` | nightly + miri |
-| `feature-matrix` | `cargo xtask feature-matrix` (runs `facade-combos` too) | CI runs `--slice 1/3`, `2/3`, `3/3` and `combinations` in parallel; locally it is one run over the workspace |
+| `feature-matrix` | `cargo xtask feature-matrix` (runs `facade-combos` too) | CI runs `--slice 1/5` to `5/5` and `combinations` in parallel; locally it is one run over the workspace |
 | `wasm-check` | `cargo xtask wasm-check`, `cargo xtask wasm-link`, `cargo xtask wasm-test` | `wasm-test` needs the `wasm-bindgen-cli` version `Cargo.lock` pins (`cargo xtask doctor full` names it) |
 | `cross-typecheck` | `cargo xtask cross-typecheck --target <triple>`, then the same command with `--all-features` (omit the filter for every target) | needs Rust target standard libraries and native C tools; see below |
 | `ci` | — | CI only: the single check a ruleset would require. `cargo xtask ci-verify` verifies that every gated job ran and passed, and that the jobs which skipped are exactly those the lane skips |
@@ -1125,8 +1125,13 @@ SDKs for macOS and iOS. These legs run clippy, not native tests or applications;
 OS runtime regressions need local platform evidence.
 
 The aggregator requires each lane's planned jobs to pass and every other job
-to skip. The two nested jobs restore the existing test cache without writing
-additional entries.
+to skip. The two nested jobs keep their own cache entries, saved on main
+beside `test`'s: their builds live in nested target directories
+(`target/tests/trybuild`, `target/cli-template-check`,
+`target/facade-consumer-check`) that `test --fast` never fills, and
+rust-cache keeps their dependency artifacts. `weekly.yml` saves no cache: an
+entry unused for seven days is dropped before the next weekly run would
+restore it.
 
 `cross-typecheck` discovers native cfg predicates in the module trees of every
 workspace Cargo target and in target-specific dependency declarations. It

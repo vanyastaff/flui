@@ -26,6 +26,9 @@ name: Weekly
 # failures surface in the Actions tab. Benchmark numbers are not collected
 # here: shared runners are too noisy for a trend, and A/B comparisons happen
 # locally with `cargo xtask bench-collect <name>` and `critcmp`.
+# No build cache: GitHub drops an entry unused for seven days, so a weekly
+# entry is gone (or evicted by the 10 GB limit) before the next run, and
+# saving it only pushes ci.yml's entries out.
 
 on:
   schedule:
@@ -68,9 +71,6 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
@@ -120,9 +120,6 @@ jobs:
         with:
           components: clippy
 
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
       # `+nightly` on every cargo line: the committed rust-toolchain.toml pin
       # overrides the job's installed default (same as the miri job).
       - name: cargo +nightly check (workspace, all targets)
@@ -166,9 +163,6 @@ jobs:
         with:
           components: clippy
 
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
       - name: cargo clippy --release (workspace, all targets)
         run: cargo clippy --workspace --all-targets --release --locked --keep-going -- -D warnings
 
@@ -190,9 +184,6 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
