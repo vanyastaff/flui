@@ -76,6 +76,7 @@ class FakeCanvas extends EventTarget {
         this.ownerDocument = document;
     }
     getRootNode() { return document; }
+    contains(node) { return node === this; }
     setAttribute() {}
 }
 

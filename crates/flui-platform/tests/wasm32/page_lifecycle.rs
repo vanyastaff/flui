@@ -58,7 +58,14 @@ export function fireOnCanvas(name) {
     return event.defaultPrevented;
 }
 // Some other element of the page (a video, say) is fullscreen.
-export function setForeignFullscreen() { globalThis.document.fullscreenElement = new EventTarget(); }
+export function setForeignFullscreen() {
+    globalThis.document.fullscreenElement = Object.assign(new EventTarget(), { contains: () => false });
+}
+// The page's own container of the canvas is fullscreen, as in an app that wraps the canvas.
+export function setContainerFullscreen() {
+    const canvas = canvases[canvases.length - 1];
+    globalThis.document.fullscreenElement = Object.assign(new EventTarget(), { contains: node => node === canvas });
+}
 export function setFullscreen(on) {
     globalThis.document.fullscreenElement = on ? canvases[canvases.length - 1] : null;
 }
@@ -78,6 +85,8 @@ extern "C" {
     fn fire_on_canvas(name: &str) -> bool;
     #[wasm_bindgen(js_name = setForeignFullscreen)]
     fn set_foreign_fullscreen();
+    #[wasm_bindgen(js_name = setContainerFullscreen)]
+    fn set_container_fullscreen();
     #[wasm_bindgen(js_name = setFullscreen)]
     fn set_fullscreen(on: bool);
 }
@@ -217,6 +226,12 @@ async fn web_fullscreenchange_republishes_the_window_state() {
     fire_document("fullscreenchange");
     assert_eq!(window.state().mode, WindowMode::Normal);
     assert_eq!(seen.lock().unwrap().len(), 2);
+
+    // A container of the canvas going fullscreen takes the canvas with it.
+    set_container_fullscreen();
+    fire_document("fullscreenchange");
+    assert_eq!(window.state().mode, WindowMode::Fullscreen);
+    assert_eq!(seen.lock().unwrap().len(), 3);
     running.quit();
     settle().await;
 }

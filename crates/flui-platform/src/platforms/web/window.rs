@@ -88,12 +88,13 @@ fn sample_state(
             state.visible,
         )
     };
-    // Only the canvas itself: another element of the page (a video) can be
-    // fullscreen while this window is not.
+    // The canvas, or an element that holds it: another element of the page (a
+    // video) can be fullscreen while this window is not, and an application
+    // that wraps the canvas in a container makes that container fullscreen.
     let fullscreen = canvas.owner_document().is_some_and(|document| {
         document
             .fullscreen_element()
-            .is_some_and(|element| &element == AsRef::<web_sys::Element>::as_ref(canvas))
+            .is_some_and(|element| element.contains(Some(canvas)))
     });
     WindowState::new(WindowGeometry::new(None, size), size)
         .with_mode(if fullscreen {
