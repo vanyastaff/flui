@@ -14,6 +14,7 @@
 //! - The trait is dyn-compatible (no generics, no `async` in methods).
 
 use flui_foundation::geometry::Rect;
+use flui_foundation::memory::MemoryPressureLevel;
 use flui_layer::Scene;
 
 use crate::error::EngineError;
@@ -186,6 +187,16 @@ pub trait RasterBackend: Send {
     fn set_pre_present_hook(&mut self, hook: Option<PrePresentHook>) {
         drop(hook);
     }
+
+    /// Give back GPU memory the next frames can rebuild.
+    ///
+    /// The raster owner calls this on its own thread, between frames, when a
+    /// [`RasterHandle`](crate::RasterHandle) was asked to trim. Default:
+    /// ignored; a backend that holds no GPU memory (scripted doubles) has
+    /// nothing to give back.
+    fn reclaim(&mut self, level: MemoryPressureLevel) {
+        let _ = level;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +227,10 @@ impl RasterBackend for crate::Renderer {
 
     fn mark_full_repaint(&mut self) {
         self.mark_full_repaint();
+    }
+
+    fn reclaim(&mut self, level: MemoryPressureLevel) {
+        self.reclaim(level);
     }
 
     fn apply_texture_updates(

@@ -218,6 +218,10 @@ impl WebPlatform {
 }
 
 impl Platform for WebPlatform {
+    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        super::window::window_capabilities()
+    }
+
     fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
         if !self.signal.accepting() {
             return Err(PlatformError::Preferences {

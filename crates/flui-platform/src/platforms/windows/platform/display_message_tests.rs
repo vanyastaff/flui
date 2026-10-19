@@ -117,10 +117,7 @@ fn dpi_change_invalidates_the_snapshot() {
     };
     let platform = WindowsPlatform::new().expect("native platform");
     let window = platform
-        .open_window(WindowOptions {
-            visible: false,
-            ..Default::default()
-        })
+        .open_window(WindowOptions::default().with_visible(false))
         .expect("hidden window");
     let hwnd = window
         .as_any()

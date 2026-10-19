@@ -723,11 +723,19 @@ fn round_trip(records: &[InputRecord]) -> Vec<InputRecord> {
 /// Variants a recording never carries, and why: the tap leaves them out and the
 /// writer refuses them as unmirrored rather than writing a row a replay could
 /// not honour.
-const NOT_RECORDED: &[(&str, &str, &str)] = &[(
-    "WindowObservation",
-    "Display",
-    "its DisplayId names a display of the recording host's platform instance (ADR-0236 §3)",
-)];
+const NOT_RECORDED: &[(&str, &str, &str)] = &[
+    (
+        "WindowObservation",
+        "Display",
+        "its DisplayId names a display of the recording host's platform instance (ADR-0236 §3)",
+    ),
+    (
+        "WindowObservation",
+        "State",
+        "it carries nothing: the owner reads the recording host's live window, and the tap \
+         records the move it caused instead",
+    ),
+];
 
 /// A sample of each variant in [`NOT_RECORDED`].
 fn unrecorded_sample(enumeration: &str, variant: &str) -> Option<InputRecord> {
@@ -742,6 +750,7 @@ fn unrecorded_sample(enumeration: &str, variant: &str) -> Option<InputRecord> {
                 )),
             )))
         }
+        ("WindowObservation", "State") => Some(window(WindowObservation::State)),
         _ => None,
     }
 }

@@ -77,7 +77,6 @@ mod view;
 mod wake_pump;
 mod window;
 mod window_ext;
-mod window_manager;
 mod window_tiling;
 
 #[cfg(feature = "a11y")]
@@ -87,9 +86,6 @@ pub use liquid_glass::{BlendingMode, LiquidGlassConfig, LiquidGlassMaterial};
 pub use platform::MacOSPlatform;
 pub use window::MacOSWindow;
 pub use window_ext::{MacOSCollectionBehavior, MacOSWindowExt, MacOSWindowLevel};
-pub use window_manager::{
-    GroupId, SharedWindowManager, WindowId, WindowInfo, WindowLevel, WindowManager, WindowOptions,
-};
 pub use window_tiling::{
     TilePosition, TilingConfiguration, TilingError, TilingLayout, TilingState,
 };

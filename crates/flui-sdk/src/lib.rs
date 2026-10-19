@@ -55,15 +55,23 @@ pub mod view {
 }
 
 /// Platform values: brightness, locale, haptic feedback kinds, the host's
-/// system preferences (its haptics setting among them) and the target
-/// platform (the one a gesture preset models).
+/// system preferences (its haptics setting among them), the target platform
+/// (the one a gesture preset models), the window's state and mode, and the
+/// system notices the host delivers.
 pub mod platform {
     pub use flui_platform_api::Brightness;
     pub use flui_platform_api::HapticFeedback;
+    pub use flui_platform_api::HostNotice;
     pub use flui_platform_api::InvalidLocale;
     pub use flui_platform_api::Locale;
+    pub use flui_platform_api::MemoryPressureLevel;
+    pub use flui_platform_api::SessionEndBlock;
+    pub use flui_platform_api::SessionEndRequest;
     pub use flui_platform_api::SystemPreferences;
     pub use flui_platform_api::TargetPlatform;
+    pub use flui_platform_api::WindowCommandError;
+    pub use flui_platform_api::WindowMode;
+    pub use flui_platform_api::WindowState;
 
     /// Handle-less input capabilities (ADR-0213). Unstable: present only
     /// under the additive `unstable-input` feature.

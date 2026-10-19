@@ -30,6 +30,7 @@ pub(crate) const VARIANTS: &[(&str, &str)] = &[
     ("WindowObservation", "SafeArea"),
     ("WindowObservation", "Brightness"),
     ("WindowObservation", "Display"),
+    ("WindowObservation", "State"),
     ("PlatformInput", "Pointer"),
     ("PlatformInput", "Keyboard"),
     ("PlatformInput", "Ime"),

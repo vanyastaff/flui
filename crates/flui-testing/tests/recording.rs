@@ -165,6 +165,44 @@ fn a_scale_change_mid_recording_replays_to_the_same_decisions() {
     );
 }
 
+/// A window moving reaches the runtime as a payload-free state change (ADR-0237
+/// §2), which names this host's live window and is not recorded: the row is the
+/// `Moved` it caused, once per move, and a state change that moved nothing is
+/// no row at all.
+#[test]
+fn a_move_through_the_window_state_records_the_move() {
+    use flui_runtime::{HostInput, owner::WindowObservation};
+
+    let registry = flui_platform_api::DisplayRegistry::new();
+    let display = registry
+        .mint(&flui_platform_api::DisplayKey::Injected(1))
+        .expect("display id");
+    let (bytes, _) = recorded(Privacy::Redact, |host| {
+        let window = host.primary_window();
+        host.move_to_display(window, Some(display));
+        host.move_to_display(window, None);
+    });
+    let observations: Vec<_> = replayable(&bytes)
+        .expect("a whole recording")
+        .rows()
+        .iter()
+        .filter_map(|row| match row {
+            InputRecord::Input(row) => match &row.input {
+                HostInput::Window(observation) => Some(*observation),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert!(
+        matches!(
+            observations[..],
+            [WindowObservation::Moved, WindowObservation::Moved]
+        ),
+        "each move is one Moved row and no State row: {observations:?}"
+    );
+}
+
 /// A window recorded at a scale other than the replaying host's is moved to
 /// that scale before the first row, as the header says it started.
 #[test]

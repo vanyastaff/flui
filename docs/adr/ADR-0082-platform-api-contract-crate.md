@@ -77,7 +77,7 @@ keep:
   `window.rs:679-683`) and returns `PlatformAccessibility`, which speaks AccessKit
   (`window.rs:263-265`).
 - A second, older window family (`Window`, `WindowManager`, `WindowBuilder`, a crate-local
-  `RawWindowHandle` enum, `crates/flui-platform/src/window.rs:53,265,340,452`) exposes
+  `RawWindowHandle` enum, in a module since removed by ADR-0237) exposes
   `fn raw_window_handle(&self) -> RawWindowHandle` (`window.rs:196`). Nothing outside the crate
   uses it; neither `PlatformEmbedder` (retired by the adopted §5 subset), `PlatformCapabilities`
   (then in `traits/capabilities.rs`, returned by `Platform::capabilities`; removed by ADR-0213),

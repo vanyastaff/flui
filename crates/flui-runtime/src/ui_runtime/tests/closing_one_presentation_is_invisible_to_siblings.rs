@@ -525,6 +525,18 @@ impl flui_platform_api::PlatformWindow for OwnershipWindow {
         }
         self.delegate.set_cursor(cursor)
     }
+    fn state(&self) -> flui_platform_api::WindowState {
+        self.delegate.state()
+    }
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        self.delegate.capabilities()
+    }
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        self.delegate.apply(command)
+    }
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

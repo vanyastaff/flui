@@ -561,11 +561,11 @@ mod tests {
     fn a_window_without_a_haptic_pen_in_range_reports_unavailable() {
         let platform = WindowsPlatform::new().expect("platform");
         let window = platform
-            .open_window(WindowOptions {
-                title: "flui haptics".into(),
-                size: Size::new(160.0, 120.0),
-                ..Default::default()
-            })
+            .open_window(
+                WindowOptions::default()
+                    .with_title("flui haptics")
+                    .with_size(Size::new(160.0, 120.0)),
+            )
             .expect("window");
         let haptics = window.haptics().expect("a Win32 window has an actuator");
         assert_unavailable(haptics.as_ref(), "with no pen in range");

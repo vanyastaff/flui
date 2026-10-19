@@ -30,6 +30,16 @@ impl OwnerCallback<'_> {
 }
 
 impl OwnerHost {
+    /// Whether an owner callback is running, or the host's state is borrowed.
+    /// Work that must not run inside user code waits for an idle host.
+    #[must_use]
+    pub fn in_callback(&self) -> bool {
+        self.core
+            .state
+            .try_borrow()
+            .map_or(true, |state| state.callback_depth > 0)
+    }
+
     /// Group native roots and nested callbacks into one finite opportunity.
     ///
     /// # Errors

@@ -54,10 +54,11 @@ impl Drop for InstallRollback {
 /// bare `open_secondary_window` convert `AppConfig` directly and reveal at
 /// open, because nothing in them would ever perform the reveal.
 pub(super) fn rendered_window_options(config: &AppConfig) -> flui_platform::WindowOptions {
-    flui_platform::WindowOptions {
-        reveal: flui_platform::WindowReveal::AfterFirstFrame,
-        ..config.into()
-    }
+    let mut options = flui_platform::WindowOptions::from(config)
+        .with_reveal(flui_platform::WindowReveal::AfterFirstFrame);
+    // Read before the window opens, so its first reveal is already in place.
+    super::placement::restore(&mut options, config);
+    options
 }
 
 pub(super) fn install_desktop_window<V>(
@@ -232,6 +233,8 @@ where
         .with_textures(textures),
     ));
 
+    super::host::track_raster_lane(lane.lock().reclaim_handle());
+
     // 5. Register input callback -> entered ui_runtime input dispatch
     install_input_wiring(owner_dispatch, window.as_ref());
 
@@ -295,8 +298,10 @@ where
     // `Platform::run` actually returns, for the clipboard/redraw-window
     // cleanup no per-window close performs.
     let closing_window_id = window.id();
+    super::placement::keep(config, owner_dispatch.address);
     installation.on_close(move || {
         tracing::info!("Window closed");
+        super::placement::finish(owner_dispatch.address);
         super::main_window::main_window_closing(owner_dispatch.address);
         let closed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             close_this_window(owner_dispatch);
@@ -365,14 +370,9 @@ where
             RuntimeTask::Event(RuntimeEvent::WindowHover(is_hovered)),
         );
     }));
-    window.on_moved(Box::new(move || {
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::WindowMoved),
-        );
-    }));
     installation.observe_appearance();
     installation.observe_display();
+    installation.observe_window_state();
     // Seed the initial size and device-pixel ratio the same way: the
     // source must not sit on defaults until the first live resize —
     // on the web backend no resize observer exists, so a default
@@ -472,6 +472,9 @@ impl DesktopWakeDeadlines {
             ),
             self.first_reveal.next_deadline(),
         );
+        // A window placement held back by the write throttle is written when
+        // its interval is over (`wake` ticks the recorders first thing).
+        let deadline = merge_wake_deadlines(deadline, super::placement::next_due());
         desktop_secondary_wake_deadline(deadline, frames_enabled)
     }
 }
@@ -493,6 +496,9 @@ impl DesktopFrameDriver {
         ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
         presentation: flui_foundation::PresentationId,
     ) {
+        // Before the gate, so a wake that only came for a held placement write
+        // does it even when no frame is due.
+        super::placement::tick();
         let lane_frame = &self.lane;
         let worker_reload_frame = &self.worker_reload;
         let device_recovery_backoff = &self.deadlines.device_recovery_backoff;

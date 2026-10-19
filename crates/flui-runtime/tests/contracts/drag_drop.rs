@@ -318,7 +318,7 @@ fn side_by_side(first: &ReceiverAnchor, second: &ReceiverAnchor) -> World {
         .with_os_drag(OsDragStart::OnLeavingWindow)
         .with_window_placement();
     let world = world_on(platform, first, second);
-    headless(&world.second).simulate_move(SECOND_AT, 0.0);
+    headless(&world.second).simulate_move(Point::new(SECOND_AT, 0.0));
     world
 }
 
@@ -567,7 +567,7 @@ fn a_drag_between_runtimes_delivers_serialized_representations_only() {
     let source_dispatch = publish(&owner, source, &[(&window_a, source_presentation)]);
 
     let (window_b, presentation_b) = open(&platform);
-    headless(&window_b).simulate_move(SECOND_AT, 0.0);
+    headless(&window_b).simulate_move(Point::new(SECOND_AT, 0.0));
     let mut target = runtime_over(&platform, presentation_b, nonce());
     let target_presentation = target.presentation_id();
     mount(&mut target, target_presentation, &target_root);

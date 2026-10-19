@@ -3,9 +3,7 @@
     clippy::arc_with_non_send_sync,
     reason = "WidgetsBinding observers are owner-local Arc capabilities"
 )]
-use flui_view::{
-    AppExitResponse, AppLifecycleState, RouteInformation, WidgetsBinding, WidgetsBindingObserver,
-};
+use flui_view::{AppLifecycleState, RouteInformation, WidgetsBinding, WidgetsBindingObserver};
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;
@@ -18,15 +16,15 @@ use std::task::{Context, Poll, Waker};
 #[derive(Default)]
 struct Healthy {
     metrics: Cell<usize>,
-    memory: Cell<usize>,
+    accessibility: Cell<usize>,
     lifecycle: Cell<usize>,
 }
 impl WidgetsBindingObserver for Healthy {
     fn did_change_metrics(&self) {
         self.metrics.set(self.metrics.get() + 1);
     }
-    fn did_have_memory_pressure(&self) {
-        self.memory.set(self.memory.get() + 1);
+    fn did_change_accessibility_features(&self) {
+        self.accessibility.set(self.accessibility.get() + 1);
     }
     fn did_change_app_lifecycle_state(&self, _: AppLifecycleState) {
         self.lifecycle.set(self.lifecycle.get() + 1);
@@ -111,7 +109,7 @@ impl Drop for Observer {
             self.binding
                 .upgrade()
                 .expect("snapshot retirement binding alive")
-                .handle_memory_pressure();
+                .handle_accessibility_features_changed();
         }
         assert!(!self.fail_drop, "{}", self.name);
     }
@@ -136,14 +134,6 @@ impl WidgetsBindingObserver for Observer {
         _: &RouteInformation,
     ) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
         self.did_pop_route()
-    }
-    fn did_request_app_exit(&self) -> Pin<Box<dyn Future<Output = AppExitResponse> + Send + '_>> {
-        self.notify();
-        Box::pin(ResponseFuture {
-            pending: self.pending,
-            value: Some(AppExitResponse::Exit),
-            state: Arc::clone(&self.future_state),
-        })
     }
 }
 
@@ -265,19 +255,6 @@ pub(crate) fn dispatch_child(case: &str) {
                 ) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
                     self.did_pop_route()
                 }
-                fn did_request_app_exit(
-                    &self,
-                ) -> Pin<Box<dyn Future<Output = AppExitResponse> + Send + '_>> {
-                    self.calls.set(self.calls.get() + 1);
-                    let cancel = self.handled;
-                    Box::pin(async move {
-                        if cancel {
-                            AppExitResponse::Cancel
-                        } else {
-                            AppExitResponse::Exit
-                        }
-                    })
-                }
             }
             let binding = WidgetsBinding::new();
             let calls = [Rc::new(Cell::new(0)), Rc::new(Cell::new(0))];
@@ -293,11 +270,6 @@ pub(crate) fn dispatch_child(case: &str) {
                 binding.handle_push_route(&RouteInformation::new("/ready"))
             ));
             assert_eq!(counts(&calls), [2, 0]);
-            assert_eq!(
-                ready(binding.handle_request_app_exit()),
-                AppExitResponse::Cancel
-            );
-            assert_eq!(counts(&calls), [3, 1], "exit still asks every observer");
         }
         "physical-healthy" | "physical-a" | "physical-b" | "physical-pair"
         | "physical-incoming" => {
@@ -389,7 +361,7 @@ pub(crate) fn dispatch_child(case: &str) {
                 }
                 assert_eq!(counts(&f.calls), [1, 1]);
                 assert_eq!(
-                    f.replacement.memory.get(),
+                    f.replacement.accessibility.get(),
                     1,
                     "destructor reentry reaches new registry"
                 );
@@ -506,7 +478,6 @@ pub(crate) fn dispatch_child(case: &str) {
             let failure = match parts[1] {
                 "pop" => cancel(f.binding.handle_pop_route(), incoming),
                 "push" => cancel(f.binding.handle_push_route(&route), incoming),
-                "exit" => cancel(f.binding.handle_request_app_exit(), incoming),
                 _ => panic!("unknown async producer"),
             };
             let retired = counts(&f.drops);
@@ -613,14 +584,6 @@ pub(crate) fn binding_observer_ownership_and_notifications() {
         "async-push-future",
         "async-push-future-pair",
         "async-push-future-incoming",
-        "async-exit-healthy",
-        "async-exit-a",
-        "async-exit-b",
-        "async-exit-pair",
-        "async-exit-incoming",
-        "async-exit-future",
-        "async-exit-future-pair",
-        "async-exit-future-incoming",
     ];
     let selected = std::env::var("FLUI_BINDING_OBSERVER_RETIREMENT_CONTROL").ok();
     if let Some(selected) = &selected {

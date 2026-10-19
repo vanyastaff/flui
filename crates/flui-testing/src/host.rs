@@ -83,6 +83,9 @@ pub struct HeadlessWindow {
     text_store_host: bool,
     gesture_preset: flui_interaction::GestureProfiles,
     display: Mutex<Option<DisplayId>>,
+    /// The revision of the state [`PlatformWindow::state`] reports: advanced by
+    /// every change this double makes to it.
+    revision: Mutex<flui_platform_api::WindowRevision>,
     input_regions: Mutex<ProjectedInputRegions>,
     input_region_updates: Mutex<Vec<Vec<DeviceInputRegion>>>,
     haptics: Arc<flui_platform_api::haptics::FakeHaptics>,
@@ -111,6 +114,7 @@ impl HeadlessWindow {
             text_store_host: false,
             gesture_preset: flui_interaction::GestureSettings::default().into(),
             display: Mutex::new(None),
+            revision: Mutex::new(flui_platform_api::WindowRevision::ZERO),
             input_regions: Mutex::default(),
             input_region_updates: Mutex::default(),
             haptics: Arc::new(flui_platform_api::haptics::FakeHaptics::new()),
@@ -275,6 +279,32 @@ impl PlatformWindow for HeadlessWindow {
         if let Some(sent) = sent {
             self.input_region_updates.lock().push(sent);
         }
+    }
+
+    /// No position (as on Wayland), the display it was
+    /// [moved to](HeadlessHost::move_to_display), and a revision each move
+    /// advances.
+    fn state(&self) -> flui_platform_api::WindowState {
+        let size = self.logical_size();
+        let mut state = flui_platform_api::WindowState::new(
+            flui_platform_api::WindowGeometry::new(None, size),
+            size,
+        )
+        .with_display(*self.display.lock());
+        state.revision = *self.revision.lock();
+        state
+    }
+
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        Ok(())
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -610,6 +640,7 @@ impl HeadlessHost {
             host,
         )
         .expect("BUG: interaction lane identity exhausted");
+        install_window_control(&ui_runtime, ui_runtime.presentation_id(), &window);
         let failures = Arc::new(Mutex::new(Vec::new()));
         ui_runtime.set_frame_failure_detail(FrameFailureDetail::Verbatim);
         let recorded = Arc::clone(&failures);
@@ -959,6 +990,7 @@ impl HeadlessHost {
             .with_gesture_profiles(gesture_preset),
         );
         let id = self.ui_runtime.install_presentation(presentation);
+        install_window_control(&self.ui_runtime, id, &window);
         self.secondary.push(SecondaryWindow {
             text_store_host,
             id,
@@ -1028,15 +1060,25 @@ impl HeadlessHost {
     }
 
     /// Move `window` to the display `display` (`None`: the backend can name none) at its
-    /// current scale, as a runner delivers the platform's move: the window reports the
-    /// new display, and the UI runtime hears that it moved.
+    /// current scale, as a runner delivers the platform's move: the window publishes a
+    /// state on the new display, and the UI runtime reads it when the runner reports
+    /// that the state changed. A move to the display the window is on publishes
+    /// nothing.
     ///
     /// # Panics
     ///
     /// If `window` was not opened by this host.
     pub fn move_to_display(&mut self, window: HeadlessWindowId, display: Option<DisplayId>) {
-        *self.window_of(window).display.lock() = display;
-        self.observe(window.0, flui_runtime::owner::WindowObservation::Moved);
+        let native = self.window_of(window);
+        if std::mem::replace(&mut *native.display.lock(), display) == display {
+            return;
+        }
+        let mut revision = native.revision.lock();
+        *revision = revision
+            .next()
+            .expect("BUG: a test moves a window far fewer than u64::MAX times");
+        drop(revision);
+        self.observe(window.0, flui_runtime::owner::WindowObservation::State);
     }
 
     /// The accessibility tree `window` last published to its platform
@@ -1453,6 +1495,45 @@ pub struct NotSettled {
 /// [opened](HeadlessHost::open_window).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HeadlessWindowId(PresentationId);
+
+/// The host's control of a [`HeadlessWindow`], behind the `WindowHandle` its
+/// widgets reach through `LifecycleContext::window`, as a runner installs one
+/// for each window it opens. The double honours no window command.
+struct HeadlessWindowControl(Arc<HeadlessWindow>);
+
+impl flui_platform_api::WindowControl for HeadlessWindowControl {
+    fn state(&self) -> flui_platform_api::WindowState {
+        self.0.state()
+    }
+
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+
+    fn submit(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        Ok(())
+    }
+
+    fn request_close(&self) {}
+}
+
+/// Attach the host's control of `window` to `presentation`, before its root
+/// widget is attached.
+fn install_window_control(
+    ui_runtime: &UiRuntime,
+    presentation: PresentationId,
+    window: &Arc<HeadlessWindow>,
+) {
+    let source = flui_view::__runtime::WindowSource::new(HeadlessWindowControl(Arc::clone(window)));
+    assert!(
+        ui_runtime.install_window(presentation, source),
+        "BUG: the window's presentation was just installed"
+    );
+}
 
 /// A window [`HeadlessHost::open_window`] installed beside the primary one.
 struct SecondaryWindow {

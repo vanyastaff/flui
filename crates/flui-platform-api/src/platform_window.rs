@@ -9,13 +9,13 @@
 use std::{any::Any, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Point, Size};
 
 use crate::keyboard::Modifiers;
 use crate::{
     CursorError, DispatchEventResult, DisplayId, PlatformHaptics, PlatformInput, PlatformTextInput,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowExecutionState, WindowId,
-    WindowShowError,
+    WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
+    WindowCommandError, WindowExecutionState, WindowId, WindowShowError, WindowState,
 };
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -94,7 +94,10 @@ pub enum WindowAt {
 /// ```
 /// use std::any::Any;
 ///
-/// use flui_platform_api::{CursorError, CursorIcon, PlatformWindow, WindowId, WindowShowError};
+/// use flui_platform_api::{
+///     CursorError, CursorIcon, PlatformWindow, WindowCapabilities, WindowCommand,
+///     WindowCommandError, WindowGeometry, WindowId, WindowShowError, WindowState,
+/// };
 /// use flui_foundation::geometry::{DeviceSize, Size};
 ///
 /// struct Offscreen;
@@ -118,6 +121,16 @@ pub enum WindowAt {
 ///     }
 ///     fn is_visible(&self) -> bool {
 ///         false
+///     }
+///     fn state(&self) -> WindowState {
+///         WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
+///     }
+///     fn capabilities(&self) -> WindowCapabilities {
+///         WindowCapabilities::NONE
+///     }
+///     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+///         command.admit(&WindowCapabilities::NONE)?;
+///         Ok(())
 ///     }
 ///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
 ///         Err(CursorError::Unsupported)
@@ -138,7 +151,10 @@ pub enum WindowAt {
 /// ```compile_fail,E0407
 /// use std::any::Any;
 ///
-/// use flui_platform_api::{CursorError, CursorIcon, PlatformWindow, WindowId, WindowShowError};
+/// use flui_platform_api::{
+///     CursorError, CursorIcon, PlatformWindow, WindowCapabilities, WindowCommand,
+///     WindowCommandError, WindowGeometry, WindowId, WindowShowError, WindowState,
+/// };
 /// use flui_foundation::geometry::{DeviceSize, Size};
 ///
 /// struct Offscreen;
@@ -162,6 +178,16 @@ pub enum WindowAt {
 ///     }
 ///     fn is_visible(&self) -> bool {
 ///         false
+///     }
+///     fn state(&self) -> WindowState {
+///         WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
+///     }
+///     fn capabilities(&self) -> WindowCapabilities {
+///         WindowCapabilities::NONE
+///     }
+///     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+///         command.admit(&WindowCapabilities::NONE)?;
+///         Ok(())
 ///     }
 ///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
 ///         Err(CursorError::Unsupported)
@@ -284,32 +310,52 @@ pub trait PlatformWindow: Send + Sync {
     /// Check if window is visible
     fn is_visible(&self) -> bool;
 
+    // ==================== State and commands (ADR-0237) ====================
+
+    /// The window's state as the operating system reports it now.
+    ///
+    /// An immutable snapshot with a [`WindowRevision`](crate::WindowRevision):
+    /// the revision grows when something differs from the previous call and
+    /// stays when nothing does. The snapshot describes what the OS did, not
+    /// what a command asked for. Call it on the owner thread.
+    ///
+    /// Required, with no default: a window that cannot publish a state of its
+    /// own says so with a snapshot built from what it knows, not by inheriting
+    /// one that would never change.
+    fn state(&self) -> WindowState;
+
+    /// Which [`WindowCommand`]s [`apply`](Self::apply) carries out.
+    ///
+    /// Required: a window states what it honours instead of inheriting a
+    /// claim.
+    fn capabilities(&self) -> WindowCapabilities;
+
+    /// Request a change to the window.
+    ///
+    /// Accepted means requested: the outcome is visible only in the next
+    /// [`state`](Self::state), because the OS may clamp, delay or refuse it.
+    /// Call it on the owner thread. An implementation begins with
+    /// [`WindowCommand::admit`] against its own
+    /// [`capabilities`](Self::capabilities), so it refuses with
+    /// [`WindowCommandError::Unsupported`] exactly when a capability is
+    /// `false`, and with [`WindowCommandError::InvalidGeometry`] before the OS
+    /// is called.
+    ///
+    /// # Errors
+    /// [`WindowCommandError`].
+    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError>;
+
+    /// Register a callback meaning "[`state`](Self::state) may answer
+    /// differently now".
+    ///
+    /// Called on the owner thread after a new snapshot was published, outside
+    /// any lock the window holds. The callback carries no payload: it re-reads
+    /// `state()` and compares revisions.
+    fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        let _ = callback;
+    }
+
     // ==================== Query Methods (US2) ====================
-
-    /// Get the window bounds (position + size) in logical pixels
-    fn bounds(&self) -> Bounds<f64> {
-        Bounds::default()
-    }
-
-    /// Get the content (client area) size in logical pixels
-    fn content_size(&self) -> Size<f64> {
-        self.logical_size()
-    }
-
-    /// Get the window bounds state (windowed, maximized, or fullscreen)
-    fn window_bounds(&self) -> WindowBounds {
-        WindowBounds::Windowed(self.bounds())
-    }
-
-    /// Check if window is maximized
-    fn is_maximized(&self) -> bool {
-        false
-    }
-
-    /// Check if window is in fullscreen mode
-    fn is_fullscreen(&self) -> bool {
-        false
-    }
 
     /// Check if window is the active (foreground) window
     fn is_active(&self) -> bool {
@@ -409,10 +455,10 @@ pub trait PlatformWindow: Send + Sync {
     ///
     /// A scale change or a move to another display need not composite a frame, so the
     /// framework also re-sends the last set when the presentation's pixel ratio changes
-    /// and when the host reports that the window moved (`WindowObservation::Moved` in
-    /// `flui-runtime`). A backend whose window can change displays at an equal scale must
-    /// deliver that observation, or the OS keeps the previous display's projection until
-    /// the next composited frame.
+    /// when a published [`state`](Self::state) puts the window somewhere else: another
+    /// position, display or frame. A backend whose window can change displays at an equal
+    /// scale must publish that state and raise [`on_state_changed`](Self::on_state_changed),
+    /// or the OS keeps the previous display's projection until the next composited frame.
     ///
     /// A backend whose OS honours no input region keeps this default, which ignores the set,
     /// and reports [`InputCapabilities::input_regions`](crate::input_capabilities::InputCapabilities::input_regions)
@@ -421,17 +467,7 @@ pub trait PlatformWindow: Send + Sync {
         let _ = regions;
     }
 
-    /// Get the window title
-    fn get_title(&self) -> String {
-        String::new()
-    }
-
     // ==================== Control Methods (US2) ====================
-
-    /// Set the window title
-    fn set_title(&self, title: &str) {
-        let _ = title;
-    }
 
     /// Show this window, unminimizing it and requesting foreground focus.
     /// Preserves maximized/fullscreen mode and the existing widget tree.
@@ -463,23 +499,6 @@ pub trait PlatformWindow: Send + Sync {
 
     /// Activate (bring to front / focus) the window.
     fn activate(&self) {}
-
-    /// Minimize the window
-    fn minimize(&self) {}
-
-    /// Maximize the window
-    fn maximize(&self) {}
-
-    /// Restore the window from minimized or maximized state
-    fn restore(&self) {}
-
-    /// Toggle fullscreen mode
-    fn toggle_fullscreen(&self) {}
-
-    /// Resize the window to the given logical size
-    fn resize(&self, size: Size<f64>) {
-        let _ = size;
-    }
 
     /// Close and destroy the window — a decision already made, not a
     /// request.
@@ -567,11 +586,6 @@ pub trait PlatformWindow: Send + Sync {
     ///
     /// Called with the new logical size and current scale factor.
     fn on_resize(&self, callback: Box<dyn FnMut(Size<f64>, f64) + Send>) {
-        let _ = callback;
-    }
-
-    /// Register a callback for window move events
-    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
         let _ = callback;
     }
 

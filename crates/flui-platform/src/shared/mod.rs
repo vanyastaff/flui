@@ -73,6 +73,8 @@ pub(crate) mod owner_signal;
 pub(crate) mod owner_slot;
 #[cfg(any(target_os = "android", target_os = "macos", test))]
 pub(crate) mod preference_read;
+pub(crate) mod system_notice;
+pub(crate) mod window_state;
 // Rule module; consumer: the Win32 backend.
 #[doc(hidden)]
 pub mod hwnd_affinity;

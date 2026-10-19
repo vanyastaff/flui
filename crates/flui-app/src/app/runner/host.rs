@@ -88,6 +88,17 @@ pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
     // Always installed, `None` included: a run without storage must not
     // inherit the previous run's on this thread.
     APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(dirs));
+    // The run's receivers replace the last run's, for the same reason.
+    let memory = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().host_memory));
+    memory.replace_receivers(config.memory_reclaimers.0.clone());
+}
+
+/// Have the host trim the GPU memory behind a new raster lane on a
+/// memory-pressure notice, for as long as the lane exists.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn track_raster_lane(lane: flui_engine::RasterHandle) {
+    let memory = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().host_memory));
+    memory.track_raster_lane(lane);
 }
 
 /// Shared host services cannot depend on a desktop window-request error.
@@ -290,11 +301,127 @@ pub(super) fn build_ui_runtime(
     if let Some(preferences) = preferences {
         host = host.with_preferences(preferences);
     }
-    Ok(crate::app::ui_runtime::UiRuntime::new(
-        window,
-        scale_factor,
-        host,
-    )?)
+    let native = Arc::clone(window.window());
+    let ui_runtime = crate::app::ui_runtime::UiRuntime::new(window, scale_factor, host)?;
+    attach_window_control(&ui_runtime, &native);
+    Ok(ui_runtime)
+}
+
+/// Answer one phase of the user's session ending (ADR-0237).
+///
+/// A query becomes one [`flui_platform::HostNotice::SessionEnding`] for every
+/// presentation, all sharing one request: the answer is `Block` while any
+/// subscriber holds a block on it. The request is kept until the session end is
+/// cancelled or happens, so the blocks outlive the query. Cancelling and ending
+/// are notices to the same subscribers and release what is still held.
+///
+/// The query is answered only after every subscriber has run. When a runtime's
+/// turn is busy (a session end arriving from inside another callback) its
+/// subscribers cannot run yet, so no block could be known: the answer is
+/// `Proceed`, with a diagnostic, rather than a `Proceed` that looks like "nobody
+/// objects". Either way the request's book closes with the answer, so a block
+/// taken afterwards is refused instead of silently too late.
+///
+/// When the last block is later released, the platform is told
+/// (`Platform::release_session_end`) so it can let the session go on.
+fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::SessionEndAnswer {
+    use flui_platform::{HostNotice, SessionEndAnswer, SessionEndPhase, SessionEndRequest};
+
+    match phase {
+        SessionEndPhase::Query => {
+            let request = SessionEndRequest::new().on_release(|| {
+                // The platform is told the application is done with the
+                // session end it asked to wait for.
+                let _ = with_owner_platform(flui_platform::OwnerPlatform::release_session_end);
+            });
+            let displaced = APP_RUNTIME.with(|slot| {
+                slot.try_borrow_mut()
+                    .ok()
+                    .and_then(|mut state| state.session_end.replace(request.clone()))
+            });
+            drop(displaced);
+            // A subscriber that panics still gets the platform its answer, and
+            // the book still closes: the panic is contained here, a native
+            // callback boundary, and reported.
+            let delivery = deliver_contained(&HostNotice::SessionEnding(request.clone()));
+            let answer = request.answer();
+            match delivery {
+                Some(delivery) if delivery.is_complete() => answer,
+                Some(delivery) => {
+                    tracing::warn!(
+                        queued = delivery.queued,
+                        refused = delivery.refused,
+                        "a session end arrived while the owner was busy; its subscribers could \
+                         not run before the answer, so the session is allowed to end"
+                    );
+                    SessionEndAnswer::Proceed
+                }
+                // A panicking subscriber counts as "proceed" (R25).
+                None => SessionEndAnswer::Proceed,
+            }
+        }
+        SessionEndPhase::Cancelled | SessionEndPhase::Ending => {
+            let released = APP_RUNTIME.with(|slot| {
+                slot.try_borrow_mut()
+                    .ok()
+                    .and_then(|mut state| state.session_end.take())
+            });
+            drop(released);
+            let notice = if phase == SessionEndPhase::Cancelled {
+                HostNotice::SessionEndCancelled
+            } else {
+                HostNotice::SessionEnded
+            };
+            deliver_contained(&notice);
+            SessionEndAnswer::Proceed
+        }
+        // A phase this host does not know asks for nothing.
+        _ => SessionEndAnswer::Proceed,
+    }
+}
+
+/// Deliver a session-end notice to every runtime, containing a subscriber's
+/// panic: the callers answer a native callback (`WM_QUERYENDSESSION`), where an
+/// unwind would abort the process or skip the answer. The first panic is
+/// reported and `None` is returned; otherwise how the notice was delivered.
+fn deliver_contained(
+    notice: &flui_platform::HostNotice,
+) -> Option<super::owner_dispatch::NoticeDelivery> {
+    let mut failure = flui_foundation::panic::FirstPanic::new();
+    let delivery = failure.contain(|| super::owner_dispatch::deliver_host_notice(notice));
+    if let Some(payload) = failure.into_payload() {
+        tracing::error!(
+            panic = flui_foundation::panic::payload_text(&*payload),
+            "a session-end subscriber panicked; the session end is answered regardless"
+        );
+        flui_foundation::panic::retain_opaque_payload(payload);
+    }
+    delivery
+}
+
+/// Give the UI runtime's primary presentation the control of its window, so
+/// `LifecycleContext::window` answers from the first `init_state` on: the root
+/// is attached after this returns.
+fn attach_window_control(
+    ui_runtime: &crate::app::ui_runtime::UiRuntime,
+    window: &Arc<dyn flui_platform::traits::PlatformWindow>,
+) {
+    let (queues, wake, router) = APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        (
+            Rc::clone(&state.window_commands),
+            state.owner_turn_wake.clone(),
+            state.close_requests(),
+        )
+    });
+    let address = flui_foundation::PresentationAddress {
+        ui_runtime_id: ui_runtime.id(),
+        presentation_id: ui_runtime.presentation_id(),
+    };
+    let wake = wake.unwrap_or_else(|| Rc::new(|| false));
+    let source = crate::app::window_control::window_source(window, address, &queues, wake, router);
+    let attached = ui_runtime.install_window(address.presentation_id, source);
+    debug_assert!(attached, "a fresh UI runtime has its primary presentation");
 }
 
 // ============================================================================
@@ -367,6 +494,9 @@ pub(crate) fn install_owner_platform(
             if APP_RUNTIME
                 .with(|slot| Arc::ptr_eq(&slot.borrow().loop_identity, &installed_identity))
             {
+                // The owner's turn starts with the commands application code
+                // queued for its windows, before anything of this turn runs.
+                super::owner_dispatch::apply_queued_window_commands(std::thread::current().id());
                 let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
                 super::owner_dispatch::with_owner_callback(|_| {
                     let current = || {
@@ -425,6 +555,12 @@ pub(crate) fn install_owner_platform(
         not(target_arch = "wasm32")
     ))]
     super::main_window::shutdown_main_window();
+    // System notices (ADR-0237): the platform reports them on the owner thread,
+    // and every UI runtime's subscribers receive them from there.
+    owner.on_host_notice(Box::new(|notice| {
+        super::owner_dispatch::deliver_host_notice(&notice.into());
+    }));
+    owner.on_session_end(Box::new(answer_session_end));
     // The platform clipboard (ADR-0038 §9) is installed with the owner, so
     // every ui_runtime a runner builds afterwards finds it (`runtime_clipboard`).
     let clipboard = owner.shared().clipboard();

@@ -619,6 +619,35 @@ pub trait LifecycleContext: BuildContext {
         None
     }
 
+    /// The window this element is presented in: read its state, ask it to
+    /// change, observe it (ADR-0237). Acquire it in `init_state` or
+    /// `did_change_dependencies`, never in build/layout/paint: commands are
+    /// queued for the owner's next turn, and `build` receives a
+    /// [`BuildContext`], which has no such method:
+    ///
+    /// ```compile_fail,E0599
+    /// use flui_view::{BuildContext, LifecycleContext};
+    ///
+    /// fn build_body(ctx: &dyn BuildContext) {
+    ///     let _ = ctx.window();
+    /// }
+    /// ```
+    ///
+    /// The same acquisition is available from a lifecycle context:
+    ///
+    /// ```
+    /// use flui_view::{BuildContext, LifecycleContext};
+    ///
+    /// fn build_body(ctx: &dyn LifecycleContext) {
+    ///     let _ = ctx.window();
+    /// }
+    /// ```
+    ///
+    /// `None` for a bare owner, or a presentation that has no window.
+    fn window(&self) -> Option<crate::WindowHandle> {
+        None
+    }
+
     /// This element tree's exact focus manager.
     ///
     /// A build owner always has one focus tree, so this capability is

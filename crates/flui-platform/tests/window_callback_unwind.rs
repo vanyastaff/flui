@@ -105,7 +105,7 @@ fn terminal_retirement_survives_an_admitted_callback_failure() {
             panics: capture_panics,
             reenter,
         };
-        *callbacks.on_moved.lock() = Some(Box::new(move || {
+        *callbacks.on_state_changed.lock() = Some(Box::new(move || {
             let _ = (&capture, &hostile);
             move_observation.fetch_add(1, Ordering::SeqCst);
         }));
@@ -113,7 +113,7 @@ fn terminal_retirement_survives_an_admitted_callback_failure() {
         let notice = Arc::clone(&retired);
         *callbacks.on_request_frame.lock() = Some(Box::new(move || {
             let callbacks = nested.upgrade().expect("owner");
-            callbacks.dispatch_moved();
+            callbacks.dispatch_state_changed();
             callbacks.dispatch_close();
             let notice = Arc::clone(&notice);
             callbacks.clear_then(move || {

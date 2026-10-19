@@ -46,7 +46,28 @@ pub(crate) struct DisplaySource {
     misses: Mutex<MissLedger>,
 }
 
+#[cfg(any(
+    windows,
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    target_arch = "wasm32",
+    test
+))]
+impl super::system_notice::StaleOnWake for DisplaySource {
+    fn mark_stale(&self) {
+        self.invalidate();
+    }
+}
+
 impl DisplaySource {
+    /// Whether the next read samples the operating system again.
+    #[cfg(test)]
+    pub(crate) fn is_stale(&self) -> bool {
+        self.stale.load(std::sync::atomic::Ordering::Acquire)
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             registry: DisplayRegistry::new(),

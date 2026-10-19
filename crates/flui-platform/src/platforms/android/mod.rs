@@ -485,6 +485,10 @@ impl AndroidPlatform {
 }
 
 impl Platform for AndroidPlatform {
+    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+
     fn preferences(&self) -> Result<crate::SystemPreferences, PlatformError> {
         self.refresh_preferences()
     }
@@ -617,6 +621,7 @@ impl Platform for AndroidPlatform {
                             // live surface simply replaces it — see
                             // `PlatformWindow::on_surface_status_change`.
                             if let Some(ref w) = *platform.window.lock() {
+                                w.publish_state();
                                 w.callbacks().dispatch_active_status_change(true);
                                 w.callbacks().dispatch_surface_status_change(true);
                                 w.request_redraw();
@@ -639,6 +644,7 @@ impl Platform for AndroidPlatform {
                             // code.
                             if let Some(ref w) = *platform.window.lock() {
                                 w.callbacks().dispatch_surface_status_change(false);
+                                w.publish_state();
                                 w.callbacks().dispatch_active_status_change(false);
                             }
                         }
@@ -720,6 +726,7 @@ impl Platform for AndroidPlatform {
                             if let Some(ref w) = *platform.window.lock() {
                                 let size = w.logical_size();
                                 let scale = w.scale_factor();
+                                w.publish_state();
                                 w.callbacks().dispatch_resize(size, scale);
                                 w.request_redraw();
                             }
@@ -727,6 +734,7 @@ impl Platform for AndroidPlatform {
                         MainEvent::GainedFocus => {
                             tracing::debug!("Android: Gained focus");
                             if let Some(ref w) = *platform.window.lock() {
+                                w.publish_state();
                                 w.callbacks().dispatch_active_status_change(true);
                             }
                         }
@@ -734,6 +742,7 @@ impl Platform for AndroidPlatform {
                             platform.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::FocusLost);
                             tracing::debug!("Android: Lost focus");
                             if let Some(ref w) = *platform.window.lock() {
+                                w.publish_state();
                                 w.callbacks().dispatch_active_status_change(false);
                             }
                         }
@@ -752,6 +761,7 @@ impl Platform for AndroidPlatform {
                             next_preference_sample = web_time::Instant::now() + Duration::from_millis(500);
                             let window = platform.window.lock().clone();
                             if let Some(window) = window {
+                                window.publish_state();
                                 window.callbacks().dispatch_resize(window.logical_size(), window.scale_factor());
                             }
                         }

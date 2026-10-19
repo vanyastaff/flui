@@ -91,7 +91,7 @@ pub struct SemanticsHost {
     ///
     /// Set (from the adapter's own thread, via
     /// [`Self::full_republish_handle`]) whenever assistive technology
-    /// activates: the adapter's state is unknown at that moment — a freshly
+    /// activate: the adapter's state is unknown at that moment — a freshly
     /// started screen reader has nothing, and `SemanticsOwner::flush`
     /// publishes incrementally, so waiting for the next diff would leave it
     /// with a fragment. Consumed on the owner thread by

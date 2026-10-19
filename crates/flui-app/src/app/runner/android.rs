@@ -289,6 +289,8 @@ where
             .with_textures(textures),
         ));
 
+        super::host::track_raster_lane(lane.lock().reclaim_handle());
+
         // 5. Register input callback -> entered ui_runtime input dispatch
         install_input_wiring(owner_dispatch, window.as_ref());
 
@@ -472,6 +474,7 @@ where
         // no-op instead of waking the loop.
         installation.observe_appearance();
         installation.observe_display();
+        installation.observe_window_state();
         installation.observe(flui_runtime::owner::WindowObservation::Metrics {
             size: window.logical_size(),
             scale_factor: window.scale_factor(),

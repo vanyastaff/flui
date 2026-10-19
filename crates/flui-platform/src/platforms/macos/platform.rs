@@ -200,6 +200,10 @@ impl MacOSPlatform {
 }
 
 impl Platform for MacOSPlatform {
+    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        super::window::window_capabilities()
+    }
+
     fn preferences(&self) -> Result<crate::SystemPreferences, PlatformError> {
         self.preferences.read()
     }
@@ -251,7 +255,7 @@ impl Platform for MacOSPlatform {
         debug_assert_appkit_main_thread("MacOSPlatform::open_window");
         if !self.loop_control.accepts_windows() {
             return Err(OpenWindowError::OwnerGone {
-                rejected: Some(options),
+                rejected: Some(Box::new(options)),
             });
         }
         let window = MacOSWindow::new(options, Arc::clone(&self.windows), self.config.clone())?;

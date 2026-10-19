@@ -149,6 +149,10 @@ impl LinuxPlatform {
 }
 
 impl Platform for LinuxPlatform {
+    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+
     #[expect(
         clippy::unimplemented,
         reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"

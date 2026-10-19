@@ -92,8 +92,10 @@ mod measured {
         TranslationFraction as _,
     };
     use flui_sdk::platform::{
-        Brightness as _, HapticFeedback as _, InvalidLocale as _, Locale as _,
-        SystemPreferences as _, TargetPlatform as _,
+        Brightness as _, HapticFeedback as _, HostNotice as _, InvalidLocale as _, Locale as _,
+        MemoryPressureLevel as _, SessionEndBlock as _, SessionEndRequest as _,
+        SystemPreferences as _, TargetPlatform as _, WindowCommandError as _, WindowMode as _,
+        WindowState as _,
     };
     use flui_sdk::rendering::{
         BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, InputRegion as _,
@@ -109,10 +111,12 @@ mod measured {
     use flui_sdk::view::{
         AnimatedView as _, AsyncDriver as _, BoxedView as _, BuildContext as _,
         BuildContextExt as _, Child as _, FieldMask as _, FrameWaker as _, GlobalKey as _,
-        InheritedData as _, InheritedView as _, IntoView as _, PostFrameHandle as _,
-        RebuildHandle as _, RebuildReason as _, RenderObjectContext as _, RenderView as _,
-        StatefulView as _, View as _, ViewExt as _, ViewState as _, impl_animated_view as _,
-        impl_inherited_view as _, impl_render_view as _, single_child_view_children as _,
+        HostNoticeSubscription as _, InheritedData as _, InheritedView as _, IntoView as _,
+        LifecycleHandle as _, PostFrameHandle as _, RebuildHandle as _, RebuildReason as _,
+        RenderObjectContext as _, RenderView as _, StatefulView as _, View as _, ViewExt as _,
+        ViewState as _, WindowClosed as _, WindowHandle as _, WindowSubscription as _,
+        impl_animated_view as _, impl_inherited_view as _, impl_render_view as _,
+        single_child_view_children as _,
     };
     use flui_sdk::widgets::__private::{
         AnchoredBox as _, FlightSeat as _, SeatClaim as _, SeatHold as _, TextFormFieldConfig as _,
@@ -433,10 +437,17 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform_api::Brightness;",
         "pub use flui_platform_api::EventTime;",
         "pub use flui_platform_api::HapticFeedback;",
+        "pub use flui_platform_api::HostNotice;",
         "pub use flui_platform_api::InvalidLocale;",
         "pub use flui_platform_api::Locale;",
+        "pub use flui_platform_api::MemoryPressureLevel;",
+        "pub use flui_platform_api::SessionEndBlock;",
+        "pub use flui_platform_api::SessionEndRequest;",
         "pub use flui_platform_api::SystemPreferences;",
         "pub use flui_platform_api::TargetPlatform;",
+        "pub use flui_platform_api::WindowCommandError;",
+        "pub use flui_platform_api::WindowMode;",
+        "pub use flui_platform_api::WindowState;",
         "pub use flui_platform_api::data_transfer::TransferActions;",
         "pub use flui_platform_api::haptics::ControlPoint;",
         "pub use flui_platform_api::haptics::HapticCapabilities;",

@@ -33,6 +33,12 @@ pub(super) mod ios;
 mod native_bindings;
 mod native_retirement;
 mod native_text_sizing;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod placement;
 mod window_install;
 
 mod owner_dispatch;
@@ -111,6 +117,25 @@ fn text_store_host_of(
     window: &std::sync::Arc<dyn flui_platform::traits::HostWindow>,
 ) -> Option<std::rc::Rc<dyn flui_platform_api::TextStoreHost>> {
     host::with_owner_platform(|owner| owner.text_store_host(window)).flatten()
+}
+
+/// The control handle of the window presented at `address`, for the thread
+/// that runs the application: the address a [`WindowRequest`](crate::WindowRequest)
+/// delivers names the new window, and this turns it into the handle its
+/// widgets get from `LifecycleContext::window`.
+///
+/// `None` on any other thread, when no presentation is registered at
+/// `address`, and once its window has closed.
+#[must_use]
+pub fn window_handle(
+    address: flui_foundation::PresentationAddress,
+) -> Option<flui_view::WindowHandle> {
+    host::APP_RUNTIME.with(|slot| {
+        let state = slot.try_borrow().ok()?;
+        (state.owner_thread == Some(std::thread::current().id()))
+            .then(|| state.window_commands.handle_for(address))
+            .flatten()
+    })
 }
 
 /// Close the window at `address` programmatically, bypassing its
@@ -321,10 +346,7 @@ mod tests {
 
         let platform = flui_platform::headless_platform();
         let window = platform
-            .open_window(flui_platform::traits::WindowOptions {
-                size: marker_size,
-                ..Default::default()
-            })
+            .open_window(flui_platform::traits::WindowOptions::default().with_size(marker_size))
             .expect("headless platform always opens a window");
 
         // `on_request_frame` requires `Send` on the callback; `AppRuntime` is
@@ -344,7 +366,7 @@ mod tests {
             let matches_marker = APP_RUNTIME
                 .with(|slot| {
                     slot.borrow()
-                        .with_redraw_window(|w| w.bounds().size == marker_size)
+                        .with_redraw_window(|w| w.state().outer.size == marker_size)
                 })
                 .unwrap_or(false);
             saw_marker_window_cb.store(matches_marker, Ordering::SeqCst);

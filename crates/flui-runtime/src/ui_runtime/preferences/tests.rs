@@ -63,6 +63,26 @@ impl PlatformWindow for Window {
     ) -> Result<(), flui_platform_api::CursorError> {
         self.inner.set_cursor(cursor)
     }
+    fn state(&self) -> flui_platform_api::WindowState {
+        let size = self.logical_size();
+        flui_platform_api::WindowState::new(
+            flui_platform_api::WindowGeometry::new(None, size),
+            size,
+        )
+    }
+
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        Ok(())
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -317,6 +337,18 @@ impl PlatformWindow for HapticWindow {
         cursor: flui_platform_api::CursorIcon,
     ) -> Result<(), flui_platform_api::CursorError> {
         self.inner.set_cursor(cursor)
+    }
+    fn state(&self) -> flui_platform_api::WindowState {
+        self.inner.state()
+    }
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        self.inner.capabilities()
+    }
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        self.inner.apply(command)
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

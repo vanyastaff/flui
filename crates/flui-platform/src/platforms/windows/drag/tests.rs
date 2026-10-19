@@ -288,12 +288,12 @@ fn open(
     react: impl FnMut(&DragDropEvent) + 'static,
 ) -> Window {
     let window = platform
-        .open_window(WindowOptions {
-            title: title.into(),
-            size: Size::new(240.0, 160.0),
-            visible: true,
-            ..Default::default()
-        })
+        .open_window(
+            WindowOptions::default()
+                .with_title(title)
+                .with_size(Size::new(240.0, 160.0))
+                .with_visible(true),
+        )
         .expect("window");
     let hwnd = window
         .as_any()

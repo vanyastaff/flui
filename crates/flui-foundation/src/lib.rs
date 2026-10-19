@@ -187,6 +187,7 @@ pub use text_sizing::{
 };
 pub mod id;
 pub mod key;
+pub mod memory;
 // Input sequence identity and its owner-local mint (ADR-0207 §4)
 pub mod sequence;
 // Panic-payload text extraction and the `BUG:` internal-invariant

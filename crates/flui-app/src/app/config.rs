@@ -1,9 +1,11 @@
 //! Application configuration.
 
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{Point, Size};
 use flui_log::AppIdentity;
 pub use flui_runtime::MotionOverride;
 pub use flui_runtime::presentation::PointerResampling;
+
+use flui_platform::WindowMode;
 
 use super::close_request::CloseRequestHandler;
 use super::dev_agent::DevAgent;
@@ -93,6 +95,14 @@ pub struct AppConfig {
 
     /// Maximum window size.
     pub max_size: Option<Size>,
+
+    /// Initial outer position in global logical pixels; `None` lets the system
+    /// place the window. A platform that cannot place a window ignores it.
+    pub position: Option<Point<f64>>,
+
+    /// The mode the window opens in. A platform that cannot enter it opens the
+    /// window in [`WindowMode::Normal`].
+    pub mode: WindowMode,
 
     /// Whether the window is resizable.
     pub resizable: bool,
@@ -238,6 +248,26 @@ pub struct AppConfig {
     /// The application's directory name under the per-user data roots, set
     /// with [`Self::with_storage_dir`].
     pub(crate) storage_dir: Option<flui_platform_api::StorageName>,
+
+    /// The storage name a window's placement is kept under, set with
+    /// [`Self::restore_placement`].
+    pub(crate) placement: Option<flui_platform_api::StorageName>,
+
+    /// The receivers registered with [`Self::with_memory_reclaim`].
+    pub(crate) memory_reclaimers: MemoryReceivers,
+}
+
+/// The memory receivers an application registered, cloned with the
+/// configuration.
+#[derive(Clone, Default)]
+pub(crate) struct MemoryReceivers(pub(crate) Vec<super::host_memory::SharedReceiver>);
+
+impl std::fmt::Debug for MemoryReceivers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("MemoryReceivers")
+            .field(&self.0.len())
+            .finish()
+    }
 }
 
 impl Default for AppConfig {
@@ -251,6 +281,8 @@ impl Default for AppConfig {
             size: Size::new(800.0, 600.0),
             min_size: None,
             max_size: None,
+            position: None,
+            mode: WindowMode::Normal,
             resizable: true,
             decorations: true,
             show_performance_overlay: false,
@@ -266,6 +298,8 @@ impl Default for AppConfig {
             #[cfg(not(target_arch = "wasm32"))]
             services: Vec::new(),
             storage_dir: None,
+            placement: None,
+            memory_reclaimers: MemoryReceivers::default(),
         }
     }
 }
@@ -321,7 +355,8 @@ impl AppConfig {
         self
     }
 
-    /// Set the initial window size.
+    /// Set the initial window size: the content area, in logical pixels, which
+    /// is what the window reports as its content size once it is open.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_size(mut self, width: u32, height: u32) -> Self {
         self.size = Size::new(width as f64, height as f64);
@@ -339,6 +374,30 @@ impl AppConfig {
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_max_size(mut self, width: u32, height: u32) -> Self {
         self.max_size = Some(Size::new(width as f64, height as f64));
+        self
+    }
+
+    /// Set the initial outer position, in global logical pixels.
+    ///
+    /// Applied where the backend places a window at open
+    /// ([`WindowCapabilities::places_at_open`](flui_platform_api::WindowCapabilities::places_at_open)):
+    /// Win32 today. The winit and AppKit backends do not yet read it and leave
+    /// the place to the system.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_position(mut self, at: Point<f64>) -> Self {
+        self.position = Some(at);
+        self
+    }
+
+    /// Set the mode the window opens in.
+    ///
+    /// Applied where the backend opens a window in a mode: Win32 today. The
+    /// winit and AppKit backends do not yet read it, so there a window opens in
+    /// [`WindowMode::Normal`] and the application sets the mode through its
+    /// `WindowHandle` once it is up.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_mode(mut self, mode: WindowMode) -> Self {
+        self.mode = mode;
         self
     }
 
@@ -472,28 +531,81 @@ impl AppConfig {
         self.storage_dir = Some(name);
         self
     }
+
+    /// Remember where this window was and open the next run there.
+    ///
+    /// The window's position, size and mode are kept in the host storage
+    /// ([`Self::with_storage_dir`]) under `name`, and the next run reads them
+    /// before the window is first shown. They are fitted to the displays of that
+    /// run first: a window whose display is gone opens on the primary one, and a
+    /// window that would lie off the screen is moved back onto it
+    /// ([`WindowPlacement::resolve`]). What it restores replaces the
+    /// configuration's [`with_size`](Self::with_size),
+    /// [`with_position`](Self::with_position) and [`with_mode`](Self::with_mode);
+    /// they apply the first time, when nothing is stored yet, and whenever the
+    /// stored value cannot be read.
+    ///
+    /// The placement is written at most once every two seconds while the window
+    /// moves (a change inside the interval is written when it is over), and at
+    /// once when the window closes and when the session ends. Windows that share
+    /// one `name` overwrite each other's placement, so give each window it should
+    /// remember a name of its own. Desktop only: Android, iOS and the Web size
+    /// the window themselves.
+    ///
+    /// Where it is applied: Win32 opens the window at the remembered position,
+    /// size and mode, and matches the display it was on. The winit and AppKit
+    /// backends do not yet place a window at open (they report so through
+    /// [`WindowCapabilities::places_at_open`](flui_platform_api::WindowCapabilities::places_at_open)),
+    /// so there only the size is restored and the position is left to the
+    /// system; see `docs/platform-parity.md`.
+    ///
+    /// [`WindowPlacement::resolve`]: flui_platform_api::WindowPlacement::resolve
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn restore_placement(mut self, name: flui_platform_api::StorageName) -> Self {
+        self.placement = Some(name);
+        self
+    }
+
+    /// Give `receiver` memory back when the system reports memory pressure.
+    ///
+    /// The framework reclaims its own caches (text, GPU buffers and glyph atlas)
+    /// itself; register what the application owns beside them, such as the
+    /// `flui_assets::AssetRegistry` its images load through (an `Arc` of a
+    /// receiver is a receiver). Receivers are reclaimed once per notice, in the
+    /// order registered, before any subscriber of
+    /// [`HostNotice::MemoryPressure`](flui_platform_api::HostNotice::MemoryPressure)
+    /// hears the notice. The host has one set of receivers, read from the
+    /// configuration the run starts with.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_memory_reclaim(
+        mut self,
+        receiver: impl flui_foundation::memory::ReclaimMemory + Send + Sync + 'static,
+    ) -> Self {
+        self.memory_reclaimers.0.push(std::sync::Arc::new(receiver));
+        self
+    }
 }
 
 impl From<&AppConfig> for flui_platform::WindowOptions {
     fn from(config: &AppConfig) -> Self {
-        flui_platform::WindowOptions {
-            title: config.title.clone(),
-            size: config.size,
-            resizable: config.resizable,
-            visible: true,
-            // `AtOpen`, the conservative default: `AfterFirstFrame` is a
-            // PROMISE to call `reveal_after_first_frame`, and this
-            // conversion is shared by callers that keep it (the desktop
-            // runner, through `FirstReveal`) and callers that do not
-            // (`run_direct`, the bare `open_secondary_window`). The one
-            // path that keeps it opts in at its own open site —
-            // `runner::desktop::rendered_window_options` — so nothing can
-            // open a window at alpha 0 that no one will ever reveal.
-            reveal: flui_platform::WindowReveal::AtOpen,
-            decorated: config.decorations,
-            min_size: config.min_size,
-            max_size: config.max_size,
-        }
+        // `visible` and `reveal` are not the configuration's to set, so they
+        // keep the options' own defaults: on screen when the window opens
+        // (`AtOpen`). `AfterFirstFrame` is a PROMISE to call
+        // `reveal_after_first_frame`, and this conversion is shared by callers
+        // that keep it (the desktop runner, through `FirstReveal`) and callers
+        // that do not (`run_direct`, the bare `open_secondary_window`). The
+        // paths that keep it opt in at their own open site
+        // (`runner::desktop::rendered_window_options`), so nothing can open a
+        // window at alpha 0 that no one will ever reveal.
+        Self::default()
+            .with_title(config.title.clone())
+            .with_size(config.size)
+            .with_resizable(config.resizable)
+            .with_decorated(config.decorations)
+            .with_min_size(config.min_size)
+            .with_max_size(config.max_size)
+            .with_position(config.position)
+            .with_mode(config.mode)
     }
 }
 

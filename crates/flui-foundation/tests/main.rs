@@ -12,6 +12,9 @@ mod sequence;
 #[path = "panic_recovery.rs"]
 mod panic_recovery;
 
+#[path = "reclaim_memory.rs"]
+mod reclaim_memory;
+
 #[path = "geometry/transform.rs"]
 mod transform;
 

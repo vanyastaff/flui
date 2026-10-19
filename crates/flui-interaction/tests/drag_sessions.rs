@@ -145,6 +145,22 @@ impl PlatformWindow for DragWindow {
     fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
         self.source.clone()
     }
+    fn state(&self) -> flui_platform_api::WindowState {
+        flui_platform_api::WindowState::new(
+            flui_platform_api::WindowGeometry::new(None, self.size),
+            self.size,
+        )
+    }
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        Ok(())
+    }
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

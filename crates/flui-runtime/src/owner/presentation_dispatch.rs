@@ -72,6 +72,9 @@ pub enum WindowObservation {
     Brightness(Brightness),
     /// The display the window is on, or that display's refresh period, changed.
     Display(DisplayUpdate),
+    /// The window's published state may have changed. Carries nothing: the
+    /// owner reads the state when it delivers this.
+    State,
 }
 
 impl WindowObservation {
@@ -120,13 +123,19 @@ impl UiRuntime {
             | WindowObservation::Execution(_)
             | WindowObservation::Snapshot { .. }
             | WindowObservation::Hover(_)
-            | WindowObservation::Moved => None,
+            | WindowObservation::Moved
+            | WindowObservation::State => None,
         };
         if let Some(pending) = pending {
             pending.apply(self, address, resize_surface);
             return;
         }
         let recording = self.begin_recorded_input();
+        // What the recording keeps of the observation. A state notification
+        // carries nothing a replay could honour: the owner read this host's
+        // live window. What it did to the presentation is recorded instead, as
+        // the move it was when the content went somewhere else.
+        let mut recorded = Some(observation);
         let applied = catch_unwind(AssertUnwindSafe(|| match observation {
             WindowObservation::Focus(focused) => self.update_window_focus(id, focused),
             WindowObservation::Visibility(visible) => self.update_window_visibility(id, visible),
@@ -140,6 +149,10 @@ impl UiRuntime {
             }
             WindowObservation::Hover(inside) => self.handle_window_hover_addressed(id, inside),
             WindowObservation::Moved => self.window_moved(id),
+            WindowObservation::State => {
+                recorded = None;
+                self.publish_window_state(id, || recorded = Some(WindowObservation::Moved));
+            }
             WindowObservation::Metrics { .. }
             | WindowObservation::SafeArea(_)
             | WindowObservation::Brightness(_)
@@ -147,8 +160,8 @@ impl UiRuntime {
                 unreachable!("BUG: mergeable observations apply as pending window state")
             }
         }));
-        if recording {
-            self.record_applied(id, HostInput::Window(observation), InputOutcome::Handled);
+        if recording && let Some(recorded) = recorded {
+            self.record_applied(id, HostInput::Window(recorded), InputOutcome::Handled);
         }
         if let Err(payload) = applied {
             std::panic::resume_unwind(payload);

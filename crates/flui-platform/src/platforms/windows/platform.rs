@@ -8,7 +8,7 @@ use std::{
 };
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Point, Size};
 use parking_lot::Mutex;
 use windows::{
     Win32::{
@@ -50,7 +50,7 @@ use super::{
     display::WindowsDisplays,
     text_services::TextServices,
     util::{WINDOW_CLASS_NAME, get_x_lparam, get_y_lparam, hiword, load_cursor_style},
-    window::WindowsWindow,
+    window::{NativeMode, WindowsWindow},
 };
 use crate::{
     config::WindowConfiguration,
@@ -60,11 +60,12 @@ use crate::{
     shared::{
         PlatformHandlers, WindowCallbacks,
         hwnd_affinity::{ContextLedger, UserDataRefusal},
+        window_state::WindowStateCell,
     },
     traits::{
         Clipboard, DisplaySnapshot, HostWindow, OpenWindowError, OwnerPlatform, Platform,
         PlatformExecutor, PlatformReadyCallback, WindowAppearance, WindowEvent, WindowId,
-        WindowMode, WindowOptions, owner::OwnerHooks,
+        WindowOptions, owner::OwnerHooks,
     },
 };
 
@@ -322,7 +323,10 @@ pub(super) struct WindowContext {
     pub identity: WindowIdentity,
     /// Tracking and cache access do not keep wrappers or their state alive.
     pub windows: std::sync::Weak<WindowMap>,
-    pub window_state: std::sync::Weak<Mutex<super::window::WindowState>>,
+    pub window_state: std::sync::Weak<Mutex<super::window::WindowRecord>>,
+    /// The published window state, shared with the wrapper; refreshed by
+    /// [`Self::publish_window_state`].
+    pub snapshot: Arc<WindowStateCell>,
     /// The platform-level handlers, shared with the owner control context.
     /// `Rc<RefCell<..>>`: every holder lives on the owner thread, and no
     /// borrow is held while a handler runs.
@@ -354,7 +358,7 @@ pub(super) struct WindowContext {
     /// trackpad gestures) or after it failed.
     pub touchpad: super::direct_manipulation::TouchpadSlot,
     /// Current window mode (replaces display_state + saved bounds)
-    pub mode: std::cell::Cell<WindowMode>,
+    pub mode: std::cell::Cell<NativeMode>,
     /// Last known size (before minimization) for restore detection
     pub last_size: std::cell::Cell<Size<i32>>,
     /// Window configuration (hotkeys, debouncing, etc.)
@@ -373,7 +377,7 @@ pub(super) struct WindowContext {
     pub cursor: std::cell::Cell<CursorIcon>,
     /// Window style bits before fullscreen (Windows-specific: WS_OVERLAPPEDWINDOW, etc.)
     ///
-    /// Stored here instead of in `WindowMode` to keep the cross-platform enum
+    /// Stored here instead of in `NativeMode` to keep the cross-platform enum
     /// free of platform-specific fields.
     pub restore_style: std::cell::Cell<u32>,
     /// Last surface-visibility value dispatched through
@@ -428,10 +432,37 @@ impl WindowContext {
     }
 
     /// Complete cache updates before callback-capable native/user code.
-    fn update_window_state(&self, update: impl FnOnce(&mut super::window::WindowState)) {
+    fn update_window_state(&self, update: impl FnOnce(&mut super::window::WindowRecord)) {
         if let Some(state) = self.window_state.upgrade() {
             update(&mut state.lock());
         }
+    }
+
+    /// The window's published state, read from the OS again first when
+    /// something invalidated it; `on_state_changed` is raised when that
+    /// produced a new revision.
+    pub(super) fn window_state(&self, hwnd: HWND) -> flui_platform_api::WindowState {
+        let Some(record) = self.window_state.upgrade() else {
+            return self.snapshot.published();
+        };
+        let published = self.snapshot.state_with(|| {
+            super::window::sample_state(
+                hwnd,
+                &record,
+                self.mode.get(),
+                self.displays.display_of_window(hwnd),
+            )
+        });
+        if published.changed {
+            self.callbacks.dispatch_state_changed();
+        }
+        published.state
+    }
+
+    /// The window may differ from its published state: read it again.
+    pub(super) fn publish_window_state(&self, hwnd: HWND) {
+        self.snapshot.invalidate();
+        let _ = self.window_state(hwnd);
     }
 
     /// Dispatch a window event to the platform-level handler.
@@ -1343,20 +1374,10 @@ impl WindowsPlatform {
                             SIZE_MINIMIZED => {
                                 tracing::info!("📦 Window Minimized");
                                 // Validate transition
-                                let candidate = WindowMode::Minimized {
-                                    previous: Bounds {
-                                        origin: Point::new(0, 0),
-                                        size: ctx.last_size.get(),
-                                    },
-                                };
+                                let candidate = NativeMode::Minimized;
                                 if prev_mode.can_transition_to(&candidate) {
                                     // Preserve the last non-minimized client size.
-                                    (
-                                        candidate,
-                                        Some(WindowEvent::Minimized {
-                                            window_id: ctx.window_id,
-                                        }),
-                                    )
+                                    (candidate, None)
                                 } else {
                                     tracing::warn!(
                                         "⚠️  Invalid state transition: {:?} -> Minimized (transition ignored)",
@@ -1368,17 +1389,12 @@ impl WindowsPlatform {
                             SIZE_MAXIMIZED => {
                                 tracing::info!("📏 Window Maximized: {}x{}", width, height);
                                 // Validate transition
-                                let candidate = WindowMode::Maximized {
-                                    previous: Bounds {
-                                        origin: Point::new(0, 0),
-                                        size: ctx.last_size.get(),
-                                    },
-                                };
+                                let candidate = NativeMode::Maximized;
                                 if prev_mode.can_transition_to(&candidate) {
                                     ctx.last_size.set(size);
                                     (
                                         candidate,
-                                        Some(WindowEvent::Maximized {
+                                        Some(WindowEvent::Resized {
                                             window_id: ctx.window_id,
                                             size,
                                         }),
@@ -1400,21 +1416,16 @@ impl WindowsPlatform {
                                 // `Resized`. Gating on it dropped the event (and the last_size
                                 // update) on every live-resize drag step.
                                 ctx.last_size.set(size);
-                                let event = if prev_mode.is_minimized() || prev_mode.is_maximized()
-                                {
+                                if prev_mode.is_minimized() || prev_mode.is_maximized() {
                                     tracing::info!("📐 Window Restored: {}x{}", width, height);
-                                    WindowEvent::Restored {
-                                        window_id: ctx.window_id,
-                                        size,
-                                    }
                                 } else {
                                     tracing::debug!("📐 Window Resized: {}x{}", width, height);
-                                    WindowEvent::Resized {
-                                        window_id: ctx.window_id,
-                                        size,
-                                    }
+                                }
+                                let event = WindowEvent::Resized {
+                                    window_id: ctx.window_id,
+                                    size,
                                 };
-                                (WindowMode::Normal, Some(event))
+                                (NativeMode::Normal, Some(event))
                             }
                             _ => {
                                 // Regular resize while in current state
@@ -1434,6 +1445,7 @@ impl WindowsPlatform {
 
                         // Update state
                         ctx.mode.set(new_mode);
+                        ctx.publish_window_state(hwnd);
 
                         // Hidden-surface gating: minimize/restore is the
                         // visibility signal Win32 actually delivers (no
@@ -1514,6 +1526,7 @@ impl WindowsPlatform {
                     {
                         let shown = wparam.0 != 0;
                         ctx.update_window_state(|state| state.visible = shown);
+                        ctx.publish_window_state(hwnd);
                         if let Some(visible) =
                             crate::shared::visibility::win32_show_window_visibility(
                                 shown,
@@ -1559,19 +1572,7 @@ impl WindowsPlatform {
                                 y as f64 / ctx.scale_factor.get(),
                             );
                         });
-                        // Fire per-window on_moved callback
-                        ctx.callbacks.dispatch_moved();
-
-                        // Dispatch Moved event to global handlers
-                        use flui_foundation::geometry::Point;
-                        let position = Point::new(
-                            x as f64 / ctx.scale_factor.get(),
-                            y as f64 / ctx.scale_factor.get(),
-                        );
-                        ctx.dispatch_event(WindowEvent::Moved {
-                            window_id: ctx.window_id,
-                            position,
-                        });
+                        ctx.publish_window_state(hwnd);
                     }
 
                     LRESULT(0)
@@ -1604,6 +1605,7 @@ impl WindowsPlatform {
                                 state.bounds.size = size;
                             }
                         });
+                        ctx.publish_window_state(hwnd);
                         ctx.dispatch_event(WindowEvent::ScaleFactorChanged {
                             window_id: ctx.window_id,
                             scale_factor: new_scale,
@@ -2012,6 +2014,7 @@ impl WindowsPlatform {
 
                     if let Some(ctx) = ctx {
                         ctx.update_window_state(|state| state.focused = true);
+                        ctx.publish_window_state(hwnd);
                         // Fire per-window on_active_status_change callback
                         ctx.callbacks.dispatch_active_status_change(true);
 
@@ -2030,6 +2033,7 @@ impl WindowsPlatform {
 
                     if let Some(ctx) = ctx {
                         ctx.update_window_state(|state| state.focused = false);
+                        ctx.publish_window_state(hwnd);
                         // Fire per-window on_active_status_change callback
                         ctx.callbacks.dispatch_active_status_change(false);
 
@@ -2404,6 +2408,10 @@ impl WindowsPlatform {
 }
 
 impl Platform for WindowsPlatform {
+    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        super::window::window_capabilities()
+    }
+
     // ==================== Core System ====================
 
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
@@ -2515,7 +2523,7 @@ impl Platform for WindowsPlatform {
     fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         if !self.owner_control.signal.accepting() {
             return Err(OpenWindowError::OwnerGone {
-                rejected: Some(options),
+                rejected: Some(Box::new(options)),
             });
         }
         // An HWND's message queue belongs to the creating thread, and the

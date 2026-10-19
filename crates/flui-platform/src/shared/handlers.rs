@@ -16,7 +16,13 @@ use parking_lot::Mutex;
 
 use flui_platform_api::input_capabilities::InputCapabilities;
 
-use crate::traits::{DispatchEventResult, PlatformInput, WindowEvent, WindowExecutionState};
+use crate::traits::{
+    DispatchEventResult, PlatformInput, SessionEndAnswer, SessionEndPhase, WindowEvent,
+    WindowExecutionState,
+};
+
+/// The callback a platform asks at each phase of the user's session ending.
+pub type SessionEndHook = Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>;
 
 /// A window's input callback.
 pub type InputCallback = Box<dyn FnMut(PlatformInput) -> DispatchEventResult>;
@@ -175,6 +181,11 @@ pub struct PlatformHandlers {
     /// Called when keyboard layout changes
     pub keyboard_layout_changed: Option<Box<dyn FnMut() + Send>>,
 
+    /// Asked at each phase of the user's session ending; its answer to
+    /// [`SessionEndPhase::Query`] decides whether the platform asks the user
+    /// to wait.
+    pub session_end: Option<SessionEndHook>,
+
     /// Consulted when this platform's own window bookkeeping believes every
     /// window it tracks has just closed, before it decides whether to end
     /// the run loop (winit) or mark itself not-running (headless).
@@ -225,6 +236,7 @@ impl PlatformHandlers {
             window_event: None,
             open_urls: None,
             keyboard_layout_changed: None,
+            session_end: None,
             exit_policy: None,
             wake_deadline: None,
         }
@@ -322,6 +334,7 @@ impl std::fmt::Debug for PlatformHandlers {
                 "keyboard_layout_changed",
                 &self.keyboard_layout_changed.is_some(),
             )
+            .field("session_end", &self.session_end.is_some())
             .field("exit_policy", &self.exit_policy.is_some())
             .field("wake_deadline", &self.wake_deadline.is_some())
             .finish()
@@ -365,8 +378,8 @@ pub struct WindowCallbacks {
     /// factor.
     pub on_resize: Mutex<Option<Box<dyn FnMut(Size<f64>, f64) + Send>>>,
 
-    /// Called when the window is moved.
-    pub on_moved: Mutex<Option<Box<dyn FnMut() + Send>>>,
+    /// Called when the window state may differ from the one last read.
+    pub on_state_changed: Mutex<Option<Box<dyn FnMut() + Send>>>,
 
     /// Called when the window is about to be destroyed. Only fires once
     /// (FnOnce).
@@ -460,7 +473,7 @@ enum WindowCallbackEvent {
     Input(PlatformInput),
     RequestFrame,
     Resize(Size<f64>, f64),
-    Moved,
+    StateChanged,
     Close,
     Active(bool, Option<Box<dyn FnOnce() + Send>>),
     Execution(WindowExecutionState),
@@ -740,7 +753,7 @@ impl WindowCallbacks {
             unanswered_keys: Mutex::new(VecDeque::new()),
             on_request_frame: Mutex::new(None),
             on_resize: Mutex::new(None),
-            on_moved: Mutex::new(None),
+            on_state_changed: Mutex::new(None),
             on_close: Mutex::new(None),
             on_should_close: Mutex::new(None),
             on_active_status_change: Mutex::new(None),
@@ -873,7 +886,7 @@ impl WindowCallbacks {
         let input_wake = self.input_wake.lock().take();
         let on_request_frame = self.on_request_frame.lock().take();
         let on_resize = self.on_resize.lock().take();
-        let on_moved = self.on_moved.lock().take();
+        let on_state_changed = self.on_state_changed.lock().take();
         let on_close = self.on_close.lock().take();
         let on_should_close = self.on_should_close.lock().take();
         let on_active_status_change = self.on_active_status_change.lock().take();
@@ -893,7 +906,7 @@ impl WindowCallbacks {
         super::panic_boundary::contain_owner_callback(|| drop(input_wake));
         super::panic_boundary::contain_owner_callback(|| drop(on_request_frame));
         super::panic_boundary::contain_owner_callback(|| drop(on_resize));
-        super::panic_boundary::contain_owner_callback(|| drop(on_moved));
+        super::panic_boundary::contain_owner_callback(|| drop(on_state_changed));
         super::panic_boundary::contain_owner_callback(|| drop(on_close));
         super::panic_boundary::contain_owner_callback(|| drop(on_should_close));
         super::panic_boundary::contain_owner_callback(|| drop(on_active_status_change));
@@ -1012,8 +1025,8 @@ impl WindowCallbacks {
                         callback(size, scale_factor);
                     }
                 }
-                WindowCallbackEvent::Moved => {
-                    let mut lease = CallbackLease::take(&self.on_moved, &self.cleared);
+                WindowCallbackEvent::StateChanged => {
+                    let mut lease = CallbackLease::take(&self.on_state_changed, &self.cleared);
                     if let Some(callback) = lease.callback_mut() {
                         callback();
                     }
@@ -1437,9 +1450,10 @@ impl WindowCallbacks {
         self.drain_events(drain);
     }
 
-    /// Dispatch a window moved event.
-    pub fn dispatch_moved(&self) {
-        let Some(drain) = DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Moved)
+    /// Dispatch a window state change.
+    pub fn dispatch_state_changed(&self) {
+        let Some(drain) =
+            DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::StateChanged)
         else {
             return;
         };
@@ -1737,8 +1751,8 @@ macro_rules! impl_window_callback_setters {
             *self.$callbacks_field.on_resize.lock() = Some(callback);
         }
 
-        fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
-            *self.$callbacks_field.on_moved.lock() = Some(callback);
+        fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
+            *self.$callbacks_field.on_state_changed.lock() = Some(callback);
         }
 
         fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
@@ -1798,7 +1812,7 @@ impl std::fmt::Debug for WindowCallbacks {
             .field("on_input", &self.on_input.is_occupied())
             .field("on_request_frame", &self.on_request_frame.lock().is_some())
             .field("on_resize", &self.on_resize.lock().is_some())
-            .field("on_moved", &self.on_moved.lock().is_some())
+            .field("on_state_changed", &self.on_state_changed.lock().is_some())
             .field("on_close", &self.on_close.lock().is_some())
             .field("on_should_close", &self.on_should_close.lock().is_some())
             .field(
@@ -1890,9 +1904,9 @@ mod tests {
                     assert!(!fail_notification, "competing status failure");
                 }
             }));
-            let moved = Arc::new(AtomicBool::new(false));
-            let delivered = Arc::clone(&moved);
-            *callbacks.on_moved.lock() = Some(Box::new(move || {
+            let changed = Arc::new(AtomicBool::new(false));
+            let delivered = Arc::clone(&changed);
+            *callbacks.on_state_changed.lock() = Some(Box::new(move || {
                 delivered.store(true, Ordering::SeqCst);
             }));
             let nested = Arc::downgrade(&callbacks);
@@ -1920,7 +1934,7 @@ mod tests {
                         }),
                     );
                 }
-                owner.dispatch_moved();
+                owner.dispatch_state_changed();
                 panic!("original dispatch failure");
             }));
             let failure = catch_unwind(AssertUnwindSafe(|| {
@@ -1937,7 +1951,7 @@ mod tests {
                 *expected.last().expect("status")
             );
             assert!(
-                !moved.load(Ordering::SeqCst),
+                !changed.load(Ordering::SeqCst),
                 "aborted ordinary event was replayed"
             );
             let state = Arc::clone(&focused);
@@ -2013,7 +2027,7 @@ mod tests {
         *callbacks.on_resize.lock() = Some(Box::new(move |_, _| {
             let _ = &first;
         }));
-        *callbacks.on_moved.lock() = Some(Box::new(move || {
+        *callbacks.on_state_changed.lock() = Some(Box::new(move || {
             let _ = &second;
         }));
         let closed = Arc::new(AtomicU32::new(0));
@@ -2036,7 +2050,7 @@ mod tests {
         assert_eq!(drops.load(Ordering::SeqCst), 2);
         assert!(callbacks.cleared.load(Ordering::SeqCst));
         assert!(callbacks.on_resize.lock().is_none());
-        assert!(callbacks.on_moved.lock().is_none());
+        assert!(callbacks.on_state_changed.lock().is_none());
     }
 
     fn owner_callback_and_capture_panics_do_not_replace_an_existing_unwind() {

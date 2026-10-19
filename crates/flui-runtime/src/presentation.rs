@@ -299,6 +299,28 @@ pub(crate) enum PresentationLifecycle {
     Closed,
 }
 
+/// Where a window's content sits on the desktop, as a published
+/// [`WindowState`](flui_platform_api::WindowState) reports it: the outer
+/// top-left corner, the display, and whether a frame offsets the content
+/// from that corner. A change re-reads the window's gesture geometry for new
+/// contacts (ADR-0212 §2) and hands it its input regions again (ADR-0217 §5).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ContentPlacement {
+    position: Option<flui_foundation::geometry::Point<f64>>,
+    display: Option<flui_platform_api::DisplayId>,
+    decorated: bool,
+}
+
+impl ContentPlacement {
+    pub(crate) fn of(state: &flui_platform_api::WindowState) -> Self {
+        Self {
+            position: state.outer.position,
+            display: state.display,
+            decorated: state.decorated,
+        }
+    }
+}
+
 /// Phase-addressed frame fault injection used by the containment tests.
 #[cfg(test)]
 struct SegmentProbe {
@@ -398,6 +420,15 @@ pub struct PresentationState {
     /// handle themselves, so collection lasts while the hook keeps one.
     /// Owner thread only.
     pub(crate) dev_agent: RefCell<Option<crate::ui_runtime::DevAgentSlot>>,
+    /// The window this presentation is shown in, as the host controls it, once
+    /// `UiRuntime::install_window` has attached it. Closed before the
+    /// presentation's terminal notification, so a handle held past the close
+    /// answers closed. Owner thread only.
+    pub(crate) window_control: RefCell<Option<std::rc::Rc<flui_view::__runtime::WindowSource>>>,
+    /// Where the window's content sat in the state last published through
+    /// `window_control`: a publication that changes it is the window moving.
+    /// Owner thread only.
+    pub(crate) window_placement: Cell<Option<ContentPlacement>>,
     /// Owner-local widget framework state. One instance per presentation
     /// (ADR-0043) — the UI runtime-level singular binding this used to be
     /// dissolves here; every widget-tree operation for this surface enters
@@ -907,6 +938,8 @@ impl PresentationState {
             text_input,
             semantics,
             dev_agent: RefCell::new(None),
+            window_control: RefCell::new(None),
+            window_placement: Cell::new(None),
             widgets,
             renderer,
             frames_rendered: Cell::new(0),
@@ -1023,6 +1056,8 @@ impl PresentationState {
             text_input,
             semantics,
             dev_agent: RefCell::new(None),
+            window_control: RefCell::new(None),
+            window_placement: Cell::new(None),
             widgets,
             renderer,
             frames_rendered: Cell::new(0),
@@ -1994,6 +2029,10 @@ impl PresentationState {
         if let Some(agent) = &agent {
             agent.withdraw();
         }
+        let window_control = self.window_control.take();
+        if let Some(window) = &window_control {
+            failure.invoke(|| window.close());
+        }
         let (announce, event) = self.semantics.take_close_callbacks();
 
         let source = self.widgets.lifecycle_source();
@@ -2007,6 +2046,7 @@ impl PresentationState {
         failure.retire(announce);
         failure.retire(event);
         failure.retire(agent);
+        failure.release(window_control);
         let mode = failure.mode();
         failure.invoke(|| close_focus(&self.focus, mode));
         let mode = failure.mode();

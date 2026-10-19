@@ -796,7 +796,7 @@ loop behind a small `NativeLoop` trait; the backend-minting seam; and a backend 
 - The work comes in two steps: a mechanical move of the traits with a re-export, then the removal of
   `Send` from callbacks, one backend at a time. Win32, AppKit, UIKit and Android are clippy-only in
   CI, so each backend step needs a recorded live run.
-- `fn raw_window_handle(&self) -> RawWindowHandle` (`crates/flui-platform/src/window.rs:196`) is
+- `fn raw_window_handle(&self) -> RawWindowHandle` (on the legacy window trait, since removed by ADR-0237) is
   replaced by the `HasWindowHandle`/`HasDisplayHandle` traits before any freeze. raw-window-handle
   0.6 is the one named P10 exception, with its price recorded: rwh 0.7 means a
   `flui-platform-api` major.

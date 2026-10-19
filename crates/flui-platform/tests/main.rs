@@ -67,6 +67,8 @@ mod web_text;
 mod window_callback_unwind;
 #[path = "window_installation.rs"]
 mod window_installation;
+#[path = "window_state.rs"]
+mod window_state;
 
 /// Runs every case even after one fails, then panics listing the failing case names.
 fn run_table(table: &str, cases: &[(&str, fn())]) {

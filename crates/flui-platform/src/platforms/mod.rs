@@ -46,8 +46,8 @@ pub use android::AndroidPlatform;
 pub use headless::{
     DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeHaptics,
     FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessDisplayControls,
-    HeadlessDragAndDrop, HeadlessExitReevaluation, HeadlessInputDevices, HeadlessOwnerTurns,
-    HeadlessPlatform, MockWindow,
+    HeadlessDragAndDrop, HeadlessExitReevaluation, HeadlessHostEvents, HeadlessInputDevices,
+    HeadlessOwnerTurns, HeadlessPlatform, HeadlessWindowPolicy, MockWindow,
 };
 #[cfg(target_os = "ios")]
 pub use ios::IOSPlatform;

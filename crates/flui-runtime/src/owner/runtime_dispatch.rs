@@ -10,7 +10,7 @@ use super::{
 use crate::ui_runtime::UiRuntime;
 
 /// Work belonging to the runtime independently of any presentation's lifetime.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum RuntimeOperation {
     /// Invalidate text and layout after the host font collection changes.
@@ -19,6 +19,8 @@ pub enum RuntimeOperation {
     Background,
     /// Apply the host lifecycle to all presentations in this runtime.
     Lifecycle(AppLifecycleState),
+    /// Deliver a system notice to every presentation in this runtime.
+    HostNotice(flui_platform_api::HostNotice),
     /// Irreversibly stop every presentation in this runtime without removing it.
     Stop,
     /// Reassemble the runtime's mounted presentations at the requested tier.
@@ -130,15 +132,33 @@ impl RuntimeWork {
             Self::TestCallback(address, _) => *address,
         }
     }
+    /// Fold `newer` into `self` when it only repeats what is already queued
+    /// directly in front of it: window-state samples of one presentation merge,
+    /// and a memory-pressure notice at a level the runtime is already queued to
+    /// hear collapses into it. Trimming twice for one level frees nothing the
+    /// first did not, and subscribers learn nothing from the repeat.
     pub(super) fn merge_pending_state(&mut self, newer: &Self) -> bool {
-        if let (Self::WindowState(address, state), Self::WindowState(next_address, next)) =
-            (self, newer)
-            && address == next_address
-        {
-            state.merge(next);
-            true
-        } else {
-            false
+        match (self, newer) {
+            (Self::WindowState(address, state), Self::WindowState(next_address, next))
+                if address == next_address =>
+            {
+                state.merge(next);
+                true
+            }
+            (
+                Self::Runtime(id, RuntimeOperation::HostNotice(queued)),
+                Self::Runtime(next_id, RuntimeOperation::HostNotice(next)),
+            ) => {
+                id == next_id
+                    && matches!(
+                        (queued, next),
+                        (
+                            flui_platform_api::HostNotice::MemoryPressure(queued),
+                            flui_platform_api::HostNotice::MemoryPressure(next),
+                        ) if queued == next
+                    )
+            }
+            _ => false,
         }
     }
     pub(super) fn validate_admission(&self, state: &OwnerState) -> Result<usize, DispatchError> {
@@ -272,6 +292,9 @@ impl RuntimeWork {
                 effects.runtime_lifecycle(id, state);
                 runtime.enter(|runtime| runtime.update_host_lifecycle(state));
             }
+            Self::Runtime(_, RuntimeOperation::HostNotice(notice)) => {
+                runtime.enter(|runtime| runtime.deliver_host_notice(&notice));
+            }
             Self::Runtime(_, RuntimeOperation::Stop) => {
                 runtime.enter(UiRuntime::stop_presentations);
             }
@@ -280,5 +303,79 @@ impl RuntimeWork {
                 runtime.enter(|runtime| runtime.perform_hot_reload_entered(tier));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use flui_foundation::UiRuntimeId;
+    use flui_foundation::memory::MemoryPressureLevel::{Critical, Moderate};
+    use flui_platform_api::HostNotice;
+
+    use super::{RuntimeOperation, RuntimeWork};
+
+    fn runtime(generation: u32) -> UiRuntimeId {
+        UiRuntimeId::new_gen(0, NonZeroU32::new(generation).expect("nonzero"))
+    }
+
+    fn notice(runtime: UiRuntimeId, notice: HostNotice) -> RuntimeWork {
+        RuntimeWork::Runtime(runtime, RuntimeOperation::HostNotice(notice))
+    }
+
+    fn folds(queued: HostNotice, next: HostNotice) -> bool {
+        notice(runtime(1), queued).merge_pending_state(&notice(runtime(1), next))
+    }
+
+    fn the_same_pressure_level_queued_twice_folds_into_one() {
+        assert!(folds(
+            HostNotice::MemoryPressure(Critical),
+            HostNotice::MemoryPressure(Critical)
+        ));
+        assert!(folds(
+            HostNotice::MemoryPressure(Moderate),
+            HostNotice::MemoryPressure(Moderate)
+        ));
+    }
+
+    fn different_levels_and_other_notices_each_stay() {
+        assert!(!folds(
+            HostNotice::MemoryPressure(Moderate),
+            HostNotice::MemoryPressure(Critical)
+        ));
+        assert!(!folds(
+            HostNotice::MemoryPressure(Critical),
+            HostNotice::Wake
+        ));
+        assert!(!folds(HostNotice::Wake, HostNotice::Wake));
+    }
+
+    fn a_pressure_notice_for_another_runtime_stays() {
+        let mut queued = notice(runtime(1), HostNotice::MemoryPressure(Critical));
+        assert!(
+            !queued.merge_pending_state(&notice(runtime(2), HostNotice::MemoryPressure(Critical)))
+        );
+    }
+
+    #[test]
+    fn host_notice_coalescing() {
+        crate::table_test::run_table(
+            "host_notice_coalescing",
+            &[
+                (
+                    "the_same_pressure_level_queued_twice_folds_into_one",
+                    the_same_pressure_level_queued_twice_folds_into_one as fn(),
+                ),
+                (
+                    "different_levels_and_other_notices_each_stay",
+                    different_levels_and_other_notices_each_stay as fn(),
+                ),
+                (
+                    "a_pressure_notice_for_another_runtime_stays",
+                    a_pressure_notice_for_another_runtime_stays as fn(),
+                ),
+            ],
+        );
     }
 }

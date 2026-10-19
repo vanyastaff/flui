@@ -10,7 +10,8 @@ use std::{
 };
 
 use flui_platform_api::{
-    Clipboard, ClipboardItem, DisplaySnapshot, WindowEvent, WindowId, WindowOptions,
+    Clipboard, ClipboardItem, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
+    WindowEvent, WindowId, WindowOptions,
 };
 
 use super::{HostWindow, OpenWindowError, OwnerPlatform};
@@ -45,38 +46,6 @@ use crate::{
 /// boxed `std::error::Error` rather than committing the signature to any
 /// one error library.
 pub type PlatformReadyCallback = Box<dyn FnOnce(OwnerPlatform) -> Result<(), BootstrapError>>;
-
-/// A phase of the user's session ending, as the platform reports it to
-/// [`Platform::on_session_end`].
-///
-/// On Windows a session end is a query to every top-level window
-/// (`WM_QUERYENDSESSION`), then its outcome (`WM_ENDSESSION`): either the
-/// session ends, and the process is terminated soon after the callback
-/// returns, or it was cancelled, by the user or by another application.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum SessionEndPhase {
-    /// The session is about to end; the answer says whether the application
-    /// asks the user to wait.
-    Query,
-    /// The session end was cancelled; the session goes on.
-    Cancelled,
-    /// The session is ending now; the process will not outlive it for long.
-    Ending,
-}
-
-/// The application's answer to a [`SessionEndPhase`]. Only an answer to
-/// [`SessionEndPhase::Query`] is read; the platform ignores the others.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum SessionEndAnswer {
-    /// Let the session end.
-    Proceed,
-    /// Ask the user to wait: work that cannot be written without a decision
-    /// would be lost. The operating system shows the application as blocking
-    /// and lets the user end the session anyway.
-    Block,
-}
 
 /// Core platform abstraction trait
 ///
@@ -428,6 +397,52 @@ pub trait Platform: Send + Sync + 'static {
     /// default implementation drops it unused.
     fn on_session_end(&self, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {
         let _ = callback;
+    }
+
+    /// Register the callback the platform calls with every system notice other
+    /// than a session end's phases (sleep, wake, session lock, memory
+    /// pressure), replacing any earlier one. It runs on the owner thread.
+    ///
+    /// A backend that observes none of them never calls it, and the default
+    /// implementation drops it unused.
+    ///
+    /// A backend that delivers [`SystemNotice::Wake`] marks its display
+    /// snapshot and every window's state stale first, in the shared dispatch
+    /// (`shared::system_notice`), so the first read after the machine woke asks
+    /// the operating system again.
+    fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
+        let _ = callback;
+    }
+
+    /// Tell the platform the application is done holding a session end it
+    /// answered [`SessionEndAnswer::Block`] to, so the session may go on: the
+    /// last [`SessionEndBlock`](flui_platform_api::SessionEndBlock) was
+    /// released. A backend that holds the session open (Windows'
+    /// `ShutdownBlockReason`) lets go here; one that answered synchronously has
+    /// nothing to undo, and the default does nothing.
+    fn release_session_end(&self) {}
+
+    /// Which window commands and observations this platform's windows have,
+    /// known before any window exists.
+    ///
+    /// It is the same set every window the platform opens reports through
+    /// [`PlatformWindow::capabilities`](flui_platform_api::PlatformWindow::capabilities),
+    /// so a caller can fit a remembered placement to what the window will be
+    /// able to do (`WindowCapabilities::places_at_open`) before it opens one.
+    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities;
+
+    /// How much larger a decorated window's outer size is than its content
+    /// size on a display of scale `scale_factor`, in logical pixels: the title
+    /// bar and borders. Known before any window exists, so a remembered
+    /// placement can be fitted by its outer size.
+    ///
+    /// The default is zero, which is exact for a platform whose windows have no
+    /// non-client area (headless, mobile, web) and an under-estimate where the
+    /// frame is not measured yet (winit, AppKit: applied with their placement
+    /// support).
+    fn window_frame_inset(&self, scale_factor: f64) -> flui_foundation::geometry::Size<f64> {
+        let _ = scale_factor;
+        flui_foundation::geometry::Size::new(0.0, 0.0)
     }
 
     /// Register the macOS application's reopen signal callback.

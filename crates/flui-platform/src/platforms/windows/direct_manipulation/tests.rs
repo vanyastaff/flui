@@ -97,13 +97,13 @@ fn send(hwnd: HWND, message: u32) {
 fn fixture(nested: Option<fn(HWND)>) -> Fixture {
     let platform = WindowsPlatform::new().expect("platform");
     let window = platform
-        .open_window(WindowOptions {
-            title: "flui touchpad".into(),
-            size: Size::new(200.0, 120.0),
-            // Shown: a hidden window keeps no update region.
-            visible: true,
-            ..Default::default()
-        })
+        .open_window(
+            WindowOptions::default()
+                .with_title("flui touchpad")
+                .with_size(Size::new(200.0, 120.0))
+                // Shown: a hidden window keeps no update region.
+                .with_visible(true),
+        )
         .expect("window");
     let hwnd = window
         .as_any()
