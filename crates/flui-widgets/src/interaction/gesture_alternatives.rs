@@ -42,7 +42,7 @@ use super::actions::{
 use super::companion::{CompanionGap, CompanionLink, LinkedCompanions};
 use super::focus::Focus;
 use super::focus_ring::FocusRing;
-use super::gesture_arena_scope::GestureArenaScope;
+use super::gesture_arena_scope::{GestureArenaScope, GesturePolicy};
 use super::listener::Listener;
 use super::raw_button::RawButton;
 use super::raw_gesture_detector::{
@@ -875,7 +875,7 @@ pub struct GestureAlternativesState {
     menu: bool,
     given_hold: Option<Rc<SequencedBranch>>,
     /// The arena, settings and writer the long press is built against.
-    policy: Option<(GestureArena, GestureSettingsProvider, WriterSource)>,
+    policy: Option<(GesturePolicy, WriterSource)>,
     hold: Option<MenuHold>,
     hold_attachment: Rc<RecognizerAttachment<LongPressGestureRecognizer>>,
     /// The contacts down on the row, one of which the long press holds.
@@ -892,13 +892,9 @@ pub struct GestureAlternativesState {
 struct MenuHold {
     branch: Option<Rc<SequencedBranch>>,
     recognizer: Rc<LongPressGestureRecognizer>,
-    /// What the hold was built for: the arena handle and policy, and the hold
-    /// the view handed it.
-    built_for: (
-        GestureArena,
-        GestureSettingsProvider,
-        Option<Rc<SequencedBranch>>,
-    ),
+    /// What the hold was built for: the arena handle and settings, and the
+    /// hold the view handed it.
+    built_for: (GesturePolicy, Option<Rc<SequencedBranch>>),
 }
 
 impl fmt::Debug for GestureAlternativesState {
@@ -914,13 +910,7 @@ impl GestureAlternativesState {
     /// Only a menu's long press uses them, and visible controls work outside
     /// a gesture scope, so there is none outside one.
     fn acquire(&mut self, ctx: &dyn LifecycleContext) {
-        self.policy = GestureArenaScope::maybe_of(ctx).map(|arena| {
-            (
-                arena,
-                GestureArenaScope::settings_or_default_of(ctx),
-                ctx.writer_source(),
-            )
-        });
+        self.policy = GesturePolicy::maybe_of(ctx).map(|policy| (policy, ctx.writer_source()));
         self.rebuild_hold();
     }
 
@@ -928,7 +918,7 @@ impl GestureAlternativesState {
     /// retiring the one it replaces; drop it when the alternative is no
     /// longer a menu.
     fn rebuild_hold(&mut self) {
-        let Some((arena, settings, writer)) = self.policy.clone().filter(|_| self.menu) else {
+        let Some((policy, writer)) = self.policy.clone().filter(|_| self.menu) else {
             self.hold_attachment.clear();
             if let Some(outgoing) = self.hold.take() {
                 let _ = outgoing.recognizer.cancel();
@@ -936,14 +926,13 @@ impl GestureAlternativesState {
             return;
         };
         let current = self.hold.as_ref().is_some_and(|hold| {
-            let (built_arena, built_settings, built_hold) = &hold.built_for;
-            built_arena.admits_like(&arena)
-                && *built_settings == settings
-                && same_hold(built_hold.as_ref(), self.given_hold.as_ref())
+            let (built_policy, built_hold) = &hold.built_for;
+            *built_policy == policy && same_hold(built_hold.as_ref(), self.given_hold.as_ref())
         });
         if current {
             return;
         }
+        let GesturePolicy { arena, settings } = &policy;
         let branch = match &self.given_hold {
             Some(branch) => Some(Rc::clone(branch)),
             None => match arena.sequenced() {
@@ -960,8 +949,8 @@ impl GestureAlternativesState {
         };
         let recognizer = menu_long_press(
             branch.as_ref(),
-            &arena,
-            &settings,
+            arena,
+            settings,
             &writer,
             &self.opener,
             &self.pressed,
@@ -970,7 +959,7 @@ impl GestureAlternativesState {
         let outgoing = self.hold.replace(MenuHold {
             branch,
             recognizer,
-            built_for: (arena, settings, self.given_hold.clone()),
+            built_for: (policy, self.given_hold.clone()),
         });
         if let Some(outgoing) = outgoing {
             let _ = outgoing.recognizer.cancel();

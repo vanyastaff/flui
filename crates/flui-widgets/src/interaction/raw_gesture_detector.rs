@@ -15,6 +15,7 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::WriterSource;
 use flui_view::prelude::*;
 
+use super::GesturePolicy;
 use crate::{GestureArenaScope, Listener, MediaQuery};
 
 /// Builds one kind of recognizer for a [`RawGestureDetector`] and carries its
@@ -51,8 +52,7 @@ pub trait GestureRecognizerFactory: 'static {
 /// for signal writes from recognizer callbacks.
 #[derive(Debug, Clone)]
 pub struct RecognizerContext {
-    arena: GestureArena,
-    settings: GestureSettingsProvider,
+    policy: GesturePolicy,
     writer: WriterSource,
 }
 
@@ -61,13 +61,13 @@ impl RecognizerContext {
     /// settings.
     #[must_use]
     pub fn arena(&self) -> &GestureArena {
-        &self.arena
+        &self.policy.arena
     }
 
     /// The scope's gesture settings; read them per pointer kind at admission.
     #[must_use]
     pub fn settings(&self) -> &GestureSettingsProvider {
-        &self.settings
+        &self.policy.settings
     }
 
     /// The owner's writer: a recognizer callback opens a write through it to
@@ -381,8 +381,7 @@ impl StatefulView for RawGestureDetector {
 
 fn context_of(ctx: &dyn LifecycleContext) -> RecognizerContext {
     RecognizerContext {
-        arena: GestureArenaScope::of(ctx),
-        settings: GestureArenaScope::settings_of(ctx),
+        policy: GesturePolicy::of(ctx),
         writer: ctx.writer_source(),
     }
 }
@@ -411,9 +410,10 @@ impl ViewState<RawGestureDetector> for RawGestureDetectorState {
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         let incoming = context_of(ctx);
-        let changed = self.context.as_ref().is_some_and(|current| {
-            current.settings != incoming.settings || !current.arena.admits_like(&incoming.arena)
-        });
+        let changed = self
+            .context
+            .as_ref()
+            .is_some_and(|current| current.policy != incoming.policy);
         if !changed {
             self.context = Some(incoming);
             return;

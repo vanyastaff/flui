@@ -26,9 +26,9 @@ use flui_interaction::drag::{
 };
 use flui_interaction::gesture::SequencedBranch;
 use flui_interaction::{
-    GestureArena, GestureRecognizer, GestureSettingsProvider, HapticsHandle, HitTestHandle,
-    LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
-    MultiDragHandle, MultiDragUpdateDetails, PointerEvent, PointerId,
+    GestureRecognizer, HapticsHandle, HitTestHandle, LongPressGestureRecognizer, MultiDragAxis,
+    MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails,
+    PointerEvent, PointerId,
 };
 use flui_platform_api::data_transfer::TransferActions;
 use flui_platform_api::haptics::{HapticRequest, HapticTiming};
@@ -44,7 +44,7 @@ use super::gesture_alternatives::{
     AlternativeKind, CommandAppearance, GestureAlternatives, GestureAlternativesError,
     MenuHoldScope,
 };
-use super::gesture_arena_scope::GestureArenaScope;
+use super::gesture_arena_scope::GesturePolicy;
 use super::recognizer_attachment::RecognizerAttachment;
 use crate::overlay::{InsertPosition, Overlay, OverlayEntry, OverlayHandle};
 use crate::support::{EventCallback, ValueCallback, event_callback, value_callback};
@@ -662,10 +662,9 @@ pub struct DraggableState {
     source: Rc<Source>,
     drag: Option<Rc<MultiDragGestureRecognizer>>,
     hold: Option<Rc<LongPressGestureRecognizer>>,
-    /// The trigger the view asks for, and the arena and policy the
-    /// recognizers are built for.
+    /// The trigger the view asks for, and the scope's arena and settings.
     trigger: DragTrigger,
-    arena: Option<GestureArena>,
+    policy: Option<GesturePolicy>,
     /// The hold of an enclosing context menu, and whether the widget's own
     /// alternatives are a menu: a long-press drag succeeds a menu's long press
     /// instead of holding the contact itself.
@@ -702,7 +701,7 @@ impl StatefulView for Draggable {
             drag: None,
             hold: None,
             trigger: self.trigger,
-            arena: None,
+            policy: None,
             enclosing_hold: None,
             own_menu: self.alternatives.is_menu(),
             own_hold: None,
@@ -715,8 +714,7 @@ impl StatefulView for Draggable {
 
 /// What a draggable's recognizers were built for.
 struct BuiltFor {
-    arena: GestureArena,
-    settings: GestureSettingsProvider,
+    policy: GesturePolicy,
     trigger: DragTrigger,
     enclosing_hold: Option<Rc<SequencedBranch>>,
     own_menu: bool,
@@ -730,8 +728,7 @@ impl BuiltFor {
             (Some(ours), Some(theirs)) => Rc::ptr_eq(ours, theirs),
             _ => false,
         };
-        self.arena.admits_like(&wanted.arena)
-            && self.settings == wanted.settings
+        self.policy == wanted.policy
             && self.trigger == wanted.trigger
             && self.own_menu == wanted.own_menu
             && same_hold
@@ -755,14 +752,14 @@ impl DraggableState {
 
     /// Build the recognizers for `trigger` under `settings`, retiring the ones
     /// they replace.
-    fn rebuild_recognizers(&mut self, settings: GestureSettingsProvider) {
+    fn rebuild_recognizers(&mut self) {
         let trigger = self.trigger;
-        let Some(arena) = self.arena.clone() else {
+        let Some(policy) = self.policy.clone() else {
             return;
         };
+        let GesturePolicy { arena, settings } = policy.clone();
         let built_for = BuiltFor {
-            arena: arena.clone(),
-            settings: settings.clone(),
+            policy,
             trigger,
             enclosing_hold: self.enclosing_hold.clone(),
             own_menu: self.own_menu,
@@ -873,9 +870,9 @@ impl ViewState<Draggable> for DraggableState {
     /// hold changed (ADR-0208).
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.acquire(ctx);
-        self.arena = Some(GestureArenaScope::of(ctx));
+        self.policy = Some(GesturePolicy::of(ctx));
         self.enclosing_hold = MenuHoldScope::of(ctx);
-        self.rebuild_recognizers(GestureArenaScope::settings_of(ctx));
+        self.rebuild_recognizers();
     }
 
     /// A new trigger, or alternatives that turn into a menu or out of one,
@@ -886,9 +883,8 @@ impl ViewState<Draggable> for DraggableState {
         if new_view.trigger != self.trigger || own_menu != self.own_menu {
             self.trigger = new_view.trigger;
             self.own_menu = own_menu;
-            if let Some(built) = &self.built_for {
-                let settings = built.settings.clone();
-                self.rebuild_recognizers(settings);
+            if self.built_for.is_some() {
+                self.rebuild_recognizers();
             }
         }
     }
