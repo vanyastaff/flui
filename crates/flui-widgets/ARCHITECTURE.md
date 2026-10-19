@@ -3255,7 +3255,7 @@ scrolls and the controller are not contacts. A `PageController` and a `PageSnap`
 page length from one `ViewportFraction` (finite and positive, refused with a `Result` where it
 is made), and a page shorter than a logical pixel names no page, so a release rests where it
 is. The policy `Arc` lives in `PageViewState` for the
-life of the controller. The scroll view's label is `WidgetsLocalizations::page_label` ("Page N of M" by default); the
+life of the controller. The scroll view's label is `WidgetsLocalizations::page_label` ("Page N of M" in `DefaultWidgetsLocalizations`); the
 page listener rebuilds the page view on every page change to keep it current.
 
 A swipe is a path, and the pages it hides are content, so the pager is a behavioural widget
