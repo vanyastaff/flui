@@ -9,9 +9,9 @@ use std::{
 };
 
 use cursor_icon::CursorIcon;
-use objc2::msg_send;
 use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
 use objc2::{ClassType, class, sel};
+use objc2::{MainThreadMarker, msg_send};
 use objc2_app_kit::{NSBackingStoreType, NSWindowCollectionBehavior, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
@@ -23,10 +23,10 @@ use flui_platform_api::{
 
 use crate::shared::{
     appkit_window_geometry::{
-        cocoa_frame, cocoa_top_left_point, constraints_of_content_limits,
+        cocoa_frame, cocoa_frame_keeping_top, cocoa_top_left_point, constraints_of_content_limits,
         content_limits_of_constraints, top_left_of_frame,
     },
-    appkit_window_mode::{ModeStep, WindowFlags, is_shown, mode_of, next_batch, steps_to},
+    appkit_window_mode::{ModeSequence, ModeStep, WindowFlags, is_shown, mode_of},
 };
 use parking_lot::Mutex;
 use raw_window_handle::{
@@ -57,12 +57,6 @@ use crate::{
         WindowReveal,
     },
 };
-
-/// How long a window counts as still animating a full-screen or Dock step when
-/// the notification that ends it has not come. Past it a mode command is sent
-/// instead of held, so a step AppKit silently refused cannot hold the window
-/// for good.
-const ANIMATION_LIMIT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// macOS window wrapper around NSWindow
 pub struct MacOSWindow {
@@ -231,21 +225,9 @@ struct MacOSWindowState {
     /// and when the window opens in another mode; `None` until then.
     normal: Option<WindowGeometry>,
 
-    /// A mode the window is on its way to, held until the step that is
-    /// animating ends: either a command that arrived meanwhile, or the rest of
-    /// a mode whose first step (leaving full screen or the Dock) must finish
-    /// before the window can be planned again. Sent from the delegate when the
-    /// step ends.
-    after_transition: Option<WindowMode>,
-
-    /// When the step that is animating (full screen, the Dock) started, if one
-    /// is: AppKit ignores a toggle sent during it. Cleared by the notification
-    /// that ends it, and ignored after `ANIMATION_LIMIT` in case none comes.
-    animating_since: Option<std::time::Instant>,
-
-    /// The mode a window that opened hidden enters when it is first shown,
-    /// unless a mode command comes first.
-    when_shown: Option<WindowMode>,
+    /// The order in which mode commands reach AppKit, and the mode a hidden
+    /// window enters when first shown.
+    sequence: ModeSequence,
 
     /// Last surface-visibility value dispatched through
     /// `WindowCallbacks::dispatch_visibility_status_change` (hidden-surface
@@ -529,13 +511,7 @@ impl MacOSWindow {
                         cocoa_frame(at, size, height)
                     }
                     // Without a position the top-left corner stays where it is.
-                    _ => Bounds {
-                        origin: Point::new(
-                            current.origin.x,
-                            current.origin.y + current.size.height - size.height,
-                        ),
-                        size,
-                    },
+                    _ => cocoa_frame_keeping_top(super::display::bounds_of(current), size),
                 };
                 let _: () = msg_send![
                     ns_window,
@@ -604,9 +580,7 @@ impl MacOSWindow {
                     display: None,
                     cursor: CursorIcon::default(),
                     normal: None,
-                    after_transition: None,
-                    animating_since: None,
-                    when_shown: None,
+                    sequence: ModeSequence::default(),
                     occlusion_visible: true,
                     first_reveal_pending,
                 })),
@@ -674,7 +648,7 @@ impl MacOSWindow {
                     // options document; its first snapshot says so.
                     let _ = window.change_mode(options.mode);
                 } else {
-                    window.state.lock().when_shown = Some(options.mode);
+                    window.state.lock().sequence.enter_when_shown(options.mode);
                 }
             }
 
@@ -1041,7 +1015,7 @@ fn window_class() -> &'static Class {
         }
 
         let mut decl = ClassBuilder::new(c"FLUIWindow", class!(NSWindow))
-            .expect("FLUIWindow must be registered exactly once (guarded by Once)");
+            .expect("BUG: FLUIWindow must be registered exactly once (guarded by Once)");
         // SAFETY: both selectors are `NSWindow` getters returning `BOOL` and
         // taking no argument, which `takes_focus` matches.
         unsafe {
@@ -1057,21 +1031,21 @@ fn window_class() -> &'static Class {
         decl.register();
     });
 
-    AnyClass::get(c"FLUIWindow").expect("FLUIWindow was registered by the Once block above")
+    AnyClass::get(c"FLUIWindow").expect("BUG: FLUIWindow was registered by the Once block above")
 }
 
 /// How much larger a titled, closable, miniaturizable and resizable window's
 /// frame is than its content, in points: the title bar. Asked of the class, so
-/// it is known before any window exists.
-pub(super) fn decorated_frame_inset() -> Size<f64> {
+/// it is known before any window exists. The marker is the proof that the
+/// caller is on the main thread, where every AppKit message in this module runs.
+pub(super) fn decorated_frame_inset(_main: MainThreadMarker) -> Size<f64> {
     let mask = NSWindowStyleMask::Titled
         | NSWindowStyleMask::Closable
         | NSWindowStyleMask::Miniaturizable
         | NSWindowStyleMask::Resizable;
     // SAFETY: `frameRectForContentRect:styleMask:` takes a rectangle and a mask
-    // by value and returns a rectangle; it messages no window. The caller is on
-    // the owner thread (`MacOSPlatform::window_frame_inset` asserts it), where
-    // every AppKit message in this module runs.
+    // by value and returns a rectangle, and it messages no window; the main
+    // thread is witnessed by the marker.
     let frame: NSRect = unsafe {
         msg_send![
             class!(NSWindow),
@@ -2122,7 +2096,7 @@ fn get_or_create_delegate_class() -> &'static Class {
         ) {
             // SAFETY: see the shared invariant above.
             if let Some(window) = unsafe { get_window_from_delegate(this) } {
-                window.record_normal(false);
+                window.record_normal();
                 window.handle_transition_started();
             }
         }
@@ -2136,7 +2110,7 @@ fn get_or_create_delegate_class() -> &'static Class {
         ) {
             // SAFETY: see the shared invariant above.
             if let Some(window) = unsafe { get_window_from_delegate(this) } {
-                window.record_normal(true);
+                window.record_normal_entering_fullscreen();
                 window.handle_transition_started();
             }
         }
@@ -2163,7 +2137,7 @@ fn get_or_create_delegate_class() -> &'static Class {
         ) -> BObjC {
             // SAFETY: see the shared invariant above.
             if let Some(window) = unsafe { get_window_from_delegate(this) } {
-                window.record_normal(false);
+                window.record_normal();
             }
             YES
         }
@@ -2496,19 +2470,22 @@ impl MacOSWindow {
     /// Remember the outer rectangle if the window is in normal mode: the
     /// window is about to leave it, and AppKit keeps no record of where it
     /// returns to.
-    ///
-    /// `windowWillEnterFullScreen:` may already see the full-screen style bit
-    /// while the frame is still the normal one, so `entering_fullscreen` counts
-    /// a window as normal if it is neither miniaturized nor zoomed.
-    fn record_normal(&self, entering_fullscreen: bool) {
+    fn record_normal(&self) {
+        self.record_normal_if(|flags| mode_of(flags) == WindowMode::Normal);
+    }
+
+    /// [`record_normal`](Self::record_normal) for `windowWillEnterFullScreen:`,
+    /// which may already see the full-screen style bit while the frame is still
+    /// the normal one: a window counts as normal if it is neither miniaturized
+    /// nor maximized.
+    fn record_normal_entering_fullscreen(&self) {
+        self.record_normal_if(|flags| !(flags.miniaturized || flags.is_maximized()));
+    }
+
+    fn record_normal_if(&self, is_normal: impl FnOnce(WindowFlags) -> bool + Send) {
         let in_normal_mode = route_on_owner(self.owner, self.owner_is_main, || {
             // SAFETY: `ns_window` is alive; the body runs on the owner lane.
-            let flags = unsafe { self.read_flags() };
-            if entering_fullscreen {
-                !(flags.miniaturized || flags.zoomed && flags.resizable)
-            } else {
-                mode_of(flags) == WindowMode::Normal
-            }
+            is_normal(unsafe { self.read_flags() })
         });
         if in_normal_mode {
             let outer = self.outer_geometry();
@@ -2657,30 +2634,16 @@ impl MacOSWindow {
                     .into(),
             });
         }
-        let now = std::time::Instant::now();
-        {
-            let mut state = self.state.lock();
-            state.when_shown = None;
-            if state
-                .animating_since
-                .is_some_and(|since| now.saturating_duration_since(since) < ANIMATION_LIMIT)
-            {
-                state.after_transition = Some(mode);
-                return Ok(());
-            }
-        }
-        let steps = steps_to(flags, mode);
-        let (batch, asks_again) = next_batch(&steps);
-        {
-            let mut state = self.state.lock();
-            state.after_transition = asks_again.then_some(mode);
-            state.animating_since = batch.iter().any(|step| step.animates()).then_some(now);
-        }
-        if !batch.is_empty() {
-            self.record_normal(false);
+        let steps = self
+            .state
+            .lock()
+            .sequence
+            .command(std::time::Instant::now(), flags, mode);
+        if !steps.is_empty() {
+            self.record_normal();
         }
         route_on_owner(self.owner, self.owner_is_main, || {
-            for step in batch {
+            for step in &steps {
                 // SAFETY: `ns_window` is alive; the body runs on the owner
                 // lane. Each message is the AppKit request the step names.
                 unsafe {
@@ -2706,19 +2669,20 @@ impl MacOSWindow {
 
     /// A step that animates has started, from this backend or from the user.
     fn handle_transition_started(&self) {
-        self.state.lock().animating_since = Some(std::time::Instant::now());
+        self.state
+            .lock()
+            .sequence
+            .step_started(std::time::Instant::now());
     }
 
     /// A step that animates is over (or failed): publish the window, then send
-    /// the mode held back for it, if there is one.
+    /// the mode held back for it, if there is one. The held mode is taken after
+    /// the publish, since a subscriber that runs in it may command a newer one.
     fn handle_transition_ended(&self) {
-        let waiting = {
-            let mut state = self.state.lock();
-            state.animating_since = None;
-            state.after_transition.take()
-        };
+        self.state.lock().sequence.step_ended();
         self.publish_state();
-        if let Some(mode) = waiting
+        let held = self.state.lock().sequence.take_held();
+        if let Some(mode) = held
             && let Err(error) = self.change_mode(mode)
         {
             tracing::debug!(%error, "a window could not finish changing mode");
@@ -2728,7 +2692,7 @@ impl MacOSWindow {
     /// A window that opened hidden enters the mode it opened in now that it
     /// is shown.
     fn enter_mode_when_shown(&self) {
-        let waiting = self.state.lock().when_shown.take();
+        let waiting = self.state.lock().sequence.take_when_shown();
         if let Some(mode) = waiting
             && let Err(error) = self.change_mode(mode)
         {
