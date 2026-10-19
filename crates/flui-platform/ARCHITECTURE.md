@@ -66,6 +66,29 @@ trait depends on `flui-platform-api` instead.
   `debug_assert_appkit_main_thread`-guarded platform entries, ADR-0039); and
   the `enable_tiling`/`disable_tiling`/`is_tiling_enabled` trio never routes
   (recorded for observability only until the native API is adopted).
+- **Linux host events reach the owner through an inbox, and a machine that
+  waits for the application waits for delivery, not for receipt.** Two sources
+  run beside the owner and never run application code: an async logind task
+  (`linux::host_notices::logind`) and a kernel-pressure thread
+  (`linux::host_notices::pressure`). Each posts a `HostEvent` to one `Inbox`
+  and wakes the owner, which drains it in its next turn
+  (`platform/linux_notices.rs`). logind's sleep and shutdown carry a
+  completion: the delay inhibitor is held until the owner has delivered the
+  event (a panic in a subscriber drops the completion too) and is released
+  after at most four seconds, inside logind's own `InhibitDelayMaxSec`.
+  Shutdown on Linux is a notification: the answer to the session-end query is
+  not read, because logind cannot be asked to wait for the user. The decisions
+  (signal decoding, trigger requests, X11 atoms to mode) are pure models in
+  `linux::lifecycle_model`, checked on every host.
+- **The X11 window probe uses two connections on purpose.** One queries from
+  whichever thread asks and sets the properties a client sets on an unmapped
+  window; the other is read only by the watch thread, which records which
+  windows' `WM_STATE` or `_NET_WM_STATE` changed. A reply wait on the
+  watching connection would read events into its queue while the thread sleeps
+  in `poll`, so no request there waits for a reply. A window that opens
+  maximized or fullscreen is created unmapped, gets its mode written into
+  `_NET_WM_STATE`, and is mapped afterwards, because a window manager reads
+  the mode from the property when it maps a window.
 
 ---
 

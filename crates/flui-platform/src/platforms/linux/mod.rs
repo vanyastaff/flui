@@ -80,7 +80,13 @@
 #[cfg(all(target_os = "linux", feature = "a11y"))]
 mod accessibility;
 pub(crate) mod display;
+#[cfg(feature = "winit-backend")]
+pub(crate) mod host_notices;
+#[cfg(feature = "winit-backend")]
+pub(crate) mod lifecycle_model;
 mod window_ext;
+#[cfg(feature = "winit-backend")]
+pub(crate) mod x11_window_probe;
 
 use std::sync::Arc;
 

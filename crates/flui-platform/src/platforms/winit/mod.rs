@@ -25,6 +25,7 @@ mod platform;
 #[cfg(target_os = "linux")]
 mod preferences;
 mod window;
+mod window_plan;
 
 pub use clipboard::ArboardClipboard;
 pub use data_transfer::WinitDataTransfer;
