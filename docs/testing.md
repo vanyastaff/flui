@@ -1117,8 +1117,8 @@ runs `checks`, `plan` and the `ci` aggregator:
 |---|---|---|
 | `docs` | a pull request that changes only documentation | nothing |
 | `tooling` | a pull request that changes only repository tooling | `deps` |
-| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `test-trybuild`, `doc`, `wasm-check`, `test-features`, `live-smoke`) over the whole workspace |
-| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `miri`, `doc-test` (all Linux) |
+| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `wasm-check`, `test-features`, `live-smoke`) over the whole workspace |
+| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `miri`, `doc-test`, `test-trybuild` (all Linux) |
 
 - **Wide lane**: every pull request that compiles anything runs every Linux
   job, in parallel, over the whole workspace. One serial job over the
