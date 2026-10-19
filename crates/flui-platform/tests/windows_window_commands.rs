@@ -439,6 +439,56 @@ fn a_frame_changed_in_fullscreen_keeps_the_content_it_returns_to() {
     );
 }
 
+fn normal_on_a_hidden_maximized_window_restores_it_without_showing() {
+    let platform = platform();
+    let window = open(&platform, options());
+    apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
+    apply(&window, WindowCommand::Hide);
+    apply(&window, WindowCommand::SetMode(WindowMode::Normal));
+    assert!(!shown(&window), "restoring does not show it");
+    assert_eq!(window.state().mode, WindowMode::Normal);
+    apply(&window, WindowCommand::Show);
+    // SAFETY: a plain query of the live window.
+    assert!(!unsafe { IsZoomed(hwnd_of(&window)) }.as_bool());
+    assert!(shown(&window));
+}
+
+fn limits_set_in_fullscreen_hold_when_it_ends() {
+    let platform = platform();
+    let window = open(&platform, options());
+    apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+    apply(
+        &window,
+        WindowCommand::SetConstraints(SizeConstraints::new(None, Some(Size::new(400.0, 300.0)))),
+    );
+    apply(&window, WindowCommand::SetMode(WindowMode::Normal));
+    let state = window.state();
+    assert!(
+        state.content_size.width <= 402.0 && state.content_size.height <= 302.0,
+        "returned to {:?} past the maximum",
+        state.content_size
+    );
+}
+
+fn a_state_read_inside_a_callback_never_sees_a_half_made_change() {
+    let platform = platform();
+    let window = open(&platform, options());
+    let before = window.state().revision;
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = Arc::clone(&seen);
+    let reader = Arc::clone(&window);
+    window.on_resize(Box::new(move |_, _| {
+        log.lock().expect("log").push(reader.state().revision);
+    }));
+    apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+    let seen = seen.lock().expect("log").clone();
+    assert!(!seen.is_empty(), "entering fullscreen resizes the window");
+    assert!(
+        seen.iter().all(|revision| *revision == before),
+        "a callback saw revisions {seen:?}, not the whole one before {before:?}"
+    );
+}
+
 fn a_maximum_caps_maximizing() {
     let platform = platform();
     let window = open(&platform, options());
@@ -751,6 +801,18 @@ fn native_window_commands() {
         (
             "a_frame_changed_in_fullscreen_keeps_the_content_it_returns_to",
             a_frame_changed_in_fullscreen_keeps_the_content_it_returns_to,
+        ),
+        (
+            "normal_on_a_hidden_maximized_window_restores_it_without_showing",
+            normal_on_a_hidden_maximized_window_restores_it_without_showing,
+        ),
+        (
+            "limits_set_in_fullscreen_hold_when_it_ends",
+            limits_set_in_fullscreen_hold_when_it_ends,
+        ),
+        (
+            "a_state_read_inside_a_callback_never_sees_a_half_made_change",
+            a_state_read_inside_a_callback_never_sees_a_half_made_change,
         ),
         ("a_maximum_caps_maximizing", a_maximum_caps_maximizing),
         (

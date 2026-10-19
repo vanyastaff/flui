@@ -234,6 +234,20 @@ fn low_memory_is_reported_once_per_hold() {
     assert_eq!(*heard.lock().expect("log"), [critical, critical]);
 }
 
+fn a_wake_that_could_not_be_posted_is_delivered_with_the_next_message() {
+    use flui_platform_api::{MemoryPressureLevel, SystemNotice};
+
+    let (receiver, host, heard) = hosted_receiver();
+    host.fail_low_memory_post_for_test();
+    assert!(heard.lock().expect("log").is_empty());
+    receiver.send_with_for_test(windows::Win32::UI::WindowsAndMessaging::WM_NULL, 0, 0);
+    assert_eq!(
+        *heard.lock().expect("log"),
+        [SystemNotice::MemoryPressure(MemoryPressureLevel::Critical)],
+        "the report was owed, not lost"
+    );
+}
+
 fn a_refused_rearm_timer_is_set_again_by_the_next_message() {
     let (receiver, host, _heard) = hosted_receiver();
     host.owe_rearm_timer_for_test();
@@ -251,6 +265,10 @@ fn host_event_sources() {
             (
                 "low_memory_is_reported_once_per_hold",
                 low_memory_is_reported_once_per_hold as fn(),
+            ),
+            (
+                "a_wake_that_could_not_be_posted_is_delivered_with_the_next_message",
+                a_wake_that_could_not_be_posted_is_delivered_with_the_next_message as fn(),
             ),
             (
                 "a_refused_rearm_timer_is_set_again_by_the_next_message",

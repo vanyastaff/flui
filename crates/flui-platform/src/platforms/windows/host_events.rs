@@ -13,7 +13,10 @@ use std::{
     ffi::c_void,
     panic::{AssertUnwindSafe, catch_unwind},
     rc::Rc,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Instant,
 };
 
@@ -125,6 +128,14 @@ impl HostEvents {
     ) -> Option<LRESULT> {
         if self.rearm_timer_owed.get() {
             self.arm_rearm_timer(hwnd);
+        }
+        let post_failed = self
+            .memory
+            .borrow()
+            .as_ref()
+            .is_some_and(|wait| wait.shared.post_failed.swap(false, Ordering::AcqRel));
+        if post_failed {
+            self.low_memory(hwnd);
         }
         if message == LOW_MEMORY {
             self.low_memory(hwnd);
@@ -294,6 +305,15 @@ impl HostEvents {
         self.rearm_timer_owed.set(true);
     }
 
+    /// Pretend the pool thread signaled and its wake could not be posted.
+    #[cfg(test)]
+    pub(super) fn fail_low_memory_post_for_test(&self) {
+        let signaled = self.signal_low_memory_for_test();
+        if let Some(wait) = self.memory.borrow().as_ref() {
+            wait.shared.post_failed.store(signaled, Ordering::Release);
+        }
+    }
+
     fn rearm_low_memory(&self, receiver: HWND) {
         self.rearm_low_memory_at(receiver, self.now());
     }
@@ -360,6 +380,8 @@ fn visible_window_of_this_thread() -> Option<HWND> {
 struct LowMemoryShared {
     watch: Mutex<MemoryWatch>,
     receiver: isize,
+    /// The wake could not be posted; the report is still owed.
+    post_failed: AtomicBool,
 }
 
 /// A wait registered on the system's low-memory event.
@@ -378,7 +400,11 @@ unsafe extern "system" fn low_memory_fired(context: *mut c_void, _timed_out: boo
         let receiver = HWND(shared.receiver as *mut _);
         // SAFETY: posting is legal from any thread; a destroyed receiver only
         // makes it fail.
-        let _ = unsafe { PostMessageW(Some(receiver), LOW_MEMORY, WPARAM(0), LPARAM(0)) };
+        if unsafe { PostMessageW(Some(receiver), LOW_MEMORY, WPARAM(0), LPARAM(0)) }.is_err() {
+            // The report is owed and no message carries it: the owner collects it
+            // with the next message it gets.
+            shared.post_failed.store(true, Ordering::Release);
+        }
     }
 }
 
@@ -389,6 +415,7 @@ impl LowMemoryWait {
         let shared = Box::new(LowMemoryShared {
             watch: Mutex::new(MemoryWatch::armed()),
             receiver: receiver.0 as isize,
+            post_failed: AtomicBool::new(false),
         });
         let mut wait = Self {
             event,

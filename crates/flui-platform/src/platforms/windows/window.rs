@@ -1452,10 +1452,53 @@ impl WindowsWindow {
         };
         if away && shown {
             self.show_native(SW_RESTORE);
+        } else if away {
+            self.restore_hidden();
         }
         // A fullscreen window that was minimized comes back fullscreen from the
         // restore above; leaving fullscreen is the second step.
         self.set_fullscreen(false);
+    }
+
+    /// Take a hidden maximized or minimized window back to its normal rectangle
+    /// without showing it: `SW_RESTORE` would show it. The state bits go and the
+    /// window is moved to the rectangle it returns to.
+    fn restore_hidden(&self) {
+        let Some(normal) = restore_rectangle(self.hwnd) else {
+            return;
+        };
+        // SAFETY: plain style and position calls on this wrapper's window; a
+        // stale handle only makes them fail.
+        unsafe {
+            let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
+            SetWindowLongPtrW(
+                self.hwnd,
+                GWL_STYLE,
+                (style & !(WS_MAXIMIZE.0 | WS_MINIMIZE.0)) as isize,
+            );
+            if let Err(error) = SetWindowPos(
+                self.hwnd,
+                None,
+                normal.origin.x,
+                normal.origin.y,
+                normal.size.width,
+                normal.size.height,
+                SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER,
+            ) {
+                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowPos (restore hidden) failed");
+            }
+        }
+        super::platform::with_window_context(self.hwnd, "restore_hidden", |ctx| {
+            // A fullscreen window that was minimized is fullscreen again; any
+            // other mode is the normal one.
+            let mode = ctx.mode.get();
+            ctx.mode.set(
+                mode.fullscreen_bounds()
+                    .map_or(NativeMode::Normal, |restore_bounds| {
+                        NativeMode::Fullscreen { restore_bounds }
+                    }),
+            );
+        });
     }
 
     /// Hide the window. A window whose first show was still to come stays
@@ -1561,6 +1604,10 @@ impl WindowsWindow {
                     let restore_style = (ctx.restore_style.get() & !WS_VISIBLE.0) | shown;
                     SetWindowLongPtrW(hwnd, GWL_STYLE, restore_style as isize);
 
+                    // The window is normal from here on, so the size limits the app set
+                    // (also while it was fullscreen) apply to the rectangle it returns to.
+                    ctx.mode.set(NativeMode::Normal);
+
                     // Restore window position and size
                     if let Err(error) = SetWindowPos(
                         hwnd,
@@ -1577,9 +1624,6 @@ impl WindowsWindow {
                             "SetWindowPos (exit fullscreen restore) failed"
                         );
                     }
-
-                    // Update state
-                    ctx.mode.set(NativeMode::Normal);
 
                     drop(hold);
                     ctx.publish_window_state(hwnd);

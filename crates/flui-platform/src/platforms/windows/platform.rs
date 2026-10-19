@@ -452,6 +452,11 @@ impl WindowContext {
     /// something invalidated it; `on_state_changed` is raised when that
     /// produced a new revision.
     pub(super) fn window_state(&self, hwnd: HWND) -> flui_platform_api::WindowState {
+        // While a change takes several steps the window is half-way between two
+        // states; a read from inside a callback it raises sees the last whole one.
+        if self.publish_hold.get() > 0 {
+            return self.snapshot.published();
+        }
         let Some(record) = self.window_state.upgrade() else {
             return self.snapshot.published();
         };
@@ -2361,7 +2366,9 @@ impl WindowsPlatform {
         match self.owner_control.shares(op) {
             Ok(shares) => {
                 let previous = slot(&mut shares.handlers.borrow_mut()).replace(callback);
-                drop(previous);
+                // The replaced callback is retired in a boundary of its own: a
+                // capture that panics in `Drop` must not unwind into the host.
+                crate::shared::panic_boundary::contain_owner_callback(|| drop(previous));
             }
             Err(UserDataRefusal::ForeignThread) => {
                 tracing::error!(
