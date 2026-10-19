@@ -163,9 +163,16 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
     - an application states its own minimum per environment in `flui.toml`, in an optional
       `[platforms.<environment>]` table with a `min` key. An absent table inherits FLUI's floor, so
       `flui create` writes none;
-    - `flui build` and `flui run` reject a `min` below FLUI's floor with an error naming both values,
-      and package with the application's value (Android `minSdk`, `MinimumOSVersion`, the deployment
-      target, the Windows manifest);
+    - `flui build` and `flui run` reject a `min` below FLUI's floor with an error naming both values;
+    - the native files the system reads are outputs of that one value, never a second place to state
+      it. The files the CLI generates (the iOS and macOS `Info.plist`, with `MinimumOSVersion` and
+      `LSMinimumSystemVersion`; the Windows manifest; the APK manifest of the Gradle-less packager)
+      are written from it, and the same value is passed to rustc (`IPHONEOS_DEPLOYMENT_TARGET`,
+      `MACOSX_DEPLOYMENT_TARGET`, the NDK API level) so the binary's own minimum agrees with the
+      bundle's. The files the application owns (the scaffolded `build.gradle.kts`) reference it
+      instead of a literal: `flui build` writes `flui.minSdk` into a generated `gradle.properties`
+      entry and the template reads `minSdk = providers.gradleProperty("flui.minSdk")`. A hand-edited
+      literal that differs is a build error naming `flui.toml` as the place to change it;
     - at start, the platform compares the running version with the higher of the two. The CLI hands
       the application's value to the build as an environment variable that `flui-app`'s build script
       reads (with `rerun-if-env-changed`), so the run-time check of decision 3 also covers an
@@ -187,6 +194,10 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
   GLES 3.0, WebGL2 and many GLES 3.1 drivers do not offer in a fragment shader.
 - The Android `minSdk` stays 23 and becomes a decision instead of a template literal; an API 23 device
   without Vulkan renders through GLES instead of failing. `doctor`'s API 21 check follows the file.
+  Today the value is stated twice (`MIN_SDK` in `android_package.rs` for the Gradle-less packager,
+  `minSdk = 23` in the Gradle template); both become readers of the one value.
+- The macOS bundle the CLI writes gains `LSMinimumSystemVersion`, which it does not carry today, and
+  the iOS bundle stops copying its minimum from whatever deployment target the build environment set.
 - iOS builds target 13.0 and macOS builds 10.13 / 11.0 explicitly instead of inheriting the build
   environment's deployment target.
 - Windows' DPI-awareness call moves behind a 1703 gate with per-monitor v1 below it, and every other
