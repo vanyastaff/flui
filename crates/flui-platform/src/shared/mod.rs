@@ -19,6 +19,8 @@ pub(crate) mod clipboard_lock;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_display;
 #[cfg(any(target_os = "android", test))]
+pub(crate) mod android_lifecycle;
+#[cfg(any(target_os = "android", test))]
 pub(crate) mod android_os_version;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_scroll;
