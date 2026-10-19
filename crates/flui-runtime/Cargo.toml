@@ -107,7 +107,7 @@ serde_json = { workspace = true }
 # The test-only hooks of the crates the UI runtime drives: `push_pending_child_
 # request_for_test`, `register_layout_builder_for_test`.
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
-flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-utils"] }
+flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["testing"] }
 # `testing::font_collection_holders`, which pins who holds the app's font
 # collection and when a UI runtime lets go of it.
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", features = ["testing"] }

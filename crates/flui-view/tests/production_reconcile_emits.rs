@@ -16,7 +16,7 @@
 //!   `build_scope`; element ids follow keys, no remount occurs, and the
 //!   `flui::reconcile` trace stream reports the real parent id.
 
-#![cfg(feature = "test-utils")]
+#![cfg(feature = "testing")]
 #![expect(
     clippy::unwrap_used,
     reason = "a panic is the failure report in a test scenario"

@@ -14,7 +14,7 @@
 //! always-enabled, no-op subscriber keeps every callsite's computed interest
 //! non-`never` for the life of the process, so scoped capture dispatchers
 //! always see their thread's events.
-#![cfg(feature = "test-utils")]
+#![cfg(feature = "testing")]
 
 use std::sync::OnceLock;
 

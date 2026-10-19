@@ -201,11 +201,6 @@ kind = "double"
 names = ["Probe"]
 
 [[allow]]
-path = "crates/flui-view/Cargo.toml"
-kind = "feature"
-names = ["test-utils"]
-
-[[allow]]
 path = "crates/flui-view/benches/shared/mock_node.rs"
 kind = "double"
 names = ["MockNode", "MockNodeInterned"]

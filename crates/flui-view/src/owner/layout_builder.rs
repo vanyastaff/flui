@@ -39,9 +39,9 @@ use std::{
 
 use flui_foundation::{ElementId, RenderId};
 use flui_objects::BuildDuringLayoutCell;
-// Only the test-utils registration helper names the concrete cell; the registry
+// Only the `testing` registration helper names the concrete cell; the registry
 // itself is payload-blind.
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "testing"))]
 use flui_objects::LayoutConstraintsCell;
 use flui_rendering::pipeline::PipelineCell;
 use parking_lot::Mutex;
@@ -117,7 +117,7 @@ impl LayoutBuilderRegistry {
         self.len.load(Ordering::Acquire) == 0
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn len(&self) -> usize {
         self.len.load(Ordering::Acquire)
     }
@@ -552,7 +552,7 @@ fn drive_fixpoint<E>(mut pass: impl FnMut() -> Result<bool, E>) -> Result<bool, 
 /// Exists because the seam ships **inert** — no widget registers
 /// into it until `LayoutBuilder` lands — so the only way for `flui-testing` / `flui-app` to prove
 /// their frame paths actually run the seam is to plant an entry by hand.
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "testing"))]
 impl BuildOwner {
     /// Override the per-frame lazy-band pass budget (default six passes).
     /// Test-only: a budget of one lets a harness
