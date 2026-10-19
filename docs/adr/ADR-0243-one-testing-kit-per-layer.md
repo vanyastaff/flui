@@ -56,16 +56,17 @@ planned driver's headless target, has nothing uniform to adopt.
 6. **Exceptions are data.** An allowlist names each exception and the change that removes it (an ADR
    or a plan step), and counts exactly, as the `markers` and `file-length` gates do
    (`tools/xtask/src/ratchet.rs`). A count above the tree is a finding, and so is one below it.
-7. **The gate.** `cargo xtask testing` fails on:
+7. **The gate.** `cargo heli xtask testing` fails on:
    - a Cargo feature named `test-support` or `test-utils`;
    - a `fn pump`, `fn advance` or `fn tick` added under `tests/` outside a kit and not listed;
    - a type named `Mock*`, `Fake*`, `Scripted*`, `Recording*` or `Probe*` added in test code outside a
      kit and not listed.
 
-   Test code is a `tests/` or `benches/` target, a `#[cfg(test)]` module or a file only such a module
-   includes. Production items are not scanned, so a type such as `flui-engine`'s `RecordingBudget`,
-   which `DrawSegment` uses at run time, is never an exception. The starting allowlist is built from the
-   same scope. The gate joins `cargo xtask checks`.
+   Test code is a `tests/` or `benches/` target, a `#[cfg(test)]` module, an item behind the crate's
+   `testing` feature, or a file only such a module includes. Unconditional production items are not
+   scanned, so a type such as `flui-engine`'s `RecordingBudget`, which `DrawSegment` uses at run time,
+   is never an exception. The starting allowlist is built from the same scope. The gate joins
+   `cargo heli xtask checks`.
 
 ## Consequences
 
@@ -88,8 +89,8 @@ planned driver's headless target, has nothing uniform to adopt.
 
 ## Verification
 
-- `cargo nextest run -p xtask testing`: a fixture tree with a listed and an unlisted helper, a renamed
+- `cargo heli nextest run -p xtask testing`: a fixture tree with a listed and an unlisted helper, a renamed
   feature and a count that grew or fell, in the style of the `ratchet` fixtures.
-- `cargo xtask testing` on the tree reports the starting allowlist with every entry citing this ADR
+- `cargo heli xtask testing` on the tree reports the starting allowlist with every entry citing this ADR
   or a plan step.
-- Each migration step lowers a count and keeps `cargo nextest run` green on the changed crates.
+- Each migration step lowers a count and keeps `cargo heli nextest run` green on the changed crates.
