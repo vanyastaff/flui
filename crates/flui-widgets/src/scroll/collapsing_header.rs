@@ -139,7 +139,7 @@ pub enum HeaderOrder {
 /// one, so its top stays put while its bottom slides under the body; the body
 /// fills the rest. By default a scroll toward the content's end collapses the
 /// header before the content moves, and a scroll toward the start expands it
-/// only once the content is back at its start. [`expand`](Self::expand) with
+/// only once the content is back at its start. [`expands`](Self::expands) with
 /// [`HeaderOrder::BeforeContent`] brings it back on any scroll toward the
 /// start instead.
 ///
@@ -198,7 +198,7 @@ impl CollapsingHeader {
     /// When a scroll toward the content's end collapses the header.
     /// Defaults to [`HeaderOrder::BeforeContent`].
     #[must_use]
-    pub fn collapse(mut self, order: HeaderOrder) -> Self {
+    pub fn collapses(mut self, order: HeaderOrder) -> Self {
         self.collapse = order;
         self
     }
@@ -206,7 +206,7 @@ impl CollapsingHeader {
     /// When a scroll toward the content's start expands the header.
     /// Defaults to [`HeaderOrder::AfterContent`].
     #[must_use]
-    pub fn expand(mut self, order: HeaderOrder) -> Self {
+    pub fn expands(mut self, order: HeaderOrder) -> Self {
         self.expand = order;
         self
     }

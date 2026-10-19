@@ -200,7 +200,7 @@ pub(crate) fn collapsing_header_collapses_before_or_after_the_content() {
         );
 
         let mut screen = Screen::new(extents(), |header| {
-            header.collapse(HeaderOrder::AfterContent)
+            header.collapses(HeaderOrder::AfterContent)
         });
         screen.drag_up(device, 200.0);
         assert!(
@@ -228,7 +228,7 @@ pub(crate) fn collapsing_header_collapses_before_or_after_the_content() {
 pub(crate) fn collapsing_header_expands_first_or_last() {
     for device in DEVICES {
         for order in [HeaderOrder::AfterContent, HeaderOrder::BeforeContent] {
-            let mut screen = Screen::new(extents(), |header| header.expand(order));
+            let mut screen = Screen::new(extents(), |header| header.expands(order));
             screen.drag_up(device, 250.0);
             assert!(
                 near(screen.extent(), COLLAPSED),
@@ -608,7 +608,7 @@ pub(crate) fn collapsing_header_with_equal_extents_takes_no_scroll() {
         let fixed = HeaderExtents::new(EXPANDED, EXPANDED).expect("equal extents");
         let mut screen = Screen::new(fixed, |header| {
             header
-                .expand(HeaderOrder::BeforeContent)
+                .expands(HeaderOrder::BeforeContent)
                 .snap_policy(Arc::new(PageSnap::new(ViewportFraction::FULL)))
         });
         screen.drag_up(device, 120.0);

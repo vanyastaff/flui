@@ -47,7 +47,7 @@ use flui_view::{
 
 use super::nested::presentation_device_pixel_ratio;
 use super::nested::{
-    AnchorSnap, AnchorSnapError, ChainNode, FlingHandoff, FlingStep, NestedScrollConnection,
+    AnchorSnap, ChainNode, FlingHandoff, FlingStep, NestedScrollConnection,
     NestedScrollScope, Participant, PlaneSource, ScrollCause, ScrollDevice, ScrollEndReason,
     ScrollStep,
 };
@@ -198,13 +198,8 @@ impl<K: Copy + Eq + 'static> DraggableAnchorsBuilder<K> {
             return Err(AnchorsError::Empty);
         }
         entries.sort_by(|(_, a), (_, b)| a.total_cmp(b));
-        let snap =
-            AnchorSnap::new(entries.iter().map(|&(_, offset)| offset)).map_err(
-                |error| match error {
-                    AnchorSnapError::NonFinite { index } => AnchorsError::NonFinite { index },
-                    _ => AnchorsError::Empty,
-                },
-            )?;
+        let snap = AnchorSnap::new(entries.iter().map(|&(_, offset)| offset))
+            .expect("BUG: the anchors were checked non-empty and finite above");
         Ok(DraggableAnchors {
             entries: entries.into(),
             policy: Arc::new(snap),
@@ -1109,7 +1104,7 @@ impl<K: Copy + Eq + 'static> Action<AnchorIntent> for AnchorAction<K> {
 
 /// The hook that tracks the current anchor of `inner` and plays the anchor
 /// haptic (once per arrival at another anchor, for every cause but a
-// programmatic one).
+/// programmatic one).
 fn motion_hook<K: Copy + Eq + 'static>(
     inner: Weak<Inner<K>>,
     haptics: Rc<RefCell<Option<HapticsHandle>>>,
