@@ -222,9 +222,10 @@ fn version_map(floors: &Floors) -> String {
          > [`platform-support.toml`](../platform-support.toml); edit that file, not this page.\n\
          \n\
          The lowest version of each environment FLUI runs on, and what sets it\n\
-         ([ADR-0244](adr/ADR-0244-os-version-floors-and-gates.md)). Below a version floor FLUI does\n\
-         not start; where a floor is a requirement rather than a version, a missing one is reported\n\
-         by name at start. An API newer than the floor is used behind a typed gate, never by raising\n\
+         ([ADR-0244](adr/ADR-0244-os-version-floors-and-gates.md)). These are the declared targets:\n\
+         only the Android `minSdk` is packaged from them so far, and no backend refuses to start\n\
+         below a floor yet ([gaps entry 22](gaps.md)), so an older system may fail later instead of\n\
+         being refused. The ADR puts an API newer than a floor behind a typed gate rather than raising\n\
          the floor.\n\
          \n\
          | Environment | Floor | Set by |\n\
