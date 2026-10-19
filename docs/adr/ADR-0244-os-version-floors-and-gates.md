@@ -67,7 +67,12 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
    each with an instance of its own for that one backend, because a combined backend mask does not
    retry: on the Web, wgpu commits to its WebGPU context as soon as `navigator.gpu` exists, so a
    browser that exposes it but returns no adapter (a blocklisted GPU) reaches WebGL2 only through a
-   second, GL-only instance. The engine therefore needs nothing
+   second, GL-only instance. Windows tries D3D12's software adapter (WARP) after the hardware one, so
+   a machine on the floor without a WDDM 2 driver still draws, slowly. Where every backend answers no
+   adapter (a Mac without a Metal GPU, a Linux machine with neither driver), an OS on its floor is
+   still not enough: the renderer returns `EngineError::NoSupportedGpu` naming the backends it tried,
+   and the app runner reports it the way decision 3 reports an OS below the floor. The engine
+   therefore needs nothing
    the downlevel backend lacks: features stay optional, limits come from the adapter, and no shader
    reads a storage buffer in a fragment stage (gradient stops move to a uniform array or a texture).
    Every pixel suite runs on both backends; on Linux, Mesa's llvmpipe gives CI a GLES adapter.
@@ -162,7 +167,10 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
       one made with plain `cargo` and no `flui.toml`;
     - an application states its own minimum per environment in `flui.toml`, in an optional
       `[platforms.<environment>]` table with a `min` key. An absent table inherits FLUI's floor, so
-      `flui create` writes none;
+      `flui create` writes none. Only the environments with a running version type take one
+      (Windows, macOS, iOS, Android): the Web has no version to compare (decision 5), and Linux's floor
+      is an ABI and a set of drivers and protocols rather than a release, so the CLI rejects a `min`
+      for either;
     - `flui build` and `flui run` reject a `min` below FLUI's floor with an error naming both values;
     - the native files the system reads are outputs of that one value, never a second place to state
       it. The files the CLI generates (the iOS and macOS `Info.plist`, with `MinimumOSVersion` and
@@ -176,7 +184,7 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
     - at start, the platform compares the running version with the higher of the two. The CLI hands
       the application's value to the build as an environment variable that `flui-app`'s build script
       reads (with `rerun-if-env-changed`), so the run-time check of decision 3 also covers an
-      application floor where the system itself does not refuse (Windows, Linux, the Web).
+      application floor where the system itself does not refuse (Windows).
 
 11. **Application code asks for capabilities, never versions.** Version types and markers stay inside
     the backends. What an application or widget may branch on is a capability through the platform's
