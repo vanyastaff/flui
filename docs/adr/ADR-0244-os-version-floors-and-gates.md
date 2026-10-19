@@ -62,7 +62,11 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
    **The GPU API is a probe, not a floor.** Whether a device has a working Vulkan driver, or a browser
    WebGPU, depends on the device, not on the OS version, so it is decided as in decision 5: the
    renderer asks for the preferred backend (Vulkan on Android and Linux, WebGPU on the Web) and falls
-   back to GLES 3.0 (WebGL2 on the Web) when no adapter answers. The engine therefore needs nothing
+   back to GLES 3.0 (WebGL2 on the Web) when no adapter answers. The backends are tried one at a time,
+   each with an instance of its own for that one backend, because a combined backend mask does not
+   retry: on the Web, wgpu commits to its WebGPU context as soon as `navigator.gpu` exists, so a
+   browser that exposes it but returns no adapter (a blocklisted GPU) reaches WebGL2 only through a
+   second, GL-only instance. The engine therefore needs nothing
    the downlevel backend lacks: features stay optional, limits come from the adapter, and no shader
    reads a storage buffer in a fragment stage (gradient stops move to a uniform array or a texture).
    Every pixel suite runs on both backends; on Linux, Mesa's llvmpipe gives CI a GLES adapter.
@@ -89,7 +93,10 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
    else; below it the constructor returns
    `PlatformError::UnsupportedOs { environment, found, floor }`, and the app runner prints it and exits
    non-zero. A version that cannot be read is not below the floor: it starts and unlocks no gate. On
-   the Web the same error comes from a browser with neither WebGPU nor WebGL2.
+   the Web, where a page has no exit status, a browser with neither a WebGPU nor a WebGL2 adapter gets
+   the same error returned from the web runner instead of a panic: it is written to the console, the
+   runner replaces the app's host element with a message naming what is missing, and no frame is
+   scheduled.
 
 4. **Above the floor, a gate is a type.** One shape for every environment, in
    `flui-platform::shared::os_version`:
