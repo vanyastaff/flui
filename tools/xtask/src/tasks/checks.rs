@@ -10,7 +10,7 @@ use anyhow::bail;
 use super::exec::{Cmd, Runner, installed, parsed};
 use crate::{
     change_scope, changelog, docs_links, docs_paths, file_length, fonts, globals, key_vocabulary,
-    markers, module_dag, perf, platform_floor, toolchain, wgsl, workspace,
+    markers, module_dag, perf, platform_floor, testing, toolchain, wgsl, workspace,
 };
 
 /// A formatter or linter that is a binary of its own, not a cargo step.
@@ -100,7 +100,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// This crate's own checks, in the order they run: each `cargo xtask`
 /// command line and the command it names. lychee is skippable like
 /// [`TOOLS`], so `--strict` reaches `docs-links` too.
-fn in_process(strict: bool) -> [(&'static str, InProcess); 25] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 27] {
     [
         (
             if strict {
@@ -146,6 +146,10 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 25] {
             markers::markers(&parsed(args)?)
         }),
         ("markers", |args| markers::markers(&parsed(args)?)),
+        ("testing --self-test", |args| {
+            testing::testing(&parsed(args)?)
+        }),
+        ("testing", |args| testing::testing(&parsed(args)?)),
         ("key-vocabulary --self-test", |args| {
             key_vocabulary::key_vocabulary(&parsed(args)?)
         }),
@@ -202,6 +206,8 @@ mod tests {
                 "file-length",
                 "markers --self-test",
                 "markers",
+                "testing --self-test",
+                "testing",
                 "key-vocabulary --self-test",
                 "key-vocabulary",
                 "platform-floor",

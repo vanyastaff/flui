@@ -51,7 +51,11 @@ use crate::util::repo_root;
 pub(crate) const ALLOWLIST: &str = "tools/xtask/allowlists/markers.toml";
 
 /// The allowlists whose `exit` values are references, not prose.
-const EXIT_LISTS: [&str; 2] = [ALLOWLIST, crate::file_length::ALLOWLIST];
+const EXIT_LISTS: [&str; 3] = [
+    ALLOWLIST,
+    crate::file_length::ALLOWLIST,
+    crate::testing::ALLOWLIST,
+];
 
 /// The extensions the scan reads.
 const EXTENSIONS: [&str; 6] = ["rs", "md", "toml", "yml", "yaml", "wgsl"];

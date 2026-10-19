@@ -1,0 +1,306 @@
+# Test helpers outside a kit (ADR-0243), written by `cargo xtask testing --seed`.
+# The names are exact and only leave: the scan fails when a file gains a helper (even one that
+# replaces a listed helper of the same kind) or loses one (remove it from `names`, and the entry
+# when it is empty). `reason` and `exit` apply to every entry.
+reason = "written before the testing gate: each helper moves into its layer's kit, or the feature is renamed to `testing`"
+exit = "ADR-0243"
+
+[[allow]]
+path = "crates/flui-animation/src/run_future_recovery.rs"
+kind = "double"
+names = ["ProbeWake"]
+
+[[allow]]
+path = "crates/flui-animation/tests/contracts/animated_value.rs"
+kind = "double"
+names = ["ProbeWake"]
+
+[[allow]]
+path = "crates/flui-animation/tests/support/motion_trace.rs"
+kind = "pump"
+names = ["advance"]
+
+[[allow]]
+path = "crates/flui-app/src/app/hot_reload/tests.rs"
+kind = "double"
+names = ["Scripted"]
+
+[[allow]]
+path = "crates/flui-app/src/app/raster_lane.rs"
+kind = "double"
+names = ["ScriptedBackend"]
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/device_recovery.rs"
+kind = "double"
+names = ["ScriptedDeviceBackend"]
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/session_controller.rs"
+kind = "double"
+names = ["Probe"]
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/surface_lifecycle.rs"
+kind = "double"
+names = ["ScriptedSurfaceBackend"]
+
+[[allow]]
+path = "crates/flui-app/src/app/window_control_tests.rs"
+kind = "double"
+names = ["RecordingWindow"]
+
+[[allow]]
+path = "crates/flui-app/tests/data_transfer_transport.rs"
+kind = "double"
+names = ["MockSource", "MockState"]
+
+[[allow]]
+path = "crates/flui-assets/src/cache/builtin_load_tests.rs"
+kind = "double"
+names = ["Probe"]
+
+[[allow]]
+path = "crates/flui-engine/src/fake_window_target.rs"
+kind = "double"
+names = ["FakeTarget"]
+
+[[allow]]
+path = "crates/flui-engine/src/raster_owner.rs"
+kind = "double"
+names = ["FakeBackend"]
+
+[[allow]]
+path = "crates/flui-engine/src/renderer.rs"
+kind = "double"
+names = ["FakeSurface", "RecordingTarget"]
+
+[[allow]]
+path = "crates/flui-engine/src/surface_lease.rs"
+kind = "double"
+names = ["RecordingSurface", "RecordingTarget"]
+
+[[allow]]
+path = "crates/flui-engine/src/window_target.rs"
+kind = "double"
+names = ["FakeWindow"]
+
+[[allow]]
+path = "crates/flui-hot-reload/src/pipeline.rs"
+kind = "double"
+names = ["ProbeRoot"]
+
+[[allow]]
+path = "crates/flui-interaction/src/arena/mod.rs"
+kind = "double"
+names = ["MockMember"]
+
+[[allow]]
+path = "crates/flui-interaction/src/text_input.rs"
+kind = "double"
+names = ["RecordingTextInput"]
+
+[[allow]]
+path = "crates/flui-interaction/tests/multi_pointer_recognizers.rs"
+kind = "pump"
+names = ["advance"]
+
+[[allow]]
+path = "crates/flui-objects/src/proxy/animated_transform.rs"
+kind = "double"
+names = ["Probe"]
+
+[[allow]]
+path = "crates/flui-objects/tests/render_object_harness.rs"
+kind = "double"
+names = ["ScriptedAnimation"]
+
+[[allow]]
+path = "crates/flui-platform/src/platforms/linux/display/source/tests.rs"
+kind = "double"
+names = ["ScriptedSession"]
+
+[[allow]]
+path = "crates/flui-platform/src/platforms/windows/text_services/probe.rs"
+kind = "pump"
+names = ["pump", "tick"]
+
+[[allow]]
+path = "crates/flui-platform/src/platforms/windows/text_services/probe.rs"
+kind = "double"
+names = ["Probe"]
+
+[[allow]]
+path = "crates/flui-platform/src/shared/android_os_version.rs"
+kind = "double"
+names = ["FakeSymbols"]
+
+[[allow]]
+path = "crates/flui-platform/tests/wasm32.rs"
+kind = "double"
+names = ["Probe"]
+
+[[allow]]
+path = "crates/flui-platform/tests/wasm32/display.rs"
+kind = "double"
+names = ["Probe"]
+
+[[allow]]
+path = "crates/flui-runtime/Cargo.toml"
+kind = "feature"
+names = ["test-support"]
+
+[[allow]]
+path = "crates/flui-runtime/src/ui_runtime/tests/overlay_style.rs"
+kind = "double"
+names = ["RecordingChrome"]
+
+[[allow]]
+path = "crates/flui-runtime/tests/contracts/frame_rate_demand.rs"
+kind = "pump"
+names = ["advance"]
+
+[[allow]]
+path = "crates/flui-scheduler/src/async_driver.rs"
+kind = "double"
+names = ["Probe"]
+
+[[allow]]
+path = "crates/flui-scheduler/src/post_frame.rs"
+kind = "double"
+names = ["Probe"]
+
+[[allow]]
+path = "crates/flui-scheduler/tests/async_driver_unwind.rs"
+kind = "double"
+names = ["ProbeFuture"]
+
+[[allow]]
+path = "crates/flui-scheduler/tests/frame_completion_recovery.rs"
+kind = "double"
+names = ["Probe"]
+
+[[allow]]
+path = "crates/flui-view/Cargo.toml"
+kind = "feature"
+names = ["test-utils"]
+
+[[allow]]
+path = "crates/flui-view/benches/shared/mock_node.rs"
+kind = "double"
+names = ["MockNode", "MockNodeInterned"]
+
+[[allow]]
+path = "crates/flui-view/tests/inherited_dependency.rs"
+kind = "double"
+names = ["Probe", "ProbeState"]
+
+[[allow]]
+path = "crates/flui-view/tests/writer_source.rs"
+kind = "double"
+names = ["Probe", "ProbeState"]
+
+[[allow]]
+path = "crates/flui-widgets/src/navigator/tests.rs"
+kind = "double"
+names = ["Probe"]
+
+[[allow]]
+path = "crates/flui-widgets/tests/editable_text.rs"
+kind = "pump"
+names = ["pump"]
+
+[[allow]]
+path = "crates/flui-widgets/tests/frame_partitions.rs"
+kind = "pump"
+names = ["advance"]
+
+[[allow]]
+path = "crates/flui-widgets/tests/lazy_list.rs"
+kind = "double"
+names = ["ProbeItem", "ProbeItemState"]
+
+[[allow]]
+path = "crates/flui-widgets/tests/modal_route.rs"
+kind = "double"
+names = ["Probe", "ProbeState"]
+
+[[allow]]
+path = "crates/flui-widgets/tests/overlay.rs"
+kind = "double"
+names = ["Probe", "ProbeState"]
+
+[[allow]]
+path = "crates/flui-widgets/tests/perf.rs"
+kind = "pump"
+names = ["pump"]
+
+[[allow]]
+path = "crates/flui-widgets/tests/router.rs"
+kind = "double"
+names = ["Probe"]
+
+[[allow]]
+path = "crates/flui-widgets/tests/scroll.rs"
+kind = "double"
+names = ["RecordingPhysics"]
+
+[[allow]]
+path = "crates/flui-widgets/tests/sliver_persistent_header.rs"
+kind = "double"
+names = ["RecordingDelegate"]
+
+[[allow]]
+path = "crates/flui-widgets/tests/text_store_kit.rs"
+kind = "pump"
+names = ["pump"]
+
+[[allow]]
+path = "crates/flui-widgets/tests/transitions.rs"
+kind = "pump"
+names = ["pump"]
+
+[[allow]]
+path = "crates/flui-widgets/tests/widgets_app.rs"
+kind = "double"
+names = ["RecordingObserver"]
+
+[[allow]]
+path = "crates/flui-widgets/tests/widgets_app_router.rs"
+kind = "double"
+names = ["Probe"]
+
+[[allow]]
+path = "examples/hot_reload_lifecycle_fixture/tests/reload_lifecycle.rs"
+kind = "pump"
+names = ["tick"]
+
+[[allow]]
+path = "packages/flui-cupertino/tests/cupertino_app.rs"
+kind = "double"
+names = ["Probe"]
+
+[[allow]]
+path = "packages/flui-cupertino/tests/tab_scaffold.rs"
+kind = "double"
+names = ["Probe", "ProbeState"]
+
+[[allow]]
+path = "packages/flui-material/tests/tab_bar_view.rs"
+kind = "double"
+names = ["Probe", "ProbeState"]
+
+[[allow]]
+path = "tests/cupertino_demo.rs"
+kind = "pump"
+names = ["pump"]
+
+[[allow]]
+path = "tests/material_demo.rs"
+kind = "pump"
+names = ["pump"]
+
+[[allow]]
+path = "tests/vertical_slice_demo.rs"
+kind = "pump"
+names = ["pump"]
