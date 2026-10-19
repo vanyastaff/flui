@@ -1401,3 +1401,128 @@ mod x11_window {
         worker.join().expect("worker thread does not panic");
     }
 }
+
+/// A Wayland window on a real compositor (skipped without `WAYLAND_DISPLAY`;
+/// the live-smoke job runs a headless weston for the Wayland close path).
+///
+/// A compositor places windows and a client cannot hide, focus or place one,
+/// so those commands are refused and the capabilities say so; what it does let
+/// a client do (title, mode, size, constraints) is accepted.
+#[cfg(target_os = "linux")]
+mod wayland_window {
+    use flui_foundation::geometry::Point;
+
+    use super::*;
+    use crate::traits::{WindowCapabilities, WindowCommand, WindowCommandError, WindowMode};
+
+    fn build_wayland_event_loop() -> EventLoop<()> {
+        use winit::platform::wayland::EventLoopBuilderExtWayland;
+        let mut builder = EventLoop::builder();
+        EventLoopBuilderExtWayland::with_any_thread(&mut builder, true);
+        EventLoopBuilderExtWayland::with_wayland(&mut builder);
+        builder
+            .build()
+            .expect("build a winit event loop on Wayland")
+    }
+
+    #[test]
+    fn wayland_window_refuses_what_a_compositor_does_not_let_a_client_do() {
+        if std::env::var_os("WAYLAND_DISPLAY").is_none_or(|socket| socket.is_empty()) {
+            eprintln!("skipped: no Wayland compositor (WAYLAND_DISPLAY is not set)");
+            return;
+        }
+        let platform = Arc::new(WinitPlatform::new());
+        let event_loop = build_wayland_event_loop();
+        install_test_owner_signal(&platform, &event_loop);
+        let event_loop_proxy = event_loop.create_proxy();
+        let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = event_loop_proxy.send_event(());
+        });
+        let (control, receiver) = control_lane(wake_owner);
+        platform
+            .install_control_lane(thread::current().id(), control.clone())
+            .expect("first install succeeds");
+
+        let platform_for_worker = Arc::clone(&platform);
+        let control_for_worker = control;
+        let worker = thread::spawn(move || {
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                wait_for_running(&platform_for_worker);
+                let window = match control_for_worker
+                    .request_open_window(
+                        WindowOptions::default()
+                            .with_title("wayland-window")
+                            .with_size(Size::new(320.0, 240.0))
+                            .with_position(Some(Point::new(40.0, 60.0))),
+                    )
+                    .expect("lane accepts the request")
+                    .wait()
+                {
+                    ClaimOutcome::Delivered(result) => result.expect("window creation succeeds"),
+                    _ => panic!("the window request is delivered"),
+                };
+                let capabilities = window.capabilities();
+                assert!(!capabilities.sets_position && !capabilities.places_at_open);
+                assert!(!capabilities.hides && !capabilities.shows && !capabilities.activates);
+                assert!(!capabilities.observes_position && !capabilities.observes_minimized);
+                assert!(
+                    capabilities.sets_title && capabilities.sets_size && capabilities.maximizes
+                );
+                assert_eq!(platform_for_worker.window_capabilities(), capabilities);
+                assert_ne!(capabilities, WindowCapabilities::ALL);
+
+                let state = window.state();
+                assert_eq!(
+                    state.outer.position, None,
+                    "a client cannot read a position"
+                );
+                assert_eq!(state.mode, WindowMode::Normal);
+
+                for refused in [
+                    WindowCommand::SetPosition(Point::new(10.0, 10.0)),
+                    WindowCommand::Hide,
+                    WindowCommand::Show,
+                    WindowCommand::Activate,
+                ] {
+                    assert_eq!(
+                        window.apply(refused.clone()),
+                        Err(WindowCommandError::Unsupported),
+                        "{refused:?}"
+                    );
+                }
+                window
+                    .apply(WindowCommand::SetTitle("renamed".into()))
+                    .expect("a title is set");
+                assert_eq!(window.state().title.as_deref(), Some("renamed"));
+                window
+                    .apply(WindowCommand::SetMode(WindowMode::Maximized))
+                    .expect("a maximize is requested");
+                // No first frame ever presents here, so there is nothing to
+                // reveal and the call changes nothing.
+                window.reveal_after_first_frame();
+                assert!(window.state().visible);
+            }));
+            control_for_worker.request_quit();
+            if let Err(payload) = outcome {
+                resume_unwind(payload);
+            }
+        });
+
+        let mut app = WinitApp {
+            platform: Arc::clone(&platform),
+            preference_source: None,
+            host_notices: None,
+            on_ready: None,
+            control: receiver,
+            quit_notified: false,
+            in_flight_replies: Vec::new(),
+            bootstrap_error: None,
+            self_close_deadline: None,
+            self_close_route: SelfCloseRoute::default(),
+        };
+        event_loop
+            .run_app(&mut app)
+            .expect("event loop runs to completion");
+        worker.join().expect("worker thread does not panic");
+    }
+}
