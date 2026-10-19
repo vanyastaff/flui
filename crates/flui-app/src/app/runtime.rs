@@ -402,9 +402,9 @@ pub(crate) struct AppRuntime {
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
-    pub(super) placement_keepers: Vec<(
+    pub(super) placement_recorders: Vec<(
         flui_foundation::PresentationAddress,
-        Rc<super::placement_keeper::PlacementKeeper>,
+        Rc<super::placement_recorder::PlacementRecorder>,
     )>,
 }
 
@@ -487,7 +487,7 @@ impl AppRuntime {
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
-            placement_keepers: Vec::new(),
+            placement_recorders: Vec::new(),
         }
     }
 

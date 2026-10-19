@@ -15,15 +15,12 @@ use flui_foundation::geometry::Size;
 use parking_lot::Mutex;
 
 use crate::traits::{
-    DispatchEventResult, HostNotice, PlatformInput, SessionEndAnswer, SessionEndPhase, WindowEvent,
+    DispatchEventResult, PlatformInput, SessionEndAnswer, SessionEndPhase, WindowEvent,
     WindowExecutionState,
 };
 
 /// The callback a platform asks at each phase of the user's session ending.
 pub type SessionEndHook = Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>;
-
-/// The callback a platform calls with each system notice.
-pub type HostNoticeHook = Box<dyn FnMut(&HostNotice) + Send>;
 
 /// Platform callback handlers registry
 ///
@@ -61,9 +58,6 @@ pub struct PlatformHandlers {
     /// [`SessionEndPhase::Query`] decides whether the platform asks the user
     /// to wait.
     pub session_end: Option<SessionEndHook>,
-
-    /// Called with each system notice other than a session end's phases.
-    pub host_notice: Option<HostNoticeHook>,
 
     /// Consulted when this platform's own window bookkeeping believes every
     /// window it tracks has just closed, before it decides whether to end
@@ -116,7 +110,6 @@ impl PlatformHandlers {
             open_urls: None,
             keyboard_layout_changed: None,
             session_end: None,
-            host_notice: None,
             exit_policy: None,
             wake_deadline: None,
         }
@@ -215,7 +208,6 @@ impl std::fmt::Debug for PlatformHandlers {
                 &self.keyboard_layout_changed.is_some(),
             )
             .field("session_end", &self.session_end.is_some())
-            .field("host_notice", &self.host_notice.is_some())
             .field("exit_policy", &self.exit_policy.is_some())
             .field("wake_deadline", &self.wake_deadline.is_some())
             .finish()

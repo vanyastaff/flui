@@ -474,6 +474,15 @@ impl LayoutSync {
 
 impl crate::traits::HostWindow for WebWindow {}
 
+/// What every browser window honours, known before one exists
+/// (`Platform::window_capabilities`).
+pub(crate) const fn window_capabilities() -> WindowCapabilities {
+    let mut capabilities = WindowCapabilities::NONE;
+    capabilities.sets_title = true;
+    capabilities.enters_fullscreen = true;
+    capabilities
+}
+
 impl PlatformWindow for WebWindow {
     fn id(&self) -> WindowId {
         self.id
@@ -522,10 +531,7 @@ impl PlatformWindow for WebWindow {
     }
 
     fn capabilities(&self) -> WindowCapabilities {
-        let mut capabilities = WindowCapabilities::none();
-        capabilities.set_title = true;
-        capabilities.fullscreen = true;
-        capabilities
+        window_capabilities()
     }
 
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
@@ -543,7 +549,9 @@ impl PlatformWindow for WebWindow {
             WindowCommand::SetMode(WindowMode::Fullscreen) => {
                 let el: &web_sys::Element = self.canvas.as_ref();
                 el.request_fullscreen()
-                    .map_err(|error| WindowCommandError::Backend(format!("{error:?}")))?;
+                    .map_err(|error| WindowCommandError::Backend {
+                        message: format!("{error:?}"),
+                    })?;
             }
             WindowCommand::SetMode(WindowMode::Normal) => {
                 if let Some(document) = self.canvas.owner_document()

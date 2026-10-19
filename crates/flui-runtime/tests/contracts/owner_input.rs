@@ -237,15 +237,8 @@ impl OwnerEffects for Effects {
 }
 
 pub(super) fn fixture(handled: bool) -> (OwnerHost, PresentationAddress, Effects) {
-    fixture_over(crate::owner_publication::runtime(), handled)
-}
-
-/// [`fixture`] over a runtime the caller built.
-pub(super) fn fixture_over(
-    runtime: UiRuntime,
-    handled: bool,
-) -> (OwnerHost, PresentationAddress, Effects) {
     let owner = OwnerHost::new();
+    let runtime = crate::owner_publication::runtime();
     runtime.synchronize_window_snapshot(
         runtime.presentation_id(),
         WindowExecutionState::Running,

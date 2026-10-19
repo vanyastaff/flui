@@ -231,9 +231,6 @@ pub struct UiRuntime {
     /// intrinsic and dry queries (ADR-0092 §10 step 3). It drops with the
     /// UI runtime and its presentations.
     text: flui_rendering::TextContextHandle,
-    /// The host's memory receivers (`RuntimeHostServices::with_memory_trim`),
-    /// trimmed before application subscribers hear a memory-pressure notice.
-    memory_trims: Vec<Arc<dyn flui_foundation::memory::MemoryTrim + Send + Sync>>,
     /// Test-only injectable clock, stored as the f64 bits in a u64 atomic
     /// (rather than an `Option<f64>`/`Cell<f64>`) so [`Self::raw_frame_time`] can
     /// read it with a single relaxed load; `0u64` is the "not set" sentinel

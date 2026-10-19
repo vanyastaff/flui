@@ -784,7 +784,7 @@ impl BuildOwner {
     }
 
     /// Weak window capability, absent for a bare owner or one without a window.
-    pub fn window_handle(&self) -> Option<crate::WindowHandle> {
+    pub(crate) fn window_handle(&self) -> Option<crate::WindowHandle> {
         self.window_handle.clone()
     }
 

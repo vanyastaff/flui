@@ -36,7 +36,7 @@ impl WindowControl for StubControl {
         WindowState::new(WindowGeometry::new(None, size), size).with_title(Some("Stub".to_owned()))
     }
     fn capabilities(&self) -> WindowCapabilities {
-        WindowCapabilities::all()
+        WindowCapabilities::ALL
     }
     fn submit(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
         command.admit(&self.capabilities())?;
@@ -130,7 +130,7 @@ fn a_lifecycle_hook_receives_the_window_it_is_presented_in() {
     let state = handle.state().expect("open");
     assert_eq!(state.title.as_deref(), Some("Stub"));
     assert_eq!(state.content_size, Size::new(320.0, 240.0));
-    assert_eq!(handle.capabilities(), Ok(WindowCapabilities::all()));
+    assert_eq!(handle.capabilities(), Ok(WindowCapabilities::ALL));
 }
 
 #[test]
@@ -169,7 +169,7 @@ fn closing_asks_the_control_and_does_not_close_the_handle() {
     let closes = Rc::clone(&control.closes);
     let (_source, handle) = mount(Some(control));
     let handle = handle.expect("window");
-    handle.close().expect("accepted");
+    handle.request_close().expect("accepted");
     assert_eq!(closes.get(), 1);
     assert!(handle.state().is_ok(), "a vetoed close leaves the window");
 }

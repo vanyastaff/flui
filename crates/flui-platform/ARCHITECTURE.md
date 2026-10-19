@@ -49,7 +49,7 @@ trait depends on `flui-platform-api` instead.
   the cell, only when the revision grew. Win32 and AppKit refresh from their
   window messages and delegate callbacks, winit from its window events, the
   Web from the layout, focus and visibility observers; the headless window
-  keeps a model that stands in for the OS (`HostLimits` makes it clamp a size
+  keeps a model that stands in for the OS (`HeadlessWindowPolicy` makes it clamp a size
   or decline a maximize) and publishes after each command or `simulate_*`
   call. The iOS window rereads its metrics on each `state` call and does not
   yet raise `on_state_changed` from its view's metric updates.

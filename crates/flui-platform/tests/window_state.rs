@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::{
-    DisplaySpec, HeadlessPlatform, HostLimits, HostWindow, MockWindow, Platform as _,
+    DisplaySpec, HeadlessPlatform, HeadlessWindowPolicy, HostWindow, MockWindow, Platform as _,
     SizeConstraints, WindowCapabilities, WindowCommand, WindowCommandError, WindowMode,
     WindowOptions, WindowState,
 };
@@ -195,8 +195,9 @@ fn repeating_a_command_keeps_the_revision_and_stays_silent() {
 }
 
 fn the_host_clamp_is_visible_in_the_snapshot() {
-    let platform = HeadlessPlatform::new()
-        .with_host_limits(HostLimits::none().with_max_window_size(Size::new(800.0, 600.0)));
+    let platform = HeadlessPlatform::new().with_window_policy(
+        HeadlessWindowPolicy::default().with_max_window_size(Size::new(800.0, 600.0)),
+    );
     let window = open(&platform);
     let (_, after) = applied(&window, WindowCommand::SetSize(Size::new(2000.0, 1500.0)));
     assert_eq!(
@@ -207,8 +208,8 @@ fn the_host_clamp_is_visible_in_the_snapshot() {
 }
 
 fn a_refused_maximize_is_accepted_and_changes_nothing() {
-    let platform =
-        HeadlessPlatform::new().with_host_limits(HostLimits::none().with_refused_maximize());
+    let platform = HeadlessPlatform::new()
+        .with_window_policy(HeadlessWindowPolicy::default().refusing_maximize());
     let window = open(&platform);
     let changes = count_changes(&window);
     let (before, after) = applied(&window, WindowCommand::SetMode(WindowMode::Maximized));
@@ -219,7 +220,7 @@ fn a_refused_maximize_is_accepted_and_changes_nothing() {
 
 fn a_false_capability_is_unsupported_and_changes_nothing() {
     for (name, command, _) in commands() {
-        let platform = HeadlessPlatform::new().with_window_capabilities(WindowCapabilities::none());
+        let platform = HeadlessPlatform::new().with_window_capabilities(WindowCapabilities::NONE);
         let window = open(&platform);
         let changes = count_changes(&window);
         let before = window.state();
@@ -234,8 +235,8 @@ fn a_false_capability_is_unsupported_and_changes_nothing() {
 }
 
 fn a_true_capability_is_honoured() {
-    let mut only_title = WindowCapabilities::none();
-    only_title.set_title = true;
+    let mut only_title = WindowCapabilities::NONE;
+    only_title.sets_title = true;
     let platform = HeadlessPlatform::new().with_window_capabilities(only_title);
     let window = open(&platform);
     assert_eq!(window.capabilities(), only_title);
@@ -250,7 +251,7 @@ fn a_true_capability_is_honoured() {
 }
 
 fn restoring_normal_is_always_accepted() {
-    let platform = HeadlessPlatform::new().with_window_capabilities(WindowCapabilities::none());
+    let platform = HeadlessPlatform::new().with_window_capabilities(WindowCapabilities::NONE);
     let window = open(&platform);
     window
         .apply(WindowCommand::SetMode(WindowMode::Normal))
@@ -315,7 +316,7 @@ fn the_user_resizing_and_moving_publish_too() {
 }
 
 fn a_window_without_position_reports_none() {
-    let mut caps = WindowCapabilities::all();
+    let mut caps = WindowCapabilities::ALL;
     caps.observes_position = false;
     let platform = HeadlessPlatform::new().with_window_capabilities(caps);
     let window = open(&platform);
@@ -326,12 +327,10 @@ fn opening_options_are_reflected_in_the_first_snapshot() {
     let platform = HeadlessPlatform::new();
     let normal =
         flui_platform::WindowGeometry::new(Some(Point::new(50.0, 60.0)), Size::new(700.0, 500.0));
-    let options = WindowOptions {
-        position: Some(Point::new(50.0, 60.0)),
-        mode: WindowMode::Maximized,
-        normal_geometry: Some(normal),
-        ..WindowOptions::default()
-    };
+    let options = WindowOptions::default()
+        .with_position(Some(Point::new(50.0, 60.0)))
+        .with_mode(WindowMode::Maximized)
+        .with_normal_geometry(Some(normal));
     let window: Arc<dyn HostWindow> = platform.open_window(options).expect("window");
     let state = window.state();
     assert_eq!(state.mode, WindowMode::Maximized);

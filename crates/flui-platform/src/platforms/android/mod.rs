@@ -372,6 +372,10 @@ impl AndroidPlatform {
 }
 
 impl Platform for AndroidPlatform {
+    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+
     fn preferences(&self) -> Result<crate::SystemPreferences, PlatformError> {
         self.refresh_preferences()
     }

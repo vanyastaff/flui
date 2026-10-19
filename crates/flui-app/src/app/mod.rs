@@ -24,7 +24,7 @@ pub(crate) mod logging;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-pub(crate) mod placement_keeper;
+pub(crate) mod placement_recorder;
 pub(crate) mod raster_lane;
 pub mod runner;
 pub(crate) mod runtime;

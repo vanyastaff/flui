@@ -2267,6 +2267,10 @@ impl Drop for WinitApp {
 }
 
 impl Platform for WinitPlatform {
+    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        super::window::window_capabilities()
+    }
+
     #[cfg(target_os = "linux")]
     fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
         let signal = self.owner_signal.lock().clone();
@@ -2825,10 +2829,9 @@ mod tests {
         let mut replies: Vec<_> = (0..3)
             .map(|index| {
                 sender
-                    .request_open_window(WindowOptions {
-                        title: format!("quit-panic-{index}"),
-                        ..WindowOptions::default()
-                    })
+                    .request_open_window(
+                        WindowOptions::default().with_title(format!("quit-panic-{index}")),
+                    )
                     .expect("request is admitted before quit")
             })
             .collect();

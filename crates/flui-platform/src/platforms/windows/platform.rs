@@ -2273,6 +2273,10 @@ impl WindowsPlatform {
 }
 
 impl Platform for WindowsPlatform {
+    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        super::window::window_capabilities()
+    }
+
     // ==================== Core System ====================
 
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {

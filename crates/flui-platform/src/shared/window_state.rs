@@ -39,7 +39,19 @@ pub(crate) struct WindowStateCell {
     stale: AtomicBool,
 }
 
+impl super::system_notice::StaleOnWake for WindowStateCell {
+    fn mark_stale(&self) {
+        self.invalidate();
+    }
+}
+
 impl WindowStateCell {
+    /// Whether the next read asks the operating system again.
+    #[cfg(test)]
+    pub(crate) fn is_stale(&self) -> bool {
+        self.stale.load(Ordering::Acquire)
+    }
+
     /// A cell publishing `initial`, stale: the first `state_with` reads the OS.
     pub(crate) fn new(initial: WindowState) -> Self {
         Self {
@@ -154,7 +166,7 @@ mod tests {
     #[test]
     fn an_exhausted_revision_freezes_the_cell() {
         let mut last = state(1.0);
-        last.revision = WindowRevision::last();
+        last.revision = WindowRevision::LAST;
         let cell = WindowStateCell::new(last.clone());
         for attempt in 0..3 {
             let published = cell.publish(state(2.0 + f64::from(attempt)));

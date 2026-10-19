@@ -83,8 +83,8 @@ mod measured {
     use flui_sdk::view::{
         AnimatedView as _, AsyncDriver as _, BoxedView as _, BuildContext as _,
         BuildContextExt as _, Child as _, FieldMask as _, FrameWaker as _, GlobalKey as _,
-        InheritedData as _, InheritedView as _, IntoView as _, LifecycleHandle as _,
-        NoticeSubscription as _, PostFrameHandle as _, RebuildHandle as _, RebuildReason as _,
+        HostNoticeSubscription as _, InheritedData as _, InheritedView as _, IntoView as _,
+        LifecycleHandle as _, PostFrameHandle as _, RebuildHandle as _, RebuildReason as _,
         RenderObjectContext as _, RenderView as _, StatefulView as _, View as _, ViewExt as _,
         ViewState as _, WindowClosed as _, WindowHandle as _, WindowSubscription as _,
         impl_animated_view as _, impl_inherited_view as _, impl_render_view as _,

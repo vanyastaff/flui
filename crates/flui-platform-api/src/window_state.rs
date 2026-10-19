@@ -49,10 +49,7 @@ impl WindowRevision {
     }
 
     /// The last revision a window can publish.
-    #[must_use]
-    pub const fn last() -> Self {
-        Self(u64::MAX)
-    }
+    pub const LAST: Self = Self(u64::MAX);
 }
 
 /// A window state cannot advance: the last revision was reached.
@@ -268,78 +265,76 @@ impl WindowState {
 )]
 pub struct WindowCapabilities {
     /// [`WindowCommand::SetTitle`].
-    pub set_title: bool,
+    pub sets_title: bool,
     /// [`WindowCommand::SetPosition`].
-    pub set_position: bool,
+    pub sets_position: bool,
     /// [`WindowCommand::SetSize`].
-    pub set_size: bool,
+    pub sets_size: bool,
     /// [`WindowCommand::SetConstraints`].
-    pub set_constraints: bool,
+    pub sets_constraints: bool,
     /// [`WindowCommand::SetResizable`].
-    pub set_resizable: bool,
+    pub sets_resizable: bool,
     /// [`WindowCommand::SetDecorated`].
-    pub set_decorated: bool,
+    pub sets_decorated: bool,
     /// [`WindowMode::Minimized`] through [`WindowCommand::SetMode`].
-    pub minimize: bool,
+    pub minimizes: bool,
     /// [`WindowMode::Maximized`] through [`WindowCommand::SetMode`].
-    pub maximize: bool,
+    pub maximizes: bool,
     /// [`WindowMode::Fullscreen`] through [`WindowCommand::SetMode`].
-    pub fullscreen: bool,
+    pub enters_fullscreen: bool,
     /// [`WindowCommand::Hide`].
-    pub hide: bool,
-    /// [`WindowCommand::Activate`] and [`WindowCommand::Show`]: showing a window
-    /// unminimizes it and requests focus, so the two stand or fall together.
-    pub activate: bool,
+    pub hides: bool,
+    /// [`WindowCommand::Show`].
+    pub shows: bool,
+    /// [`WindowCommand::Activate`]: bring the window to the front and request
+    /// focus.
+    pub activates: bool,
     /// The snapshot's [`WindowGeometry::position`] is reported.
     pub observes_position: bool,
     /// [`WindowMode::Minimized`] is ever published.
     pub observes_minimized: bool,
     /// A saved position can be applied again when the window opens.
-    pub restores_position: bool,
+    pub places_at_open: bool,
 }
 
 impl WindowCapabilities {
     /// A window that honours no command and observes nothing.
-    #[must_use]
-    pub const fn none() -> Self {
-        Self {
-            set_title: false,
-            set_position: false,
-            set_size: false,
-            set_constraints: false,
-            set_resizable: false,
-            set_decorated: false,
-            minimize: false,
-            maximize: false,
-            fullscreen: false,
-            hide: false,
-            activate: false,
-            observes_position: false,
-            observes_minimized: false,
-            restores_position: false,
-        }
-    }
+    pub const NONE: Self = Self {
+        sets_title: false,
+        sets_position: false,
+        sets_size: false,
+        sets_constraints: false,
+        sets_resizable: false,
+        sets_decorated: false,
+        minimizes: false,
+        maximizes: false,
+        enters_fullscreen: false,
+        hides: false,
+        shows: false,
+        activates: false,
+        observes_position: false,
+        observes_minimized: false,
+        places_at_open: false,
+    };
 
     /// A window that honours every command and observes everything.
-    #[must_use]
-    pub const fn all() -> Self {
-        Self {
-            set_title: true,
-            set_position: true,
-            set_size: true,
-            set_constraints: true,
-            set_resizable: true,
-            set_decorated: true,
-            minimize: true,
-            maximize: true,
-            fullscreen: true,
-            hide: true,
-            activate: true,
-            observes_position: true,
-            observes_minimized: true,
-            restores_position: true,
-        }
-    }
+    pub const ALL: Self = Self {
+        sets_title: true,
+        sets_position: true,
+        sets_size: true,
+        sets_constraints: true,
+        sets_resizable: true,
+        sets_decorated: true,
+        minimizes: true,
+        maximizes: true,
+        enters_fullscreen: true,
+        hides: true,
+        shows: true,
+        activates: true,
+        observes_position: true,
+        observes_minimized: true,
+        places_at_open: true,
+    };
 
     /// Whether `command` is one this window honours.
     ///
@@ -348,18 +343,19 @@ impl WindowCapabilities {
     #[must_use]
     pub const fn permits(&self, command: &WindowCommand) -> bool {
         match command {
-            WindowCommand::SetTitle(_) => self.set_title,
-            WindowCommand::SetPosition(_) => self.set_position,
-            WindowCommand::SetSize(_) => self.set_size,
-            WindowCommand::SetConstraints(_) => self.set_constraints,
-            WindowCommand::SetResizable(_) => self.set_resizable,
-            WindowCommand::SetDecorated(_) => self.set_decorated,
-            WindowCommand::SetMode(WindowMode::Minimized) => self.minimize,
-            WindowCommand::SetMode(WindowMode::Maximized) => self.maximize,
-            WindowCommand::SetMode(WindowMode::Fullscreen) => self.fullscreen,
+            WindowCommand::SetTitle(_) => self.sets_title,
+            WindowCommand::SetPosition(_) => self.sets_position,
+            WindowCommand::SetSize(_) => self.sets_size,
+            WindowCommand::SetConstraints(_) => self.sets_constraints,
+            WindowCommand::SetResizable(_) => self.sets_resizable,
+            WindowCommand::SetDecorated(_) => self.sets_decorated,
+            WindowCommand::SetMode(WindowMode::Minimized) => self.minimizes,
+            WindowCommand::SetMode(WindowMode::Maximized) => self.maximizes,
+            WindowCommand::SetMode(WindowMode::Fullscreen) => self.enters_fullscreen,
             WindowCommand::SetMode(WindowMode::Normal) => true,
-            WindowCommand::Hide => self.hide,
-            WindowCommand::Show | WindowCommand::Activate => self.activate,
+            WindowCommand::Hide => self.hides,
+            WindowCommand::Show => self.shows,
+            WindowCommand::Activate => self.activates,
         }
     }
 }
@@ -466,8 +462,11 @@ pub enum WindowCommandError {
     #[error("the window is closed")]
     Closed,
     /// The operating system refused or failed the request.
-    #[error("the window system failed the command: {0}")]
-    Backend(String),
+    #[error("the window system failed the command: {message}")]
+    Backend {
+        /// What the window system reported.
+        message: String,
+    },
 }
 
 /// The control surface the framework gives app code over one window

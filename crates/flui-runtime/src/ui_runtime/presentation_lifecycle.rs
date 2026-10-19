@@ -2,6 +2,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use flui_foundation::PresentationId;
+use flui_foundation::panic::FirstPanic;
 use flui_rendering::binding::RendererBinding as _;
 use flui_scheduler::AppLifecycleState;
 use flui_view::__runtime::BindingRuntime as _;
@@ -191,13 +192,17 @@ impl UiRuntime {
     /// presentation that is closing is skipped. Every presentation is drained
     /// even when a subscriber panics; the first panic resumes afterwards.
     pub fn deliver_host_notice(&self, notice: &flui_platform_api::HostNotice) {
-        // The framework gives its memory back first, so a subscriber finds the
-        // easy memory already free. A receiver that panics does not keep the
-        // others, or the subscribers, from running.
-        let mut first = match notice {
-            flui_platform_api::HostNotice::MemoryPressure(level) => self.trim_memory(*level),
-            _ => None,
-        };
+        // This runtime's own caches give memory back first, so a subscriber
+        // finds the easy memory already free. The host's shared receivers are
+        // reclaimed once per notice by the host, not once per runtime.
+        let mut first = FirstPanic::new();
+        if let flui_platform_api::HostNotice::MemoryPressure(level) = notice {
+            // `None` while a measurement has the context lent: it is
+            // mid-layout, and the next notice reclaims it.
+            first.contain(|| {
+                let _ = self.text.try_with(|text| text.reclaim(*level));
+            });
+        }
         let sources: Vec<_> = self
             .presentations
             .iter()
@@ -208,47 +213,9 @@ impl UiRuntime {
             let _ = source.commit_notice(notice.clone());
         }
         for source in sources {
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| source.drain())) {
-                if first.is_none() {
-                    first = Some(payload);
-                } else {
-                    std::mem::forget(payload);
-                }
-            }
+            first.contain(|| source.drain());
         }
-        if let Some(payload) = first {
-            resume_unwind(payload);
-        }
-    }
-
-    /// Ask every holder of rebuildable memory this UI runtime owns or was given
-    /// to give it back for `level`: its text service, then the host's receivers
-    /// in the order they were added.
-    ///
-    /// Every receiver runs even when one panics; the first panic is returned and
-    /// the later payloads are leaked rather than dropped, since a payload's
-    /// destructor may panic too.
-    fn trim_memory(
-        &self,
-        level: flui_foundation::memory::MemoryPressureLevel,
-    ) -> Option<Box<dyn std::any::Any + Send>> {
-        // `None` while a measurement has the context lent: it is mid-layout,
-        // and the next notice trims it.
-        let text = catch_unwind(AssertUnwindSafe(|| {
-            let _ = self.text.try_with(|text| text.trim(level));
-        }))
-        .err();
-        let hosts = flui_foundation::memory::trim_all(
-            self.memory_trims.iter().map(|receiver| &**receiver),
-            level,
-        );
-        match (text, hosts) {
-            (Some(first), Some(later)) => {
-                std::mem::forget(later);
-                Some(first)
-            }
-            (first, later) => first.or(later),
-        }
+        first.resume();
     }
 
     /// Re-derive and deliver every presentation's lifecycle from the state
@@ -809,8 +776,11 @@ mod tests {
                 handle
                     .subscribe_notices(move |notice| {
                         if let HostNotice::SessionEnding(request) = notice {
-                            held.borrow_mut()
-                                .push(request.block(format!("save {index}")));
+                            held.borrow_mut().push(
+                                request
+                                    .block(format!("save {index}"))
+                                    .expect("the book is open until the host answers"),
+                            );
                         }
                     })
                     .expect("open presentation")
@@ -819,10 +789,12 @@ mod tests {
         let released = Rc::new(Cell::new(0));
         let on_release = Rc::clone(&released);
         let request =
-            SessionEndRequest::new().releasing(move || on_release.set(on_release.get() + 1));
+            SessionEndRequest::new().on_release(move || on_release.set(on_release.get() + 1));
         ui_runtime.deliver_host_notice(&HostNotice::SessionEnding(request.clone()));
         assert!(request.is_blocked());
         assert_eq!(request.reasons(), ["save 0", "save 1"]);
+        // The host answers the platform once every presentation has heard it.
+        assert_eq!(request.answer(), flui_platform_api::SessionEndAnswer::Block);
 
         let first = held.borrow_mut().remove(0);
         drop(first);
@@ -853,98 +825,6 @@ mod tests {
         assert!(reached.get(), "the other presentation still heard it");
     }
 
-    /// A memory receiver that writes its name and the level it was asked for
-    /// into a shared log, and panics when told to.
-    struct Receiver {
-        name: &'static str,
-        log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-        fails: bool,
-    }
-
-    impl flui_foundation::memory::MemoryTrim for Receiver {
-        fn trim(&self, level: flui_foundation::memory::MemoryPressureLevel) {
-            self.log
-                .lock()
-                .expect("log")
-                .push(format!("{} {level:?}", self.name));
-            assert!(!self.fails, "{} fails", self.name);
-        }
-    }
-
-    fn runtime_with_receivers(
-        log: &std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-        receivers: &[(&'static str, bool)],
-    ) -> (UiRuntime, PresentationId, PresentationId) {
-        let (mut ui_runtime, a, b) = two_presentations();
-        for &(name, fails) in receivers {
-            ui_runtime.memory_trims.push(std::sync::Arc::new(Receiver {
-                name,
-                log: std::sync::Arc::clone(log),
-                fails,
-            }));
-        }
-        (ui_runtime, a, b)
-    }
-
-    fn memory_pressure_trims_the_host_before_any_subscriber_hears_it() {
-        use flui_platform_api::{HostNotice, MemoryPressureLevel};
-        let log = std::sync::Arc::default();
-        let (ui_runtime, a, b) =
-            runtime_with_receivers(&log, &[("assets", false), ("raster", false)]);
-        let _tokens: Vec<_> = notice_handles(&ui_runtime, &[a, b])
-            .into_iter()
-            .enumerate()
-            .map(|(index, handle)| {
-                let log = std::sync::Arc::clone(&log);
-                handle
-                    .subscribe_notices(move |_| {
-                        log.lock().expect("log").push(format!("subscriber {index}"));
-                    })
-                    .expect("open presentation")
-            })
-            .collect();
-        ui_runtime.deliver_host_notice(&HostNotice::MemoryPressure(MemoryPressureLevel::Moderate));
-        ui_runtime.deliver_host_notice(&HostNotice::Wake);
-        assert_eq!(
-            *log.lock().expect("log"),
-            [
-                "assets Moderate",
-                "raster Moderate",
-                "subscriber 0",
-                "subscriber 1",
-                "subscriber 0",
-                "subscriber 1",
-            ],
-            "receivers in the order added, then subscribers; other notices trim nothing"
-        );
-    }
-
-    fn a_panicking_trim_receiver_keeps_neither_the_others_nor_the_subscribers_waiting() {
-        use flui_platform_api::{HostNotice, MemoryPressureLevel};
-        let log = std::sync::Arc::default();
-        let (ui_runtime, a, _b) =
-            runtime_with_receivers(&log, &[("first", true), ("second", false)]);
-        let heard = Rc::new(Cell::new(false));
-        let seen = Rc::clone(&heard);
-        let _token = notice_handles(&ui_runtime, &[a])[0]
-            .subscribe_notices(move |_| seen.set(true))
-            .expect("open presentation");
-        let failure = catch_unwind(AssertUnwindSafe(|| {
-            ui_runtime
-                .deliver_host_notice(&HostNotice::MemoryPressure(MemoryPressureLevel::Critical));
-        }))
-        .expect_err("the first failure resumes after delivery");
-        assert_eq!(
-            failure.downcast_ref::<String>().map(String::as_str),
-            Some("first fails")
-        );
-        assert_eq!(
-            *log.lock().expect("log"),
-            ["first Critical", "second Critical"]
-        );
-        assert!(heard.get(), "the subscriber still heard the notice");
-    }
-
     #[test]
     fn host_notice_delivery() {
         crate::table_test::run_table(
@@ -965,15 +845,6 @@ mod tests {
                 (
                     "a_panicking_notice_subscriber_does_not_starve_the_others",
                     a_panicking_notice_subscriber_does_not_starve_the_others as fn(),
-                ),
-                (
-                    "memory_pressure_trims_the_host_before_any_subscriber_hears_it",
-                    memory_pressure_trims_the_host_before_any_subscriber_hears_it as fn(),
-                ),
-                (
-                    "a_panicking_trim_receiver_keeps_neither_the_others_nor_the_subscribers_waiting",
-                    a_panicking_trim_receiver_keeps_neither_the_others_nor_the_subscribers_waiting
-                        as fn(),
                 ),
             ],
         );

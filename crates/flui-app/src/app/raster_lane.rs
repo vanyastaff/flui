@@ -273,7 +273,7 @@ impl<B: RasterBackend> RasterLane<B> {
     }
 
     /// The mailbox handle that carries a memory trim to the lane's backend.
-    pub(crate) fn trim_handle(&self) -> RasterHandle {
+    pub(crate) fn reclaim_handle(&self) -> RasterHandle {
         self.handle.clone()
     }
 

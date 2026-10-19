@@ -40,12 +40,31 @@ pub enum WindowReveal {
     AfterFirstFrame,
 }
 
-/// Window creation options
+/// Window creation options.
+///
+/// Adding an option is not a breaking change: the type is `#[non_exhaustive]`,
+/// so it is built from [`Default`] with the `with_*` methods.
+///
+/// # Geometry
+///
+/// [`size`](Self::size) is the **content** size: what
+/// [`WindowState::content_size`](crate::WindowState::content_size) reports
+/// after the window opens. The backend adds the window's frame (title bar and
+/// borders) to ask the window system for the outer window, so reopening a
+/// window with the size it last reported does not shrink it by its frame.
+///
+/// [`position`](Self::position) and
+/// [`normal_geometry`](Self::normal_geometry) are measured from the origin of
+/// the usable area of [`display`](Self::display) in that display's logical
+/// pixels when a display is given, and in global logical pixels when it is
+/// not. A backend converts through the display's own scale, so a desktop of
+/// mixed scales needs no single global scale.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct WindowOptions {
     /// Window title
     pub title: String,
-    /// Initial window size (logical pixels)
+    /// Initial content size (logical pixels).
     pub size: Size<f64>,
     /// Whether window is resizable
     pub resizable: bool,
@@ -68,16 +87,108 @@ pub struct WindowOptions {
     pub min_size: Option<Size<f64>>,
     /// Maximum window size
     pub max_size: Option<Size<f64>>,
-    /// Initial outer position in global logical pixels; `None` lets the
-    /// system place the window. A backend that cannot place a window ignores
-    /// it, and says so through its [`WindowCapabilities`](crate::WindowCapabilities).
+    /// The display `position` and `normal_geometry` are measured on; `None`
+    /// measures them in global logical pixels. A display that no longer exists
+    /// is treated as `None`.
+    pub display: Option<crate::DisplayId>,
+    /// Initial outer position, relative to [`display`](Self::display); `None`
+    /// lets the system place the window. A backend that cannot place a window
+    /// at open ignores it, and says so through its
+    /// [`WindowCapabilities::places_at_open`](crate::WindowCapabilities::places_at_open).
     pub position: Option<Point<f64>>,
     /// The mode the window opens in. A backend that cannot enter it opens the
     /// window in [`WindowMode::Normal`], which its first snapshot shows.
     pub mode: WindowMode,
-    /// The rectangle the window returns to from a maximized or fullscreen
+    /// The outer rectangle the window returns to from a maximized or fullscreen
     /// opening mode, so a restored maximized window keeps its earlier bounds.
+    /// Measured like [`position`](Self::position).
     pub normal_geometry: Option<WindowGeometry>,
+}
+
+impl WindowOptions {
+    /// Set the title.
+    #[must_use]
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = title.into();
+        self
+    }
+
+    /// Set the initial content size.
+    #[must_use]
+    pub const fn with_size(mut self, size: Size<f64>) -> Self {
+        self.size = size;
+        self
+    }
+
+    /// Set whether the window is resizable.
+    #[must_use]
+    pub const fn with_resizable(mut self, resizable: bool) -> Self {
+        self.resizable = resizable;
+        self
+    }
+
+    /// Set whether the window is visible initially.
+    #[must_use]
+    pub const fn with_visible(mut self, visible: bool) -> Self {
+        self.visible = visible;
+        self
+    }
+
+    /// Set when a visible window first becomes visible to the viewer.
+    #[must_use]
+    pub const fn with_reveal(mut self, reveal: WindowReveal) -> Self {
+        self.reveal = reveal;
+        self
+    }
+
+    /// Set whether the window is decorated.
+    #[must_use]
+    pub const fn with_decorated(mut self, decorated: bool) -> Self {
+        self.decorated = decorated;
+        self
+    }
+
+    /// Set the minimum content size.
+    #[must_use]
+    pub const fn with_min_size(mut self, min_size: Option<Size<f64>>) -> Self {
+        self.min_size = min_size;
+        self
+    }
+
+    /// Set the maximum content size.
+    #[must_use]
+    pub const fn with_max_size(mut self, max_size: Option<Size<f64>>) -> Self {
+        self.max_size = max_size;
+        self
+    }
+
+    /// Set the display the position is measured on.
+    #[must_use]
+    pub const fn with_display(mut self, display: Option<crate::DisplayId>) -> Self {
+        self.display = display;
+        self
+    }
+
+    /// Set the initial outer position.
+    #[must_use]
+    pub const fn with_position(mut self, position: Option<Point<f64>>) -> Self {
+        self.position = position;
+        self
+    }
+
+    /// Set the mode the window opens in.
+    #[must_use]
+    pub const fn with_mode(mut self, mode: WindowMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Set the rectangle a maximized or fullscreen window returns to.
+    #[must_use]
+    pub const fn with_normal_geometry(mut self, normal_geometry: Option<WindowGeometry>) -> Self {
+        self.normal_geometry = normal_geometry;
+        self
+    }
 }
 
 impl Default for WindowOptions {
@@ -91,6 +202,7 @@ impl Default for WindowOptions {
             decorated: true,
             min_size: None,
             max_size: None,
+            display: None,
             position: None,
             mode: WindowMode::Normal,
             normal_geometry: None,

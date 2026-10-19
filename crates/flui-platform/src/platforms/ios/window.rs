@@ -35,7 +35,10 @@ use objc2_ui_kit::{
 };
 
 use flui_foundation::geometry::{EdgeInsets, Size};
-use flui_platform_api::{WindowAppearance, WindowGeometry, WindowState};
+use flui_platform_api::{
+    WindowAppearance, WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry,
+    WindowState,
+};
 
 use super::display::{IosDisplays, ScreenIdentity};
 use super::events::TouchInputState;
@@ -1196,6 +1199,17 @@ impl PlatformWindow for IOSWindow {
     /// The metrics and lifecycle live apart from this cell, so each call reads
     /// them again. `on_state_changed` is raised where they change: when the
     /// view's size or scale does, and on each lifecycle step.
+    fn capabilities(&self) -> WindowCapabilities {
+        WindowCapabilities::NONE
+    }
+
+    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+        // The system owns the surface: every command is refused unless it asks
+        // for what the window already is.
+        command.admit(&WindowCapabilities::NONE)?;
+        Ok(())
+    }
+
     fn state(&self) -> WindowState {
         self.snapshot.invalidate();
         let published = self.snapshot.state_with(|| {

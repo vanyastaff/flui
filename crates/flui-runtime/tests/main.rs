@@ -103,8 +103,6 @@ mod owner_display;
 mod owner_input;
 #[path = "contracts/owner_metrics.rs"]
 mod owner_metrics;
-#[path = "contracts/owner_notice.rs"]
-mod owner_notice;
 #[path = "contracts/owner_publication.rs"]
 mod owner_publication;
 #[path = "contracts/owner_registry.rs"]

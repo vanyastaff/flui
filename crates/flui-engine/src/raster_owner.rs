@@ -50,7 +50,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
-use flui_foundation::memory::{MemoryPressureLevel, MemoryTrim};
+use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
 use flui_foundation::{FrameEpoch, GpuResourceGeneration, PresentationAddress, SurfaceGeneration};
 use flui_layer::{DamageRegion, SceneSnapshot};
 use parking_lot::{Condvar, Mutex};
@@ -1057,8 +1057,8 @@ impl RasterHandle {
 /// ahead of the next pump's render. Asked repeatedly before the owner runs,
 /// only the strongest level is applied, once. A handle whose owner is gone
 /// does nothing.
-impl MemoryTrim for RasterHandle {
-    fn trim(&self, level: MemoryPressureLevel) {
+impl ReclaimMemory for RasterHandle {
+    fn reclaim(&self, level: MemoryPressureLevel) {
         let mut state = self.mailbox.state.lock();
         state.pending_trim = state.pending_trim.max(Some(level));
         drop(state);
@@ -1388,7 +1388,7 @@ impl<B: RasterBackend> RasterOwner<B> {
         if let Some(level) = trim {
             // Between frames: the previous frame's buffers are all free and
             // this frame has not recorded yet.
-            self.backend.trim(level);
+            self.backend.reclaim(level);
             tracing::debug!(?level, "raster owner: gave back GPU memory");
         }
 
@@ -1852,7 +1852,7 @@ mod tests {
             Ok(())
         }
 
-        fn trim(&mut self, level: MemoryPressureLevel) {
+        fn reclaim(&mut self, level: MemoryPressureLevel) {
             self.trims.push(level);
         }
     }
@@ -2244,8 +2244,8 @@ mod tests {
     fn trims_coalesce_to_the_strongest_level_and_apply_before_the_frame() {
         let (mut owner, handle, _ack_rx, _shutdown_rx) = new_owner(FakeBackend::default());
         let generation = handle.resize(800, 600).expect("nonzero");
-        handle.trim(MemoryPressureLevel::Critical);
-        handle.trim(MemoryPressureLevel::Moderate);
+        handle.reclaim(MemoryPressureLevel::Critical);
+        handle.reclaim(MemoryPressureLevel::Moderate);
         handle
             .submit(test_frame(FrameEpoch::ZERO.next(), generation))
             .expect("accepted");
@@ -2259,7 +2259,7 @@ mod tests {
         assert!(matches!(owner.pump(), PumpOutcome::Idle));
         owner.with_backend(|backend| assert_eq!(backend.trims.len(), 1, "applied once"));
 
-        handle.trim(MemoryPressureLevel::Moderate);
+        handle.reclaim(MemoryPressureLevel::Moderate);
         assert!(matches!(owner.pump(), PumpOutcome::Idle));
         owner.with_backend(|backend| {
             assert_eq!(

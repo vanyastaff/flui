@@ -266,7 +266,7 @@ impl WgpuPainter {
     /// half the pool's budget. [`Critical`](MemoryPressureLevel::Critical)
     /// evicts every free buffer and resets the glyph atlas. Call between
     /// frames, after the last submit, when every pooled buffer is free.
-    pub(crate) fn trim(&mut self, level: MemoryPressureLevel) {
+    pub(crate) fn reclaim(&mut self, level: MemoryPressureLevel) {
         if level == MemoryPressureLevel::Moderate {
             self.resources
                 .buffer_pool_mut()

@@ -64,6 +64,67 @@ pub fn retain_opaque_payload(payload: Box<dyn Any + Send>) {
     }
 }
 
+/// The first panic of a run of callbacks, kept while the rest still run.
+///
+/// Delivery to several receivers must not stop at the first that panics, and
+/// must not hide it: [`contain`](Self::contain) runs each one, the first
+/// payload is held, later payloads are retained rather than dropped (a payload
+/// destructor may panic too, see [`retain_opaque_payload`]), and
+/// [`resume`](Self::resume) raises the first once everything has run.
+#[derive(Default)]
+pub struct FirstPanic(Option<Box<dyn Any + Send>>);
+
+impl std::fmt::Debug for FirstPanic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FirstPanic")
+            .field("held", &self.0.is_some())
+            .finish()
+    }
+}
+
+impl FirstPanic {
+    /// A collector holding no panic.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(None)
+    }
+
+    /// Run `run`, holding its panic if it has one and none is held yet.
+    pub fn contain<R>(&mut self, run: impl FnOnce() -> R) -> Option<R> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+            Ok(value) => Some(value),
+            Err(payload) => {
+                self.record(payload);
+                None
+            }
+        }
+    }
+
+    /// Hold `payload` unless an earlier panic is held; retain it otherwise.
+    pub fn record(&mut self, payload: Box<dyn Any + Send>) {
+        Self::fold(&mut self.0, Some(payload));
+    }
+
+    /// Fold `next` into `first`: the first payload stays, a later one is
+    /// retained.
+    pub fn fold(first: &mut Option<Box<dyn Any + Send>>, next: Option<Box<dyn Any + Send>>) {
+        if let Some(payload) = next {
+            if first.is_none() {
+                *first = Some(payload);
+            } else {
+                retain_opaque_payload(payload);
+            }
+        }
+    }
+
+    /// Raise the held panic, if there is one.
+    pub fn resume(self) {
+        if let Some(payload) = self.0 {
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
 /// Carries the first failure across nested callback delivery and retirement.
 ///
 /// Framework delivery seams borrow this context from their enclosing owner.

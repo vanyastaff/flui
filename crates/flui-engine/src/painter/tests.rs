@@ -3908,7 +3908,7 @@ fn trim_evicts_free_buffers_by_level() {
             4 * BUFFER_BYTES
         );
 
-        painter.trim(level);
+        painter.reclaim(level);
 
         assert_eq!(
             painter.resources.buffer_pool_mut().total_capacity_bytes(),

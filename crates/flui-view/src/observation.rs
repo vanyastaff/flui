@@ -367,13 +367,7 @@ impl<E: Clone + 'static> Drop for CloseWindow<E> {
 }
 
 pub(crate) fn preserve(first: &mut Option<Panic>, next: Option<Panic>) {
-    if let Some(payload) = next {
-        if first.is_none() {
-            *first = Some(payload);
-        } else {
-            std::mem::forget(payload);
-        }
-    }
+    flui_foundation::panic::FirstPanic::fold(first, next);
 }
 
 // Rejected admission owns the generic callback too. It must release source

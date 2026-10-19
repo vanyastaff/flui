@@ -204,6 +204,10 @@ impl MacOSPlatform {
 }
 
 impl Platform for MacOSPlatform {
+    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        super::window::window_capabilities()
+    }
+
     fn preferences(&self) -> Result<crate::SystemPreferences, PlatformError> {
         self.preferences.read()
     }

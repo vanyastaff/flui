@@ -6,7 +6,7 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use flui_foundation::memory::{MemoryPressureLevel, MemoryTrim};
+use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
 use parking_lot::RwLock;
 
 use crate::cache::{AssetCache, AssetCacheConfig, CacheCapacity};
@@ -439,8 +439,8 @@ impl AssetRegistry {
 /// cheaper half-way to give back, so each level drops the same entries.
 /// Handles already given out keep their data, and loads in flight finish into
 /// the caches they started with.
-impl MemoryTrim for AssetRegistry {
-    fn trim(&self, _level: MemoryPressureLevel) {
+impl ReclaimMemory for AssetRegistry {
+    fn reclaim(&self, _level: MemoryPressureLevel) {
         self.retire_caches();
     }
 }

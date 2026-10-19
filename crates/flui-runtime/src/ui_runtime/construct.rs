@@ -126,7 +126,6 @@ impl UiRuntime {
             storage,
             clock,
             text,
-            memory_trims,
         } = services;
 
         // The ui_runtime's scheduler fires the SAME platform wake its presentation
@@ -202,7 +201,6 @@ impl UiRuntime {
             clipboard,
             storage,
             text,
-            memory_trims,
             #[cfg(any(test, feature = "test-support"))]
             now_secs_override: AtomicU64::new(0),
             rx,

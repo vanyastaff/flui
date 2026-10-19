@@ -36,7 +36,7 @@ use std::thread::ThreadId;
 
 use flui_foundation::{ClaimHandle, ClaimOutcome};
 use flui_platform_api::text_store::TextStoreHost;
-use flui_platform_api::{HostNotice, SessionEndAnswer, SessionEndPhase};
+use flui_platform_api::{SessionEndAnswer, SessionEndPhase, SystemNotice};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 use super::{
@@ -115,8 +115,28 @@ impl OwnerPlatform {
     /// Install the callback the platform calls with each system notice other
     /// than a session end's phases, replacing any earlier one. See
     /// [`Platform::on_host_notice`].
-    pub fn on_host_notice(&self, callback: Box<dyn FnMut(&HostNotice) + Send>) {
+    pub fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
         self.platform.on_host_notice(callback);
+    }
+
+    /// Tell the platform the application released the session end it asked to
+    /// wait for. See [`Platform::release_session_end`].
+    pub fn release_session_end(&self) {
+        self.platform.release_session_end();
+    }
+
+    /// The commands and observations every window of this platform has, known
+    /// before one opens. See [`Platform::window_capabilities`].
+    #[must_use]
+    pub fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        self.platform.window_capabilities()
+    }
+
+    /// The title bar and border a decorated window adds to its content size on a
+    /// display of scale `scale_factor`. See [`Platform::window_frame_inset`].
+    #[must_use]
+    pub fn window_frame_inset(&self, scale_factor: f64) -> flui_foundation::geometry::Size<f64> {
+        self.platform.window_frame_inset(scale_factor)
     }
 
     /// Open a window. `Ready` is guaranteed inside `on_ready`; afterwards
@@ -328,8 +348,28 @@ impl SharedPlatform {
 
     /// Registers the callback called with each other system notice; see
     /// [`Platform::on_host_notice`].
-    pub fn on_host_notice(&self, callback: Box<dyn FnMut(&HostNotice) + Send>) {
+    pub fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
         self.platform.on_host_notice(callback);
+    }
+
+    /// Tells the platform the application released the session end it asked to
+    /// wait for; see [`Platform::release_session_end`].
+    pub fn release_session_end(&self) {
+        self.platform.release_session_end();
+    }
+
+    /// The commands and observations every window of this platform has, known
+    /// before one opens; see [`Platform::window_capabilities`].
+    #[must_use]
+    pub fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        self.platform.window_capabilities()
+    }
+
+    /// The frame a decorated window adds to its content size on a display of
+    /// scale `scale_factor`; see [`Platform::window_frame_inset`].
+    #[must_use]
+    pub fn window_frame_inset(&self, scale_factor: f64) -> flui_foundation::geometry::Size<f64> {
+        self.platform.window_frame_inset(scale_factor)
     }
 
     /// Registers a callback for when the application is reopened (macOS).

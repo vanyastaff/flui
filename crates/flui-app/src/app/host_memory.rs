@@ -1,21 +1,22 @@
 //! The memory the host gives back when the system asks for it (ADR-0237
 //! decision 9): the receivers the application registered
-//! ([`AppConfig::with_memory_trim`]) and the GPU memory behind each raster lane.
+//! ([`AppConfig::with_memory_reclaim`]) and the GPU memory behind each raster lane.
 //!
-//! One [`HostMemory`] per host is every UI runtime's single host receiver, so a
-//! window opened later reaches the lanes and receivers of the windows opened
-//! before it. The lists are cloned out before any receiver runs, so a receiver
+//! One [`HostMemory`] per host is reclaimed once per notice, however many
+//! windows it has, and a window opened later is reached along with the lanes and
+//! receivers of the windows opened before it. The lists are cloned out before any receiver runs, so a receiver
 //! may register or release another without meeting this lock.
 //!
-//! [`AppConfig::with_memory_trim`]: crate::app::AppConfig::with_memory_trim
+//! [`AppConfig::with_memory_reclaim`]: crate::app::AppConfig::with_memory_reclaim
 
 use std::sync::Arc;
 
-use flui_foundation::memory::{MemoryPressureLevel, MemoryTrim, trim_all};
+use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory, reclaim_each};
+use flui_foundation::panic::FirstPanic;
 use parking_lot::Mutex;
 
 /// Receivers an application registered, shared with every UI runtime.
-pub(crate) type SharedReceiver = Arc<dyn MemoryTrim + Send + Sync>;
+pub(crate) type SharedReceiver = Arc<dyn ReclaimMemory + Send + Sync>;
 
 /// What a host trims on a memory-pressure notice.
 #[derive(Default)]
@@ -37,35 +38,32 @@ impl HostMemory {
     /// Trim the GPU memory behind `lane` along with the application's
     /// receivers, until the lane's owner is gone.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn track_raster(&self, lane: flui_engine::RasterHandle) {
+    pub(crate) fn track_raster_lane(&self, lane: flui_engine::RasterHandle) {
         let mut rasters = self.rasters.lock();
         rasters.retain(flui_engine::RasterHandle::is_live);
         rasters.push(lane);
     }
 }
 
-impl MemoryTrim for HostMemory {
-    fn trim(&self, level: MemoryPressureLevel) {
+impl ReclaimMemory for HostMemory {
+    fn reclaim(&self, level: MemoryPressureLevel) {
         let receivers = self.receivers.lock().clone();
-        let first = trim_all(receivers.iter().map(|receiver| &**receiver), level);
+        let mut failure = FirstPanic::new();
+        reclaim_each(
+            receivers.iter().map(|receiver| &**receiver),
+            level,
+            &mut failure,
+        );
         #[cfg(not(target_arch = "wasm32"))]
-        let first = {
+        {
             let rasters = {
                 let mut rasters = self.rasters.lock();
                 rasters.retain(flui_engine::RasterHandle::is_live);
                 rasters.clone()
             };
-            match (first, trim_all(rasters.iter(), level)) {
-                (Some(first), Some(later)) => {
-                    std::mem::forget(later);
-                    Some(first)
-                }
-                (first, later) => first.or(later),
-            }
-        };
-        if let Some(payload) = first {
-            std::panic::resume_unwind(payload);
+            reclaim_each(rasters.iter(), level, &mut failure);
         }
+        failure.resume();
     }
 }
 
@@ -74,14 +72,14 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
 
-    use flui_foundation::memory::{MemoryPressureLevel, MemoryTrim};
+    use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
 
     use super::HostMemory;
 
     struct Named(&'static str, Arc<Mutex<Vec<String>>>);
 
-    impl MemoryTrim for Named {
-        fn trim(&self, level: MemoryPressureLevel) {
+    impl ReclaimMemory for Named {
+        fn reclaim(&self, level: MemoryPressureLevel) {
             self.1
                 .lock()
                 .expect("log")
@@ -97,9 +95,9 @@ mod tests {
             Arc::new(Named("assets", Arc::clone(&log))),
             Arc::new(Named("cache", Arc::clone(&log))),
         ]);
-        memory.trim(MemoryPressureLevel::Critical);
+        memory.reclaim(MemoryPressureLevel::Critical);
         memory.replace_receivers(vec![Arc::new(Named("next run", Arc::clone(&log)))]);
-        memory.trim(MemoryPressureLevel::Moderate);
+        memory.reclaim(MemoryPressureLevel::Moderate);
         assert_eq!(
             *log.lock().expect("log"),
             ["assets Critical", "cache Critical", "next run Moderate"]

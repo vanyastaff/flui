@@ -341,10 +341,7 @@ mod tests {
 
         let platform = flui_platform::headless_platform();
         let window = platform
-            .open_window(flui_platform::traits::WindowOptions {
-                size: marker_size,
-                ..Default::default()
-            })
+            .open_window(flui_platform::traits::WindowOptions::default().with_size(marker_size))
             .expect("headless platform always opens a window");
 
         // `on_request_frame` requires `Send` on the callback; `AppRuntime` is

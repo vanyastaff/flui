@@ -194,7 +194,7 @@ pub trait RasterBackend: Send {
     /// [`RasterHandle`](crate::RasterHandle) was asked to trim. Default:
     /// ignored; a backend that holds no GPU memory (scripted doubles) has
     /// nothing to give back.
-    fn trim(&mut self, level: MemoryPressureLevel) {
+    fn reclaim(&mut self, level: MemoryPressureLevel) {
         let _ = level;
     }
 }
@@ -229,8 +229,8 @@ impl RasterBackend for crate::Renderer {
         self.mark_full_repaint();
     }
 
-    fn trim(&mut self, level: MemoryPressureLevel) {
-        self.trim(level);
+    fn reclaim(&mut self, level: MemoryPressureLevel) {
+        self.reclaim(level);
     }
 
     fn apply_texture_updates(

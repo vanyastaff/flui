@@ -145,12 +145,9 @@ impl WinitWindow {
         options: &WindowOptions,
     ) -> Self {
         let shell = desktop_shell(&window);
-        let mut capabilities = WindowCapabilities::none();
-        capabilities.set_title = true;
-        capabilities.minimize = true;
-        capabilities.maximize = true;
-        capabilities.fullscreen = true;
-        capabilities.activate = shell;
+        let mut capabilities = window_capabilities();
+        capabilities.shows = shell;
+        capabilities.activates = shell;
         capabilities.observes_minimized = shell;
         let creation = CreationFacts {
             constraints: SizeConstraints::new(options.min_size, options.max_size),
@@ -310,6 +307,18 @@ impl Drop for WinitWindow {
     }
 }
 
+/// What every winit window honours on every shell, known before one exists
+/// (`Platform::window_capabilities`); a desktop shell adds showing, activating
+/// and minimize observation (`WinitWindow::new`).
+pub(crate) const fn window_capabilities() -> WindowCapabilities {
+    let mut capabilities = WindowCapabilities::NONE;
+    capabilities.sets_title = true;
+    capabilities.minimizes = true;
+    capabilities.maximizes = true;
+    capabilities.enters_fullscreen = true;
+    capabilities
+}
+
 impl PlatformWindow for WinitWindow {
     fn id(&self) -> WindowId {
         self.id
@@ -412,7 +421,9 @@ impl PlatformWindow for WinitWindow {
             }
             WindowCommand::Show => self.show().map_err(|error| match error {
                 crate::WindowShowError::Closed => WindowCommandError::Closed,
-                crate::WindowShowError::Native { message } => WindowCommandError::Backend(message),
+                crate::WindowShowError::Native { message } => {
+                    WindowCommandError::Backend { message }
+                }
                 _ => WindowCommandError::Unsupported,
             })?,
             WindowCommand::Activate => self.window.focus_window(),

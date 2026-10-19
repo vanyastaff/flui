@@ -49,14 +49,21 @@ impl WindowQueue {
         if batch.is_empty() {
             return;
         }
+        // From here the batch is owned by a guard that gives back whatever is
+        // still unapplied if a command panics: the rest waits for the next
+        // turn instead of being lost with the unwind.
+        let mut batch = UnappliedBatch {
+            queue: self,
+            rest: batch,
+        };
         let Some(window) = self.window.upgrade() else {
             return;
         };
-        for work in batch {
+        while let Some(work) = batch.rest.pop_front() {
             match work {
                 Queued::Command(command) => match window.apply(command) {
                     Ok(()) => {}
-                    Err(WindowCommandError::Backend(message)) => {
+                    Err(WindowCommandError::Backend { message }) => {
                         tracing::warn!(
                             window = ?window.id(),
                             %message,
@@ -82,6 +89,35 @@ impl WindowQueue {
         {
             tracing::debug!(%error, "a queued window close found the window already gone");
         }
+    }
+}
+
+/// The part of a batch not yet applied. If the walk unwinds, dropping this puts
+/// it back at the front of the queue, ahead of anything queued meanwhile, so the
+/// next turn applies it in the order it was submitted.
+struct UnappliedBatch<'a> {
+    queue: &'a WindowQueue,
+    rest: VecDeque<Queued>,
+}
+
+impl Drop for UnappliedBatch<'_> {
+    fn drop(&mut self) {
+        if self.rest.is_empty() {
+            return;
+        }
+        let mut pending = self.queue.pending.borrow_mut();
+        let newer = std::mem::replace(&mut *pending, std::mem::take(&mut self.rest));
+        pending.extend(newer);
+    }
+}
+
+/// Marks a walk over the queues as in progress, and unmarks it however the walk
+/// ends.
+struct Applying<'a>(&'a Cell<bool>);
+
+impl Drop for Applying<'_> {
+    fn drop(&mut self) {
+        self.0.set(false);
     }
 }
 
@@ -114,6 +150,7 @@ impl WindowCommandQueues {
         if self.applying.replace(true) {
             return;
         }
+        let _applying = Applying(&self.applying);
         let queues: Vec<_> = self
             .queues
             .borrow()
@@ -123,7 +160,6 @@ impl WindowCommandQueues {
         for queue in queues {
             queue.apply_pending();
         }
-        self.applying.set(false);
     }
 }
 
@@ -168,7 +204,7 @@ impl WindowControl for HostWindowControl {
         self.queue
             .window
             .upgrade()
-            .map_or_else(WindowCapabilities::none, |window| window.capabilities())
+            .map_or(WindowCapabilities::NONE, |window| window.capabilities())
     }
 
     fn submit(&self, command: WindowCommand) -> Result<(), WindowCommandError> {

@@ -97,31 +97,31 @@ type Capability = fn(&mut WindowCapabilities) -> &mut bool;
 
 fn admit_refuses_exactly_when_the_capability_is_false() {
     let rows: [(WindowCommand, Capability); 12] = [
-        (WindowCommand::SetTitle("t".into()), |c| &mut c.set_title),
+        (WindowCommand::SetTitle("t".into()), |c| &mut c.sets_title),
         (WindowCommand::SetPosition(Point::new(1.0, 1.0)), |c| {
-            &mut c.set_position
+            &mut c.sets_position
         }),
         (WindowCommand::SetSize(size(10.0, 10.0)), |c| {
-            &mut c.set_size
+            &mut c.sets_size
         }),
-        (constraints(None, None), |c| &mut c.set_constraints),
-        (WindowCommand::SetResizable(true), |c| &mut c.set_resizable),
-        (WindowCommand::SetDecorated(true), |c| &mut c.set_decorated),
+        (constraints(None, None), |c| &mut c.sets_constraints),
+        (WindowCommand::SetResizable(true), |c| &mut c.sets_resizable),
+        (WindowCommand::SetDecorated(true), |c| &mut c.sets_decorated),
         (WindowCommand::SetMode(WindowMode::Minimized), |c| {
-            &mut c.minimize
+            &mut c.minimizes
         }),
         (WindowCommand::SetMode(WindowMode::Maximized), |c| {
-            &mut c.maximize
+            &mut c.maximizes
         }),
         (WindowCommand::SetMode(WindowMode::Fullscreen), |c| {
-            &mut c.fullscreen
+            &mut c.enters_fullscreen
         }),
-        (WindowCommand::Show, |c| &mut c.activate),
-        (WindowCommand::Hide, |c| &mut c.hide),
-        (WindowCommand::Activate, |c| &mut c.activate),
+        (WindowCommand::Show, |c| &mut c.shows),
+        (WindowCommand::Hide, |c| &mut c.hides),
+        (WindowCommand::Activate, |c| &mut c.activates),
     ];
     for (command, capability) in rows {
-        let mut all = WindowCapabilities::all();
+        let mut all = WindowCapabilities::ALL;
         assert_eq!(command.admit(&all), Ok(()), "{command:?}");
         *capability(&mut all) = false;
         assert_eq!(
@@ -130,7 +130,7 @@ fn admit_refuses_exactly_when_the_capability_is_false() {
             "{command:?} without its capability"
         );
         assert_eq!(
-            command.admit(&WindowCapabilities::none()),
+            command.admit(&WindowCapabilities::NONE),
             Err(WindowCommandError::Unsupported),
             "{command:?} on a window that honours nothing"
         );
@@ -139,7 +139,7 @@ fn admit_refuses_exactly_when_the_capability_is_false() {
 
 fn restoring_normal_needs_no_capability() {
     assert_eq!(
-        WindowCommand::SetMode(WindowMode::Normal).admit(&WindowCapabilities::none()),
+        WindowCommand::SetMode(WindowMode::Normal).admit(&WindowCapabilities::NONE),
         Ok(())
     );
 }
@@ -147,7 +147,7 @@ fn restoring_normal_needs_no_capability() {
 fn admit_checks_numbers_before_capabilities() {
     let bad = WindowCommand::SetSize(size(-1.0, 10.0));
     assert_eq!(
-        bad.admit(&WindowCapabilities::none()),
+        bad.admit(&WindowCapabilities::NONE),
         Err(WindowCommandError::InvalidGeometry)
     );
 }
@@ -182,7 +182,7 @@ fn a_difference_advances_the_revision_by_one() {
 
 fn the_revision_a_sample_carries_is_ignored() {
     let mut sample = base_state();
-    sample.revision = WindowRevision::last();
+    sample.revision = WindowRevision::LAST;
     let next = base_state()
         .successor(sample)
         .expect("equal but for the revision");
@@ -191,7 +191,7 @@ fn the_revision_a_sample_carries_is_ignored() {
 
 fn the_last_revision_refuses_instead_of_wrapping() {
     let mut at_last = base_state();
-    at_last.revision = WindowRevision::last();
+    at_last.revision = WindowRevision::LAST;
     assert_eq!(
         at_last.successor(base_state().with_visible(false)),
         Err(WindowRevisionExhausted)
@@ -204,7 +204,7 @@ fn the_last_revision_refuses_instead_of_wrapping() {
     let unchanged = at_last
         .successor(base_state())
         .expect("an equal sample needs no new revision");
-    assert_eq!(unchanged.revision, WindowRevision::last());
+    assert_eq!(unchanged.revision, WindowRevision::LAST);
 }
 
 #[test]

@@ -703,12 +703,12 @@ fn a_window_offers_its_text_services_as_its_host() {
 
     let platform = super::super::WindowsPlatform::new().expect("platform");
     let window = platform
-        .open_window(WindowOptions {
-            title: "flui window host".into(),
-            size: Size::new(200.0, 80.0),
-            visible: false,
-            ..Default::default()
-        })
+        .open_window(
+            WindowOptions::default()
+                .with_title("flui window host")
+                .with_size(Size::new(200.0, 80.0))
+                .with_visible(false),
+        )
         .expect("window");
     let win32 = window
         .as_any()
@@ -760,12 +760,12 @@ type Row = (&'static str, fn(HWND));
 fn the_text_services_answer_a_completion_for_its_store() {
     let platform = super::super::WindowsPlatform::new().expect("platform");
     let window = platform
-        .open_window(WindowOptions {
-            title: "flui text services".into(),
-            size: Size::new(200.0, 80.0),
-            visible: false,
-            ..Default::default()
-        })
+        .open_window(
+            WindowOptions::default()
+                .with_title("flui text services")
+                .with_size(Size::new(200.0, 80.0))
+                .with_visible(false),
+        )
         .expect("window");
     let hwnd = window
         .as_any()
@@ -1008,12 +1008,12 @@ fn a_panicking_activation_diagnostic_orphans_no_window() {
     let platform = super::super::WindowsPlatform::new().expect("platform");
     let opened = tracing::subscriber::with_default(PanicsOn("ITfThreadMgr activated"), || {
         catch_unwind(AssertUnwindSafe(|| {
-            platform.open_window(WindowOptions {
-                title: TITLE.into(),
-                size: Size::new(200.0, 80.0),
-                visible: false,
-                ..Default::default()
-            })
+            platform.open_window(
+                WindowOptions::default()
+                    .with_title(TITLE)
+                    .with_size(Size::new(200.0, 80.0))
+                    .with_visible(false),
+            )
         }))
     });
     match opened {
@@ -1057,12 +1057,12 @@ fn a_window_destroyed_during_activation_fails_the_open() {
     }
     let platform = super::super::WindowsPlatform::new().expect("platform");
     super::super::window::BEFORE_TSF_ACTIVATION.set(Some(destroy));
-    let opened = platform.open_window(WindowOptions {
-        title: "flui destroyed during activation".into(),
-        size: Size::new(200.0, 80.0),
-        visible: false,
-        ..Default::default()
-    });
+    let opened = platform.open_window(
+        WindowOptions::default()
+            .with_title("flui destroyed during activation")
+            .with_size(Size::new(200.0, 80.0))
+            .with_visible(false),
+    );
     super::super::window::BEFORE_TSF_ACTIVATION.set(None);
     assert!(
         matches!(opened, Err(crate::traits::OpenWindowError::Backend { .. })),
@@ -1105,12 +1105,12 @@ fn a_window_dropped_after_its_platform_retires_tsf_inside_com() {
     assert!(!thread_in_apartment(), "the test thread starts outside STA");
     let platform = super::super::WindowsPlatform::new().expect("platform");
     let window = platform
-        .open_window(WindowOptions {
-            title: "flui outlives its platform".into(),
-            size: Size::new(200.0, 80.0),
-            visible: false,
-            ..Default::default()
-        })
+        .open_window(
+            WindowOptions::default()
+                .with_title("flui outlives its platform")
+                .with_size(Size::new(200.0, 80.0))
+                .with_visible(false),
+        )
         .expect("window");
     let hwnd = window
         .as_any()

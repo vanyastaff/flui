@@ -3,14 +3,14 @@
 
 use flui_foundation::geometry::Size;
 
-/// Limits the headless host imposes on its windows.
+/// What the headless host imposes on its windows.
 ///
 /// A window command is a request (ADR-0237): the host may clamp a size or
 /// decline a mode, and the window's snapshot shows what happened. The default
 /// limits impose nothing.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 #[non_exhaustive]
-pub struct HostLimits {
+pub struct HeadlessWindowPolicy {
     /// The largest window the host allows, in logical pixels. A larger
     /// resize request ends at this size.
     pub max_window_size: Option<Size<f64>>,
@@ -19,16 +19,7 @@ pub struct HostLimits {
     pub refuses_maximize: bool,
 }
 
-impl HostLimits {
-    /// Limits that impose nothing.
-    #[must_use]
-    pub const fn none() -> Self {
-        Self {
-            max_window_size: None,
-            refuses_maximize: false,
-        }
-    }
-
+impl HeadlessWindowPolicy {
     /// Cap windows at `size`.
     #[must_use]
     pub const fn with_max_window_size(mut self, size: Size<f64>) -> Self {
@@ -38,7 +29,7 @@ impl HostLimits {
 
     /// Make the host decline to maximize windows.
     #[must_use]
-    pub const fn with_refused_maximize(mut self) -> Self {
+    pub const fn refusing_maximize(mut self) -> Self {
         self.refuses_maximize = true;
         self
     }

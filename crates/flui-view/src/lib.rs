@@ -169,7 +169,9 @@ pub mod __runtime;
 mod lifecycle;
 mod observation;
 mod window_handle;
-pub use lifecycle::{LifecycleClosed, LifecycleHandle, LifecycleSubscription, NoticeSubscription};
+pub use lifecycle::{
+    HostNoticeSubscription, LifecycleClosed, LifecycleHandle, LifecycleSubscription,
+};
 pub use window_handle::{WindowClosed, WindowHandle, WindowSubscription};
 // Holding a presentation's close while work finishes
 mod close_guard;

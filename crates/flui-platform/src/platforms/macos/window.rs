@@ -882,6 +882,21 @@ impl crate::traits::HostWindow for MacOSWindow {
     }
 }
 
+/// What every AppKit window honours and observes, known before one exists
+/// (`Platform::window_capabilities`).
+pub(crate) const fn window_capabilities() -> WindowCapabilities {
+    let mut capabilities = WindowCapabilities::NONE;
+    capabilities.sets_title = true;
+    capabilities.sets_size = true;
+    capabilities.minimizes = true;
+    capabilities.maximizes = true;
+    capabilities.enters_fullscreen = true;
+    capabilities.shows = true;
+    capabilities.activates = true;
+    capabilities.observes_minimized = true;
+    capabilities
+}
+
 impl PlatformWindow for MacOSWindow {
     fn id(&self) -> WindowId {
         WindowId(self.ns_window as u64)
@@ -1033,15 +1048,7 @@ impl PlatformWindow for MacOSWindow {
     }
 
     fn capabilities(&self) -> WindowCapabilities {
-        let mut capabilities = WindowCapabilities::none();
-        capabilities.set_title = true;
-        capabilities.set_size = true;
-        capabilities.minimize = true;
-        capabilities.maximize = true;
-        capabilities.fullscreen = true;
-        capabilities.activate = true;
-        capabilities.observes_minimized = true;
-        capabilities
+        window_capabilities()
     }
 
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
@@ -1055,7 +1062,9 @@ impl PlatformWindow for MacOSWindow {
             WindowCommand::SetMode(mode) => self.enter_native_mode(mode),
             WindowCommand::Show => self.show().map_err(|error| match error {
                 crate::WindowShowError::Closed => WindowCommandError::Closed,
-                crate::WindowShowError::Native { message } => WindowCommandError::Backend(message),
+                crate::WindowShowError::Native { message } => {
+                    WindowCommandError::Backend { message }
+                }
                 _ => WindowCommandError::Unsupported,
             })?,
             WindowCommand::Activate => self.activate(),

@@ -283,3 +283,77 @@ impl RuntimeWork {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use flui_foundation::UiRuntimeId;
+    use flui_foundation::memory::MemoryPressureLevel::{Critical, Moderate};
+    use flui_platform_api::HostNotice;
+
+    use super::{RuntimeOperation, RuntimeWork};
+
+    fn runtime(generation: u32) -> UiRuntimeId {
+        UiRuntimeId::new_gen(0, NonZeroU32::new(generation).expect("nonzero"))
+    }
+
+    fn notice(runtime: UiRuntimeId, notice: HostNotice) -> RuntimeWork {
+        RuntimeWork::Runtime(runtime, RuntimeOperation::HostNotice(notice))
+    }
+
+    fn folds(queued: HostNotice, next: HostNotice) -> bool {
+        notice(runtime(1), queued).merge_pending_state(&notice(runtime(1), next))
+    }
+
+    fn the_same_pressure_level_queued_twice_folds_into_one() {
+        assert!(folds(
+            HostNotice::MemoryPressure(Critical),
+            HostNotice::MemoryPressure(Critical)
+        ));
+        assert!(folds(
+            HostNotice::MemoryPressure(Moderate),
+            HostNotice::MemoryPressure(Moderate)
+        ));
+    }
+
+    fn different_levels_and_other_notices_each_stay() {
+        assert!(!folds(
+            HostNotice::MemoryPressure(Moderate),
+            HostNotice::MemoryPressure(Critical)
+        ));
+        assert!(!folds(
+            HostNotice::MemoryPressure(Critical),
+            HostNotice::Wake
+        ));
+        assert!(!folds(HostNotice::Wake, HostNotice::Wake));
+    }
+
+    fn a_pressure_notice_for_another_runtime_stays() {
+        let mut queued = notice(runtime(1), HostNotice::MemoryPressure(Critical));
+        assert!(
+            !queued.merge_pending_state(&notice(runtime(2), HostNotice::MemoryPressure(Critical)))
+        );
+    }
+
+    #[test]
+    fn host_notice_coalescing() {
+        crate::table_test::run_table(
+            "host_notice_coalescing",
+            &[
+                (
+                    "the_same_pressure_level_queued_twice_folds_into_one",
+                    the_same_pressure_level_queued_twice_folds_into_one as fn(),
+                ),
+                (
+                    "different_levels_and_other_notices_each_stay",
+                    different_levels_and_other_notices_each_stay as fn(),
+                ),
+                (
+                    "a_pressure_notice_for_another_runtime_stays",
+                    a_pressure_notice_for_another_runtime_stays as fn(),
+                ),
+            ],
+        );
+    }
+}

@@ -245,8 +245,8 @@ pub struct AppConfig {
     /// [`Self::restore_placement`].
     pub(crate) placement: Option<flui_platform_api::StorageName>,
 
-    /// The receivers registered with [`Self::with_memory_trim`].
-    pub(crate) memory_trims: MemoryReceivers,
+    /// The receivers registered with [`Self::with_memory_reclaim`].
+    pub(crate) memory_reclaimers: MemoryReceivers,
 }
 
 /// The memory receivers an application registered, cloned with the
@@ -290,7 +290,7 @@ impl Default for AppConfig {
             services: Vec::new(),
             storage_dir: None,
             placement: None,
-            memory_trims: MemoryReceivers::default(),
+            memory_reclaimers: MemoryReceivers::default(),
         }
     }
 }
@@ -335,7 +335,8 @@ impl AppConfig {
         self
     }
 
-    /// Set the initial window size.
+    /// Set the initial window size: the content area, in logical pixels, which
+    /// is what the window reports as its content size once it is open.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_size(mut self, width: u32, height: u32) -> Self {
         self.size = Size::new(width as f64, height as f64);
@@ -357,6 +358,11 @@ impl AppConfig {
     }
 
     /// Set the initial outer position, in global logical pixels.
+    ///
+    /// Applied where the backend places a window at open
+    /// ([`WindowCapabilities::places_at_open`](flui_platform_api::WindowCapabilities::places_at_open)):
+    /// Win32 today. The winit and AppKit backends do not yet read it and leave
+    /// the place to the system.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_position(mut self, at: Point<f64>) -> Self {
         self.position = Some(at);
@@ -364,6 +370,11 @@ impl AppConfig {
     }
 
     /// Set the mode the window opens in.
+    ///
+    /// Applied where the backend opens a window in a mode: Win32 today. The
+    /// winit and AppKit backends do not yet read it, so there a window opens in
+    /// [`WindowMode::Normal`] and the application sets the mode through its
+    /// `WindowHandle` once it is up.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_mode(mut self, mode: WindowMode) -> Self {
         self.mode = mode;
@@ -507,10 +518,18 @@ impl AppConfig {
     /// stored value cannot be read.
     ///
     /// The placement is written at most once every two seconds while the window
-    /// moves, and at once when the window closes and when the session ends.
-    /// Windows that share one `name` overwrite each other's placement, so give
-    /// each window it should remember a name of its own. Desktop only: Android,
-    /// iOS and the Web size the window themselves.
+    /// moves (a change inside the interval is written when it is over), and at
+    /// once when the window closes and when the session ends. Windows that share
+    /// one `name` overwrite each other's placement, so give each window it should
+    /// remember a name of its own. Desktop only: Android, iOS and the Web size
+    /// the window themselves.
+    ///
+    /// Where it is applied: Win32 opens the window at the remembered position,
+    /// size and mode, and matches the display it was on. The winit and AppKit
+    /// backends do not yet place a window at open (they report so through
+    /// [`WindowCapabilities::places_at_open`](flui_platform_api::WindowCapabilities::places_at_open)),
+    /// so there only the size is restored and the position is left to the
+    /// system; see `docs/platform-parity.md`.
     ///
     /// [`WindowPlacement::resolve`]: flui_platform_api::WindowPlacement::resolve
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
@@ -521,19 +540,20 @@ impl AppConfig {
 
     /// Give `receiver` memory back when the system reports memory pressure.
     ///
-    /// The framework trims its own caches (text, GPU buffers and glyph atlas)
+    /// The framework reclaims its own caches (text, GPU buffers and glyph atlas)
     /// itself; register what the application owns beside them, such as the
-    /// `flui_assets::AssetRegistry` its images load through. Receivers are
-    /// trimmed in the order registered, before any subscriber of
+    /// `flui_assets::AssetRegistry` its images load through (an `Arc` of a
+    /// receiver is a receiver). Receivers are reclaimed once per notice, in the
+    /// order registered, before any subscriber of
     /// [`HostNotice::MemoryPressure`](flui_platform_api::HostNotice::MemoryPressure)
     /// hears the notice. The host has one set of receivers, read from the
     /// configuration the run starts with.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn with_memory_trim(
+    pub fn with_memory_reclaim(
         mut self,
-        receiver: std::sync::Arc<dyn flui_foundation::memory::MemoryTrim + Send + Sync>,
+        receiver: impl flui_foundation::memory::ReclaimMemory + Send + Sync + 'static,
     ) -> Self {
-        self.memory_trims.0.push(receiver);
+        self.memory_reclaimers.0.push(std::sync::Arc::new(receiver));
         self
     }
 }
@@ -549,16 +569,14 @@ impl From<&AppConfig> for flui_platform::WindowOptions {
         // paths that keep it opt in at their own open site
         // (`runner::desktop::rendered_window_options`), so nothing can open a
         // window at alpha 0 that no one will ever reveal.
-        Self {
-            title: config.title.clone(),
-            size: config.size,
-            resizable: config.resizable,
-            decorated: config.decorations,
-            min_size: config.min_size,
-            max_size: config.max_size,
-            position: config.position,
-            mode: config.mode,
-            ..Self::default()
-        }
+        Self::default()
+            .with_title(config.title.clone())
+            .with_size(config.size)
+            .with_resizable(config.resizable)
+            .with_decorated(config.decorations)
+            .with_min_size(config.min_size)
+            .with_max_size(config.max_size)
+            .with_position(config.position)
+            .with_mode(config.mode)
     }
 }

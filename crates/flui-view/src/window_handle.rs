@@ -22,6 +22,12 @@ use crate::observation::{Observation, Phase, Subscription, WeakObservation};
 #[error("the window is closed")]
 pub struct WindowClosed;
 
+impl From<WindowClosed> for WindowCommandError {
+    fn from(WindowClosed: WindowClosed) -> Self {
+        Self::Closed
+    }
+}
+
 struct Shared {
     control: Box<dyn WindowControl>,
     closed: Cell<bool>,
@@ -55,10 +61,7 @@ impl WindowHandle {
     }
 
     fn submit(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
-        let shared = self
-            .open()
-            .map_err(|WindowClosed| WindowCommandError::Closed)?;
-        shared.control.submit(command)
+        self.open()?.control.submit(command)
     }
 
     /// The window's last published state.
@@ -163,15 +166,13 @@ impl WindowHandle {
     }
 
     /// Ask the window to close through the vetoed close path; the window may
-    /// stay open.
+    /// stay open. Asking is not closing: the application's close-request
+    /// handler decides, on the owner's next turn.
     ///
     /// # Errors
-    /// [`WindowCommandError::Closed`] once the window has closed.
-    pub fn close(&self) -> Result<(), WindowCommandError> {
-        self.open()
-            .map_err(|WindowClosed| WindowCommandError::Closed)?
-            .control
-            .request_close();
+    /// [`WindowClosed`] once the window has closed.
+    pub fn request_close(&self) -> Result<(), WindowClosed> {
+        self.open()?.control.request_close();
         Ok(())
     }
 

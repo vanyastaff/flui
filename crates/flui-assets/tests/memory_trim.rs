@@ -1,7 +1,7 @@
 //! An asset registry gives back its completed entries under memory pressure.
 
 use flui_assets::{Asset, AssetRegistryBuilder, FontAsset};
-use flui_foundation::memory::{MemoryPressureLevel, MemoryTrim};
+use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
 
 fn font(name: &str) -> FontAsset {
     FontAsset::from_bytes(
@@ -18,7 +18,7 @@ async fn trimming_drops_completed_entries_but_not_handles_already_given_out() {
         let before = registry.load(font("trimmed")).await.expect("loads");
         assert!(registry.get::<FontAsset>(&key).await.is_some());
 
-        registry.trim(level);
+        registry.reclaim(level);
 
         assert!(
             registry.get::<FontAsset>(&key).await.is_none(),

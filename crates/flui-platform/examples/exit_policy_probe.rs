@@ -34,10 +34,7 @@ mod native {
                 .borrow()
                 .as_ref()
                 .expect("owner")
-                .open_window(WindowOptions {
-                    visible: false,
-                    ..WindowOptions::default()
-                })
+                .open_window(WindowOptions::default().with_visible(false))
                 .expect("open")
                 .try_ready()
                 .expect("ready")

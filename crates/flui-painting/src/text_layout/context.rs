@@ -677,7 +677,7 @@ impl TextContext {
     /// [`FontRegistry`](crate::glyphs::FontRegistry) holds keeps its data and
     /// its keys; a face nothing holds loads again, under a new blob id, on its
     /// next use.
-    pub fn trim(&mut self, level: MemoryPressureLevel) {
+    pub fn reclaim(&mut self, level: MemoryPressureLevel) {
         self.layout_cx = parley::LayoutContext::new();
         match level {
             MemoryPressureLevel::Moderate => self.font_cx.source_cache.prune(TRIM_MAX_AGE, false),
@@ -1159,7 +1159,7 @@ mod tests {
             let (fonts, path) = file_backed_roboto(&format!("trim-{level:?}"));
             let mut cx = TextContext::new(&fonts);
             let before = roboto_face(&mut cx, None);
-            cx.trim(level);
+            cx.reclaim(level);
             let after = roboto_face(&mut cx, None);
             let _ = std::fs::remove_file(&path);
             assert_eq!(before != after, reloads, "{level:?}");

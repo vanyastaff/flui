@@ -17,15 +17,17 @@ use windows::{
         UI::{
             HiDpi::{GetDpiForSystem, GetDpiForWindow},
             WindowsAndMessaging::{
-                CW_USEDEFAULT, CreateWindowExW, DestroyWindow, GCLP_HBRBACKGROUND, GWL_STYLE,
-                GWLP_USERDATA, GetClientRect, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW,
-                GetWindowPlacement, GetWindowRect, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND,
-                IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
-                IDC_WAIT, LoadCursorW, PostMessageW, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
-                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-                SetClassLongPtrW, SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-                SetWindowTextW, ShowWindow, WINDOWPLACEMENT, WM_CLOSE, WS_CAPTION, WS_EX_APPWINDOW,
-                WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
+                CW_USEDEFAULT, CreateWindowExW, DestroyWindow, GCLP_HBRBACKGROUND, GWL_EXSTYLE,
+                GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetForegroundWindow,
+                GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, IDC_APPSTARTING, IDC_ARROW,
+                IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
+                IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, LoadCursorW, PostMessageW, SW_MAXIMIZE,
+                SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED,
+                SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+                SWP_NOZORDER, SetClassLongPtrW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
+                SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, WINDOWPLACEMENT,
+                WM_CLOSE, WS_CAPTION, WS_EX_APPWINDOW, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW,
+                WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
             },
         },
     },
@@ -249,19 +251,26 @@ pub(super) fn sample_state(
     } else {
         WindowGeometry::new(None, if mode.is_minimized() { cached } else { content })
     };
-    let normal = match mode {
-        NativeMode::Fullscreen { restore_bounds } => Some(WindowGeometry::new(
+    // The rectangle the window returns to: Win32's own for a maximized or
+    // minimized window (`rcNormalPosition`), and for a fullscreen one the
+    // rectangle it was given on entering, taken from the same source.
+    let restore = match mode {
+        NativeMode::Fullscreen { restore_bounds } => Some(restore_bounds),
+        NativeMode::Maximized | NativeMode::Minimized => restore_rectangle(hwnd),
+        NativeMode::Normal => None,
+    };
+    let normal = restore.map(|bounds| {
+        WindowGeometry::new(
             Some(Point::new(
-                f64::from(restore_bounds.origin.x) / scale,
-                f64::from(restore_bounds.origin.y) / scale,
+                f64::from(bounds.origin.x) / scale,
+                f64::from(bounds.origin.y) / scale,
             )),
             Size::new(
-                f64::from(restore_bounds.size.width) / scale,
-                f64::from(restore_bounds.size.height) / scale,
+                f64::from(bounds.size.width) / scale,
+                f64::from(bounds.size.height) / scale,
             ),
-        )),
-        _ => None,
-    };
+        )
+    });
     WindowState::new(outer, if mode.is_minimized() { cached } else { content })
         .with_mode(mode.public())
         .with_normal_geometry(normal)
@@ -281,6 +290,176 @@ impl std::fmt::Debug for WindowsWindow {
             .field("hwnd", &self.hwnd.0)
             .finish_non_exhaustive()
     }
+}
+
+/// How far the work area of `hwnd`'s monitor starts from the monitor's own
+/// origin, in device pixels: a taskbar on the top or left edge moves it.
+/// `WINDOWPLACEMENT::rcNormalPosition` is measured from the work area, screen
+/// coordinates from the monitor.
+fn workspace_origin(hwnd: HWND) -> (i32, i32) {
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+    };
+
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `info` is a stack local with `cbSize` set; a stale `hwnd` makes
+    // the monitor lookup fall back to the nearest monitor and never faults.
+    let found = unsafe {
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        GetMonitorInfoW(monitor, &raw mut info).as_bool()
+    };
+    if found {
+        (
+            info.rcWork.left - info.rcMonitor.left,
+            info.rcWork.top - info.rcMonitor.top,
+        )
+    } else {
+        (0, 0)
+    }
+}
+
+/// The outer rectangle `hwnd` returns to from a maximized or minimized state
+/// (`rcNormalPosition`), in device pixels of the virtual screen. Unlike
+/// `GetWindowRect` it is the normal rectangle whatever state the window is in
+/// now.
+fn restore_rectangle(hwnd: HWND) -> Option<Bounds<i32>> {
+    let mut placement = WINDOWPLACEMENT {
+        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `placement` is a stack local with `length` set.
+    unsafe { GetWindowPlacement(hwnd, &raw mut placement) }.ok()?;
+    let (dx, dy) = workspace_origin(hwnd);
+    let rect = placement.rcNormalPosition;
+    Some(Bounds {
+        origin: Point::new(rect.left + dx, rect.top + dy),
+        size: Size::new(rect.right - rect.left, rect.bottom - rect.top),
+    })
+}
+
+/// Where Win32 is asked to put a window that opens, in physical pixels of the
+/// virtual screen.
+#[derive(Debug, Clone, PartialEq)]
+struct OpenSpot {
+    /// The scale the sizes were computed at: the target display's, else the
+    /// system's.
+    scale: f64,
+    /// The outer size the window is created with.
+    outer: (i32, i32),
+    /// The outer top-left; `None` leaves the place to the system.
+    origin: Option<(i32, i32)>,
+    /// The outer rectangle (left, top, right, bottom) a window that opens
+    /// maximized or fullscreen returns to; `None` leaves it to the system.
+    normal: Option<(i32, i32, i32, i32)>,
+}
+
+/// Turn the options of an opening window into physical pixels.
+///
+/// `options.size` is the content size, so `outer_of` (the window frame at a
+/// DPI) turns it into the outer size. `options.position` and
+/// `options.normal_geometry` are relative to the origin of `target`'s usable
+/// area in that display's logical pixels and convert through that display's own
+/// scale; with no `target` they are global logical pixels at `system_scale`.
+fn open_spot(
+    options: &WindowOptions,
+    target: Option<&flui_platform_api::DisplayInfo>,
+    system_scale: f64,
+    outer_of: impl Fn(u32, (i32, i32)) -> (i32, i32),
+) -> OpenSpot {
+    let scale = target
+        .map(|display| display.scale_factor)
+        .filter(|scale| scale.is_finite() && *scale > 0.0)
+        .unwrap_or(system_scale);
+    let dpi = ((scale * f64::from(USER_DEFAULT_SCREEN_DPI)).round() as u32).max(1);
+    let content = (
+        logical_to_device(options.size.width, scale),
+        logical_to_device(options.size.height, scale),
+    );
+    let outer = outer_of(dpi, content);
+    let anchor = target.map_or((0, 0), |display| {
+        (
+            display.usable_bounds.origin.x,
+            display.usable_bounds.origin.y,
+        )
+    });
+    let place = |at: Point<f64>| {
+        (
+            anchor.0 + logical_to_device(at.x, scale),
+            anchor.1 + logical_to_device(at.y, scale),
+        )
+    };
+    let origin = options.position.map(place);
+    let normal = options.normal_geometry.and_then(|geometry| {
+        let (left, top) = geometry.position.map(place).or(origin)?;
+        Some((
+            left,
+            top,
+            left + logical_to_device(geometry.size.width, scale),
+            top + logical_to_device(geometry.size.height, scale),
+        ))
+    });
+    OpenSpot {
+        scale,
+        outer,
+        origin,
+        normal,
+    }
+}
+
+/// The outer size, in physical pixels, of a window of `style` that has a
+/// content area of `content` at `dpi`: the content plus its title bar and
+/// borders (`AdjustWindowRectExForDpi`), measured for the style given and not
+/// for the window's current rectangle, which a maximized or minimized window
+/// does not keep.
+fn outer_size(
+    style: u32,
+    ex_style: u32,
+    dpi: u32,
+    content: (i32, i32),
+) -> windows::core::Result<(i32, i32)> {
+    use windows::Win32::UI::{
+        HiDpi::AdjustWindowRectExForDpi,
+        WindowsAndMessaging::{WINDOW_EX_STYLE, WINDOW_STYLE},
+    };
+
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: content.0,
+        bottom: content.1,
+    };
+    // SAFETY: `rect` is a stack local passed as the documented in/out
+    // parameter; the style and DPI are plain values.
+    unsafe {
+        AdjustWindowRectExForDpi(
+            &raw mut rect,
+            WINDOW_STYLE(style),
+            false,
+            WINDOW_EX_STYLE(ex_style),
+            dpi,
+        )?;
+    }
+    Ok((rect.right - rect.left, rect.bottom - rect.top))
+}
+
+/// What every Win32 window honours and observes, known before one exists
+/// (`Platform::window_capabilities`).
+pub(crate) const fn window_capabilities() -> WindowCapabilities {
+    let mut capabilities = WindowCapabilities::NONE;
+    capabilities.sets_title = true;
+    capabilities.sets_size = true;
+    capabilities.minimizes = true;
+    capabilities.maximizes = true;
+    capabilities.enters_fullscreen = true;
+    capabilities.shows = true;
+    capabilities.activates = true;
+    capabilities.observes_position = true;
+    capabilities.observes_minimized = true;
+    capabilities.places_at_open = true;
+    capabilities
 }
 
 impl WindowsWindow {
@@ -308,9 +487,9 @@ impl WindowsWindow {
         // whose ownership has not yet transferred to a context and wrapper.
         let (identity, created) = super::platform::WindowIdentity::admit(
             super::platform::WindowIdentity::source(),
-            || Self::create_native(&options),
+            || Self::create_native(&options, &displays),
         );
-        let (hwnd, requested, scale_factor) = created?;
+        let (hwnd, requested, scale_factor, normal) = created?;
         Self::install_native(
             options,
             windows_map,
@@ -323,14 +502,19 @@ impl WindowsWindow {
             hwnd,
             requested,
             scale_factor,
+            normal,
             apartment,
         )
     }
 
     /// Create the native window: the resource an admitted identity owns.
-    /// Returns the HWND with the requested device size and the system scale
-    /// factor it was computed at.
-    fn create_native(options: &WindowOptions) -> Result<(HWND, Size<i32>, f64), OpenWindowError> {
+    /// Returns the HWND with the requested outer device size, the scale factor
+    /// the sizes were computed at and, for a window that opens maximized or
+    /// fullscreen, the rectangle it returns to (screen coordinates).
+    fn create_native(
+        options: &WindowOptions,
+        displays: &super::display::WindowsDisplays,
+    ) -> Result<(HWND, Size<i32>, f64, Option<RECT>), OpenWindowError> {
         // SAFETY: `GetModuleHandleW(None)` queries the current process image
         // and takes no pointer arguments — always sound. `GetDpiForSystem`
         // reads global state, no preconditions. `CreateWindowExW` requires
@@ -343,13 +527,7 @@ impl WindowsWindow {
                 message: format!("Failed to get module handle: {e}"),
             })?;
 
-            // Get DPI for initial size calculation
-            let dpi = GetDpiForSystem();
-            let scale_factor = dpi as f64 / USER_DEFAULT_SCREEN_DPI as f64;
-
-            // Convert logical size to device pixels
-            let width = logical_to_device(options.size.width, scale_factor);
-            let height = logical_to_device(options.size.height, scale_factor);
+            let system_scale = GetDpiForSystem() as f64 / USER_DEFAULT_SCREEN_DPI as f64;
 
             // Determine window style
             let style = if options.decorated {
@@ -362,15 +540,27 @@ impl WindowsWindow {
 
             let ex_style = WS_EX_APPWINDOW;
 
-            // Create the window at the default position
+            // The options' size is the content size: ask Win32 for the outer
+            // window that holds it at the target display's DPI, and place it
+            // on the display the options name.
+            let snapshot = displays.snapshot().ok();
+            let target = options
+                .display
+                .and_then(|id| snapshot.as_ref().and_then(|snapshot| snapshot.get(id)));
+            let spot = open_spot(options, target, system_scale, |dpi, content| {
+                outer_size(style.0, ex_style.0, dpi, content).unwrap_or(content)
+            });
+            let (width, height) = spot.outer;
+            let scale_factor = spot.scale;
+
             let title = HSTRING::from(&options.title);
             let hwnd = CreateWindowExW(
                 ex_style,
                 WINDOW_CLASS_NAME,
                 &title,
                 style,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
+                spot.origin.map_or(CW_USEDEFAULT, |origin| origin.0),
+                spot.origin.map_or(CW_USEDEFAULT, |origin| origin.1),
                 width,
                 height,
                 None, // parent
@@ -387,7 +577,13 @@ impl WindowsWindow {
                     message: windows::core::Error::from_thread().to_string(),
                 });
             }
-            Ok((hwnd, Size::new(width, height), scale_factor))
+            let normal = spot.normal.map(|(left, top, right, bottom)| RECT {
+                left,
+                top,
+                right,
+                bottom,
+            });
+            Ok((hwnd, Size::new(width, height), scale_factor, normal))
         }
     }
 
@@ -407,6 +603,7 @@ impl WindowsWindow {
         hwnd: HWND,
         requested: Size<i32>,
         scale_factor: f64,
+        normal: Option<RECT>,
         apartment: Option<Rc<super::com_apartment::ComApartment>>,
     ) -> Result<Arc<Self>, OpenWindowError> {
         let (width, height) = (requested.width, requested.height);
@@ -560,7 +757,7 @@ impl WindowsWindow {
                 // warn on every visible window creation. Nothing meaningful
                 // to check here; UpdateWindow below does return a genuine
                 // success/failure BOOL.
-                let _ = ShowWindow(hwnd, SW_SHOW);
+                Self::show_opened(hwnd, options.mode, normal);
                 if let Err(error) = UpdateWindow(hwnd).ok() {
                     tracing::warn!(?hwnd, ?error, "UpdateWindow failed in WindowsWindow::new");
                 }
@@ -568,6 +765,78 @@ impl WindowsWindow {
             }
 
             Ok(window)
+        }
+    }
+
+    /// Show a window that has just opened, in the mode the options ask for.
+    ///
+    /// A normal window is simply shown. A maximized or minimized one is shown
+    /// through `SetWindowPlacement`, whose `rcNormalPosition` is the rectangle
+    /// it returns to (`normal`, in screen coordinates, converted to the
+    /// workspace coordinates the call takes), so the first frame is already in
+    /// the right mode and a restored window keeps its earlier bounds. A
+    /// fullscreen one is placed normally first and then enters fullscreen, so
+    /// the bounds it returns to are `normal`'s.
+    ///
+    /// # Safety
+    /// `hwnd` must be a live window created on this thread.
+    unsafe fn show_opened(hwnd: HWND, mode: WindowMode, normal: Option<RECT>) {
+        if mode == WindowMode::Normal || (normal.is_none() && mode == WindowMode::Fullscreen) {
+            // ShowWindow's return value is the window's PREVIOUS visibility, not
+            // success: nothing to check.
+            // SAFETY: the caller guarantees `hwnd` is a live window.
+            let _ = unsafe { ShowWindow(hwnd, SW_SHOW) };
+            if mode == WindowMode::Fullscreen {
+                Self::toggle_fullscreen_for_hwnd(hwnd);
+            }
+            return;
+        }
+        let mut placement = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: `placement` is a stack local with `length` set; `hwnd` is live
+        // by the caller's guarantee.
+        if let Err(error) = unsafe { GetWindowPlacement(hwnd, &raw mut placement) } {
+            tracing::warn!(
+                ?hwnd,
+                ?error,
+                "GetWindowPlacement failed at open; showing normally"
+            );
+            // SAFETY: as above.
+            let _ = unsafe { ShowWindow(hwnd, SW_SHOW) };
+            return;
+        }
+        placement.showCmd = match mode {
+            WindowMode::Maximized => SW_SHOWMAXIMIZED,
+            WindowMode::Minimized => SW_SHOWMINIMIZED,
+            _ => SW_SHOWNORMAL,
+        }
+        .0 as u32;
+        if let Some(rect) = normal {
+            // `rcNormalPosition` is in workspace coordinates: relative to the
+            // work area, which a taskbar on the top or left edge moves away
+            // from the monitor's origin.
+            let (dx, dy) = workspace_origin(hwnd);
+            placement.rcNormalPosition = RECT {
+                left: rect.left - dx,
+                top: rect.top - dy,
+                right: rect.right - dx,
+                bottom: rect.bottom - dy,
+            };
+        }
+        // SAFETY: `placement` is fully initialized above.
+        if let Err(error) = unsafe { SetWindowPlacement(hwnd, &raw const placement) } {
+            tracing::warn!(
+                ?hwnd,
+                ?error,
+                "SetWindowPlacement failed at open; showing normally"
+            );
+            // SAFETY: as above.
+            let _ = unsafe { ShowWindow(hwnd, SW_SHOW) };
+        }
+        if mode == WindowMode::Fullscreen {
+            Self::toggle_fullscreen_for_hwnd(hwnd);
         }
     }
 
@@ -751,35 +1020,88 @@ impl WindowsWindow {
         self.state.lock().title = title.to_string();
     }
 
-    /// Resize the content area to `size`, keeping the window's frame.
-    fn set_inner_size(&self, size: Size<f64>) {
-        let mut window = RECT::default();
-        let mut client = RECT::default();
-        // SAFETY: both RECTs are stack locals and `&raw mut` gives each call a
-        // valid, correctly sized out-parameter; `SetWindowPos` takes `self.hwnd`
-        // and plain integer/flag arguments, with `None` as the documented
-        // no-op z-order handle.
-        unsafe {
-            if GetWindowRect(self.hwnd, &raw mut window).is_err()
-                || GetClientRect(self.hwnd, &raw mut client).is_err()
-            {
-                tracing::warn!(hwnd = ?self.hwnd, "window rectangles unreadable; resize skipped");
-                return;
+    /// Resize the content area to `size`.
+    ///
+    /// The size is the window's **normal** size, whatever mode it is in, so the
+    /// frame is measured against the normal rectangle and never against the
+    /// maximized, minimized or fullscreen one:
+    ///
+    /// - a normal window resizes at once, keeping its position;
+    /// - a maximized or minimized window keeps its mode and takes the size
+    ///   when it is restored (Win32's `rcNormalPosition`);
+    /// - a fullscreen window takes the size for the bounds it returns to.
+    ///
+    /// # Errors
+    /// [`WindowCommandError::Backend`] when Win32 refuses or fails the resize.
+    fn set_inner_size(&self, size: Size<f64>) -> Result<(), WindowCommandError> {
+        let backend = |what: &str, error: windows::core::Error| WindowCommandError::Backend {
+            message: format!("{what} failed: {error}"),
+        };
+        let scale = self.state.lock().scale_factor;
+        let content = (
+            logical_to_device(size.width, scale),
+            logical_to_device(size.height, scale),
+        );
+        let fullscreen = super::platform::with_window_context(self.hwnd, "set_inner_size", |ctx| {
+            match ctx.mode.get() {
+                NativeMode::Fullscreen { restore_bounds } => {
+                    Some((restore_bounds, ctx.restore_style.get()))
+                }
+                _ => None,
             }
-            let scale = self.state.lock().scale_factor;
-            let frame_width = (window.right - window.left) - (client.right - client.left);
-            let frame_height = (window.bottom - window.top) - (client.bottom - client.top);
-            if let Err(error) = SetWindowPos(
+        })
+        .flatten();
+        // SAFETY: `self.hwnd` is this wrapper's live window handle. Every
+        // out-parameter (`RECT`, `WINDOWPLACEMENT`) is a stack local passed as
+        // `&raw mut`/`&raw const`, correctly sized for its call, with
+        // `WINDOWPLACEMENT::length` set; `SetWindowPos` takes plain integer
+        // and flag arguments with `None` as the documented no-op z-order
+        // handle.
+        unsafe {
+            let dpi = GetDpiForWindow(self.hwnd).max(USER_DEFAULT_SCREEN_DPI);
+            let ex_style = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) as u32;
+            if let Some((restore_bounds, restore_style)) = fullscreen {
+                let (width, height) = outer_size(restore_style, ex_style, dpi, content)
+                    .map_err(|e| backend("AdjustWindowRectExForDpi", e))?;
+                super::platform::with_window_context(self.hwnd, "set_inner_size", |ctx| {
+                    ctx.mode.set(NativeMode::Fullscreen {
+                        restore_bounds: Bounds {
+                            origin: restore_bounds.origin,
+                            size: Size::new(width, height),
+                        },
+                    });
+                });
+                return Ok(());
+            }
+            let mut placement = WINDOWPLACEMENT {
+                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                ..Default::default()
+            };
+            GetWindowPlacement(self.hwnd, &raw mut placement)
+                .map_err(|e| backend("GetWindowPlacement", e))?;
+            let away_from_normal = placement.showCmd == SW_SHOWMAXIMIZED.0 as u32
+                || placement.showCmd == SW_SHOWMINIMIZED.0 as u32;
+            let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
+            if away_from_normal {
+                let (width, height) = outer_size(style, ex_style, dpi, content)
+                    .map_err(|e| backend("AdjustWindowRectExForDpi", e))?;
+                placement.rcNormalPosition.right = placement.rcNormalPosition.left + width;
+                placement.rcNormalPosition.bottom = placement.rcNormalPosition.top + height;
+                return SetWindowPlacement(self.hwnd, &raw const placement)
+                    .map_err(|e| backend("SetWindowPlacement", e));
+            }
+            let (width, height) = outer_size(style, ex_style, dpi, content)
+                .map_err(|e| backend("AdjustWindowRectExForDpi", e))?;
+            SetWindowPos(
                 self.hwnd,
                 None,
                 0,
                 0,
-                logical_to_device(size.width, scale) + frame_width,
-                logical_to_device(size.height, scale) + frame_height,
+                width,
+                height,
                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
-            ) {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowPos (inner resize) failed");
-            }
+            )
+            .map_err(|e| backend("SetWindowPos", e))
         }
     }
 
@@ -904,11 +1226,13 @@ impl WindowsWindow {
                     let current_style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
                     ctx.restore_style.set(current_style);
 
-                    // Save current bounds
-                    let restore_bounds = Bounds {
+                    // Save the bounds the window returns to: its normal
+                    // rectangle, which is not its current one when it was
+                    // maximized (or minimized) on the way in.
+                    let restore_bounds = restore_rectangle(hwnd).unwrap_or(Bounds {
                         origin: Point::new(rect.left, rect.top),
                         size: Size::new(rect.right - rect.left, rect.bottom - rect.top),
-                    };
+                    });
 
                     // Validate transition
                     let candidate = NativeMode::Fullscreen { restore_bounds };
@@ -1172,16 +1496,7 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn capabilities(&self) -> WindowCapabilities {
-        let mut capabilities = WindowCapabilities::none();
-        capabilities.set_title = true;
-        capabilities.set_size = true;
-        capabilities.minimize = true;
-        capabilities.maximize = true;
-        capabilities.fullscreen = true;
-        capabilities.activate = true;
-        capabilities.observes_position = true;
-        capabilities.observes_minimized = true;
-        capabilities
+        window_capabilities()
     }
 
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
@@ -1191,7 +1506,7 @@ impl PlatformWindow for WindowsWindow {
         command.admit(&PlatformWindow::capabilities(self))?;
         match command {
             WindowCommand::SetTitle(title) => self.set_native_title(&title),
-            WindowCommand::SetSize(size) => self.set_inner_size(size),
+            WindowCommand::SetSize(size) => self.set_inner_size(size)?,
             WindowCommand::SetMode(WindowMode::Minimized) => self.show_native(SW_MINIMIZE),
             WindowCommand::SetMode(WindowMode::Maximized) => self.show_native(SW_MAXIMIZE),
             WindowCommand::SetMode(WindowMode::Fullscreen) => self.set_fullscreen(true),
@@ -1201,7 +1516,9 @@ impl PlatformWindow for WindowsWindow {
             }
             WindowCommand::Show => self.show().map_err(|error| match error {
                 crate::WindowShowError::Closed => WindowCommandError::Closed,
-                crate::WindowShowError::Native { message } => WindowCommandError::Backend(message),
+                crate::WindowShowError::Native { message } => {
+                    WindowCommandError::Backend { message }
+                }
                 _ => WindowCommandError::Unsupported,
             })?,
             WindowCommand::Activate => self.activate(),
@@ -2121,4 +2438,263 @@ thread_local! {
     /// stand in for a message the activation dispatches.
     pub(super) static BEFORE_TSF_ACTIVATION: std::cell::Cell<Option<fn(HWND)>> =
         const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+mod open_tests {
+    use flui_foundation::geometry::{Bounds, Point, Size};
+    use flui_platform_api::{
+        DisplayInfo, DisplayKey, DisplayRegistry, WindowCommand, WindowGeometry, WindowMode,
+        WindowOptions,
+    };
+
+    use super::open_spot;
+    use crate::traits::Platform as _;
+
+    const FRAME: (i32, i32) = (16, 39);
+
+    fn with_frame(_dpi: u32, content: (i32, i32)) -> (i32, i32) {
+        (content.0 + FRAME.0, content.1 + FRAME.1)
+    }
+
+    fn display(scale: f64, origin: (i32, i32)) -> DisplayInfo {
+        let registry = DisplayRegistry::new();
+        let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
+        DisplayInfo::new(
+            id,
+            "d",
+            Bounds::new(Point::new(origin.0, origin.1), Size::new(3840, 2160)),
+            scale,
+        )
+    }
+
+    fn the_size_is_the_content_and_the_frame_is_added() {
+        let options = WindowOptions::default().with_size(Size::new(800.0, 600.0));
+        let spot = open_spot(&options, None, 1.0, with_frame);
+        assert_eq!(spot.outer, (816, 639));
+        assert_eq!(spot.origin, None);
+    }
+
+    fn a_position_converts_through_the_named_displays_own_scale() {
+        // A 2x display that starts at device x 1920: 100 logical is 200 device
+        // pixels from its origin, whatever the system scale is.
+        let target = display(2.0, (1920, 0));
+        let options = WindowOptions::default()
+            .with_size(Size::new(800.0, 600.0))
+            .with_position(Some(Point::new(100.0, 50.0)));
+        let spot = open_spot(&options, Some(&target), 1.0, with_frame);
+        assert_eq!(spot.scale, 2.0);
+        assert_eq!(spot.outer, (1600 + 16, 1200 + 39));
+        assert_eq!(spot.origin, Some((1920 + 200, 100)));
+    }
+
+    fn without_a_display_the_position_is_global_at_the_system_scale() {
+        let options = WindowOptions::default().with_position(Some(Point::new(100.0, 50.0)));
+        let spot = open_spot(&options, None, 1.5, with_frame);
+        assert_eq!(spot.origin, Some((150, 75)));
+    }
+
+    fn the_normal_rectangle_is_the_outer_geometry_it_returns_to() {
+        let target = display(1.0, (0, 0));
+        let options = WindowOptions::default()
+            .with_mode(WindowMode::Maximized)
+            .with_normal_geometry(Some(WindowGeometry::new(
+                Some(Point::new(100.0, 80.0)),
+                Size::new(700.0, 500.0),
+            )));
+        let spot = open_spot(&options, Some(&target), 1.0, with_frame);
+        assert_eq!(spot.normal, Some((100, 80, 800, 580)));
+    }
+
+    fn a_normal_rectangle_without_a_position_follows_the_windows_own() {
+        let options = WindowOptions::default()
+            .with_position(Some(Point::new(30.0, 40.0)))
+            .with_normal_geometry(Some(WindowGeometry::new(None, Size::new(300.0, 200.0))));
+        let spot = open_spot(&options, None, 1.0, with_frame);
+        assert_eq!(spot.normal, Some((30, 40, 330, 240)));
+        let unplaced = WindowOptions::default()
+            .with_normal_geometry(Some(WindowGeometry::new(None, Size::new(300.0, 200.0))));
+        assert_eq!(open_spot(&unplaced, None, 1.0, with_frame).normal, None);
+    }
+
+    #[test]
+    fn open_geometry() {
+        crate::table_test::run_table(
+            "open_geometry",
+            &[
+                (
+                    "the_size_is_the_content_and_the_frame_is_added",
+                    the_size_is_the_content_and_the_frame_is_added as fn(),
+                ),
+                (
+                    "a_position_converts_through_the_named_displays_own_scale",
+                    a_position_converts_through_the_named_displays_own_scale as fn(),
+                ),
+                (
+                    "without_a_display_the_position_is_global_at_the_system_scale",
+                    without_a_display_the_position_is_global_at_the_system_scale as fn(),
+                ),
+                (
+                    "the_normal_rectangle_is_the_outer_geometry_it_returns_to",
+                    the_normal_rectangle_is_the_outer_geometry_it_returns_to as fn(),
+                ),
+                (
+                    "a_normal_rectangle_without_a_position_follows_the_windows_own",
+                    a_normal_rectangle_without_a_position_follows_the_windows_own as fn(),
+                ),
+            ],
+        );
+    }
+
+    fn near(actual: f64, wanted: f64) -> bool {
+        (actual - wanted).abs() <= 2.0
+    }
+
+    /// A real window opened with a content size reports that content size:
+    /// the frame is added to the outer window, not taken out of the content.
+    fn a_real_window_opens_with_the_content_size_it_asked_for() {
+        let platform = super::super::WindowsPlatform::new().expect("platform");
+        let window = platform
+            .open_window(
+                WindowOptions::default()
+                    .with_size(Size::new(640.0, 480.0))
+                    .with_visible(false),
+            )
+            .expect("window");
+        let state = window.state();
+        assert!(
+            near(state.content_size.width, 640.0) && near(state.content_size.height, 480.0),
+            "content {:?}",
+            state.content_size
+        );
+        assert!(
+            state.outer.size.width > state.content_size.width
+                && state.outer.size.height > state.content_size.height,
+            "the outer window carries a frame"
+        );
+    }
+
+    /// A size set on a maximized window is the size it returns to: the window
+    /// stays maximized and restores to the content size asked for.
+    fn a_size_set_while_maximized_is_the_size_restored_to() {
+        let platform = super::super::WindowsPlatform::new().expect("platform");
+        let window = platform
+            .open_window(WindowOptions::default().with_visible(false))
+            .expect("window");
+        window
+            .apply(WindowCommand::SetMode(WindowMode::Maximized))
+            .expect("maximize");
+        window
+            .apply(WindowCommand::SetSize(Size::new(500.0, 400.0)))
+            .expect("resize while maximized");
+        assert_eq!(
+            window.state().mode,
+            WindowMode::Maximized,
+            "still maximized"
+        );
+        window
+            .apply(WindowCommand::SetMode(WindowMode::Normal))
+            .expect("restore");
+        let state = window.state();
+        assert!(
+            near(state.content_size.width, 500.0) && near(state.content_size.height, 400.0),
+            "restored to {:?}",
+            state.content_size
+        );
+    }
+
+    /// A window that opens maximized returns to the rectangle it was given.
+    fn a_window_opened_maximized_returns_to_its_normal_rectangle() {
+        let platform = super::super::WindowsPlatform::new().expect("platform");
+        let window = platform
+            .open_window(
+                WindowOptions::default()
+                    .with_mode(WindowMode::Maximized)
+                    .with_normal_geometry(Some(WindowGeometry::new(
+                        Some(Point::new(120.0, 100.0)),
+                        Size::new(700.0, 500.0),
+                    ))),
+            )
+            .expect("window");
+        assert_eq!(window.state().mode, WindowMode::Maximized);
+        window
+            .apply(WindowCommand::SetMode(WindowMode::Normal))
+            .expect("restore");
+        let outer = window.state().outer;
+        assert!(
+            near(outer.size.width, 700.0) && near(outer.size.height, 500.0),
+            "returned to {outer:?}"
+        );
+        let at = outer.position.expect("a Win32 window reports its position");
+        assert!(near(at.x, 120.0) && near(at.y, 100.0), "at {at:?}");
+    }
+
+    /// Maximized and fullscreen windows both report the rectangle they return
+    /// to, taken from Win32's own `rcNormalPosition`: entering fullscreen from
+    /// a maximized window does not make the maximized rectangle the one to
+    /// return to.
+    fn maximized_and_fullscreen_windows_report_their_normal_rectangle() {
+        let platform = super::super::WindowsPlatform::new().expect("platform");
+        let window = platform
+            .open_window(
+                WindowOptions::default()
+                    .with_size(Size::new(640.0, 480.0))
+                    .with_position(Some(Point::new(150.0, 120.0)))
+                    .with_visible(false),
+            )
+            .expect("window");
+        let normal = window.state().outer;
+        let same_as_normal = |state: flui_platform_api::WindowState, what: &str| {
+            let reported = state
+                .normal_geometry
+                .unwrap_or_else(|| panic!("{what} reports the rectangle it returns to"));
+            assert!(
+                near(reported.size.width, normal.size.width)
+                    && near(reported.size.height, normal.size.height),
+                "{what}: {reported:?} is not {normal:?}"
+            );
+            let (at, was) = (
+                reported.position.expect("a position"),
+                normal.position.expect("a position"),
+            );
+            assert!(
+                near(at.x, was.x) && near(at.y, was.y),
+                "{what}: at {at:?}, was {was:?}"
+            );
+        };
+
+        window
+            .apply(WindowCommand::SetMode(WindowMode::Maximized))
+            .expect("maximize");
+        same_as_normal(window.state(), "a maximized window");
+        window
+            .apply(WindowCommand::SetMode(WindowMode::Fullscreen))
+            .expect("fullscreen");
+        same_as_normal(window.state(), "a fullscreen window entered from maximized");
+    }
+
+    #[test]
+    fn open_real_window() {
+        crate::table_test::run_table(
+            "open_real_window",
+            &[
+                (
+                    "maximized_and_fullscreen_windows_report_their_normal_rectangle",
+                    maximized_and_fullscreen_windows_report_their_normal_rectangle as fn(),
+                ),
+                (
+                    "a_real_window_opens_with_the_content_size_it_asked_for",
+                    a_real_window_opens_with_the_content_size_it_asked_for as fn(),
+                ),
+                (
+                    "a_size_set_while_maximized_is_the_size_restored_to",
+                    a_size_set_while_maximized_is_the_size_restored_to as fn(),
+                ),
+                (
+                    "a_window_opened_maximized_returns_to_its_normal_rectangle",
+                    a_window_opened_maximized_returns_to_its_normal_rectangle as fn(),
+                ),
+            ],
+        );
+    }
 }

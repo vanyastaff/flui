@@ -1374,8 +1374,8 @@ impl Renderer {
     /// Give back the GPU memory the next frames can rebuild: pooled buffers and,
     /// at [`Critical`](flui_foundation::memory::MemoryPressureLevel::Critical),
     /// the glyph atlas. Call between frames.
-    pub fn trim(&mut self, level: flui_foundation::memory::MemoryPressureLevel) {
-        self.painter.trim(level);
+    pub fn reclaim(&mut self, level: flui_foundation::memory::MemoryPressureLevel) {
+        self.painter.reclaim(level);
     }
 
     /// Mark the entire screen as needing repaint.

@@ -15,8 +15,7 @@ use crate::keyboard::Modifiers;
 use crate::{
     CursorError, DispatchEventResult, DisplayId, PlatformHaptics, PlatformInput, PlatformTextInput,
     WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
-    WindowCommandError, WindowExecutionState, WindowGeometry, WindowId, WindowShowError,
-    WindowState,
+    WindowCommandError, WindowExecutionState, WindowId, WindowShowError, WindowState,
 };
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -72,7 +71,10 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 /// ```
 /// use std::any::Any;
 ///
-/// use flui_platform_api::{CursorError, CursorIcon, PlatformWindow, WindowId, WindowShowError};
+/// use flui_platform_api::{
+///     CursorError, CursorIcon, PlatformWindow, WindowCapabilities, WindowCommand,
+///     WindowCommandError, WindowGeometry, WindowId, WindowShowError, WindowState,
+/// };
 /// use flui_foundation::geometry::{DeviceSize, Size};
 ///
 /// struct Offscreen;
@@ -96,6 +98,16 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 ///     }
 ///     fn is_visible(&self) -> bool {
 ///         false
+///     }
+///     fn state(&self) -> WindowState {
+///         WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
+///     }
+///     fn capabilities(&self) -> WindowCapabilities {
+///         WindowCapabilities::NONE
+///     }
+///     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+///         command.admit(&WindowCapabilities::NONE)?;
+///         Ok(())
 ///     }
 ///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
 ///         Err(CursorError::Unsupported)
@@ -116,7 +128,10 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 /// ```compile_fail,E0407
 /// use std::any::Any;
 ///
-/// use flui_platform_api::{CursorError, CursorIcon, PlatformWindow, WindowId, WindowShowError};
+/// use flui_platform_api::{
+///     CursorError, CursorIcon, PlatformWindow, WindowCapabilities, WindowCommand,
+///     WindowCommandError, WindowGeometry, WindowId, WindowShowError, WindowState,
+/// };
 /// use flui_foundation::geometry::{DeviceSize, Size};
 ///
 /// struct Offscreen;
@@ -140,6 +155,16 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 ///     }
 ///     fn is_visible(&self) -> bool {
 ///         false
+///     }
+///     fn state(&self) -> WindowState {
+///         WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
+///     }
+///     fn capabilities(&self) -> WindowCapabilities {
+///         WindowCapabilities::NONE
+///     }
+///     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+///         command.admit(&WindowCapabilities::NONE)?;
+///         Ok(())
 ///     }
 ///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
 ///         Err(CursorError::Unsupported)
@@ -271,23 +296,16 @@ pub trait PlatformWindow: Send + Sync {
     /// stays when nothing does. The snapshot describes what the OS did, not
     /// what a command asked for. Call it on the owner thread.
     ///
-    /// The default derives a snapshot from the required queries and so never
-    /// advances its revision; a window that is a real host window overrides it.
-    fn state(&self) -> WindowState {
-        let size = self.logical_size();
-        WindowState::new(WindowGeometry::new(None, size), size)
-            .with_visible(self.is_visible())
-            .with_focused(self.is_focused())
-            .with_display(self.display_id())
-    }
+    /// Required, with no default: a window that cannot publish a state of its
+    /// own says so with a snapshot built from what it knows, not by inheriting
+    /// one that would never change.
+    fn state(&self) -> WindowState;
 
     /// Which [`WindowCommand`]s [`apply`](Self::apply) carries out.
     ///
-    /// The default is none: a window that overrides nothing refuses every
-    /// command instead of claiming to have done it.
-    fn capabilities(&self) -> WindowCapabilities {
-        WindowCapabilities::none()
-    }
+    /// Required: a window states what it honours instead of inheriting a
+    /// claim.
+    fn capabilities(&self) -> WindowCapabilities;
 
     /// Request a change to the window.
     ///
@@ -301,12 +319,8 @@ pub trait PlatformWindow: Send + Sync {
     /// is called.
     ///
     /// # Errors
-    /// [`WindowCommandError`]. The default refuses every command as
-    /// unsupported.
-    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
-        command.admit(&self.capabilities())?;
-        Err(WindowCommandError::Unsupported)
-    }
+    /// [`WindowCommandError`].
+    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError>;
 
     /// Register a callback meaning "[`state`](Self::state) may answer
     /// differently now".

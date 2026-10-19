@@ -61,25 +61,25 @@ impl WindowFixture for Fixture {
 }
 
 fn only_the_move_and_size_commands() -> WindowCapabilities {
-    let mut capabilities = WindowCapabilities::none();
-    capabilities.set_position = true;
-    capabilities.set_size = true;
+    let mut capabilities = WindowCapabilities::NONE;
+    capabilities.sets_position = true;
+    capabilities.sets_size = true;
     capabilities.observes_position = true;
     capabilities
 }
 
 fn no_fullscreen_or_minimize() -> WindowCapabilities {
-    let mut capabilities = WindowCapabilities::all();
-    capabilities.fullscreen = false;
-    capabilities.minimize = false;
+    let mut capabilities = WindowCapabilities::ALL;
+    capabilities.enters_fullscreen = false;
+    capabilities.minimizes = false;
     capabilities.observes_minimized = false;
     capabilities
 }
 
 fn the_headless_window_conforms_under_every_capability_set() {
     for (name, capabilities) in [
-        ("all", WindowCapabilities::all()),
-        ("none", WindowCapabilities::none()),
+        ("all", WindowCapabilities::ALL),
+        ("none", WindowCapabilities::NONE),
         ("move and size only", only_the_move_and_size_commands()),
         ("no fullscreen or minimize", no_fullscreen_or_minimize()),
     ] {
@@ -89,7 +89,7 @@ fn the_headless_window_conforms_under_every_capability_set() {
 }
 
 fn caught(fault: Fault) -> Vec<&'static str> {
-    window_conformance::check(&mut Fixture::new(WindowCapabilities::all(), Some(fault)))
+    window_conformance::check(&mut Fixture::new(WindowCapabilities::ALL, Some(fault)))
         .into_iter()
         .map(|violation| violation.check)
         .collect()

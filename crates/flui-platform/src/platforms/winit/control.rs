@@ -395,11 +395,9 @@ mod tests {
     assert_not_impl_any!(super::ControlReceiver: Send, Sync);
 
     fn options(title: impl Into<String>) -> WindowOptions {
-        WindowOptions {
-            title: title.into(),
-            size: Size::new(800.0, 600.0),
-            ..WindowOptions::default()
-        }
+        WindowOptions::default()
+            .with_title(title)
+            .with_size(Size::new(800.0, 600.0))
     }
 
     /// A tiny stand-in window so tests can build an `Arc<dyn HostWindow>`
@@ -435,6 +433,26 @@ mod tests {
         ) -> Result<(), crate::traits::CursorError> {
             Ok(())
         }
+        fn state(&self) -> flui_platform_api::WindowState {
+            let size = self.logical_size();
+            flui_platform_api::WindowState::new(
+                flui_platform_api::WindowGeometry::new(None, size),
+                size,
+            )
+        }
+
+        fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+            flui_platform_api::WindowCapabilities::NONE
+        }
+
+        fn apply(
+            &self,
+            command: flui_platform_api::WindowCommand,
+        ) -> Result<(), flui_platform_api::WindowCommandError> {
+            command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+            Ok(())
+        }
+
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }

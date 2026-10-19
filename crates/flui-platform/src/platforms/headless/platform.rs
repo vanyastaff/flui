@@ -22,19 +22,19 @@ use flui_platform_api::text_store::TextStoreHost;
 use parking_lot::Mutex;
 
 use super::display::{DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplays};
-use super::host_limits::HostLimits;
+use super::window_policy::HeadlessWindowPolicy;
 use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     error::PlatformError,
     shared::{PlatformHandlers, WindowCallbacks, window_state::WindowStateCell},
     traits::{
         Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId,
-        DisplaySnapshot, HostNotice, HostWindow, OpenWindowError, OwnerPlatform, PendingWindow,
-        Platform, PlatformCapabilities, PlatformExecutor, PlatformHaptics, PlatformInput,
+        DisplaySnapshot, HostWindow, OpenWindowError, OwnerPlatform, PendingWindow, Platform,
+        PlatformCapabilities, PlatformExecutor, PlatformHaptics, PlatformInput,
         PlatformReadyCallback, PlatformTextInput, PlatformWindow, SessionEndAnswer,
-        SessionEndPhase, SizeConstraints, WindowAppearance, WindowBackgroundAppearance,
-        WindowCapabilities, WindowCommand, WindowCommandError, WindowEvent, WindowGeometry,
-        WindowId, WindowMode, WindowOpen, WindowOptions, WindowState,
+        SessionEndPhase, SizeConstraints, SystemNotice, WindowAppearance,
+        WindowBackgroundAppearance, WindowCapabilities, WindowCommand, WindowCommandError,
+        WindowEvent, WindowGeometry, WindowId, WindowMode, WindowOpen, WindowOptions, WindowState,
         owner::{DirectOwnerHooks, OwnerHooks, ProxyTransport},
     },
 };
@@ -122,8 +122,14 @@ struct HeadlessState {
     /// ([`HeadlessPlatform::with_window_capabilities`]).
     window_capabilities: WindowCapabilities,
     /// What the host clamps or declines for every window opened from now on
-    /// ([`HeadlessPlatform::with_host_limits`]).
-    host_limits: HostLimits,
+    /// ([`HeadlessPlatform::with_window_policy`]).
+    window_policy: HeadlessWindowPolicy,
+    /// The channel system notices take to the host; a wake marks every window
+    /// opened here stale first.
+    notices: Arc<crate::shared::system_notice::SystemNotices>,
+    /// How many times the host told this platform it released a session end it
+    /// had answered with a block.
+    session_end_releases: usize,
 }
 
 impl HeadlessPlatform {
@@ -144,8 +150,10 @@ impl HeadlessPlatform {
             exit_reevaluation_requested: false,
             text_store_host: None,
             displays: HeadlessDisplays::new(vec![DisplaySpec::default()]),
-            window_capabilities: WindowCapabilities::all(),
-            host_limits: HostLimits::none(),
+            window_capabilities: WindowCapabilities::ALL,
+            window_policy: HeadlessWindowPolicy::default(),
+            notices: Arc::default(),
+            session_end_releases: 0,
         };
 
         let wake_failure = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -247,8 +255,8 @@ impl HeadlessPlatform {
     /// for, to test that a snapshot reports the outcome and not the request.
     /// The default imposes nothing.
     #[must_use]
-    pub fn with_host_limits(self, limits: HostLimits) -> Self {
-        self.with_state(|state| state.host_limits = limits);
+    pub fn with_window_policy(self, limits: HeadlessWindowPolicy) -> Self {
+        self.with_state(|state| state.window_policy = limits);
         self
     }
 
@@ -280,7 +288,7 @@ impl HeadlessPlatform {
     }
 
     /// Simulate a system notice; see [`HeadlessHostEvents::notice`].
-    pub fn simulate_host_notice(&self, notice: &HostNotice) {
+    pub fn simulate_host_notice(&self, notice: SystemNotice) {
         self.host_events().notice(notice);
     }
 
@@ -448,10 +456,17 @@ impl Platform for HeadlessPlatform {
         });
     }
 
-    fn on_host_notice(&self, callback: Box<dyn FnMut(&HostNotice) + Send>) {
-        self.with_state(|state| {
-            state.handlers.host_notice = Some(callback);
-        });
+    fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
+        let notices = self.with_state(|state| Arc::clone(&state.notices));
+        notices.set_hook(callback);
+    }
+
+    fn release_session_end(&self) {
+        self.with_state(|state| state.session_end_releases += 1);
+    }
+
+    fn window_capabilities(&self) -> WindowCapabilities {
+        self.with_state(|state| state.window_capabilities)
     }
 
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
@@ -521,10 +536,11 @@ fn create_mock_window(
             display,
             display_bounds: display.and_then(|id| state.displays.logical_bounds(id)),
             capabilities: state.window_capabilities,
-            limits: state.host_limits,
+            limits: state.window_policy,
         },
     );
 
+    state.notices.mark_stale_on_wake(&window.window_state);
     state.windows.push(window.clone());
     state.active_window = Some(window_id);
 
@@ -676,19 +692,24 @@ impl HeadlessHostEvents {
     /// A system notice other than a session end's phases: the hook registered
     /// with `OwnerPlatform::on_host_notice` is called. Nothing happens when
     /// none is registered or the platform is gone.
-    pub fn notice(&self, notice: &HostNotice) {
+    ///
+    /// A wake marks the state of every window opened on this platform stale
+    /// first (`shared::system_notice`).
+    pub fn notice(&self, notice: SystemNotice) {
         let Some(state) = self.state.upgrade() else {
             return;
         };
-        let hook = state.lock().handlers.host_notice.take();
-        let Some(mut hook) = hook else {
-            return;
-        };
-        hook(notice);
-        let mut state = state.lock();
-        if state.handlers.host_notice.is_none() {
-            state.handlers.host_notice = Some(hook);
-        }
+        let notices = Arc::clone(&state.lock().notices);
+        notices.dispatch(notice);
+    }
+
+    /// How many times the host told the platform it released a session end it
+    /// had answered with a block (`Platform::release_session_end`).
+    #[must_use]
+    pub fn session_end_releases(&self) -> usize {
+        self.state
+            .upgrade()
+            .map_or(0, |state| state.lock().session_end_releases)
     }
 }
 
@@ -953,7 +974,7 @@ pub struct MockWindow {
     /// The published snapshot, shared by every clone of this window.
     window_state: Arc<WindowStateCell>,
     capabilities: WindowCapabilities,
-    limits: HostLimits,
+    limits: HeadlessWindowPolicy,
     callbacks: Arc<WindowCallbacks>,
     text_input: Arc<FakeTextInput>,
     haptics: Arc<FakeHaptics>,
@@ -997,7 +1018,7 @@ struct MockWindowHost {
     /// maximized or fullscreen.
     display_bounds: Option<Bounds<f64>>,
     capabilities: WindowCapabilities,
-    limits: HostLimits,
+    limits: HeadlessWindowPolicy,
 }
 
 /// Mutable state for headless MockWindow
@@ -1040,7 +1061,7 @@ impl MockWindowState {
 
     /// `size` as the host ends up with it: raised to the window's minimum,
     /// lowered to its maximum and to the largest window the host allows.
-    fn clamp_size(&self, size: Size<f64>, limits: &HostLimits) -> Size<f64> {
+    fn clamp_size(&self, size: Size<f64>, limits: &HeadlessWindowPolicy) -> Size<f64> {
         let mut size = size;
         if let Some(min) = self.constraints.min {
             size.width = size.width.max(min.width);
@@ -1053,7 +1074,7 @@ impl MockWindowState {
         Self::clamp_to_host(size, limits)
     }
 
-    fn clamp_to_host(size: Size<f64>, limits: &HostLimits) -> Size<f64> {
+    fn clamp_to_host(size: Size<f64>, limits: &HeadlessWindowPolicy) -> Size<f64> {
         match limits.max_window_size {
             Some(max) => Size::new(size.width.min(max.width), size.height.min(max.height)),
             None => size,
@@ -1073,7 +1094,7 @@ impl MockWindowState {
     fn enter_mode(
         &mut self,
         mode: WindowMode,
-        limits: &HostLimits,
+        limits: &HeadlessWindowPolicy,
         display_bounds: Option<Bounds<f64>>,
     ) {
         match mode {
@@ -1152,7 +1173,7 @@ impl MockWindow {
             title: options.title.clone(),
             position: options
                 .position
-                .filter(|_| capabilities.restores_position)
+                .filter(|_| capabilities.places_at_open)
                 .unwrap_or_default(),
             size: options.size,
             mode: WindowMode::Normal,

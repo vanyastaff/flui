@@ -14,7 +14,7 @@ use flui_foundation::{PresentationId, UiRuntimeId};
 use flui_platform::traits::WindowId;
 use flui_platform::{HeadlessPlatform, Platform as _, WindowMode, WindowOptions};
 use flui_platform_api::{CursorError, CursorIcon};
-use flui_view::WindowHandle;
+use flui_view::{WindowClosed, WindowHandle};
 
 use super::*;
 
@@ -65,7 +65,7 @@ fn rig(window: &Arc<dyn PlatformWindow>, n: usize) -> Rig {
 }
 
 fn commands_wait_for_the_next_turn_and_apply_in_order() {
-    let window = headless_window(WindowCapabilities::all());
+    let window = headless_window(WindowCapabilities::ALL);
     let rig = rig(&window, 1);
     let before = window.state();
     rig.handle.set_title("A").expect("accepted");
@@ -88,13 +88,13 @@ fn commands_wait_for_the_next_turn_and_apply_in_order() {
 }
 
 fn a_refused_command_is_never_queued() {
-    let none = headless_window(WindowCapabilities::none());
+    let none = headless_window(WindowCapabilities::NONE);
     let rig_none = rig(&none, 2);
     assert_eq!(
         rig_none.handle.set_title("x"),
         Err(WindowCommandError::Unsupported)
     );
-    let all = headless_window(WindowCapabilities::all());
+    let all = headless_window(WindowCapabilities::ALL);
     let rig_all = rig(&all, 3);
     assert_eq!(
         rig_all.handle.set_size(Size::new(f64::NAN, 10.0)),
@@ -115,8 +115,8 @@ fn a_refused_command_is_never_queued() {
 }
 
 fn the_handles_of_two_windows_do_not_mix() {
-    let first = headless_window(WindowCapabilities::all());
-    let second = headless_window(WindowCapabilities::all());
+    let first = headless_window(WindowCapabilities::ALL);
+    let second = headless_window(WindowCapabilities::ALL);
     let queues = WindowCommandQueues::default();
     let source = |window: &Arc<dyn PlatformWindow>, n| {
         window_source(
@@ -151,7 +151,7 @@ fn the_handles_of_two_windows_do_not_mix() {
 }
 
 fn a_closed_window_answers_closed() {
-    let window = headless_window(WindowCapabilities::all());
+    let window = headless_window(WindowCapabilities::ALL);
     let rig = rig(&window, 6);
     let seen = Rc::new(Cell::new(0));
     let counted = Rc::clone(&seen);
@@ -164,7 +164,7 @@ fn a_closed_window_answers_closed() {
         rig.handle.set_title("late"),
         Err(WindowCommandError::Closed)
     );
-    assert_eq!(rig.handle.close(), Err(WindowCommandError::Closed));
+    assert_eq!(rig.handle.request_close(), Err(WindowClosed));
     assert!(rig.handle.state().is_err());
     assert!(rig.handle.subscribe(|_| {}).is_err());
     rig.source.publish_current();
@@ -207,12 +207,20 @@ impl PlatformWindow for RecordingWindow {
     fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> {
         Ok(())
     }
+    fn state(&self) -> WindowState {
+        WindowState::new(
+            flui_platform::WindowGeometry::new(None, Size::new(10.0, 10.0)),
+            Size::new(10.0, 10.0),
+        )
+    }
     fn capabilities(&self) -> WindowCapabilities {
-        WindowCapabilities::all()
+        WindowCapabilities::ALL
     }
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
         if self.fail_titles && matches!(command, WindowCommand::SetTitle(_)) {
-            return Err(WindowCommandError::Backend("the system said no".into()));
+            return Err(WindowCommandError::Backend {
+                message: "the system said no".into(),
+            });
         }
         self.applied.lock().expect("log").push(command);
         if let Some(during) = self.during_apply {
@@ -301,8 +309,45 @@ fn a_nested_turn_leaves_the_queue_to_the_walk_in_progress() {
     assert_eq!(applied(&window).len(), 1);
 }
 
+fn a_panic_while_applying_neither_wedges_the_walk_nor_loses_the_rest() {
+    thread_local! {
+        static ARMED: Cell<bool> = const { Cell::new(true) };
+    }
+    fn explode_once() {
+        assert!(!ARMED.replace(false), "a command panics");
+    }
+    ARMED.set(true);
+    let window = recording(false, Some(explode_once));
+    let as_platform: Arc<dyn PlatformWindow> = window.clone();
+    let rig = rig(&as_platform, 12);
+    rig.handle.set_resizable(false).expect("accepted");
+    rig.handle.set_decorated(false).expect("accepted");
+    rig.handle.set_title("last").expect("accepted");
+
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rig.queues.apply_pending();
+    }));
+    assert!(outcome.is_err(), "the first command panics");
+    assert!(
+        !rig.queues.applying.get(),
+        "the walk is not left marked as in progress"
+    );
+    assert_eq!(applied(&window), [WindowCommand::SetResizable(false)]);
+
+    rig.queues.apply_pending();
+    assert_eq!(
+        applied(&window),
+        [
+            WindowCommand::SetResizable(false),
+            WindowCommand::SetDecorated(false),
+            WindowCommand::SetTitle("last".into()),
+        ],
+        "what the panic cut off still applies, in order, on the next turn"
+    );
+}
+
 fn subscribers_hear_a_new_state_in_order_and_what_they_ask_waits() {
-    let window = headless_window(WindowCapabilities::all());
+    let window = headless_window(WindowCapabilities::ALL);
     let rig = rig(&window, 10);
     let log = Rc::new(RefCell::new(Vec::new()));
     let seen = Rc::clone(&log);
@@ -343,7 +388,7 @@ fn closing_is_queued_with_the_commands_and_never_applied_inline() {
     let as_platform: Arc<dyn PlatformWindow> = window.clone();
     let rig = rig(&as_platform, 11);
     rig.handle.set_resizable(false).expect("accepted");
-    rig.handle.close().expect("accepted");
+    rig.handle.request_close().expect("accepted");
     assert_eq!(rig.wakes.get(), 2);
     rig.queues.apply_pending();
     assert_eq!(
@@ -385,6 +430,10 @@ fn window_handle_contract() {
             (
                 "a_nested_turn_leaves_the_queue_to_the_walk_in_progress",
                 a_nested_turn_leaves_the_queue_to_the_walk_in_progress as fn(),
+            ),
+            (
+                "a_panic_while_applying_neither_wedges_the_walk_nor_loses_the_rest",
+                a_panic_while_applying_neither_wedges_the_walk_nor_loses_the_rest as fn(),
             ),
             (
                 "subscribers_hear_a_new_state_in_order_and_what_they_ask_waits",

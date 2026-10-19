@@ -13,7 +13,10 @@ use android_activity::AndroidApp;
 use android_activity::ndk::configuration::UiModeNight;
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{EdgeInsets, Point, Size};
-use flui_platform_api::{DisplayId, FrameRateHint, WindowAppearance, WindowGeometry, WindowState};
+use flui_platform_api::{
+    DisplayId, FrameRateHint, WindowAppearance, WindowCapabilities, WindowCommand,
+    WindowCommandError, WindowGeometry, WindowState,
+};
 use parking_lot::Mutex;
 
 use crate::{
@@ -391,12 +394,23 @@ impl PlatformWindow for AndroidWindow {
         self.app.native_window().is_some()
     }
 
+    fn capabilities(&self) -> WindowCapabilities {
+        WindowCapabilities::NONE
+    }
+
+    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+        // The system owns the surface: every command is refused unless it asks
+        // for what the window already is.
+        command.admit(&WindowCapabilities::NONE)?;
+        Ok(())
+    }
+
     fn state(&self) -> WindowState {
         self.current_state()
     }
 
     // The activity surface honours no window command and reports no position:
-    // `WindowCapabilities::none()` is the trait default.
+    // `WindowCapabilities::NONE` is the trait default.
     //
     // `apply` is the trait default too: it refuses every command as
     // unsupported.

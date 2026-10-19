@@ -276,7 +276,7 @@ where
             .with_textures(textures),
         ));
 
-        super::host::track_raster_lane(lane.lock().trim_handle());
+        super::host::track_raster_lane(lane.lock().reclaim_handle());
 
         // 5. Register input callback -> entered ui_runtime input dispatch
         install_input_wiring(owner_dispatch, window.as_ref());

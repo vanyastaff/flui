@@ -39,16 +39,14 @@ fn test_window_lifecycle_contract() {
     }
 
     // Contract 3: Window creation should either succeed or fail gracefully
-    let options = WindowOptions {
-        title: "Contract Test Window".to_string(),
-        size: Size::new(640.0, 480.0),
-        visible: false,
-        resizable: true,
-        decorated: true,
-        min_size: Some(Size::new(320.0, 240.0)),
-        max_size: None,
-        ..Default::default()
-    };
+    let options = WindowOptions::default()
+        .with_title("Contract Test Window".to_string())
+        .with_size(Size::new(640.0, 480.0))
+        .with_visible(false)
+        .with_resizable(true)
+        .with_decorated(true)
+        .with_min_size(Some(Size::new(320.0, 240.0)))
+        .with_max_size(None);
 
     match platform.open_window(options) {
         Ok(window) => {
@@ -122,12 +120,10 @@ fn test_window_lifecycle_contract() {
             tracing::info!("✓ request_redraw() executed without panic");
 
             // Contract 9: Multiple window creation
-            let options2 = WindowOptions {
-                title: "Contract Test Window 2".to_string(),
-                size: Size::new(400.0, 300.0),
-                visible: false,
-                ..Default::default()
-            };
+            let options2 = WindowOptions::default()
+                .with_title("Contract Test Window 2".to_string())
+                .with_size(Size::new(400.0, 300.0))
+                .with_visible(false);
 
             match platform.open_window(options2) {
                 Ok(window2) => {
@@ -713,12 +709,12 @@ mod native_windows {
 
     fn open(platform: &WindowsPlatform, decorated: bool) -> Arc<dyn HostWindow> {
         platform
-            .open_window(WindowOptions {
-                visible: false,
-                decorated,
-                size: Size::new(320.0, 240.0),
-                ..Default::default()
-            })
+            .open_window(
+                WindowOptions::default()
+                    .with_visible(false)
+                    .with_decorated(decorated)
+                    .with_size(Size::new(320.0, 240.0)),
+            )
             .expect("create actual hidden Win32 window")
     }
 
@@ -726,11 +722,11 @@ mod native_windows {
     // window, so system-key defaults are exercised on a shown one.
     fn open_shown(platform: &WindowsPlatform) -> Arc<dyn HostWindow> {
         platform
-            .open_window(WindowOptions {
-                visible: true,
-                size: Size::new(160.0, 120.0),
-                ..Default::default()
-            })
+            .open_window(
+                WindowOptions::default()
+                    .with_visible(true)
+                    .with_size(Size::new(160.0, 120.0)),
+            )
             .expect("create actual shown Win32 window")
     }
 
@@ -807,11 +803,11 @@ mod native_windows {
         Box::new(WindowsPlatform::new().expect("native Windows platform"))
             .run(Box::new(move |owner| {
                 let WindowOpen::Ready(window) = owner
-                    .open_window(WindowOptions {
-                        visible: true,
-                        size: Size::new(160.0, 120.0),
-                        ..Default::default()
-                    })
+                    .open_window(
+                        WindowOptions::default()
+                            .with_visible(true)
+                            .with_size(Size::new(160.0, 120.0)),
+                    )
                     .expect("open readmission window")
                 else {
                     panic!("Win32 on-ready window was deferred");
@@ -927,11 +923,11 @@ mod native_windows {
             .run(Box::new(move |owner| {
                 if let Some(visible) = window {
                     let WindowOpen::Ready(_window) = owner
-                        .open_window(WindowOptions {
-                            visible,
-                            size: Size::new(160.0, 120.0),
-                            ..Default::default()
-                        })
+                        .open_window(
+                            WindowOptions::default()
+                                .with_visible(visible)
+                                .with_size(Size::new(160.0, 120.0)),
+                        )
                         .expect("open callback-less window")
                     else {
                         panic!("Win32 on-ready window was deferred");
@@ -968,11 +964,11 @@ mod native_windows {
         Box::new(WindowsPlatform::new().expect("native Windows platform"))
             .run(Box::new(move |owner| {
                 let WindowOpen::Ready(window) = owner
-                    .open_window(WindowOptions {
-                        visible: true,
-                        size: Size::new(160.0, 120.0),
-                        ..Default::default()
-                    })
+                    .open_window(
+                        WindowOptions::default()
+                            .with_visible(true)
+                            .with_size(Size::new(160.0, 120.0)),
+                    )
                     .expect("open same-instant window")
                 else {
                     panic!("Win32 on-ready window was deferred");
@@ -1096,11 +1092,11 @@ mod native_windows {
         Box::new(WindowsPlatform::new().expect("native Windows platform"))
             .run(Box::new(move |owner| {
                 let WindowOpen::Ready(window) = owner
-                    .open_window(WindowOptions {
-                        visible: minimized,
-                        size: Size::new(160.0, 120.0),
-                        ..Default::default()
-                    })
+                    .open_window(
+                        WindowOptions::default()
+                            .with_visible(minimized)
+                            .with_size(Size::new(160.0, 120.0)),
+                    )
                     .expect("open unpainted window")
                 else {
                     panic!("Win32 on-ready window was deferred");
@@ -1180,11 +1176,11 @@ mod native_windows {
                 let mut windows = Vec::new();
                 for index in 0..2 {
                     let WindowOpen::Ready(window) = owner
-                        .open_window(WindowOptions {
-                            visible: true,
-                            size: Size::new(160.0, 120.0),
-                            ..Default::default()
-                        })
+                        .open_window(
+                            WindowOptions::default()
+                                .with_visible(true)
+                                .with_size(Size::new(160.0, 120.0)),
+                        )
                         .expect("open actual deadline window")
                     else {
                         panic!("Win32 on-ready window was deferred");
@@ -3686,11 +3682,11 @@ mod native_windows {
 
     fn open_owned(owner: &OwnerPlatform) -> Arc<dyn HostWindow> {
         owner
-            .open_window(WindowOptions {
-                visible: false,
-                size: Size::new(320.0, 240.0),
-                ..Default::default()
-            })
+            .open_window(
+                WindowOptions::default()
+                    .with_visible(false)
+                    .with_size(Size::new(320.0, 240.0)),
+            )
             .expect("create actual hidden Win32 window")
             .try_ready()
             .expect("owner-thread window opens directly")

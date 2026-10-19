@@ -10,7 +10,7 @@ use std::{
 };
 
 use flui_platform_api::{
-    Clipboard, ClipboardItem, DisplaySnapshot, HostNotice, SessionEndAnswer, SessionEndPhase,
+    Clipboard, ClipboardItem, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
     WindowEvent, WindowId, WindowOptions,
 };
 
@@ -405,8 +405,44 @@ pub trait Platform: Send + Sync + 'static {
     ///
     /// A backend that observes none of them never calls it, and the default
     /// implementation drops it unused.
-    fn on_host_notice(&self, callback: Box<dyn FnMut(&HostNotice) + Send>) {
+    ///
+    /// A backend that delivers [`SystemNotice::Wake`] marks its display
+    /// snapshot and every window's state stale first, in the shared dispatch
+    /// (`shared::system_notice`), so the first read after the machine woke asks
+    /// the operating system again.
+    fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
         let _ = callback;
+    }
+
+    /// Tell the platform the application is done holding a session end it
+    /// answered [`SessionEndAnswer::Block`] to, so the session may go on: the
+    /// last [`SessionEndBlock`](flui_platform_api::SessionEndBlock) was
+    /// released. A backend that holds the session open (Windows'
+    /// `ShutdownBlockReason`) lets go here; one that answered synchronously has
+    /// nothing to undo, and the default does nothing.
+    fn release_session_end(&self) {}
+
+    /// Which window commands and observations this platform's windows have,
+    /// known before any window exists.
+    ///
+    /// It is the same set every window the platform opens reports through
+    /// [`PlatformWindow::capabilities`](flui_platform_api::PlatformWindow::capabilities),
+    /// so a caller can fit a remembered placement to what the window will be
+    /// able to do (`WindowCapabilities::places_at_open`) before it opens one.
+    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities;
+
+    /// How much larger a decorated window's outer size is than its content
+    /// size on a display of scale `scale_factor`, in logical pixels: the title
+    /// bar and borders. Known before any window exists, so a remembered
+    /// placement can be fitted by its outer size.
+    ///
+    /// The default is zero, which is exact for a platform whose windows have no
+    /// non-client area (headless, mobile, web) and an under-estimate where the
+    /// frame is not measured yet (winit, AppKit: applied with their placement
+    /// support).
+    fn window_frame_inset(&self, scale_factor: f64) -> flui_foundation::geometry::Size<f64> {
+        let _ = scale_factor;
+        flui_foundation::geometry::Size::new(0.0, 0.0)
     }
 
     /// Register the macOS application's reopen signal callback.

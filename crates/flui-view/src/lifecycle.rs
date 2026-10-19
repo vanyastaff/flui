@@ -86,12 +86,10 @@ impl LifecycleHandle {
     /// Returns [`LifecycleClosed`] once terminal close begins or the owner dies.
     pub fn subscribe_notices(
         &self,
-        mut callback: impl FnMut(&HostNotice) + 'static,
-    ) -> Result<NoticeSubscription, LifecycleClosed> {
-        let (_, token) = self
-            .notices
-            .subscribe(Box::new(move |notice: &HostNotice| callback(notice)))?;
-        Ok(NoticeSubscription { _token: token })
+        callback: impl FnMut(&HostNotice) + 'static,
+    ) -> Result<HostNoticeSubscription, LifecycleClosed> {
+        let (_, token) = self.notices.subscribe(Box::new(callback))?;
+        Ok(HostNoticeSubscription { _token: token })
     }
 }
 
@@ -111,12 +109,13 @@ impl std::fmt::Debug for LifecycleSubscription {
 /// Cancels a notice callback on drop, with the same guarantees as
 /// [`LifecycleSubscription`].
 #[must_use = "dropping the subscription cancels notice observation"]
-pub struct NoticeSubscription {
+pub struct HostNoticeSubscription {
     _token: Subscription<HostNotice>,
 }
-impl std::fmt::Debug for NoticeSubscription {
+impl std::fmt::Debug for HostNoticeSubscription {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("NoticeSubscription").finish_non_exhaustive()
+        f.debug_struct("HostNoticeSubscription")
+            .finish_non_exhaustive()
     }
 }
 
