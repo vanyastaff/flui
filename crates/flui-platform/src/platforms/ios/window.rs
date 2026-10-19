@@ -1192,24 +1192,26 @@ impl PlatformWindow for IOSWindow {
         Err(CursorError::Unsupported)
     }
 
-    /// The scene's size, visibility and focus. `UIWindow` has no title, frame,
-    /// position or commands, so the capabilities stay at the trait default
-    /// (none) and `apply` refuses every command.
-    ///
-    /// The metrics and lifecycle live apart from this cell, so each call reads
-    /// them again. `on_state_changed` is raised where they change: when the
-    /// view's size or scale does, and on each lifecycle step.
+    /// `UIWindow` has no title, frame, position or commands, so a scene's
+    /// window honours none and observes nothing.
     fn capabilities(&self) -> WindowCapabilities {
         WindowCapabilities::NONE
     }
 
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
-        // The system owns the surface: every command is refused unless it asks
-        // for what the window already is.
-        command.admit(&WindowCapabilities::NONE)?;
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(WindowCommandError::Closed);
+        }
+        // The system owns the surface: every command is refused, except the one
+        // that asks for the mode every window has.
+        command.admit(&PlatformWindow::capabilities(self))?;
         Ok(())
     }
 
+    /// The scene's size, visibility and focus. The metrics and lifecycle live
+    /// apart from this cell, so each call reads them again. `on_state_changed`
+    /// is raised where they change: when the view's size or scale does, and on
+    /// each lifecycle step.
     fn state(&self) -> WindowState {
         self.snapshot.invalidate();
         let published = self.snapshot.state_with(|| {

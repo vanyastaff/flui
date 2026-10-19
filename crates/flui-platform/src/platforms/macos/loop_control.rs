@@ -15,6 +15,10 @@ use objc2_app_kit::{
 use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint};
 use parking_lot::Mutex;
 
+use std::time::Duration;
+
+use flui_platform_api::{SessionEndAnswer, SessionEndPhase};
+
 use super::{
     owner_lane::{
         exec_async_guarded, owner_queue, report_contained_panic,
@@ -22,7 +26,24 @@ use super::{
     },
     window::MacOSWindow,
 };
-use crate::{error::PlatformError, shared::PlatformHandlers, traits::PlatformWindow};
+use crate::{
+    error::PlatformError,
+    shared::{
+        PlatformHandlers,
+        terminate_gate::{ANNOUNCEMENT_LIFETIME, DEFERRAL_LIMIT, TerminateGate, Termination},
+    },
+    traits::PlatformWindow,
+};
+
+/// Whether finishing a session end also answers a waiting
+/// `applicationShouldTerminate:`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reply {
+    /// The terminate request was answered already (`NSTerminateNow`).
+    None,
+    /// It was answered `NSTerminateLater`: reply to AppKit.
+    ToAppKit,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
@@ -49,6 +70,9 @@ pub(super) struct LoopControl {
     state: Mutex<State>,
     windows: Arc<Mutex<HashMap<u64, Arc<MacOSWindow>>>>,
     handlers: Arc<Mutex<PlatformHandlers>>,
+    /// Connects the session-end announcement to the terminate request that
+    /// follows it. Never held across a call into the session-end hook.
+    terminate_gate: Mutex<TerminateGate>,
 }
 
 impl LoopControl {
@@ -84,8 +108,125 @@ impl LoopControl {
                 }),
                 windows,
                 handlers,
+                terminate_gate: Mutex::new(TerminateGate::new()),
             }
         })
+    }
+
+    /// `NSWorkspaceWillPowerOffNotification`: the user's session is about to
+    /// end. The application is asked whether it needs the user to wait; the
+    /// terminate request that follows carries the answer out. If none follows,
+    /// the session end was called off, which AppKit does not announce, and the
+    /// application is told so.
+    pub(super) fn session_end_announced(self: &Arc<Self>) {
+        let blocked = self.ask_session_end(SessionEndPhase::Query) == SessionEndAnswer::Block;
+        let epoch = self.terminate_gate.lock().announced(blocked);
+        if let Some(epoch) = epoch {
+            self.after(ANNOUNCEMENT_LIFETIME, move |control| {
+                if control.terminate_gate.lock().announcement_lapsed(epoch) {
+                    control.ask_session_end(SessionEndPhase::Cancelled);
+                }
+            });
+        }
+    }
+
+    /// The application released its last hold on the session end
+    /// (`Platform::release_session_end`): answer the terminate request that
+    /// waits, if one does.
+    ///
+    /// The release happens wherever the last `SessionEndBlock` is dropped,
+    /// possibly inside a turn of the runtime, so the answer is a task of its
+    /// own: telling the application the session is ending, and then letting the
+    /// process go, must not happen under the code that dropped the block.
+    pub(super) fn session_end_released(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        exec_async_guarded(owner_queue(), move || {
+            cleanup_step(|| {
+                if let Some(control) = weak.upgrade() {
+                    let owed = control.terminate_gate.lock().released();
+                    if owed {
+                        control.finish_session_end(Reply::ToAppKit);
+                    }
+                }
+            });
+        });
+    }
+
+    /// `applicationShouldTerminate:`. A quit nobody announced goes through the
+    /// run loop's orderly stop and is cancelled here; a session end is answered
+    /// at once, or after the application releases its holds.
+    fn terminate_requested(self: &Arc<Self>) -> NSApplicationTerminateReply {
+        let termination = self.terminate_gate.lock().terminate_requested();
+        match termination {
+            Termination::Quit => {
+                self.request(true);
+                NSApplicationTerminateReply::TerminateCancel
+            }
+            Termination::Now => {
+                self.finish_session_end(Reply::None);
+                NSApplicationTerminateReply::TerminateNow
+            }
+            Termination::Later { epoch } => {
+                self.after(DEFERRAL_LIMIT, move |control| {
+                    if control.terminate_gate.lock().deferral_ran_out(epoch) {
+                        tracing::warn!("a session end waited the full limit for the application");
+                        control.finish_session_end(Reply::ToAppKit);
+                    }
+                });
+                NSApplicationTerminateReply::TerminateLater
+            }
+        }
+    }
+
+    /// Run `body` on the owner lane after `delay`, if the control is still
+    /// alive.
+    fn after(self: &Arc<Self>, delay: Duration, body: impl FnOnce(&Self) + Send + 'static) {
+        let weak = Arc::downgrade(self);
+        owner_queue().exec_after(delay, move || {
+            cleanup_step(|| {
+                if let Some(control) = weak.upgrade() {
+                    body(&control);
+                }
+            });
+        });
+    }
+
+    /// The session is ending now: tell the application, run the quit callback
+    /// the way iOS does at termination, and let AppKit go on if it is waiting.
+    fn finish_session_end(&self, reply: Reply) {
+        self.ask_session_end(SessionEndPhase::Ending);
+        let quit = self.handlers.lock().quit.take();
+        if let Some(quit) = quit {
+            cleanup_step(quit);
+        }
+        if reply == Reply::ToAppKit {
+            // The tasks that get here run on the main queue.
+            let mtm = MainThreadMarker::new()
+                .expect("BUG: a deferred termination is answered from a main-queue task");
+            NSApplication::sharedApplication(mtm).replyToApplicationShouldTerminate(true);
+        }
+    }
+
+    /// Ask the session-end hook, outside every lock. A hook that panics lets
+    /// the session end; a missing one does too.
+    fn ask_session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {
+        let Some(mut hook) = self.handlers.lock().session_end.take() else {
+            return SessionEndAnswer::Proceed;
+        };
+        let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook(phase)))
+            .unwrap_or_else(|payload| {
+                report_contained_panic(payload);
+                SessionEndAnswer::Proceed
+            });
+        {
+            let mut handlers = self.handlers.lock();
+            if self.accepts_windows() && handlers.session_end.is_none() {
+                handlers.session_end = Some(hook);
+                return answer;
+            }
+        }
+        cleanup_step(|| drop(hook));
+        answer
     }
 
     pub(super) fn accepts_windows(&self) -> bool {
@@ -400,12 +541,20 @@ define_class!(
 
         #[unsafe(method(applicationShouldTerminate:))]
         fn should_terminate(&self, _app: &NSApplication) -> NSApplicationTerminateReply {
-            // Never run user teardown inside the Objective-C callback. Guard the
-            // queue request as well: Rust unwinding must not cross this ABI.
-            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                if let Some(control) = self.ivars().upgrade() { control.request(true); }
-            })) { report_contained_panic(payload); }
-            NSApplicationTerminateReply::TerminateCancel
+            // An ordinary quit never runs user teardown inside the Objective-C
+            // callback: it queues the request and cancels this one. A session
+            // end is answered here, since the system waits for the answer.
+            // Guard everything: Rust unwinding must not cross this ABI.
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.ivars()
+                    .upgrade()
+                    .map(|control| control.terminate_requested())
+            }))
+            .unwrap_or_else(|payload| {
+                report_contained_panic(payload);
+                None
+            })
+            .unwrap_or(NSApplicationTerminateReply::TerminateCancel)
         }
     }
 );

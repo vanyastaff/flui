@@ -42,8 +42,16 @@ pub(crate) mod display_source;
 // keeps these pure rules checked on every host.
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple_display_identity;
+// What the AppKit window reports and is asked, as pure rules; `test` keeps them
+// checked on every host.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod appkit_window_geometry;
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod appkit_window_mode;
 #[cfg(any(target_os = "ios", test))]
 pub(crate) mod apple_os_version;
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod dispatch_memory_pressure;
 #[cfg(any(target_os = "ios", test))]
 pub(crate) mod display_link_rate;
 pub mod events;
@@ -52,6 +60,8 @@ pub(crate) mod owner_signal;
 #[cfg(any(target_os = "android", target_os = "macos", test))]
 pub(crate) mod preference_read;
 pub(crate) mod system_notice;
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod terminate_gate;
 pub(crate) mod window_state;
 // `pub`, not `pub(crate)`, for the same reason `keys`/`keys_macos` are:
 // these cfg-free rule modules are consumed only by one target's backend
