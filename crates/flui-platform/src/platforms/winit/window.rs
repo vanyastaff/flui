@@ -268,7 +268,12 @@ impl WinitWindow {
             return;
         };
         probe.watch(id);
-        probe.set_mode_hint(id, self.opens_in);
+        // Only a window that stays unmapped has a mode to seed: one already
+        // mapped is the window manager's to place, and writing its properties
+        // would undo a rule that maximized it meanwhile.
+        if self.opens_in != WindowMode::Normal {
+            probe.set_mode_hint(id, self.opens_in);
+        }
         let _ = self.x11.set((probe, id));
         // The snapshot made at creation knew nothing of the probe.
         self.refresh_state();

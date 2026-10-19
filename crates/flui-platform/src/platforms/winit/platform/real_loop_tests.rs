@@ -1602,7 +1602,17 @@ mod x11_window {
                 .apply(WindowCommand::SetMode(WindowMode::Normal))
                 .expect("a desktop window returns to normal");
             assert_eq!(state_names(server, id), Vec::<String>::new());
-            // Minimizing it leaves no mode to be mapped in; the window is            // minimized once it is mapped.            window                .apply(WindowCommand::SetMode(WindowMode::Fullscreen))                .expect("a desktop window enters fullscreen");            window                .apply(WindowCommand::SetMode(WindowMode::Minimized))                .expect("a minimize is requested");            assert_eq!(state_names(server, id), Vec::<String>::new());
+
+            // Minimizing it leaves no mode to be mapped in; the window is
+            // minimized once it is mapped.
+            window
+                .apply(WindowCommand::SetMode(WindowMode::Fullscreen))
+                .expect("a desktop window enters fullscreen");
+            assert_eq!(state_names(server, id), ["_NET_WM_STATE_FULLSCREEN"]);
+            window
+                .apply(WindowCommand::SetMode(WindowMode::Minimized))
+                .expect("a minimize is requested");
+            assert_eq!(state_names(server, id), Vec::<String>::new());
 
             window.reveal_after_first_frame();
             until_map_state(server, id, MapState::VIEWABLE);
