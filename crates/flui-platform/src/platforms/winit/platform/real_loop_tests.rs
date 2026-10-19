@@ -1509,6 +1509,89 @@ mod x11_window {
     fn x11_window_opened_fullscreen_at_once_is_mapped_with_the_mode_set() {
         opens_in_mode_with_the_property_set(WindowMode::Fullscreen, &["_NET_WM_STATE_FULLSCREEN"]);
     }
+
+    /// The names of the atoms in the window's `_NET_WM_STATE`.
+    fn state_names(server: &RustConnection, id: u32) -> Vec<String> {
+        let atom = |name: &str| {
+            server
+                .intern_atom(false, name.as_bytes())
+                .expect("request")
+                .reply()
+                .expect("the atom")
+                .atom
+        };
+        let property = server
+            .get_property(false, id, atom("_NET_WM_STATE"), AtomEnum::ATOM, 0, 64)
+            .expect("request")
+            .reply()
+            .expect("the property");
+        property
+            .value32()
+            .map(|atoms| {
+                atoms
+                    .map(|atom| {
+                        let name = server
+                            .get_atom_name(atom)
+                            .expect("request")
+                            .reply()
+                            .expect("the name")
+                            .name;
+                        String::from_utf8(name).expect("an ASCII atom name")
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// A window the application opens hidden, in a mode, is unmapped with the
+    /// mode in its properties, and `Show` maps it from there.
+    #[test]
+    fn x11_window_opened_hidden_in_a_mode_keeps_the_mode_until_it_is_shown() {
+        let opening = WindowOptions::default()
+            .with_size(Size::new(320.0, 240.0))
+            .with_mode(WindowMode::Maximized)
+            .with_visible(false);
+        run_x11_scenario(opening, |window, id, server| {
+            assert_eq!(map_state(server, id), MapState::UNMAPPED);
+            let names = state_names(server, id);
+            assert!(
+                names.contains(&"_NET_WM_STATE_MAXIMIZED_HORZ".to_owned())
+                    && names.contains(&"_NET_WM_STATE_MAXIMIZED_VERT".to_owned()),
+                "{names:?}"
+            );
+            assert!(!window.state().visible);
+
+            window
+                .apply(WindowCommand::Show)
+                .expect("a desktop window shows");
+            until_map_state(server, id, MapState::VIEWABLE);
+        });
+    }
+
+    /// A mode asked for while the window waits unmapped for its first frame
+    /// replaces the one it opened in, in the properties the window manager
+    /// reads when it maps it.
+    #[test]
+    fn x11_window_asked_for_a_mode_before_its_first_frame_opens_in_that_mode() {
+        let opening = WindowOptions::default()
+            .with_size(Size::new(320.0, 240.0))
+            .with_mode(WindowMode::Maximized)
+            .with_reveal(WindowReveal::AfterFirstFrame);
+        run_x11_scenario(opening, |window, id, server| {
+            window
+                .apply(WindowCommand::SetMode(WindowMode::Fullscreen))
+                .expect("a desktop window enters fullscreen");
+            assert_eq!(state_names(server, id), ["_NET_WM_STATE_FULLSCREEN"]);
+
+            window
+                .apply(WindowCommand::SetMode(WindowMode::Normal))
+                .expect("a desktop window returns to normal");
+            assert_eq!(state_names(server, id), Vec::<String>::new());
+
+            window.reveal_after_first_frame();
+            until_map_state(server, id, MapState::VIEWABLE);
+        });
+    }
 }
 
 /// A Wayland window on a real compositor (skipped without `WAYLAND_DISPLAY`;

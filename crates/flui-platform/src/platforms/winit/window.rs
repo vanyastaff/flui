@@ -104,7 +104,7 @@ pub struct WinitWindow {
     /// The outer size an unmapped window opened with a remembered rectangle
     /// has to end up with once its frame is known.
     #[cfg(target_os = "linux")]
-    outer_to_fit: Option<Size<f64>>,
+    outer_to_fit: Mutex<Option<Size<f64>>>,
     /// The frame around decorated windows, measured from this and the
     /// platform's other windows.
     frame_inset: Arc<FrameInset>,
@@ -207,16 +207,17 @@ impl WinitWindow {
             normal_geometry: Mutex::new(plan.normal_geometry),
             map_after_setup: plan.map_after_setup,
             #[cfg(target_os = "linux")]
-            opens_in: if plan.created_unmapped() {
+            opens_in: if plan.unmapped_until_shown() {
                 plan.mode
             } else {
                 WindowMode::Normal
             },
             #[cfg(target_os = "linux")]
-            outer_to_fit: plan
-                .normal_geometry
-                .filter(|_| plan.created_unmapped())
-                .map(|geometry| geometry.size),
+            outer_to_fit: Mutex::new(
+                plan.normal_geometry
+                    .filter(|_| plan.unmapped_until_shown())
+                    .map(|geometry| geometry.size),
+            ),
             reveal_pending: Mutex::new(plan.hidden_until_first_frame),
             frame_inset,
             #[cfg(target_os = "linux")]
@@ -407,6 +408,8 @@ impl WinitWindow {
     /// mode from depending on what the window manager makes of two requests at
     /// once: it keeps a minimized window minimized under a maximize.
     fn enter_mode(&self, mode: WindowMode) -> Result<(), WindowCommandError> {
+        #[cfg(target_os = "linux")]
+        self.seed_unmapped_mode(mode);
         match mode {
             WindowMode::Minimized => self.window.set_minimized(true),
             WindowMode::Maximized => {
@@ -429,6 +432,18 @@ impl WinitWindow {
         Ok(())
     }
 
+    /// Name `mode` in the properties of a window that is not mapped. A window
+    /// manager opens a window in the mode its properties name, and ignores the
+    /// client message winit sends for a window it does not manage yet, so a
+    /// mode asked for before the window is first shown would be lost.
+    #[cfg(target_os = "linux")]
+    fn seed_unmapped_mode(&self, mode: WindowMode) {
+        let unmapped = *self.reveal_pending.lock() || !*self.is_visible.lock();
+        if unmapped && let Some((probe, id)) = self.x11.get() {
+            probe.set_mode_hint(*id, mode);
+        }
+    }
+
     /// Give a window that opens at a remembered outer rectangle, unmapped, the
     /// content size that makes its outer size that. The first window of a run
     /// has no frame measured yet, so the window manager is asked for the one
@@ -445,7 +460,9 @@ impl WinitWindow {
     fn fit_to_remembered_rectangle(&self) {
         #[cfg(target_os = "linux")]
         {
-            let Some(outer) = self.outer_to_fit else {
+            // Once: the window is fitted when it is first mapped, not each time
+            // it is shown again.
+            let Some(outer) = self.outer_to_fit.lock().take() else {
                 return;
             };
             if self.frame_inset.is_known() || !self.window.is_decorated() {
@@ -472,6 +489,7 @@ impl WinitWindow {
     fn make_visible(&self) {
         let mut pending = self.reveal_pending.lock();
         *pending = false;
+        self.fit_to_remembered_rectangle();
         self.window.set_visible(true);
         *self.is_visible.lock() = true;
     }

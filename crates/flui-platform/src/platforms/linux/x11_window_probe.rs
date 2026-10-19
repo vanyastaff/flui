@@ -188,31 +188,44 @@ impl X11WindowProbe {
         }
     }
 
-    /// Set `_NET_WM_STATE` on the not yet mapped `window` to include `mode`
-    /// (maximized or fullscreen), as EWMH has a client do for a window that is
-    /// not managed yet: the window manager reads the property when it maps the
-    /// window, and ignores a client message about a window it does not manage.
-    /// Any other mode is no state to set.
+    /// Set `mode` in `_NET_WM_STATE` of the not yet mapped `window`, replacing
+    /// the maximized and fullscreen atoms it had and keeping any other, as EWMH
+    /// has a client do for a window that is not managed yet: the window manager
+    /// reads the property when it maps the window, and ignores a client message
+    /// about a window it does not manage. [`WindowMode::Normal`] clears the
+    /// mode. Minimized is no state to set here.
     pub(crate) fn set_mode_hint(&self, window: u32, mode: WindowMode) {
         let states = &self.atoms.states;
-        let atoms: &[u32] = match mode {
+        let wanted: &[u32] = match mode {
+            WindowMode::Normal => &[],
             WindowMode::Maximized => &[states.maximized_horz, states.maximized_vert],
             WindowMode::Fullscreen => &[states.fullscreen],
             _ => return,
         };
+        let mode_atoms = [
+            states.maximized_horz,
+            states.maximized_vert,
+            states.fullscreen,
+        ];
+        let mut atoms: Vec<u32> = self
+            .property(window, self.atoms.net_wm_state, AtomEnum::ATOM.into())
+            .and_then(|reply| Some(reply.value32()?.collect()))
+            .unwrap_or_default();
+        atoms.retain(|atom| !mode_atoms.contains(atom));
+        atoms.extend_from_slice(wanted);
         let set = self
             .query
             .change_property32(
-                PropMode::APPEND,
+                PropMode::REPLACE,
                 window,
                 self.atoms.net_wm_state,
                 AtomEnum::ATOM,
-                atoms,
+                &atoms,
             )
             .map_err(ProbeError::from_display)
             .and_then(|cookie| cookie.check().map_err(ProbeError::from_display));
         if let Err(error) = set {
-            tracing::debug!(%error, window, ?mode, "cannot ask for an X11 window's opening mode");
+            tracing::debug!(%error, window, ?mode, "cannot set an X11 window's mode before it is mapped");
         }
     }
     /// The frame the window manager will put around the not yet mapped

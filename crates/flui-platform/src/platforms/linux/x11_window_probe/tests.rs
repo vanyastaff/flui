@@ -68,6 +68,40 @@ impl Fixture {
             .atom
     }
 
+    /// The names of the atoms in `_NET_WM_STATE`.
+    fn state_names(&self) -> Vec<String> {
+        let property = self
+            .connection
+            .get_property(
+                false,
+                self.window,
+                self.atom("_NET_WM_STATE"),
+                AtomEnum::ATOM,
+                0,
+                64,
+            )
+            .expect("request")
+            .reply()
+            .expect("the property");
+        property
+            .value32()
+            .map(|atoms| {
+                atoms
+                    .map(|atom| {
+                        let name = self
+                            .connection
+                            .get_atom_name(atom)
+                            .expect("request")
+                            .reply()
+                            .expect("the name")
+                            .name;
+                        String::from_utf8(name).expect("an ASCII atom name")
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Set `_NET_WM_STATE` to the named atoms.
     fn set_state(&self, names: &[&str]) {
         let atoms: Vec<u32> = names.iter().map(|name| self.atom(name)).collect();
@@ -202,7 +236,7 @@ fn x11_probe_hears_of_a_change_to_a_watched_window() {
 }
 
 #[test]
-fn x11_probe_asks_for_a_mode_on_a_window_that_is_not_mapped() {
+fn x11_probe_sets_the_mode_of_a_window_that_is_not_mapped() {
     if !x_server() {
         return;
     }
@@ -210,17 +244,23 @@ fn x11_probe_asks_for_a_mode_on_a_window_that_is_not_mapped() {
     let fixture = Fixture::new();
     assert_eq!(probe.mode(fixture.window), Some(WindowMode::Normal));
 
-    // Modes that are no state to set change nothing.
-    probe.set_mode_hint(fixture.window, WindowMode::Normal);
+    // Minimized is no state to set.
     probe.set_mode_hint(fixture.window, WindowMode::Minimized);
-    assert_eq!(probe.mode(fixture.window), Some(WindowMode::Normal));
+    assert_eq!(fixture.state_names(), Vec::<String>::new());
 
     probe.set_mode_hint(fixture.window, WindowMode::Maximized);
     assert_eq!(probe.mode(fixture.window), Some(WindowMode::Maximized));
 
-    // It adds to what the window already asks for rather than replacing it.
+    // A later mode replaces the earlier one: the window opens in the last.
     probe.set_mode_hint(fixture.window, WindowMode::Fullscreen);
     assert_eq!(probe.mode(fixture.window), Some(WindowMode::Fullscreen));
+    assert_eq!(fixture.state_names(), ["_NET_WM_STATE_FULLSCREEN"]);
+
+    // Normal clears the mode and leaves what is not a mode alone.
+    fixture.set_state(&["_NET_WM_STATE_ABOVE", "_NET_WM_STATE_FULLSCREEN"]);
+    probe.set_mode_hint(fixture.window, WindowMode::Normal);
+    assert_eq!(probe.mode(fixture.window), Some(WindowMode::Normal));
+    assert_eq!(fixture.state_names(), ["_NET_WM_STATE_ABOVE"]);
 }
 
 #[test]

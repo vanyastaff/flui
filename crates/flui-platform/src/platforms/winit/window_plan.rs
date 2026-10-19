@@ -114,16 +114,28 @@ pub(super) struct OpenPlan {
     /// its mode is written into its properties, which a window manager reads
     /// when it maps a window, so it never appears in normal mode first.
     pub map_after_setup: bool,
+    /// Whether the application asked for the window hidden (`visible: false`)
+    /// on a shell where that means unmapped. Its opening mode is written into
+    /// its properties like any other unmapped window's, and it stays unmapped
+    /// until the application shows it.
+    pub hidden_by_application: bool,
     /// The rectangle the window returns to from `mode`, when it opens
     /// maximized or fullscreen with one remembered.
     pub normal_geometry: Option<WindowGeometry>,
 }
 
 impl OpenPlan {
-    /// Whether the window is created unmapped, to be mapped later: after its
-    /// first frame, or once its opening mode is set.
+    /// Whether the window is created unmapped, to be mapped by the host: after
+    /// its first frame, or once its opening mode is set.
     pub(super) const fn created_unmapped(&self) -> bool {
         self.hidden_until_first_frame || self.map_after_setup
+    }
+
+    /// Whether the window is unmapped at creation for any reason, the
+    /// application's included.
+    #[cfg(any(target_os = "linux", test))]
+    pub(super) const fn unmapped_until_shown(&self) -> bool {
+        self.created_unmapped() || self.hidden_by_application
     }
 
     /// Plan the creation of a window on `shell` from `options`.
@@ -186,6 +198,7 @@ impl OpenPlan {
                 && shell.defers_reveal()
                 && !hidden_until_first_frame
                 && mode != WindowMode::Normal,
+            hidden_by_application: !options.visible && shell.defers_reveal(),
             normal_geometry: returns_to,
         }
     }
@@ -638,6 +651,16 @@ mod tests {
             let planned = plan(&options, shell);
             assert_eq!(planned.hidden_until_first_frame, hidden, "{case}");
             assert_eq!(planned.map_after_setup, mapped, "{case}");
+            assert_eq!(
+                planned.hidden_by_application,
+                !visible && shell == WindowShell::Desktop,
+                "{case}"
+            );
+            assert_eq!(
+                planned.unmapped_until_shown(),
+                hidden || mapped || (!visible && shell == WindowShell::Desktop),
+                "{case}"
+            );
         }
     }
     #[test]
