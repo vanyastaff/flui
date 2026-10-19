@@ -2,6 +2,7 @@
 //! [`GestureRecognizerFactory`] values and keeps each one alive across
 //! rebuilds, reconfiguring it in place.
 
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::{any::Any, any::TypeId, rc::Rc};
 
 use flui_foundation::ViewKey;
@@ -15,6 +16,7 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::WriterSource;
 use flui_view::prelude::*;
 
+use super::GesturePolicy;
 use crate::{GestureArenaScope, Listener, MediaQuery};
 
 /// Builds one kind of recognizer for a [`RawGestureDetector`] and carries its
@@ -51,8 +53,7 @@ pub trait GestureRecognizerFactory: 'static {
 /// for signal writes from recognizer callbacks.
 #[derive(Debug, Clone)]
 pub struct RecognizerContext {
-    arena: GestureArena,
-    settings: GestureSettingsProvider,
+    policy: GesturePolicy,
     writer: WriterSource,
 }
 
@@ -61,13 +62,13 @@ impl RecognizerContext {
     /// settings.
     #[must_use]
     pub fn arena(&self) -> &GestureArena {
-        &self.arena
+        &self.policy.arena
     }
 
     /// The scope's gesture settings; read them per pointer kind at admission.
     #[must_use]
     pub fn settings(&self) -> &GestureSettingsProvider {
-        &self.settings
+        &self.policy.settings
     }
 
     /// The owner's writer: a recognizer callback opens a write through it to
@@ -381,8 +382,7 @@ impl StatefulView for RawGestureDetector {
 
 fn context_of(ctx: &dyn LifecycleContext) -> RecognizerContext {
     RecognizerContext {
-        arena: GestureArenaScope::of(ctx),
-        settings: GestureArenaScope::settings_of(ctx),
+        policy: GesturePolicy::of(ctx),
         writer: ctx.writer_source(),
     }
 }
@@ -411,9 +411,10 @@ impl ViewState<RawGestureDetector> for RawGestureDetectorState {
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         let incoming = context_of(ctx);
-        let changed = self.context.as_ref().is_some_and(|current| {
-            current.settings != incoming.settings || !current.arena.admits_like(&incoming.arena)
-        });
+        let changed = self
+            .context
+            .as_ref()
+            .is_some_and(|current| current.policy != incoming.policy);
         if !changed {
             self.context = Some(incoming);
             return;
@@ -480,13 +481,27 @@ impl ViewState<RawGestureDetector> for RawGestureDetectorState {
             self.slots.push(slot);
         }
         self.factories.clone_from(&new_view.factories);
+        // A retired recognizer's callbacks may panic on cancellation, and a
+        // factory's update may panic too: every kept recognizer is still
+        // updated, and the first failure is resumed after the last.
         let retired: Vec<Slot> = outgoing.into_iter().flatten().collect();
-        cancel_slots(&retired);
+        let mut first = catch_unwind(AssertUnwindSafe(|| cancel_slots(&retired))).err();
         drop(retired);
         for index in updates {
-            self.factories[index]
-                .factory
-                .update_live(&*self.slots[index].live);
+            let updated = catch_unwind(AssertUnwindSafe(|| {
+                self.factories[index]
+                    .factory
+                    .update_live(&*self.slots[index].live);
+            }));
+            if let Err(payload) = updated {
+                match first {
+                    Some(_) => flui_foundation::panic::retain_opaque_payload(payload),
+                    None => first = Some(payload),
+                }
+            }
+        }
+        if let Some(payload) = first {
+            resume_unwind(payload);
         }
     }
 

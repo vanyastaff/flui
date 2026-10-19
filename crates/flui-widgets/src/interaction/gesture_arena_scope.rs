@@ -132,6 +132,40 @@ impl GestureArenaScope {
     }
 }
 
+/// The arena handle and the gesture settings a widget builds its recognizers
+/// for. Equal policies admit alike under the same settings, so recognizers
+/// built for one serve the other.
+#[derive(Clone, Debug)]
+pub(crate) struct GesturePolicy {
+    pub(crate) arena: GestureArena,
+    pub(crate) settings: GestureSettingsProvider,
+}
+
+impl GesturePolicy {
+    /// The scope's policy. Reading the settings depends on the scope, so the
+    /// caller's `did_change_dependencies` runs when the scope changes.
+    pub(crate) fn of(ctx: &dyn BuildContext) -> Self {
+        Self {
+            arena: GestureArenaScope::of(ctx),
+            settings: GestureArenaScope::settings_of(ctx),
+        }
+    }
+
+    /// [`Self::of`], or `None` outside a presentation scope.
+    pub(crate) fn maybe_of(ctx: &dyn BuildContext) -> Option<Self> {
+        GestureArenaScope::maybe_of(ctx).map(|arena| Self {
+            arena,
+            settings: GestureArenaScope::settings_or_default_of(ctx),
+        })
+    }
+}
+
+impl PartialEq for GesturePolicy {
+    fn eq(&self, other: &Self) -> bool {
+        self.settings == other.settings && self.arena.admits_like(&other.arena)
+    }
+}
+
 impl std::fmt::Debug for GestureArenaScope {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GestureArenaScope")

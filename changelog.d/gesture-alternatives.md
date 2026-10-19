@@ -12,7 +12,7 @@
 - **`ShowContextMenuIntent`** (`flui-widgets`): `DefaultFocusTraversal` binds the Menu key and
   Shift+F10 to it (Menu alone on Android, nothing on macOS and iOS);
   `ShowContextMenuIntent::default_keys` lists them per platform.
-- **`SingleActivator::trigger`, `modifiers` and `is_on_release`** (`flui-widgets`): what a
+- **`SingleActivator::trigger` and `modifiers`** (`flui-widgets`): what a
   menu shows as a shortcut hint.
 - **`assert_gesture_alternatives`** (`flui-testing`): performs each command of a subject through
   its gesture, assistive technology, its keys and its single-pointer path with a mouse, a finger

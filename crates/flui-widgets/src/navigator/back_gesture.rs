@@ -34,7 +34,6 @@ use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, curves};
 use flui_foundation::Listenable;
-use flui_interaction::GestureArena;
 use flui_interaction::gesture::horizontal_drag;
 use flui_interaction::{
     DragEndDetails, DragGestureRecognizer, DragStartDetails, DragUpdateDetails, GestureRecognizer,
@@ -47,8 +46,9 @@ use flui_view::{AnimatedView, impl_animated_view};
 use super::binding::PopPacing;
 use super::navigator::NavigatorHandle;
 use super::route::RouteId;
+use crate::interaction::GesturePolicy;
 use crate::interaction::recognizer_attachment::RecognizerAttachment;
-use crate::{Directionality, GestureArenaScope, Listener, Positioned, SizedBox, Stack, StackFit};
+use crate::{Directionality, Listener, Positioned, SizedBox, Stack, StackFit};
 
 /// The width of the edge-anchored hit region that can start a drag.
 pub(crate) const BACK_GESTURE_WIDTH: f64 = 20.0;
@@ -548,8 +548,8 @@ pub(crate) struct BackGestureDetectorState {
     runtime: super::lifecycle::Terminal<Rc<BackGestureRuntime>>,
     /// Current admission owner, replaced when an authored provider changes.
     recognizer: Option<Rc<DragGestureRecognizer>>,
-    /// The policy and arena handle the recognizer was built with.
-    built_for: Option<(flui_interaction::GestureSettingsProvider, GestureArena)>,
+    /// The arena handle and settings the recognizer was built with.
+    built_for: Option<GesturePolicy>,
     attachment: Rc<RecognizerAttachment<DragGestureRecognizer>>,
 }
 
@@ -571,10 +571,9 @@ impl std::fmt::Debug for BackGestureDetectorState {
 
 impl ViewState<BackGestureDetector> for BackGestureDetectorState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let settings = GestureArenaScope::settings_of(ctx);
-        let arena = GestureArenaScope::of(ctx);
-        let recognizer = self.build_recognizer(arena.clone(), settings.clone());
-        self.built_for = Some((settings, arena));
+        let policy = GesturePolicy::of(ctx);
+        let recognizer = self.build_recognizer(&policy);
+        self.built_for = Some(policy);
         self.attachment.attach(&recognizer);
         self.recognizer = Some(recognizer);
     }
@@ -582,17 +581,10 @@ impl ViewState<BackGestureDetector> for BackGestureDetectorState {
     /// A scope with another policy, or one handing out a handle that admits
     /// elsewhere, replaces the recognizer.
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        let settings = GestureArenaScope::settings_of(ctx);
-        let arena = GestureArenaScope::of(ctx);
-        let current = self
-            .built_for
-            .as_ref()
-            .is_some_and(|(built_settings, built_arena)| {
-                *built_settings == settings && built_arena.admits_like(&arena)
-            });
-        if !current {
-            let incoming = self.build_recognizer(arena.clone(), settings.clone());
-            self.built_for = Some((settings, arena));
+        let policy = GesturePolicy::of(ctx);
+        if self.built_for.as_ref() != Some(&policy) {
+            let incoming = self.build_recognizer(&policy);
+            self.built_for = Some(policy);
             self.attachment.attach(&incoming);
             let outgoing = self.recognizer.replace(incoming);
             if let Some(outgoing) = outgoing {
@@ -646,17 +638,13 @@ impl ViewState<BackGestureDetector> for BackGestureDetectorState {
 }
 
 impl BackGestureDetectorState {
-    fn build_recognizer(
-        &self,
-        arena: GestureArena,
-        settings: flui_interaction::GestureSettingsProvider,
-    ) -> Rc<DragGestureRecognizer> {
+    fn build_recognizer(&self, policy: &GesturePolicy) -> Rc<DragGestureRecognizer> {
         let start_runtime = Rc::clone(&self.runtime);
         let update_runtime = Rc::clone(&self.runtime);
         let end_runtime = Rc::clone(&self.runtime);
         let cancel_runtime = Rc::clone(&self.runtime);
-        horizontal_drag(arena)
-            .settings(settings)
+        horizontal_drag(policy.arena.clone())
+            .settings(policy.settings.clone())
             .on_start(move |details| start_runtime.on_drag_start(details))
             .on_update(move |details| update_runtime.on_drag_update(details))
             .on_end(move |details| end_runtime.on_drag_end(details))

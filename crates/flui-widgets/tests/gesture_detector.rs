@@ -607,6 +607,94 @@ impl flui_widgets::GestureRecognizerFactory for CountingPan {
     fn update(&self, _recognizer: &Self::Recognizer) {}
 }
 
+/// A rebuild that retires a recognizer whose cancellation panics still
+/// reconfigures the recognizers it keeps: the kept tap reads the new
+/// factory's configuration.
+pub(crate) fn a_retired_recognizer_panicking_on_cancel_leaves_the_kept_ones_updated() {
+    use flui_view::StateHandle;
+    use flui_view::prelude::IntoView;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let configured = Rc::new(Cell::new(0_u32));
+    let retiring = Rc::new(Cell::new(false));
+    let revision = StateHandle::new(0_u32);
+    let mut laid = lay_out(
+        Rebuilding {
+            revision: revision.clone(),
+            child: {
+                let (configured, retiring) = (Rc::clone(&configured), Rc::clone(&retiring));
+                Rc::new(move || {
+                    let mut detector = flui_widgets::RawGestureDetector::new();
+                    if !retiring.get() {
+                        detector = detector.recognizer(CancelPanics);
+                    }
+                    let tag = if retiring.get() { 2 } else { 1 };
+                    detector = detector.recognizer(TaggedTap(Rc::clone(&configured), tag));
+                    flui_view::BoxedView::new(
+                        detector
+                            .child(ColoredBox::new(Color::rgb(10, 20, 30)))
+                            .into_view(),
+                    )
+                })
+            },
+        },
+        tight(100.0, 100.0),
+    );
+    assert_eq!(configured.get(), 1);
+    // The pan takes the contact, so retiring it cancels a live drag.
+    laid.dispatch_pointer_down(10.0, 50.0);
+    laid.dispatch_pointer_move(60.0, 50.0);
+    retiring.set(true);
+    revision.update(|revision| *revision += 1);
+    // The pan's end panics while the rebuild retires it.
+    laid.pump();
+    laid.dispatch_pointer_up(60.0, 50.0);
+    assert_eq!(
+        configured.get(),
+        2,
+        "the kept tap took the rebuilt factory's configuration"
+    );
+}
+
+/// Builds a pan whose cancellation panics.
+#[derive(Clone)]
+struct CancelPanics;
+
+impl flui_widgets::GestureRecognizerFactory for CancelPanics {
+    type Recognizer = flui_interaction::DragGestureRecognizer;
+
+    fn create(&self, cx: &flui_widgets::RecognizerContext) -> std::rc::Rc<Self::Recognizer> {
+        flui_interaction::DragGestureRecognizer::builder(
+            cx.arena().clone(),
+            flui_interaction::DragAxis::Free,
+        )
+        .on_start(|_| {})
+        .on_end(|_| panic!("intentional pan end panic"))
+        .on_cancel(|| panic!("intentional pan cancel panic"))
+        .build()
+    }
+
+    fn update(&self, _recognizer: &Self::Recognizer) {}
+}
+
+/// Builds a tap and records the tag of the factory that last configured it.
+#[derive(Clone)]
+struct TaggedTap(std::rc::Rc<std::cell::Cell<u32>>, u32);
+
+impl flui_widgets::GestureRecognizerFactory for TaggedTap {
+    type Recognizer = flui_interaction::TapGestureRecognizer;
+
+    fn create(&self, cx: &flui_widgets::RecognizerContext) -> std::rc::Rc<Self::Recognizer> {
+        self.0.set(self.1);
+        flui_interaction::TapGestureRecognizer::builder(cx.arena().clone()).build()
+    }
+
+    fn update(&self, _recognizer: &Self::Recognizer) {
+        self.0.set(self.1);
+    }
+}
+
 /// Builds a fresh `child` whenever `revision` changes.
 #[derive(Clone, flui_view::prelude::StatefulView)]
 struct Rebuilding {

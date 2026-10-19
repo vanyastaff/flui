@@ -5,10 +5,13 @@
 //! row's extent on each side its [`DismissDirection`] allows. A release past
 //! the side's threshold (default `0.4` of the extent), or a fling toward it,
 //! settles out; anything else settles back, and a cancelled contact returns.
-//! Resting out, the row performs its gesture command and starts the resize
-//! collapse over [`Dismissible::resize_duration`] (or fires
-//! [`Dismissible::on_dismissed`] at once when that is `None`), then fires
-//! `on_dismissed`.
+//! Resting out, the row collapses over [`Dismissible::resize_duration`];
+//! when the collapse finishes (at once when that is `None`) it performs its
+//! gesture command and then fires [`Dismissible::on_dismissed`].
+//!
+//! While its card is off its closed stop the row holds a keep-alive lease, so
+//! a lazy list keeps it, and the contact sliding it, when it scrolls out of
+//! the list's cache band.
 //!
 //! # Known limits
 //!
@@ -19,8 +22,6 @@
 //! 2. **Finite laid-out size.** The stops lie at the row's committed extent
 //!    along the axis, read when a contact goes down. A row that has not been
 //!    laid out, or lays out to no extent, cannot be dragged out.
-//! 3. **No keep-alive.** A lazy list's viewport can dispose a row in the
-//!    middle of its slide; FLUI has no keep-alive mechanism yet.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -36,6 +37,7 @@ use flui_foundation::ListenerId;
 use flui_foundation::geometry::{Axis, Size};
 use flui_objects::StackFit;
 use flui_painting::paint::Clip;
+use flui_view::owner::{KeepAliveHandle, KeepAliveLease};
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{
     BoxedView, EventCx, EventOutcome, IntoView, PostFrameHandle, RebuildHandle, ViewExt, ViewState,
@@ -220,7 +222,7 @@ pub struct DismissUpdateDetails {
 /// A widget that can be dismissed by dragging in [`DismissDirection`].
 ///
 /// See the module docs for the documented limits (no `confirm_dismiss`,
-/// finite laid-out size, no keep-alive).
+/// finite laid-out size).
 #[derive(Clone, StatefulView)]
 pub struct Dismissible {
     child: BoxedView,
@@ -557,12 +559,25 @@ struct DismissEvents {
     callbacks: Rc<RefCell<DismissCallbacks>>,
     /// The dismissal's command, resolved by the latest build.
     command: RefCell<Option<CommandHandle>>,
+    keep_alive: KeepAliveHandle,
+    /// Held while the card is off its closed stop.
+    slide_lease: RefCell<Option<KeepAliveLease>>,
 }
 
 impl DismissEvents {
-    /// The content moved: queue an update when its progress changed.
+    /// The content moved: keep the row alive while it is off its closed
+    /// stop, and queue an update when its progress changed.
     fn moved(self: &Rc<Self>) {
-        if !self.mounted.get() || self.callbacks.borrow().update.is_none() {
+        if !self.mounted.get() {
+            return;
+        }
+        let off_closed = self.controller.offset() != 0.0;
+        if off_closed != self.slide_lease.borrow().is_some() {
+            let lease = off_closed.then(|| self.keep_alive.hold());
+            let released = self.slide_lease.replace(lease);
+            drop(released);
+        }
+        if self.callbacks.borrow().update.is_none() {
             return;
         }
         let config = self.config.borrow().clone();
@@ -891,6 +906,8 @@ impl ViewState<Dismissible> for DismissibleState {
             mounted: Cell::new(true),
             callbacks: Rc::clone(&self.callbacks),
             command: RefCell::new(None),
+            keep_alive: ctx.keep_alive_handle(),
+            slide_lease: RefCell::new(None),
         });
         let moved = Rc::downgrade(&events);
         self.offset_listener = Some(self.controller.offset_listenable().add_listener(Rc::new(
@@ -973,6 +990,9 @@ impl ViewState<Dismissible> for DismissibleState {
         }
         if let Some(events) = &self.events {
             events.mounted.set(false);
+            // Queued deliveries may keep the events past the row.
+            let released = events.slide_lease.take();
+            drop(released);
         }
         if let Some(id) = self.offset_listener.take() {
             self.controller.offset_listenable().remove_listener(id);

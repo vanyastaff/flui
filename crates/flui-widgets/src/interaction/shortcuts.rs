@@ -182,13 +182,6 @@ impl SingleActivator {
         })
     }
 
-    /// Whether the activator matches the key's release rather than its
-    /// key-down.
-    #[must_use]
-    pub fn is_on_release(&self) -> bool {
-        self.on_release
-    }
-
     /// Whether `event` triggers this activator: a key-down (or allowed repeat)
     /// of exactly the trigger key under exactly the required modifiers — or,
     /// for an [`on_release`](Self::on_release) activator, that key's release.
@@ -215,6 +208,24 @@ impl SingleActivator {
                 .is_none_or(|required| modifiers.contains(Modifiers::SHIFT) == required)
             && modifiers.contains(Modifiers::ALT) == self.alt
             && modifiers.contains(Modifiers::META) == self.meta
+    }
+
+    /// Whether one key event can trigger both `self` and `other`, by the
+    /// rules of [`matches`](Self::matches): letters without case, an ignored
+    /// Shift beside either Shift state, and a first key-down whatever the
+    /// repeat policy.
+    pub(crate) fn overlaps(&self, other: &Self) -> bool {
+        let shift = match (self.shift, other.shift) {
+            (Some(ours), Some(theirs)) => ours == theirs,
+            _ => true,
+        };
+        self.on_release == other.on_release
+            && self.control == other.control
+            && self.alt == other.alt
+            && self.meta == other.meta
+            && shift
+            && (trigger_matches(&self.trigger, &other.trigger)
+                || trigger_matches(&other.trigger, &self.trigger))
     }
 }
 
