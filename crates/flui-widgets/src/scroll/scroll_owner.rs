@@ -39,7 +39,8 @@ use super::nested::{
     ScrollDevice, ScrollEndReason, ScrollSequence, ScrollStep, SnapPolicy, follow_latch,
 };
 use super::scroll_controller::PendingScrollCommand;
-use super::scrollable::presentation_device_pixel_ratio;
+use super::nested::presentation_device_pixel_ratio;
+use super::scroll_physics::rest_slop;
 use super::{ScrollController, ScrollMetrics, SharedScrollPhysics};
 use flui_interaction::drag::DragIdentity;
 
@@ -152,12 +153,7 @@ impl RunTag {
     /// `edge` from where the leaf stands: within half a device pixel, the
     /// slop a ballistic run rests within (ADR-0155), however long the list.
     fn reached(&self, pixels: f64, edge: f64, device_pixel_ratio: f64) -> bool {
-        let slop = if device_pixel_ratio.is_finite() && device_pixel_ratio > 0.0 {
-            0.5 / device_pixel_ratio
-        } else {
-            0.5
-        };
-        (pixels + self.deflected.get() - edge).abs() <= slop
+        (pixels + self.deflected.get() - edge).abs() <= rest_slop(device_pixel_ratio)
     }
 }
 

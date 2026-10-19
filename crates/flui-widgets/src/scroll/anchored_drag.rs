@@ -51,7 +51,7 @@ use super::nested::{
     ScrollStep,
 };
 use super::scroll_owner::{MotionHook, MoveOutcome, ScrollOwner, SharedSnapPolicy};
-use super::scrollable::presentation_device_pixel_ratio;
+use super::nested::presentation_device_pixel_ratio;
 use super::{ScrollController, Scrollable};
 use crate::anchored_box::AnchoredBox;
 use crate::interaction::raw_gesture_detector::ContactAdmission;

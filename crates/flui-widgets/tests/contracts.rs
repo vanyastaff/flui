@@ -1171,6 +1171,7 @@ fn nested_scroll_channel() {
             ("collapsing_header::collapsing_header_expands_first_or_last", crate::collapsing_header::collapsing_header_expands_first_or_last),
             ("collapsing_header::collapsing_header_inherits_the_fling_across_its_collapse", crate::collapsing_header::collapsing_header_inherits_the_fling_across_its_collapse),
             ("collapsing_header::collapsing_header_snaps_to_an_extent", crate::collapsing_header::collapsing_header_snaps_to_an_extent),
+            ("collapsing_header::collapsing_header_rests_within_half_a_device_pixel", crate::collapsing_header::collapsing_header_rests_within_half_a_device_pixel),
             ("collapsing_header::collapsing_header_reveals_focused_row_from_tab_and_assistive_request", crate::collapsing_header::collapsing_header_reveals_focused_row_from_tab_and_assistive_request),
             ("collapsing_header::collapsing_header_is_a_banner_assistive_scrolls_expand_and_collapse", crate::collapsing_header::collapsing_header_is_a_banner_assistive_scrolls_expand_and_collapse),
             ("collapsing_header::collapsing_header_with_equal_extents_takes_no_scroll", crate::collapsing_header::collapsing_header_with_equal_extents_takes_no_scroll),

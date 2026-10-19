@@ -84,7 +84,7 @@ pub(crate) use chain::{
     Acceptance, ChainNode, Handoff, NestedScrollScope, Participant, ScrollSequence,
 };
 pub(crate) use idle_end::follow_latch;
-pub(crate) use plane::PlaneSource;
+pub(crate) use plane::{PlaneSource, presentation_device_pixel_ratio};
 pub use snap::{
     AnchorSnap, AnchorSnapError, InvalidViewportFraction, PageSnap, SnapPolicy, ViewportFraction,
 };

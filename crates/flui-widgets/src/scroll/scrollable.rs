@@ -73,7 +73,7 @@ use flui_foundation::geometry::{Axis, Point, Rect, Vec2};
 use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
-use flui_rendering::pipeline::{PipelineOwner, WeakPipelineCell};
+use flui_rendering::pipeline::WeakPipelineCell;
 use flui_rendering::view::{ScrollDirection, ScrollPosition};
 use flui_view::prelude::StatefulView;
 use flui_view::{BoxedView, BuildContext, Child, IntoView, LifecycleContext, ViewExt, ViewState};
@@ -84,7 +84,10 @@ use crate::interaction::focus_reveal::{
 };
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::drag_autoscroll::{DragAutoscroll, DragAutoscrollAnchor};
-use crate::scroll::nested::{NestedScrollScope, OverscrollBehavior, ScrollCause, ScrollDevice};
+use crate::scroll::nested::{
+    NestedScrollScope, OverscrollBehavior, ScrollCause, ScrollDevice,
+    presentation_device_pixel_ratio,
+};
 use crate::scroll::scroll_owner::{
     MoveOutcome, OwnerConfig, OwnerEnv, ScrollOwner, SharedSnapPolicy,
 };
@@ -548,16 +551,6 @@ pub struct ScrollableState {
     pipeline: Option<WeakPipelineCell>,
     /// This scrollable as the reveal scope of the focus inside it.
     reveal: Rc<ScrollReveal>,
-}
-
-/// The device pixel ratio of the presentation `pipeline` belongs to, read at
-/// the moment of the call so a window moved to another monitor is honoured.
-/// `1.0` once the presentation is gone or while a frame holds the pipeline.
-pub(crate) fn presentation_device_pixel_ratio(pipeline: Option<&WeakPipelineCell>) -> f64 {
-    pipeline
-        .and_then(WeakPipelineCell::upgrade)
-        .and_then(|cell| cell.try_with(PipelineOwner::device_pixel_ratio))
-        .unwrap_or(1.0)
 }
 
 impl std::fmt::Debug for ScrollableState {

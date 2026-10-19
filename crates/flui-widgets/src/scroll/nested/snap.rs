@@ -24,18 +24,6 @@ pub trait SnapPolicy: Send + Sync + std::fmt::Debug {
 /// velocities.
 const VELOCITY_TOLERANCE: f64 = 20.0;
 
-/// How far off a target, in logical pixels, still counts as on it: the half
-/// device pixel a ballistic run rests within (ADR-0155), so a scrollable that
-/// came to rest a hair off its target flings on to the next one.
-fn rest_slop(metrics: &ScrollMetrics) -> f64 {
-    let ratio = metrics.device_pixel_ratio;
-    if ratio.is_finite() && ratio > 0.0 {
-        0.5 / ratio
-    } else {
-        0.5
-    }
-}
-
 /// The share of the viewport one page takes: finite and greater than zero.
 ///
 /// A [`PageController`](crate::PageController) and a [`PageSnap`] take their
@@ -59,6 +47,14 @@ pub struct ViewportFraction(f64);
 #[error("a viewport fraction must be finite and greater than zero, got {fraction}")]
 pub struct InvalidViewportFraction {
     fraction: f64,
+}
+
+impl InvalidViewportFraction {
+    /// The refused share.
+    #[must_use]
+    pub fn fraction(&self) -> f64 {
+        self.fraction
+    }
 }
 
 impl ViewportFraction {
@@ -137,7 +133,7 @@ impl SnapPolicy for PageSnap {
         }
         let page = metrics.page(self.viewport_fraction);
         let nearest = page.round();
-        let page = if (page - nearest).abs() * extent <= rest_slop(metrics) {
+        let page = if (page - nearest).abs() * extent <= metrics.rest_slop() {
             nearest
         } else {
             page
@@ -230,7 +226,7 @@ impl SnapPolicy for AnchorSnap {
         let anchors = &*self.anchors;
         let (first, last) = (anchors[0], anchors[anchors.len() - 1]);
         let pixels = metrics.pixels;
-        let slop = rest_slop(metrics);
+        let slop = metrics.rest_slop();
         if velocity > VELOCITY_TOLERANCE {
             let next = anchors.partition_point(|&anchor| anchor <= pixels + slop);
             return anchors.get(next).copied().unwrap_or(last);

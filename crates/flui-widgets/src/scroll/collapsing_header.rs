@@ -41,7 +41,8 @@ use super::nested::{
     ScrollStep,
 };
 use super::scroll_owner::{SharedSnapPolicy, settle_spring, snap_target};
-use super::scrollable::presentation_device_pixel_ratio;
+use super::nested::presentation_device_pixel_ratio;
+use super::scroll_physics::rest_slop;
 use super::{ClampingScrollPhysics, ScrollMetrics, ScrollPhysics};
 use crate::interaction::focus_reveal::{FocusRevealScope, RevealTarget, SharedRevealTarget};
 use crate::{
@@ -293,7 +294,7 @@ impl HeaderModel {
 
     /// Within half a device pixel of `target`.
     fn rests_on(&self, target: f64) -> bool {
-        (self.offset.get() - target).abs() <= 0.5 / self.device_pixel_ratio().max(1.0)
+        (self.offset.get() - target).abs() <= rest_slop(self.device_pixel_ratio())
     }
 
     fn set_offset(&self, offset: f64) {

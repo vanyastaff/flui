@@ -19,7 +19,7 @@ use super::{
     ScrollEndReason, ScrollStep,
 };
 use crate::scroll::scroll_owner::ScrollOwner;
-use crate::scroll::scrollable::presentation_device_pixel_ratio;
+use super::plane::presentation_device_pixel_ratio;
 
 /// What sits at one place of a scroll chain.
 #[derive(Clone)]
