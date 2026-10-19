@@ -67,7 +67,11 @@ jobs:
         continue-on-error: true
         run: cargo xtask deps --strict --only advisories
 
+      # Only a run of main's own tree may touch the issue: a manual run from
+      # another ref (`workflow_dispatch --ref`) checks out that ref, whose
+      # deny.toml ignores or dependency bumps say nothing about main.
       - name: Open, update or close the advisory issue
+        if: github.ref == 'refs/heads/main'
         uses: ./.github/actions/tracking-issue
         env:
           GH_TOKEN: ${{ github.token }}
