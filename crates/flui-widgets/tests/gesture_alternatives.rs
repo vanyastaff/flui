@@ -723,8 +723,30 @@ pub(crate) fn every_preset_opens_the_menu_by_its_pointer_trigger() {
 }
 
 /// Within one row a label names one action, so two commands may not share
-/// one, and an empty label names none.
+/// one, and an empty label names none. A key performs one command too.
 pub(crate) fn labels_name_one_action_each() {
+    let keyed = |label: &str| {
+        GestureCommand::new(label.to_owned(), Delete("Alice"))
+            .key(SingleActivator::character("d").control())
+    };
+    let shared_key = GestureAlternatives::new(Alternative::ContextMenu(
+        MenuSpec::new(keyed("Delete"), |_cx, _request| {}).item(keyed("Archive")),
+    ));
+    assert_eq!(
+        shared_key.err(),
+        Some(GestureAlternativesError::DuplicateKey {
+            key: SingleActivator::character("d").control()
+        })
+    );
+    let repeated_on_one = GestureAlternatives::new(Alternative::ContextMenu(MenuSpec::new(
+        keyed("Delete").key(SingleActivator::character("d").control()),
+        |_cx, _request| {},
+    )));
+    assert!(
+        repeated_on_one.is_ok(),
+        "a key one command lists twice performs only it"
+    );
+
     let control = |label: &str| GestureCommand::new(label.to_owned(), Delete("Alice"));
     let duplicate = GestureAlternatives::new(Alternative::VisibleControl(
         ControlSpec::new(control("Delete"), SizedBox::shrink())

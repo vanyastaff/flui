@@ -681,6 +681,12 @@ pub enum GestureAlternativesError {
         /// The shared label.
         label: String,
     },
+    /// Two commands share a key: pressing it could perform either.
+    #[error("two gesture commands share the key {key:?}")]
+    DuplicateKey {
+        /// The shared key.
+        key: SingleActivator,
+    },
     /// A companion command performs an intent of a type its
     /// [`CompanionLink`] does not carry, so no companion could ever publish
     /// a node for it.
@@ -724,8 +730,9 @@ impl GestureAlternatives {
     ///
     /// [`GestureAlternativesError::EmptyLabel`] for a command without a
     /// label, [`GestureAlternativesError::DuplicateLabel`] for two commands
-    /// with one, [`GestureAlternativesError::ForeignIntent`] for a companion
-    /// command whose intent its link does not carry.
+    /// with one, [`GestureAlternativesError::DuplicateKey`] for two commands
+    /// with one key, [`GestureAlternativesError::ForeignIntent`] for a
+    /// companion command whose intent its link does not carry.
     pub fn new(alternative: Alternative) -> Result<Self, GestureAlternativesError> {
         let alternatives = Self {
             alternative,
@@ -734,6 +741,7 @@ impl GestureAlternatives {
             hold: None,
         };
         let mut seen: Vec<&str> = Vec::new();
+        let mut keys: Vec<&SingleActivator> = Vec::new();
         for command in alternatives.commands() {
             if command.label().is_empty() {
                 return Err(GestureAlternativesError::EmptyLabel);
@@ -744,6 +752,13 @@ impl GestureAlternatives {
                 });
             }
             seen.push(command.label());
+            let earlier = keys.len();
+            for key in &command.keys {
+                if keys[..earlier].contains(&key) {
+                    return Err(GestureAlternativesError::DuplicateKey { key: key.clone() });
+                }
+                keys.push(key);
+            }
             if let Alternative::Companion(spec) = &alternatives.alternative
                 && !spec.link.accepts(command.intent_any())
             {
