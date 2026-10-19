@@ -60,13 +60,22 @@ async fn watch_connection(inbox: &Inbox) -> zbus::Result<()> {
     })
     .await
     .map_err(|_| zbus::Error::Failure("system bus connection timed out".into()))??;
-    let manager = Proxy::new(&connection, DESTINATION, MANAGER_PATH, MANAGER_INTERFACE).await?;
+    serve(inbox, &connection, DELIVERY_BUDGET).await
+}
+
+/// Listen on `connection` until it ends.
+async fn serve(
+    inbox: &Inbox,
+    connection: &zbus::Connection,
+    delivery_budget: Duration,
+) -> zbus::Result<()> {
+    let manager = Proxy::new(connection, DESTINATION, MANAGER_PATH, MANAGER_INTERFACE).await?;
     // Both subscriptions precede the inhibitor: a sleep that begins while the
     // setup runs is queued for the loop below instead of lost.
     let mut sleeps = manager.receive_signal("PrepareForSleep").await?;
     let mut shutdowns = manager.receive_signal("PrepareForShutdown").await?;
     let mut inhibitor = take_inhibitor(&manager).await;
-    let mut session = SessionWatch::start(&connection, &manager).await;
+    let mut session = SessionWatch::start(connection, &manager).await;
     let mut filter = LogindFilter::new(session.as_ref().is_some_and(|session| session.locked));
 
     loop {
@@ -88,7 +97,7 @@ async fn watch_connection(inbox: &Inbox) -> zbus::Result<()> {
         if let Some(delivered) = inbox.post(host_event(event), wait) {
             // An owner that never delivers cannot hold the machine longer
             // than the budget; one that dropped the completion has delivered.
-            let _ = tokio::time::timeout(DELIVERY_BUDGET, delivered).await;
+            let _ = tokio::time::timeout(delivery_budget, delivered).await;
         }
         match event.inhibitor_action() {
             InhibitorAction::Release => drop(inhibitor.take()),
@@ -260,3 +269,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod bus_tests;
