@@ -28,7 +28,7 @@ use crate::gesture::observer::GestureContest;
 use crate::{
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{GestureArena, GestureArenaMember},
-    gesture::settings::GestureSettingsProvider,
+    gesture::settings::GestureSettings,
     pointer::PointerDispatch,
 };
 
@@ -77,7 +77,6 @@ impl Drop for HoldCallbacks {
 /// Holds a pressed contact on Down; see the `hold` module documentation.
 pub struct HoldGestureRecognizer {
     contact: PrimaryContact,
-    settings: GestureSettingsProvider,
     allowed_devices: PointerKindSet,
     callbacks: HoldCallbacks,
     /// The contact `on_hold` announced, owed one `on_release`.
@@ -136,7 +135,6 @@ impl HoldGestureRecognizerBuilder {
                 contact: PrimaryContact::new(
                     ArenaMembership::new(self.arena, member).holding_contact(),
                 ),
-                settings: GestureSettingsProvider::default(),
                 allowed_devices: self.allowed_devices,
                 callbacks: self.callbacks,
                 announced: Cell::new(None),
@@ -188,7 +186,8 @@ impl GestureRecognizer for HoldGestureRecognizer {
             return;
         };
         let kind = admission_kind(down.local);
-        let settings = self.settings.snapshot_for(kind);
+        // A hold reads no setting: it neither moves nor waits.
+        let settings = GestureSettings::default();
         let arena = self.contact.arena();
         // One operation: a beaten member's failure is raised after `on_hold`,
         // which still announces the contact this hold now tracks.

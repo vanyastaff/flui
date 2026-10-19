@@ -19,7 +19,7 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::{Axis, Offset};
 
-use crate::gesture::traits::DragAxis;
+use crate::gesture::constraints::DragAxis;
 
 /// What an arena member does with a moving contact, for the ownership table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

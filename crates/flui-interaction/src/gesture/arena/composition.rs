@@ -292,7 +292,7 @@ impl GestureArena {
         &self,
         kind: CompositionKind,
     ) -> Result<(Self, Self, Rc<CompositionNode>), CompositionError> {
-        if self.owner_closed.get() {
+        if self.shared.owner_closed.get() {
             return Err(CompositionError::Closed);
         }
         self.check_delay_ceiling(kind)?;

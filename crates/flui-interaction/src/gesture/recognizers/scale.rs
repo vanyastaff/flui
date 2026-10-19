@@ -1037,12 +1037,11 @@ impl ScaleGestureRecognizer {
                 PanZoomDisposition::Admitted
             }
             PanZoomPhase::Update(transform) => {
-                let PanZoomPhase::Update(global_transform) = global.phase else {
+                if !matches!(global.phase, PanZoomPhase::Update(_)) {
                     return PanZoomDisposition::Ignored;
-                };
+                }
                 // The focal point is the event's own, refreshed on every
                 // update; translation during a pinch is its movement.
-                let _ = global_transform;
                 let (focal, global_focal) = (anchor, global_anchor);
                 if !focal.is_finite() || !global_focal.is_finite() {
                     return PanZoomDisposition::Ignored;

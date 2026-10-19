@@ -18,7 +18,7 @@ use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{
-        AdmissionContext, GestureArena, GestureArenaEntry, GestureArenaMember,
+        AdmissionContext, ContactRole, GestureArena, GestureArenaEntry, GestureArenaMember,
         GestureDeadlineRegistration, GestureDisposition, HeldOut, MotionRole, SweepModel,
     },
     gesture::observer::GestureContest,
@@ -33,8 +33,7 @@ use super::callback_containment::withdraw_cancelled;
 pub struct ArenaMembership {
     arena: GestureArena,
     this: Weak<dyn GestureArenaMember>,
-    role: Option<MotionRole>,
-    holds: bool,
+    role: ContactRole,
 }
 
 impl std::fmt::Debug for ArenaMembership {
@@ -51,27 +50,28 @@ impl ArenaMembership {
         Self {
             arena,
             this,
-            role: None,
-            holds: false,
+            role: ContactRole::Discrete,
         }
     }
 
     /// Join every contact as a moving member, for the ownership table
     /// (ADR-0208): a slop crossing claims through
-    /// [`GestureArenaEntry::claim_motion`].
+    /// [`GestureArenaEntry::claim_motion`]. A moving member does not hold,
+    /// so this replaces [`Self::holding_contact`].
     #[must_use]
     pub fn with_motion_role(mut self, role: MotionRole) -> Self {
-        self.role = Some(role);
+        self.role = ContactRole::Moving(role);
         self
     }
 
     /// Join every contact as a hold (ADR-0208 rule 4): the members of that
     /// contact that do not move, a tap or a long press, lose to it on
     /// admission, and such members joining after it are refused. Moving
-    /// members still compete, and take the contact from the hold.
+    /// members still compete, and take the contact from the hold. A hold
+    /// does not move, so this replaces [`Self::with_motion_role`].
     #[must_use]
     pub fn holding_contact(mut self) -> Self {
-        self.holds = true;
+        self.role = ContactRole::Hold;
         self
     }
 
@@ -110,7 +110,6 @@ impl ArenaMembership {
             &member,
             AdmissionContext {
                 role: self.role,
-                holds: self.holds,
                 feeder,
             },
         )
