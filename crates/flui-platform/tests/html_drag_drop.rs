@@ -11,7 +11,7 @@ use std::sync::Arc;
 use flui_foundation::{DataTransferId, DragSessionId, UiRuntimeId};
 use flui_platform::shared::html_drag_drop::{
     DomSource, ProviderPanicked, action_of, allowed_of, drop_effect, effect_allowed_of, format_of,
-    offered, payload_of, serve_stored, stored,
+    offered, payload_of, payload_of_bytes, serve_stored, stored,
 };
 use flui_platform_api::data_transfer::{
     DataTransferOffer, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
@@ -167,6 +167,32 @@ fn payloads_travel_as_the_strings_the_browser_stores() {
     );
 }
 
+/// A dropped file, and an image a page stored as a string, resolve as the
+/// format they were announced as: an image for `image/*`, bytes otherwise.
+fn dropped_images_resolve_as_the_image_they_announced() {
+    let offer = offered(["image/svg+xml"], ["image/png", "application/pdf"]);
+    let resolve =
+        |index: usize, bytes: &[u8]| payload_of_bytes(&offer[index].1.format, bytes.to_vec());
+    let TransferPayload::Image(png) = resolve(1, b"\x89PNG") else {
+        panic!("a png file is an image");
+    };
+    assert_eq!(
+        (png.mime.as_str(), &*png.bytes),
+        ("image/png", &b"\x89PNG"[..])
+    );
+    let TransferPayload::Custom { mime, bytes } = resolve(2, b"%PDF") else {
+        panic!("a pdf file is bytes");
+    };
+    assert_eq!((mime.as_str(), &*bytes), ("application/pdf", &b"%PDF"[..]));
+    let TransferPayload::Image(svg) = payload_of(&offer[0].1.format, "<svg/>".to_owned()) else {
+        panic!("an image string is an image");
+    };
+    assert_eq!(
+        (svg.mime.as_str(), &*svg.bytes),
+        ("image/svg+xml", &b"<svg/>"[..])
+    );
+}
+
 /// `dragstart` stores what the provider serves; a refusal leaves one
 /// representation out, a panic is contained and stops the serving, so the
 /// source can end its session.
@@ -229,6 +255,10 @@ fn html_drag_drop_table() {
             (
                 "payloads_travel_as_the_strings_the_browser_stores",
                 payloads_travel_as_the_strings_the_browser_stores,
+            ),
+            (
+                "dropped_images_resolve_as_the_image_they_announced",
+                dropped_images_resolve_as_the_image_they_announced,
             ),
             (
                 "a_provider_panic_at_dragstart_is_contained_and_reported",

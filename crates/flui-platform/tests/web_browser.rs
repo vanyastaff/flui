@@ -627,7 +627,7 @@ async fn an_html_drag_over_the_canvas_is_offered_and_dropped() {
     window.accept.set(Some(TransferActions::COPY));
     begin_drag(
         r#"[["text/plain","hello"],["text/uri-list","https://a.example/"]]"#,
-        r##"[["notes.txt","text/markdown","# notes"]]"##,
+        r##"[["notes.txt","text/markdown","# notes"],["shot.png","image/png","png"]]"##,
         "copyMove",
     );
     let enter = drag_answer("dragenter");
@@ -671,6 +671,19 @@ async fn an_html_drag_over_the_canvas_is_offered_and_dropped() {
         panic!("bytes");
     };
     assert_eq!(&*bytes, b"# notes");
+    let image = offer
+        .find(&TransferFormat::Image {
+            mime: Mime::new("image/png"),
+        })
+        .expect("the image file is offered as an image");
+    let TransferPayload::Image(png) = transfer
+        .request(*id, image, TransferLimits::default())
+        .await
+        .expect("the image is read")
+    else {
+        panic!("an image file resolves as the image it announced");
+    };
+    assert_eq!((png.mime.as_str(), &*png.bytes), ("image/png", &b"png"[..]));
     assert!(matches!(
         transfer
             .request(*id, file, TransferLimits::default().with_max_bytes(3))

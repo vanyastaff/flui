@@ -31,9 +31,9 @@ use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
 use flui_platform_api::DragDropEvent;
 use flui_platform_api::data_transfer::{
-    DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, OfferTable,
-    RepresentationDescriptor, RepresentationIndex, TransferActions, TransferError, TransferLimits,
-    TransferPayload, TransferRequest,
+    DataTransferOffer, DataTransferSource, DropFeedback, Mime, OfferRecord, OfferTable,
+    RepresentationDescriptor, RepresentationIndex, TransferActions, TransferError, TransferFormat,
+    TransferLimits, TransferPayload, TransferRequest,
 };
 use flui_platform_api::drag::{
     DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource,
@@ -44,7 +44,7 @@ use wasm_bindgen::JsCast;
 use crate::shared::WindowCallbacks;
 use crate::shared::html_drag_drop::{
     DomSource, FILES_TYPE, action_of, allowed_of, drop_effect, effect_allowed_of, offered,
-    payload_of, serve_stored,
+    payload_of, payload_of_bytes, serve_stored,
 };
 use crate::shared::panic_boundary::contain_owner_callback;
 use crate::traits::PlatformInput;
@@ -187,7 +187,7 @@ impl DataTransferSource for WebTransfer {
     ) -> TransferRequest {
         enum Found {
             Payload(TransferPayload),
-            File(web_sys::File, String),
+            File(web_sys::File, TransferFormat),
         }
         let found = {
             let offers = self.offers.lock();
@@ -203,25 +203,20 @@ impl DataTransferSource for WebTransfer {
                 }
                 Some(Held::Payload(payload)) => Found::Payload(payload.clone()),
                 Some(Held::File(file)) => {
-                    let mime = offers
+                    // The format the file was announced as, image or bytes.
+                    let format = offers
                         .table
                         .get(id)
                         .and_then(|record| {
                             record
                                 .representations()
                                 .get(usize::from(representation.0))
-                                .map(|descriptor| match &descriptor.format {
-                                    flui_platform_api::data_transfer::TransferFormat::Image {
-                                        mime,
-                                    }
-                                    | flui_platform_api::data_transfer::TransferFormat::Custom {
-                                        mime,
-                                    } => mime.as_str().to_owned(),
-                                    _ => "application/octet-stream".to_owned(),
-                                })
+                                .map(|descriptor| descriptor.format.clone())
                         })
-                        .unwrap_or_else(|| "application/octet-stream".to_owned());
-                    Found::File(file.clone(), mime)
+                        .unwrap_or_else(|| TransferFormat::Custom {
+                            mime: Mime::new("application/octet-stream"),
+                        });
+                    Found::File(file.clone(), format)
                 }
                 // Before the drop the browser keeps the data from every
                 // page; a missing one was announced but not delivered.
@@ -242,7 +237,7 @@ impl DataTransferSource for WebTransfer {
                     Ok(payload)
                 })
             }
-            Found::File(file, mime) => {
+            Found::File(file, format) => {
                 let size = file.size() as u64;
                 if size > limits.max_bytes {
                     return TransferRequest::ready(Err(TransferError::TooLarge {
@@ -263,10 +258,7 @@ impl DataTransferSource for WebTransfer {
                                     limit: limits.max_bytes,
                                 })
                             } else {
-                                Ok(TransferPayload::Custom {
-                                    mime: flui_platform_api::data_transfer::Mime::new(&mime),
-                                    bytes: Arc::from(bytes),
-                                })
+                                Ok(payload_of_bytes(&format, bytes))
                             }
                         });
                     completer.complete(result);

@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use flui_platform_api::data_transfer::{
     DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex, TransferActions,
-    TransferFormat, TransferPayload, TransferUri,
+    TransferFormat, TransferImage, TransferPayload, TransferUri,
 };
 use flui_platform_api::drag::{IDENTITY_ESSENCE, OsDragProvider};
 
@@ -195,10 +195,32 @@ pub fn payload_of(format: &TransferFormat, text: String) -> TransferPayload {
                 .map(|line| TransferUri::Uri(line.to_owned()))
                 .collect(),
         ),
-        TransferFormat::Image { mime } | TransferFormat::Custom { mime } => {
+        TransferFormat::Image { .. } | TransferFormat::Custom { .. } => {
+            payload_of_bytes(format, text.into_bytes())
+        }
+    }
+}
+
+/// The payload a dropped file's bytes, or a `getData` string's, carry for
+/// `format`: an image for an image format, as announced, and raw bytes of
+/// the type's essence otherwise (`application/octet-stream` for a format a
+/// file never announces).
+#[must_use]
+pub fn payload_of_bytes(format: &TransferFormat, bytes: Vec<u8>) -> TransferPayload {
+    let bytes = Arc::from(bytes);
+    match format {
+        TransferFormat::Image { mime } => TransferPayload::Image(TransferImage {
+            mime: mime.clone(),
+            bytes,
+        }),
+        TransferFormat::Custom { mime } => TransferPayload::Custom {
+            mime: Mime::new(mime.as_str().split(';').next().unwrap_or_default()),
+            bytes,
+        },
+        TransferFormat::Text | TransferFormat::Html | TransferFormat::UriList => {
             TransferPayload::Custom {
-                mime: Mime::new(mime.as_str().split(';').next().unwrap_or_default()),
-                bytes: Arc::from(text.into_bytes()),
+                mime: Mime::new("application/octet-stream"),
+                bytes,
             }
         }
     }

@@ -222,11 +222,9 @@ pub enum TransferUri {
 /// decoding belongs to the consumer (flui-assets' decoders), not the
 /// transport.
 ///
-/// Declared as part of the frozen vocabulary, but **no backend delivers it
-/// yet**: image representations arrive with the native transports (ADR-0038
-/// §5 protocol mapping). Until then no source ever announces
-/// [`TransferFormat::Image`], so a request for one cannot arise — there is
-/// deliberately no stub that fabricates success.
+/// A request for a representation announced as [`TransferFormat::Image`]
+/// resolves as this payload, with the bytes as the source provided them
+/// (ADR-0038 §5 protocol mapping).
 #[derive(Debug, Clone)]
 pub struct TransferImage {
     /// Container format of `bytes` (e.g. `image/png`).
