@@ -15,7 +15,8 @@
 //!     -> MainEvent::Gained/LostFocus -> focus, nothing else
 //!     -> MainEvent::InitWindow       -> on_ready(), create surface
 //!     -> MainEvent::TerminateWindow  -> surface released
-//!     -> MainEvent::LowMemory        -> memory pressure (+ trim level via JNI)
+//!     -> MainEvent::LowMemory        -> memory pressure `Critical`
+//!     -> Resume/Pause/Stop/LowMemory -> memory pressure from the trim level (JNI)
 //!     -> MainEvent::SaveState        -> session end notice
 //!     -> MainEvent::Destroy          -> break loop
 //!     -> each tick                   -> dispatch_request_frame()
@@ -220,8 +221,7 @@ impl AndroidPlatform {
     /// Record what an Activity callback told, then tell the window (its state
     /// is published first, so an observer reads the new value) or, for the end
     /// of the session, the host.
-    fn announce(&self, signal: Option<ActivitySignal>) {
-        let Some(signal) = signal else { return };
+    fn announce(&self, signal: ActivitySignal) {
         let window = || self.window.lock().clone();
         match signal {
             ActivitySignal::Visibility(visible) => {
@@ -587,13 +587,16 @@ impl Platform for AndroidPlatform {
                         },
                     );
                     match main_event {
-                        MainEvent::Start => {
-                            tracing::debug!("Android: Started — the activity is on screen");
-                            platform.announce(reaction.signal);
-                        }
-                        MainEvent::Stop => {
-                            tracing::debug!("Android: Stopped — the activity is off screen");
-                            platform.announce(reaction.signal);
+                        // Visibility, focus gained and the end of the session
+                        // have nothing to do besides announcing themselves.
+                        MainEvent::Start
+                        | MainEvent::Stop
+                        | MainEvent::GainedFocus
+                        | MainEvent::SaveState { .. } => {
+                            tracing::debug!(event = ?main_event, "Android: lifecycle callback");
+                            if let Some(signal) = reaction.signal {
+                                platform.announce(signal);
+                            }
                         }
                         MainEvent::Resume { .. } => {
                             tracing::info!(
@@ -610,8 +613,14 @@ impl Platform for AndroidPlatform {
                             // a `true` that finds a live surface simply
                             // replaces it — see
                             // `PlatformWindow::on_surface_status_change`.
-                            platform.announce(reaction.signal);
-                            if let Some(ref w) = *platform.window.lock() {
+                            if let Some(signal) = reaction.signal {
+                                platform.announce(signal);
+                            }
+                            // The window is cloned out of its lock: the surface
+                            // observer runs embedder code that may call back
+                            // into the platform.
+                            let window = platform.window.lock().clone();
+                            if let Some(w) = window {
                                 w.callbacks().dispatch_surface_status_change(true);
                                 w.request_redraw();
                             }
@@ -631,10 +640,13 @@ impl Platform for AndroidPlatform {
                             // step here with a validity window behind it, and
                             // the execution observer runs arbitrary embedder
                             // code.
-                            if let Some(ref w) = *platform.window.lock() {
+                            let window = platform.window.lock().clone();
+                            if let Some(w) = window {
                                 w.callbacks().dispatch_surface_status_change(false);
                             }
-                            platform.announce(reaction.signal);
+                            if let Some(signal) = reaction.signal {
+                                platform.announce(signal);
+                            }
                         }
                         MainEvent::InitWindow { .. } => {
                             tracing::debug!(
@@ -719,18 +731,12 @@ impl Platform for AndroidPlatform {
                                 w.request_redraw();
                             }
                         }
-                        MainEvent::GainedFocus => {
-                            tracing::debug!("Android: Gained focus");
-                            platform.announce(reaction.signal);
-                        }
                         MainEvent::LostFocus => {
                             platform.cancel_input_contacts(flui_platform_api::pointer::CancelReason::FocusLost);
                             tracing::debug!("Android: Lost focus");
-                            platform.announce(reaction.signal);
-                        }
-                        MainEvent::SaveState { .. } => {
-                            tracing::debug!("Android: Save state — the process may be killed");
-                            platform.announce(reaction.signal);
+                            if let Some(signal) = reaction.signal {
+                                platform.announce(signal);
+                            }
                         }
                         MainEvent::ConfigChanged { .. } => {
                             tracing::debug!("Android: Config changed");

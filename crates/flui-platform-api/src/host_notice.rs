@@ -86,6 +86,12 @@ pub enum HostNotice {
     /// The session end was cancelled; the session goes on.
     SessionEndCancelled,
     /// The session is ending now. Save what must survive.
+    ///
+    /// Where the platform cannot tell a real end from the process merely being
+    /// at risk (Android's `onSaveInstanceState`, which follows every `onStop`),
+    /// this means "the process may be killed": it can repeat, and the
+    /// application can run again afterwards. Save what must survive; do not
+    /// close what the application still needs.
     SessionEnded,
     /// The machine is about to sleep.
     Sleep,

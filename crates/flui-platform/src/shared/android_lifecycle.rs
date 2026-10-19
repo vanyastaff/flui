@@ -73,24 +73,9 @@ pub(crate) enum ActivitySignal {
     Visibility(bool),
     Execution(WindowExecutionState),
     Focus(bool),
-    /// The process may be killed now: placement and storage are flushed.
+    /// The process may be killed now. `onSaveInstanceState` follows every
+    /// `onStop` (API 28+), so this repeats and the Activity may start again.
     SessionEnded,
-}
-
-/// What an `ActivityManager.RunningAppProcessInfo.lastTrimLevel` asks for,
-/// `None` for the levels that are not memory pressure.
-///
-/// `TRIM_MEMORY_UI_HIDDEN` (20) says the UI went away, which `Stop` already
-/// reports; `0` and unknown future values ask for nothing.
-pub(crate) const fn pressure_for_trim_level(level: i32) -> Option<MemoryPressureLevel> {
-    match level {
-        TRIM_MEMORY_RUNNING_MODERATE
-        | TRIM_MEMORY_RUNNING_LOW
-        | TRIM_MEMORY_BACKGROUND
-        | TRIM_MEMORY_MODERATE => Some(MemoryPressureLevel::Moderate),
-        TRIM_MEMORY_RUNNING_CRITICAL | TRIM_MEMORY_COMPLETE => Some(MemoryPressureLevel::Critical),
-        _ => None,
-    }
 }
 
 // `android.content.ComponentCallbacks2` constants.
@@ -101,6 +86,22 @@ const TRIM_MEMORY_BACKGROUND: i32 = 40;
 const TRIM_MEMORY_MODERATE: i32 = 60;
 const TRIM_MEMORY_COMPLETE: i32 = 80;
 
+/// What an `ActivityManager.RunningAppProcessInfo.lastTrimLevel` asks for,
+/// `None` for the levels that are not memory pressure.
+///
+/// `TRIM_MEMORY_UI_HIDDEN` (20) says the UI went away, which `Stop` already
+/// reports; `0` and unknown future values ask for nothing.
+const fn pressure_for_trim_level(level: i32) -> Option<MemoryPressureLevel> {
+    match level {
+        TRIM_MEMORY_RUNNING_MODERATE
+        | TRIM_MEMORY_RUNNING_LOW
+        | TRIM_MEMORY_BACKGROUND
+        | TRIM_MEMORY_MODERATE => Some(MemoryPressureLevel::Moderate),
+        TRIM_MEMORY_RUNNING_CRITICAL | TRIM_MEMORY_COMPLETE => Some(MemoryPressureLevel::Critical),
+        _ => None,
+    }
+}
+
 /// What one callback asks the backend to deliver.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Reaction {
@@ -108,7 +109,14 @@ pub(crate) struct Reaction {
     pub pressure: Option<MemoryPressureLevel>,
 }
 
-/// The state the mapping needs between callbacks: the trim level last seen.
+/// The mapping from Activity callbacks to [`Reaction`]s. It is stateless
+/// except for the trim level last seen, which suppresses a level that is read
+/// again unchanged.
+///
+/// A level is remembered when it is read, not when a subscriber hears of it:
+/// notices are not replayed, so a level seen before the host listens (the
+/// first callbacks precede the application's bootstrap) is not announced again
+/// later.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ActivityLifecycle {
     last_trim_level: Option<i32>,
@@ -121,8 +129,8 @@ impl ActivityLifecycle {
     ///
     /// A trim level that equals the one seen before delivers nothing, so
     /// `Pause` then `Stop` at the same level is one notice; the level going
-    /// back to `0` and up again is a new one. When `LowMemory` and the level it
-    /// reads both ask for pressure, only the larger is delivered.
+    /// back to `0` and up again is a new one. `Critical` is the largest level, so
+    /// when `LowMemory` asks for it the level read at the same time adds nothing.
     pub(crate) fn react(
         &mut self,
         event: ActivityEvent,
@@ -149,7 +157,7 @@ impl ActivityLifecycle {
         };
         Reaction {
             signal,
-            pressure: from_event.max(from_level),
+            pressure: from_event.or(from_level),
         }
     }
 
@@ -269,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn android_lifecycle_mapping_low_memory_delivers_the_larger_level_once() {
+    fn android_lifecycle_mapping_low_memory_always_delivers_critical() {
         // `LowMemory` is `Critical`; the level it reads cannot add a second one.
         let mut lifecycle = ActivityLifecycle::default();
         assert_eq!(

@@ -479,8 +479,10 @@ where
         });
         APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
 
-        // Mark lifecycle as started (Resumed). Routed through dispatch --
-        // see `run_desktop`'s matching comment for why.
+        // Seed the host's own lifecycle as Resumed. It does not decide what a
+        // presentation is: the window's visible, running and focused facts,
+        // sampled above, do. Routed through dispatch -- see `run_desktop`'s
+        // matching comment for why.
         debug_assert_eq!(
             std::thread::current().id(),
             owner_dispatch.owner_thread,
