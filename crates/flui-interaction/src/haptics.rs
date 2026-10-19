@@ -44,6 +44,8 @@ use flui_platform_api::haptics::{
 };
 use flui_platform_api::{DeviceId, EventTime, HapticFeedback, PlatformHaptics};
 
+use crate::retain::Retain;
+
 /// How many outcomes a presentation holds for its observers, counting the
 /// requests still queued for a frame (ADR-0210 §4).
 pub const MAILBOX_CAPACITY: usize = 64;
@@ -101,6 +103,7 @@ enum Play {
     },
 }
 
+#[derive(Clone)]
 struct Queued {
     ticket: HapticTicket,
     deadline: EventTime,
@@ -244,26 +247,41 @@ impl State {
 
     /// Resolve every queued request `resolve` decides, in ticket order, into
     /// the mailbox; requests it returns `None` for stay queued.
+    ///
+    /// Each request leaves the queue only as its outcome enters the mailbox,
+    /// before the next is resolved: a backend that panics in `resolve` loses
+    /// no outcome resolved before it, and its request and those behind it
+    /// stay queued. Requests a backend call queues stay behind for the next
+    /// pass.
     fn resolve(&self, mut resolve: impl FnMut(&Queued) -> Option<HapticOutcome>) {
-        let queued = std::mem::take(&mut *self.queue.borrow_mut());
-        let mut kept = VecDeque::new();
-        let mut resolved = Vec::new();
-        for entry in queued {
-            match resolve(&entry) {
-                Some(outcome) => resolved.push(Entry {
-                    ticket: entry.ticket,
-                    outcome,
-                    delivered: Vec::new(),
-                }),
-                None => kept.push_back(entry),
-            }
+        let tickets: Vec<HapticTicket> = self.queue.borrow().iter().map(|e| e.ticket).collect();
+        for ticket in tickets {
+            // Cloned out, so no borrow is held while a backend runs.
+            let Some(entry) = self
+                .queue
+                .borrow()
+                .iter()
+                .find(|entry| entry.ticket == ticket)
+                .cloned()
+            else {
+                // A backend call resolved it already.
+                continue;
+            };
+            let Some(outcome) = resolve(&entry) else {
+                continue;
+            };
+            let mut queue = self.queue.borrow_mut();
+            let Some(index) = queue.iter().position(|entry| entry.ticket == ticket) else {
+                continue;
+            };
+            queue.remove(index);
+            drop(queue);
+            self.mailbox.borrow_mut().push_back(Entry {
+                ticket,
+                outcome,
+                delivered: Vec::new(),
+            });
         }
-        // A backend call above may have queued more; they stay behind.
-        let mut queue = self.queue.borrow_mut();
-        kept.append(&mut queue);
-        *queue = kept;
-        drop(queue);
-        self.mailbox.borrow_mut().extend(resolved);
     }
 
     fn suppress_queued(&self) {
@@ -564,13 +582,6 @@ impl HapticsHost {
         }
     }
 
-    /// The deadline a request queued now gets: the factor times the window's
-    /// current refresh period.
-    #[must_use]
-    pub fn frame_deadline(&self) -> Duration {
-        self.state.frame_deadline()
-    }
-
     /// A frame was presented: every queued request whose deadline has not
     /// passed plays now, and the rest resolve to
     /// [`HapticOutcome::Suppressed`], as all of them do while haptics are off
@@ -664,7 +675,7 @@ impl HapticsHost {
         state.report_undelivered("a haptic outcome was withdrawn with its failed presentation");
         let observers = std::mem::take(&mut *state.observers.borrow_mut());
         for slot in observers {
-            std::mem::forget(slot.observer);
+            slot.observer.retain();
         }
     }
 }
