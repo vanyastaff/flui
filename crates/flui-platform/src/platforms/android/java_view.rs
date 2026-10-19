@@ -195,8 +195,8 @@ impl JavaView {
 
     /// [`Self::post`] for a call that answers whether it worked: `failed`
     /// runs on the Java main thread when the view is not installed, the call
-    /// fails, or it answers `false`, so an obligation the call carried is
-    /// still discharged.
+    /// fails or panics, or it answers `false`, so an obligation the call
+    /// carried is still discharged.
     pub(super) fn post_or(
         self: &Arc<Self>,
         call: impl FnOnce(&mut Env<'_>, &JObject<'_>) -> jni::errors::Result<bool> + Send + 'static,
@@ -204,12 +204,16 @@ impl JavaView {
     ) {
         let this = Arc::clone(self);
         self.app.run_on_java_main_thread(Box::new(move || {
-            let worked = this.view().is_some_and(|view| {
-                this.attached(|env| call(env, view.as_ref()))
-                    .inspect_err(|error| {
-                        tracing::warn!(target: "flui_platform::android", %error, "a FluiView call failed");
-                    })
-                    .unwrap_or(false)
+            // Contained here, not by the main-thread loop around this closure,
+            // which would swallow the panic before `failed` ran.
+            let worked = contained(|| {
+                this.view().is_some_and(|view| {
+                    this.attached(|env| call(env, view.as_ref()))
+                        .inspect_err(|error| {
+                            tracing::warn!(target: "flui_platform::android", %error, "a FluiView call failed");
+                        })
+                        .unwrap_or(false)
+                })
             });
             if !worked {
                 failed(&this);
@@ -483,9 +487,7 @@ fn register_natives(env: &mut Env<'_>, class: &JClass<'_>) -> jni::errors::Resul
             ),
             NativeMethod::from_raw_parts(
                 jni_str!("nativeDrop"),
-                jni_str!(
-                    "(JFF[Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;[Ljava/lang/String;)J"
-                ),
+                jni_str!("(JFFZLjava/lang/String;Ljava/lang/String;[Ljava/lang/String;)J"),
                 native_drop as *mut std::ffi::c_void,
             ),
             NativeMethod::from_raw_parts(
@@ -600,7 +602,6 @@ extern "system" fn native_drop<'local>(
     handle: jlong,
     x: jfloat,
     y: jfloat,
-    mime_types: JObjectArray<'local>,
     local: jboolean,
     text: JString<'local>,
     html: JString<'local>,
@@ -612,17 +613,14 @@ extern "system" fn native_drop<'local>(
         };
         let read = env
             .with_env(|env| -> jni::errors::Result<_> {
-                Ok((
-                    strings(env, &mime_types)?,
-                    crate::shared::android_drag::DroppedClip {
-                        text: string(env, &text)?,
-                        html: string(env, &html)?,
-                        uris: strings(env, &uris)?,
-                    },
-                ))
+                Ok(crate::shared::android_drag::DroppedClip {
+                    text: string(env, &text)?,
+                    html: string(env, &html)?,
+                    uris: strings(env, &uris)?,
+                })
             })
             .into_outcome();
-        let jni::Outcome::Ok((mime_types, clip)) = read else {
+        let jni::Outcome::Ok(clip) = read else {
             return 0;
         };
         let scale = view.scale();
@@ -630,7 +628,6 @@ extern "system" fn native_drop<'local>(
             .drop_clip(
                 &view,
                 (f64::from(x) / scale, f64::from(y) / scale),
-                &mime_types,
                 local,
                 &clip,
             )
@@ -664,7 +661,7 @@ extern "system" fn native_ime_state<'local>(
             composition_start,
             composition_end,
         };
-        view.report(u32::try_from(generation).unwrap_or(u32::MAX), &state);
+        view.report(generation.cast_unsigned(), &state);
     });
 }
 
