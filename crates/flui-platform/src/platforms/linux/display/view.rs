@@ -38,6 +38,9 @@ pub(crate) struct OutputView {
     pub scale_factor: f64,
     pub refresh_period: Option<RefreshPeriod>,
     pub is_primary: bool,
+    /// What names the output again after a restart; see
+    /// [`DisplayInfo::persistent_key`].
+    pub persistent_key: Option<String>,
 }
 
 /// The numbers one display answers to, with its id.
@@ -95,6 +98,7 @@ impl FreshIds {
                 .with_usable_bounds(view.usable_bounds)
                 .with_primary(view.is_primary);
             info.refresh_period = view.refresh_period;
+            info.persistent_key.clone_from(&view.persistent_key);
             displays.push(info);
             natives.push(NativeIds {
                 natives: view.natives.clone(),
@@ -151,6 +155,7 @@ mod tests {
             scale_factor: 1.0,
             refresh_period: None,
             is_primary: false,
+            persistent_key: None,
         }
     }
 
