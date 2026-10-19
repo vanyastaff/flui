@@ -27,6 +27,7 @@ mod window;
 mod window_ext;
 mod window_frame;
 mod window_limits;
+mod window_modes;
 
 #[cfg(feature = "a11y")]
 pub use accessibility::WindowsAccessibility;
