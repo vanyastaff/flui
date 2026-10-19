@@ -162,7 +162,7 @@ struct Harness {
 }
 
 impl Harness {
-    async fn start(delivery_budget: Duration) -> Option<Self> {
+    async fn start(delivery_budget: Duration, locked: bool) -> Option<Self> {
         let bus = PrivateBus::start().or_else(|| {
             eprintln!("skipped: no dbus-daemon to host a stand-in for logind");
             None
@@ -174,7 +174,7 @@ impl Harness {
             .expect("a bus name")
             .serve_at(MANAGER, Manager(Arc::clone(&held), SESSION))
             .expect("serve the manager")
-            .serve_at(SESSION, Session(false))
+            .serve_at(SESSION, Session(locked))
             .expect("serve the session")
             .build()
             .await
@@ -213,7 +213,7 @@ impl Harness {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn logind_inhibitor_is_held_until_the_owner_has_delivered_the_sleep() {
-    let Some(harness) = Harness::start(Duration::from_secs(5)).await else {
+    let Some(harness) = Harness::start(Duration::from_secs(5), false).await else {
         return;
     };
     assert!(!harness.held.released(0), "held from the start");
@@ -248,7 +248,7 @@ async fn logind_inhibitor_is_held_until_the_owner_has_delivered_the_sleep() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn logind_inhibitor_is_not_held_longer_than_the_budget_by_an_owner_that_never_delivers() {
-    let Some(harness) = Harness::start(Duration::from_millis(300)).await else {
+    let Some(harness) = Harness::start(Duration::from_millis(300), false).await else {
         return;
     };
     Manager::prepare_for_shutdown(&harness.manager_signals(), true)
@@ -279,7 +279,7 @@ async fn logind_inhibitor_is_not_held_longer_than_the_budget_by_an_owner_that_ne
 
 #[tokio::test(flavor = "multi_thread")]
 async fn logind_lock_and_unlock_reach_the_owner() {
-    let Some(harness) = Harness::start(Duration::from_secs(5)).await else {
+    let Some(harness) = Harness::start(Duration::from_secs(5), false).await else {
         return;
     };
     Session::lock(&harness.session_signals())
@@ -299,5 +299,31 @@ async fn logind_lock_and_unlock_reach_the_owner() {
     // Sleep and shutdown do not take the lock events' place: the inhibitor
     // stayed held through both.
     assert!(!harness.held.released(0));
+    harness.adapter.abort();
+}
+
+/// A session that is locked when the adapter starts is announced as locked
+/// once, and the unlock that follows is heard.
+#[tokio::test(flavor = "multi_thread")]
+async fn logind_session_locked_at_start_is_announced_once() {
+    let Some(harness) = Harness::start(Duration::from_secs(5), true).await else {
+        return;
+    };
+    assert_eq!(
+        next_delivery(&harness.inbox).await.event,
+        HostEvent::Notice(SystemNotice::SessionLocked)
+    );
+    // The `Lock` that announced it can arrive again, as it does when it was
+    // queued during the adapter's setup: it is the same lock.
+    Session::lock(&harness.session_signals())
+        .await
+        .expect("the signal is sent");
+    Session::unlock(&harness.session_signals())
+        .await
+        .expect("the signal is sent");
+    assert_eq!(
+        next_delivery(&harness.inbox).await.event,
+        HostEvent::Notice(SystemNotice::SessionUnlocked)
+    );
     harness.adapter.abort();
 }

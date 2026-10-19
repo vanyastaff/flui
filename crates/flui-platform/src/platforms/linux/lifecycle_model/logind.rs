@@ -98,8 +98,8 @@ pub(crate) struct LogindFilter {
 }
 
 impl LogindFilter {
-    /// `locked` is the session's `LockedHint` when the adapter started
-    /// listening; a session already locked then is not announced.
+    /// `locked` is whether the session is locked as far as the owner has been
+    /// told.
     pub(crate) fn new(locked: bool) -> Self {
         Self {
             locked,

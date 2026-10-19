@@ -25,7 +25,10 @@ pub(super) enum WindowShell {
     /// the program, and their position and minimization can be read.
     Desktop,
     /// A Wayland compositor: a program can neither place a window nor hide it,
-    /// read where it is, tell whether it is minimized, nor take focus.
+    /// read where it is, tell whether it is minimized, nor take focus. A
+    /// client can still minimize its window, but only the user can bring it
+    /// back: asking for normal mode restores a maximized or fullscreen window
+    /// and leaves a minimized one to the user.
     Wayland,
 }
 

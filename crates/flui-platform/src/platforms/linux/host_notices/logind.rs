@@ -76,7 +76,16 @@ async fn serve(
     let mut shutdowns = manager.receive_signal("PrepareForShutdown").await?;
     let mut inhibitor = take_inhibitor(&manager).await;
     let mut session = SessionWatch::start(connection, &manager).await;
-    let mut filter = LogindFilter::new(session.as_ref().is_some_and(|session| session.locked));
+    // The filter starts unlocked and is told of a session that is locked now,
+    // so the owner hears of it once. Seeding it as locked instead would turn
+    // a lock that landed between the subscription and this read (its signal is
+    // queued) into a duplicate and drop it.
+    let mut filter = LogindFilter::new(false);
+    if session.as_ref().is_some_and(|session| session.locked)
+        && let Some(event) = filter.accept(LogindEvent::SessionLocked)
+    {
+        inbox.post(host_event(event), false);
+    }
 
     loop {
         let event = tokio::select! {
