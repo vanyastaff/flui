@@ -628,6 +628,9 @@ impl LifecycleContext for ElementBuildContext {
     fn lifecycle_handle(&self) -> Option<crate::LifecycleHandle> {
         self.owner.read().lifecycle_handle()
     }
+    fn window(&self) -> Option<crate::WindowHandle> {
+        self.owner.read().window_handle()
+    }
     fn focus_manager(&self) -> Rc<FocusManager> {
         self.owner.read().focus_manager()
     }
@@ -695,6 +698,7 @@ pub(crate) struct BuildCapabilities {
     /// The exact focus manager owned by the surrounding build owner.
     pub(crate) focus_manager: Rc<FocusManager>,
     pub(crate) lifecycle_handle: Option<crate::LifecycleHandle>,
+    pub(crate) window_handle: Option<crate::WindowHandle>,
     /// The binding's async task driver.
     pub(crate) async_driver: Option<flui_scheduler::AsyncDriver>,
     /// The binding's post-frame capability.
@@ -1079,6 +1083,9 @@ impl LifecycleContext for BuildCtx<'_> {
     }
     fn lifecycle_handle(&self) -> Option<crate::LifecycleHandle> {
         self.capabilities.lifecycle_handle.clone()
+    }
+    fn window(&self) -> Option<crate::WindowHandle> {
+        self.capabilities.window_handle.clone()
     }
     fn focus_manager(&self) -> Rc<FocusManager> {
         Rc::clone(&self.capabilities.focus_manager)

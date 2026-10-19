@@ -38,6 +38,7 @@ pub use crate::flush_registry::{
 };
 pub use crate::lifecycle::{CloseDelivery, LifecycleCloseWindow, LifecycleSource};
 pub use crate::owner_notify::{LifecycleEvent, OwnerNotify, Undeliverable};
+pub use crate::window_handle::WindowSource;
 
 /// What an [`AgentWindow`] calls: one window's read and act, enqueued on its
 /// owner. The runtime's semantics agent is the implementation.

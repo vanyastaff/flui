@@ -102,6 +102,8 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 static_assertions.workspace = true
+# The headless backend whose windows the conformance checks run against.
+flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
 # Enable flui-view's `test-utils` feature in test builds so the layout-builder
 # seam test can plant a registry entry (`register_layout_builder_for_test`).
 # Same dev-only feature-unification pattern used by flui-app; the hook stays out

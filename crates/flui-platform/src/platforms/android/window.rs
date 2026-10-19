@@ -13,11 +13,14 @@ use android_activity::AndroidApp;
 use android_activity::ndk::configuration::UiModeNight;
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{EdgeInsets, Point, Size};
-use flui_platform_api::{DisplayId, FrameRateHint, WindowAppearance};
+use flui_platform_api::{
+    DisplayId, FrameRateHint, WindowAppearance, WindowCapabilities, WindowCommand,
+    WindowCommandError, WindowGeometry, WindowState,
+};
 use parking_lot::Mutex;
 
 use crate::{
-    shared::WindowCallbacks,
+    shared::{WindowCallbacks, window_state::WindowStateCell},
     traits::{CursorError, PlatformWindow, WindowExecutionState, WindowId},
 };
 
@@ -35,7 +38,7 @@ pub struct AndroidWindow {
     app: AndroidApp,
     callbacks: Arc<WindowCallbacks>,
     redraw_requested: Arc<AtomicBool>,
-    execution_resumed: Arc<AtomicBool>,
+    activity: Arc<ActivityFlags>,
     owner: std::thread::ThreadId,
     owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
     geometry_live: Arc<AtomicBool>,
@@ -48,6 +51,8 @@ pub struct AndroidWindow {
     /// The last refresh-rate request, applied again to every native window that
     /// replaces the one it was made on.
     frame_rate_hint: Arc<Mutex<FrameRateHint>>,
+    /// The published window state (ADR-0237).
+    snapshot: Arc<WindowStateCell>,
 }
 
 impl std::fmt::Debug for AndroidWindow {
@@ -62,15 +67,18 @@ impl AndroidWindow {
     /// Create a new Android window wrapping the given `AndroidApp`
     pub(super) fn new(
         app: AndroidApp,
-        execution_resumed: Arc<AtomicBool>,
+        activity: Arc<ActivityFlags>,
         owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
         displays: Arc<super::display::AndroidDisplays>,
     ) -> Self {
         let system_chrome = Arc::new(super::system_chrome::AndroidSystemChrome::new(app.clone()));
+        let snapshot = Arc::new(WindowStateCell::new(sample_state(
+            &app, &displays, &activity,
+        )));
         Self {
             callbacks: Arc::new(WindowCallbacks::new()),
             redraw_requested: Arc::new(AtomicBool::new(true)),
-            execution_resumed,
+            activity,
             owner: std::thread::current().id(),
             owner_signal,
             geometry_live: Arc::new(AtomicBool::new(true)),
@@ -80,6 +88,7 @@ impl AndroidWindow {
             appearance: Arc::new(Mutex::new(night_mode(&app))),
             displays,
             frame_rate_hint: Arc::new(Mutex::new(FrameRateHint::Default)),
+            snapshot,
             app,
         }
     }
@@ -194,19 +203,91 @@ impl AndroidWindow {
     pub(crate) fn take_deliverable_redraw_request(&self) -> bool {
         take_deliverable_redraw_request(
             &self.redraw_requested,
-            self.execution_resumed.load(Ordering::SeqCst),
+            self.activity.resumed.load(Ordering::SeqCst),
         )
     }
 
     /// Get native window dimensions, returning (0, 0) if window is not
     /// available
     fn native_size(&self) -> (i32, i32) {
-        if let Some(native_window) = self.app.native_window() {
-            (native_window.width(), native_window.height())
-        } else {
-            (0, 0)
-        }
+        native_extent(&self.app)
     }
+
+    /// The window's published state, read again first when something
+    /// invalidated it; `on_state_changed` is raised when that produced a new
+    /// revision.
+    fn current_state(&self) -> WindowState {
+        let published = self
+            .snapshot
+            .state_with(|| sample_state(&self.app, &self.displays, &self.activity));
+        if published.changed {
+            self.callbacks.dispatch_state_changed();
+        }
+        published.state
+    }
+
+    /// The activity surface may differ from its published state: read it again.
+    pub(crate) fn publish_state(&self) {
+        self.snapshot.invalidate();
+        let _ = self.current_state();
+    }
+}
+
+/// The native window's size in pixels, `(0, 0)` while there is none.
+fn native_extent(app: &AndroidApp) -> (i32, i32) {
+    if let Some(native_window) = app.native_window() {
+        (native_window.width(), native_window.height())
+    } else {
+        (0, 0)
+    }
+}
+
+/// Device pixels per logical pixel, from the configuration's density.
+fn native_scale(app: &AndroidApp) -> f64 {
+    if let Ok(ratio) = super::preferences::pixel_ratio(app) {
+        return ratio.get();
+    }
+    // android-activity config returns density as DPI / 160
+    // Default to 2.0 if config is unavailable
+    let config = app.config();
+    let density = config.density().unwrap_or(320);
+    density as f64 / 160.0
+}
+
+/// The Activity's lifecycle as its callbacks reported it, shared by the
+/// platform's event loop and the window it opened.
+///
+/// Three independent facts (see `shared::android_lifecycle`): the Activity is on
+/// screen (`onStart` to `onStop`), it may run (`onResume` to `onPause`), and its
+/// window has input focus. None implies another: a dialog takes focus from a
+/// running, visible Activity. All three are false until their first callback.
+#[derive(Debug, Default)]
+pub(super) struct ActivityFlags {
+    pub(super) visible: AtomicBool,
+    pub(super) resumed: AtomicBool,
+    pub(super) focused: AtomicBool,
+}
+
+/// The activity surface as the system reports it now. The activity fills its
+/// display with no frame, title or position of its own.
+fn sample_state(
+    app: &AndroidApp,
+    displays: &super::display::AndroidDisplays,
+    activity: &ActivityFlags,
+) -> WindowState {
+    let (width, height) = native_extent(app);
+    let scale = native_scale(app);
+    let size = if scale > 0.0 {
+        Size::new(f64::from(width) / scale, f64::from(height) / scale)
+    } else {
+        Size::new(f64::from(width), f64::from(height))
+    };
+    WindowState::new(WindowGeometry::new(None, size), size)
+        .with_visible(activity.visible.load(Ordering::SeqCst))
+        .with_focused(activity.focused.load(Ordering::SeqCst))
+        .with_resizable(false)
+        .with_decorated(false)
+        .with_display(displays.activity_display())
 }
 
 fn take_deliverable_redraw_request(redraw_requested: &AtomicBool, execution_running: bool) -> bool {
@@ -283,14 +364,7 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn scale_factor(&self) -> f64 {
-        if let Ok(ratio) = super::preferences::pixel_ratio(&self.app) {
-            return ratio.get();
-        }
-        // android-activity config returns density as DPI / 160
-        // Default to 2.0 if config is unavailable
-        let config = self.app.config();
-        let density = config.density().unwrap_or(320);
-        density as f64 / 160.0
+        native_scale(&self.app)
     }
 
     fn gesture_geometry(
@@ -312,7 +386,7 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn execution_state(&self) -> WindowExecutionState {
-        if self.execution_resumed.load(Ordering::SeqCst) {
+        if self.activity.resumed.load(Ordering::SeqCst) {
             WindowExecutionState::Running
         } else {
             WindowExecutionState::Suspended
@@ -332,12 +406,26 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn is_focused(&self) -> bool {
-        // On Android, the Activity surface is always focused when resumed
-        true
+        self.activity.focused.load(Ordering::SeqCst)
     }
 
     fn is_visible(&self) -> bool {
-        self.app.native_window().is_some()
+        self.activity.visible.load(Ordering::SeqCst)
+    }
+
+    fn capabilities(&self) -> WindowCapabilities {
+        WindowCapabilities::NONE
+    }
+
+    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+        // The system owns the surface: every command is refused unless it asks
+        // for what the window already is.
+        command.admit(&WindowCapabilities::NONE)?;
+        Ok(())
+    }
+
+    fn state(&self) -> WindowState {
+        self.current_state()
     }
 
     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
@@ -425,10 +513,6 @@ impl PlatformWindow for AndroidWindow {
     }
 
     // ==================== Additional query methods ====================
-
-    fn get_title(&self) -> String {
-        "FLUI Android".to_string()
-    }
 
     fn mouse_position(&self) -> Point<f64> {
         Point::default()

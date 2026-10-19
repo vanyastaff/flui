@@ -272,6 +272,11 @@ impl<B: RasterBackend> RasterLane<B> {
         }
     }
 
+    /// The mailbox handle that carries a memory trim to the lane's backend.
+    pub(crate) fn reclaim_handle(&self) -> RasterHandle {
+        self.handle.clone()
+    }
+
     /// Scoped access to the wrapped backend, for backend-specific concerns
     /// the raster protocol does not cover (device-loss recovery, the
     /// hot-reload plugin's direct scene path, test-state reads).

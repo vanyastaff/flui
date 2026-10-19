@@ -37,6 +37,14 @@ mod text_input_mapping;
 mod window_callback_unwind;
 #[path = "window_installation.rs"]
 mod window_installation;
+#[path = "window_state.rs"]
+mod window_state;
+#[path = "windows_host_events.rs"]
+#[cfg(target_os = "windows")]
+mod windows_host_events;
+#[path = "windows_window_commands.rs"]
+#[cfg(target_os = "windows")]
+mod windows_window_commands;
 
 /// Runs every case even after one fails, then panics listing the failing case names.
 fn run_table(table: &str, cases: &[(&str, fn())]) {

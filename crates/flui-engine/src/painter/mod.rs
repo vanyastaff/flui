@@ -10,6 +10,8 @@
 
 use std::sync::Arc;
 
+use flui_foundation::memory::MemoryPressureLevel;
+
 use crate::{
     command_ir::{DrawItem, DrawSegment},
     glyph_atlas::{GlyphAtlas, TextAtlas},
@@ -256,6 +258,23 @@ impl WgpuPainter {
             &self.pipelines.glyph_atlas_bind_group_layout,
             source.rasterizer(),
         );
+    }
+
+    /// Give back GPU memory the next frames can rebuild, for `level`.
+    ///
+    /// [`Moderate`](MemoryPressureLevel::Moderate) evicts free buffers down to
+    /// half the pool's budget. [`Critical`](MemoryPressureLevel::Critical)
+    /// evicts every free buffer and resets the glyph atlas. Call between
+    /// frames, after the last submit, when every pooled buffer is free.
+    pub(crate) fn reclaim(&mut self, level: MemoryPressureLevel) {
+        if level == MemoryPressureLevel::Moderate {
+            self.resources
+                .buffer_pool_mut()
+                .evict_over_budget(crate::buffer_pool::DEFAULT_BUDGET_BYTES / 2);
+        } else {
+            self.resources.buffer_pool_mut().evict_over_budget(0);
+            self.glyph_atlas.reset();
+        }
     }
 
     // ===== Accessors =====

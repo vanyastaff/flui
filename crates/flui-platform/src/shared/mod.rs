@@ -19,6 +19,8 @@ pub(crate) mod clipboard_lock;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_display;
 #[cfg(any(target_os = "android", test))]
+pub(crate) mod android_lifecycle;
+#[cfg(any(target_os = "android", test))]
 pub(crate) mod android_os_version;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_scroll;
@@ -40,8 +42,16 @@ pub(crate) mod display_source;
 // keeps these pure rules checked on every host.
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple_display_identity;
+// What the AppKit window reports and is asked, as pure rules; `test` keeps them
+// checked on every host.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod appkit_window_geometry;
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod appkit_window_mode;
 #[cfg(any(target_os = "ios", test))]
 pub(crate) mod apple_os_version;
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod dispatch_memory_pressure;
 #[cfg(any(target_os = "ios", test))]
 pub(crate) mod display_link_rate;
 pub mod events;
@@ -49,6 +59,10 @@ mod handlers;
 pub(crate) mod owner_signal;
 #[cfg(any(target_os = "android", target_os = "macos", test))]
 pub(crate) mod preference_read;
+pub(crate) mod system_notice;
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod terminate_gate;
+pub(crate) mod window_state;
 // `pub`, not `pub(crate)`, for the same reason `keys`/`keys_macos` are:
 // these cfg-free rule modules are consumed only by one target's backend
 // (here Win32), so on every other target a crate-private visibility flags
@@ -82,6 +96,14 @@ pub(crate) mod display_period;
 // `test` keeps them checked on every host.
 #[cfg(any(windows, test))]
 pub(crate) mod windows_display;
+// The Win32 backend turns window limits, system messages and the low-memory
+// event into notices by these rules; `test` keeps them checked on every host.
+#[cfg(any(windows, test))]
+pub(crate) mod windows_host_messages;
+#[cfg(any(windows, test))]
+pub(crate) mod windows_memory_watch;
+#[cfg(any(windows, test))]
+pub(crate) mod windows_window_limits;
 // The browser's display rules: the refresh estimate from animation-frame
 // timestamps, the pixel-ratio query, screen identity and feature detection. The
 // Web backend consumes them; `test` keeps the rules checked on every host.

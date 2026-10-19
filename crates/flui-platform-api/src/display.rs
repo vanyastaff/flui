@@ -19,9 +19,9 @@
 //! keeps its id when it is unplugged and plugged back in during the session; two
 //! identical monitors differ by connector; swapping the cables swaps the
 //! identities; an output with no stable native key gets a fresh id each time it
-//! appears. An identity that survives a restart is deliberately absent: it
-//! belongs with window placement restore, and [`DisplayInfo`] is
-//! `#[non_exhaustive]` so it can gain one without breaking this contract.
+//! appears. An identity that survives a restart is [`DisplayInfo::persistent_key`]
+//! (ADR-0237): a string the platform derives from the monitor itself, compared
+//! only for equality and absent where the platform has none.
 //!
 //! # Refresh period
 //!
@@ -304,6 +304,11 @@ pub struct DisplayInfo {
     /// Whether this is the primary display. A platform with no notion of
     /// primary (Wayland) marks none.
     pub is_primary: bool,
+    /// A string that names this display again after a restart, for saved
+    /// window placement; `None` where the platform has no such name. It is an
+    /// identity compared only for equality, never a label, and unlike
+    /// [`DisplayId`] it means the same thing in another run.
+    pub persistent_key: Option<String>,
 }
 
 impl DisplayInfo {
@@ -324,7 +329,15 @@ impl DisplayInfo {
             scale_factor,
             refresh_period: None,
             is_primary: false,
+            persistent_key: None,
         }
+    }
+
+    /// Record the key that names this display across restarts.
+    #[must_use]
+    pub fn with_persistent_key(mut self, key: impl Into<String>) -> Self {
+        self.persistent_key = Some(key.into());
+        self
     }
 
     /// Set the usable area.

@@ -51,12 +51,20 @@ pub mod view {
     mod __runtime {}
 }
 
-/// Platform values: brightness, locale and the target platform.
+/// Platform values: brightness, locale, the target platform, the window's state
+/// and mode, and the system notices the host delivers.
 pub mod platform {
     pub use flui_platform_api::Brightness;
+    pub use flui_platform_api::HostNotice;
     pub use flui_platform_api::InvalidLocale;
     pub use flui_platform_api::Locale;
+    pub use flui_platform_api::MemoryPressureLevel;
+    pub use flui_platform_api::SessionEndBlock;
+    pub use flui_platform_api::SessionEndRequest;
     pub use flui_platform_api::TargetPlatform;
+    pub use flui_platform_api::WindowCommandError;
+    pub use flui_platform_api::WindowMode;
+    pub use flui_platform_api::WindowState;
 }
 
 /// Gesture details and focus, at the paths `flui::interaction` uses.

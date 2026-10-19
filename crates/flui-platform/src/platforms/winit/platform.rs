@@ -545,11 +545,11 @@ impl WinitPlatform {
         // case is a typed refusal, not a panic holding a native window.
         let Some(close_lane) = self.control_sender() else {
             return Err(OpenWindowError::OwnerGone {
-                rejected: Some(options),
+                rejected: Some(Box::new(options)),
             });
         };
         let mut attributes = WindowAttributes::default()
-            .with_title(options.title)
+            .with_title(options.title.clone())
             .with_inner_size(winit::dpi::LogicalSize::new(
                 options.size.width,
                 options.size.height,
@@ -582,6 +582,7 @@ impl WinitPlatform {
             raw_window,
             close_lane,
             Arc::clone(&self.displays),
+            &options,
         ));
         #[cfg(target_os = "linux")]
         if let Some(source) = self.with_state(|state| state.preferences.upgrade()) {
@@ -1255,6 +1256,7 @@ impl ApplicationHandler for WinitApp {
                         physical_size.width as f64 / scale,
                         physical_size.height as f64 / scale,
                     );
+                    win.refresh_state();
                     win.callbacks().dispatch_resize(logical, scale);
                     self.sync_window_display(event_loop, win, false);
                 }
@@ -1288,6 +1290,7 @@ impl ApplicationHandler for WinitApp {
                 // Update WinitWindow focus state
                 if let Some(ref win) = window {
                     win.set_focused(focused);
+                    win.refresh_state();
                     win.callbacks().dispatch_active_status_change(focused);
                 }
 
@@ -1399,7 +1402,7 @@ impl ApplicationHandler for WinitApp {
             }
             WinitWindowEvent::Moved(_) => {
                 if let Some(ref win) = window {
-                    win.callbacks().dispatch_moved();
+                    win.refresh_state();
                     self.sync_window_display(event_loop, win, false);
                 }
             }
@@ -1420,6 +1423,7 @@ impl ApplicationHandler for WinitApp {
                 // the pre-existing always-visible behavior.
                 if let Some(ref win) = window {
                     win.set_visible(!occluded);
+                    win.refresh_state();
                     win.callbacks().dispatch_visibility_status_change(!occluded);
                 }
             }
@@ -2263,6 +2267,10 @@ impl Drop for WinitApp {
 }
 
 impl Platform for WinitPlatform {
+    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        super::window::window_capabilities()
+    }
+
     #[cfg(target_os = "linux")]
     fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
         let signal = self.owner_signal.lock().clone();
@@ -2420,7 +2428,7 @@ impl Platform for WinitPlatform {
             // fresh platform without rebuilding them.
             Err(OpenWindowStateError::Stopped) => {
                 return Err(OpenWindowError::OwnerGone {
-                    rejected: Some(options),
+                    rejected: Some(Box::new(options)),
                 });
             }
             // Lifecycle refusals: the loop is not (yet) in a state that can
@@ -2647,7 +2655,7 @@ impl OwnerHooks for WinitOwnerHooks {
             .is_some_and(|signal| !signal.accepting())
         {
             return Err(OpenWindowError::OwnerGone {
-                rejected: Some(options),
+                rejected: Some(Box::new(options)),
             });
         }
 
@@ -2672,7 +2680,7 @@ impl OwnerHooks for WinitOwnerHooks {
         });
         let Some(control) = control else {
             return Err(OpenWindowError::OwnerGone {
-                rejected: Some(options),
+                rejected: Some(Box::new(options)),
             });
         };
         match control.request_open_window(options) {
@@ -2751,10 +2759,13 @@ impl ProxyTransport for WinitProxyTransport {
             .request_open_window(options)
             .map(|handle| PendingWindow::new(handle, self.owner_thread))
             .map_err(|error| match error {
-                ControlSendError::Full { capacity, rejected } => {
-                    ProxySendError::Full { capacity, rejected }
-                }
-                ControlSendError::OwnerGone { rejected } => ProxySendError::OwnerGone { rejected },
+                ControlSendError::Full { capacity, rejected } => ProxySendError::Full {
+                    capacity,
+                    rejected: *rejected,
+                },
+                ControlSendError::OwnerGone { rejected } => ProxySendError::OwnerGone {
+                    rejected: *rejected,
+                },
             })
     }
 
@@ -2818,10 +2829,9 @@ mod tests {
         let mut replies: Vec<_> = (0..3)
             .map(|index| {
                 sender
-                    .request_open_window(WindowOptions {
-                        title: format!("quit-panic-{index}"),
-                        ..WindowOptions::default()
-                    })
+                    .request_open_window(
+                        WindowOptions::default().with_title(format!("quit-panic-{index}")),
+                    )
                     .expect("request is admitted before quit")
             })
             .collect();

@@ -35,10 +35,28 @@ trait depends on `flui-platform-api` instead.
   is built, so a runner may read it once. `dyn HostWindow` has its own
   `HasWindowHandle`/`HasDisplayHandle` impls: without them an `open_window`
   result would not be a `flui_engine::WindowTarget` until upcast.
+- **A window publishes a state snapshot and takes commands (ADR-0237).** There
+  is one window trait. `PlatformWindow::state` returns an immutable
+  `WindowState` with a revision, `apply` takes a `WindowCommand`, and
+  `capabilities` says which commands the window honours: `apply` answers
+  `Unsupported` exactly when the matching capability is `false`, and the
+  capabilities of each backend are what its `apply` carries out today. The
+  snapshot describes what the OS reported, not what a command asked for.
+  Every backend keeps its last snapshot in a `shared::window_state::WindowStateCell`
+  (built like `DisplaySource`): an OS event marks the cell stale, the next read
+  samples the OS with no lock held, and a sample equal to the published one
+  keeps the revision. `on_state_changed` is raised after the publish, outside
+  the cell, only when the revision grew. Win32 and AppKit refresh from their
+  window messages and delegate callbacks, winit from its window events, the
+  Web from the layout, focus and visibility observers; the headless window
+  keeps a model that stands in for the OS (`HeadlessWindowPolicy` makes it clamp a size
+  or decline a maximize) and publishes after each command or `simulate_*`
+  call. The iOS window rereads its metrics on each `state` call and does not
+  yet raise `on_state_changed` from its view's metric updates.
 - **The macOS backend enforces the window thread-affinity default
   mechanically.** `PlatformWindow`'s rule is that a method driving a window runs
   on the thread that owns the platform event loop. Every window-driving
-  `PlatformWindow`/`WindowTrait`/`MacOSWindowExtTrait` body on `MacOSWindow`
+  `PlatformWindow`/`MacOSWindowExtTrait` body on `MacOSWindow`
   re-enters the owner lane through `route_on_owner`, so a call from any thread
   is marshaled onto the window's owner lane before any AppKit message is sent.
   Two carve-outs: the class-E raw-handle accessors
@@ -761,8 +779,9 @@ or existing delegate is rejected before bootstrap or activation mutation. The
 constructor merely acquires the singleton. The run scope retains its delegate,
 sets Regular activation, and restores the previous policy only while its own
 delegate and installed policy are still current. External replacements survive.
-The delegate routes native termination into the same deferred quit path and
-returns TerminateCancel, preventing AppKit from exiting the process itself.
+A terminate request nobody announced goes into the same deferred quit path and
+is answered TerminateCancel, so AppKit does not exit the process itself; a
+session end is answered differently (see the section after this one).
 
 Explicit quit bypasses the last-window veto. `stop(None)` plus an application
 NSEvent wakes the native wait; quit during bootstrap skips `run()` entirely.
@@ -799,6 +818,49 @@ quit, bootstrap failure/unwind and quit panic each have their own case. Unsuppor
 hosts and unknown case names fail explicitly. The older close-path and frame-pump
 probes retain their narrower lifecycle/frame assertions.
 
+### An AppKit window's mode, the host's notices and a session end (ADR-0237)
+
+AppKit has no mode property. `shared::appkit_window_mode` reads a window's mode
+from its flags (full screen outranks miniaturized, which outranks zoomed, and a
+zoom counts only for a resizable window) and plans the toggles that reach
+another mode from those flags. `ModeSequence` orders the commands: a full-screen
+or Dock step animates, AppKit ignores a toggle sent meanwhile, and what the
+window looks like afterwards is known only afterwards, so a command that
+arrives during one, and the rest of a mode whose first step is one, are held
+and planned again from the real flags at the step's `windowDid…` notification.
+The newest command wins. A step whose notification never comes stops holding
+after three seconds. AppKit keeps no rectangle to return to from a zoomed,
+minimized or full-screen window, so the backend records the outer rectangle
+just before the window leaves normal mode.
+
+A position is the outer top-left in global logical points: AppKit measures from
+the bottom-left corner of the primary screen, so `shared::appkit_window_geometry`
+flips through the primary screen's height. The display snapshot is measured the
+same way (device pixels of that screen from the primary screen's top-left
+corner), so a position and a display origin share one space. `Platform::open_window`
+turns a position measured on a display into a global one before the window is
+built.
+
+The notice sources (`NSWorkspace` sleep and wake, the distributed screen lock
+notifications, the memory-pressure dispatch source) start in `run`, after the
+application has installed its hooks, and only forward to `SystemNotices`; a wake
+marks the displays and every window's state stale first. The distributed centre
+is asked to deliver while the application is inactive, and is put back when the
+sources drop. The memory-pressure source's handler holds the source and
+`Drop` cancels it, which ends that cycle.
+
+A session end is two events. `NSWorkspaceWillPowerOffNotification` asks the
+session-end hook and `TerminateGate` remembers the answer; the terminate request
+that follows is answered `NSTerminateNow` (after the hook hears `Ending`), or
+`NSTerminateLater` while the application holds the session end, with the reply
+sent when it releases its blocks or after four seconds. The release reaches the
+gate as a task of its own on the main queue, never from the stack that dropped
+the block. AppKit says nothing when the user calls a log out off, so an
+announcement no terminate request follows within ten seconds is reported
+`Cancelled`; a Cmd-Q inside those ten seconds is taken for the session end,
+which the live checks record. A terminate request with no announcement is an
+ordinary quit. The quit callback is not run for a session end: the process ends
+with the session, and the application was told what to save.
 
 ### Win32 decides the exit policy on an owner-window turn
 
@@ -958,10 +1020,16 @@ against what it already holds — that statelessness is the point, since a `fals
 can be lost and an "already present, do nothing" rule would then keep a surface
 built from a dead window for the rest of the process's life. The parameter is a
 `bool`, not an enum: a third state of the *surface* belongs in its own callback,
-per ADR-0035's split of this family by signal rather than by arity. Android is the
-only backend that emits it — `Pause` and `TerminateWindow` send `false`, `Resume`
-and `InitWindow` send `true` — and `platforms/android/mod.rs`'s module doc carries
-why that pair, and not `Pause` alone, is the correct mapping.
+per ADR-0035's split of this family by signal rather than by arity. Android and the Web
+emit it. Android's `Pause` and `TerminateWindow` send `false`, `Resume` and `InitWindow`
+send `true` — `platforms/android/mod.rs`'s module doc carries why that pair, and not
+`Pause` alone, is the correct mapping. The Web sends `false` on `webglcontextlost` and
+`true` on `webglcontextrestored`: the canvas stays, the context behind it is gone, and
+whatever was built on it must be rebuilt once the browser gives one back. The loss is
+cancelled with `preventDefault` — without that the browser never restores the context —
+and a browser that never restores it leaves the page without a surface, which is all the
+page can know. A lost WebGPU device is not a surface event, so it does not use this
+signal; the renderer reports it to its owner directly.
 
 **Alternatives considered:**
 
@@ -2138,3 +2206,78 @@ host tests cover the level lookup (`os_capability_table`), the value
 classification (`android_display_table`) and the idle wait
 (`idle_wait_follows_the_real_period`), and CI type-checks the rest for
 `aarch64-linux-android`.
+
+### A Win32 window opens hidden, in its mode, and is shown by its first frame
+
+**Rule:** `CreateWindowExW` never gets `WS_VISIBLE`. The window is placed first (`SetWindowPlacement`
+with `SW_HIDE` stores the rectangle it returns to), put in its opening mode (fullscreen is entered
+while hidden), and only then shown, with the command of that mode (`SW_SHOWMAXIMIZED`,
+`SW_SHOWMINIMIZED`, else `SW_SHOW`). Its first sight is therefore the final one: no normal window that
+jumps to maximized. `WindowReveal::AtOpen` shows it before `open_window` returns;
+`AfterFirstFrame` waits for `reveal_after_first_frame`; `visible: false` waits for `show`.
+
+**Why a deferred window answers `visible`:** the runtime gates frames on visibility, and the frame that
+earns the reveal must run. A deferred window therefore reports `visible` (and seeds its visibility edge
+filter `true`) while it is natively hidden. A hidden window is never sent `WM_PAINT`, so
+`request_redraw` on one posts a frame request to the window instead.
+
+**The first show is one slot** (`WindowContext::first_show`), taken by whichever of the reveal, `show`,
+`activate` or a mode that shows the window comes first. A mode set on a window still waiting for its
+first frame is staged in the slot, not shown early.
+
+**Frame and limits:** `resizable` is `WS_THICKFRAME | WS_MAXIMIZEBOX`, `decorated` is the caption; a
+popup has neither, so a window without a frame reports `resizable: false` and gets its wish back with
+the frame. `WM_GETMINMAXINFO` turns the app's logical inner-size limits into outer limits in the
+window's current DPI with the frame measured for the style the window has
+(`shared::windows_window_limits`); a fullscreen window keeps the system's rectangle.
+
+**Fullscreen from another mode:** a visible maximized or minimized window is restored (`SC_RESTORE`)
+before the style is replaced, and the style saved to return to has no `WS_MAXIMIZE` or
+`WS_MINIMIZE`. A resize does not end fullscreen, and a minimized fullscreen window comes back
+fullscreen. `WINDOWPLACEMENT` rectangles are workspace coordinates; a task bar on the top or left edge
+moves the work area, so they are converted with the monitor's work-area offset.
+
+**System events** arrive on the hidden top-level receiver (`preferences/receiver.rs`), which a
+message-only window could not be: `WM_QUERYENDSESSION` and `WM_ENDSESSION`, `WM_POWERBROADCAST`,
+`WM_WTSSESSION_CHANGE`, and a posted message from a pool thread waiting on the low-memory event
+(`platforms::windows::host_events`; rules in `shared::windows_host_messages` and
+`shared::windows_memory_watch`). A session-end query the host answers with a block is refused and
+registered as a shutdown reason on the first visible window of the thread (the receiver otherwise);
+`Platform::release_session_end` withdraws it. The host's answer carries no reason text, so the system is given
+a fixed neutral one. A critical session end is never blocked, and a panicking hook answers
+`Proceed`. The low-memory event is a level, not an edge: the watch reports once, stays deaf for
+`HOLD_INTERVAL`, and only then waits again. `WTSRegisterSessionNotification` asks for this session only.
+
+**Verified:** the pure rules by host tests; the window and the receiver against the real system by
+`windows_window_commands` and `windows_host_events` (messages sent to the real windows). A real
+log-off, sleep, lock or low-memory state, and the first frame seen by eye, have not run.
+
+**Modes on a window that is not shown:** `Normal` keeps a hidden window hidden and decides how it is
+first shown; `Minimized` and `Maximized` show it, as `ShowWindow` does; only a window waiting for its
+first frame stages a mode without showing it. Size limits also hold a window without a sizing border
+(`WM_WINDOWPOSCHANGING`), since the system asks for them only while sizing one that has it. A change
+that takes several steps (entering fullscreen, changing the frame) publishes one snapshot.
+`WTSRegisterSessionNotification` is asked once at startup; if it fails (an app started before
+Remote Desktop Services at logon), lock and unlock stay unreported for the process.
+
+### Android reads the Activity's lifecycle as three facts and a cycle
+
+**Rule:** an Activity callback is mapped by one pure rule
+(`shared/android_lifecycle.rs`) and delivered through `ActivityTarget`, which
+`AndroidPlatform` implements; nothing in the event loop decides what a callback
+means. The window's published state is refreshed before its observer is told.
+
+**Choice:** `onStart`/`onStop` give visibility, `onResume`/`onPause` the execution
+state, `onWindowFocusChanged` focus; none implies another. NativeActivity has no
+`onTrimMemory`, so `lastTrimLevel` is read through JNI (`android/memory.rs`) on
+`LowMemory`, `Pause`, `Stop` and `Resume`, never on a timer, and a level is
+remembered when it is read: notices are not replayed, so a level seen before the
+host listens is not announced later. The session ends once per start-to-stop
+cycle, by whichever of `Stop` and `SaveState` comes first (the order differs
+below and above API 28; a Back that finishes the Activity never saves state),
+so the notice repeats on every trip to the background and asks for saving. The
+session-end hook is out of its slot while it runs and is put back even when it
+panics (`PlatformHandlers::run_session_end`).
+
+**Verified by:** `android_lifecycle_mapping*` and `session_end_hook_*` on the
+host; the `MainEvent` match and the JNI read run only on a device.

@@ -6,6 +6,7 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
 use parking_lot::RwLock;
 
 use crate::cache::{AssetCache, AssetCacheConfig, CacheCapacity};
@@ -371,6 +372,11 @@ impl AssetRegistry {
         reason = "public API: uniform async surface with the genuinely-async `invalidate`/`clear` siblings"
     )]
     pub async fn clear_all(&self) {
+        self.retire_caches();
+    }
+
+    /// Detaches every typed cache and drops it with no lock held.
+    fn retire_caches(&self) {
         let retired = {
             let mut caches = self.caches.write();
             std::mem::take(&mut *caches)
@@ -424,6 +430,18 @@ impl AssetRegistry {
         let cache = AssetCache::<T>::with_config(self.cache_config);
         caches.insert(type_id, Box::new(cache.clone()));
         cache
+    }
+}
+
+/// Under memory pressure the registry gives back every completed entry.
+///
+/// An asset reloads from its source on the next request, and there is no
+/// cheaper half-way to give back, so each level drops the same entries.
+/// Handles already given out keep their data, and loads in flight finish into
+/// the caches they started with.
+impl ReclaimMemory for AssetRegistry {
+    fn reclaim(&self, _level: MemoryPressureLevel) {
+        self.retire_caches();
     }
 }
 
