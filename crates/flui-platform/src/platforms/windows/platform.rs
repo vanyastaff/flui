@@ -328,6 +328,9 @@ pub(super) struct WindowContext {
     /// Set while the window is being put into fullscreen, before its mode says
     /// so: the size limits do not apply to the rectangle it is given.
     pub limits_waived: std::cell::Cell<bool>,
+    /// Set while a hidden window is restored and hidden again: the show and
+    /// the hide are not the window appearing, so no visibility is reported.
+    pub visibility_muted: std::cell::Cell<bool>,
     /// What is still owed of the window's first show. A window opens hidden and
     /// in its mode, so the first sight of it is already maximized or
     /// fullscreen, not a normal window that jumps.
@@ -1458,14 +1461,16 @@ impl WindowsPlatform {
                         // derivation hang off. Decided by the pure rule in
                         // `shared::visibility` (host-tested); the cell is the
                         // edge filter shared with the WM_SHOWWINDOW arm.
-                        if let Some(visible) = crate::shared::visibility::win32_size_visibility(
-                            size_type,
-                            prev_mode.is_minimized(),
-                        ) && crate::shared::visibility::visibility_edge(
-                            ctx.last_visibility_dispatched.get(),
-                            visible,
-                        )
-                        .is_some()
+                        if !ctx.visibility_muted.get()
+                            && let Some(visible) = crate::shared::visibility::win32_size_visibility(
+                                size_type,
+                                prev_mode.is_minimized(),
+                            )
+                            && crate::shared::visibility::visibility_edge(
+                                ctx.last_visibility_dispatched.get(),
+                                visible,
+                            )
+                            .is_some()
                         {
                             ctx.last_visibility_dispatched.set(visible);
                             tracing::debug!(
@@ -1530,11 +1535,12 @@ impl WindowsPlatform {
                         let shown = wparam.0 != 0;
                         ctx.update_window_state(|state| state.visible = shown);
                         ctx.publish_window_state(hwnd);
-                        if let Some(visible) =
-                            crate::shared::visibility::win32_show_window_visibility(
-                                shown,
-                                ctx.mode.get().is_minimized(),
-                            )
+                        if !ctx.visibility_muted.get()
+                            && let Some(visible) =
+                                crate::shared::visibility::win32_show_window_visibility(
+                                    shown,
+                                    ctx.mode.get().is_minimized(),
+                                )
                             && crate::shared::visibility::visibility_edge(
                                 ctx.last_visibility_dispatched.get(),
                                 visible,
