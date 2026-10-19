@@ -5,7 +5,7 @@
   `PointerId`, so settling a click a double tap held no longer cancels the long press, swipe or
   force press of the same mouse's next contact, and sweeping it no longer takes away that
   contact's `Sequenced` successors. A custom member reads `contest.pointer()` where it used the
-  pointer ([ADR-0243](/docs/adr/ADR-0243-arena-verdicts-name-their-contest.md)).
+  pointer ([ADR-0246](/docs/adr/ADR-0246-arena-verdicts-name-their-contest.md)).
 - **`flui-interaction`**: a drag whose OS session the host refused targets and drops in its
   window again, and no longer asks the refusing backend on every move out of the window.
 - **`flui-interaction`**: an OS drop whose last hover update panics in a receiver still runs the

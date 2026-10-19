@@ -10,7 +10,7 @@
   events; the Android target and source through `FluiView`, run on a device within one app.
   Pending ([tasks](../plans/specs/flui-interaction/completeness/tasks.md)): every other native
   drag source and target.
-- **Amended by:** [ADR-0244](ADR-0244-android-java-view.md) (2026-10-17): the Android target is
+- **Amended by:** [ADR-0247](ADR-0247-android-java-view.md) (2026-10-17): the Android target is
   `FluiView.onDragEvent`, answered from the cached feedback; the source is
   `FluiView.startDragAndDrop` (API 24) with the whole clip at the start; a drag from another app
   permits a copy; `OnReceiveContentListener` receives only pasted and keyboard text.

@@ -4,7 +4,7 @@
 //!
 //! An application here is a Rust `cdylib` with no Java of its own: the
 //! manifest names `android.app.NativeActivity` and the library, and `FluiView`'s
-//! dex travels inside the library (ADR-0244), so the APK has no
+//! dex travels inside the library (ADR-0247), so the APK has no
 //! `classes.dex`. No Gradle: `aapt2` links the manifest, the JDK's `jar`
 //! stores the library uncompressed, `zipalign` page-aligns it and
 //! `apksigner` signs it with the SDK's debug keystore.

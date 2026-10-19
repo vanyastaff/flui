@@ -335,7 +335,7 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   The generated operation sequences in
   `arena_settles_every_member_exactly_once` assert terminal verdict uniqueness
   and settlement across pointer reuse.
-- **A verdict names its contest, not its pointer (ADR-0243).** A contest a
+- **A verdict names its contest, not its pointer (ADR-0246).** A contest a
   hold kept past its Up settles while the same pointer ID's next contact is
   down, so `accept_gesture` and `reject_gesture` receive the `GestureContest`
   they settle and a member that outlives one contact compares it with its

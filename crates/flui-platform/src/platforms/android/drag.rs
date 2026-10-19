@@ -1,4 +1,4 @@
-//! Android drag and drop through `FluiView` (ADR-0211, ADR-0244).
+//! Android drag and drop through `FluiView` (ADR-0211, ADR-0247).
 //!
 //! [`AndroidTransfer`] is the platform's one [`DataTransferSource`]. A drag
 //! over the view mints an offer from its `ClipDescription` when it enters,

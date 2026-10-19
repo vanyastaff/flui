@@ -159,7 +159,7 @@ pub struct AndroidPlatform {
     owner_signal: Arc<OwnerSignal>,
     scroll_factors: Mutex<crate::shared::android_scroll::FactorCache>,
     preference_admission: crate::shared::preference_read::ReadAdmission,
-    /// `FluiView`, installed on the Java main thread at start (ADR-0244).
+    /// `FluiView`, installed on the Java main thread at start (ADR-0247).
     java_view: Arc<java_view::JavaView>,
     displays: Arc<display::AndroidDisplays>,
     api: AndroidApi,
@@ -294,7 +294,7 @@ impl AndroidPlatform {
     }
 
     /// Deliver what `FluiView` reported since the last turn, in order, on the
-    /// owner thread (ADR-0244).
+    /// owner thread (ADR-0247).
     fn deliver_view_events(&self) {
         let events = self.java_view.take_events();
         if events.is_empty() {
@@ -1063,7 +1063,7 @@ impl Platform for AndroidPlatform {
     }
 
     fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
-        // FluiView's drag and drop (ADR-0211, ADR-0244).
+        // FluiView's drag and drop (ADR-0211, ADR-0247).
         Arc::clone(self.java_view.transfer()) as Arc<dyn DataTransferSource>
     }
 

@@ -1,4 +1,4 @@
-# ADR-0244: Android's Java side is a `flui-platform` view loaded from the native library
+# ADR-0247: Android's Java side is a `flui-platform` view loaded from the native library
 
 - **Status:** Accepted (2026-10-17). Implemented: the shim, its loader, the input method host,
   the drop target, the drag source, the content receiver and the handwriting request; run on a

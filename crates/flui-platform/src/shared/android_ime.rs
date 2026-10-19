@@ -1,4 +1,4 @@
-//! The decidable half of the Android backend's input method (ADR-0244,
+//! The decidable half of the Android backend's input method (ADR-0247,
 //! ADR-0090): how `FluiView`'s mirror and the field's `TextStore` stay one
 //! document while two threads own the session.
 //!

@@ -51,7 +51,7 @@ pub struct AndroidWindow {
     /// The decor view and vibrator haptics play on (ADR-0210).
     haptics: Arc<super::haptics::AndroidHaptics>,
     /// `FluiView`: the input method's editor, the drop target and the drag
-    /// source (ADR-0244).
+    /// source (ADR-0247).
     java_view: Arc<super::java_view::JavaView>,
     /// The window's text input, on the owner thread only.
     text_input: Arc<OwnerSlot<Rc<super::text_input::AndroidTextInput>>>,
@@ -385,7 +385,7 @@ impl crate::traits::HostWindow for AndroidWindow {
             .poll(&self.app, &self.owner_signal, self.owner)
     }
 
-    /// The window's input method host (ADR-0090, ADR-0244): `FluiView`'s
+    /// The window's input method host (ADR-0090, ADR-0247): `FluiView`'s
     /// `InputConnection` serves the focused field's store.
     fn text_store_host(
         &self,

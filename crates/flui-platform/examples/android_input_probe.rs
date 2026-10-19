@@ -265,7 +265,7 @@ mod probe {
     }
 }
 
-/// What the probe does with `FluiView` (ADR-0244): its input method serves a
+/// What the probe does with `FluiView` (ADR-0247): its input method serves a
 /// field the probe focuses, and its drag source and drop target carry a drag
 /// the probe starts.
 #[cfg(all(target_os = "android", debug_assertions))]

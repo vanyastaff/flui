@@ -2694,7 +2694,7 @@ touch, and a whole `flui-app` with two runtimes.
 platform start: `InMemoryDexClassLoader` from API 26, a read-only, byte-compared code-cache copy
 through `DexClassLoader` below, either parented to the Activity's loader. The view's native
 methods are bound with `RegisterNatives` on the class that loader returned, and one full-window
-view is laid over the `NativeActivity`'s content (ADR-0244). Every owner-to-view call is posted
+view is laid over the `NativeActivity`'s content (ADR-0247). Every owner-to-view call is posted
 (`JavaView::post`, or `post_or` when a refusal must still discharge an obligation, as a drag the
 view could not start must still end); every native method only queues a `ViewEvent` and wakes the
 owner, which delivers them in order each loop turn, and contains a panic before it reaches the

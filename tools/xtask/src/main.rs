@@ -134,7 +134,7 @@ enum Command {
     KeyVocabulary(key_vocabulary::KeyVocabularyArgs),
     /// Check (or --write) the table of variants an input recording carries (ADR-0215 §2).
     RecordingVocabulary(recording_vocabulary::RecordingVocabularyArgs),
-    /// Check (or --write) the Android `FluiView` dex against its Java sources (ADR-0244).
+    /// Check (or --write) the Android `FluiView` dex against its Java sources (ADR-0247).
     AndroidDex(android_dex::AndroidDexArgs),
     /// Validate changelog.d fragments; --write merges them into CHANGELOG.md and deletes them.
     Changelog(changelog::ChangelogArgs),

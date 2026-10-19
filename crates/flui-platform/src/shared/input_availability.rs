@@ -76,7 +76,7 @@ pub const fn ios() -> InputCapabilities {
 /// delivered as phased scrolling and `PanZoom`. Outgoing drags start through
 /// `FluiView.startDragAndDrop` from API 24
 /// ([`DRAG_API`](super::android_drag::DRAG_API)) once the view is installed
-/// (`java_view`, ADR-0244); without it every drag stays in its window.
+/// (`java_view`, ADR-0247); without it every drag stays in its window.
 #[must_use]
 pub const fn android(api_level: i32, java_view: bool) -> InputCapabilities {
     let mut builder = InputCapabilities::builder().pen(Native);
@@ -129,7 +129,7 @@ pub const fn winit(session: WinitSession) -> InputCapabilities {
 /// When an OS drag session can start on Win32, AppKit, Android and winit: the
 /// drag runs in its window and escalates when the pointer leaves it
 /// (ADR-0211 §2). Win32 starts them through OLE and Android through
-/// `startDragAndDrop` (ADR-0244); the other backends report outgoing drags
+/// `startDragAndDrop` (ADR-0247); the other backends report outgoing drags
 /// `Unavailable` until their native session lands.
 pub const DESKTOP_DRAG_START: flui_platform_api::drag::OsDragStart =
     flui_platform_api::drag::OsDragStart::OnLeavingWindow;
