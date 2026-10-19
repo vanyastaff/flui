@@ -256,7 +256,7 @@ impl CallbackShortcuts {
     pub fn new(child: impl IntoView) -> Self {
         Self {
             bindings: Vec::new(),
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 
@@ -354,7 +354,7 @@ impl Shortcuts {
     pub fn new(child: impl IntoView) -> Self {
         Self {
             bindings: Vec::new(),
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
             focus_node: None,
         }
     }

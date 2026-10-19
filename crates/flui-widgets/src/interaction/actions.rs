@@ -274,7 +274,7 @@ impl Actions {
     pub fn new(child: impl IntoView) -> Self {
         Self {
             own: Vec::new(),
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 

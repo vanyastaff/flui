@@ -30,7 +30,7 @@ impl PanClaimRegion {
     pub fn new(claim: PanClaim, child: impl IntoView) -> Self {
         Self {
             claim,
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 }

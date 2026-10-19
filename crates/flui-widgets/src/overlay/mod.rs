@@ -868,9 +868,7 @@ impl OverlayScope {
     fn new(handle: OverlayHandle, child: impl IntoView) -> Self {
         Self {
             handle: crate::support::retirement::Terminal::new(handle),
-            child: crate::support::retirement::Terminal::new(BoxedView(Box::new(
-                child.into_view(),
-            ))),
+            child: crate::support::retirement::Terminal::new(BoxedView::new(child.into_view())),
         }
     }
 }

@@ -39,7 +39,7 @@ impl HapticsMode {
     /// A haptics switch around `child`, on by default.
     pub fn new(child: impl IntoView) -> Self {
         Self {
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
             enabled: true,
         }
     }

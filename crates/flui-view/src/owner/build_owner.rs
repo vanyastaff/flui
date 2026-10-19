@@ -1576,7 +1576,7 @@ impl BuildOwner {
         self.dirty_reasons.remove(&failed);
         self.pending_dependency_changes.remove(&failed);
         let mut element_owner = self.element_owner_mut();
-        tree.replace_child_with(parent, slot, recovery_view.0.as_ref(), &mut element_owner);
+        tree.replace_child_with(parent, slot, &recovery_view, &mut element_owner);
         element_owner.commit_staged_lifecycle_panic(staged);
     }
 

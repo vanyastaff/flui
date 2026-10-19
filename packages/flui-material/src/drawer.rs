@@ -553,9 +553,22 @@ struct DrawerControllerCore {
     alignment: Cell<DrawerAlignment>,
     panel_width: Cell<f64>,
     on_open_changed: RefCell<Option<BoundDrawerCallback>>,
+    /// Rebuilds the drawer, for a drag that ends on a closed panel: no run
+    /// starts or settles then, so no status change rebuilds it to drop the
+    /// panel's content.
+    rebuild: RefCell<Option<flui_sdk::view::RebuildHandle>>,
 }
 
 impl DrawerControllerCore {
+    /// Rebuild the drawer to drop the panel it still shows over a closed
+    /// position.
+    fn rebuild_closed(&self) {
+        let rebuild = self.rebuild.borrow().clone();
+        if let Some(rebuild) = rebuild {
+            rebuild.schedule(flui_sdk::view::RebuildReason::AnimationTick);
+        }
+    }
+
     fn replace_callback(&self, callback: Option<BoundDrawerCallback>) {
         let previous = self.on_open_changed.replace(callback);
         drop(previous);
@@ -606,6 +619,7 @@ impl DrawerControllerCore {
     /// crossing `0.5` as the fling animates).
     fn settle(&self, primary_velocity: f64) {
         if self.is_closed() {
+            self.rebuild_closed();
             return;
         }
         let width = self.panel_width.get();
@@ -623,7 +637,11 @@ impl DrawerControllerCore {
     /// Only reachable from the open panel's gesture detector; the
     /// closed-state edge strip wires no drag `on_cancel`.
     fn handle_drag_cancel(&self) {
-        if self.is_closed() || self.controller.is_animating() {
+        if self.is_closed() {
+            self.rebuild_closed();
+            return;
+        }
+        if self.controller.is_animating() {
             return;
         }
         if self.controller.value() < 0.5 {
@@ -698,6 +716,7 @@ impl StatefulView for DrawerController {
                 alignment: Cell::new(self.alignment),
                 panel_width: Cell::new(self.panel_width),
                 on_open_changed: RefCell::new(None),
+                rebuild: RefCell::new(None),
             }),
             controller,
         }
@@ -708,6 +727,7 @@ impl ViewState<DrawerController> for DrawerControllerState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.writer = Some(ctx.writer_source());
         let rebuild = ctx.rebuild_handle();
+        *self.core.rebuild.borrow_mut() = Some(rebuild.clone());
 
         self.did_change_dependencies(ctx);
 

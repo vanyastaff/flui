@@ -1077,9 +1077,12 @@ pub(crate) fn outgoing_switcher_retirement_preserves_independent_captures() {
     armed.set(false);
     assert!(!fail_once.get(), "the actual outgoing capture must retire");
     if let Err(failure) = result {
-        assert_eq!(
-            flui_foundation::panic::payload_text(failure.as_ref()),
-            Some("outgoing switcher capture failed")
+        // The last owner of the shared view lets go inside a build, so the
+        // frame names the phase in front of the capture's own message.
+        assert!(
+            flui_foundation::panic::payload_text(failure.as_ref())
+                .is_some_and(|text| text.ends_with("outgoing switcher capture failed")),
+            "the outgoing capture's failure propagates"
         );
     }
     assert!(

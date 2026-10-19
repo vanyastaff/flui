@@ -3541,9 +3541,9 @@ impl TextStoreObserver for FailsOnStatus {
 /// focus loss. The update still
 /// moves the field onto the replacement node and ends the old node's IME
 /// session before it raises the observer's failure, the first. The frame
-/// recovers from the update's panic by retiring the field. A focus ancestor's
-/// scheduled rebuild can mount a fresh field on the replacement node in the
-/// same frame; the retired owner must stay detached while that new owner works.
+/// recovers from the update's panic by retiring the field. The parent producing
+/// the field again mounts a fresh one on the replacement node; the retired
+/// owner must stay detached while that new owner works.
 fn editable_update_whose_observer_and_focus_listener_panic() {
     static OBSERVER_FAILURE_RECOVERED: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
@@ -3588,6 +3588,9 @@ fn editable_update_whose_observer_and_focus_listener_panic() {
         OBSERVER_FAILURE_RECOVERED.load(std::sync::atomic::Ordering::Relaxed),
         "the observer's first failure reached frame recovery"
     );
+    // The substitute stays until a parent builds the field again; a parent
+    // that rebuilt and handed back the view it already held does not.
+    harness.swap_root(EditableText::new(controller.clone(), Rc::clone(&new)).obscure_text(true));
     let current_elements = harness.elements_of_type(std::any::TypeId::of::<EditableText>());
     assert_eq!(current_elements.len(), 1);
     assert_ne!(

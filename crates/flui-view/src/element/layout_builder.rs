@@ -279,9 +279,9 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
         let ctx = ctx_choice.as_ctx();
         let view = core.view().clone();
         let child_view = build_or_recover(core, owner, "LayoutBuilderElement", move || {
-            // `BoxedView` is a newtype over `Box<dyn View>`; unwrap it for the
-            // reconciler, which speaks `Box<dyn View>`.
-            (view.builder)(ctx, constraints).0
+            // The reconciler speaks `Box<dyn View>`; the box keeps the
+            // `BoxedView` inside it, and with it the view's identity.
+            Box::new((view.builder)(ctx, constraints)) as Box<dyn View>
         });
         single_child_views(core, child_view, "LayoutBuilderBehavior")
     }

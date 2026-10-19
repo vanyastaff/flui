@@ -579,7 +579,7 @@ pub(crate) fn disclosure_owns_constructor_clone_and_retirement_failure_tails() {
             "converted header remains protected"
         );
     }
-    fn partial_clone() {
+    fn shared_clone() {
         let log = Rc::new(RefCell::new(Vec::new()));
         let fails = Rc::new(Cell::new(true));
         let view = Disclosure::new(
@@ -601,14 +601,16 @@ pub(crate) fn disclosure_owns_constructor_clone_and_retirement_failure_tails() {
                 clone_fails: true,
             },
         );
-        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| view.clone()));
-        assert_panic(failure, "body clone");
-        assert!(
-            log.borrow().is_empty(),
-            "completed header clone stays protected when body clone throws"
-        );
+        // The children are shared views: cloning the section shares them, so
+        // the body's own `Clone` never runs and cannot fail.
+        let copy = view.clone();
         fails.set(false);
         drop(view);
+        assert!(
+            log.borrow().is_empty(),
+            "the clone still owns the shared children"
+        );
+        drop(copy);
         assert_eq!(*log.borrow(), vec!["header", "body"]);
     }
     fn competing_drops() {
@@ -661,7 +663,7 @@ pub(crate) fn disclosure_owns_constructor_clone_and_retirement_failure_tails() {
         &[
             ("constructor conversion", constructor as fn()),
             ("body conversion", body_conversion as fn()),
-            ("partial clone", partial_clone as fn()),
+            ("shared clone", shared_clone as fn()),
             ("competing drops", competing_drops as fn()),
             ("body drop", body_drop as fn()),
             ("header drop", header_drop as fn()),

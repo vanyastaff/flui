@@ -94,11 +94,9 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
             })
         };
         let vsync = Vsync::new();
-        let mut app = lay_out_animated(
-            VsyncScope::new(vsync.clone(), probe.view()),
-            tight(200.0, 200.0),
-            vsync,
-        );
+        // A new root view is how the scope hands its probe to build again.
+        let root = || VsyncScope::new(vsync.clone(), probe.view());
+        let mut app = lay_out_animated(root(), tight(200.0, 200.0), vsync.clone());
         drop(capture);
         app.dispatch_pointer_down(20.0, 20.0);
         for x in [40.0, 60.0, 80.0, 100.0] {
@@ -125,11 +123,11 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
             UpdateDelivery::Ordered => app.tick(),
             UpdateDelivery::Replaced => {
                 generation.set(2);
-                app.pump();
+                app.pump_widget(root());
             }
             UpdateDelivery::Unmounted => {
                 show.set(false);
-                app.pump();
+                app.pump_widget(root());
             }
             UpdateDelivery::Panicking => {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.tick()));
@@ -145,7 +143,9 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
                     show.set(false);
                 }
                 let (result, log) = flui_testing::log_capture::capture(|| {
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.pump()))
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        app.pump_widget(root());
+                    }))
                 });
                 let reports: Vec<_> = log
                     .records()
@@ -263,7 +263,7 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
         ) {
             generation.set(2);
             show.set(true);
-            app.pump();
+            app.pump_widget(root());
             app.dispatch_pointer_cancel();
             app.dispatch_pointer_down(20.0, 20.0);
             for x in [40.0, 60.0, 80.0, 100.0] {
@@ -1034,11 +1034,9 @@ pub(crate) fn resize_delivery_keeps_accepted_ticks_before_completion() {
             })
         };
         let vsync = Vsync::new();
-        let mut laid = lay_out_animated(
-            VsyncScope::new(vsync.clone(), probe.view()),
-            tight(150.0, 100.0),
-            vsync.clone(),
-        );
+        // A new root view is how the scope hands its probe to build again.
+        let root = || VsyncScope::new(vsync.clone(), probe.view());
+        let mut laid = lay_out_animated(root(), tight(150.0, 100.0), vsync.clone());
         laid.dispatch_pointer_down(10.0, 50.0);
         for step in 1..=12 {
             laid.dispatch_pointer_move_after(
@@ -1067,11 +1065,11 @@ pub(crate) fn resize_delivery_keeps_accepted_ticks_before_completion() {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match delivery {
             UpdateDelivery::Replaced => {
                 generation.set(2);
-                laid.pump();
+                laid.pump_widget(root());
             }
             UpdateDelivery::Unmounted => {
                 show.set(false);
-                laid.pump();
+                laid.pump_widget(root());
             }
             _ => laid.tick(),
         }));

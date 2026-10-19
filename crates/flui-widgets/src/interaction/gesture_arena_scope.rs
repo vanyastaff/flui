@@ -41,7 +41,7 @@ impl GestureArenaScope {
             arena,
             settings: None,
             wheel_preferences: None,
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 

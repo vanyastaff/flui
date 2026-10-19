@@ -366,7 +366,7 @@ fn identified_cells(rows: &[TableRow]) -> Vec<KeyedCell> {
             // is matched to the cell with an equal key anywhere in its row —
             // the identity it had before this wrapper existed. A keyless cell
             // is matched by column, as its position in the row.
-            let cell_part = cell.0.key().map_or(KeyPart::Position(column), |key| {
+            let cell_part = cell.key().map_or(KeyPart::Position(column), |key| {
                 KeyPart::Keyed(key.clone_key())
             });
             cells.push(KeyedCell::new(

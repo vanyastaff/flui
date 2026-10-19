@@ -142,13 +142,7 @@ impl ElementTree {
                 // substitute, and the crash names a broken factory instead
                 // of hiding it.
                 let substitute_id = self
-                    .try_insert_with_provisional_order(
-                        substitute_view.0.as_ref(),
-                        parent,
-                        slot,
-                        owner,
-                        order,
-                    )
+                    .try_insert_with_provisional_order(&substitute_view, parent, slot, owner, order)
                     .unwrap_or_else(|substitute_panic| {
                         std::panic::resume_unwind(substitute_panic.payload)
                     });
@@ -254,7 +248,7 @@ impl ElementTree {
         let substitute_view = recovery_view_for(&error);
         let substitute_id = self
             .try_insert_with_provisional_order(
-                substitute_view.0.as_ref(),
+                &substitute_view,
                 parent,
                 replacement_slot,
                 owner,

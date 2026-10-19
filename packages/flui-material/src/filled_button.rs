@@ -70,7 +70,7 @@ impl FilledButton {
             on_pressed: None,
             style: None,
             variant: FilledButtonVariant::Filled,
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 

@@ -2,6 +2,7 @@
 //! attachment, autofocus, focus-change callbacks, exclusion and
 //! geometry-ordered traversal.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use flui_interaction::focus::{FocusNode, FocusScopeNode};
@@ -1092,4 +1093,159 @@ pub(crate) fn an_adopted_external_node_ignores_the_old_elements_focus_action() {
         !node.has_primary_focus(),
         "the old element focused a node another owner adopted"
     );
+}
+
+/// Counts how often its state is created, which is how often the subtree
+/// under it was torn down and mounted again.
+#[derive(Clone, StatefulView)]
+struct MountProbe {
+    mounts: Rc<Cell<usize>>,
+}
+
+struct MountProbeState {
+    mounts: Rc<Cell<usize>>,
+}
+
+impl std::fmt::Debug for MountProbe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MountProbe")
+    }
+}
+
+impl StatefulView for MountProbe {
+    type State = MountProbeState;
+
+    fn create_state(&self) -> Self::State {
+        MountProbeState {
+            mounts: Rc::clone(&self.mounts),
+        }
+    }
+}
+
+impl ViewState<MountProbe> for MountProbeState {
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
+        self.mounts.set(self.mounts.get() + 1);
+    }
+
+    fn build(&self, _view: &MountProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(10.0, 10.0)
+    }
+}
+
+/// Whether a `Focus` can take focus changes nothing about the elements under
+/// it: a popup route that makes the page below unfocusable, or an owner that
+/// disables one field, must not tear the subtree down and mount it again
+/// (which cancels a gesture in flight under it).
+///
+/// Red-check: wrap the child in `Semantics` only while the node can take
+/// focus — the probe mounts a second time on every row.
+pub(crate) fn a_focus_keeps_its_subtree_when_it_stops_being_focusable() {
+    let own = FocusNode::with_debug_label("own flag");
+    let page = FocusScopeNode::new();
+    type Flip = Box<dyn Fn(bool)>;
+    let rows: [(&str, Flip, Rc<Cell<usize>>, BoxedView); 2] = {
+        let (own_mounts, page_mounts) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+        let own_flip = Rc::clone(&own);
+        let page_flip = Rc::clone(&page);
+        [
+            (
+                "the node's own flag",
+                Box::new(move |can| own_flip.set_can_request_focus(can)),
+                Rc::clone(&own_mounts),
+                Focus::new(MountProbe { mounts: own_mounts })
+                    .focus_node(Rc::clone(&own))
+                    .into_view()
+                    .boxed(),
+            ),
+            (
+                "the page's scope above it",
+                Box::new(move |can| page_flip.as_focus_node().set_can_request_focus(can)),
+                Rc::clone(&page_mounts),
+                FocusScope::with_external_node(
+                    Rc::clone(&page),
+                    Focus::new(MountProbe {
+                        mounts: page_mounts,
+                    }),
+                )
+                .into_view()
+                .boxed(),
+            ),
+        ]
+    };
+    for (name, flip, mounts, view) in rows {
+        let mut harness = mount(view);
+        assert_eq!(mounts.get(), 1, "{name}: mounted once");
+        for can in [false, true, false] {
+            flip(can);
+            harness.tick();
+            assert_eq!(
+                mounts.get(),
+                1,
+                "{name}: the subtree survives can_request_focus = {can}"
+            );
+        }
+    }
+}
+
+/// A stateless root that makes its scroll controller inside `build`.
+#[derive(Clone, Debug, StatelessView)]
+struct ControllerInBuild;
+
+impl StatelessView for ControllerInBuild {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        use flui_widgets::{ListView, ScrollController, Scrollable, Text};
+
+        Scrollable::new()
+            .controller(ScrollController::new())
+            .viewport_builder(Rc::new(|position| {
+                let rows: Vec<_> = (0..40)
+                    .map(|row| {
+                        SizedBox::height(50.0)
+                            .child(Text::new(format!("row {row}")))
+                            .into_view()
+                            .boxed()
+                    })
+                    .collect();
+                ListView::new(50.0, rows)
+                    .position(position)
+                    .into_view()
+                    .boxed()
+            }))
+    }
+}
+
+/// The first focus gain, which a drag's start causes by focusing its scroll
+/// view, flips `has_focus` on every enclosing scope. They update their
+/// dependents and nothing else: a root that makes a scroll controller in
+/// `build` is not built again under the drag, so its position is the one the
+/// contact moves and every step of a held drag paints new content.
+///
+/// Red-check: have an element's update rebuild its child whether or not the
+/// child's view is the one it already holds — the frames freeze after the
+/// first step.
+pub(crate) fn the_first_focus_gain_does_not_rebuild_the_app_under_a_drag() {
+    use crate::common::{lay_out, tight};
+
+    let mut laid = lay_out(ControllerInBuild, tight(400.0, 300.0));
+    let row_top = |laid: &crate::common::LaidOut| {
+        let row = laid.find_text("row 3").expect("the fourth row is in view");
+        laid.absolute_offset(row).dy
+    };
+    laid.dispatch_pointer_down(200.0, 250.0);
+    let mut previous = row_top(&laid);
+    for step in 1..=8 {
+        laid.dispatch_pointer_move(200.0, 250.0 - 15.0 * f64::from(step));
+        laid.tick();
+        let top = row_top(&laid);
+        if step > 1 {
+            assert!(
+                top < previous,
+                "step {step} of the held drag left the row at {top}, where step {} had it at \
+                 {previous}",
+                step - 1
+            );
+        }
+        previous = top;
+    }
+    laid.dispatch_pointer_up(200.0, 130.0);
 }

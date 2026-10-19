@@ -728,21 +728,16 @@ fn hold_then_drag(at: Offset<f64>) -> PointerScript {
 
 /// A menu's long press around a long-press drag is the drag's hold, not a
 /// second one: the press opens the menu, and once the finger moves past the
-/// slop the menu's `dismiss` closes it and the drag takes the contact. A
-/// long press that does not move keeps the menu and starts no drag. The same
-/// holds for a card whose own commands open a menu.
+/// slop the menu closes and the drag takes the contact, with the page's
+/// elements, and so the drag's gesture, kept through the menu's opening. A
+/// long press that does not move keeps the menu and starts no drag. A card
+/// whose own commands open a menu hands over the same way.
 pub(crate) fn a_held_press_moved_past_the_slop_closes_the_menu_and_drags() {
     let at = Offset::new(150.0, 25.0);
-    let around = |events: &Events| {
-        let (opened, closed) = (Rc::clone(events), Rc::clone(events));
-        GestureAlternatives::new(Alternative::ContextMenu(
-            MenuSpec::new(GestureCommand::new(DELETE, Delete), move |_cx, _request| {
-                opened.borrow_mut().push("open");
-            })
-            .dismiss(move |_cx| closed.borrow_mut().push("close")),
-        ))
-        .expect("one labelled command")
-        .child(long_press_card(events, false))
+    let area = |events: &Events| {
+        ContextMenuArea::new(GestureCommand::new(DELETE, Delete), [])
+            .expect("one labelled command")
+            .child(long_press_card(events, false))
     };
     let still = TouchScript::new("long press")
         .down(1, at)
@@ -750,33 +745,36 @@ pub(crate) fn a_held_press_moved_past_the_slop_closes_the_menu_and_drags() {
         .up(1)
         .build()
         .expect("the press lifts its finger");
-    let rows: [(&str, bool, &PointerScript, &[&str]); 3] = [
-        (
-            "around: moved",
-            false,
-            &hold_then_drag(at),
-            &["open", "drag", "close"],
-        ),
-        ("around: still", false, &still, &["open"]),
+    // Whether the area's menu is open at the end; a card with its own menu
+    // (`None`) logs its opening instead.
+    let rows: [(&str, &PointerScript, &[&str], Option<bool>); 3] = [
+        ("around: moved", &hold_then_drag(at), &["drag"], Some(false)),
+        ("around: still", &still, &[], Some(true)),
         (
             "own menu: moved",
-            true,
             &hold_then_drag(at),
             &["open", "drag"],
+            None,
         ),
     ];
-    for (name, own_menu, script, expected) in rows {
+    for (name, script, expected, menu_open) in rows {
         let events = Events::default();
-        let mut laid = if own_menu {
+        let mut laid = if menu_open.is_none() {
             mount_home(long_press_card(&events, true))
         } else {
-            mount_home(around(&events))
+            mount_home(area(&events))
         };
+        laid.enable_semantics();
+        laid.pump();
         laid.replay(script);
         for _ in 0..4 {
             laid.pump_for(Duration::from_millis(16));
         }
         assert_eq!(*events.borrow(), expected, "{name}");
+        if let Some(open) = menu_open {
+            let tree = laid.a11y_tree().expect("semantics enabled");
+            assert_eq!(tree.find(Role::Menu).is_ok(), open, "{name}: menu open");
+        }
     }
 }
 

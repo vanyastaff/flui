@@ -131,7 +131,7 @@ impl InkWell {
     /// rectangle shape.
     pub fn new(child: impl IntoView) -> Self {
         Self {
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
             on_tap: None,
             overlay_color: WidgetStateProperty::all(None),
             shape: MaterialShape::default(),

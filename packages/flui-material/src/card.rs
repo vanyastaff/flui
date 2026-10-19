@@ -106,7 +106,7 @@ impl Card {
             shape: None,
             clip_behavior: None,
             margin: None,
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 

@@ -279,28 +279,28 @@ impl ListTile {
     /// Sets the leading slot (typically an icon or avatar).
     #[must_use]
     pub fn leading(mut self, leading: impl IntoView) -> Self {
-        self.leading = Some(BoxedView(Box::new(leading.into_view())));
+        self.leading = Some(BoxedView::new(leading.into_view()));
         self
     }
 
     /// Sets the title slot (typically `Text`).
     #[must_use]
     pub fn title(mut self, title: impl IntoView) -> Self {
-        self.title = Some(BoxedView(Box::new(title.into_view())));
+        self.title = Some(BoxedView::new(title.into_view()));
         self
     }
 
     /// Sets the subtitle slot (typically `Text`).
     #[must_use]
     pub fn subtitle(mut self, subtitle: impl IntoView) -> Self {
-        self.subtitle = Some(BoxedView(Box::new(subtitle.into_view())));
+        self.subtitle = Some(BoxedView::new(subtitle.into_view()));
         self
     }
 
     /// Sets the trailing slot (typically an icon or metadata).
     #[must_use]
     pub fn trailing(mut self, trailing: impl IntoView) -> Self {
-        self.trailing = Some(BoxedView(Box::new(trailing.into_view())));
+        self.trailing = Some(BoxedView::new(trailing.into_view()));
         self
     }
 

@@ -132,8 +132,9 @@ pub(crate) fn maintained_child_mutes_and_resumes_without_remounting_as_visibilit
         mounted: Arc::clone(&mounted),
         probe,
     };
-    let root = VsyncScope::new(vsync.clone(), host);
-    let mut laid = lay_out_animated(root, loose(100.0), vsync);
+    // A new root view is how the scope hands its host to build again.
+    let root = || VsyncScope::new(vsync.clone(), host.clone());
+    let mut laid = lay_out_animated(root(), loose(100.0), vsync.clone());
 
     assert_eq!(*found_ambient.lock(), Some(true));
     assert_eq!(init_count.load(Ordering::Relaxed), 1);
@@ -150,7 +151,7 @@ pub(crate) fn maintained_child_mutes_and_resumes_without_remounting_as_visibilit
     assert!(visible_value > 0.0, "the visible controller should advance");
 
     visible.store(false, Ordering::Relaxed);
-    laid.pump();
+    laid.pump_widget(root());
     laid.pump_for(FRAME);
     laid.pump_for(FRAME);
     let hidden_value = controller.value();
@@ -162,7 +163,7 @@ pub(crate) fn maintained_child_mutes_and_resumes_without_remounting_as_visibilit
     assert_eq!(dispose_count.load(Ordering::Relaxed), 0);
 
     visible.store(true, Ordering::Relaxed);
-    laid.pump();
+    laid.pump_widget(root());
     laid.pump_for(FRAME);
     laid.pump_for(FRAME);
     assert!(
@@ -173,7 +174,7 @@ pub(crate) fn maintained_child_mutes_and_resumes_without_remounting_as_visibilit
     assert_eq!(dispose_count.load(Ordering::Relaxed), 0);
 
     mounted.store(false, Ordering::Relaxed);
-    laid.pump();
+    laid.pump_widget(root());
     assert_eq!(dispose_count.load(Ordering::Relaxed), 1);
     let unmounted_value = controller.value();
     laid.pump_for(FRAME);

@@ -268,8 +268,8 @@ pub(crate) fn pan_claim_region_keeps_the_pan_from_an_enclosing_drag() {
             .drag(DragSlot::pan().on_start(move |_, _| pan.borrow_mut().push("pan")))
             .child(ColoredBox::new(Color::rgb(10, 20, 30)));
         let inner = match claim {
-            Some(claim) => BoxedView(Box::new(PanClaimRegion::new(claim, map).into_view())),
-            None => BoxedView(Box::new(map.into_view())),
+            Some(claim) => BoxedView::new(PanClaimRegion::new(claim, map).into_view()),
+            None => BoxedView::new(map.into_view()),
         };
         let scoped = lay_out(
             GestureDetector::new()
@@ -542,7 +542,7 @@ pub(crate) fn recognizers_follow_a_changed_arena_scope() {
             .drag(DragSlot::horizontal().on_start(move |_, _| pager.borrow_mut().push("pager")))
             .child(SwitchingScope {
                 claimed: claimed.clone(),
-                child: flui_view::BoxedView(Box::new(map.into_view())),
+                child: flui_view::BoxedView::new(map.into_view()),
             }),
         tight(100.0, 100.0),
     );
@@ -574,9 +574,7 @@ pub(crate) fn recognizers_follow_a_changed_arena_scope() {
                 let detector = flui_widgets::RawGestureDetector::new()
                     .recognizer(factory.clone())
                     .child(ColoredBox::new(Color::rgb(10, 20, 30)));
-                flui_view::BoxedView(Box::new(
-                    PanClaimRegion::new(PanClaim::None, detector).into_view(),
-                ))
+                flui_view::BoxedView::new(PanClaimRegion::new(PanClaim::None, detector).into_view())
             }),
         },
         tight(100.0, 100.0),

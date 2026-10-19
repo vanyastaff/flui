@@ -264,9 +264,9 @@ and checks that the flight subsequently lands.
 The flight's rect, opacity, fade anchor and lifecycle flags use owner-local
 `Cell` storage. Terminal status is `Cell<Option<AnimationStatus>>`, shared with
 the relays that report it. Coherent manifest facts and owning slots use short
-`RefCell` borrows. The shuttle configuration has an `Rc` snapshot because
-`BoxedView::clone` executes the authored view's `Clone`; cloning and retiring
-that configuration happen after the slot borrow ends.
+`RefCell` borrows. The shuttle configuration has an `Rc` snapshot; cloning a
+`BoxedView` shares it, so no authored `Clone` runs under the slot borrow, and
+retiring that configuration happens after the borrow ends.
 
 Diversion rechecks cancellation after rect mapping returns, before freezing its
 selected heroes. `cancelling_a_hero_mapping_does_not_refreeze_the_previous_page`
@@ -278,8 +278,8 @@ calling out. Subscription cancellation, overlay removal and each placeholder
 restoration share one first-failure context with registry retirement. Controller
 detachment completes the remaining flights before resuming a cancellation
 failure. `hero_flight_terminal_retirement` uses the private cancellation seam
-to pin single and competing failures, peer restoration, fresh admission and
-authored shuttle cloning which withdraws its own configuration. Physical last
+to pin single and competing failures, peer restoration and fresh admission.
+Physical last
 release withdraws owned fields before the same cleanup protocol; incoming unwind
 retains opaque owners under the navigator's existing policy. ADR-0178 governs
 the cancellation bridge to the animation and foundation layers.
@@ -3647,3 +3647,25 @@ or its list.
 state, not a layout: the plain keep-alive hold is enough, and the pinned slot
 that lays a focused row out beyond the band is not needed for it.
 **Test:** `a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag`.
+
+### 42. A focus edge updates the focus state's readers, not the subtree under it
+
+**Choice:** `Focus` and `FocusScope` still rebuild on every edge of their node (the
+provider's revision is how readers of `Focus::of(ctx).has_focus()` stay current), and
+that rebuild touches nothing it does not own, in two ways. `Focus` always puts its child
+under one `Semantics` and changes only its configuration with whether the node can take
+focus, so a page that becomes unfocusable (a popup route over it) keeps every element
+under each `Focus`, and a gesture in flight under it, such as a long-press drag handed off
+from a context menu. And the child a rebuilt `Focus`/`FocusScope` hands back is the view
+it was given, which an element holding it does not build again (ADR-0245), so the first
+focus gain of an app, which a `Scrollable`'s drag start causes, no longer rebuilds the app
+root under the contact: a root making a `ScrollController` in `build` keeps its drag.
+
+**Why:** the alternatives were notifying readers through a listenable outside the
+widget, which still leaves the `Semantics` wrapper rebuilding its child with the
+focused flag, or giving `Focus` a bespoke skip; the reconciler's identity check fixes
+every wrapper that rebuilds for its own reasons (`Navigator`, `Theme`, animations), not
+just this one. **Tests:** `a_focus_keeps_its_subtree_when_it_stops_being_focusable`,
+`the_first_focus_gain_does_not_rebuild_the_app_under_a_drag`,
+`a_held_press_moved_past_the_slop_closes_the_menu_and_drags` (a real `ContextMenuArea`
+around a long-press `Draggable`).

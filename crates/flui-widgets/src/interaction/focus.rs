@@ -281,7 +281,7 @@ impl Focus {
     /// A focusable subtree with a widget-owned node.
     pub fn new(child: impl IntoView) -> Self {
         Self {
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
             node_ownership: FocusNodeOwnership::Internal,
             autofocus: false,
             can_request_focus: None,
@@ -1043,19 +1043,23 @@ impl ViewState<Focus> for FocusState {
     /// every focus edge, so the flag follows the focus. Assistive focus requests
     /// use this same mounted node and its normal admission policy.
     fn build(&self, view: &Focus, _ctx: &dyn BuildContext) -> impl IntoView {
-        // Only a node that can take focus is annotated. A node that cannot —
-        // the one a `Shortcuts` hosts its key handler on — gets no render
-        // object of its own, so the default bindings above every tree add
-        // nothing to hit testing or to the semantics tree; and an annotation
-        // setting even a false flag would gather its subtree into one node.
-        let child = if view.include_semantics && self.node.can_request_focus() {
+        // The child always sits under one `Semantics`, whether the node can
+        // take focus or not: whether it can changes with the page above
+        // (a popup route makes everything under it unfocusable), and a
+        // subtree whose wrapper appears and disappears is torn down and
+        // mounted again, which cancels a gesture in flight under it. Only a
+        // node that can take focus annotates it. A node that cannot — the one
+        // a `Shortcuts` hosts its key handler on — leaves the configuration
+        // empty, which adds nothing to the semantics tree; setting even a
+        // false flag would gather the subtree into one node.
+        let semantics = if view.include_semantics && self.node.can_request_focus() {
             let semantics = Semantics::new()
                 .focusable(true)
                 .focused(self.node.has_primary_focus());
             // Only the current attachment may focus the node: once another
             // owner adopts it, this element neither advertises nor performs
             // an assistive focus request on the adopter's behalf.
-            let semantics = match self.attachment.as_ref().filter(|a| a.is_attached()) {
+            match self.attachment.as_ref().filter(|a| a.is_attached()) {
                 Some(attachment) => {
                     let node = Rc::clone(&self.node);
                     let attachment = Rc::downgrade(attachment);
@@ -1068,17 +1072,15 @@ impl ViewState<Focus> for FocusState {
                     })
                 }
                 None => semantics,
-            };
-            semantics.child(view.child.clone()).into_view().boxed()
+            }
         } else {
-            view.child.clone()
+            Semantics::new()
         };
+        let child = semantics.child(view.child.clone()).into_view().boxed();
         FocusParentProvider {
             parent: Rc::clone(&self.node),
             revision: self.node_revision.get(),
-            child: BoxedView(Box::new(
-                AnchoredBox::new(self.anchor.clone(), child).into_view(),
-            )),
+            child: BoxedView::new(AnchoredBox::new(self.anchor.clone(), child).into_view()),
         }
     }
 }
@@ -1130,7 +1132,7 @@ impl FocusScope {
     /// A scope with a widget-owned node.
     pub fn new(child: impl IntoView) -> Self {
         Self {
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
             external_scope: None,
             edge_behavior: None,
         }
@@ -1140,7 +1142,7 @@ impl FocusScope {
     /// handle (`FocusScope.withExternalFocusNode`, `:826-834`).
     pub fn with_external_node(scope: Rc<FocusScopeNode>, child: impl IntoView) -> Self {
         Self {
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
             external_scope: Some(scope),
             edge_behavior: None,
         }

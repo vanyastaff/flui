@@ -168,6 +168,8 @@ mod text_store_kit;
 mod transition_route;
 #[path = "transitions.rs"]
 mod transitions;
+#[path = "unchanged_child.rs"]
+mod unchanged_child;
 #[path = "visibility.rs"]
 mod visibility;
 #[path = "widgets_app.rs"]

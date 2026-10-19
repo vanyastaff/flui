@@ -108,13 +108,16 @@ pub(crate) fn dispatch_child(kind: &str) {
         armed: Rc::clone(&armed),
         drops: Arc::clone(&original_drops),
     };
-    let row = DenseRow {
+    // A parent offers its children as new views each time: a view handed back
+    // unchanged is not updated, and these rows need the update to run.
+    let make_row = || DenseRow {
         children: vec![
             DenseHealthyLeaf { marker: 1 }.boxed(),
-            subject.boxed(),
+            subject.clone().boxed(),
             DenseHealthyLeaf { marker: 2 }.boxed(),
         ],
     };
+    let row = make_row();
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     let parent = tree.mount_root_with_pipeline_owner(
@@ -129,7 +132,7 @@ pub(crate) fn dispatch_child(kind: &str) {
         owner.build_scope(&mut tree);
         let old = tree.get(parent).expect("parent").child_ids()[1];
         armed.set(true);
-        tree.update(parent, &row, &mut owner.element_owner_mut());
+        tree.update(parent, &make_row(), &mut owner.element_owner_mut());
         owner.schedule_build_for(parent, 0, RebuildReason::ParentUpdate);
         Some(old)
     } else {
@@ -198,7 +201,7 @@ pub(crate) fn dispatch_child(kind: &str) {
     }
     // Retry through the actual parent producer, replacing any recovery child.
     armed.set(false);
-    tree.update(parent, &row, &mut owner.element_owner_mut());
+    tree.update(parent, &make_row(), &mut owner.element_owner_mut());
     owner.schedule_build_for(parent, 0, RebuildReason::ParentUpdate);
     owner.build_scope(&mut tree);
     owner.finalize_tree(&mut tree);
