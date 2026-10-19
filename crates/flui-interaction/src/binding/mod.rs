@@ -57,7 +57,11 @@
 //! target and admitted transform through the sequence, including at an extent
 //! or after the target retires. End/Cancel, device removal and owner lifecycle
 //! withdrawal release selection before callbacks. A phase-less wheel burst
-//! expires after 500 ms without a packet on the presentation's monotonic clock.
+//! expires after its preset's
+//! [`contactless_latch_idle`](crate::gesture::GestureSettings::contactless_latch_idle)
+//! (1500 ms by default) without a packet on the presentation's monotonic clock,
+//! and a phased latch that never sends its end phase after
+//! [`phased_latch_idle`](crate::gesture::GestureSettings::phased_latch_idle).
 //! Source identity is the native `DeviceId`, or `PointerId` when the platform
 //! supplies no device; tool and role remain mutable metadata. At most 32 sources
 //! are admitted; overflow reaches fresh observers but cannot start an unlatched

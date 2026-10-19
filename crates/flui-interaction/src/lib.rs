@@ -101,15 +101,16 @@
 //! which `cargo xtask module-dag` checks against the manifest's
 //! `[package.metadata.flui.modules]`:
 //!
-//! 1. [`events`] - The owned input vocabulary; [`ids`] - Type-safe identifiers
+//! 0. [`events`] - The owned input vocabulary; [`ids`] - Type-safe identifiers
+//! 1. Close policy and panic containment (private)
 //! 2. [`pointer`](mod@pointer) - Hit testing, routing, capture, hover tracking and resampling;
 //!    [`focus`] - Keyboard focus and traversal; [`text_input`] - IME and clipboard
 //! 3. [`gesture`] - The arena, the recognizers, their settings and details, and
-//!    velocity estimation
+//!    velocity estimation; [`drag`] - Drag-and-drop sessions
 //! 4. [`binding`] - [`GestureBinding`], which composes them for one presentation
-//!
-//! `testing` - Synthetic event builders (requires `testing` feature). Gesture
-//! scripting and replay live in `flui-testing`, which owns the virtual clock.
+//! 5. [`haptics`] - A presentation's haptics, on the binding's clock and dispatch
+//! 6. `testing` - Synthetic event builders (requires `testing` feature). Gesture
+//!    scripting and replay live in `flui-testing`, which owns the virtual clock.
 //!
 //! # Separation from Rendering
 //!

@@ -240,9 +240,13 @@ impl PanZoomSequences {
         withdrawn.into_iter().map(|(_, session)| session).collect()
     }
 
-    /// Yield every session; the map is empty before any retirement runs.
+    /// Yield every session in surface and source order; the map is empty
+    /// before any retirement runs.
     pub(super) fn drain(&self) -> Vec<Rc<PanZoomSequence>> {
-        self.sessions.take().into_values().collect()
+        let mut drained: Vec<_> = self.sessions.take().into_iter().collect();
+        // Retire in key order, independent of hash layout.
+        drained.sort_unstable_by_key(|(key, _)| *key);
+        drained.into_iter().map(|(_, session)| session).collect()
     }
 }
 
