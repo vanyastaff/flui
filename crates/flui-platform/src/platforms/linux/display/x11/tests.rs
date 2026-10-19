@@ -146,4 +146,21 @@ fn a_randr_reconfiguration_on_a_real_server_is_published() {
             Step::Changed | Step::Idle => {}
         }
     }
+
+    // A change made while the machine slept sends the process no event, so the
+    // snapshot taken after a wake reads the outputs from the server again
+    // rather than resolving the list last held. No watcher runs here, as when
+    // the display thread has not heard of the change. (Part of this test, not
+    // a test of its own: two tests reconfiguring one server would race.)
+    use crate::platforms::linux::display::source::LinuxDisplays;
+    use crate::shared::system_notice::StaleOnWake;
+
+    let displays = LinuxDisplays::new();
+    let outputs = || displays.snapshot().expect("a snapshot").displays().len();
+    assert_eq!(outputs(), 1);
+    configure(0, info.x, info.y, &[]);
+    assert_eq!(outputs(), 1, "nothing told the source the screen went");
+    displays.mark_stale();
+    assert_eq!(outputs(), 0, "the wake read the server again");
+    configure(info.mode, info.x, info.y, &info.outputs);
 }
