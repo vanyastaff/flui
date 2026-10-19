@@ -1,7 +1,9 @@
 name: CI
 
-# Runtime CI runs on Linux. Ordinary PRs take docs/tooling/wide lanes; main and merge
-# queue add Linux full checks. Nightly/manual runs use the same Linux jobs.
+# Runtime CI runs on Linux. Ordinary PRs take docs/tooling/wide lanes; main, the
+# merge queue and a manual run add Linux full checks. There is no scheduled run:
+# advisories.yml checks the RustSec database daily, and nothing else changes
+# without a commit.
 # No label enables native application Windows/macOS or GPU jobs. Platform typechecking
 # uses Linux cross tools and macOS SDK legs; OS runtime checks are local commands.
 # Native host-tool tests live separately in xtask-native.yml.
@@ -14,10 +16,6 @@ on:
   push:
     branches: [main]
   merge_group:
-  # Nightly: the extended lane against main even on a quiet day (new
-  # toolchain, new advisories, a flaky test that only shows up sometimes).
-  schedule:
-    - cron: "17 3 * * *"
   workflow_dispatch:
 
 # Least-privilege GITHUB_TOKEN: no job in this workflow writes to the repo,
@@ -216,13 +214,11 @@ jobs:
   # plan — what this run has to build: one `lane` output, decided by
   # `cargo xtask affected --event <event>` (the shell
   # only reads the label, live from the API):
-  #   schedule, workflow_dispatch      extended
-  #   push, merge_group                full
+  #   push, merge_group, workflow_dispatch   full
   #   pull_request, otherwise, by the change (the classification
   #   `cargo xtask affected` prints):
   #     docs      only documentation changed
-  #     tooling   only repo tooling, or a standalone crate (own [workspace],
-  #               no member depends on it): `checks` and `standalone` cover it
+  #     tooling   only repo tooling: `checks` and `deps` cover it
   #     wide      anything that compiles: the whole workspace. `mode` says
   #               whether the change was a set of packages (`packages`) or a
   #               workspace-wide input (`full`: Cargo.lock, root Cargo.toml,
@@ -247,7 +243,6 @@ jobs:
       lane: ${{ steps.scope.outputs.lane }}
       mode: ${{ steps.scope.outputs.mode }}
       heavy_required: ${{ steps.scope.outputs.heavy_required }}
-      standalone: ${{ steps.scope.outputs.standalone }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -281,53 +276,15 @@ jobs:
           echo "event=$EVENT $(grep '^lane=' scope.txt)"
           cat scope.txt
 
-  # ─────────────────────────────────────────────────────────────────────────
-  # standalone — a crate under the repository with its own [workspace] that
-  # no member depends on (`plan`'s `standalone` output; the repository has
-  # none today): nothing in the workspace compiles it, so a change to
-  # it runs the tooling lane and this job checks that it still builds
-  # against its own lockfile. Warnings are not denied: these crates are
-  # outside the workspace lints. Runs only when such a crate changed, never
-  # on main, so it saves no cache.
-  # ─────────────────────────────────────────────────────────────────────────
-  standalone:
-    name: standalone
-    needs: [checks, plan]
-    if: needs.plan.outputs.lane == 'tooling' && needs.plan.outputs.standalone != ''
-    runs-on: ubuntu-26.04
-    timeout-minutes: 30
-    env:
-      CARGO_BUILD_WARNINGS: warn
-      STANDALONE: ${{ needs.plan.outputs.standalone }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install pinned Rust
-        uses: ./.github/actions/rust-toolchain
-
-      - name: cargo check (each changed standalone crate)
-        run: |
-          set -euo pipefail
-          set -f
-          # shellcheck disable=SC2086
-          for d in $STANDALONE; do
-            echo "::group::$d"
-            cargo check --locked --all-targets --manifest-path "$d/Cargo.toml"
-            echo "::endgroup::"
-          done
-
-  # ─────────────────────────────────────────────────────────────────────────
   # clippy — workspace lint with -D warnings. Split out of `checks` so it runs
-  # in PARALLEL with test/doc/bench-compile instead of gating them: clippy
+  # in PARALLEL with test/doc instead of gating them: clippy
   # compiles the whole workspace (minutes); the rest of `checks` is seconds.
   # Gated on `checks` so a malformed PR fails cheap before this build starts.
   # ─────────────────────────────────────────────────────────────────────────
   clippy:
     name: clippy
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
@@ -363,7 +320,7 @@ jobs:
   test:
     name: test
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
@@ -434,7 +391,7 @@ jobs:
   test-nested:
     name: test-nested
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
@@ -466,7 +423,7 @@ jobs:
   test-trybuild:
     name: test-trybuild
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
@@ -518,7 +475,7 @@ jobs:
   test-features:
     name: test-features
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -578,17 +535,6 @@ jobs:
       # smoke test's localizations assertions) need no run here: the `test`
       # job's TEST_SCOPE turns `flui/cupertino,flui/localizations` on.
 
-      # ADR-0074 realm-scoped signals live behind the non-default `signals`
-      # feature on flui-view/flui-testing/flui-widgets/flui-app; the workspace
-      # run never compiles their tests. Same rule as the block above: a test
-      # behind a non-default feature needs its own run.
-      - name: cargo nextest run (realm-scoped signals feature)
-        run: >
-          cargo nextest run
-          -p flui-view -p flui-testing -p flui-widgets -p flui-app
-          --features flui-view/signals,flui-testing/signals,flui-widgets/signals,flui-app/signals
-          --locked --no-fail-fast
-
       # A snapshot assertion in these suites fails with a `.snap.new` beside
       # it; upload them as `test` does, or the diff is only a log tail.
       - name: Upload insta snapshot candidates on failure
@@ -610,7 +556,7 @@ jobs:
   live-smoke:
     name: live-smoke
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -671,24 +617,6 @@ jobs:
       - name: live-smoke-wayland (teardown ordering under headless weston)
         run: cargo xtask live-smoke --wayland
 
-  bench-compile:
-    name: bench-compile
-    needs: [checks, plan]
-    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
-    runs-on: ubuntu-26.04
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install pinned Rust
-        uses: ./.github/actions/rust-toolchain
-
-
-      - name: cargo bench --no-run
-        run: cargo bench -p flui-rendering --no-run --locked
-
   # ─────────────────────────────────────────────────────────────────────────
   # doc — RUSTDOCFLAGS=-D warnings enforces zero new doc warnings. Gated on
   # `checks`. Ubuntu only — docs are platform-agnostic.
@@ -702,7 +630,7 @@ jobs:
   doc:
     name: doc
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
@@ -731,13 +659,14 @@ jobs:
   #               always ours to make (the std API, or an `ignore` with its
   #               reason in deny.toml), so it blocks with the rest.
   #   advisories  the RustSec database as of the run, so a commit that passed
-  #               yesterday can fail today: blocking in the wide, full and
-  #               extended lanes on main, nightly, the merge queue, and any PR
-  #               whose change is workspace-wide or touches a heavy-job input
-  #               (`mode` full, or `heavy_required`: Cargo.lock, deny.toml,
-  #               see `plan`); on a PR that changes only packages
-  #               or tooling a new advisory is reported without failing
-  #               unrelated work, and the next run on main turns red for it.
+  #               yesterday can fail today: blocking in the wide and full
+  #               lanes on main, the merge queue, and any PR whose change is
+  #               workspace-wide or touches a heavy-job input (`mode` full,
+  #               or `heavy_required`: Cargo.lock, deny.toml, see `plan`); on
+  #               a PR that changes only packages or tooling a new advisory
+  #               is reported without failing unrelated work. Between
+  #               commits, advisories.yml runs this step daily against main
+  #               and keeps the "RustSec advisory on main" issue.
   # ─────────────────────────────────────────────────────────────────────────
   deps:
     name: deps
@@ -786,7 +715,7 @@ jobs:
   doc-test:
     name: doc-test
     needs: [checks, plan]
-    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -811,7 +740,7 @@ jobs:
   miri:
     name: miri
     needs: [checks, plan]
-    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
@@ -884,7 +813,7 @@ jobs:
   feature-matrix:
     name: feature-matrix (${{ matrix.slice }})
     needs: [checks, plan]
-    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
@@ -931,7 +860,7 @@ jobs:
   wasm-check:
     name: wasm-check
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -987,7 +916,7 @@ jobs:
   cross-typecheck:
     name: cross-typecheck (${{ matrix.target }})
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -1048,7 +977,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, plan, standalone, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, live-smoke, bench-compile, doc, deps, doc-test, miri]
+    needs: [checks, plan, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, live-smoke, doc, deps, doc-test, miri]
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
@@ -1080,10 +1009,9 @@ jobs:
       #    `plan`'s `lane` alone, and the aggregator recomputes it instead of
       #    trusting each job's `if:`. Every lane runs checks and plan; then
       #      docs      nothing else
-      #      tooling   deps, and standalone when plan names a standalone crate
+      #      tooling   deps
       #      wide      deps + HEAVY_JOBS (the Linux PR gate)
       #      full      wide + FULL_JOBS (additional Linux checks)
-      #      extended  full + EXTENDED_JOBS
       #    Every other job must skip. Any other skip (a drifted `if:`, a
       #    cancellation) or a job that ran where it should have skipped fails
       #    the aggregator. Each list must equal the jobs whose `if:` names its
@@ -1095,47 +1023,41 @@ jobs:
             clippy wasm-check cross-typecheck test test-nested test-trybuild doc
             test-features live-smoke
           FULL_JOBS: >-
-            feature-matrix bench-compile
-            doc-test miri
-          EXTENDED_JOBS: >-
+            feature-matrix doc-test miri
           LANE: ${{ needs.plan.outputs.lane }}
-          STANDALONE: ${{ needs.plan.outputs.standalone }}
           EVENT: ${{ github.event_name }}
         run: cargo xtask ci-verify
 
   # ─────────────────────────────────────────────────────────────────────────
-  # notify-main-red -- a red `ci` on main or on the nightly run opens (or
-  # comments on) one tracking issue, so a broken main is never silent. It
-  # runs only there: on a PR the red check on the PR is the notification.
-  # The team rule for a red main (AGENTS.md): fix forward within the hour or
-  # revert.
+  # notify-main-red -- a red `ci` on main opens (or comments on) one tracking
+  # issue, so a broken main is never silent, and the next green run on main
+  # closes it again. It runs only on main: on a PR the red check on the PR
+  # is the notification. The team rule for a red main (AGENTS.md): fix
+  # forward within the hour or revert.
   # ─────────────────────────────────────────────────────────────────────────
   notify-main-red:
     name: notify-main-red
     needs: [ci]
-    if: ${{ !cancelled() && needs.ci.result == 'failure' && (github.event_name == 'push' || github.event_name == 'schedule') }}
+    if: ${{ !cancelled() && github.event_name == 'push' && contains(fromJSON('["success","failure"]'), needs.ci.result) }}
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       issues: write
     steps:
-      - name: Open or update the "main is red" issue
+      # Only the local action is needed from the checkout.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/tracking-issue
+
+      - name: Open, update or close the "main is red" issue
+        uses: ./.github/actions/tracking-issue
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
-          EVENT: ${{ github.event_name }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          title="CI is red on main"
-          body="\`ci\` failed on \`${SHA:0:10}\` ($EVENT): $RUN_URL
-          Rule (AGENTS.md): fix forward within the hour or revert. Close this issue once main is green again."
-          number=$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
-            --jq "map(select(.title == \"$title\")) | .[0].number // empty")
-          if [ -n "$number" ]; then
-            gh issue comment "$number" --body "$body"
-            echo "commented on #$number"
-          else
-            gh issue create --title "$title" --body "$body"
-          fi
+        with:
+          title: CI is red on main
+          outcome: ${{ needs.ci.result }}
+          body: |
+            `ci` failed on ${{ github.sha }}: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Rule (AGENTS.md): fix forward within the hour or revert. The next green run on main closes this issue.

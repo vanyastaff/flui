@@ -4,8 +4,8 @@
 //!
 //! The lane ([`Lane::decide`]) comes from the event and
 //! the classification: `docs` and `tooling` compile nothing, `wide` runs every
-//! Linux PR jobs over the workspace in parallel; `full` adds Linux checks,
-//! and nightly/manual `extended` uses the same Linux coverage. A pull request
+//! Linux PR job over the workspace in parallel; `full` (main, the merge queue
+//! and a manual run) adds Linux checks. A pull request
 //! that compiles anything takes `wide`: one serial job over the changed crates
 //! measured slower than the parallel jobs over everything (35 against 18
 //! minutes, median of the runs of 2026-09-30), and hosted runners do not queue
@@ -52,8 +52,6 @@ pub(super) enum Event {
     Push,
     #[value(name = "merge_group")]
     MergeGroup,
-    #[value(name = "schedule")]
-    Schedule,
     #[value(name = "workflow_dispatch")]
     WorkflowDispatch,
 }
@@ -63,15 +61,14 @@ pub(super) enum Event {
 pub(super) enum Lane {
     /// Documentation only: `checks`, `plan`.
     Docs,
-    /// Repository tooling or a standalone crate: `deps` and `standalone` too.
+    /// Repository tooling: `deps` too.
     Tooling,
     /// A pull request that compiles anything: every Linux job over the whole
     /// workspace (`HEAVY_JOBS`).
     Wide,
-    /// `main` and the merge queue: `wide` plus additional Linux jobs (`FULL_JOBS`).
+    /// `main`, the merge queue and a manual run: `wide` plus additional Linux
+    /// jobs (`FULL_JOBS`).
     Full,
-    /// Nightly and dispatch: Linux full coverage.
-    Extended,
 }
 
 impl Lane {
@@ -81,15 +78,13 @@ impl Lane {
             Self::Tooling => "tooling",
             Self::Wide => "wide",
             Self::Full => "full",
-            Self::Extended => "extended",
         }
     }
 
     /// The lane for a run: the event first, then what the change touches.
     pub(super) fn decide(event: Event, mode: Mode, heavy_required: bool) -> Self {
         match event {
-            Event::Schedule | Event::WorkflowDispatch => Self::Extended,
-            Event::Push | Event::MergeGroup => Self::Full,
+            Event::Push | Event::MergeGroup | Event::WorkflowDispatch => Self::Full,
             Event::PullRequest if heavy_required => Self::Wide,
             Event::PullRequest => match mode {
                 Mode::Full | Mode::Packages => Self::Wide,
@@ -100,8 +95,8 @@ impl Lane {
     }
 }
 
-/// `cargo xtask affected`'s outputs (CI's `plan` reads `lane`, `mode`,
-/// `cross_ios` and `standalone`), one field per output, in output order.
+/// `cargo xtask affected`'s outputs (CI's `plan` reads `lane`, `mode` and
+/// `heavy_required`), one field per output, in output order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LaneArgs {
     pub(super) lane: Lane,
@@ -123,14 +118,11 @@ pub(super) struct LaneArgs {
     pub(super) hack_args: String,
     pub(super) doc_args: String,
     pub(super) doctest_args: String,
-    /// Standalone crate directories the change touches (own `[workspace]`,
-    /// outside every member's graph), space-separated.
-    pub(super) standalone: String,
 }
 
 impl LaneArgs {
     /// `(key, value)` in output order; booleans as `true`/`false`.
-    pub(super) fn fields(&self) -> [(&'static str, String); 20] {
+    pub(super) fn fields(&self) -> [(&'static str, String); 19] {
         let b = |v: bool| if v { "true" } else { "false" }.to_owned();
         [
             ("lane", self.lane.as_str().to_owned()),
@@ -156,7 +148,6 @@ impl LaneArgs {
             ("hack_args", self.hack_args.clone()),
             ("doc_args", self.doc_args.clone()),
             ("doctest_args", self.doctest_args.clone()),
-            ("standalone", self.standalone.clone()),
         ]
     }
 }
@@ -430,7 +421,6 @@ pub(super) fn lane_args(repo: &Repo, scope: &Scope, event: Event) -> anyhow::Res
         hack_args,
         doc_args,
         doctest_args,
-        standalone: scope.standalone.join(" "),
     })
 }
 
@@ -468,13 +458,12 @@ mod tests {
     }
 
     fn events_pick_their_lane() {
-        use Event::{MergeGroup, PullRequest, Push, Schedule, WorkflowDispatch};
+        use Event::{MergeGroup, PullRequest, Push, WorkflowDispatch};
         for mode in [Mode::Docs, Mode::None, Mode::Packages, Mode::Full] {
             for heavy in [false, true] {
                 assert_eq!(Lane::decide(Push, mode, heavy), Lane::Full);
                 assert_eq!(Lane::decide(MergeGroup, mode, heavy), Lane::Full);
-                assert_eq!(Lane::decide(Schedule, mode, heavy), Lane::Extended);
-                assert_eq!(Lane::decide(WorkflowDispatch, mode, heavy), Lane::Extended);
+                assert_eq!(Lane::decide(WorkflowDispatch, mode, heavy), Lane::Full);
             }
             assert_eq!(Lane::decide(PullRequest, mode, true), Lane::Wide);
         }
@@ -488,7 +477,7 @@ mod tests {
             ],
             [Lane::Docs, Lane::Tooling, Lane::Wide, Lane::Wide]
         );
-        let names: Vec<String> = [PullRequest, Push, MergeGroup, Schedule, WorkflowDispatch]
+        let names: Vec<String> = [PullRequest, Push, MergeGroup, WorkflowDispatch]
             .iter()
             .map(|e| {
                 clap::ValueEnum::to_possible_value(e)
@@ -499,13 +488,7 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            [
-                "pull_request",
-                "push",
-                "merge_group",
-                "schedule",
-                "workflow_dispatch"
-            ],
+            ["pull_request", "push", "merge_group", "workflow_dispatch"],
             "github.event_name spellings"
         );
     }
@@ -525,30 +508,12 @@ mod tests {
             packages: vec!["flui-platform".to_owned()],
             seeds: vec!["flui-platform".to_owned()],
             manifests: Vec::new(),
-            standalone: Vec::new(),
             heavy_required: false,
             reason: String::new(),
         };
         let a = lane_args(repo(), &only_platform, Event::PullRequest).expect("lane args");
         assert_eq!(a.test_args, "");
         assert!(a.platform, "its own leg runs it");
-    }
-
-    fn a_standalone_crate_runs_the_tooling_lane() {
-        let only_standalone = Scope {
-            mode: Mode::None,
-            packages: Vec::new(),
-            seeds: Vec::new(),
-            manifests: Vec::new(),
-            standalone: vec!["tools/spike".to_owned()],
-            heavy_required: false,
-            reason: String::new(),
-        };
-        let a = lane_args(repo(), &only_standalone, Event::PullRequest).expect("lane args");
-        assert_eq!(
-            (a.lane, a.standalone.as_str(), a.pkg_args.as_str()),
-            (Lane::Tooling, "tools/spike", "")
-        );
     }
 
     fn a_changed_manifest_gets_the_per_feature_pass() {
@@ -740,7 +705,6 @@ mod tests {
                 &a.hack_args,
                 &a.doc_args,
                 &a.doctest_args,
-                &a.standalone,
             ];
             assert!(empty.iter().all(|v| v.is_empty()), "{files:?}: {a:?}");
             assert!(
@@ -773,10 +737,6 @@ mod tests {
                 (
                     "platform_only_scope_has_no_test_args",
                     platform_only_scope_has_no_test_args as fn(),
-                ),
-                (
-                    "a_standalone_crate_runs_the_tooling_lane",
-                    a_standalone_crate_runs_the_tooling_lane as fn(),
                 ),
                 (
                     "a_changed_manifest_gets_the_per_feature_pass",
