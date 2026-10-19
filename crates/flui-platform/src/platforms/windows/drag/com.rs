@@ -40,8 +40,7 @@ use windows_core::{BOOL, HRESULT, Ref};
 use super::{OleTransfer, clipboard_format, describe, global_format, write_global};
 use crate::platforms::windows::platform::{WindowIdentity, with_window_context_checked};
 use crate::shared::ole_drag_drop::{
-    DragContinuation, NativeFormat, actions_of, answered_action, continue_drag, effect_bits,
-    encode, native_format,
+    DragContinuation, NativeFormat, actions_of, continue_drag, effect_bits, encode, native_format,
 };
 
 pub(in crate::platforms::windows) use objects::{
@@ -428,7 +427,9 @@ impl WindowDropTarget {
 
     /// The effect to answer the OS with: the cached feedback, narrowed.
     fn answer(&self, id: DataTransferId, allowed: TransferActions) -> DROPEFFECT {
-        answered_action(self.transfer.feedback(id), allowed)
+        self.transfer
+            .feedback(id)
+            .resolve(allowed)
             .map_or(DROPEFFECT_NONE, |action| DROPEFFECT(effect_bits(action)))
     }
 
@@ -540,7 +541,7 @@ impl IDropTarget_Impl for WindowDropTarget_Impl {
             };
             // The action comes from what the target last cached, never from
             // the drop itself; a refusal leaves instead of dropping.
-            let Some(action) = answered_action(self.transfer.feedback(id), allowed) else {
+            let Some(action) = self.transfer.feedback(id).resolve(allowed) else {
                 self.leave();
                 return Ok(());
             };

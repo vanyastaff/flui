@@ -37,8 +37,8 @@ use parking_lot::Mutex;
 
 use crate::shared::android_drag::{
     ACTION_DRAG_ENDED, ACTION_DRAG_ENTERED, ACTION_DRAG_EXITED, ACTION_DRAG_LOCATION,
-    ACTION_DRAG_STARTED, ClipSource, DroppedClip, Held, clip_parts, drop_action, held,
-    incoming_allowed, offered, source_end, uri_bytes,
+    ACTION_DRAG_STARTED, ClipSource, DroppedClip, Held, clip_parts, held, incoming_allowed,
+    offered, source_end, uri_bytes,
 };
 use crate::shared::os_version::Since;
 use crate::shared::os_version::android::{AndroidApi, DragSource};
@@ -200,7 +200,7 @@ impl AndroidTransfer {
             let mut offers = self.offers.lock();
             let (id, allowed) = offers.hover.take()?;
             let feedback = offers.feedback.get(&id).copied().unwrap_or_default();
-            match drop_action(feedback, allowed) {
+            match feedback.resolve(allowed) {
                 None => {
                     Self::close(&mut offers, id);
                     (DragDropEvent::Exited { id }, None)

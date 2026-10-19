@@ -4,7 +4,9 @@ use std::num::NonZeroU8;
 use std::time::Duration;
 
 use flui_platform_api::EventTime;
-use flui_platform_api::pointer::{PointerButton, PointerButtons, PointerKind};
+use flui_platform_api::pointer::{PointerButton, PointerButtons, PointerId, PointerKind};
+
+use super::RawPoint;
 
 /// What a button reading does to a contact's sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,10 +138,10 @@ pub struct ClickSettings {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct LastPress {
-    key: (u64, u64),
+    pointer: PointerId,
     button: PointerButton,
     time: EventTime,
-    position: (f64, f64),
+    position: RawPoint,
     count: NonZeroU8,
 }
 
@@ -170,27 +172,27 @@ impl ClickCounter {
         self.last = None;
     }
 
-    /// The count of a press of `button` from contact `key` at `time` and
-    /// `position` (device pixels), and record it.
+    /// The count of a press of `button` from `pointer` at `time` and
+    /// `position`, and record it.
     pub fn press(
         &mut self,
-        key: (u64, u64),
+        pointer: PointerId,
         button: PointerButton,
         time: EventTime,
-        position: (f64, f64),
+        position: RawPoint,
     ) -> Option<NonZeroU8> {
         let settings = self.settings?;
         let continues = self.last.filter(|last| {
-            last.key == key
+            last.pointer == pointer
                 && last.button == button
                 && time >= last.time
                 && time.saturating_duration_since(last.time) <= settings.interval
-                && (position.0 - last.position.0).abs() <= settings.area.0 / 2.0
-                && (position.1 - last.position.1).abs() <= settings.area.1 / 2.0
+                && (position.x - last.position.x).abs() <= settings.area.0 / 2.0
+                && (position.y - last.position.y).abs() <= settings.area.1 / 2.0
         });
         let count = continues.map_or(NonZeroU8::MIN, |last| last.count.saturating_add(1));
         self.last = Some(LastPress {
-            key,
+            pointer,
             button,
             time,
             position,
