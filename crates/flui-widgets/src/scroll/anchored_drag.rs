@@ -47,9 +47,8 @@ use flui_view::{
 
 use super::nested::presentation_device_pixel_ratio;
 use super::nested::{
-    AnchorSnap, ChainNode, FlingHandoff, FlingStep, NestedScrollConnection,
-    NestedScrollScope, Participant, PlaneSource, ScrollCause, ScrollDevice, ScrollEndReason,
-    ScrollStep,
+    AnchorSnap, ChainNode, FlingHandoff, FlingStep, NestedScrollConnection, NestedScrollScope,
+    Participant, PlaneSource, ScrollCause, ScrollDevice, ScrollEndReason, ScrollStep,
 };
 use super::scroll_owner::{MotionHook, MoveOutcome, ScrollOwner, SharedSnapPolicy};
 use super::{ScrollController, Scrollable};

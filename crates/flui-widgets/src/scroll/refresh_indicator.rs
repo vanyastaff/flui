@@ -59,7 +59,6 @@ use flui_foundation::geometry::{Axis, Vec2};
 use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_interaction::InputSequenceId;
-use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_platform_api::TargetPlatform;
 use flui_platform_api::keyboard::NamedKey;

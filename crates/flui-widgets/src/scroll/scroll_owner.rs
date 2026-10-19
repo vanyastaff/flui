@@ -28,7 +28,7 @@ use flui_animation::simulation::{SpringDescription, SpringSimulation};
 use flui_animation::{Animation, AnimationController, AnimationRunFuture, Simulation};
 use flui_foundation::geometry::{Axis, Point, Vec2};
 use flui_foundation::panic::PanicRecovery;
-use flui_interaction::gesture::{GestureArena, GestureSettingsProvider};
+use flui_interaction::gesture::GestureSettingsProvider;
 use flui_interaction::{HoldEnd, InputSequenceId, RemainderHandoff};
 use flui_platform_api::keyboard::Code;
 use flui_platform_api::pointer::{DeviceId, PointerKind};

@@ -92,8 +92,7 @@ use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{Listenable, ListenerId};
 use flui_interaction::focus::{FocusNode, FocusNodeRegistration, KeyEventResult};
 use flui_interaction::gesture::{
-    GestureArena, GestureSettingsProvider, ScaleEndDetails, ScaleStartDetails, ScaleStartMode,
-    ScaleUpdateDetails,
+    GestureSettingsProvider, ScaleEndDetails, ScaleStartDetails, ScaleStartMode, ScaleUpdateDetails,
 };
 use flui_interaction::pointer::EventPropagation;
 use flui_interaction::{GestureEndReason, InputSequenceId, RemainderHandoff, Velocity};
