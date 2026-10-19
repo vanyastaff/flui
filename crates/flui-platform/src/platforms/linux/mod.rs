@@ -82,6 +82,7 @@ mod accessibility;
 pub(crate) mod display;
 #[cfg(feature = "winit-backend")]
 pub(crate) mod host_notices;
+#[cfg(feature = "winit-backend")]
 pub(crate) mod lifecycle_model;
 mod window_ext;
 #[cfg(feature = "winit-backend")]

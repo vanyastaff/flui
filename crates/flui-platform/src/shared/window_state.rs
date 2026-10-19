@@ -4,13 +4,25 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use flui_platform_api::{WindowMode, WindowState};
+use flui_platform_api::WindowState;
 use parking_lot::Mutex;
 
 /// The mode of a window from what the window system says of it. A minimized
 /// window is hidden whatever else is set; a fullscreen one often keeps its
 /// maximized flag, so fullscreen comes before maximized.
-pub(crate) const fn mode_of(minimized: bool, fullscreen: bool, maximized: bool) -> WindowMode {
+#[cfg(any(
+    all(
+        feature = "winit-backend",
+        any(windows, target_os = "macos", target_os = "linux")
+    ),
+    test
+))]
+pub(crate) const fn mode_of(
+    minimized: bool,
+    fullscreen: bool,
+    maximized: bool,
+) -> flui_platform_api::WindowMode {
+    use flui_platform_api::WindowMode;
     if minimized {
         WindowMode::Minimized
     } else if fullscreen {
