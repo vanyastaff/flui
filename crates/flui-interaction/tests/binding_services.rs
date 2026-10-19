@@ -392,54 +392,50 @@ fn a_drain_callback_that_closes_again_settles_once() {
 // Nested dispatch
 // ----------------------------------------------------------------------------
 
-/// A claim reached while the winner's target is delivered owes the rest of
-/// the route its `Cancel(Claimed)` after that packet; a dispatch nested in
-/// the winner's callback leaves the outer packet's delivery in order.
-#[test]
-fn a_nested_dispatch_leaves_the_outer_claim_to_the_outer_dispatch() {
-    use flui_interaction::events::make_up_event_for_id;
-    use flui_interaction::{DragAxis, DragGestureRecognizer, RecognizerSet};
+type Heard = Rc<RefCell<Vec<&'static str>>>;
+
+fn heard_name(event: &PointerEvent) -> &'static str {
     use flui_platform_api::pointer::CancelReason;
-
-    fn name(event: &PointerEvent) -> &'static str {
-        match event {
-            PointerEvent::Down(_) => "down",
-            PointerEvent::Move(_) => "move",
-            PointerEvent::Up(_) => "up",
-            PointerEvent::Cancel(cancel) if cancel.reason == CancelReason::Claimed => "claimed",
-            PointerEvent::Cancel(_) => "cancel",
-            _ => "other",
-        }
+    match event {
+        PointerEvent::Down(_) => "down",
+        PointerEvent::Move(_) => "move",
+        PointerEvent::Up(_) => "up",
+        PointerEvent::Cancel(cancel) if cancel.reason == CancelReason::Claimed => "claimed",
+        PointerEvent::Cancel(_) => "cancel",
+        _ => "other",
     }
+}
 
-    let lane = InteractionLane::try_new().expect("lane");
-    let binding = Rc::new(GestureBinding::new());
+/// A route whose leaf feeds a horizontal drag and runs `after` on each event
+/// it hears, and whose parent feeds a vertical rival and logs what it
+/// hears: a horizontal Move makes the drag claim the contact. The caller keeps
+/// the returned recognizers alive for as long as the route is used.
+fn claiming_route(
+    lane: &InteractionLane,
+    binding: &GestureBinding,
+    after: impl Fn(&PointerEvent) + 'static,
+) -> (HitTestResult, Heard, Box<dyn std::any::Any>) {
+    use flui_interaction::{DragAxis, DragGestureRecognizer, RecognizerSet};
     let winner =
         DragGestureRecognizer::builder(binding.arena().clone(), DragAxis::Horizontal).build();
-    // A rival, so the winner claims the contact instead of winning by default.
     let loser = DragGestureRecognizer::builder(binding.arena().clone(), DragAxis::Vertical).build();
-    let observed = Rc::new(RefCell::new(Vec::new()));
+    let heard = Heard::default();
     let route = lane.enter(|| {
         let handle = lane.dispatch_handle();
         let mut set = RecognizerSet::default();
         set.attach(&winner);
-        let nested = Rc::downgrade(&binding);
         let inner = handle
             .register_pointer(move |dispatch| {
                 set.dispatch(dispatch);
-                if matches!(dispatch.local, PointerEvent::Move(_)) {
-                    // A hover of another mouse, dispatched from the callback.
-                    let binding = nested.upgrade().expect("binding");
-                    binding.handle_pointer_event(&hover(9, Offset::ZERO), |_| HitTestResult::new());
-                }
+                after(dispatch.local);
             })
             .expect("winner target");
-        let log = Rc::clone(&observed);
+        let log = Rc::clone(&heard);
         let mut rival = RecognizerSet::default();
         rival.attach(&loser);
         let outer = handle
             .register_pointer(move |dispatch| {
-                log.borrow_mut().push(name(dispatch.local));
+                log.borrow_mut().push(heard_name(dispatch.local));
                 rival.dispatch(dispatch);
             })
             .expect("rival target");
@@ -448,7 +444,48 @@ fn a_nested_dispatch_leaves_the_outer_claim_to_the_outer_dispatch() {
         route.add(HitTestEntry::new(RenderId::new(2)).pointer_target(outer));
         route
     });
-    let id = pointer(4);
+    (route, heard, Box::new((winner, loser)))
+}
+
+fn touch_down(id: u64) -> PointerEvent {
+    make_down_event_for_id(pointer(id), Offset::ZERO, PointerKind::Touch).expect("down")
+}
+
+fn touch_move(id: u64, x: f64) -> PointerEvent {
+    make_move_event_for_id(pointer(id), Offset::new(x, 0.0), PointerKind::Touch).expect("move")
+}
+
+fn touch_up(id: u64, x: f64) -> PointerEvent {
+    make_up_event_for_id(pointer(id), Offset::new(x, 0.0), PointerKind::Touch).expect("up")
+}
+
+/// The rest of a claimed contact's route hears one `Cancel(Claimed)` after
+/// the claiming packet reached it, whatever the winner's callback dispatches.
+#[test]
+fn a_nested_dispatch_settles_each_claim_once_its_packet_is_delivered() {
+    run_rows(&[
+        (
+            "a_nested_dispatch_leaves_the_outer_claim_to_the_outer_dispatch",
+            a_nested_dispatch_leaves_the_outer_claim_to_the_outer_dispatch,
+        ),
+        (
+            "a_contact_claimed_and_ended_in_a_nested_dispatch_cancels_its_rival",
+            a_contact_claimed_and_ended_in_a_nested_dispatch_cancels_its_rival,
+        ),
+    ]);
+}
+
+fn a_nested_dispatch_leaves_the_outer_claim_to_the_outer_dispatch() {
+    let lane = InteractionLane::try_new().expect("lane");
+    let binding = Rc::new(GestureBinding::new());
+    let nested = Rc::downgrade(&binding);
+    // A hover of another mouse, dispatched from the winner's callback.
+    let (route, heard, _recognizers) = claiming_route(&lane, &binding, move |event| {
+        if matches!(event, PointerEvent::Move(_)) {
+            let binding = nested.upgrade().expect("binding");
+            binding.handle_pointer_event(&hover(9, Offset::ZERO), |_| HitTestResult::new());
+        }
+    });
     let send = |event: PointerEvent| {
         lane.enter(|| {
             binding.handle_pointer_event(&event, |_| route.clone());
@@ -456,12 +493,49 @@ fn a_nested_dispatch_leaves_the_outer_claim_to_the_outer_dispatch() {
             binding.drain_deferred_arena_resolutions();
         });
     };
-    send(make_down_event_for_id(id, Offset::ZERO, PointerKind::Touch).expect("down"));
-    send(make_move_event_for_id(id, Offset::new(60.0, 0.0), PointerKind::Touch).expect("move"));
-    send(make_up_event_for_id(id, Offset::new(60.0, 0.0), PointerKind::Touch).expect("up"));
+    send(touch_down(4));
+    send(touch_move(4, 60.0));
+    send(touch_up(4, 60.0));
     assert_eq!(
-        *observed.borrow(),
+        *heard.borrow(),
         ["down", "move", "claimed"],
-        "the observer heard the claiming Move before its Cancel(Claimed)"
+        "the rival heard the claiming Move before its Cancel(Claimed)"
+    );
+}
+
+fn a_contact_claimed_and_ended_in_a_nested_dispatch_cancels_its_rival() {
+    let lane = InteractionLane::try_new().expect("lane");
+    let binding = Rc::new(GestureBinding::new());
+    let (claimed, heard, _claimed_recognizers) = claiming_route(&lane, &binding, |_| {});
+    // Another contact's Down callback delivers the claiming Move of the
+    // first contact and lifts it, before the Down's dispatch returns.
+    let nested = Rc::downgrade(&binding);
+    let (driver, _, _driver_recognizers) = claiming_route(&lane, &binding, move |event| {
+        if !matches!(event, PointerEvent::Down(_)) {
+            return;
+        }
+        let binding = nested.upgrade().expect("binding");
+        binding.handle_pointer_event(&touch_move(5, 60.0), |_| HitTestResult::new());
+        binding.flush_pending_moves();
+        binding.handle_pointer_event(&touch_up(5, 60.0), |_| HitTestResult::new());
+    });
+    let send = |event: PointerEvent, route: &HitTestResult| {
+        lane.enter(|| {
+            binding.handle_pointer_event(&event, |_| route.clone());
+            binding.flush_pending_moves();
+            binding.drain_deferred_arena_resolutions();
+        });
+    };
+    send(touch_down(5), &claimed);
+    send(touch_down(3), &driver);
+    assert_eq!(
+        binding.active_pointer_count(),
+        1,
+        "the nested Up ended its contact"
+    );
+    assert_eq!(
+        *heard.borrow(),
+        ["down", "move", "claimed"],
+        "the claimed contact's rival heard its Cancel(Claimed) before the contact ended"
     );
 }

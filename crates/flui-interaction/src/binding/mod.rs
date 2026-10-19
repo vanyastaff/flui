@@ -179,6 +179,17 @@ impl From<PointerInfo> for SignalSource {
     }
 }
 
+/// One contact's packet in flight; dropping it, also in an unwind, pops it.
+struct InFlight<'a> {
+    stack: &'a RefCell<SmallVec<[PointerId; 2]>>,
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.stack.borrow_mut().pop();
+    }
+}
+
 struct DetachedPointerSequence {
     cached: Option<CachedPointerRoute>,
     pending_moves: SmallVec<[PendingMoveState; 1]>,
@@ -344,6 +355,9 @@ pub struct GestureBinding {
     /// latches and contactless sources carry; refuses at exhaustion
     /// (ADR-0207 §4).
     sequences: Rc<IdMint<InputSequenceId>>,
+    /// Contacts whose packet a dispatch on the stack is delivering, innermost
+    /// last.
+    in_flight: RefCell<SmallVec<[PointerId; 2]>>,
 }
 
 impl Default for GestureBinding {
@@ -406,6 +420,7 @@ impl GestureBinding {
             default_profiles,
             surfaces: IdMint::new(),
             sequences,
+            in_flight: RefCell::default(),
         }
     }
 
@@ -513,13 +528,8 @@ impl GestureBinding {
         self.close.enter();
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             let value = body();
-            // A verdict the body reached hands its continuing contact over,
-            // once the outermost packet reached its whole route: a dispatch
-            // nested in a callback must not cancel targets that packet has
-            // yet to reach.
-            if self.close.is_outermost()
-                && let Some(failure) = self.settle_claims()
-            {
+            // A verdict the body reached hands its continuing contact over.
+            if let Some(failure) = self.settle_claims() {
                 failure.resume();
             }
             value
@@ -848,6 +858,8 @@ impl GestureBinding {
             return;
         }
         self.dispatch(|| {
+            let _in_flight = crate::PointerEventExt::pointer_id(event)
+                .map(|pointer| self.deliver_packet_of(pointer));
             let ending = matches!(
                 event,
                 PointerEvent::Down(_) | PointerEvent::Up(_) | PointerEvent::Cancel(_)
@@ -1011,6 +1023,7 @@ impl GestureBinding {
                         .contacts
                         .is_current(snapshot.pointer_id, snapshot.sequence)
                     {
+                        let _in_flight = self.deliver_packet_of(snapshot.pointer_id);
                         let delivered = self.dispatch_event_with_capture(
                             &event,
                             snapshot.token,
@@ -1044,6 +1057,7 @@ impl GestureBinding {
                 let delivery = capture.begin_delivery();
                 resampler.sample(sample_time, next_sample_time, |resampled| {
                     if self.contacts.is_current(pointer_id, sequence) {
+                        let _in_flight = self.deliver_packet_of(pointer_id);
                         let delivered = self.dispatch_event(&resampled, token);
                         RoutePanic::preserve_first(
                             &mut first_panic,
@@ -1078,6 +1092,7 @@ impl GestureBinding {
             match pending {
                 PendingMove::Contact { event, sequence } => {
                     if self.contacts.is_current(pointer_id, sequence) {
+                        let _in_flight = self.deliver_packet_of(pointer_id);
                         let delivered = self.dispatch_on_cached_route(pointer_id, &event);
                         RoutePanic::preserve_first(
                             &mut first_panic,
@@ -1595,6 +1610,13 @@ impl GestureBinding {
         {
             // Another device's packet under this contact's pointer id belongs
             // to no sequence of this binding.
+            return;
+        }
+        // A revision corrects a reading it names by time, so it moves the
+        // contact's state on in nothing, but it speaks for the same device.
+        if let PointerEvent::Revise(revision) = event
+            && !self.contacts.admits_device(&revision.pointer)
+        {
             return;
         }
         // A Down mints its own sequence; a wheel or pan/zoom packet belongs to
@@ -2306,38 +2328,65 @@ impl GestureBinding {
     /// The hand-off already restricts later packets to the owner's target,
     /// so a target that receives this cancellation hears nothing more of the
     /// contact.
+    ///
+    /// A contact whose packet an enclosing dispatch is still delivering keeps
+    /// its debt for that dispatch: its targets past the callback that nested
+    /// this one have yet to hear the packet.
     fn settle_claims(&self) -> Option<RoutePanic> {
         let mut first = None;
         for debt in self.contacts.claim_debts() {
+            if self.in_flight.borrow().contains(&debt.contact.pointer.id)
+                || debt.capture.is_delivering()
+            {
+                continue;
+            }
             let Some(owner) = debt.capture.take_claim_debt() else {
                 continue;
             };
             let contact = debt.contact;
             let Some(token) = debt.token.filter(|_| {
-                !self.close.withholds_delivery()
-                    && self
-                        .contacts
-                        .is_current(contact.pointer.id, contact.sequence)
+                self.contacts
+                    .is_current(contact.pointer.id, contact.sequence)
             }) else {
                 continue;
             };
-            let cancel = PointerEvent::Cancel(PointerCancel::new(
-                contact.pointer,
-                contact.time,
-                CancelReason::Claimed,
-            ));
-            let delivered = match active_dispatch_handle()
-                .and_then(|handle| handle.invoke_pointer_route_except(token, &cancel, owner))
-            {
-                Ok(panic) => panic,
-                Err(error) => {
-                    tracing::error!(?error, "claimed-contact cancellation failed");
-                    None
-                }
-            };
+            let delivered = self.cancel_claimed(contact.pointer, contact.time, token, owner);
             RoutePanic::preserve_first(&mut first, delivered, "claimed-contact cancellation");
         }
         first
+    }
+
+    /// Deliver `Cancel(Claimed)` to every target of `token`'s route but the
+    /// claim's `owner`.
+    fn cancel_claimed(
+        &self,
+        pointer: PointerInfo,
+        time: flui_platform_api::EventTime,
+        token: ResolvedRouteToken,
+        owner: crate::pointer::PointerTarget,
+    ) -> Option<RoutePanic> {
+        if self.close.withholds_delivery() {
+            return None;
+        }
+        let cancel = PointerEvent::Cancel(PointerCancel::new(pointer, time, CancelReason::Claimed));
+        match active_dispatch_handle()
+            .and_then(|handle| handle.invoke_pointer_route_except(token, &cancel, owner))
+        {
+            Ok(panic) => panic,
+            Err(error) => {
+                tracing::error!(?error, "claimed-contact cancellation failed");
+                None
+            }
+        }
+    }
+
+    /// Mark `pointer`'s packet in flight until the guard drops: a dispatch
+    /// nested in its callbacks leaves the contact's claim to this one.
+    fn deliver_packet_of(&self, pointer: PointerId) -> InFlight<'_> {
+        self.in_flight.borrow_mut().push(pointer);
+        InFlight {
+            stack: &self.in_flight,
+        }
     }
 
     fn queue_pending_move(&self, key: MoveKey, mut pending: PendingMove) {
