@@ -997,7 +997,7 @@ impl GestureArena {
     /// Observers run after the outermost operation returns, never inside one.
     pub(crate) fn run_owned_recovery(&self, action: impl FnOnce(&mut RecoveryScope<'_>)) {
         observe_after(&self.shared.observers, || {
-            self.shared.recovery.standalone(action)
+            self.shared.recovery.standalone(action);
         });
     }
 
@@ -1793,19 +1793,20 @@ impl GestureArena {
         pointer: PointerId,
         member: &Rc<dyn GestureArenaMember>,
     ) -> GestureArenaEntry {
-        self.try_add_erased(pointer, member, AdmissionContext::default())
-            .map(|(entry, held_out)| {
-                self.deliver_held_out(held_out);
-                entry
-            })
-            .unwrap_or_else(|| GestureArenaEntry {
+        let Some((entry, held_out)) =
+            self.try_add_erased(pointer, member, AdmissionContext::default())
+        else {
+            return GestureArenaEntry {
                 arena: self.clone(),
                 // Generations are issued from 1: a refused entry names no
                 // contest any verdict settles.
                 contest: GestureContest::new(pointer, None, ArenaGeneration(0)),
                 slot: Weak::new(),
                 member: Rc::downgrade(member),
-            })
+            };
+        };
+        self.deliver_held_out(held_out);
+        entry
     }
 
     pub(crate) fn try_add_erased(
