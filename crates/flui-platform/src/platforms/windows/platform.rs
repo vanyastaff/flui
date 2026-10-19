@@ -393,7 +393,7 @@ pub(super) struct WindowContext {
     /// What is still owed of the window's first show. A window opens hidden and
     /// in its mode, so the first sight of it is already maximized or
     /// fullscreen, not a normal window that jumps.
-    pub first_show: std::cell::Cell<super::window::FirstShow>,
+    pub first_show: std::cell::Cell<super::window_frame::FirstShow>,
     /// Last surface-visibility value dispatched through
     /// `WindowCallbacks::dispatch_visibility_status_change` (hidden-surface
     /// gating). Two message families feed it — `WM_SIZE`

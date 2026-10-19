@@ -25,6 +25,7 @@ mod text_services;
 mod util;
 mod window;
 mod window_ext;
+mod window_frame;
 mod window_limits;
 
 #[cfg(feature = "a11y")]
