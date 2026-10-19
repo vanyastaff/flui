@@ -1130,8 +1130,6 @@ impl ApplicationHandler for WinitApp {
             self.request_exit(event_loop);
             return;
         }
-        #[cfg(target_os = "linux")]
-        self.start_host_notices();
 
         // Call on_ready callback once. `ACTIVE_EVENT_LOOP` is published for
         // this exact nested call so `open_window` can create windows
@@ -1181,6 +1179,12 @@ impl ApplicationHandler for WinitApp {
         {
             tracing::error!(%error, "owner wake start failed");
             self.request_exit(event_loop);
+        } else {
+            // The owner can drain the inbox from here on. A sleep that arrived
+            // while `on_ready` ran would have held logind's inhibitor with no
+            // turn to deliver it, so the sources start only now.
+            #[cfg(target_os = "linux")]
+            self.start_host_notices();
         }
     }
 
@@ -1885,6 +1889,11 @@ impl WinitApp {
 
         let drain_budget = self.control.begin_drain();
         for _ in 0..drain_budget {
+            // A sleep or shutdown holds logind only for a few seconds, and a
+            // queue of window opens can take longer than that: the notices
+            // are heard between the opens, not after them all.
+            #[cfg(target_os = "linux")]
+            self.deliver_host_notices();
             if self.control.take_quit_requested() {
                 self.complete_pending_closes(event_loop);
                 self.request_exit(event_loop);

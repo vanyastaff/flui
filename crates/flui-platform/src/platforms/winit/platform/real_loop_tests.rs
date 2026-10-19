@@ -1269,7 +1269,27 @@ mod x11_window {
         opening: WindowOptions,
         scenario: impl FnOnce(Arc<dyn HostWindow>, u32, &RustConnection) + Send + 'static,
     ) {
-        let platform = Arc::new(WinitPlatform::new());
+        run_x11_window(
+            Arc::new(WinitPlatform::new()),
+            opening,
+            move |window, server| {
+                let id = window
+                    .as_any()
+                    .downcast_ref::<WinitWindow>()
+                    .and_then(WinitWindow::x11_id)
+                    .expect("an X11 window has an id once the probe is attached");
+                scenario(window, id, server);
+            },
+        );
+    }
+
+    /// [`run_x11_scenario`] on a platform the caller has prepared, for a
+    /// scenario that needs no X11 id.
+    fn run_x11_window(
+        platform: Arc<WinitPlatform>,
+        opening: WindowOptions,
+        scenario: impl FnOnce(Arc<dyn HostWindow>, &RustConnection) + Send + 'static,
+    ) {
         let event_loop = build_x11_event_loop();
         install_test_owner_signal(&platform, &event_loop);
         let event_loop_proxy = event_loop.create_proxy();
@@ -1297,12 +1317,7 @@ mod x11_window {
                     ClaimOutcome::Delivered(result) => result.expect("window creation succeeds"),
                     _ => panic!("the window request is delivered"),
                 };
-                let id = window
-                    .as_any()
-                    .downcast_ref::<WinitWindow>()
-                    .and_then(WinitWindow::x11_id)
-                    .expect("an X11 window has an id once the probe is attached");
-                scenario(window, id, &server);
+                scenario(window, &server);
             }));
             control_for_worker.request_quit();
             if let Err(payload) = outcome {
@@ -1590,6 +1605,30 @@ mod x11_window {
 
             window.reveal_after_first_frame();
             until_map_state(server, id, MapState::VIEWABLE);
+        });
+    }
+
+    /// A window whose probe could not be made does not claim to see a minimize
+    /// that nothing would tell it of: winit sends no event for one on X11.
+    #[test]
+    fn x11_window_without_a_probe_does_not_claim_to_observe_minimizing() {
+        let platform = Arc::new(WinitPlatform::new());
+        // The probe's connections failed: the platform remembers that.
+        assert!(
+            platform.x11_probe.set(None).is_ok(),
+            "no probe was made yet"
+        );
+        run_x11_window(platform, WindowOptions::default(), |window, _server| {
+            let capabilities = window.capabilities();
+            assert!(!capabilities.observes_minimized);
+            // Nothing else is taken away.
+            let mut expected = WindowCapabilities::ALL;
+            expected.observes_minimized = false;
+            assert_eq!(capabilities, expected);
+            // Asking is still allowed: the compositor or window manager acts.
+            window
+                .apply(WindowCommand::SetMode(WindowMode::Minimized))
+                .expect("a minimize is requested");
         });
     }
 }

@@ -111,6 +111,10 @@ pub struct WinitWindow {
     /// The X11 probe and this window's X11 id, once attached.
     #[cfg(target_os = "linux")]
     x11: std::sync::OnceLock<(Arc<X11WindowProbe>, u32)>,
+    /// Set when this is an X11 window and no probe could be attached: its
+    /// minimization then goes unseen until some other event samples it.
+    #[cfg(target_os = "linux")]
+    minimize_unobserved: AtomicBool,
 }
 
 /// What the window system lets a program do to `window`: a Wayland surface
@@ -222,6 +226,8 @@ impl WinitWindow {
             frame_inset,
             #[cfg(target_os = "linux")]
             x11: std::sync::OnceLock::new(),
+            #[cfg(target_os = "linux")]
+            minimize_unobserved: AtomicBool::new(false),
             window,
             is_focused: parking_lot::Mutex::new(true),
             is_visible: parking_lot::Mutex::new(options.visible),
@@ -251,13 +257,17 @@ impl WinitWindow {
         let Some(id) = id else {
             return;
         };
-        if let Some(probe) = probe() {
-            probe.watch(id);
-            probe.set_mode_hint(id, self.opens_in);
-            let _ = self.x11.set((probe, id));
-            // The snapshot made at creation knew nothing of the probe.
-            self.refresh_state();
-        }
+        let Some(probe) = probe() else {
+            // winit reports no event when an X11 window is minimized, so
+            // without the probe the snapshot cannot follow it.
+            self.minimize_unobserved.store(true, Ordering::Release);
+            return;
+        };
+        probe.watch(id);
+        probe.set_mode_hint(id, self.opens_in);
+        let _ = self.x11.set((probe, id));
+        // The snapshot made at creation knew nothing of the probe.
+        self.refresh_state();
     }
 
     /// Map a window created hidden to open in a mode, now that the mode is set
@@ -641,7 +651,12 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn capabilities(&self) -> WindowCapabilities {
-        self.capabilities
+        let mut capabilities = self.capabilities;
+        #[cfg(target_os = "linux")]
+        if self.minimize_unobserved.load(Ordering::Acquire) {
+            capabilities.observes_minimized = false;
+        }
+        capabilities
     }
 
     fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
