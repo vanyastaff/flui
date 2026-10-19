@@ -14,7 +14,7 @@ use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     error::PlatformError,
     executor::BackgroundExecutor,
-    shared::PlatformHandlers,
+    shared::{PlatformHandlers, system_notice::SystemNotices},
     traits::{
         Clipboard, DesktopCapabilities, DisplaySnapshot, OpenWindowError, OwnerPlatform, Platform,
         PlatformCapabilities, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent,
@@ -60,6 +60,13 @@ pub struct MacOSPlatform {
     /// Marks `displays` stale and wakes the owner when AppKit reports a
     /// change of screen parameters; removed when the platform is dropped.
     _screen_observer: display::ScreenObserver,
+
+    /// Where sleep, wake, lock and memory notices go, and what a wake marks
+    /// stale before the host hears of it.
+    notices: Arc<SystemNotices>,
+
+    /// The live sources of `notices` and of session-end announcements.
+    _notice_sources: super::system_notices::SystemNoticeSources,
 
     /// Records the event-loop owner thread so the thread-affine AppKit
     /// operations below can `debug_assert` their caller (ADR-0039).
@@ -176,6 +183,10 @@ impl MacOSPlatform {
             let displays = Arc::new(display::MacosDisplays::new());
             let screen_observer =
                 display::ScreenObserver::new(&displays, &loop_control.owner_signal);
+            let notices = Arc::new(SystemNotices::default());
+            notices.mark_stale_on_wake(&displays);
+            let notice_sources =
+                super::system_notices::SystemNoticeSources::new(&notices, &loop_control);
             let platform = Self {
                 loop_control,
                 preferences,
@@ -187,6 +198,8 @@ impl MacOSPlatform {
                 config,
                 displays,
                 _screen_observer: screen_observer,
+                notices,
+                _notice_sources: notice_sources,
                 affinity: OwnerAffinity::new(),
             };
             // The constructor requires the main thread (checked above), so
@@ -201,11 +214,62 @@ impl MacOSPlatform {
     pub fn app(&self) -> &Retained<NSApplication> {
         &self.app
     }
+
+    /// Turn a position and a normal rectangle measured on a display into
+    /// global logical pixels, which is all a window knows how to place. A
+    /// display that is gone leaves them global, as the options document.
+    fn measure_placement_globally(&self, options: &mut WindowOptions) {
+        let Some(display) = options.display.take() else {
+            return;
+        };
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let Ok(snapshot) = self.displays.snapshot(mtm) else {
+            return;
+        };
+        let display = snapshot.get(display);
+        options.position = options
+            .position
+            .map(|at| crate::shared::appkit_window_geometry::globalize(at, display));
+        if let Some(normal) = options.normal_geometry.as_mut() {
+            normal.position = normal
+                .position
+                .map(|at| crate::shared::appkit_window_geometry::globalize(at, display));
+        }
+    }
 }
 
 impl Platform for MacOSPlatform {
     fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
         super::window::window_capabilities()
+    }
+
+    fn window_frame_inset(&self, _scale_factor: f64) -> flui_foundation::geometry::Size<f64> {
+        self.affinity
+            .debug_assert_owner("MacOSPlatform::window_frame_inset");
+        debug_assert_appkit_main_thread("MacOSPlatform::window_frame_inset");
+        // AppKit measures a frame in points, so the scale does not enter.
+        super::window::decorated_frame_inset()
+    }
+
+    fn on_session_end(
+        &self,
+        callback: Box<
+            dyn FnMut(flui_platform_api::SessionEndPhase) -> flui_platform_api::SessionEndAnswer
+                + Send,
+        >,
+    ) {
+        let previous = self.handlers.lock().session_end.replace(callback);
+        drop(previous);
+    }
+
+    fn on_host_notice(&self, callback: Box<dyn FnMut(flui_platform_api::SystemNotice) + Send>) {
+        self.notices.set_hook(callback);
+    }
+
+    fn release_session_end(&self) {
+        self.loop_control.session_end_released();
     }
 
     fn preferences(&self) -> Result<crate::SystemPreferences, PlatformError> {
@@ -252,7 +316,7 @@ impl Platform for MacOSPlatform {
 
     fn open_window(
         &self,
-        options: WindowOptions,
+        mut options: WindowOptions,
     ) -> Result<Arc<dyn crate::traits::HostWindow>, OpenWindowError> {
         self.affinity
             .debug_assert_owner("MacOSPlatform::open_window");
@@ -262,7 +326,9 @@ impl Platform for MacOSPlatform {
                 rejected: Some(Box::new(options)),
             });
         }
+        self.measure_placement_globally(&mut options);
         let window = MacOSWindow::new(options, Arc::clone(&self.windows), self.config.clone())?;
+        self.notices.mark_stale_on_wake(window.state_cell());
         // Installed immediately after construction, before the window can be
         // handed to anyone who might redraw it — the slot is a `OnceLock`, so
         // a later install would be silently ignored rather than racing.

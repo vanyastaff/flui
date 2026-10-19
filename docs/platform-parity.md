@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-18 · **Change:** minor (Windows two-monitor run) ·
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-18 · **Change:** minor (macOS and iOS window lifecycle) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -40,10 +40,10 @@ Counted over every row of the core and system-service sections.
 | Environment | Backend | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready |
 |---|---|---|---|---|---|---|---|---|
 | Windows | Win32 (native) | 9 | 30 | 35 | 17 | 2 | 32% | no |
-| macOS | AppKit (native) | 9 | 22 | 43 | 17 | 2 | 26% | no |
+| macOS | AppKit (native) | 9 | 26 | 39 | 17 | 2 | 29% | no |
 | Wayland | winit (fallback) | 6 | 22 | 40 | 23 | 2 | 24% | no |
 | X11 | winit (fallback) | 8 | 22 | 37 | 24 | 2 | 28% | no |
-| iOS | UIKit (native) | 7 | 14 | 42 | 30 | 0 | 22% | no |
+| iOS | UIKit (native) | 7 | 16 | 41 | 29 | 0 | 23% | no |
 | Android | android-activity (native) | 10 | 14 | 40 | 29 | 0 | 27% | no |
 | Web | wasm canvas (native) | 7 | 17 | 34 | 34 | 1 | 26% | no |
 | Headless | test double | 33 | 0 | 55 | 5 | 0 | 38% | — |
@@ -61,9 +61,9 @@ Counted over every row of the core and system-service sections.
 | Focus and active state | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Android `is_focused()` is always true | 2–4 |
 | Visibility, minimize, occlusion | 🟡 | ✅ | ❌ | ✅ | ✅ | ❌ | 🟡 | ✅ | Windows sees minimize and restore only; winit never reports occlusion on Wayland; Android never dispatches visibility. Runs: macOS minimize and hide, the X11 cover window in `live-smoke`, iOS Home and return | 6–10 |
 | Suspend, resume, GPU-surface loss | — | — | — | — | ✅ | 🟡 | ❌ | ✅ | Android never dispatches execution-state changes; Web ignores page freeze, `webglcontextlost` and device loss | 4–8 |
-| Sleep, wake, screen lock | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Not in the contract | 3–5 |
-| Session end (log off, shutdown) with veto | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | No backend handles it, and `flui-app` can't register the hook (`OwnerPlatform` doesn't expose it) | 4–6 |
-| Memory pressure | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | Not in the contract; Android only logs `LowMemory` | 3–5 |
+| Sleep, wake, screen lock | ❌ | 🟡 | ❌ | ❌ | — | — | — | ❌ | macOS delivers `NSWorkspace` will-sleep and did-wake and the distributed `screenIsLocked`/`screenIsUnlocked`; type-checked only, [#1736](https://github.com/vanyastaff/flui/issues/1736) lists the run. The other backends do not deliver them yet | 3–5 |
+| Session end (log off, shutdown) with veto | ❌ | 🟡 | ❌ | ❌ | 🟡 | — | — | ❌ | macOS asks the hook on `NSWorkspaceWillPowerOffNotification`, holds the log out with `NSTerminateLater` while a block is held (it replies on release or after 4 s) and lets it pass otherwise; iOS tells the hook `Ending` from `applicationWillTerminate:`, which iOS does not promise; both type-checked only, [#1736](https://github.com/vanyastaff/flui/issues/1736) lists the run. The other backends do not handle it yet | 4–6 |
+| Memory pressure | ❌ | 🟡 | ❌ | ❌ | 🟡 | ❌ | — | ❌ | macOS maps the dispatch memory-pressure source (warn is `Moderate`, critical is `Critical`) and iOS maps `applicationDidReceiveMemoryWarning:` to `Critical`; type-checked only, [#1736](https://github.com/vanyastaff/flui/issues/1736) lists the run. Android only logs `LowMemory` | 3–5 |
 | Bring the app forward, request attention | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Windows `activate` re-foregrounds whatever is already in front; Wayland needs an `xdg-activation` token | 3–5 |
 | Single instance, forward arguments | ❌ | — | ❌ | ❌ | — | — | — | ❌ | macOS enforces one instance itself | 3–5 |
 | Deep links, URL schemes, file associations | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | `on_open_urls` is never called, at cold start or while running; the Web entry URL is under history routing | 12–20 |
@@ -78,12 +78,12 @@ Counted over every row of the core and system-service sections.
 | Multiple windows | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | — | ✅ | No iPad scenes, no Android multi-window | 8–14 |
 | Show without a blank first frame | 🟡 | ✅ | ❌ | 🟡 | — | — | — | ✅ | Windows and X11 show the window at creation; Wayland refuses `show`. macOS run: deferred first reveal | 3–5 |
 | Title | 🟡 | 🟡 | 🟡 | 🟡 | — | — | 🟡 | ✅ | No API for apps; winit can't read the title back | 2–3 |
-| Minimize, maximize, restore, state readback | 🟡 | 🟡 | 🟡 | 🟡 | — | — | — | ✅ | No API for apps; no readback on macOS or Linux; Wayland never reports minimized. macOS ran minimize and hide | 3–5 |
+| Minimize, maximize, restore, state readback | 🟡 | 🟡 | 🟡 | 🟡 | — | — | — | ✅ | No API for apps; no readback on Linux; Wayland never reports minimized. macOS reads the mode from `NSWindow` and carries out every mode command, type-checked only ([#1736](https://github.com/vanyastaff/flui/issues/1736)); an earlier macOS run covered minimize and hide | 3–5 |
 | Fullscreen | 🟡 | 🟡 | 🟡 | 🟡 | — | — | 🟡 | ✅ | winit is borderless only; Web doesn't listen for `fullscreenchange`; mobile immersive mode is under System UI | 2–4 |
-| Position, size, move and resize events | 🟡 | 🟡 | 🟡 | ❌ | — | — | 🟡 | ✅ | No `set_position` in the contract; winit `bounds()` and `resize` are missing; Wayland can't read or set a global position by design | 4–8 |
-| Size constraints, resizable and other flags | ❌ | 🟡 | 🟡 | 🟡 | — | — | — | ✅ | Windows ignores min/max size and resizable (no `WM_GETMINMAXINFO`); no runtime setter anywhere | 3–5 |
+| Position, size, move and resize events | 🟡 | 🟡 | 🟡 | ❌ | — | — | 🟡 | ✅ | No `set_position` in the contract; winit `bounds()` and `resize` are missing; Wayland can't read or set a global position by design. macOS reads and sets the outer top-left position, content size and limits through `NSWindow` (type-checked only, [#1736](https://github.com/vanyastaff/flui/issues/1736)) | 4–8 |
+| Size constraints, resizable and other flags | ❌ | 🟡 | 🟡 | 🟡 | — | — | — | ✅ | Windows ignores min/max size and resizable (no `WM_GETMINMAXINFO`); no runtime setter anywhere. macOS sets and reads content size limits, resizable and decorated through `NSWindow` (type-checked only, [#1736](https://github.com/vanyastaff/flui/issues/1736)) | 3–5 |
 | Live resize without jitter | ❔ | ❔ | ❔ | ❔ | — | — | ❔ | — | Not audited; Windows has no `WM_ENTERSIZEMOVE` handling | ❔ |
-| Save and restore window placement | ✅ | ❌ | ❌ | ❌ | — | — | — | ✅ | `AppConfig::restore_placement`. Windows opens at the remembered position, size and mode (content size, `SetWindowPlacement`) and ran in a real window; winit and AppKit ignore a position, mode and normal geometry at open until they gain placement support, and no backend but headless and Windows reports a stable display key to match the display by | 3–5 |
+| Save and restore window placement | ✅ | 🟡 | ❌ | ❌ | — | — | — | ✅ | `AppConfig::restore_placement`. Windows opens at the remembered position, size and mode (content size, `SetWindowPlacement`) and ran in a real window. macOS opens at the position, in the mode and returning to the `normal_geometry` of the options, reads the display by its UUID (`persistent_key`) and measures display bounds from the top-left corner; type-checked only, [#1736](https://github.com/vanyastaff/flui/issues/1736) lists the run. winit ignores a position, mode and normal geometry at open until it gains placement support, and no backend but headless, Windows and macOS reports a stable display key to match the display by | 3–5 |
 | Undecorated windows, custom title bar | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Undecorated Windows windows can't be dragged or resized; no caption hit-testing, drag regions, snap layouts or system window menu; compositors without server-side decorations need client-side ones | 12–20 |
 | Backdrop material, transparency, corners | 🟡 | ❌ | ❌ | ❌ | — | — | — | ❌ | Windows forces Mica at creation; macOS Liquid Glass sits behind a `&mut` extension nothing can reach | 6–10 |
 | Owned, modal and popup windows; always on top | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Not in the contract, so menus, tooltips and dropdowns can't leave the window; Wayland needs `xdg_popup` | 10–16 |
@@ -232,3 +232,4 @@ exists yet.
 | 2026-10-18 | minor | Linux displays and refresh rate: the outputs read from the compositor (Wayland `wl_output`/`zxdg_output_v1`, X11 RandR 1.5) on a thread that wakes the owner; the X11 cells ran live (XWayland under WSLg, `xrandr` changes under an Xorg dummy server), the Wayland cells read values live and stay 🟡 |
 | 2026-10-18 | minor | Windows two-monitor run (`examples/displays.rs`, a second 3440×1440 monitor connected live): a new snapshot with `id 2`, the window naming `DisplayId 2` after a drag and `DisplayId 1` back, the id kept when the monitor moved left, and live rate changes (144 Hz, 165 Hz) published with ids unchanged; the display cells keep their marks; a Windows disconnect was not run; the overall figure recounted from the tables (~26%, 54 ✅, 143 🟡, 477 applicable cells), the summary table brought in line, and the hours of the two display rows lowered to the runs still owed |
 | 2026-10-18 | minor | Wayland displays and refresh rate ran live (`examples/displays.rs` under WSLg: an output grown from 640×480 to 3440×1440 keeping `id 1`, then a second same-named output added as `id 2`); the two Wayland cells become ✅ and the overall figure is recounted: 56 ✅, 141 🟡, 477 applicable cells, (56 + 70.5) / 477 = 26.5%, ~27%; a Wayland scale change cannot be observed through WSLg and a window moved between the two outputs was not run |
+| 2026-10-18 | minor | macOS and iOS window lifecycle: macOS reads and sets window state through `NSWindow`, delivers sleep, wake, lock and memory pressure, and holds a session end with `NSTerminateLater`; iOS maps the memory warning and `applicationWillTerminate:`; display bounds and persistent keys on macOS; type-checked only, the cells stay 🟡 until [#1736](https://github.com/vanyastaff/flui/issues/1736) runs |
