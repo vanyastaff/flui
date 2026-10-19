@@ -814,5 +814,9 @@ fn gesture_alternatives() {
             "gesture_alternatives::unmounting_the_tab_bar_unregisters_it",
             gesture_alternatives::unmounting_the_tab_bar_unregisters_it,
         ),
+        (
+            "gesture_alternatives::replacing_the_controller_moves_the_pager_and_bar_to_the_new_one",
+            gesture_alternatives::replacing_the_controller_moves_the_pager_and_bar_to_the_new_one,
+        ),
     ]);
 }

@@ -139,12 +139,12 @@ mod sliver_demo;
 /// sliver demo and travels upward in 15 px steps, one frame each, and every
 /// frame after the first must paint different content than the one before.
 ///
-/// The drag's start gives the scroll view the keyboard focus, which makes the
-/// enclosing focus scopes rebuild the whole app: the demo's root builds again
-/// in the middle of the drag. A root that hands its `Scrollable` a controller
-/// made inside `build` swaps the scroll position under the contact every
-/// time, which cancels the drag, so the frames freeze while the pointer keeps
-/// moving.
+/// The drag's start gives the scroll view the keyboard focus. The enclosing
+/// focus scopes rebuild for it but hand their child back unchanged, so the
+/// demo's root is not built again under the contact (ADR-0245); this pins the
+/// end-to-end result, that the frames keep following the pointer. It does not
+/// pin the root's own shape: the demo passes the `Scrollable` no controller,
+/// but a controller made in `build` would also pass here.
 #[test]
 fn sliver_demo_content_follows_every_step_of_a_held_drag() {
     use flui_testing::widgets::{lay_out, tight};

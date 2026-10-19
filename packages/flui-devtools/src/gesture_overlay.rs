@@ -22,7 +22,7 @@
 //! ```
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
@@ -180,9 +180,15 @@ impl StatefulView for GestureInspectorOverlay {
 impl ViewState<GestureInspectorOverlay> for GestureInspectorOverlayState {
     fn build(&self, view: &GestureInspectorOverlay, _ctx: &dyn BuildContext) -> impl IntoView {
         let positions = Rc::clone(&self.positions);
+        let controller = view.controller.clone();
         let app = Listener::new()
             .behavior(HitTestBehavior::Translucent)
             .on_pointer_down(move |_, dispatch| {
+                // Nothing reads a position while the overlay is hidden, and
+                // the layer prunes only while it builds shown.
+                if !controller.is_shown() {
+                    return;
+                }
                 if let (Some(pointer), Some(at)) =
                     (dispatch.local.pointer_id(), dispatch.local.position())
                 {
@@ -252,9 +258,12 @@ impl Live {
             }
         } else if !shown && attached {
             let outgoing = self.inspector.borrow_mut().take();
-            let observing = &self.controller.borrow().inner.observing;
-            observing.set(observing.get().saturating_sub(1));
+            // Dropping the inspector detaches from the arena and may run
+            // observer code, so no borrow of the controller is held across it.
             drop(outgoing);
+            let controller = self.controller.borrow();
+            let observing = &controller.inner.observing;
+            observing.set(observing.get().saturating_sub(1));
         }
         self.rebuild.schedule(RebuildReason::StateChange);
     }
@@ -262,28 +271,37 @@ impl Live {
     /// The contests to draw now, with their opacity.
     fn visible(&self) -> Vec<(ContestReport, f64)> {
         let now = self.arena.now();
-        self.inspector
-            .borrow()
-            .as_ref()
-            .map(GestureInspector::contests)
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|contest| {
-                let opacity = opacity(&contest, now)?;
-                Some((contest, opacity))
-            })
-            .collect()
+        let mut visible = Vec::new();
+        if let Some(inspector) = self.inspector.borrow().as_ref() {
+            inspector.visit_contests(|contest| {
+                if let Some(opacity) = opacity(contest, now) {
+                    visible.push((contest.clone(), opacity));
+                }
+            });
+        }
+        visible
+    }
+
+    /// The pointers of every contest the inspector still retains.
+    fn retained_pointers(&self) -> HashSet<PointerId> {
+        let mut pointers = HashSet::new();
+        if let Some(inspector) = self.inspector.borrow().as_ref() {
+            inspector.visit_contests(|contest| {
+                pointers.insert(contest.pointer);
+            });
+        }
+        pointers
     }
 
     /// While a settled contest is still fading, rebuild after every frame.
     fn keep_fading(self: &Rc<Self>) {
         let now = self.arena.now();
-        let fading = self.inspector.borrow().as_ref().is_some_and(|inspector| {
-            inspector
-                .contests()
-                .iter()
-                .any(|contest| settled_at(contest).is_some() && opacity(contest, now).is_some())
-        });
+        let mut fading = false;
+        if let Some(inspector) = self.inspector.borrow().as_ref() {
+            inspector.visit_contests(|contest| {
+                fading |= settled_at(contest).is_some() && opacity(contest, now).is_some();
+            });
+        }
         let Some(post_frame) = &self.post_frame else {
             return;
         };
@@ -413,7 +431,12 @@ impl ViewState<OverlayLayer> for OverlayLayerState {
         let Some(live) = self.live.as_ref().filter(|_| view.controller.is_shown()) else {
             return SizedBox::shrink().boxed();
         };
-        let positions = view.positions.borrow();
+        // A position outlives its contest only until the next build: the
+        // inspector keeps a bounded number of contests, so the map is bounded
+        // by it too.
+        let retained = live.retained_pointers();
+        let mut positions = view.positions.borrow_mut();
+        positions.retain(|pointer, _| retained.contains(pointer));
         let labels: Vec<BoxedView> = live
             .visible()
             .into_iter()

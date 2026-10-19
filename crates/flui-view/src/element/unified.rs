@@ -362,10 +362,17 @@ where
         // `ViewState::did_update_view`) and `InheritedBehavior`'s dependent
         // notification. An offer of the view the element already holds
         // touches nothing, so there is no behavior to tell.
-        if let ViewUpdate::Replaced { previous } = self.core.update_view(new_view) {
-            // Notify behavior of update
-            self.behavior.on_update(&self.core, owner);
-            self.behavior.on_view_updated(&self.core, &previous, owner);
+        match self.core.update_view(new_view) {
+            ViewUpdate::Replaced { previous } => {
+                self.behavior.on_update(&self.core, owner);
+                self.behavior.on_view_updated(&self.core, &previous, owner);
+            }
+            ViewUpdate::Equal => {
+                self.behavior.on_update(&self.core, owner);
+                self.behavior
+                    .on_view_updated(&self.core, self.core.view(), owner);
+            }
+            ViewUpdate::Unchanged | ViewUpdate::Mismatch => {}
         }
     }
 
