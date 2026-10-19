@@ -2082,15 +2082,24 @@ impl WinitApp {
             ?window_id,
             "orphaned window request (requester abandoned); unwinding"
         );
-        let (window, data_transfer) = self.platform.with_state(|state| {
+        // The drag session is retired before the window leaves `window_id_map`:
+        // the map entry is what observers read as "the window is gone", so
+        // removing it last keeps that observation from racing the cleanup.
+        // `forget_window` wakes parked deliveries, so it runs outside the
+        // state lock.
+        let data_transfer = self
+            .platform
+            .with_state(|state| Arc::clone(&state.data_transfer));
+        data_transfer.forget_window(window_id);
+        let window = self.platform.with_state(|state| {
             let window = state.windows.remove(&window_id);
-            state.window_id_map.retain(|_, v| *v != window_id);
             state.cursor_positions.remove(&window_id);
             state.native_pointer.cancel_window(
                 window_id,
                 crate::shared::pointer_assembly::NativeCancel::FocusLost,
             );
-            (window, Arc::clone(&state.data_transfer))
+            state.window_id_map.retain(|_, v| *v != window_id);
+            window
         });
         if let Some(window) = window {
             // Directly, not through `PlatformWindow::close`: that route posts
@@ -2098,7 +2107,6 @@ impl WinitApp {
             // already out of the map it would look in.
             window.inner().set_visible(false);
         }
-        data_transfer.forget_window(window_id);
     }
 
     /// Fires the harness self-close (see [`WinitApp::self_close_deadline`])
