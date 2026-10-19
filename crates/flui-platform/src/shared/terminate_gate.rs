@@ -57,23 +57,23 @@ pub(crate) enum Termination {
 #[derive(Debug)]
 pub(crate) struct TerminateGate {
     state: State,
-    epochs: u64,
+    last_epoch: u64,
 }
 
 impl TerminateGate {
     pub(crate) const fn new() -> Self {
         Self {
             state: State::Idle,
-            epochs: 0,
+            last_epoch: 0,
         }
     }
 
     fn next_epoch(&mut self) -> u64 {
-        self.epochs = self
-            .epochs
+        self.last_epoch = self
+            .last_epoch
             .checked_add(1)
             .expect("BUG: more announcements than a u64 counts");
-        self.epochs
+        self.last_epoch
     }
 
     /// The system announced a session end and the application answered

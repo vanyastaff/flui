@@ -42,7 +42,7 @@ graph LR
 | WL2 | PR 1. Хост: `WindowHandle`, `WindowControl`, очередь команд, опции создания, `HostNotice` и `LifecycleHandle::subscribe_notices`, конец сессии через `OwnerPlatform` | R5, R6, R8, R9, R13, R21–R25 | WL1 | — | L | 4 | не начата |
 | WL3 | PR 1. Потребители: `WindowPlacement` и `PlacementRecorder`, подрезка кэшей, инвалидация после `Wake`, conformance-набор | R16–R20, R26, R27, R39 | WL2 | — | L | 2 | не начата |
 | WL4 | PR 2. Windows: команды, `WM_GETMINMAXINFO`, создание скрытым, показ по первому кадру, чтение `GetWindowPlacement`, конец сессии, сон, блокировка, память, `persistent_key` | R11, R14, R15, R33, D-10 | WL3 | [P] | L, W | 6 | не начата |
-| WL5 | PR 3. macOS и iOS: чтение режима, команды, `NSWorkspace`, блокировка, `dispatch` memory pressure, `NSTerminateLater`; iOS memory warning и terminate | R32, R34 | WL3 | [P] | L (типы) | 4 | не начата |
+| WL5 | PR 3. macOS и iOS: чтение режима, команды, `NSWorkspace`, блокировка, `dispatch` memory pressure, `NSTerminateLater`; iOS memory warning и terminate | R32, R34 | WL3 | [P] | L (типы) | 4 | в PR [#1739](https://github.com/vanyastaff/flui/pull/1739); проверена типами, живой прогон — [#1736](https://github.com/vanyastaff/flui/issues/1736) |
 | WL6 | PR 4. Linux: команды и чтение через winit, X11 `_NET_WM_STATE`, показ по первому кадру X11/Wayland, logind, PSI, `persistent_key` | R14, R35 | WL3 | [P] | L, X, WSL | 6 | не начата |
 | WL7 | PR 5. Android: видимость, выполнение, фокус раздельно; `LowMemory` и `lastTrimLevel`; `SaveState` | R28, R29 | WL3 | [P] | L, A | 3 | не начата |
 | WL8 | PR 6. Web: `freeze`/`resume`, `pagehide`, потеря контекста WebGL/WebGPU, `fullscreenchange` | R30, R31 | WL3 | [P] | L, B | 3 | не начата |

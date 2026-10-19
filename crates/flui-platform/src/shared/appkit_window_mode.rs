@@ -6,6 +6,8 @@
 //! frame equals the standard frame. Zooming and full screen are toggles, so a
 //! request is sent only from the state it undoes.
 
+use std::time::{Duration, Instant};
+
 use flui_platform_api::WindowMode;
 
 /// What AppKit says about a window, as plain flags.
@@ -21,6 +23,14 @@ pub(crate) struct WindowFlags {
     pub(crate) resizable: bool,
 }
 
+impl WindowFlags {
+    /// Whether the window is zoomed in the sense that matters: `isZoomed` is
+    /// also true for a window that cannot be resized, which is not maximized.
+    pub(crate) const fn is_maximized(self) -> bool {
+        self.zoomed && self.resizable
+    }
+}
+
 /// The mode a window with these flags is in.
 ///
 /// Full screen outranks the rest and a miniaturized window outranks a zoomed
@@ -32,7 +42,7 @@ pub(crate) const fn mode_of(flags: WindowFlags) -> WindowMode {
         WindowMode::Fullscreen
     } else if flags.miniaturized {
         WindowMode::Minimized
-    } else if flags.zoomed && flags.resizable {
+    } else if flags.is_maximized() {
         WindowMode::Maximized
     } else {
         WindowMode::Normal
@@ -80,7 +90,7 @@ pub(crate) fn steps_to(flags: WindowFlags, target: WindowMode) -> Vec<ModeStep> 
     if current == target {
         return Vec::new();
     }
-    let zoomed = flags.zoomed && flags.resizable;
+    let zoomed = flags.is_maximized();
     let mut requests = Vec::new();
     if flags.fullscreen {
         requests.push(ExitFullscreen);
@@ -127,6 +137,82 @@ pub(crate) fn next_batch(requests: &[ModeStep]) -> (&[ModeStep], bool) {
     {
         Some(index) => (&requests[..=index], true),
         None => (requests, false),
+    }
+}
+
+/// How long a window counts as still animating a full-screen or Dock step when
+/// the notification that ends it has not come. Past it a mode command is sent
+/// instead of held, so a step AppKit silently refused cannot hold the window
+/// for good.
+pub(crate) const ANIMATION_LIMIT: Duration = Duration::from_secs(3);
+
+/// The order in which a window's mode commands reach AppKit.
+///
+/// AppKit ignores a toggle sent while a full-screen or Dock step animates, and
+/// what a window looks like after one is only known after. So a command that
+/// arrives during one, and the rest of a mode whose first step is one, are held
+/// here and planned again from the window's flags when the step's notification
+/// arrives. The newest command wins, and it replaces the mode a hidden window
+/// was to enter when first shown.
+#[derive(Debug, Default)]
+pub(crate) struct ModeSequence {
+    /// The mode held back until the animating step ends.
+    held: Option<WindowMode>,
+    /// When the step that is animating started.
+    animating_since: Option<Instant>,
+    /// The mode a window that opened hidden enters when it is first shown.
+    when_shown: Option<WindowMode>,
+}
+
+impl ModeSequence {
+    /// The steps to send now to take a window with `flags` to `target`, at
+    /// `now`.
+    pub(crate) fn command(
+        &mut self,
+        now: Instant,
+        flags: WindowFlags,
+        target: WindowMode,
+    ) -> Vec<ModeStep> {
+        self.when_shown = None;
+        if self
+            .animating_since
+            .is_some_and(|since| now.saturating_duration_since(since) < ANIMATION_LIMIT)
+        {
+            self.held = Some(target);
+            return Vec::new();
+        }
+        let steps = steps_to(flags, target);
+        let (batch, asks_again) = next_batch(&steps);
+        self.held = asks_again.then_some(target);
+        self.animating_since = batch.iter().any(|step| step.animates()).then_some(now);
+        batch.to_vec()
+    }
+
+    /// A step that animates has started, from this backend or from the user.
+    pub(crate) fn step_started(&mut self, now: Instant) {
+        self.animating_since = Some(now);
+    }
+
+    /// The step that was animating is over, or failed.
+    pub(crate) fn step_ended(&mut self) {
+        self.animating_since = None;
+    }
+
+    /// The mode held back for the step that ended, if there is one, to be
+    /// commanded again from the window's new state.
+    pub(crate) fn take_held(&mut self) -> Option<WindowMode> {
+        self.held.take()
+    }
+
+    /// A window that opened hidden enters `mode` when it is first shown.
+    pub(crate) fn enter_when_shown(&mut self, mode: WindowMode) {
+        self.when_shown = Some(mode);
+    }
+
+    /// The mode a hidden window enters now that it is shown, if no mode command
+    /// came first.
+    pub(crate) fn take_when_shown(&mut self) -> Option<WindowMode> {
+        self.when_shown.take()
     }
 }
 
@@ -250,5 +336,74 @@ mod tests {
                 "{step:?} holds back"
             );
         }
+    }
+
+    fn at(start: Instant, seconds: u64) -> Instant {
+        start + Duration::from_secs(seconds)
+    }
+
+    #[test]
+    fn a_command_during_a_step_that_animates_is_held_and_the_newest_wins() {
+        let start = Instant::now();
+        let mut sequence = ModeSequence::default();
+        // Full screen starts: the step is sent and the window animates.
+        assert_eq!(
+            sequence.command(start, flags("R"), Fullscreen),
+            [ModeStep::EnterFullscreen]
+        );
+        // Two commands arrive meanwhile: nothing is sent, the newest is held.
+        assert_eq!(sequence.command(at(start, 1), flags("FR"), Minimized), []);
+        assert_eq!(sequence.command(at(start, 1), flags("FR"), Normal), []);
+        // The step ends; the held mode is commanded again from the real flags.
+        sequence.step_ended();
+        assert_eq!(sequence.take_held(), Some(Normal));
+        assert_eq!(sequence.take_held(), None, "a held mode is taken once");
+        assert_eq!(
+            sequence.command(at(start, 2), flags("FR"), Normal),
+            [ModeStep::ExitFullscreen]
+        );
+    }
+
+    #[test]
+    fn the_rest_of_a_mode_waits_for_the_step_it_depends_on() {
+        let start = Instant::now();
+        let mut sequence = ModeSequence::default();
+        assert_eq!(
+            sequence.command(start, flags("FR"), Minimized),
+            [ModeStep::ExitFullscreen]
+        );
+        sequence.step_ended();
+        assert_eq!(sequence.take_held(), Some(Minimized));
+        assert_eq!(
+            sequence.command(at(start, 1), flags("R"), Minimized),
+            [ModeStep::Miniaturize]
+        );
+        assert_eq!(sequence.take_held(), None, "nothing is left to ask again");
+    }
+
+    #[test]
+    fn a_step_that_never_ends_stops_holding_commands() {
+        let start = Instant::now();
+        let mut sequence = ModeSequence::default();
+        sequence.step_started(start);
+        assert_eq!(sequence.command(at(start, 1), flags("R"), Maximized), []);
+        // AppKit refused the step and sent no notification.
+        assert_eq!(
+            sequence.command(start + ANIMATION_LIMIT, flags("R"), Maximized),
+            [ModeStep::Zoom]
+        );
+    }
+
+    #[test]
+    fn a_mode_command_replaces_the_mode_a_hidden_window_was_to_enter() {
+        let start = Instant::now();
+        let mut sequence = ModeSequence::default();
+        sequence.enter_when_shown(Fullscreen);
+        assert_eq!(sequence.command(start, flags("R"), Normal), []);
+        assert_eq!(sequence.take_when_shown(), None);
+
+        sequence.enter_when_shown(Fullscreen);
+        assert_eq!(sequence.take_when_shown(), Some(Fullscreen));
+        assert_eq!(sequence.take_when_shown(), None, "it is entered once");
     }
 }
