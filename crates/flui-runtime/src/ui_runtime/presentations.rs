@@ -226,13 +226,19 @@ impl UiRuntime {
     /// [`OwnerHost`](crate::owner::OwnerHost) needs no call: the host enters them
     /// when its outermost callback finishes. This is for a runtime driven
     /// without one.
+    ///
+    /// # Panics
+    ///
+    /// With the first panic of a start or of a refusal's observer, once every
+    /// session was started or sent back to its window.
     pub fn enter_pending_os_drags(&self) {
-        let refused: Vec<_> = self
-            .take_os_drag_starts()
-            .into_iter()
-            .filter_map(OsDragEntry::start)
-            .collect();
-        self.os_drags_refused(refused);
+        let mut first = None;
+        let refused = start_os_drags(self.take_os_drag_starts(), &mut first);
+        let told = catch_unwind(AssertUnwindSafe(|| self.os_drags_refused(refused))).err();
+        crate::lifecycle_state::preserve_first_lifecycle_panic(&mut first, told, "OS drag refusal");
+        if let Some(payload) = first {
+            resume_unwind(payload);
+        }
     }
 
     /// Whether a drag decided on an OS session the host has not entered yet.
@@ -257,20 +263,14 @@ impl UiRuntime {
                             presentation.with_window(|window| window.drag_source())
                         })
                         .flatten(),
-                    request: pending.request,
+                    pending,
                 })
                 .collect()
         })
     }
 
     /// Send the drags whose OS session could not start back to their windows.
-    pub(crate) fn os_drags_refused(
-        &self,
-        refused: Vec<(
-            flui_platform_api::drag::DragSessionKey,
-            flui_platform_api::drag::DragError,
-        )>,
-    ) {
+    pub(crate) fn os_drags_refused(&self, refused: Vec<OsDragRefusal>) {
         if refused.is_empty() {
             return;
         }
@@ -801,23 +801,39 @@ impl UiRuntime {
 /// One OS drag session to start, with the drag source of the window it starts in.
 pub(crate) struct OsDragEntry {
     source: Option<std::sync::Arc<dyn flui_platform_api::drag::PlatformDragSource>>,
-    request: flui_platform_api::drag::OsDragRequest,
+    pending: flui_interaction::drag::PendingOsDrag,
 }
 
-impl OsDragEntry {
-    /// Start the session; a window with no drag source, or one that refuses,
-    /// names the drag to send back to its window.
-    pub(crate) fn start(
-        self,
-    ) -> Option<(
-        flui_platform_api::drag::DragSessionKey,
-        flui_platform_api::drag::DragError,
-    )> {
-        let key = self.request.key;
-        let started = match self.source {
-            Some(source) => source.start(self.request),
-            None => Err(flui_platform_api::drag::DragError::Unavailable),
-        };
-        started.err().map(|error| (key, error))
+/// A drag whose OS session could not start, to send back to its window.
+pub(crate) type OsDragRefusal = (
+    flui_platform_api::drag::DragSessionKey,
+    flui_platform_api::drag::DragError,
+);
+
+/// Start every one of `entries`, with the runtime released, so the OS loop a
+/// start runs can deliver to it. A window with no drag source, one that
+/// refuses, and one whose start panics each name the drag to send back to its
+/// window; the first panic is kept in `first`, and the starts after it still
+/// run.
+pub(crate) fn start_os_drags(
+    entries: Vec<OsDragEntry>,
+    first: &mut Option<Box<dyn std::any::Any + Send>>,
+) -> Vec<OsDragRefusal> {
+    let mut refused = Vec::new();
+    for OsDragEntry { source, pending } in entries {
+        let key = pending.key();
+        match catch_unwind(AssertUnwindSafe(|| pending.start(source.as_deref()))) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => refused.push((key, error)),
+            Err(failure) => {
+                refused.push((key, flui_platform_api::drag::DragError::Unavailable));
+                crate::lifecycle_state::preserve_first_lifecycle_panic(
+                    first,
+                    Some(failure),
+                    "OS drag start",
+                );
+            }
+        }
     }
+    refused
 }

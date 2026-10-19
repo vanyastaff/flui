@@ -6,7 +6,7 @@ use std::cell::{Cell, RefCell};
 use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 
 use flui_foundation::geometry::{Offset, Point};
@@ -14,7 +14,8 @@ use flui_foundation::{PresentationAddress, PresentationId};
 use flui_interaction::LocalPayloadTarget;
 use flui_interaction::drag::{
     AllowedActions, DragFetch, DragHandle, DragItem, DragOutcome, DragPoint, DragScope,
-    DragSession, DragStart, DragView, DropReceiver, DropReceiverSlot, MoveOutcome, ProcessNonce,
+    DragSession, DragStage, DragStart, DragView, DropReceiver, DropReceiverSlot, MoveOutcome,
+    ProcessNonce,
 };
 use flui_objects::RenderMetaData;
 use flui_platform::{
@@ -23,7 +24,7 @@ use flui_platform::{
 use flui_platform_api::data_transfer::{
     DropFeedback, TransferActions, TransferFormat, TransferLimits, TransferPayload,
 };
-use flui_platform_api::drag::{DragError, OsDragStart};
+use flui_platform_api::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform_api::{DispatchEventResult, PlatformInput, PlatformWindow, WindowExecutionState};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::protocol::BoxProtocol;
@@ -842,11 +843,154 @@ fn drags_from_both_windows_cross_independently() {
     assert!(!world.dnd.is_active());
 }
 
+thread_local! {
+    /// The requests [`FirstStartPanics`] accepted, held as the OS holds them.
+    static ACCEPTED: RefCell<Vec<OsDragRequest>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A drag source whose first start panics; it accepts every start after it.
+#[derive(Default)]
+struct FirstStartPanics {
+    starts: AtomicUsize,
+}
+
+impl PlatformDragSource for FirstStartPanics {
+    fn start_timing(&self) -> OsDragStart {
+        OsDragStart::OnLeavingWindow
+    }
+
+    fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
+        assert!(
+            self.starts.fetch_add(1, Ordering::SeqCst) > 0,
+            "start failed"
+        );
+        ACCEPTED.with(|accepted| accepted.borrow_mut().push(request));
+        Ok(())
+    }
+}
+
+/// A headless window that starts OS drags through `source`.
+struct WithDragSource {
+    window: Arc<dyn PlatformWindow>,
+    source: Arc<dyn PlatformDragSource>,
+}
+
+impl PlatformWindow for WithDragSource {
+    fn id(&self) -> flui_platform_api::WindowId {
+        self.window.id()
+    }
+    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
+        self.window.physical_size()
+    }
+    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
+        self.window.logical_size()
+    }
+    fn scale_factor(&self) -> f64 {
+        self.window.scale_factor()
+    }
+    fn request_redraw(&self) {
+        self.window.request_redraw();
+    }
+    fn is_focused(&self) -> bool {
+        self.window.is_focused()
+    }
+    fn is_visible(&self) -> bool {
+        self.window.is_visible()
+    }
+    fn set_cursor(
+        &self,
+        cursor: flui_platform_api::CursorIcon,
+    ) -> Result<(), flui_platform_api::CursorError> {
+        self.window.set_cursor(cursor)
+    }
+    fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
+        Some(Arc::clone(&self.source))
+    }
+    fn state(&self) -> flui_platform_api::WindowState {
+        self.window.state()
+    }
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        self.window.capabilities()
+    }
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        self.window.apply(command)
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// Two drags leave their window and the backend's first start panics: that
+/// drag goes back to its window as a refused one does, the start after it
+/// still runs, and the panic propagates once both are done.
+fn a_start_that_panics_is_a_refusal_and_the_next_still_starts() {
+    let platform = HeadlessPlatform::new();
+    let (host, _) = open(&platform);
+    let window: Arc<dyn PlatformWindow> = Arc::new(WithDragSource {
+        window: as_platform(&host),
+        source: Arc::new(FirstStartPanics::default()),
+    });
+    let runtime = runtime_over(
+        &platform,
+        PresentationWindow::new(Arc::clone(&window), None),
+        nonce(),
+    );
+    let start = || {
+        runtime
+            .drag_handle()
+            .start(
+                DragStart::new(
+                    runtime.presentation_id(),
+                    vec![DragItem::new().with_text("x")],
+                    AllowedActions::new(MOVE, COPY),
+                )
+                .window(Arc::downgrade(&window)),
+            )
+            .expect("starts in the window")
+    };
+    let (first, second) = (start(), start());
+    for session in [&first, &second] {
+        let outcome = runtime.enter(|_| {
+            session
+                .pointer_moved(Offset::new(100_000.0, 10.0), None)
+                .expect("live")
+        });
+        assert_eq!(outcome, MoveOutcome::Escalating);
+    }
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.enter_pending_os_drags();
+    }))
+    .expect_err("the start's panic propagates");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("start failed")
+    );
+    assert_eq!(
+        first.stage(),
+        Ok(DragStage::InWindow),
+        "the panicking start is a refusal"
+    );
+    assert_eq!(
+        second.stage(),
+        Ok(DragStage::System),
+        "the start after it ran"
+    );
+    let accepted = ACCEPTED.with(|accepted| std::mem::take(&mut *accepted.borrow_mut()));
+    assert_eq!(accepted.len(), 1);
+}
+
 #[test]
 fn drag_and_drop_reaches_the_runtime() {
     crate::table_test::run_table(
         "drag and drop delivery",
         &[
+            (
+                "a_start_that_panics_is_a_refusal_and_the_next_still_starts",
+                a_start_that_panics_is_a_refusal_and_the_next_still_starts,
+            ),
             (
                 "a_drag_from_another_application_reaches_the_receiver_under_it",
                 a_drag_from_another_application_reaches_the_receiver_under_it,

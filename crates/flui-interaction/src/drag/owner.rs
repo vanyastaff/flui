@@ -5,6 +5,7 @@
 //! runtime attaches its presentations, enters the OS sessions the table decided
 //! on, and delivers the OS's drag events to the receivers under them.
 
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -17,7 +18,8 @@ use flui_platform_api::data_transfer::{
 };
 use flui_platform_api::drag::{
     AllowedActions, DragError, DragMoment, DragReach, DragSessionKey, OsDragEnd, OsDragRequest,
-    OsDragStart, OsOffer, OsSessionPlan, ProcessNonce, plan_os_session, validate_session,
+    OsDragStart, OsOffer, OsSessionPlan, PlatformDragSource, ProcessNonce, plan_os_session,
+    validate_session,
 };
 use flui_platform_api::pointer::PointerInfo;
 use flui_platform_api::{DragDropEvent, EventTime, PlatformWindow, WindowAt, WindowId};
@@ -26,8 +28,8 @@ use super::cursor::{DragCursor, drag_cursor};
 use super::item::{DragItem, SessionData};
 use super::receiver::{DragPoint, DropReceiverSlot, ResolvedReceiver, receivers_on_path};
 use super::sessions::{
-    DragPhase, DragSessions, Entry, Incoming, PendingOsDrag, Shared, Surface, WeakShared,
-    pointer_kind,
+    DragPhase, DragSessions, Entry, Incoming, OsStart, PendingOsDrag, SessionRef, Shared, Surface,
+    WeakShared, pointer_kind,
 };
 use super::tracker::{DropTracker, Dropped, single_action};
 use super::view::{DragScope, DragView};
@@ -288,7 +290,7 @@ impl DragOwner {
                             entry.phase,
                             DragPhase::Armed
                                 | DragPhase::InWindow { .. }
-                                | DragPhase::EscalationPending { .. }
+                                | DragPhase::EscalationPending
                         )
                 })
                 .map(|(slot, entry)| (slot, entry.id))
@@ -308,19 +310,23 @@ impl DragOwner {
             failure.invoke(|| cancel_session(&self.shared, slot, id));
         }
         for id in incoming {
-            failure.invoke(|| self.exit_incoming(id));
+            failure.invoke(|| self.exit_incoming(presentation, id));
         }
         failure.finish();
     }
 
-    /// The OS sessions decided on since the last call, now entered: each moves to
-    /// the system phase before the host starts it, because a backend may run a
-    /// modal loop inside `start` and the session must already be the OS's when
-    /// its first event arrives. Call at the outermost quiescent point.
+    /// The OS sessions decided on since the last call, each to enter with
+    /// [`PendingOsDrag::start`]: each moves to the system phase before the
+    /// host starts it, because a backend may run a modal loop inside `start`
+    /// and the session must already be the OS's when its first event arrives.
+    /// Call at the outermost quiescent point.
     #[must_use]
     pub fn take_pending_os_drags(&self) -> Vec<PendingOsDrag> {
         let mut state = self.shared.borrow_mut();
         let mut taken = Vec::new();
+        // A request whose session was withdrawn is dropped outside the
+        // borrow: its end hook looks the session up.
+        let mut stale = Vec::new();
         let mut capture_release = Vec::new();
         while let Some((id, pending)) = state.pending.pop_front() {
             let slot = state
@@ -329,16 +335,21 @@ impl DragOwner {
                 .find(|(_, entry)| entry.id == id)
                 .map(|(slot, _)| slot);
             let Some(entry) = slot.and_then(|slot| state.entries.get_mut(slot)) else {
+                stale.push(pending);
                 continue;
             };
-            let DragPhase::EscalationPending { plan } = entry.phase else {
+            if !matches!(entry.phase, DragPhase::EscalationPending) {
+                stale.push(pending);
                 continue;
+            }
+            entry.phase = DragPhase::System {
+                start: OsStart::Idle,
             };
-            entry.phase = DragPhase::System { plan };
             capture_release.extend(entry.capture.take());
             taken.push(pending);
         }
         drop(state);
+        drop(stale);
         // Releasing a capture defers its cancellation; no user code runs here.
         drop(capture_release);
         taken
@@ -350,9 +361,11 @@ impl DragOwner {
         !self.shared.borrow().pending.is_empty()
     }
 
-    /// The host could not start `session`'s OS session: it returns to its
-    /// window, targets and drops there, and leaving the window is a move with
-    /// no target from then on, as on a backend with no OS drags.
+    /// The host could not start `session`'s OS session ([`PendingOsDrag::start`]
+    /// failed or panicked): it returns to its window, targets and drops there,
+    /// and leaving the window is a move with no target from then on, as on a
+    /// backend with no OS drags. An end hook the backend kept is ignored from
+    /// then on.
     pub fn os_drag_refused(&self, session: DragSessionKey, error: DragError) {
         let observer = {
             let mut state = self.shared.borrow_mut();
@@ -448,7 +461,7 @@ impl DragOwner {
                 });
             let incoming = state.incoming.iter().map(|incoming| {
                 (
-                    Hovered::Offer(incoming.offer.id()),
+                    Hovered::Offer(incoming.presentation, incoming.offer.id()),
                     incoming.tracker.clone(),
                     ViewParts::of_incoming(incoming),
                 )
@@ -496,11 +509,11 @@ impl DragOwner {
                     entry.phase = DragPhase::InWindow { accepted: None };
                 }
             }
-            Hovered::Offer(id) => {
+            Hovered::Offer(presentation, id) => {
                 let waiting = self
                     .shared
                     .borrow_mut()
-                    .incoming_mut(id)
+                    .incoming_mut(presentation, id)
                     .is_some_and(|incoming| !incoming.dropped);
                 if waiting {
                     self.source
@@ -564,7 +577,12 @@ impl DragOwner {
                 let id = offer.id();
                 self.admit_offer(presentation, offer, allowed);
                 if let Some(position) = position {
-                    self.update_incoming(id, Offset::new(position.x, position.y), hit);
+                    self.update_incoming(
+                        presentation,
+                        id,
+                        Offset::new(position.x, position.y),
+                        hit,
+                    );
                 }
             }
             DragDropEvent::Moved {
@@ -572,10 +590,10 @@ impl DragOwner {
                 allowed,
                 position,
             } => {
-                if let Some(incoming) = self.shared.borrow_mut().incoming_mut(id) {
+                if let Some(incoming) = self.shared.borrow_mut().incoming_mut(presentation, id) {
                     incoming.os_allowed = allowed;
                 }
-                self.update_incoming(id, Offset::new(position.x, position.y), hit);
+                self.update_incoming(presentation, id, Offset::new(position.x, position.y), hit);
             }
             DragDropEvent::Dropped {
                 id,
@@ -588,13 +606,18 @@ impl DragOwner {
                 let mut failure = ClosePanic::new();
                 if let Some(position) = position {
                     failure.invoke(|| {
-                        self.update_incoming(id, Offset::new(position.x, position.y), hit);
+                        self.update_incoming(
+                            presentation,
+                            id,
+                            Offset::new(position.x, position.y),
+                            hit,
+                        );
                     });
                 }
-                failure.invoke(|| self.drop_incoming(id, action));
+                failure.invoke(|| self.drop_incoming(presentation, id, action));
                 failure.finish();
             }
-            DragDropEvent::Exited { id } => self.exit_incoming(id),
+            DragDropEvent::Exited { id } => self.exit_incoming(presentation, id),
         }
     }
 
@@ -607,9 +630,7 @@ impl DragOwner {
         let mut state = self.shared.borrow_mut();
         // The same offer announced again over the same window is the same drag:
         // one tracker, so its receivers still hear one enter and one leave or drop.
-        if let Some(incoming) = state.incoming.iter_mut().find(|incoming| {
-            incoming.offer.id() == offer.id() && incoming.presentation == presentation
-        }) {
+        if let Some(incoming) = state.incoming_mut(presentation, offer.id()) {
             incoming.os_allowed = os_allowed;
             return;
         }
@@ -647,13 +668,14 @@ impl DragOwner {
 
     fn update_incoming(
         &self,
+        presentation: PresentationId,
         id: DataTransferId,
         position: Offset<f64>,
         hit: &mut dyn FnMut(Offset<f64>, PointerKind) -> Option<Vec<HitTestEntry>>,
     ) {
         let found = {
             let mut state = self.shared.borrow_mut();
-            let Some(incoming) = state.incoming_mut(id) else {
+            let Some(incoming) = state.incoming_mut(presentation, id) else {
                 return;
             };
             if incoming.dropped {
@@ -681,10 +703,15 @@ impl DragOwner {
         failure.finish();
     }
 
-    fn drop_incoming(&self, id: DataTransferId, action: TransferActions) {
+    fn drop_incoming(
+        &self,
+        presentation: PresentationId,
+        id: DataTransferId,
+        action: TransferActions,
+    ) {
         let (tracker, parts) = {
             let mut state = self.shared.borrow_mut();
-            let Some(incoming) = state.incoming_mut(id) else {
+            let Some(incoming) = state.incoming_mut(presentation, id) else {
                 return;
             };
             if std::mem::replace(&mut incoming.dropped, true) {
@@ -692,24 +719,24 @@ impl DragOwner {
             }
             (incoming.tracker.clone(), ViewParts::of_incoming(incoming))
         };
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            parts.with_view(&self.source, |view| tracker.finish(view, Some(action)))
-        }));
+        // A receiver failing with the drop does not keep the OS from hearing
+        // that the target is done, and stays the failure that propagates.
+        let mut failure = ClosePanic::new();
+        failure.invoke(|| {
+            parts.with_view(&self.source, |view| tracker.finish(view, Some(action)));
+        });
         // The OS is told once every request made from the drop has resolved.
-        self.conclude_resolved_drops();
-        match result {
-            Ok(Dropped::Delivered | Dropped::NoRecipient) => {}
-            Err(payload) => std::panic::resume_unwind(payload),
-        }
+        failure.invoke(|| self.conclude_resolved_drops());
+        failure.finish();
     }
 
-    fn exit_incoming(&self, id: DataTransferId) {
+    fn exit_incoming(&self, presentation: PresentationId, id: DataTransferId) {
         let incoming = {
             let mut state = self.shared.borrow_mut();
             let Some(index) = state
                 .incoming
                 .iter()
-                .position(|incoming| incoming.offer.id() == id)
+                .position(|incoming| incoming.is(presentation, id))
             else {
                 return;
             };
@@ -753,7 +780,7 @@ impl DragOwner {
 #[derive(Clone, Copy)]
 enum Hovered {
     Session(usize, DragSessionId),
-    Offer(DataTransferId),
+    Offer(PresentationId, DataTransferId),
 }
 
 /// Everything a [`DragView`] borrows, owned, so the view outlives no borrow.
@@ -1072,22 +1099,10 @@ impl DragSession {
         Ok(match entry.phase {
             DragPhase::Armed => DragStage::Armed,
             DragPhase::InWindow { .. } => DragStage::InWindow,
-            DragPhase::EscalationPending { .. } => DragStage::EscalationPending,
+            DragPhase::EscalationPending => DragStage::EscalationPending,
             DragPhase::System { .. } => DragStage::System,
             DragPhase::Concluded { .. } => DragStage::Concluded,
         })
-    }
-
-    /// The OS session the session became, once it did: what it offers and
-    /// advertises.
-    #[must_use]
-    pub fn os_plan(&self) -> Option<OsSessionPlan> {
-        let shared = self.shared.upgrade()?;
-        let state = shared.borrow();
-        match state.entry(self.slot, self.id)?.phase {
-            DragPhase::EscalationPending { plan } | DragPhase::System { plan } => Some(plan),
-            _ => None,
-        }
     }
 
     /// How the session ended, once it has.
@@ -1159,9 +1174,9 @@ impl Drop for DragSession {
             };
             entry.released = true;
             match entry.phase {
-                DragPhase::Armed
-                | DragPhase::InWindow { .. }
-                | DragPhase::EscalationPending { .. } => true,
+                DragPhase::Armed | DragPhase::InWindow { .. } | DragPhase::EscalationPending => {
+                    true
+                }
                 DragPhase::System { .. } => false,
                 DragPhase::Concluded { .. } => {
                     let removed = state.entries.try_remove(self.slot);
@@ -1509,10 +1524,17 @@ fn cancel_session(shared: &Shared, slot: usize, id: DragSessionId) {
     if running.stage_system {
         return;
     }
-    {
+    // The request the host never entered goes outside the borrow: its end
+    // hook looks the session up.
+    let withdrawn: VecDeque<_> = {
         let mut state = shared.borrow_mut();
-        state.pending.retain(|(pending, _)| *pending != id);
-    }
+        let (withdrawn, kept) = std::mem::take(&mut state.pending)
+            .into_iter()
+            .partition(|(pending, _)| *pending == id);
+        state.pending = kept;
+        withdrawn
+    };
+    drop(withdrawn);
     let mut failure = ClosePanic::new();
     failure.invoke(|| {
         running
@@ -1525,9 +1547,11 @@ fn cancel_session(shared: &Shared, slot: usize, id: DragSessionId) {
     failure.finish();
 }
 
-/// Move a session to its last phase, release what it held and tell its observer.
+/// Move a session to its last phase, tell its observer and release what it
+/// held. Each step runs whatever an earlier one did; the first failure
+/// propagates once all have run.
 fn conclude(shared: &Shared, slot: usize, id: DragSessionId, outcome: DragOutcome) {
-    let (observer, capture, removed) = {
+    let (observer, capture, cursor, removed) = {
         let mut state = shared.borrow_mut();
         let Some(entry) = state.entry_mut(slot, id) else {
             return;
@@ -1547,16 +1571,185 @@ fn conclude(shared: &Shared, slot: usize, id: DragSessionId, outcome: DragOutcom
         if state.held == Some((slot, id)) {
             state.held = None;
         }
-        (observer, (capture, cursor), removed)
+        (observer, capture, cursor, removed)
     };
-    let (capture, cursor) = capture;
-    drop(capture);
-    if let Some(cursor) = cursor {
-        cursor.hide();
-    }
-    drop(removed);
+    let mut failure = ClosePanic::new();
     if let Some(observer) = observer {
-        observer.ended(outcome);
+        failure.invoke(|| observer.ended(outcome));
+    }
+    failure.invoke(|| drop(capture));
+    if let Some(cursor) = cursor {
+        failure.invoke(|| cursor.hide());
+    }
+    // The entry may hold the last owner of the drag's values.
+    failure.invoke(|| drop(removed));
+    failure.finish();
+}
+
+/// The end hook an OS session's backend holds. It ends the session once:
+/// with the outcome the backend reports, or cancelled when the backend drops
+/// the hook without reporting one, so a session the OS took always ends.
+struct OsEnd {
+    session: SessionRef,
+    reported: bool,
+}
+
+impl OsEnd {
+    fn report(mut self, end: OsDragEnd) {
+        self.reported = true;
+        let outcome = match end {
+            OsDragEnd::Dropped(action) => DragOutcome::Dropped { action },
+            OsDragEnd::Cancelled => DragOutcome::Cancelled,
+        };
+        end_os_session(&self.session, outcome);
+    }
+}
+
+impl Drop for OsEnd {
+    fn drop(&mut self) {
+        if self.reported {
+            return;
+        }
+        let Some(shared) = self.session.shared.upgrade() else {
+            return;
+        };
+        let SessionRef { slot, id, .. } = self.session;
+        let idle = {
+            let Ok(mut state) = shared.try_borrow_mut() else {
+                tracing::error!("BUG: an OS drag's end hook was dropped inside its session table");
+                return;
+            };
+            let Some(entry) = state.entry_mut(slot, id) else {
+                return;
+            };
+            match &mut entry.phase {
+                // Whether the start failed is known once it returns.
+                DragPhase::System {
+                    start: OsStart::Running { end_dropped },
+                } => {
+                    *end_dropped = true;
+                    false
+                }
+                DragPhase::System {
+                    start: OsStart::Idle,
+                } => true,
+                _ => false,
+            }
+        };
+        if idle {
+            // Inside an unwind, the observer's failure is retained.
+            let mut failure = ClosePanic::new();
+            failure.invoke(|| conclude(&shared, slot, id, DragOutcome::Cancelled));
+            failure.finish();
+        }
+    }
+}
+
+/// End `session`'s OS session with `outcome`, while the OS still runs it: a
+/// session a refused start sent back to its window ignores the hook.
+fn end_os_session(session: &SessionRef, outcome: DragOutcome) {
+    let Some(shared) = session.shared.upgrade() else {
+        return;
+    };
+    let system = shared
+        .borrow()
+        .entry(session.slot, session.id)
+        .is_some_and(|entry| matches!(entry.phase, DragPhase::System { .. }));
+    if system {
+        conclude(&shared, session.slot, session.id, outcome);
+    }
+}
+
+/// A session's OS start while the backend runs it.
+struct StartRunning<'a> {
+    session: &'a SessionRef,
+    left: bool,
+}
+
+impl<'a> StartRunning<'a> {
+    fn enter(session: &'a SessionRef) -> Self {
+        if let Some(shared) = session.shared.upgrade()
+            && let Some(entry) = shared.borrow_mut().entry_mut(session.slot, session.id)
+            && let DragPhase::System { start } = &mut entry.phase
+        {
+            *start = OsStart::Running { end_dropped: false };
+        }
+        Self {
+            session,
+            left: false,
+        }
+    }
+
+    /// The start returned: whether the backend dropped the end hook uncalled.
+    fn leave(mut self) -> bool {
+        self.left = true;
+        self.reset()
+    }
+
+    fn reset(&self) -> bool {
+        let Some(shared) = self.session.shared.upgrade() else {
+            return false;
+        };
+        let mut state = shared.borrow_mut();
+        let Some(entry) = state.entry_mut(self.session.slot, self.session.id) else {
+            return false;
+        };
+        match &mut entry.phase {
+            DragPhase::System { start } => {
+                let dropped = matches!(start, OsStart::Running { end_dropped: true });
+                *start = OsStart::Idle;
+                dropped
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Drop for StartRunning<'_> {
+    /// The start panicked: the host refuses the session, which sends it back
+    /// to its window.
+    fn drop(&mut self) {
+        if !self.left {
+            let _ = self.reset();
+        }
+    }
+}
+
+impl PendingOsDrag {
+    /// The session this request starts.
+    #[must_use]
+    pub fn key(&self) -> DragSessionKey {
+        self.request.key
+    }
+
+    /// Start the OS session through `source`, the drag source of the window
+    /// the session leaves; `None` when that window has none, which refuses.
+    /// Owner thread, at the outermost quiescent point, with no borrow of the
+    /// runtime held: a backend may run the OS's modal loop inside.
+    ///
+    /// # Errors
+    ///
+    /// The backend's refusal, or [`DragError::Unavailable`] with no source.
+    /// The host then sends the session back to its window with
+    /// [`DragOwner::os_drag_refused`], as it does when the start panics.
+    pub fn start(self, source: Option<&dyn PlatformDragSource>) -> Result<(), DragError> {
+        let Self {
+            request, session, ..
+        } = self;
+        let running = StartRunning::enter(&session);
+        let started = if let Some(source) = source {
+            source.start(request)
+        } else {
+            drop(request);
+            Err(DragError::Unavailable)
+        };
+        let end_dropped = running.leave();
+        if started.is_ok() && end_dropped {
+            // Started, and its end hook dropped without an end: nothing will
+            // end it later.
+            end_os_session(&session, DragOutcome::Cancelled);
+        }
+        started
     }
 }
 
@@ -1574,9 +1767,7 @@ fn escalate(
         let entry = state.entry(slot, id).ok_or(DragError::SessionClosed)?;
         if matches!(
             entry.phase,
-            DragPhase::EscalationPending { .. }
-                | DragPhase::System { .. }
-                | DragPhase::Concluded { .. }
+            DragPhase::EscalationPending | DragPhase::System { .. } | DragPhase::Concluded { .. }
         ) {
             return Ok(false);
         }
@@ -1609,20 +1800,25 @@ fn escalate(
         )
     };
     let (presentation, key, data, pointer) = request_parts;
-    let request = os_request(plan, key, data, pointer, shared, slot, id);
+    let session = SessionRef {
+        shared: Rc::downgrade(shared),
+        slot,
+        id,
+    };
+    let request = os_request(plan, key, data, pointer, session.clone());
+    let pending = PendingOsDrag {
+        presentation,
+        request,
+        session,
+    };
     {
         let mut state = shared.borrow_mut();
         let Some(entry) = state.entry_mut(slot, id) else {
+            drop(state);
             return Err(DragError::SessionClosed);
         };
-        entry.phase = DragPhase::EscalationPending { plan };
-        state.pending.push_back((
-            id,
-            PendingOsDrag {
-                presentation,
-                request,
-            },
-        ));
+        entry.phase = DragPhase::EscalationPending;
+        state.pending.push_back((id, pending));
     }
     // Leaving the window leaves every receiver in it.
     let (tracker, parts) = running;
@@ -1635,9 +1831,7 @@ fn os_request(
     key: DragSessionKey,
     data: Rc<SessionData>,
     pointer: Option<PointerInfo>,
-    shared: &Shared,
-    slot: usize,
-    id: DragSessionId,
+    session: SessionRef,
 ) -> OsDragRequest {
     let mut representations = match plan.offer {
         OsOffer::Full => data.descriptors(),
@@ -1645,7 +1839,10 @@ fn os_request(
     };
     let serialized = representations.len();
     representations.push(key.representation());
-    let weak = Rc::downgrade(shared);
+    let end = OsEnd {
+        session,
+        reported: false,
+    };
     OsDragRequest {
         key,
         pointer: pointer.map(|info| info.id),
@@ -1662,14 +1859,6 @@ fn os_request(
                 std::cmp::Ordering::Greater => Err(TransferError::Cancelled),
             }
         }),
-        on_end: Box::new(move |end| {
-            let outcome = match end {
-                OsDragEnd::Dropped(action) => DragOutcome::Dropped { action },
-                OsDragEnd::Cancelled => DragOutcome::Cancelled,
-            };
-            if let Some(shared) = weak.upgrade() {
-                conclude(&shared, slot, id, outcome);
-            }
-        }),
+        on_end: Box::new(move |outcome| end.report(outcome)),
     }
 }

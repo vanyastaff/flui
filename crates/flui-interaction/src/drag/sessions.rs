@@ -15,8 +15,7 @@ use std::sync::atomic::AtomicUsize;
 use flui_foundation::{DataTransferId, DragSessionId, IdMint, PresentationId, UiRuntimeId};
 use flui_platform_api::data_transfer::{DataTransferOffer, TransferActions};
 use flui_platform_api::drag::{
-    AllowedActions, DragReach, DragSessionKey, OsDragRequest, OsDragStart, OsSessionPlan,
-    ProcessNonce,
+    AllowedActions, DragReach, DragSessionKey, OsDragRequest, OsDragStart, ProcessNonce,
 };
 use flui_platform_api::{PlatformWindow, WindowId};
 use slab::Slab;
@@ -37,11 +36,23 @@ pub(crate) enum DragPhase {
     /// last move was accepted with, if a receiver accepted it.
     InWindow { accepted: Option<TransferActions> },
     /// An OS session was decided on; the host has not entered it yet.
-    EscalationPending { plan: OsSessionPlan },
-    /// The OS runs the session.
-    System { plan: OsSessionPlan },
+    EscalationPending,
+    /// The OS runs the session, or the host is about to start it.
+    System { start: OsStart },
     /// Over, with the outcome observers were told.
     Concluded { outcome: DragOutcome },
+}
+
+/// Whether the host's start of a session's OS session is running.
+#[derive(Clone, Copy)]
+pub(crate) enum OsStart {
+    /// Not running: the start has not been called yet, or it returned. An end
+    /// hook dropped now ends the session cancelled.
+    Idle,
+    /// The backend's `start` is running. An end hook it drops is a refusal
+    /// when the start fails, and an end with no drop when it succeeds; which,
+    /// is known once it returns.
+    Running { end_dropped: bool },
 }
 
 pub(crate) struct Entry {
@@ -76,12 +87,18 @@ pub(crate) struct Entry {
     pub(crate) released: bool,
 }
 
-/// An OS session decided on and waiting for the host to enter it.
+/// An OS session decided on and waiting for the host to enter it with
+/// [`start`](Self::start).
+///
+/// Its session ends however the OS session goes: the backend calls the end
+/// hook, or drops it uncalled and the session ends cancelled. Dropping this
+/// without starting it ends the session cancelled too.
+#[must_use = "a pending OS drag ends cancelled unless it is started"]
 pub struct PendingOsDrag {
     /// The presentation whose window starts the session.
     pub presentation: PresentationId,
-    /// What to start.
-    pub request: OsDragRequest,
+    pub(crate) request: OsDragRequest,
+    pub(crate) session: SessionRef,
 }
 
 impl std::fmt::Debug for PendingOsDrag {
@@ -89,8 +106,16 @@ impl std::fmt::Debug for PendingOsDrag {
         f.debug_struct("PendingOsDrag")
             .field("presentation", &self.presentation)
             .field("request", &self.request)
-            .finish()
+            .finish_non_exhaustive()
     }
+}
+
+/// One session of a table, named by its slot and identity.
+#[derive(Clone)]
+pub(crate) struct SessionRef {
+    pub(crate) shared: WeakShared,
+    pub(crate) slot: usize,
+    pub(crate) id: DragSessionId,
 }
 
 /// An offer the OS delivered to one of this runtime's windows.
@@ -114,6 +139,13 @@ pub(crate) struct Incoming {
     /// The kind of pointer that drags, when this runtime started the drag;
     /// `Unknown` for another application's.
     pub(crate) pointer: PointerKind,
+}
+
+impl Incoming {
+    /// Whether this is the hover of offer `id` over `presentation`'s window.
+    pub(crate) fn is(&self, presentation: PresentationId, id: DataTransferId) -> bool {
+        self.presentation == presentation && self.offer.id() == id
+    }
 }
 
 /// An open presentation of the runtime, as its drags reach it.
@@ -174,10 +206,16 @@ impl DragSessions {
             .filter(|entry| !matches!(entry.phase, DragPhase::Concluded { .. }))
     }
 
-    pub(crate) fn incoming_mut(&mut self, id: DataTransferId) -> Option<&mut Incoming> {
+    /// The offer `id` over `presentation`'s window. The same offer over two
+    /// windows is two hovers, each with its own receivers.
+    pub(crate) fn incoming_mut(
+        &mut self,
+        presentation: PresentationId,
+        id: DataTransferId,
+    ) -> Option<&mut Incoming> {
         self.incoming
             .iter_mut()
-            .find(|incoming| incoming.offer.id() == id)
+            .find(|incoming| incoming.is(presentation, id))
     }
 }
 
