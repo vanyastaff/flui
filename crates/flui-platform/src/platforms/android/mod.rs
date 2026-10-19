@@ -904,6 +904,7 @@ impl Platform for AndroidPlatform {
             Arc::clone(&self.activity),
             Arc::downgrade(&self.owner_signal),
             Arc::clone(&self.displays),
+            self.api,
         ));
         let previous = self.window.lock().replace(Arc::clone(&window));
         if let Some(previous) = previous {

@@ -4,6 +4,8 @@ use android_activity::AndroidApp;
 use flui_foundation::geometry::{EdgeInsets, Size};
 use jni::{JValue, jni_sig, jni_str};
 
+use crate::shared::os_version::android::{AndroidApi, DisplayCutout, InsetsByType};
+
 #[derive(Clone, Copy)]
 pub(super) struct Sample {
     size: Size<i32>,
@@ -56,11 +58,8 @@ impl Default for Capture {
 }
 
 /// Must run on Android's Java main thread. Stable insets exclude keyboard
-/// occlusion; the display cutout is included independently on API 28+.
-pub(super) fn sample(app: &AndroidApp) -> Option<Sample> {
-    if AndroidApp::sdk_version() < 23 {
-        return None;
-    }
+/// occlusion; the display cutout is included where [`DisplayCutout`] exists.
+pub(super) fn sample(app: &AndroidApp, api: AndroidApi) -> Option<Sample> {
     super::preferences::with_activity(app, |env, activity| {
         let window = env
             .call_method(
@@ -96,7 +95,7 @@ pub(super) fn sample(app: &AndroidApp) -> Option<Sample> {
             .call_method(&decor, jni_str!("getHeight"), jni_sig!("()I"), &[])?
             .i()?;
         let mut edges = [0; 4];
-        if AndroidApp::sdk_version() >= 30 {
+        if api.since::<InsetsByType>().is_some() {
             let bars = env
                 .call_static_method(
                     jni_str!("android/view/WindowInsets$Type"),
@@ -139,7 +138,7 @@ pub(super) fn sample(app: &AndroidApp) -> Option<Sample> {
                 *edge = env.call_method(&insets, name, jni_sig!("()I"), &[])?.i()?;
             }
         }
-        if (28..30).contains(&AndroidApp::sdk_version()) {
+        if api.since::<DisplayCutout>().is_some() && api.since::<InsetsByType>().is_none() {
             let cutout = env
                 .call_method(
                     &insets,

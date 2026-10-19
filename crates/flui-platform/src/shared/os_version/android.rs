@@ -75,3 +75,33 @@ impl Gate for ScaledScrollFactor {
     type Version = AndroidApi;
     const SINCE: u64 = 26;
 }
+
+/// `WindowInsets.Type` and `WindowInsets.getInsetsIgnoringVisibility` (API 30). Without them
+/// the safe area is the stable insets, with the display cutout merged in where
+/// [`DisplayCutout`] exists.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct InsetsByType;
+
+impl Gate for InsetsByType {
+    type Version = AndroidApi;
+    const SINCE: u64 = 30;
+}
+
+/// `WindowInsets.getDisplayCutout` (API 28). Without it the safe area leaves a cutout out.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DisplayCutout;
+
+impl Gate for DisplayCutout {
+    type Version = AndroidApi;
+    const SINCE: u64 = 28;
+}
+
+/// `Window.getInsetsController` (API 30). Without it the status-bar icons are set with
+/// `View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct InsetsController;
+
+impl Gate for InsetsController {
+    type Version = AndroidApi;
+    const SINCE: u64 = 30;
+}

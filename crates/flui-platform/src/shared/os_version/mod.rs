@@ -62,7 +62,10 @@ pub(crate) fn since<F: Gate>(version: F::Version) -> Option<Since<F>> {
 
 #[cfg(test)]
 mod tests {
-    use super::android::{AndroidApi, ContextDisplay, ScaledScrollFactor, TextWeight};
+    use super::android::{
+        AndroidApi, ContextDisplay, DisplayCutout, InsetsByType, InsetsController,
+        ScaledScrollFactor, TextWeight,
+    };
     use super::apple::AppleVersion;
     use super::{Gate, since};
     use crate::shared::android_ndk::{
@@ -131,6 +134,24 @@ mod tests {
             "ScaledScrollFactor",
             api(25),
             api(26),
+            unknown,
+        ));
+        failures.extend(row::<InsetsByType>(
+            "InsetsByType",
+            api(29),
+            api(30),
+            unknown,
+        ));
+        failures.extend(row::<DisplayCutout>(
+            "DisplayCutout",
+            api(27),
+            api(28),
+            unknown,
+        ));
+        failures.extend(row::<InsetsController>(
+            "InsetsController",
+            api(29),
+            api(30),
             unknown,
         ));
         failures.extend(row::<FrameRateRangeProperty>(
