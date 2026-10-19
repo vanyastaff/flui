@@ -1,0 +1,300 @@
+# Test helpers outside a kit (ADR-0243), written by `cargo xtask testing --seed`.
+# Counts are exact and only go down: the scan fails when a file gains a helper, loses one
+# (lower `count`) or loses its last (remove the entry). `reason` and `exit` apply to every entry.
+reason = "written before the testing gate: each helper moves into its layer's kit, or the feature is renamed to `testing`"
+exit = "ADR-0243"
+
+[[allow]]
+path = "crates/flui-animation/src/run_future_recovery.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-animation/tests/contracts/animated_value.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-animation/tests/support/motion_trace.rs"
+kind = "pump"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/app/hot_reload/tests.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/app/raster_lane.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/device_recovery.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/session_controller.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/app/runner/surface_lifecycle.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/tests/data_transfer_transport.rs"
+kind = "double"
+count = 2
+
+[[allow]]
+path = "crates/flui-assets/src/cache/builtin_load_tests.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-engine/src/fake_window_target.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-engine/src/raster_owner.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-engine/src/renderer.rs"
+kind = "double"
+count = 2
+
+[[allow]]
+path = "crates/flui-engine/src/surface_lease.rs"
+kind = "double"
+count = 2
+
+[[allow]]
+path = "crates/flui-engine/src/window_target.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-hot-reload/src/pipeline.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-interaction/src/arena/mod.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-interaction/src/text_input.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-interaction/tests/multi_pointer_recognizers.rs"
+kind = "pump"
+count = 1
+
+[[allow]]
+path = "crates/flui-objects/src/proxy/animated_transform.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-objects/tests/render_object_harness.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-platform/src/platforms/linux/display/source/tests.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-platform/src/platforms/windows/text_services/probe.rs"
+kind = "pump"
+count = 2
+
+[[allow]]
+path = "crates/flui-platform/src/platforms/windows/text_services/probe.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-platform/src/shared/android_os_version.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-platform/tests/wasm32.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-platform/tests/wasm32/display.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-runtime/Cargo.toml"
+kind = "feature"
+count = 1
+
+[[allow]]
+path = "crates/flui-runtime/src/ui_runtime/tests/overlay_style.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-runtime/tests/contracts/frame_rate_demand.rs"
+kind = "pump"
+count = 1
+
+[[allow]]
+path = "crates/flui-scheduler/src/async_driver.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-scheduler/src/post_frame.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-scheduler/tests/async_driver_unwind.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-scheduler/tests/frame_completion_recovery.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-view/Cargo.toml"
+kind = "feature"
+count = 1
+
+[[allow]]
+path = "crates/flui-view/benches/shared/mock_node.rs"
+kind = "double"
+count = 2
+
+[[allow]]
+path = "crates/flui-view/tests/inherited_dependency.rs"
+kind = "double"
+count = 2
+
+[[allow]]
+path = "crates/flui-view/tests/writer_source.rs"
+kind = "double"
+count = 2
+
+[[allow]]
+path = "crates/flui-widgets/src/navigator/tests.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/tests/editable_text.rs"
+kind = "pump"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/tests/frame_partitions.rs"
+kind = "pump"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/tests/lazy_list.rs"
+kind = "double"
+count = 2
+
+[[allow]]
+path = "crates/flui-widgets/tests/modal_route.rs"
+kind = "double"
+count = 2
+
+[[allow]]
+path = "crates/flui-widgets/tests/overlay.rs"
+kind = "double"
+count = 2
+
+[[allow]]
+path = "crates/flui-widgets/tests/perf.rs"
+kind = "pump"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/tests/router.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/tests/scroll.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/tests/sliver_persistent_header.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/tests/text_store_kit.rs"
+kind = "pump"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/tests/transitions.rs"
+kind = "pump"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/tests/widgets_app.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/tests/widgets_app_router.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "examples/hot_reload_lifecycle_fixture/tests/reload_lifecycle.rs"
+kind = "pump"
+count = 1
+
+[[allow]]
+path = "packages/flui-cupertino/tests/cupertino_app.rs"
+kind = "double"
+count = 1
+
+[[allow]]
+path = "packages/flui-cupertino/tests/tab_scaffold.rs"
+kind = "double"
+count = 2
+
+[[allow]]
+path = "packages/flui-material/tests/tab_bar_view.rs"
+kind = "double"
+count = 2
+
+[[allow]]
+path = "tests/cupertino_demo.rs"
+kind = "pump"
+count = 1
+
+[[allow]]
+path = "tests/material_demo.rs"
+kind = "pump"
+count = 1
+
+[[allow]]
+path = "tests/vertical_slice_demo.rs"
+kind = "pump"
+count = 1

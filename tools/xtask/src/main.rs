@@ -27,6 +27,7 @@ mod markers;
 mod module_dag;
 mod perf;
 mod ratchet;
+mod testing;
 mod toolchain;
 mod wasm;
 mod wgsl;
@@ -128,6 +129,8 @@ enum Command {
     FileLength(file_length::FileLengthArgs),
     /// Check for process markers outside the archival roots (ADR-0078 §4).
     Markers(markers::MarkersArgs),
+    /// Check that test helpers live in a kit and test support is named `testing` (ADR-0243).
+    Testing(testing::TestingArgs),
     /// Check (or --write) the W3C key tables generated from keyboard-types (ADR-0089 §4).
     KeyVocabulary(key_vocabulary::KeyVocabularyArgs),
     /// Validate changelog.d fragments; --write merges them into CHANGELOG.md and deletes them.
@@ -190,6 +193,7 @@ fn main() -> ExitCode {
         Command::FontAssets(args) => fonts::font_assets(&args),
         Command::FileLength(args) => file_length::file_length(&args),
         Command::Markers(args) => markers::markers(&args),
+        Command::Testing(args) => testing::testing(&args),
         Command::KeyVocabulary(args) => key_vocabulary::key_vocabulary(&args),
         Command::Changelog(args) => changelog::changelog(&args),
         Command::Doctor(args) => doctor::doctor(&args),

@@ -379,7 +379,7 @@ fn path_attr(attrs: &[Attribute]) -> Option<String> {
     })
 }
 
-fn item_attrs(item: &Item) -> &[Attribute] {
+pub(crate) fn item_attrs(item: &Item) -> &[Attribute] {
     match item {
         Item::Const(i) => &i.attrs,
         Item::Enum(i) => &i.attrs,

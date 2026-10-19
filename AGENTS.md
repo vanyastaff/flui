@@ -92,6 +92,7 @@ backend change needs `cargo heli nextest run -p flui-platform` by hand.
 | No bare `unwrap()` in production: `expect("BUG: <invariant>")`, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) | clippy |
 | Dependencies point down the tiers; an exception names the ADR that removes it | `xtask workspace`, `xtask reach` (ADR-0081) |
 | Every `static`/`thread_local!` outside tests has a `globals` entry (an ADR that removes it, or an ADR-0097 grant) | `xtask globals` |
+| Test support is named `testing`; a hand-written `pump`/`advance`/`tick` or a `Mock*`/`Fake*`/`Scripted*`/`Recording*`/`Probe*` type in test code is in a kit or counted in the allowlist (ADR-0243) | `xtask testing` |
 
 ## ADR Policy
 
