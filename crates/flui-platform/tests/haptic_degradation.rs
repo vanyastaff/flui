@@ -7,13 +7,13 @@ use std::time::Duration;
 use flui_platform::shared::haptic_degradation::{
     ANDROID_USAGE_ASSISTANCE_SONIFICATION, ANDROID_USAGE_TOUCH, AndroidFeedbackAnswer,
     AndroidHapticConstant, AndroidHapticsApi, AndroidPatternPlan, AndroidPrimitive,
-    AndroidVibrationUsage, AndroidVibrator, CORE_HAPTICS_CURVE_POINTS, ComposedPrimitive,
-    CoreHapticsControl, CoreHapticsCurve, CoreHapticsEngine, CoreHapticsEvent, EnvelopeStep,
-    IosGenerator, IosImpact, IosNotification, MacFeedback, PEN_BUZZ, PenCommand, PenController,
-    PenWaveform, WebVibration, actuator_for, android_feedback, android_feedback_outcome,
-    android_pattern, android_vibration_usage, ios_feedback, ios_pattern, ios_pattern_parts, linux,
-    macos_feedback, macos_pattern, pen_feedback_step, pen_timeline, web_feedback, web_pattern,
-    windows_capabilities, windows_feedback, windows_pattern,
+    AndroidVibrationUsage, AndroidVibrator, AndroidViewAnswer, CORE_HAPTICS_CURVE_POINTS,
+    ComposedPrimitive, CoreHapticsControl, CoreHapticsCurve, CoreHapticsEngine, CoreHapticsEvent,
+    EnvelopeStep, IosGenerator, IosImpact, IosNotification, MacFeedback, PEN_BUZZ, PenCommand,
+    PenController, PenWaveform, WebVibration, actuator_for, android_feedback,
+    android_feedback_outcome, android_pattern, android_vibration_usage, ios_feedback, ios_pattern,
+    ios_pattern_parts, linux, macos_feedback, macos_pattern, pen_feedback_step, pen_timeline,
+    web_feedback, web_pattern, windows_capabilities, windows_feedback, windows_pattern,
 };
 use flui_platform::traits::WindowOptions;
 use flui_platform::{FakeHaptics, HeadlessPlatform, OwnerPlatform, Platform as _};
@@ -249,7 +249,7 @@ fn android_feedback_rows() {
             AndroidFeedbackAnswer::Declined,
             HapticOutcome::Suppressed,
         ),
-        (Submitted, AndroidFeedbackAnswer::Late, Submitted),
+        (Submitted, AndroidFeedbackAnswer::Unanswered, Submitted),
         (
             Submitted,
             AndroidFeedbackAnswer::Failed,
@@ -261,6 +261,21 @@ fn android_feedback_rows() {
             reported,
             "{table:?} answered {answer:?}"
         );
+    }
+    // The owner never waits for the Java main thread: a request reports
+    // what the view answered the call before it, and a request before any
+    // answer reports the table's outcome.
+    let answers = AndroidViewAnswer::new();
+    assert_eq!(answers.outcome(Approximated), Approximated, "unanswered");
+    for (answer, reported) in [
+        (AndroidFeedbackAnswer::Declined, HapticOutcome::Suppressed),
+        (AndroidFeedbackAnswer::Played, Submitted),
+        (AndroidFeedbackAnswer::Failed, HapticOutcome::Unavailable),
+        (AndroidFeedbackAnswer::Unanswered, Submitted),
+    ] {
+        answers.publish(answer);
+        assert_eq!(answers.last(), answer);
+        assert_eq!(answers.outcome(Submitted), reported, "after {answer:?}");
     }
 }
 

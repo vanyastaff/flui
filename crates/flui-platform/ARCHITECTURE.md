@@ -2515,12 +2515,17 @@ capabilities; after it a request is `Submitted`. Chrome's own answer is all
 that ran: a headless desktop has no vibration motor.
 
 Android tier 1 posts `performHapticFeedback` to the Java main thread, which
-owns the decor view, and the owner waits at most 8 ms for its answer
-(`android_feedback_outcome`): `false` (feedback off for the view or the system,
-or no window) reports `Suppressed`, a JNI failure `Unavailable`, and `true` the
-table's outcome. An answer later than the wait keeps the table's outcome, since
-the posted call still plays; the bound keeps a busy Java thread, or one blocked
-on the native thread in a lifecycle callback, from stalling the owner.
+owns the decor view, and the owner never waits for it (ADR-0247 §5): a busy
+Java thread, or one blocked on the native thread in a lifecycle callback,
+never stalls the owner. The Java thread publishes the view's answer to an
+`AndroidViewAnswer` as it makes the call, and a request reports the answer to
+the call before it (`android_feedback_outcome`): `false` (feedback off for the
+view or the system, or no window) reports `Suppressed`, a JNI failure or a
+posted call dropped unrun `Unavailable`, and `true`, or no answer yet, the
+table's outcome. Declining is a state of the view, not of one call, so from
+the request after the first declined one every request reports `Suppressed`
+while it lasts; only the first request after the state changes is reported
+from the old one.
 
 Android pattern vibrations go to the `Vibrator`, which needs the install-time
 `VIBRATE` permission (the CLI's manifest template declares it). Without it the
@@ -2606,7 +2611,13 @@ phases are cancelled, the content reset, contacts declined, the timer
 stopped) and `WM_EXITSIZEMOVE` resumes it. A
 failing `Update`, or `WM_DESTROY`, cancels what is open and releases the
 viewport (disable, remove the handler, abandon, deactivate) before the
-window's callbacks go; the COM apartment outlives its interfaces. The
+window's callbacks go; the COM apartment outlives its interfaces. After a
+failing `Update` the window republishes its capabilities without
+`precise_scroll` and `trackpad_gestures`, since two-finger scrolling then
+reaches it as wheel ticks (`a_failed_viewport_withdraws_the_touchpad_capabilities`).
+A frame takes the cursor where it last read it when it cannot be read, and a
+viewport that has never read it leaves its readings queued rather than placing
+them at the origin. The
 viewport's content rectangle is far larger than the window so the system
 never rubber-bands a manipulation.
 

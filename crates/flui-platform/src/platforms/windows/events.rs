@@ -35,7 +35,10 @@ use flui_platform_api::{
 use windows::Win32::{
     Foundation::{HWND, LPARAM, POINT, WPARAM},
     Graphics::Gdi::ScreenToClient,
-    System::SystemInformation::GetTickCount64,
+    System::{
+        SystemInformation::GetTickCount64,
+        SystemServices::{MK_LBUTTON, MK_MBUTTON, MK_RBUTTON, MK_XBUTTON1, MK_XBUTTON2},
+    },
     UI::{
         Input::{
             KeyboardAndMouse::{
@@ -43,7 +46,14 @@ use windows::Win32::{
                 VK_LBUTTON, VK_LWIN, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_RWIN, VK_SHIFT,
                 VK_XBUTTON1, VK_XBUTTON2,
             },
-            Pointer::{POINTER_INFO, POINTER_PEN_INFO, POINTER_TOUCH_INFO},
+            Pointer::{
+                POINTER_BUTTON_CHANGE_TYPE, POINTER_CHANGE_FIFTHBUTTON_DOWN,
+                POINTER_CHANGE_FIFTHBUTTON_UP, POINTER_CHANGE_FIRSTBUTTON_DOWN,
+                POINTER_CHANGE_FIRSTBUTTON_UP, POINTER_CHANGE_FOURTHBUTTON_DOWN,
+                POINTER_CHANGE_FOURTHBUTTON_UP, POINTER_CHANGE_SECONDBUTTON_DOWN,
+                POINTER_CHANGE_SECONDBUTTON_UP, POINTER_CHANGE_THIRDBUTTON_DOWN,
+                POINTER_CHANGE_THIRDBUTTON_UP, POINTER_INFO, POINTER_PEN_INFO, POINTER_TOUCH_INFO,
+            },
         },
         WindowsAndMessaging::{
             GetMessageTime, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
@@ -213,7 +223,35 @@ use super::util::{get_x_lparam, get_y_lparam};
 use crate::{shared::events::event_timestamp_ns, shared::keys, traits::PlatformInput};
 
 /// Every Win32 registry serves one window.
-const SURFACE: NativeSurface = NativeSurface(0);
+pub(super) const SURFACE: NativeSurface = NativeSurface(0);
+
+/// Each mouse button: its virtual key, the `MK_*` bit a mouse message's
+/// `WPARAM` and OLE's key state carry for it, and the button it is.
+pub(super) const MOUSE_BUTTONS: [(VIRTUAL_KEY, u32, PointerButton); 5] = [
+    (VK_LBUTTON, MK_LBUTTON.0, PointerButton::PRIMARY),
+    (VK_RBUTTON, MK_RBUTTON.0, PointerButton::SECONDARY),
+    (VK_MBUTTON, MK_MBUTTON.0, PointerButton::AUXILIARY),
+    (VK_XBUTTON1, MK_XBUTTON1.0, PointerButton::BACK),
+    (VK_XBUTTON2, MK_XBUTTON2.0, PointerButton::FORWARD),
+];
+
+/// The button a pointer packet's `ButtonChangeType` names and whether it
+/// went down; `None` when no button changed.
+fn button_change(change: POINTER_BUTTON_CHANGE_TYPE) -> Option<(PointerButton, bool)> {
+    Some(match change {
+        POINTER_CHANGE_FIRSTBUTTON_DOWN => (PointerButton::PRIMARY, true),
+        POINTER_CHANGE_FIRSTBUTTON_UP => (PointerButton::PRIMARY, false),
+        POINTER_CHANGE_SECONDBUTTON_DOWN => (PointerButton::SECONDARY, true),
+        POINTER_CHANGE_SECONDBUTTON_UP => (PointerButton::SECONDARY, false),
+        POINTER_CHANGE_THIRDBUTTON_DOWN => (PointerButton::AUXILIARY, true),
+        POINTER_CHANGE_THIRDBUTTON_UP => (PointerButton::AUXILIARY, false),
+        POINTER_CHANGE_FOURTHBUTTON_DOWN => (PointerButton::BACK, true),
+        POINTER_CHANGE_FOURTHBUTTON_UP => (PointerButton::BACK, false),
+        POINTER_CHANGE_FIFTHBUTTON_DOWN => (PointerButton::FORWARD, true),
+        POINTER_CHANGE_FIFTHBUTTON_UP => (PointerButton::FORWARD, false),
+        _ => return None,
+    })
+}
 
 /// The mouse's contact, given the primary mouse identity: outside the 32-bit
 /// range of `WM_POINTER` ids. Every route a mouse reaches the window by —
@@ -361,13 +399,9 @@ fn pointer_reading(
             buttons = buttons.with(button);
         }
     }
-    let changed = match native.ButtonChangeType.0 {
-        3 | 4 => PointerButton::SECONDARY,
-        5 | 6 => PointerButton::AUXILIARY,
-        7 | 8 => PointerButton::BACK,
-        9 | 10 => PointerButton::FORWARD,
-        _ => PointerButton::PRIMARY,
-    };
+    let change = button_change(native.ButtonChangeType);
+    // A DOWN or UP that names no button is the primary's.
+    let changed = change.map_or(PointerButton::PRIMARY, |(button, _)| button);
     // ENTER can follow DOWN while both notifications refer to the same native
     // packet: its cached ButtonChangeType is not a second press.
     let action = if message == WM_POINTERENTER {
@@ -376,9 +410,9 @@ fn pointer_reading(
         ReadingAction::Leave
     } else if flags & POINTER_FLAG_CANCELED.0 != 0 {
         ReadingAction::Cancel(NativeCancel::Platform)
-    } else if matches!(native.ButtonChangeType.0, 1 | 3 | 5 | 7 | 9) || message == WM_POINTERDOWN {
+    } else if change.is_some_and(|(_, down)| down) || message == WM_POINTERDOWN {
         ReadingAction::Press(changed)
-    } else if matches!(native.ButtonChangeType.0, 2 | 4 | 6 | 8 | 10) || message == WM_POINTERUP {
+    } else if change.is_some_and(|(_, down)| !down) || message == WM_POINTERUP {
         ReadingAction::Release(changed)
     } else {
         ReadingAction::Move
@@ -422,47 +456,48 @@ fn native_history(raw: u32) -> Option<Vec<PointerPacket>> {
         },
         WindowsAndMessaging::{PT_PEN, PT_TOUCH},
     };
-    // SAFETY: initialized out buffers belong to this call. The native ID is
-    // obtained from the message; Windows rejects stale or invented IDs.
-    unsafe {
-        let mut info = POINTER_INFO::default();
-        GetPointerInfo(raw, &raw mut info).ok()?;
-        let count = info.historyCount.max(1);
-        match info.pointerType {
-            PT_PEN => read_history(count, |count, buffer| {
-                GetPointerPenInfoHistory(raw, count, Some(buffer))
-            })
-            .map(|readings: Vec<POINTER_PEN_INFO>| {
-                readings.into_iter().map(PointerPacket::Pen).collect()
-            }),
-            PT_TOUCH => read_history(count, |count, buffer| {
-                GetPointerTouchInfoHistory(raw, count, Some(buffer))
-            })
-            .map(|readings: Vec<POINTER_TOUCH_INFO>| {
-                readings.into_iter().map(PointerPacket::Touch).collect()
-            }),
-            _ => read_history(count, |count, buffer| {
-                GetPointerInfoHistory(raw, count, Some(buffer))
-            })
-            .map(|readings: Vec<POINTER_INFO>| {
-                readings.into_iter().map(PointerPacket::Pointer).collect()
-            }),
-        }
+    let mut info = POINTER_INFO::default();
+    // SAFETY: `info` is a live, writable local. The native ID is obtained
+    // from the message; Windows rejects stale or invented IDs.
+    unsafe { GetPointerInfo(raw, &raw mut info) }.ok()?;
+    let count = info.historyCount.max(1);
+    match info.pointerType {
+        PT_PEN => read_history(count, |count, buffer: &mut [POINTER_PEN_INFO]| {
+            // SAFETY: `*count` is `buffer.len()` (`read_history`), so the
+            // call writes at most the entries `buffer` holds.
+            unsafe { GetPointerPenInfoHistory(raw, count, Some(buffer.as_mut_ptr())) }
+        })
+        .map(|readings| readings.into_iter().map(PointerPacket::Pen).collect()),
+        PT_TOUCH => read_history(count, |count, buffer: &mut [POINTER_TOUCH_INFO]| {
+            // SAFETY: as for the pen history.
+            unsafe { GetPointerTouchInfoHistory(raw, count, Some(buffer.as_mut_ptr())) }
+        })
+        .map(|readings| readings.into_iter().map(PointerPacket::Touch).collect()),
+        _ => read_history(count, |count, buffer: &mut [POINTER_INFO]| {
+            // SAFETY: as for the pen history.
+            unsafe { GetPointerInfoHistory(raw, count, Some(buffer.as_mut_ptr())) }
+        })
+        .map(|readings| readings.into_iter().map(PointerPacket::Pointer).collect()),
     }
 }
 
+/// Read up to `count` history entries: `query` is handed a buffer of
+/// `count` entries and that same count, which it rewrites to the number it
+/// filled. A count larger than the buffer is refused.
 fn read_history<T: Default + Clone>(
-    mut count: u32,
-    query: impl FnOnce(*mut u32, *mut T) -> windows::core::Result<()>,
+    count: u32,
+    query: impl FnOnce(&mut u32, &mut [T]) -> windows::core::Result<()>,
 ) -> Option<Vec<T>> {
+    let len = usize::try_from(count).ok()?;
     let mut values = Vec::new();
-    values.try_reserve_exact(count as usize).ok()?;
-    values.resize(count as usize, T::default());
-    query(&raw mut count, values.as_mut_ptr()).ok()?;
-    if count as usize > values.len() {
-        return None;
-    }
-    values.truncate(count as usize);
+    values.try_reserve_exact(len).ok()?;
+    values.resize(len, T::default());
+    let mut filled = count;
+    query(&mut filled, &mut values).ok()?;
+    let filled = usize::try_from(filled)
+        .ok()
+        .filter(|filled| *filled <= len)?;
+    values.truncate(filled);
     Some(values)
 }
 
@@ -1111,32 +1146,16 @@ pub(super) fn message_modifiers() -> KeyboardModifiers {
 /// set is delivered as a hover, so no gesture recognizer ever sees it and the
 /// drag is silently re-interpreted as a tap on release.
 ///
-/// `MK_LBUTTON`/`MK_RBUTTON`/`MK_MBUTTON` are `0x0001`/`0x0002`/`0x0010`
-/// (`winuser.h`); the X buttons have no `PointerButton` mapping here.
+/// The bits are [`MOUSE_BUTTONS`]'.
 #[inline]
 fn held_buttons(wparam: WPARAM) -> PointerButtons {
-    const MK_LBUTTON: usize = 0x0001;
-    const MK_RBUTTON: usize = 0x0002;
-    const MK_MBUTTON: usize = 0x0010;
-
     let mask = wparam.0 & 0xffff;
-    let mut buttons = PointerButtons::NONE;
-    if mask & MK_LBUTTON != 0 {
-        buttons = buttons.with(PointerButton::PRIMARY);
-    }
-    if mask & MK_RBUTTON != 0 {
-        buttons = buttons.with(PointerButton::SECONDARY);
-    }
-    if mask & MK_MBUTTON != 0 {
-        buttons = buttons.with(PointerButton::AUXILIARY);
-    }
-    if mask & 0x0020 != 0 {
-        buttons = buttons.with(PointerButton::BACK);
-    }
-    if mask & 0x0040 != 0 {
-        buttons = buttons.with(PointerButton::FORWARD);
-    }
-    buttons
+    MOUSE_BUTTONS
+        .iter()
+        .filter(|(_, bit, _)| mask & *bit as usize != 0)
+        .fold(PointerButtons::NONE, |held, (_, _, button)| {
+            held.with(*button)
+        })
 }
 
 /// The button a button message reports and whether it is a press, or `None`
@@ -1211,9 +1230,9 @@ pub(super) fn capture_changed_input(
     registry: &RefCell<ContactRegistry>,
 ) -> Vec<PlatformInput> {
     let gaining = HWND(lparam.0 as *mut core::ffi::c_void);
-    let held = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]
-        .into_iter()
-        .any(key_down_in_queue);
+    let held = MOUSE_BUTTONS
+        .iter()
+        .any(|(key, _, _)| key_down_in_queue(*key));
     if gaining == hwnd || !held {
         return Vec::new();
     }

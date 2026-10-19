@@ -12,6 +12,7 @@
 //! its start until that point, then follows the curve; where a backend can
 //! only step between values, a step takes the lower of its two ends.
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 use flui_platform_api::haptics::{
@@ -405,34 +406,79 @@ pub const fn android_feedback(
     (constant, exact_or_approximated(exact && available))
 }
 
-/// What the decor view said to `performHapticFeedback`, as far as the owner
-/// thread learned it.
+/// What the decor view said to `performHapticFeedback`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AndroidFeedbackAnswer {
+    /// No call has been answered yet.
+    Unanswered,
     /// It returned `true`: the feedback played.
     Played,
     /// It returned `false`: haptic feedback is off for the view or the
     /// system, or the view has no window, so nothing played.
     Declined,
-    /// The call is posted but the Java main thread has not answered in time;
-    /// it still plays when that thread gets to it.
-    Late,
-    /// The call failed (a JNI error or a Java exception): nothing played.
+    /// The call failed (a JNI error, a Java exception, or the posted call
+    /// dropped unrun): nothing played.
     Failed,
 }
 
-/// The outcome Android tier 1 reports: the table's (`android_feedback`)
-/// once the view played it or when the answer comes too late to wait for,
-/// [`HapticOutcome::Suppressed`] when the view declined, and
-/// [`HapticOutcome::Unavailable`] when the call could not be made.
+/// The outcome Android tier 1 reports for `answer`, the view's answer to the
+/// call before this one: the table's (`android_feedback`) when it played or
+/// nothing has answered yet, [`HapticOutcome::Suppressed`] when the view
+/// declined, and [`HapticOutcome::Unavailable`] when the call could not be
+/// made.
 pub const fn android_feedback_outcome(
     table: HapticOutcome,
     answer: AndroidFeedbackAnswer,
 ) -> HapticOutcome {
     match answer {
-        AndroidFeedbackAnswer::Played | AndroidFeedbackAnswer::Late => table,
+        AndroidFeedbackAnswer::Played | AndroidFeedbackAnswer::Unanswered => table,
         AndroidFeedbackAnswer::Declined => HapticOutcome::Suppressed,
         AndroidFeedbackAnswer::Failed => HapticOutcome::Unavailable,
+    }
+}
+
+/// The decor view's answer to the latest semantic feedback call, published by
+/// the Java main thread as it makes the call and read by the owner, which
+/// never waits for that thread (ADR-0247 §5). A request is therefore
+/// reported from the answer to the call before it: the view declines when
+/// feedback is off for it or the system, or it has no window, which are
+/// states, not answers to one call, so the request after the first one
+/// declined reports `Suppressed` while the state lasts.
+#[derive(Debug, Default)]
+pub struct AndroidViewAnswer(AtomicU8);
+
+impl AndroidViewAnswer {
+    /// Nothing answered yet.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(AtomicU8::new(0))
+    }
+
+    /// The Java main thread's answer to a call it just made.
+    pub fn publish(&self, answer: AndroidFeedbackAnswer) {
+        let raw = match answer {
+            AndroidFeedbackAnswer::Unanswered => 0,
+            AndroidFeedbackAnswer::Played => 1,
+            AndroidFeedbackAnswer::Declined => 2,
+            AndroidFeedbackAnswer::Failed => 3,
+        };
+        self.0.store(raw, Ordering::Release);
+    }
+
+    /// The answer published last.
+    #[must_use]
+    pub fn last(&self) -> AndroidFeedbackAnswer {
+        match self.0.load(Ordering::Acquire) {
+            1 => AndroidFeedbackAnswer::Played,
+            2 => AndroidFeedbackAnswer::Declined,
+            3 => AndroidFeedbackAnswer::Failed,
+            _ => AndroidFeedbackAnswer::Unanswered,
+        }
+    }
+
+    /// The outcome of a request whose table outcome is `table`, made now.
+    pub fn outcome(&self, table: HapticOutcome) -> HapticOutcome {
+        android_feedback_outcome(table, self.last())
     }
 }
 

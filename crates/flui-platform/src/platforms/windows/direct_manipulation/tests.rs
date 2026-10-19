@@ -7,6 +7,7 @@
 use std::sync::{Arc, Mutex};
 
 use flui_foundation::geometry::Size;
+use flui_platform_api::input_capabilities::InputCapabilities;
 use flui_platform_api::pointer::PointerEvent;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{GetUpdateRect, ValidateRect};
@@ -15,9 +16,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::PUMP_TIMER;
-use crate::platforms::windows::platform::with_window_context;
+use crate::platforms::windows::platform::{WindowContext, with_window_context};
 use crate::platforms::windows::{WindowsPlatform, WindowsWindow};
 use crate::shared::direct_manipulation::{ContentTransform, ViewportReading, ViewportStatus};
+use crate::shared::input_availability;
 use crate::traits::{DispatchEventResult, HostWindow, Platform as _, PlatformInput, WindowOptions};
 
 use ViewportStatus::{Ready, Running};
@@ -274,6 +276,36 @@ fn destroying_the_window_cancels_what_is_open_before_it_closes() {
     }));
     f.window.close();
     assert_eq!(f.lines(), ["Began 8", "Cancelled 0", "close"]);
+}
+
+fn capabilities(hwnd: HWND) -> InputCapabilities {
+    with_window_context(hwnd, "test", |context| {
+        context.callbacks.input_capabilities()
+    })
+    .expect("a context")
+}
+
+/// A viewport whose `Update` fails is released, what it had open is
+/// cancelled, and the window stops claiming precise scrolling and trackpad
+/// gestures it now reads as wheel ticks. `Update` survives a deactivated
+/// manager and an abandoned viewport, so the case enters the failure path
+/// `pump_touchpad` takes on its error. Red-check: drop the capability
+/// republish from `touchpad_failed`.
+#[test]
+fn a_failed_viewport_withdraws_the_touchpad_capabilities() {
+    let f = fixture(None);
+    assert_eq!(capabilities(f.hwnd), input_availability::windows(true));
+    push(f.hwnd, &[status(Running), content(-8.0)]);
+    pump(f.hwnd);
+    with_window_context(f.hwnd, "test", |context| context.touchpad_failed(f.hwnd))
+        .expect("a context");
+    assert_eq!(f.lines(), ["Began 8", "Cancelled 0"]);
+    assert!(
+        !with_window_context(f.hwnd, "test", WindowContext::has_touchpad).expect("a context"),
+        "the failed viewport is released"
+    );
+    assert_eq!(capabilities(f.hwnd), input_availability::windows(false));
+    f.window.close();
 }
 
 /// The viewport's event handler holds the window's `Rc` queue, so it does

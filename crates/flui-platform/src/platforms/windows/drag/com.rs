@@ -5,9 +5,9 @@
 //! so a panic (a hostile diagnostics subscriber, a provider) never unwinds
 //! into OLE; it answers `E_UNEXPECTED` and its payload is retained.
 
+use crate::shared::panic_boundary::contain_os_entry;
 use std::cell::{Cell, RefCell};
 use std::mem::ManuallyDrop;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -38,7 +38,7 @@ use windows::Win32::{
 use windows_core::{BOOL, HRESULT, Ref};
 
 use super::{OleTransfer, clipboard_format, describe, global_format, write_global};
-use crate::platforms::windows::platform::{WindowIdentity, with_window_context_checked};
+use crate::platforms::windows::platform::WindowRef;
 use crate::shared::ole_drag_drop::{
     DragContinuation, NativeFormat, actions_of, continue_drag, effect_bits, encode, native_format,
 };
@@ -50,14 +50,7 @@ pub(in crate::platforms::windows) use objects::{
 
 /// Run one vtable method's body; a panic answers `E_UNEXPECTED`.
 fn com_boundary<R>(body: impl FnOnce() -> windows_core::Result<R>) -> windows_core::Result<R> {
-    catch_unwind(AssertUnwindSafe(body)).unwrap_or_else(|payload| {
-        // A payload whose `Drop` panics must not unwind into OLE.
-        std::mem::forget(payload);
-        crate::shared::panic_boundary::contain_owner_callback(|| {
-            tracing::error!("an OLE drag-and-drop call panicked");
-        });
-        Err(E_UNEXPECTED.into())
-    })
+    contain_os_entry("OLE drag and drop", body).unwrap_or_else(|| Err(E_UNEXPECTED.into()))
 }
 
 /// The `#[implement]` expansions, in a module of their own so the lints
@@ -82,7 +75,7 @@ mod objects {
 
     use super::super::OleTransfer;
     use super::SourceEntry;
-    use crate::platforms::windows::platform::WindowIdentity;
+    use crate::platforms::windows::platform::WindowRef;
 
     // Every object here holds owner-thread state (`Rc`, `Cell`, `RefCell`, a
     // `!Send` provider): `Agile = false` withholds `IAgileObject` and the
@@ -115,8 +108,7 @@ mod objects {
     /// One window's drop target.
     #[implement(IDropTarget, Agile = false)]
     pub(in crate::platforms::windows) struct WindowDropTarget {
-        pub(super) hwnd: isize,
-        pub(super) identity: WindowIdentity,
+        pub(super) window: WindowRef,
         pub(super) transfer: Arc<OleTransfer>,
         /// The offer of the drag over the window, and what its source
         /// permitted at the last event.
@@ -201,7 +193,7 @@ impl SourceData {
             // Asked from inside the provider itself.
             return Err(E_UNEXPECTED.into());
         };
-        let served = catch_unwind(AssertUnwindSafe(|| provider(entry.representation)));
+        let served = contain_os_entry("a drag's provider", || provider(entry.representation));
         let restored = {
             let mut slot = self.provider.borrow_mut();
             if slot.is_none() {
@@ -211,17 +203,20 @@ impl SourceData {
                 Some(provider)
             }
         };
-        crate::shared::panic_boundary::contain_owner_callback(|| drop(restored));
+        if served.is_some() {
+            crate::shared::panic_boundary::contain_owner_callback(|| drop(restored));
+        } else {
+            // After the provider's failure its captures are retained, not
+            // dropped (ADR-0127 §2).
+            std::mem::forget(restored);
+        }
         let payload = match served {
-            Ok(Ok(payload)) => payload,
-            Ok(Err(error)) => {
+            Some(Ok(payload)) => payload,
+            Some(Err(error)) => {
                 tracing::debug!(%error, "the drag's provider refused a representation");
                 return Err(DV_E_FORMATETC.into());
             }
-            Err(payload) => {
-                std::mem::forget(payload);
-                return Err(E_UNEXPECTED.into());
-            }
+            None => return Err(E_UNEXPECTED.into()),
         };
         encode(&entry.native, &payload).ok_or_else(|| DV_E_FORMATETC.into())
     }
@@ -377,15 +372,13 @@ impl IDropSource_Impl for DropSource_Impl {
 }
 
 impl WindowDropTarget {
-    /// The drop target of the window `hwnd`, created as `identity`.
+    /// The drop target of `window`.
     pub(in crate::platforms::windows) fn new(
-        hwnd: isize,
-        identity: WindowIdentity,
+        window: WindowRef,
         transfer: Arc<OleTransfer>,
     ) -> Self {
         Self {
-            hwnd,
-            identity,
+            window,
             transfer,
             over: Cell::new(None),
         }
@@ -395,14 +388,11 @@ impl WindowDropTarget {
     /// pixels and converted to the window's logical pixels.
     fn dispatch(
         &self,
-        event: impl FnOnce(Option<Point<f64>>) -> DragDropEvent,
+        event: impl FnOnce(Option<Point<f64>>) -> Option<DragDropEvent>,
         screen: Option<&POINTL>,
     ) {
-        let hwnd = windows::Win32::Foundation::HWND(self.hwnd as *mut _);
-        let _ = with_window_context_checked(hwnd, "drag and drop", |context| {
-            if context.identity != self.identity {
-                return;
-            }
+        let hwnd = self.window.hwnd();
+        let _ = self.window.with_context("drag and drop", |context| {
             let position = screen.and_then(|screen| {
                 let mut point = POINT {
                     x: screen.x,
@@ -419,9 +409,11 @@ impl WindowDropTarget {
             });
             // Dispatch is the window's own: it queues behind a callback
             // already running and contains the callback's panics.
-            context
-                .callbacks
-                .dispatch_input(PlatformInput::DragDrop(event(position)));
+            if let Some(event) = event(position) {
+                context
+                    .callbacks
+                    .dispatch_input(PlatformInput::DragDrop(event));
+            }
         });
     }
 
@@ -437,7 +429,7 @@ impl WindowDropTarget {
     /// left and retired.
     pub(in crate::platforms::windows) fn leave(&self) {
         if let Some((id, _)) = self.over.take() {
-            self.dispatch(|_| DragDropEvent::Exited { id }, None);
+            self.dispatch(|_| Some(DragDropEvent::Exited { id }), None);
             self.transfer.close_offer(id);
         }
     }
@@ -474,10 +466,12 @@ impl IDropTarget_Impl for WindowDropTarget_Impl {
             let id = offer.id();
             self.over.set(Some((id, allowed)));
             self.dispatch(
-                |position| DragDropEvent::Entered {
-                    offer,
-                    allowed,
-                    position,
+                |position| {
+                    Some(DragDropEvent::Entered {
+                        offer,
+                        allowed,
+                        position,
+                    })
                 },
                 Some(point),
             );
@@ -503,11 +497,16 @@ impl IDropTarget_Impl for WindowDropTarget_Impl {
                 return Ok(());
             };
             self.over.set(Some((id, allowed)));
+            // A point the window cannot place is no movement: the window
+            // keeps the position it was last told, and the OS is still
+            // answered from the cached feedback below.
             self.dispatch(
-                |position| DragDropEvent::Moved {
-                    id,
-                    allowed,
-                    position: position.unwrap_or_default(),
+                |position| {
+                    position.map(|position| DragDropEvent::Moved {
+                        id,
+                        allowed,
+                        position,
+                    })
                 },
                 Some(point),
             );
@@ -549,10 +548,12 @@ impl IDropTarget_Impl for WindowDropTarget_Impl {
             self.over.set(None);
             *effect = DROPEFFECT(effect_bits(action));
             self.dispatch(
-                |position| DragDropEvent::Dropped {
-                    id,
-                    action,
-                    position,
+                |position| {
+                    Some(DragDropEvent::Dropped {
+                        id,
+                        action,
+                        position,
+                    })
                 },
                 Some(point),
             );

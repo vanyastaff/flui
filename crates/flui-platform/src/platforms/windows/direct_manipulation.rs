@@ -70,11 +70,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::com_apartment::ComApartment;
+use super::events::SURFACE;
 use super::platform::WindowContext;
 use crate::shared::direct_manipulation::{
     TouchpadAssembler, TouchpadFrame, ViewportReading, ViewportStatus,
 };
-use crate::shared::pointer_assembly::{NativeSurface, NativeTime, QpcTicks, ReadingTime};
+use crate::shared::pointer_assembly::{NativeTime, QpcTicks, ReadingTime};
 use crate::traits::PlatformInput;
 
 /// The timer that paces a window's viewport; the value spells "DM".
@@ -100,7 +101,6 @@ const CONTENT_EXTENT: i32 = 1 << 24;
 )]
 mod handler {
     use std::cell::RefCell;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
 
     use windows::Win32::Foundation::E_UNEXPECTED;
@@ -111,6 +111,7 @@ mod handler {
     use windows_core::{Ref, implement};
 
     use crate::shared::direct_manipulation::{ContentTransform, ViewportReading, ViewportStatus};
+    use crate::shared::panic_boundary::contain_os_entry;
 
     /// Readings the viewport reported during one `Update`.
     pub(in super::super) type ReadingQueue = Rc<RefCell<Vec<ViewportReading>>>;
@@ -131,12 +132,12 @@ mod handler {
         /// The boundary every callback crosses: a panic must not unwind into
         /// the system, and a queue borrowed elsewhere drops the reading.
         fn entry(&self, body: impl FnOnce(&mut Vec<ViewportReading>)) -> windows_core::Result<()> {
-            catch_unwind(AssertUnwindSafe(|| {
+            contain_os_entry("a DirectManipulation viewport handler", || {
                 if let Ok(mut queue) = self.queue.try_borrow_mut() {
                     body(&mut queue);
                 }
-            }))
-            .map_err(|_| E_UNEXPECTED.into())
+            })
+            .ok_or_else(|| E_UNEXPECTED.into())
         }
     }
 
@@ -348,6 +349,9 @@ pub(super) struct TouchpadHost {
     status: ViewportStatus,
     /// Paused for the modal size and move loop.
     paused: bool,
+    /// The cursor where a frame last read it, in device pixels of the
+    /// client area.
+    cursor: Option<(f64, f64)>,
 }
 
 impl TouchpadHost {
@@ -359,9 +363,10 @@ impl TouchpadHost {
     ) -> windows_core::Result<Self> {
         Ok(Self {
             viewport: Rc::new(ComViewport::create(hwnd, size, apartment)?),
-            assembler: TouchpadAssembler::new(NativeSurface(0)),
+            assembler: TouchpadAssembler::new(SURFACE),
             status: ViewportStatus::Ready,
             paused: false,
+            cursor: None,
         })
     }
 
@@ -396,25 +401,30 @@ impl WindowContext {
         self.touchpad.host.borrow().is_some()
     }
 
-    fn frame(&self, hwnd: HWND) -> TouchpadFrame {
+    /// The frame `host`'s readings are decoded in: the cursor now, or where
+    /// it was last read when it cannot be read (another desktop is active);
+    /// `None` when it has never been read, since the origin would be a
+    /// position the touchpad never reported (ADR-0054).
+    fn frame(&self, hwnd: HWND, host: &mut TouchpadHost) -> Option<TouchpadFrame> {
         let mut cursor = POINT::default();
         // SAFETY: `cursor` is a live, writable local; `hwnd` is this
-        // window. On failure the point stays at the origin.
-        let position = unsafe {
-            if GetCursorPos(&raw mut cursor).is_ok()
+        // window.
+        let read = unsafe {
+            GetCursorPos(&raw mut cursor).is_ok()
                 && windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &raw mut cursor).as_bool()
-            {
-                (f64::from(cursor.x), f64::from(cursor.y))
-            } else {
-                (0.0, 0.0)
-            }
         };
-        TouchpadFrame {
+        let position = if read {
+            (f64::from(cursor.x), f64::from(cursor.y))
+        } else {
+            host.cursor?
+        };
+        host.cursor = Some(position);
+        Some(TouchpadFrame {
             time: now(),
             position,
             scale: self.scale_factor.get(),
             modifiers: super::events::message_modifiers(),
-        }
+        })
     }
 
     /// The system offered a contact (`DM_POINTERHITTEST`): give it to the
@@ -464,17 +474,24 @@ impl WindowContext {
                     ?error,
                     "DirectManipulation failed; the touchpad viewport is released"
                 );
-                self.release_touchpad(hwnd);
+                self.touchpad_failed(hwnd);
                 return;
             }
         };
-        let frame = self.frame(hwnd);
         let mut inputs = Vec::new();
         let mut reset = false;
         let animating = {
             let mut host = self.touchpad.host.borrow_mut();
             // Released while `Update` ran (a failure seen by a nested pump).
             let Some(host) = host.as_mut() else { return };
+            let Some(frame) = self.frame(hwnd, host) else {
+                // No position to place them at yet: the readings wait, in
+                // order, for the next pump that can read the cursor.
+                host.viewport.queue.borrow_mut().splice(0..0, readings);
+                drop(viewport);
+                Self::keep_pumping(hwnd);
+                return;
+            };
             let mut registry = self.pointer_registry.borrow_mut();
             for reading in readings {
                 if let ViewportReading::Status(status) = reading {
@@ -567,6 +584,17 @@ impl WindowContext {
         }
     }
 
+    /// The viewport failed: release it, and stop claiming precise scrolling
+    /// and trackpad gestures, since two-finger scrolling now reaches the
+    /// window as wheel ticks.
+    fn touchpad_failed(&self, hwnd: HWND) {
+        self.release_touchpad(hwnd);
+        self.callbacks
+            .set_input_capabilities(crate::shared::input_availability::windows(
+                self.has_touchpad(),
+            ));
+    }
+
     /// The viewport failed or the window is going away: end what is open as
     /// cancelled and release every interface.
     pub(super) fn release_touchpad(&self, hwnd: HWND) {
@@ -600,13 +628,19 @@ impl WindowContext {
     fn abandon_host(&self, hwnd: HWND, host: &mut TouchpadHost) -> Vec<PlatformInput> {
         host.viewport.stop();
         host.status = ViewportStatus::Ready;
-        let frame = self.frame(hwnd);
-        let delivered = host
-            .assembler
-            .abandon(&mut self.pointer_registry.borrow_mut(), frame);
-        if delivered.reset
-            && let Err(error) = host.viewport.reset()
-        {
+        // A host that never read the cursor decoded nothing (its readings
+        // wait for a frame), so nothing is open to cancel; its content is
+        // still returned to the origin.
+        let (inputs, reset) = match self.frame(hwnd, host) {
+            Some(frame) => {
+                let delivered = host
+                    .assembler
+                    .abandon(&mut self.pointer_registry.borrow_mut(), frame);
+                (delivered.inputs, delivered.reset)
+            }
+            None => (Vec::new(), true),
+        };
+        if reset && let Err(error) = host.viewport.reset() {
             tracing::debug!(?error, "DirectManipulation could not reset its viewport");
         }
         // What the viewport reported, the stop and the reset included, is of
@@ -614,7 +648,7 @@ impl WindowContext {
         // one from the origin.
         host.viewport.queue.borrow_mut().clear();
         Self::stop_pumping(hwnd);
-        delivered.inputs
+        inputs
     }
 
     /// Whether `timer` is the viewport's pacing timer.
