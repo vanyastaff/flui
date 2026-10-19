@@ -112,6 +112,12 @@ impl ScrollMetrics {
         Tolerance::for_device_pixel_ratio(self.device_pixel_ratio).ok()
     }
 
+    /// How far off a target, in logical pixels, still counts as on it:
+    /// [`rest_slop`] at these metrics' ratio.
+    pub(crate) fn rest_slop(&self) -> f64 {
+        rest_slop(self.device_pixel_ratio)
+    }
+
     /// The scroll range, or `None` when the extents are unordered or not
     /// finite.
     pub(crate) fn bounds(&self) -> Option<SimulationBounds> {
@@ -155,6 +161,18 @@ impl ScrollMetrics {
     #[must_use]
     pub fn pixels_from_page(&self, viewport_fraction: f64, page: f64) -> f64 {
         page * self.viewport_dimension * viewport_fraction
+    }
+}
+
+/// Half a device pixel at `device_pixel_ratio`, in logical pixels: the slop a
+/// ballistic run rests within (ADR-0155), so whatever came to rest a hair off
+/// a target counts as on it. Half a logical pixel for a ratio that is not
+/// finite and positive.
+pub(crate) fn rest_slop(device_pixel_ratio: f64) -> f64 {
+    if device_pixel_ratio.is_finite() && device_pixel_ratio > 0.0 {
+        0.5 / device_pixel_ratio
+    } else {
+        0.5
     }
 }
 

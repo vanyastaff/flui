@@ -363,6 +363,15 @@ impl PointerSequences {
     /// Refuses (returns `false`) a packet from another device: the map key
     /// already matches `PointerId`, and device identity completes the source,
     /// while kind/tool and primary role may change during contact.
+    /// Whether `pointer`'s device may speak for the contact its id names: no
+    /// contact, or the device that admitted it. Changes nothing.
+    pub(super) fn admits_device(&self, pointer: &PointerInfo) -> bool {
+        self.routes
+            .borrow()
+            .get(&pointer.id)
+            .is_none_or(|cached| cached.pointer.device == pointer.device)
+    }
+
     pub(super) fn observe(&self, pointer: &PointerInfo, time: Option<EventTime>) -> bool {
         let mut routes = self.routes.borrow_mut();
         let Some(cached) = routes.get_mut(&pointer.id) else {

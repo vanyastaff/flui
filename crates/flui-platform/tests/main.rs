@@ -42,6 +42,9 @@ mod executor;
 mod file_store;
 #[path = "haptic_degradation.rs"]
 mod haptic_degradation;
+#[path = "headless_drag.rs"]
+#[cfg(not(target_arch = "wasm32"))]
+mod headless_drag;
 #[path = "html_drag_drop.rs"]
 mod html_drag_drop;
 #[path = "input_capabilities.rs"]

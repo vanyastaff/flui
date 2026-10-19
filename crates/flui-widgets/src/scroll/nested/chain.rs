@@ -13,13 +13,13 @@ use flui_view::{BoxedView, BuildContext, BuildContextExt, InheritedView, IntoVie
 use smallvec::SmallVec;
 
 use super::idle_end::IdleEnd;
+use super::plane::presentation_device_pixel_ratio;
 use super::plane::{Plane, PlaneSource};
 use super::{
     FlingHandoff, FlingStep, NestedScrollConnection, OverscrollBehavior, ScrollCause, ScrollDevice,
     ScrollEndReason, ScrollStep,
 };
 use crate::scroll::scroll_owner::ScrollOwner;
-use crate::scroll::scrollable::presentation_device_pixel_ratio;
 
 /// What sits at one place of a scroll chain.
 #[derive(Clone)]
@@ -747,10 +747,11 @@ impl ScrollSequence {
     /// remainder goes back up within the latch. Returns what everyone
     /// consumed.
     ///
-    /// A delta that is not finite (a jump to NaN, an unbounded target) is
-    /// dropped here, before anyone sees it: every step a participant or a
-    /// leaf is offered is finite, so no answer is clamped against a NaN
-    /// bound and nothing publishes a non-finite offset.
+    /// A delta that is not finite is dropped here, before anyone sees it:
+    /// finite inputs still make one (a jump across an extent near `f64::MAX`
+    /// overflows the difference), and every source dispatches through here,
+    /// so no participant or leaf is offered one, no answer is clamped against
+    /// a NaN bound and nothing publishes a non-finite offset.
     pub(crate) fn dispatch(
         &self,
         runner: usize,

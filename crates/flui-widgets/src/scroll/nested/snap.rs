@@ -24,18 +24,6 @@ pub trait SnapPolicy: Send + Sync + std::fmt::Debug {
 /// velocities.
 const VELOCITY_TOLERANCE: f64 = 20.0;
 
-/// How far off a target, in logical pixels, still counts as on it: the half
-/// device pixel a ballistic run rests within (ADR-0155), so a scrollable that
-/// came to rest a hair off its target flings on to the next one.
-fn rest_slop(metrics: &ScrollMetrics) -> f64 {
-    let ratio = metrics.device_pixel_ratio;
-    if ratio.is_finite() && ratio > 0.0 {
-        0.5 / ratio
-    } else {
-        0.5
-    }
-}
-
 /// The share of the viewport one page takes: finite and greater than zero.
 ///
 /// A [`PageController`](crate::PageController) and a [`PageSnap`] take their
@@ -100,17 +88,9 @@ impl Default for ViewportFraction {
     }
 }
 
-impl TryFrom<f64> for ViewportFraction {
-    type Error = InvalidViewportFraction;
-
-    fn try_from(fraction: f64) -> Result<Self, Self::Error> {
-        Self::new(fraction)
-    }
-}
-
 /// Snaps to whole pages of a [`ViewportFraction`] of the viewport.
 ///
-/// A release faster than [`velocity_tolerance`](Self::velocity_tolerance)
+/// A release faster than 20 logical pixels per second
 /// commits to the next page in its direction, from anywhere on the current
 /// one; a slower one settles on the nearest page.
 ///
@@ -139,12 +119,6 @@ impl PageSnap {
             viewport_fraction: viewport_fraction.get(),
         }
     }
-
-    /// The release speed, logical px/s, below which the nearest page wins.
-    #[must_use]
-    pub fn velocity_tolerance(&self) -> f64 {
-        VELOCITY_TOLERANCE
-    }
 }
 
 impl SnapPolicy for PageSnap {
@@ -159,7 +133,7 @@ impl SnapPolicy for PageSnap {
         }
         let page = metrics.page(self.viewport_fraction);
         let nearest = page.round();
-        let page = if (page - nearest).abs() * extent <= rest_slop(metrics) {
+        let page = if (page - nearest).abs() * extent <= metrics.rest_slop() {
             nearest
         } else {
             page
@@ -195,7 +169,7 @@ pub enum AnchorSnapError {
 /// Snaps to the nearest of a set of anchor offsets along the scroll axis: the
 /// stops of a sheet, a row's revealed actions, item starts of uneven size.
 ///
-/// A release faster than [`velocity_tolerance`](Self::velocity_tolerance)
+/// A release faster than 20 logical pixels per second
 /// commits to the next anchor in its direction, also from an anchor's own
 /// offset, or stays on the last one that way; a slower one settles on the
 /// nearest anchor (the farther one, from exactly halfway). Anchors are
@@ -245,12 +219,6 @@ impl AnchorSnap {
     pub fn anchors(&self) -> &[f64] {
         &self.anchors
     }
-
-    /// The release speed, logical px/s, below which the nearest anchor wins.
-    #[must_use]
-    pub fn velocity_tolerance(&self) -> f64 {
-        VELOCITY_TOLERANCE
-    }
 }
 
 impl SnapPolicy for AnchorSnap {
@@ -258,7 +226,7 @@ impl SnapPolicy for AnchorSnap {
         let anchors = &*self.anchors;
         let (first, last) = (anchors[0], anchors[anchors.len() - 1]);
         let pixels = metrics.pixels;
-        let slop = rest_slop(metrics);
+        let slop = metrics.rest_slop();
         if velocity > VELOCITY_TOLERANCE {
             let next = anchors.partition_point(|&anchor| anchor <= pixels + slop);
             return anchors.get(next).copied().unwrap_or(last);

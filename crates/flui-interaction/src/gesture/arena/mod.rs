@@ -961,23 +961,45 @@ pub enum ScrollLatchEnd {
     WithThisPacket,
 }
 
-/// The contactless input a binding is dispatching: its sequence and, for a
-/// wheel or trackpad packet, when its latch ends.
+/// The input a binding is dispatching, and the sequence it belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct DispatchedSignal {
-    pub(crate) sequence: InputSequenceId,
-    pub(crate) latch_end: Option<ScrollLatchEnd>,
+pub(crate) enum DispatchedInput {
+    /// An event of a contact (or of a native pan/zoom lease on its pointer):
+    /// a contest the pointer opens meanwhile decides this sequence.
+    Contact {
+        pointer: PointerId,
+        sequence: InputSequenceId,
+    },
+    /// A wheel or trackpad packet of a latch, and when the latch ends.
+    Latch {
+        sequence: InputSequenceId,
+        end: Option<ScrollLatchEnd>,
+    },
+    /// Contactless input: an assistive action, keyboard or programmatic
+    /// scrolling, or a pan/zoom lease with no pointer.
+    Contactless(InputSequenceId),
 }
+
+impl DispatchedInput {
+    pub(crate) const fn sequence(self) -> InputSequenceId {
+        match self {
+            Self::Contact { sequence, .. }
+            | Self::Latch { sequence, .. }
+            | Self::Contactless(sequence) => sequence,
+        }
+    }
+}
+
+/// The one cell naming the input a binding is dispatching; the binding's
+/// haptics host reads it live to tag its requests.
+pub(crate) type DispatchedInputCell = Rc<Cell<Option<DispatchedInput>>>;
 
 /// Per-contact state the arena keeps beside its competitions.
 #[derive(Default)]
 struct ContactLedger {
-    /// The contact its binding is dispatching an event of, with the event's
-    /// input sequence; `None` outside a binding's dispatch.
-    dispatched: Cell<Option<(PointerId, InputSequenceId)>>,
-    /// The contactless sequence its binding is dispatching input of: a wheel
-    /// or trackpad latch, or an assistive action; `None` otherwise.
-    signal: Cell<Option<DispatchedSignal>>,
+    /// The input its binding is dispatching; `None` outside a binding's
+    /// dispatch.
+    dispatched: DispatchedInputCell,
     /// The issuer of every sequence identity: the binding's own mint once a
     /// binding drives this arena, a private one for a standalone arena.
     sequences: RefCell<Rc<IdMint<InputSequenceId>>>,
@@ -1209,13 +1231,13 @@ impl GestureArena {
                 .checked_add(1)
                 .expect("BUG: gesture arena generation exhausted"),
         );
-        let sequence = self
-            .shared
-            .contacts
-            .dispatched
-            .get()
-            .filter(|(dispatched, _)| *dispatched == pointer)
-            .map(|(_, sequence)| sequence);
+        let sequence = match self.shared.contacts.dispatched.get() {
+            Some(DispatchedInput::Contact {
+                pointer: dispatched,
+                sequence,
+            }) if dispatched == pointer => Some(sequence),
+            _ => None,
+        };
         Rc::new(ArenaSlot::new(
             pointer,
             sequence,
@@ -1223,23 +1245,15 @@ impl GestureArena {
         ))
     }
 
-    /// The contact a binding is dispatching an event of, and its sequence: a
-    /// contest this pointer opens meanwhile decides that sequence. Returns the
-    /// value it replaces, for the binding to restore.
-    pub(crate) fn set_dispatched_contact(
-        &self,
-        contact: Option<(PointerId, InputSequenceId)>,
-    ) -> Option<(PointerId, InputSequenceId)> {
-        self.shared.contacts.dispatched.replace(contact)
+    /// The input a binding is dispatching. Returns the value it replaces,
+    /// for the binding to restore.
+    pub(crate) fn set_dispatched(&self, input: Option<DispatchedInput>) -> Option<DispatchedInput> {
+        self.shared.contacts.dispatched.replace(input)
     }
 
-    /// The contactless sequence a binding is dispatching input of. Returns
-    /// the value it replaces, for the binding to restore.
-    pub(crate) fn set_dispatched_signal(
-        &self,
-        signal: Option<DispatchedSignal>,
-    ) -> Option<DispatchedSignal> {
-        self.shared.contacts.signal.replace(signal)
+    /// The live cell naming the input a binding is dispatching.
+    pub(crate) fn dispatched_cell(&self) -> DispatchedInputCell {
+        Rc::clone(&self.shared.contacts.dispatched)
     }
 
     /// Share `mint` as this arena's issuer of sequence identities: the
@@ -1262,14 +1276,7 @@ impl GestureArena {
             .contacts
             .dispatched
             .get()
-            .map(|(_, sequence)| sequence)
-            .or_else(|| {
-                self.shared
-                    .contacts
-                    .signal
-                    .get()
-                    .map(|signal| signal.sequence)
-            })
+            .map(DispatchedInput::sequence)
     }
 
     /// When the binding's latch of the wheel or trackpad packet being
@@ -1283,10 +1290,10 @@ impl GestureArena {
     /// next packet's new latch is a new sequence for both.
     #[must_use]
     pub fn dispatched_latch_end(&self) -> Option<ScrollLatchEnd> {
-        if self.shared.contacts.dispatched.get().is_some() {
-            return None;
+        match self.shared.contacts.dispatched.get()? {
+            DispatchedInput::Latch { end, .. } => end,
+            DispatchedInput::Contact { .. } | DispatchedInput::Contactless(_) => None,
         }
-        self.shared.contacts.signal.get()?.latch_end
     }
 
     /// Issue the identity of a contactless input sequence from the issuer the
@@ -1697,7 +1704,10 @@ impl GestureArena {
     /// and gesture details that keep [`web_time::Instant`]s.
     #[inline]
     pub(crate) fn instant_at(&self, time: EventTime) -> web_time::Instant {
+        // A sample past the last representable instant orders at the epoch:
+        // no clock reading produces one.
         crate::events::instant_at(self.shared.clock.as_ref(), time)
+            .unwrap_or_else(|| self.shared.clock.epoch())
     }
 
     /// The current reading as an instant, for a recognizer that only stamps

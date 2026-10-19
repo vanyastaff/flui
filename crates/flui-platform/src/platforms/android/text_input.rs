@@ -95,7 +95,8 @@ fn publish(view: &Arc<JavaView>, snapshot: Snapshot, how: Publish, status: (i32,
         composition_start,
         composition_end,
     ] = snapshot.java_offsets();
-    let generation = i32::try_from(snapshot.generation).unwrap_or(i32::MAX);
+    // The generation wraps; Java carries its bits as an opaque `int`.
+    let generation = snapshot.generation.cast_signed();
     let text = snapshot.text;
     view.post(move |env, view| {
         let text = env.new_string(&text)?;

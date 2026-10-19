@@ -1082,6 +1082,10 @@ impl PlatformWindow for MacOSWindow {
         WindowId(self.ns_window as u64)
     }
 
+    fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
+        Some(Arc::new(super::haptics::MacHaptics))
+    }
+
     /// The window's IME capability — the `NSTextInputClient` conformance the
     /// content view carries (see `super::text_input`). Without this override
     /// the trait default (`None`) leaves the native backend with no IME at all
@@ -1093,10 +1097,6 @@ impl PlatformWindow for MacOSWindow {
     /// exists, and a window that never attaches a text input never builds one.
     /// `closed` is shared rather than copied so the capability observes the
     /// window's own close.
-    fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
-        Some(Arc::new(super::haptics::MacHaptics))
-    }
-
     fn text_input(&self) -> Option<Arc<dyn crate::traits::PlatformTextInput>> {
         let text_input = self.text_input.get_or_init(|| {
             Arc::new(super::text_input::MacOSTextInput::new(

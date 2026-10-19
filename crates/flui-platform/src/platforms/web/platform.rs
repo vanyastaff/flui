@@ -59,7 +59,8 @@ struct WebState {
     owner: Weak<WebPlatform>,
 }
 
-// SAFETY: WASM is single-threaded — no data races possible
+// SAFETY: the page has one thread (the module refuses `+atomics`), so the value
+// is never reached from another.
 unsafe impl Send for WebPlatform {}
 unsafe impl Sync for WebPlatform {}
 

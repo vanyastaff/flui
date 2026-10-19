@@ -2,18 +2,24 @@
 //! binding mints one id per contact, latch and contactless source, and never
 //! reissues one.
 
+use std::cell::Cell;
 use std::collections::HashSet;
+use std::rc::Rc;
+use std::sync::Arc;
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::events::{
     PointerEvent, PointerKind, make_down_event_for_id, make_move_event_for_id, make_scroll_event,
     make_up_event_for_id,
 };
+use flui_interaction::haptics::HapticsHost;
 use flui_interaction::{
-    ContactlessSource, GestureBinding, HitTestResult, IdExhausted, InputSequenceId, InputSurface,
-    PointerId,
+    ContactlessSource, EventPropagation, GestureBinding, HitTestEntry, HitTestResult, IdExhausted,
+    InputSequenceId, InputSurface, InteractionLane, PointerId, RenderId, ScrollLatchEnd,
 };
-use flui_platform_api::pointer::{DeviceId, ScrollPhase};
+use flui_platform_api::haptics::{FakeHaptics, HapticRequest, HapticTiming};
+use flui_platform_api::pointer::{DeviceId, PointerRevision, ScrollPhase};
+use flui_platform_api::{HapticFeedback, PlatformHaptics};
 use static_assertions::assert_impl_all;
 
 assert_impl_all!(InputSequenceId: Copy, Send, Sync, Ord, std::hash::Hash);
@@ -62,6 +68,20 @@ fn a_contact_carries_one_sequence_from_down_to_up() {
     assert_ne!(first, second);
     let other = send(&binding, &down(2)).expect("a second finger starts its own");
     assert_ne!(other, second);
+
+    // Another device reusing the contact's pointer id is refused, and belongs
+    // to no sequence.
+    let PointerEvent::Move(mut foreign) = moved(1) else {
+        unreachable!("a move helper builds a move")
+    };
+    foreign.pointer = foreign
+        .pointer
+        .with_device(DeviceId::try_from(7_u64).expect("nonzero device"));
+    let revision = PointerRevision::new(foreign.pointer, *foreign.current());
+    for packet in [PointerEvent::Move(foreign), PointerEvent::Revise(revision)] {
+        assert_eq!(send(&binding, &packet), None, "{packet:?}");
+    }
+
     assert_eq!(send(&binding, &up(1)), Some(second));
     assert_eq!(send(&binding, &up(2)), Some(other));
 
@@ -130,4 +150,84 @@ fn an_exhausted_binding_refuses_new_sequences_permanently() {
         binding.begin_contactless(ContactlessSource::Assistive),
         Err(IdExhausted)
     );
+}
+
+#[test]
+fn a_wheel_under_a_held_button_belongs_to_its_latch() {
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let binding = GestureBinding::new();
+    let arena = binding.arena().clone();
+    let seen = Rc::new(Cell::new(None));
+    lane.enter(|| {
+        let record = Rc::clone(&seen);
+        let target = handle
+            .register_scroll(move |_| {
+                record.set(Some((
+                    arena.dispatched_sequence(),
+                    arena.dispatched_latch_end(),
+                )));
+                EventPropagation::Stop
+            })
+            .expect("scroll consumer");
+        let mut path = HitTestResult::new();
+        path.add(HitTestEntry::new(RenderId::new(1)).scroll_target(target));
+
+        let press = make_down_event_for_id(pointer(1), Offset::ZERO, PointerKind::Mouse)
+            .expect("mouse down");
+        let contact = send(&binding, &press).expect("the press is a contact");
+        let PointerEvent::Scroll(scroll) =
+            make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)).expect("finite wheel")
+        else {
+            unreachable!("a scroll helper builds a scroll")
+        };
+        assert_eq!(
+            scroll.pointer.id,
+            pointer(1),
+            "the wheel shares the held pointer"
+        );
+        let latch = binding
+            .dispatch_pointer_on(InputSurface::Window, &PointerEvent::Scroll(scroll), |_| {
+                path.clone()
+            })
+            .sequence()
+            .expect("a wheel burst is a sequence");
+        assert_ne!(latch, contact, "the wheel opened its own latch");
+        let (consumed, end) = seen.get().expect("the consumer took the packet");
+        assert_eq!(
+            consumed,
+            Some(latch),
+            "the consumer names the latch, not the contact"
+        );
+        assert!(
+            matches!(end, Some(ScrollLatchEnd::IdleAt(_))),
+            "the consumer learns when the latch lapses, got {end:?}"
+        );
+        let release =
+            make_up_event_for_id(pointer(1), Offset::ZERO, PointerKind::Mouse).expect("mouse up");
+        assert_eq!(send(&binding, &release), Some(contact));
+    });
+}
+
+#[test]
+fn haptics_requested_in_a_contactless_dispatch_carry_its_sequence() {
+    let binding = GestureBinding::new();
+    let fake = Arc::new(FakeHaptics::new());
+    let actuator: Arc<dyn PlatformHaptics> = fake.clone();
+    let host = HapticsHost::builder(&binding, move || Some(Arc::clone(&actuator))).build();
+    let haptics = host.handle();
+    let action = binding
+        .begin_contactless(ContactlessSource::Assistive)
+        .expect("an id to issue");
+    let request = HapticRequest::new(HapticTiming::Immediate);
+    binding.dispatch_contactless(action.id, || {
+        let _ = haptics.perform(HapticFeedback::SelectionClick, request);
+    });
+    let _ = haptics.perform(HapticFeedback::SelectionClick, request);
+    let tagged: Vec<_> = fake
+        .calls()
+        .iter()
+        .map(|call| call.request.sequence)
+        .collect();
+    assert_eq!(tagged, [Some(action.id), None]);
 }

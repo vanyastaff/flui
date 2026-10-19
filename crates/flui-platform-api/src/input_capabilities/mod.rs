@@ -96,6 +96,12 @@ impl InputCapabilities {
         InputCapabilitiesBuilder(Self::UNAVAILABLE)
     }
 
+    /// A builder starting from this value, so a change to one capability
+    /// keeps every other.
+    pub const fn to_builder(self) -> InputCapabilitiesBuilder {
+        InputCapabilitiesBuilder(self)
+    }
+
     /// Pen input: pressure, angles, hover and the eraser.
     #[must_use]
     pub const fn pen(&self) -> Availability {
