@@ -208,12 +208,18 @@ impl X11WindowProbe {
             states.maximized_vert,
             states.fullscreen,
         ];
-        let mut atoms: Vec<u32> = self
+        let current: Vec<u32> = self
             .property(window, self.atoms.net_wm_state, AtomEnum::ATOM.into())
             .and_then(|reply| Some(reply.value32()?.collect()))
             .unwrap_or_default();
+        let mut atoms = current.clone();
         atoms.retain(|atom| !mode_atoms.contains(atom));
         atoms.extend_from_slice(wanted);
+        // A write of what is there changes nothing and would still tell every
+        // watcher of the window that something changed.
+        if atoms == current {
+            return;
+        }
         let set = self
             .query
             .change_property32(
