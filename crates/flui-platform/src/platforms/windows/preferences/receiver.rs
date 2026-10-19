@@ -1,6 +1,6 @@
 //! A hidden top-level receiver; message-only HWNDs cannot receive broadcasts.
 
-use std::{cell::Cell, sync::Arc};
+use std::{cell::Cell, rc::Rc, sync::Arc};
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
@@ -16,10 +16,16 @@ use windows::{
 };
 
 use super::Invalidation;
-use crate::shared::panic_boundary::contain_owner_callback;
+use crate::{
+    platforms::windows::host_events::HostEvents,
+    shared::{panic_boundary::contain_owner_callback, windows_host_messages::WM_QUERYENDSESSION},
+};
 
 struct Context {
     invalidation: Arc<Invalidation>,
+    /// Where the system's session, power, lock and memory messages go; absent
+    /// for an owner that hears them another way.
+    host: Option<Rc<HostEvents>>,
     hwnd: Cell<Option<HWND>>,
 }
 
@@ -34,21 +40,37 @@ pub(super) struct Receiver {
 impl Receiver {
     #[cfg(test)]
     pub(super) fn send_for_test(&self, message: u32, wparam: usize) {
-        let hwnd = self
-            .context
-            .as_ref()
-            .and_then(|context| context.hwnd.get())
-            .expect("live receiver");
+        self.send_with_for_test(message, wparam, 0);
+    }
+
+    /// Send a pointer-free message to this receiver and return the window
+    /// procedure's result.
+    #[cfg(test)]
+    pub(in crate::platforms::windows) fn send_with_for_test(
+        &self,
+        message: u32,
+        wparam: usize,
+        lparam: isize,
+    ) -> isize {
         // SAFETY: this test sends a pointer-free notification only to this
         // receiver, whose context is retained by the borrowed owner.
         unsafe {
             windows::Win32::UI::WindowsAndMessaging::SendMessageW(
-                hwnd,
+                self.hwnd_for_test(),
                 message,
                 Some(WPARAM(wparam)),
-                Some(LPARAM(0)),
-            );
+                Some(LPARAM(lparam)),
+            )
+            .0
         }
+    }
+
+    #[cfg(test)]
+    pub(in crate::platforms::windows) fn hwnd_for_test(&self) -> HWND {
+        self.context
+            .as_ref()
+            .and_then(|context| context.hwnd.get())
+            .expect("live receiver")
     }
 
     #[cfg(test)]
@@ -70,9 +92,13 @@ impl Receiver {
         }
     }
 
-    pub(super) fn new(invalidation: Arc<Invalidation>) -> windows::core::Result<Self> {
+    pub(super) fn new(
+        invalidation: Arc<Invalidation>,
+        host: Option<Rc<HostEvents>>,
+    ) -> windows::core::Result<Self> {
         let context = Box::new(Context {
             invalidation,
+            host,
             hwnd: Cell::new(None),
         });
         let class: Vec<_> = format!("FLUIPreferences_{:p}\0", &*context)
@@ -117,6 +143,9 @@ impl Receiver {
                 Some(std::ptr::from_ref(context).cast()),
             )?;
         }
+        if let (Some(host), Some(hwnd)) = (&context.host, context.hwnd.get()) {
+            host.attach(hwnd);
+        }
         Ok(receiver)
     }
 }
@@ -127,6 +156,9 @@ impl Drop for Receiver {
             return;
         };
         if let Some(hwnd) = context.hwnd.get() {
+            if let Some(host) = &context.host {
+                host.detach(hwnd);
+            }
             // SAFETY: only this owner can destroy its live HWND. WM_NCDESTROY
             // clears the handle before reuse; context stays live through this call.
             if let Err(error) = unsafe { DestroyWindow(hwnd) } {
@@ -156,7 +188,8 @@ unsafe extern "system" fn procedure(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    let mut result = LRESULT(0);
+    // A contained panic must not answer a session-end query with a refusal.
+    let mut result = LRESULT(isize::from(message == WM_QUERYENDSESSION));
     contain_owner_callback(|| {
         // SAFETY: this class receives only its own boxed Context during native
         // creation. Only this owner reaches userdata. It is detached before
@@ -191,6 +224,13 @@ unsafe extern "system" fn procedure(
                 } else if message == WM_CLOSE {
                     // This internal receiver is retired by the host, not by
                     // ordinary window-close routing or last-user-window policy.
+                    return;
+                } else if let Some(host) = (*context).host.clone()
+                    && let Some(answer) = host.handle(hwnd, message, wparam, lparam)
+                {
+                    // Cloned out of the context: a hook may drop the platform,
+                    // and nothing borrowed from userdata survives user code.
+                    result = answer;
                     return;
                 }
             }

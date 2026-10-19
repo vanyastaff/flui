@@ -2207,6 +2207,59 @@ classification (`android_display_table`) and the idle wait
 (`idle_wait_follows_the_real_period`), and CI type-checks the rest for
 `aarch64-linux-android`.
 
+### A Win32 window opens hidden, in its mode, and is shown by its first frame
+
+**Rule:** `CreateWindowExW` never gets `WS_VISIBLE`. The window is placed first (`SetWindowPlacement`
+with `SW_HIDE` stores the rectangle it returns to), put in its opening mode (fullscreen is entered
+while hidden), and only then shown, with the command of that mode (`SW_SHOWMAXIMIZED`,
+`SW_SHOWMINIMIZED`, else `SW_SHOW`). Its first sight is therefore the final one: no normal window that
+jumps to maximized. `WindowReveal::AtOpen` shows it before `open_window` returns;
+`AfterFirstFrame` waits for `reveal_after_first_frame`; `visible: false` waits for `show`.
+
+**Why a deferred window answers `visible`:** the runtime gates frames on visibility, and the frame that
+earns the reveal must run. A deferred window therefore reports `visible` (and seeds its visibility edge
+filter `true`) while it is natively hidden. A hidden window is never sent `WM_PAINT`, so
+`request_redraw` on one posts a frame request to the window instead.
+
+**The first show is one slot** (`WindowContext::first_show`), taken by whichever of the reveal, `show`,
+`activate` or a mode that shows the window comes first. A mode set on a window still waiting for its
+first frame is staged in the slot, not shown early.
+
+**Frame and limits:** `resizable` is `WS_THICKFRAME | WS_MAXIMIZEBOX`, `decorated` is the caption; a
+popup has neither, so a window without a frame reports `resizable: false` and gets its wish back with
+the frame. `WM_GETMINMAXINFO` turns the app's logical inner-size limits into outer limits in the
+window's current DPI with the frame measured for the style the window has
+(`shared::windows_window_limits`); a fullscreen window keeps the system's rectangle.
+
+**Fullscreen from another mode:** a visible maximized or minimized window is restored (`SC_RESTORE`)
+before the style is replaced, and the style saved to return to has no `WS_MAXIMIZE` or
+`WS_MINIMIZE`. A resize does not end fullscreen, and a minimized fullscreen window comes back
+fullscreen. `WINDOWPLACEMENT` rectangles are workspace coordinates; a task bar on the top or left edge
+moves the work area, so they are converted with the monitor's work-area offset.
+
+**System events** arrive on the hidden top-level receiver (`preferences/receiver.rs`), which a
+message-only window could not be: `WM_QUERYENDSESSION` and `WM_ENDSESSION`, `WM_POWERBROADCAST`,
+`WM_WTSSESSION_CHANGE`, and a posted message from a pool thread waiting on the low-memory event
+(`platforms::windows::host_events`; rules in `shared::windows_host_messages` and
+`shared::windows_memory_watch`). A session-end query the host answers with a block is refused and
+registered as a shutdown reason on the first visible window of the thread (the receiver otherwise);
+`Platform::release_session_end` withdraws it. The host's answer carries no reason text, so the system is given
+a fixed neutral one. A critical session end is never blocked, and a panicking hook answers
+`Proceed`. The low-memory event is a level, not an edge: the watch reports once, stays deaf for
+`HOLD_INTERVAL`, and only then waits again. `WTSRegisterSessionNotification` asks for this session only.
+
+**Verified:** the pure rules by host tests; the window and the receiver against the real system by
+`windows_window_commands` and `windows_host_events` (messages sent to the real windows). A real
+log-off, sleep, lock or low-memory state, and the first frame seen by eye, have not run.
+
+**Modes on a window that is not shown:** `Normal` keeps a hidden window hidden and decides how it is
+first shown; `Minimized` and `Maximized` show it, as `ShowWindow` does; only a window waiting for its
+first frame stages a mode without showing it. Size limits also hold a window without a sizing border
+(`WM_WINDOWPOSCHANGING`), since the system asks for them only while sizing one that has it. A change
+that takes several steps (entering fullscreen, changing the frame) publishes one snapshot.
+`WTSRegisterSessionNotification` is asked once at startup; if it fails (an app started before
+Remote Desktop Services at logon), lock and unlock stay unreported for the process.
+
 ### Android reads the Activity's lifecycle as three facts and a cycle
 
 **Rule:** an Activity callback is mapped by one pure rule

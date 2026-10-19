@@ -179,3 +179,101 @@ fn unrelated_wakes_do_not_repeat_failed_native_reads() {
         values(3.0)
     );
 }
+
+/// A receiver wired to a host, with the notices it delivers collected.
+fn hosted_receiver() -> (
+    receiver::Receiver,
+    Rc<crate::platforms::windows::host_events::HostEvents>,
+    Arc<std::sync::Mutex<Vec<flui_platform_api::SystemNotice>>>,
+) {
+    let notices = Arc::new(crate::shared::system_notice::SystemNotices::default());
+    let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&heard);
+    notices.set_hook(Box::new(move |notice| {
+        recorded.lock().expect("notice log").push(notice);
+    }));
+    let host = Rc::new(crate::platforms::windows::host_events::HostEvents::new(
+        Rc::new(RefCell::new(crate::shared::PlatformHandlers::default())),
+        notices,
+    ));
+    let invalidation = Arc::new(Invalidation {
+        accepting: AtomicBool::new(true),
+        pending: AtomicBool::new(false),
+        signal: Weak::new(),
+        displays: Arc::new(crate::platforms::windows::display::WindowsDisplays::new()),
+    });
+    let receiver = receiver::Receiver::new(invalidation, Some(Rc::clone(&host))).expect("receiver");
+    (receiver, host, heard)
+}
+
+fn low_memory_is_reported_once_per_hold() {
+    use flui_platform_api::{MemoryPressureLevel, SystemNotice};
+
+    let (receiver, host, heard) = hosted_receiver();
+    let report =
+        || receiver.send_with_for_test(crate::platforms::windows::host_events::LOW_MEMORY, 0, 0);
+    let critical = SystemNotice::MemoryPressure(MemoryPressureLevel::Critical);
+
+    assert!(
+        host.signal_low_memory_for_test(),
+        "the first signal wakes the owner"
+    );
+    report();
+    assert_eq!(*heard.lock().expect("log"), [critical]);
+
+    // The event stays signaled while memory is low: more signals during the
+    // hold are the same episode, whatever reaches the owner's queue.
+    assert!(!host.signal_low_memory_for_test());
+    report();
+    assert_eq!(heard.lock().expect("log").len(), 1);
+
+    // The hold over, the wait is registered again and a new episode reports.
+    host.end_low_memory_hold_for_test(receiver.hwnd_for_test());
+    assert!(host.signal_low_memory_for_test());
+    report();
+    assert_eq!(*heard.lock().expect("log"), [critical, critical]);
+}
+
+fn a_wake_that_could_not_be_posted_is_delivered_with_the_next_message() {
+    use flui_platform_api::{MemoryPressureLevel, SystemNotice};
+
+    let (receiver, host, heard) = hosted_receiver();
+    host.fail_low_memory_post_for_test();
+    assert!(heard.lock().expect("log").is_empty());
+    receiver.send_with_for_test(windows::Win32::UI::WindowsAndMessaging::WM_NULL, 0, 0);
+    assert_eq!(
+        *heard.lock().expect("log"),
+        [SystemNotice::MemoryPressure(MemoryPressureLevel::Critical)],
+        "the report was owed, not lost"
+    );
+}
+
+fn a_refused_rearm_timer_is_set_again_by_the_next_message() {
+    let (receiver, host, _heard) = hosted_receiver();
+    host.owe_rearm_timer_for_test();
+    assert!(host.rearm_timer_owed_for_test());
+    // Any message the receiver gets pays the debt.
+    receiver.send_with_for_test(windows::Win32::UI::WindowsAndMessaging::WM_NULL, 0, 0);
+    assert!(!host.rearm_timer_owed_for_test());
+}
+
+#[test]
+fn host_event_sources() {
+    crate::table_test::run_table(
+        "host_event_sources",
+        &[
+            (
+                "low_memory_is_reported_once_per_hold",
+                low_memory_is_reported_once_per_hold as fn(),
+            ),
+            (
+                "a_wake_that_could_not_be_posted_is_delivered_with_the_next_message",
+                a_wake_that_could_not_be_posted_is_delivered_with_the_next_message as fn(),
+            ),
+            (
+                "a_refused_rearm_timer_is_set_again_by_the_next_message",
+                a_refused_rearm_timer_is_set_again_by_the_next_message as fn(),
+            ),
+        ],
+    );
+}

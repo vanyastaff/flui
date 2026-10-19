@@ -96,6 +96,14 @@ pub(crate) mod display_period;
 // `test` keeps them checked on every host.
 #[cfg(any(windows, test))]
 pub(crate) mod windows_display;
+// The Win32 backend turns window limits, system messages and the low-memory
+// event into notices by these rules; `test` keeps them checked on every host.
+#[cfg(any(windows, test))]
+pub(crate) mod windows_host_messages;
+#[cfg(any(windows, test))]
+pub(crate) mod windows_memory_watch;
+#[cfg(any(windows, test))]
+pub(crate) mod windows_window_limits;
 // The browser's display rules: the refresh estimate from animation-frame
 // timestamps, the pixel-ratio query, screen identity and feature detection. The
 // Web backend consumes them; `test` keeps the rules checked on every host.
