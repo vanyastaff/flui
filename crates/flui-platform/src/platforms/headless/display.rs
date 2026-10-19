@@ -23,6 +23,7 @@ pub struct DisplaySpec {
     size: Size<i32>,
     scale_factor: f64,
     refresh_period: Option<Duration>,
+    persistent_key: Option<String>,
 }
 
 impl DisplaySpec {
@@ -35,7 +36,16 @@ impl DisplaySpec {
             size: Size::new(width, height),
             scale_factor: 1.0,
             refresh_period: None,
+            persistent_key: None,
         }
+    }
+
+    /// The key that names this display again in another run, as
+    /// [`DisplayInfo::persistent_key`] reports it.
+    #[must_use]
+    pub fn with_persistent_key(mut self, key: impl Into<String>) -> Self {
+        self.persistent_key = Some(key.into());
+        self
     }
 
     /// The display's device pixels per logical pixel.
@@ -112,6 +122,9 @@ impl HeadlessDisplays {
                 if let Some(period) = spec.refresh_period {
                     info = info.with_refresh_period(period);
                 }
+                if let Some(key) = spec.persistent_key {
+                    info = info.with_persistent_key(key);
+                }
                 info
             })
             .collect();
@@ -127,6 +140,23 @@ impl HeadlessDisplays {
 
     pub(super) fn contains(&self, id: DisplayId) -> bool {
         self.snapshot.get(id).is_some()
+    }
+
+    /// The bounds of display `id` in the logical pixels of its own scale.
+    pub(super) fn logical_bounds(&self, id: DisplayId) -> Option<Bounds<f64>> {
+        let display = self.snapshot.get(id)?;
+        let scale = display.scale_factor;
+        let device = display.bounds;
+        Some(Bounds::new(
+            Point::new(
+                f64::from(device.origin.x) / scale,
+                f64::from(device.origin.y) / scale,
+            ),
+            Size::new(
+                f64::from(device.size.width) / scale,
+                f64::from(device.size.height) / scale,
+            ),
+        ))
     }
 
     /// The display a new window opens on.

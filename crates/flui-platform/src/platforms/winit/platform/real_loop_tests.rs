@@ -39,12 +39,10 @@ use crate::{
 };
 
 fn options(title: impl Into<String>) -> WindowOptions {
-    WindowOptions {
-        title: title.into(),
-        size: Size::new(320.0, 240.0),
-        visible: false,
-        ..WindowOptions::default()
-    }
+    WindowOptions::default()
+        .with_title(title)
+        .with_size(Size::new(320.0, 240.0))
+        .with_visible(false)
 }
 
 /// Manual WinitApp fixtures need the same owner signal as run_event_loop.

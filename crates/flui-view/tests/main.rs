@@ -69,6 +69,8 @@ mod stateless_stateful_tests;
 mod static_children_retirement;
 #[path = "trybuild_ui.rs"]
 mod trybuild_ui;
+#[path = "window_handle.rs"]
+mod window_handle;
 #[path = "writer_source.rs"]
 mod writer_source;
 

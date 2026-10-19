@@ -75,6 +75,12 @@ pub(crate) struct WindowsDisplays {
     samples: std::sync::atomic::AtomicUsize,
 }
 
+impl crate::shared::system_notice::StaleOnWake for WindowsDisplays {
+    fn mark_stale(&self) {
+        self.invalidate();
+    }
+}
+
 impl WindowsDisplays {
     /// A source that has not sampled yet. Reads the OS build once.
     pub(crate) fn new() -> Self {
@@ -186,6 +192,11 @@ impl WindowsDisplays {
             )
             .with_usable_bounds(monitor.usable_bounds)
             .with_primary(monitor.is_primary);
+            // The monitor's interface path names this monitor on this machine
+            // across restarts, so a window remembered on it finds it again.
+            if let Some(interface) = monitor_interface_path(&monitor.device_name) {
+                display = display.with_persistent_key(interface);
+            }
             display.refresh_period = path
                 .and_then(|path| rational_refresh_period(path.refresh.0, path.refresh.1))
                 .or_else(|| frequency_period(current_mode_frequency(&monitor.device_name)));

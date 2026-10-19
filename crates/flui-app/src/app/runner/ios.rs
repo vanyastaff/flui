@@ -383,6 +383,8 @@ where
         .with_textures(textures),
     ));
 
+    super::host::track_raster_lane(lane.lock().reclaim_handle());
+
     // 5. Input -> entered ui_runtime input dispatch.
     install_input_wiring(owner_dispatch, window.as_ref());
 
@@ -463,6 +465,7 @@ where
     }));
     installation.observe_appearance();
     installation.observe_display();
+    installation.observe_window_state();
     // Register before sampling, so native facts changed during renderer bootstrap
     // cannot be replaced by a synthetic Resumed observation.
     let execution = window.execution_state();

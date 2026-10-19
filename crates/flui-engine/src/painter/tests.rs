@@ -3873,3 +3873,47 @@ fn painter_solid_shaders_use_effective_colors_for_compositing() {
         "Solid shader rows failed: {failures:?}"
     );
 }
+
+/// A moderate trim evicts free pooled buffers down to half the pool's budget
+/// and a critical one evicts them all.
+#[test]
+fn trim_evicts_free_buffers_by_level() {
+    use flui_foundation::memory::MemoryPressureLevel;
+
+    const MIB: usize = 1024 * 1024;
+    const BUFFER_BYTES: usize = 16 * MIB;
+    let payload = vec![0_u8; BUFFER_BYTES];
+    for (level, kept) in [
+        (MemoryPressureLevel::Moderate, 32 * MIB),
+        (MemoryPressureLevel::Critical, 0),
+    ] {
+        let (device, queue) = test_device_and_queue();
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            wgpu::TextureFormat::Rgba8Unorm,
+            (64, 64),
+        );
+        // Four buffers in use at once are four allocations, 64 MiB in all: at
+        // the budget, so the end-of-frame pass would keep them.
+        for _ in 0..4 {
+            painter
+                .resources
+                .buffer_pool_mut()
+                .get_vertex_buffer(&device, &queue, "trim", &payload);
+        }
+        painter.resources.buffer_pool_mut().reset();
+        assert_eq!(
+            painter.resources.buffer_pool_mut().total_capacity_bytes(),
+            4 * BUFFER_BYTES
+        );
+
+        painter.reclaim(level);
+
+        assert_eq!(
+            painter.resources.buffer_pool_mut().total_capacity_bytes(),
+            kept,
+            "{level:?}"
+        );
+    }
+}

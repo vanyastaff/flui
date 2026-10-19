@@ -43,16 +43,14 @@ fn main() {
 
             tracing::info!("Creating window...");
 
-            let window_options = WindowOptions {
-                title: "FLUI Platform Window".to_string(),
-                size: Size::new(800.0, 600.0),
-                resizable: true,
-                visible: true,
-                decorated: true,
-                min_size: None,
-                max_size: None,
-                ..Default::default()
-            };
+            let window_options = WindowOptions::default()
+                .with_title("FLUI Platform Window".to_string())
+                .with_size(Size::new(800.0, 600.0))
+                .with_resizable(true)
+                .with_visible(true)
+                .with_decorated(true)
+                .with_min_size(None)
+                .with_max_size(None);
 
             // `Ready` is guaranteed inside `on_ready` (ADR-0039 §1).
             let window = owner

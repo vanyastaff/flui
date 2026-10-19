@@ -14,7 +14,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use flui_foundation::geometry::Size;
 use parking_lot::Mutex;
 
-use crate::traits::{DispatchEventResult, PlatformInput, WindowEvent, WindowExecutionState};
+use crate::traits::{
+    DispatchEventResult, PlatformInput, SessionEndAnswer, SessionEndPhase, WindowEvent,
+    WindowExecutionState,
+};
+
+/// The callback a platform asks at each phase of the user's session ending.
+pub type SessionEndHook = Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>;
 
 /// Platform callback handlers registry
 ///
@@ -47,6 +53,11 @@ pub struct PlatformHandlers {
 
     /// Called when keyboard layout changes
     pub keyboard_layout_changed: Option<Box<dyn FnMut() + Send>>,
+
+    /// Asked at each phase of the user's session ending; its answer to
+    /// [`SessionEndPhase::Query`] decides whether the platform asks the user
+    /// to wait.
+    pub session_end: Option<SessionEndHook>,
 
     /// Consulted when this platform's own window bookkeeping believes every
     /// window it tracks has just closed, before it decides whether to end
@@ -89,6 +100,29 @@ pub struct PlatformHandlers {
     pub wake_deadline: Option<Arc<dyn Fn() -> Option<web_time::Instant> + Send + Sync>>,
 }
 
+/// A session-end hook while it runs, back in its slot when the guard drops.
+struct RunningSessionEndHook<'a> {
+    handlers: &'a Mutex<PlatformHandlers>,
+    hook: Option<SessionEndHook>,
+}
+
+impl Drop for RunningSessionEndHook<'_> {
+    fn drop(&mut self) {
+        let Some(hook) = self.hook.take() else { return };
+        let displaced = {
+            let mut handlers = self.handlers.lock();
+            if handlers.session_end.is_none() {
+                handlers.session_end = Some(hook);
+                None
+            } else {
+                Some(hook)
+            }
+        };
+        // Outside the lock: a capture's destructor is user code.
+        drop(displaced);
+    }
+}
+
 impl PlatformHandlers {
     /// Create new empty handler registry
     pub fn new() -> Self {
@@ -98,9 +132,32 @@ impl PlatformHandlers {
             window_event: None,
             open_urls: None,
             keyboard_layout_changed: None,
+            session_end: None,
             exit_policy: None,
             wake_deadline: None,
         }
+    }
+
+    /// Ask the registered session-end hook about `phase`, answering
+    /// [`SessionEndAnswer::Proceed`] when none is registered.
+    ///
+    /// The hook runs with no lock of `handlers` held, so it may register
+    /// another hook or call back into the platform. It is out of its slot while
+    /// it runs, and is put back afterwards even when it panics, unless a hook
+    /// registered in the meantime took the slot: then the older one is dropped.
+    #[must_use]
+    pub fn run_session_end(handlers: &Mutex<Self>, phase: SessionEndPhase) -> SessionEndAnswer {
+        let Some(hook) = handlers.lock().session_end.take() else {
+            return SessionEndAnswer::Proceed;
+        };
+        let mut running = RunningSessionEndHook {
+            handlers,
+            hook: Some(hook),
+        };
+        running
+            .hook
+            .as_mut()
+            .map_or(SessionEndAnswer::Proceed, |hook| hook(phase))
     }
 
     /// Invoke the quit callback if registered
@@ -195,6 +252,7 @@ impl std::fmt::Debug for PlatformHandlers {
                 "keyboard_layout_changed",
                 &self.keyboard_layout_changed.is_some(),
             )
+            .field("session_end", &self.session_end.is_some())
             .field("exit_policy", &self.exit_policy.is_some())
             .field("wake_deadline", &self.wake_deadline.is_some())
             .finish()
@@ -231,8 +289,8 @@ pub struct WindowCallbacks {
     /// factor.
     pub on_resize: Mutex<Option<Box<dyn FnMut(Size<f64>, f64) + Send>>>,
 
-    /// Called when the window is moved.
-    pub on_moved: Mutex<Option<Box<dyn FnMut() + Send>>>,
+    /// Called when the window state may differ from the one last read.
+    pub on_state_changed: Mutex<Option<Box<dyn FnMut() + Send>>>,
 
     /// Called when the window is about to be destroyed. Only fires once
     /// (FnOnce).
@@ -326,7 +384,7 @@ enum WindowCallbackEvent {
     Input(PlatformInput),
     RequestFrame,
     Resize(Size<f64>, f64),
-    Moved,
+    StateChanged,
     Close,
     Active(bool, Option<Box<dyn FnOnce() + Send>>),
     Execution(WindowExecutionState),
@@ -519,7 +577,7 @@ impl WindowCallbacks {
             on_input: Mutex::new(None),
             on_request_frame: Mutex::new(None),
             on_resize: Mutex::new(None),
-            on_moved: Mutex::new(None),
+            on_state_changed: Mutex::new(None),
             on_close: Mutex::new(None),
             on_should_close: Mutex::new(None),
             on_active_status_change: Mutex::new(None),
@@ -648,7 +706,7 @@ impl WindowCallbacks {
         let on_input = self.on_input.lock().take();
         let on_request_frame = self.on_request_frame.lock().take();
         let on_resize = self.on_resize.lock().take();
-        let on_moved = self.on_moved.lock().take();
+        let on_state_changed = self.on_state_changed.lock().take();
         let on_close = self.on_close.lock().take();
         let on_should_close = self.on_should_close.lock().take();
         let on_active_status_change = self.on_active_status_change.lock().take();
@@ -664,7 +722,7 @@ impl WindowCallbacks {
         super::panic_boundary::contain_owner_callback(|| drop(on_input));
         super::panic_boundary::contain_owner_callback(|| drop(on_request_frame));
         super::panic_boundary::contain_owner_callback(|| drop(on_resize));
-        super::panic_boundary::contain_owner_callback(|| drop(on_moved));
+        super::panic_boundary::contain_owner_callback(|| drop(on_state_changed));
         super::panic_boundary::contain_owner_callback(|| drop(on_close));
         super::panic_boundary::contain_owner_callback(|| drop(on_should_close));
         super::panic_boundary::contain_owner_callback(|| drop(on_active_status_change));
@@ -773,8 +831,8 @@ impl WindowCallbacks {
                         callback(size, scale_factor);
                     }
                 }
-                WindowCallbackEvent::Moved => {
-                    let mut lease = CallbackLease::take(&self.on_moved, &self.cleared);
+                WindowCallbackEvent::StateChanged => {
+                    let mut lease = CallbackLease::take(&self.on_state_changed, &self.cleared);
                     if let Some(callback) = lease.callback_mut() {
                         callback();
                     }
@@ -895,9 +953,10 @@ impl WindowCallbacks {
         self.drain_events(drain);
     }
 
-    /// Dispatch a window moved event.
-    pub fn dispatch_moved(&self) {
-        let Some(drain) = DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Moved)
+    /// Dispatch a window state change.
+    pub fn dispatch_state_changed(&self) {
+        let Some(drain) =
+            DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::StateChanged)
         else {
             return;
         };
@@ -1196,8 +1255,8 @@ macro_rules! impl_window_callback_setters {
             *self.$callbacks_field.on_resize.lock() = Some(callback);
         }
 
-        fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
-            *self.$callbacks_field.on_moved.lock() = Some(callback);
+        fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {
+            *self.$callbacks_field.on_state_changed.lock() = Some(callback);
         }
 
         fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
@@ -1257,7 +1316,7 @@ impl std::fmt::Debug for WindowCallbacks {
             .field("on_input", &self.on_input.lock().is_some())
             .field("on_request_frame", &self.on_request_frame.lock().is_some())
             .field("on_resize", &self.on_resize.lock().is_some())
-            .field("on_moved", &self.on_moved.lock().is_some())
+            .field("on_state_changed", &self.on_state_changed.lock().is_some())
             .field("on_close", &self.on_close.lock().is_some())
             .field("on_should_close", &self.on_should_close.lock().is_some())
             .field(
@@ -1297,6 +1356,83 @@ mod tests {
     use crate::shared::{hwnd_affinity, owner_signal};
 
     use super::*;
+
+    #[test]
+    fn session_end_hook_runs_without_the_lock_and_returns_to_its_slot() {
+        let handlers = Mutex::new(PlatformHandlers::new());
+        assert_eq!(
+            PlatformHandlers::run_session_end(&handlers, SessionEndPhase::Ending),
+            SessionEndAnswer::Proceed,
+            "no hook registered"
+        );
+
+        let phases = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&phases);
+        let handlers = Arc::new(handlers);
+        let locked = Arc::clone(&handlers);
+        handlers.lock().session_end = Some(Box::new(move |phase| {
+            recorded.lock().push(phase);
+            // Not held while the hook runs: this would deadlock otherwise.
+            drop(locked.lock());
+            SessionEndAnswer::Block
+        }));
+
+        for phase in [SessionEndPhase::Query, SessionEndPhase::Ending] {
+            assert_eq!(
+                PlatformHandlers::run_session_end(&handlers, phase),
+                SessionEndAnswer::Block
+            );
+        }
+        assert_eq!(
+            *phases.lock(),
+            [SessionEndPhase::Query, SessionEndPhase::Ending],
+            "the hook came back after each run"
+        );
+    }
+
+    #[test]
+    fn session_end_hook_survives_its_own_panic() {
+        let handlers = Mutex::new(PlatformHandlers::new());
+        let runs = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&runs);
+        handlers.lock().session_end = Some(Box::new(move |_| {
+            assert!(
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0,
+                "the first run fails"
+            );
+            SessionEndAnswer::Proceed
+        }));
+
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            PlatformHandlers::run_session_end(&handlers, SessionEndPhase::Ending)
+        }));
+        assert!(outcome.is_err());
+        assert_eq!(
+            PlatformHandlers::run_session_end(&handlers, SessionEndPhase::Ending),
+            SessionEndAnswer::Proceed
+        );
+        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn session_end_hook_registered_while_running_replaces_the_running_one() {
+        let handlers = Arc::new(Mutex::new(PlatformHandlers::new()));
+        let registering = Arc::clone(&handlers);
+        handlers.lock().session_end = Some(Box::new(move |_| {
+            registering.lock().session_end = Some(Box::new(|_| SessionEndAnswer::Block));
+            SessionEndAnswer::Proceed
+        }));
+
+        assert_eq!(
+            PlatformHandlers::run_session_end(&handlers, SessionEndPhase::Ending),
+            SessionEndAnswer::Proceed
+        );
+        assert_eq!(
+            PlatformHandlers::run_session_end(&handlers, SessionEndPhase::Ending),
+            SessionEndAnswer::Block,
+            "the newer hook kept the slot"
+        );
+    }
 
     fn accepted_focus_observations_survive_dispatch_unwind() {
         accepted_status_observations_survive_dispatch_unwind(false);
@@ -1349,9 +1485,9 @@ mod tests {
                     assert!(!fail_notification, "competing status failure");
                 }
             }));
-            let moved = Arc::new(AtomicBool::new(false));
-            let delivered = Arc::clone(&moved);
-            *callbacks.on_moved.lock() = Some(Box::new(move || {
+            let changed = Arc::new(AtomicBool::new(false));
+            let delivered = Arc::clone(&changed);
+            *callbacks.on_state_changed.lock() = Some(Box::new(move || {
                 delivered.store(true, Ordering::SeqCst);
             }));
             let nested = Arc::downgrade(&callbacks);
@@ -1376,7 +1512,7 @@ mod tests {
                         }),
                     );
                 }
-                owner.dispatch_moved();
+                owner.dispatch_state_changed();
                 panic!("original dispatch failure");
             }));
             let failure = catch_unwind(AssertUnwindSafe(|| {
@@ -1393,7 +1529,7 @@ mod tests {
                 *expected.last().expect("status")
             );
             assert!(
-                !moved.load(Ordering::SeqCst),
+                !changed.load(Ordering::SeqCst),
                 "aborted ordinary event was replayed"
             );
             let state = Arc::clone(&focused);
@@ -1466,7 +1602,7 @@ mod tests {
         *callbacks.on_resize.lock() = Some(Box::new(move |_, _| {
             let _ = &first;
         }));
-        *callbacks.on_moved.lock() = Some(Box::new(move || {
+        *callbacks.on_state_changed.lock() = Some(Box::new(move || {
             let _ = &second;
         }));
         let closed = Arc::new(AtomicU32::new(0));
@@ -1489,7 +1625,7 @@ mod tests {
         assert_eq!(drops.load(Ordering::SeqCst), 2);
         assert!(callbacks.cleared.load(Ordering::SeqCst));
         assert!(callbacks.on_resize.lock().is_none());
-        assert!(callbacks.on_moved.lock().is_none());
+        assert!(callbacks.on_state_changed.lock().is_none());
     }
 
     fn owner_callback_and_capture_panics_do_not_replace_an_existing_unwind() {

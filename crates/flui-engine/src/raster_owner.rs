@@ -50,6 +50,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
+use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
 use flui_foundation::{FrameEpoch, GpuResourceGeneration, PresentationAddress, SurfaceGeneration};
 use flui_layer::{DamageRegion, SceneSnapshot};
 use parking_lot::{Condvar, Mutex};
@@ -426,6 +427,11 @@ struct MailboxState {
     /// command drain" shape [`pending_resize`](Self::pending_resize) uses.
     /// Set by [`RasterHandle::bind_gpu_resource_generation`].
     pending_gpu_resource_generation: Option<GpuResourceGeneration>,
+    /// The strongest memory-pressure level asked for since the last pump,
+    /// applied by [`RasterOwner::pump`] before the frame it renders. Levels
+    /// collapse to the strongest: a critical trim gives back all a moderate one
+    /// would.
+    pending_trim: Option<MemoryPressureLevel>,
     /// **The single [`SurfaceGeneration`] counter for this raster lane**
     /// (ADR-0045 decision 4) — mutated only under this struct's own lock.
     /// Every mint routes through it: [`RasterHandle::resize`] (the
@@ -999,6 +1005,14 @@ impl RasterHandle {
         *self.mailbox.surface_state.lock()
     }
 
+    /// Whether the owner this handle talks to still exists. Once it has dropped,
+    /// every request to it is moot, so a holder of many handles can let go of
+    /// this one.
+    #[must_use]
+    pub fn is_live(&self) -> bool {
+        self.mailbox.owner_alive.load(Ordering::Acquire)
+    }
+
     /// The current reliable, cross-thread count of frames this owner has
     /// accepted but not yet retired. See the module docs for the accounting
     /// contract (three retire sites, RAII, panic-safe) and its atomics
@@ -1033,6 +1047,22 @@ impl RasterHandle {
     /// `set_on_frame_scheduled`.
     pub fn set_wake_hook(&self, hook: Option<Arc<dyn Fn() + Send + Sync>>) {
         let _prev = std::mem::replace(&mut *self.mailbox.accounting.wake.lock(), hook);
+    }
+}
+
+/// Asks the raster thread to give back GPU memory, for `level`.
+///
+/// A message, not a call: the backend belongs to the raster owner, so the level
+/// waits in the mailbox like a resize and the owner applies it between frames,
+/// ahead of the next pump's render. Asked repeatedly before the owner runs,
+/// only the strongest level is applied, once. A handle whose owner is gone
+/// does nothing.
+impl ReclaimMemory for RasterHandle {
+    fn reclaim(&self, level: MemoryPressureLevel) {
+        let mut state = self.mailbox.state.lock();
+        state.pending_trim = state.pending_trim.max(Some(level));
+        drop(state);
+        self.mailbox.condvar.notify_one();
     }
 }
 
@@ -1251,6 +1281,7 @@ impl<B: RasterBackend> RasterOwner<B> {
         let (
             resize,
             pending_gpu_resource_generation,
+            trim,
             frame,
             shutting_down,
             mailbox_surface_generation,
@@ -1258,6 +1289,7 @@ impl<B: RasterBackend> RasterOwner<B> {
             let mut state = self.mailbox.state.lock();
             let resize = state.pending_resize.take();
             let pending_gpu_resource_generation = state.pending_gpu_resource_generation.take();
+            let trim = state.pending_trim.take();
             let frame = state.pending_frame.take();
             // Read in the SAME lock acquisition that drains `pending_resize`
             // — see that field's own doc and `RasterHandle::resize`'s doc
@@ -1269,6 +1301,7 @@ impl<B: RasterBackend> RasterOwner<B> {
             (
                 resize,
                 pending_gpu_resource_generation,
+                trim,
                 frame,
                 state.shutting_down,
                 state.current_surface_generation,
@@ -1350,6 +1383,13 @@ impl<B: RasterBackend> RasterOwner<B> {
                 gpu_resource_generation = ?generation,
                 "raster owner: bound to a new GPU-resource generation"
             );
+        }
+
+        if let Some(level) = trim {
+            // Between frames: the previous frame's buffers are all free and
+            // this frame has not recorded yet.
+            self.backend.reclaim(level);
+            tracing::debug!(?level, "raster owner: gave back GPU memory");
         }
 
         let Some(frame) = wake_guard.frame.as_ref() else {
@@ -1543,6 +1583,7 @@ impl<B: RasterBackend> RasterOwner<B> {
                 while state.pending_frame.is_none()
                     && state.pending_resize.is_none()
                     && state.pending_gpu_resource_generation.is_none()
+                    && state.pending_trim.is_none()
                     && !state.shutting_down
                 {
                     self.mailbox.condvar.wait(&mut state);
@@ -1751,6 +1792,8 @@ mod tests {
         /// (a pump that extracts both a pending resize and a pending
         /// frame runs `resize` first).
         panic_next_resize: bool,
+        /// Every level `trim` received, in order.
+        trims: Vec<MemoryPressureLevel>,
     }
 
     impl FakeBackend {
@@ -1807,6 +1850,10 @@ mod tests {
 
         fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
             Ok(())
+        }
+
+        fn reclaim(&mut self, level: MemoryPressureLevel) {
+            self.trims.push(level);
         }
     }
 
@@ -2182,6 +2229,43 @@ mod tests {
                 backend.full_repaint_calls, 1,
                 "the rejected frame's (full) damage still reaches the backend, \
                  which keeps it until a frame presents"
+            );
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Memory trim: a message the owner applies between frames
+    // -----------------------------------------------------------------------
+
+    /// Trims asked before the owner runs collapse to the strongest level and
+    /// reach the backend once, before the frame in the same pump renders; a
+    /// pump with nothing pending trims nothing.
+    #[test]
+    fn trims_coalesce_to_the_strongest_level_and_apply_before_the_frame() {
+        let (mut owner, handle, _ack_rx, _shutdown_rx) = new_owner(FakeBackend::default());
+        let generation = handle.resize(800, 600).expect("nonzero");
+        handle.reclaim(MemoryPressureLevel::Critical);
+        handle.reclaim(MemoryPressureLevel::Moderate);
+        handle
+            .submit(test_frame(FrameEpoch::ZERO.next(), generation))
+            .expect("accepted");
+
+        assert!(matches!(owner.pump(), PumpOutcome::Presented { .. }));
+        owner.with_backend(|backend| {
+            assert_eq!(backend.trims, vec![MemoryPressureLevel::Critical]);
+            assert_eq!(backend.render_calls, 1);
+        });
+
+        assert!(matches!(owner.pump(), PumpOutcome::Idle));
+        owner.with_backend(|backend| assert_eq!(backend.trims.len(), 1, "applied once"));
+
+        handle.reclaim(MemoryPressureLevel::Moderate);
+        assert!(matches!(owner.pump(), PumpOutcome::Idle));
+        owner.with_backend(|backend| {
+            assert_eq!(
+                backend.trims,
+                vec![MemoryPressureLevel::Critical, MemoryPressureLevel::Moderate],
+                "a trim needs no frame to apply"
             );
         });
     }

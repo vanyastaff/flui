@@ -16,9 +16,12 @@
 //! - the input vocabulary ([`PlatformInput`], [`DispatchEventResult`],
 //!   [`DragDropEvent`] and the conversion helpers);
 //! - the per-window contract [`PlatformWindow`] and the window vocabulary
-//!   ([`WindowId`], [`WindowOptions`], [`WindowMode`], [`WindowEvent`],
+//!   ([`WindowId`], [`WindowOptions`], [`WindowEvent`],
 //!   [`WindowExecutionState`], [`CursorIcon`] and the errors window
-//!   operations return).
+//!   operations return);
+//! - the window state contract: the [`WindowState`] snapshot a window
+//!   publishes, the [`WindowCommand`]s it takes and the
+//!   [`WindowCapabilities`] that say which (ADR-0237).
 //!
 //! No OS, winit, AccessKit or tokio type may appear here (ADR-0082 §1). That
 //! is the point of the crate: naming a contract must not link a backend, so a
@@ -98,10 +101,12 @@ mod display;
 mod event_time;
 mod haptic_feedback;
 mod haptics;
+mod host_notice;
 mod ime;
 mod input;
 pub mod keyboard;
 mod locale;
+mod placement;
 mod platform_window;
 pub mod pointer;
 mod preferences;
@@ -111,6 +116,7 @@ mod target_platform;
 mod text_input;
 pub mod text_store;
 mod window;
+mod window_state;
 
 pub use brightness::Brightness;
 pub use clipboard::{Clipboard, ClipboardItem, InMemoryClipboard};
@@ -126,6 +132,10 @@ pub use display::{
 pub use event_time::EventTime;
 pub use haptic_feedback::HapticFeedback;
 pub use haptics::PlatformHaptics;
+pub use host_notice::{
+    HostNotice, MemoryPressureLevel, SessionEndAnswer, SessionEndBlock, SessionEndBlockError,
+    SessionEndPhase, SessionEndRequest, SystemNotice,
+};
 pub use ime::ImeEvent;
 pub use input::{
     DispatchEventResult, DragDropEvent, PlatformInput, delta_offset_from_coords, device_to_logical,
@@ -133,6 +143,7 @@ pub use input::{
 };
 pub use keyboard::{Code, Key, KeyEvent, KeyState, Location, Modifiers, NamedKey};
 pub use locale::{InvalidLocale, Locale};
+pub use placement::{PlacementError, ResolvedPlacement, WindowPlacement};
 pub use platform_window::PlatformWindow;
 pub use pointer::{
     ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
@@ -153,6 +164,10 @@ pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
 pub use window::{
-    CursorError, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent,
-    WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal, WindowShowError,
+    CursorError, WindowAppearance, WindowBackgroundAppearance, WindowEvent, WindowExecutionState,
+    WindowId, WindowOptions, WindowReveal, WindowShowError,
+};
+pub use window_state::{
+    SizeConstraints, WindowCapabilities, WindowCommand, WindowCommandError, WindowControl,
+    WindowGeometry, WindowMode, WindowRevision, WindowRevisionExhausted, WindowState,
 };

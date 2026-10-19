@@ -189,6 +189,7 @@ pub mod id;
 mod input_sequence;
 pub use input_sequence::{InputSequenceId, InputSequenceIdExhausted, InputSequenceIdMint};
 pub mod key;
+pub mod memory;
 // Panic-payload text extraction and the `BUG:` internal-invariant
 // classifier every `catch_unwind` boundary in the workspace shares. Not in
 // the prelude: this is a narrow, deliberately-reached-for utility, not a

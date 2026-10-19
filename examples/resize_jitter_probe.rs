@@ -213,26 +213,25 @@ mod appkit_resize_jitter_probe {
     /// and immediately before `NSApplication::run`.
     fn setup_and_run(owner: flui_platform::OwnerPlatform, stale: Arc<AtomicUsize>) {
         let (first_w, first_h) = SIZES[0];
-        let window: Arc<dyn PlatformWindow> =
-            match owner.open_window(flui_platform::WindowOptions {
-                title: "FLUI resize-jitter probe".to_string(),
-                size: Size::new(first_w as f64, first_h as f64),
+        let window: Arc<dyn PlatformWindow> = match owner.open_window(
+            flui_platform::WindowOptions::default()
+                .with_title("FLUI resize-jitter probe".to_string())
+                .with_size(Size::new(first_w as f64, first_h as f64))
                 // Resizable, unlike the other AppKit probes: this one exists to
                 // change the window's size, so a non-resizable window would make
                 // the platform refuse the very operation under test.
-                resizable: true,
-                visible: true,
-                decorated: true,
-                min_size: None,
-                max_size: None,
-                ..Default::default()
-            }) {
-                Ok(pending) => match pending.try_ready() {
-                    Ok(window) => window,
-                    Err(error) => fatal(format!("the window was not ready: {error:?}")),
-                },
-                Err(error) => fatal(format!("open_window was refused: {error:?}")),
-            };
+                .with_resizable(true)
+                .with_visible(true)
+                .with_decorated(true)
+                .with_min_size(None)
+                .with_max_size(None),
+        ) {
+            Ok(pending) => match pending.try_ready() {
+                Ok(window) => window,
+                Err(error) => fatal(format!("the window was not ready: {error:?}")),
+            },
+            Err(error) => fatal(format!("open_window was refused: {error:?}")),
+        };
 
         // `Renderer::new` takes ownership of an owned handle source; going
         // through `Arc<dyn PlatformWindow>` is the caller shape its own doc
@@ -307,7 +306,10 @@ mod appkit_resize_jitter_probe {
                     state.size_index = index;
                 }
                 if let Some(window) = burst_window.upgrade() {
-                    window.resize(Size::new(w as f64, h as f64));
+                    // `apply` routes onto the window's owner thread itself.
+                    let _ = window.apply(flui_platform::WindowCommand::SetSize(Size::new(
+                        w as f64, h as f64,
+                    )));
                 }
                 std::thread::sleep(RESIZE_INTERVAL);
             }

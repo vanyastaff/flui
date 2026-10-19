@@ -189,20 +189,7 @@ pub enum CloseResponse {
 ///   registered the handler**, which would mean a backend broke
 ///   [`PlatformWindow`]'s own same-thread callback contract.
 #[derive(Clone)]
-pub struct CloseRequestHandler(
-    #[cfg_attr(
-        all(
-            any(target_arch = "wasm32", target_os = "android", target_os = "ios"),
-            not(test)
-        ),
-        expect(
-            dead_code,
-            reason = "native close-request consultation is wired on desktop; mobile and web \
-                      retain the common handler API without invoking it"
-        )
-    )]
-    Arc<dyn Fn(&CloseRequest) -> CloseResponse + Send + Sync>,
-);
+pub struct CloseRequestHandler(Arc<dyn Fn(&CloseRequest) -> CloseResponse + Send + Sync>);
 
 impl CloseRequestHandler {
     /// Wrap a callback as a registerable handler.
@@ -210,17 +197,6 @@ impl CloseRequestHandler {
         Self(Arc::new(handler))
     }
 
-    #[cfg_attr(
-        all(
-            any(target_arch = "wasm32", target_os = "android", target_os = "ios"),
-            not(test)
-        ),
-        expect(
-            dead_code,
-            reason = "native close-request consultation is wired on desktop; mobile and web \
-                      retain the common handler API without invoking it"
-        )
-    )]
     fn call(&self, request: &CloseRequest) -> CloseResponse {
         (self.0)(request)
     }
@@ -435,17 +411,6 @@ impl CloseRequestRouter {
     ///
     /// `reason` is why the close was asked for. Not yet carried to the
     /// handler: [`CloseRequest::reason`] reads [`CloseReason::User`].
-    #[cfg_attr(
-        all(
-            any(target_arch = "wasm32", target_os = "android", target_os = "ios"),
-            not(test)
-        ),
-        expect(
-            dead_code,
-            reason = "native close-request consultation is wired on desktop; mobile and web \
-                      retain the common handler API without invoking it"
-        )
-    )]
     pub(crate) fn consult(
         &self,
         address: PresentationAddress,

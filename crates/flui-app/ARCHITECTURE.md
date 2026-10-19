@@ -300,8 +300,11 @@ Desktop primary and secondary windows, UIKit and Web submit their initial
 execution, focus and visibility as one `WindowObservation::Snapshot` after
 registering callbacks.
 The queue entry supplies its exact presentation incarnation; the payload cannot
-capture a different target. Android host lifecycle callbacks use runtime-scoped
-`RuntimeDispatcher::lifecycle`. These paths carry closed operations.
+capture a different target. Android does the same: its focus, visibility and
+execution callbacks are addressed observations, and the application lifecycle is
+derived from them (`derive_lifecycle_state`), as on iOS; no Android callback sets
+the lifecycle itself, since focus alone never means paused. These paths carry
+closed operations.
 
 Snapshots and lifecycle transitions stay lossless and ordered. A suspended or
 unfocused observation can cancel pointer sequences and notify lifecycle listeners;

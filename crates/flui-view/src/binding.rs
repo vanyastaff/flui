@@ -103,19 +103,6 @@ impl RouteInformation {
 }
 
 // ============================================================================
-// App Exit Response
-// ============================================================================
-
-/// Response to an app exit request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AppExitResponse {
-    /// Allow the app to exit.
-    Exit,
-    /// Cancel the exit request.
-    Cancel,
-}
-
-// ============================================================================
 // View Focus Event
 // ============================================================================
 
@@ -293,22 +280,6 @@ pub trait WidgetsBindingObserver {
     /// Called when the view focus changes.
     fn did_change_view_focus(&self, _event: ViewFocusEvent) {}
 
-    /// Called when a request is received from the system to exit the
-    /// application.
-    ///
-    /// Return `AppExitResponse::Cancel` to prevent exit.
-    /// All observers are asked before exiting.
-    fn did_request_app_exit(&self) -> Pin<Box<dyn Future<Output = AppExitResponse> + Send + '_>> {
-        Box::pin(async { AppExitResponse::Exit })
-    }
-
-    // ========================================================================
-    // System Events
-    // ========================================================================
-
-    /// Called when system is running low on memory.
-    fn did_have_memory_pressure(&self) {}
-
     /// Called when accessibility features change.
     fn did_change_accessibility_features(&self) {}
 }
@@ -430,7 +401,6 @@ impl Drop for BindingObserverOwner {
 }
 
 type BindingRouteFuture<'a> = Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
-type BindingExitFuture<'a> = Pin<Box<dyn Future<Output = AppExitResponse> + Send + 'a>>;
 
 // The current observer, remaining snapshot and returned response future are
 // separate owners in a suspended dispatch. Fence the response independently.
@@ -449,35 +419,6 @@ impl Future for BindingRouteResponse<'_> {
 }
 
 impl Drop for BindingRouteResponse<'_> {
-    fn drop(&mut self) {
-        if let Some(future) = self.0.take() {
-            if std::thread::panicking() {
-                std::mem::forget(future);
-            } else {
-                drop(future);
-            }
-        }
-    }
-}
-
-struct BindingExitResponse<'a>(Option<BindingExitFuture<'a>>);
-
-impl Future for BindingExitResponse<'_> {
-    type Output = AppExitResponse;
-    fn poll(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<AppExitResponse> {
-        self.get_mut()
-            .0
-            .as_mut()
-            .expect("BUG: exit response polled after retirement")
-            .as_mut()
-            .poll(cx)
-    }
-}
-
-impl Drop for BindingExitResponse<'_> {
     fn drop(&mut self) {
         if let Some(future) = self.0.take() {
             if std::thread::panicking() {
@@ -1441,18 +1382,6 @@ impl WidgetsBinding {
             std::panic::resume_unwind(payload);
         }
     }
-
-    /// Notify all observers of memory pressure.
-    ///
-    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
-    /// rationale.
-    pub fn handle_memory_pressure(&self) {
-        let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
-        for observer in &observers {
-            observer.did_have_memory_pressure();
-        }
-    }
-
     /// Notify all observers of accessibility features change.
     ///
     /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
@@ -1472,6 +1401,13 @@ impl WidgetsBinding {
     /// Get the number of observers.
     pub fn observer_count(&self) -> usize {
         self.inner.read().observers.len()
+    }
+
+    /// Give the elements of this binding the window they are presented in, so
+    /// `LifecycleContext::window` answers. Call before the root is attached.
+    #[doc(hidden)]
+    pub fn set_window_handle(&self, handle: crate::WindowHandle) {
+        self.inner.write().build_owner.set_window_handle(handle);
     }
 
     // ========================================================================
@@ -1624,33 +1560,6 @@ impl WidgetsBinding {
         let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
         for observer in &observers {
             observer.did_change_view_focus(event);
-        }
-    }
-
-    // ========================================================================
-    // App Exit Request
-    // ========================================================================
-
-    /// Handle an app exit request from the system.
-    ///
-    /// All observers are asked. If any returns `Cancel`, the exit is prevented.
-    pub async fn handle_request_app_exit(&self) -> AppExitResponse {
-        let observers: Vec<_> = self.inner.read().observers.clone();
-        let mut should_cancel = false;
-
-        for observer in observers {
-            if BindingExitResponse(Some(observer.did_request_app_exit())).await
-                == AppExitResponse::Cancel
-            {
-                should_cancel = true;
-                // Don't return early - all observers should be notified
-            }
-        }
-
-        if should_cancel {
-            AppExitResponse::Cancel
-        } else {
-            AppExitResponse::Exit
         }
     }
 }

@@ -57,6 +57,8 @@ mod runtime_input_lifecycle;
 mod self_rescheduling_local_post_frame;
 #[path = "text_store_kit.rs"]
 mod text_store_kit;
+#[path = "window_conformance.rs"]
+mod window_conformance;
 #[path = "window_scale_factor.rs"]
 mod window_scale_factor;
 

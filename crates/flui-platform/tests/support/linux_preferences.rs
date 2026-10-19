@@ -294,10 +294,7 @@ pub mod linux {
                 );
                 if scheme {
                     let window = owner
-                        .open_window(flui_platform::WindowOptions {
-                            visible: false,
-                            ..Default::default()
-                        })?
+                        .open_window(flui_platform::WindowOptions::default().with_visible(false))?
                         .try_ready()?;
                     assert_eq!(
                         window.appearance(),
