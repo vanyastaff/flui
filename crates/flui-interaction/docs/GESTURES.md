@@ -20,8 +20,8 @@ Built-in recognizers: `TapGestureRecognizer`, `DoubleTapGestureRecognizer`,
 `LongPressGestureRecognizer`, `DragGestureRecognizer` (plus the
 `vertical_drag`, `horizontal_drag` and `pan` constructors in `drag_variants`),
 `ScaleGestureRecognizer`, `ForcePressGestureRecognizer`,
-`MultiTapGestureRecognizer`, `MultiDragGestureRecognizer`,
-`EagerGestureRecognizer` and `TapAndDragGestureRecognizer`.
+`MultiTapGestureRecognizer`, `MultiDragGestureRecognizer` and
+`TapAndDragGestureRecognizer`.
 
 ## Construction
 

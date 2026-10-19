@@ -8,8 +8,8 @@ use std::{
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::{
-    EagerGestureRecognizer, GestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
-    MultiDragGestureRecognizer, PointerId, TapAndDragGestureRecognizer, TapGestureRecognizer,
+    GestureRecognizer, LongPressGestureRecognizer, MultiDragAxis, MultiDragGestureRecognizer,
+    PointerId, TapAndDragGestureRecognizer, TapGestureRecognizer,
     events::{PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id},
     gesture::GestureArena,
     pointer::PointerDispatch,
@@ -80,7 +80,6 @@ impl tracing::Subscriber for RecognizerEvents {
 #[derive(Clone, Copy)]
 enum RecognizerKind {
     Tap,
-    Eager,
     LongPress,
     MultiDrag,
 }
@@ -119,7 +118,6 @@ fn observes(kind: RecognizerKind, expected: &str) {
         let arena = GestureArena::new();
         let recognizer: Rc<dyn GestureRecognizer> = match kind {
             RecognizerKind::Tap => TapGestureRecognizer::builder(arena.clone()).build(),
-            RecognizerKind::Eager => EagerGestureRecognizer::builder(arena.clone()).build(),
             RecognizerKind::LongPress => LongPressGestureRecognizer::builder(arena.clone()).build(),
             RecognizerKind::MultiDrag => {
                 MultiDragGestureRecognizer::builder(arena.clone(), MultiDragAxis::Free).build()
@@ -143,12 +141,6 @@ fn tap_reports_admission() {
 fn tap_reports_dispatch() {
     observes(RecognizerKind::Tap, "event_received");
 }
-fn eager_reports_admission() {
-    observes(RecognizerKind::Eager, "recognizer_added");
-}
-fn eager_reports_dispatch() {
-    observes(RecognizerKind::Eager, "event_received");
-}
 fn long_press_reports_admission() {
     observes(RecognizerKind::LongPress, "recognizer_added");
 }
@@ -167,8 +159,6 @@ fn stable_recognizer_observability_kinds_reach_the_subscriber() {
     let cases: &[(&str, fn())] = &[
         ("tap admission", tap_reports_admission),
         ("tap dispatch", tap_reports_dispatch),
-        ("eager admission", eager_reports_admission),
-        ("eager dispatch", eager_reports_dispatch),
         ("long press admission", long_press_reports_admission),
         ("long press dispatch", long_press_reports_dispatch),
         ("multi drag admission", multi_drag_reports_admission),

@@ -10,11 +10,10 @@ use std::{
 
 use flui_foundation::geometry::{DevicePixelRatio, Offset, Point, Size};
 use flui_interaction::{
-    DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, EagerGestureRecognizer,
-    ForcePressGestureRecognizer, GestureArena, GestureArenaMember, GestureRecognizer,
-    GestureSettings, GestureSettingsSource, LongPressGestureRecognizer, ManualClock,
-    MultiTapGestureRecognizer, PointerId, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
-    TapGestureRecognizer,
+    DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, ForcePressGestureRecognizer,
+    GestureArena, GestureArenaMember, GestureRecognizer, GestureSettings, GestureSettingsSource,
+    LongPressGestureRecognizer, ManualClock, MultiTapGestureRecognizer, PointerId,
+    ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapGestureRecognizer,
     events::{PointerEvent, PointerEventExt, PointerKind},
     pointer::PointerDispatch,
 };
@@ -340,52 +339,6 @@ fn tap_and_drag_retains_consecutive_candidate_profile() {
         &[1, 2, 1, 1],
         "old candidate retains interval; new chain uses replacement"
     );
-}
-
-fn eager_source_replacement_does_not_retire_accepted_contact() {
-    let arena = GestureArena::new();
-    let source = GestureSettingsSource::new(GestureSettings::default());
-    let eager = EagerGestureRecognizer::builder(arena.clone())
-        .settings(source.provider())
-        .build();
-    eager.add_pointer(PointerDispatch::at_root(&event(
-        80,
-        PointerKind::Touch,
-        0,
-        0.0,
-        0.0,
-        0,
-    )));
-    source.replace(GestureSettings::preset(
-        flui_platform_api::TargetPlatform::Unknown,
-        PointerKind::Mouse,
-    ));
-    eager.add_pointer(PointerDispatch::at_root(&event(
-        81,
-        PointerKind::Touch,
-        1,
-        0.0,
-        0.0,
-        0,
-    )));
-    assert!(
-        !arena.contains(PointerId::try_from(81).expect("nonzero fixture")),
-        "active eager owner stays busy"
-    );
-    eager.cancel();
-    eager.add_pointer(PointerDispatch::at_root(&event(
-        81,
-        PointerKind::Touch,
-        2,
-        0.0,
-        0.0,
-        0,
-    )));
-    assert!(
-        arena.contains(PointerId::try_from(81).expect("nonzero fixture")),
-        "next contact remains admissible"
-    );
-    eager.cancel();
 }
 
 fn independent_multidrags_snapshot_each_admission() {
@@ -1492,10 +1445,6 @@ fn admitted_gesture_settings_contract() {
         (
             "tap and drag candidate",
             tap_and_drag_retains_consecutive_candidate_profile,
-        ),
-        (
-            "eager source replacement",
-            eager_source_replacement_does_not_retire_accepted_contact,
         ),
         (
             "long press retains deadline",

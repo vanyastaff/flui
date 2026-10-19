@@ -1,13 +1,13 @@
-//! Scale, force-press, tap-and-drag and eager recognizers driven through the
+//! Scale, force-press and tap-and-drag recognizers driven through the
 //! production `GestureBinding`: the binding closes each arena after Down,
 //! sweeps it after Up, and the frame drains lone-member default wins, exactly
 //! as a presentation drives them.
-use flui_interaction::gesture::GestureContest;
+use flui_interaction::gesture::{GestureArenaMember, GestureContest, GestureDisposition};
 use std::{
     cell::{Cell, RefCell},
     f64::consts::PI,
     panic::{AssertUnwindSafe, catch_unwind},
-    rc::Rc,
+    rc::{Rc, Weak},
     sync::Arc,
     time::Duration,
 };
@@ -21,9 +21,9 @@ use flui_interaction::gesture::GestureArena;
 use flui_interaction::gesture::{ScaleEndDetails, ScaleUpdateDetails};
 use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
-    DragAxis, DragGestureRecognizer, EagerGestureRecognizer, ForcePressGestureRecognizer,
-    GestureBinding, GestureRecognizer, HitTestResult, ManualClock, PointerId,
-    ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapGestureRecognizer,
+    DragAxis, DragGestureRecognizer, ForcePressGestureRecognizer, GestureBinding,
+    GestureRecognizer, HitTestResult, ManualClock, PointerId, ScaleGestureRecognizer,
+    TapAndDragGestureRecognizer, TapGestureRecognizer,
 };
 
 // ============================================================================
@@ -576,11 +576,49 @@ fn scale_ended_from_its_start_publishes_no_update() {
     );
 }
 
+/// A member that claims each contact in the arena the moment it goes down.
+struct Claimant {
+    arena: GestureArena,
+    this: Weak<Claimant>,
+}
+
+impl Claimant {
+    fn new(arena: GestureArena) -> Rc<Self> {
+        Rc::new_cyclic(|this| Self {
+            arena,
+            this: this.clone(),
+        })
+    }
+}
+
+impl GestureArenaMember for Claimant {
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, _: GestureContest) {}
+}
+
+impl GestureRecognizer for Claimant {
+    fn add_pointer(&self, down: PointerDispatch<'_>) {
+        let Some(pointer) = pointer_of(down.local) else {
+            return;
+        };
+        let member = self.this.upgrade().expect("BUG: the claimant is alive");
+        self.arena
+            .add(id(pointer), &member)
+            .resolve(GestureDisposition::Accepted);
+    }
+
+    fn handle_event(&self, _: PointerDispatch<'_>) {}
+
+    fn cancel(&self) -> flui_interaction::CancelOutcome {
+        flui_interaction::CancelOutcome::Idle
+    }
+}
+
 fn scale_contact_lost_to_a_competitor_cancels_the_scale() {
     let rig = Rig::new();
-    // An eager member that sees only the third contact claims its arena first.
-    let eager = EagerGestureRecognizer::builder(rig.binding.arena().clone()).build();
-    rig.attach(&eager, Some(3));
+    // A claimant that sees only the third contact takes its arena first.
+    let claimant = Claimant::new(rig.binding.arena().clone());
+    rig.attach(&claimant, Some(3));
     let (_scale, log) = scale_on(&rig);
     pinch_out(&rig, 1, 2);
     assert_eq!(log.starts.get(), 1);
@@ -2024,80 +2062,11 @@ fn input_barrier_keeps_out_and_back_motion() {
     }
 }
 
-// ============================================================================
-// Eager
-// ============================================================================
-
-#[test]
-fn eager_wins_at_close_and_forgets_a_finished_contact() {
-    let rig = Rig::new();
-    let eager = EagerGestureRecognizer::builder(rig.binding.arena().clone()).build();
-    rig.attach(&eager, None);
-    let taps = Rc::new(Cell::new(0));
-    let counted = taps.clone();
-    let tap = TapGestureRecognizer::builder(rig.binding.arena().clone())
-        .on_tap(move |_| counted.set(counted.get() + 1))
-        .build();
-    rig.attach(&tap, None);
-    for pointer in [1, 2] {
-        rig.down(pointer, 100.0, 100.0);
-        rig.frame();
-        rig.up(pointer, 100.0, 100.0);
-        rig.frame();
-        assert!(
-            !rig.binding.arena().contains(id(pointer)),
-            "the lifted contact is over"
-        );
-        assert_eq!(
-            eager.cancel(),
-            flui_interaction::CancelOutcome::Idle,
-            "the lifted contact was already retired"
-        );
-    }
-    rig.down(3, 100.0, 100.0);
-    rig.cancel(3);
-    assert!(
-        !rig.binding.arena().contains(id(3)),
-        "the cancelled contact is over"
-    );
-    assert_eq!(
-        eager.cancel(),
-        flui_interaction::CancelOutcome::Idle,
-        "the cancelled contact was already retired"
-    );
-    assert_eq!(taps.get(), 0, "the eager member won every contact");
-}
-
 fn route<R: GestureRecognizer>(recognizer: &R, event: &PointerEvent) {
     recognizer.handle_event(PointerDispatch::at_root(event));
 }
 
-/// In a self-driven arena the recognizers close it themselves. A cancelled
-/// contact's arena has no winner: the eager member's cancel must not award the
-/// arena to a rival, which would accept a gesture for the cancelled contact.
-#[test]
-fn eager_cancel_in_a_self_driven_arena_awards_no_rival() {
-    let arena = GestureArena::new();
-    let eager = EagerGestureRecognizer::builder(arena.clone()).build();
-    let starts = Rc::new(Cell::new(0));
-    let counted = starts.clone();
-    // A drag starts the moment the arena accepts it, so an award is visible.
-    let rival = DragGestureRecognizer::builder(arena.clone(), DragAxis::Free)
-        .on_start(move |_| counted.set(counted.get() + 1))
-        .build();
-    let at = Offset::new(100.0, 100.0);
-    let down = make_down_event_for_id(id(1), at, PointerKind::Touch).expect("valid fixture sample");
-    let cancel = make_cancel_event_for_id(id(1), PointerKind::Touch);
-    eager.add_pointer(PointerDispatch::at_root(&down));
-    rival.add_pointer(PointerDispatch::at_root(&down));
-    // The eager member hears the cancel first, then the rival.
-    route(&*eager, &cancel);
-    route(&*rival, &cancel);
-    assert_eq!(starts.get(), 0, "the cancelled contact has no winner");
-    assert!(!arena.contains(id(1)), "the cancelled arena is gone");
-}
-
-/// The checked pressure boundary refuses a nonfinite reading before it can
+// The checked pressure boundary refuses a nonfinite reading before it can
 /// publish an update or peak from a stale pressure paired with a new position.
 fn force_press_ignores_a_non_finite_pressure_sample() {
     assert!(
@@ -2346,9 +2315,6 @@ fn cancellation_preserves_reentrant_and_independent_contacts() {
             }),
             ("tap and drag reentry", || {
                 cancellation_reentry(|arena| TapAndDragGestureRecognizer::builder(arena).build());
-            }),
-            ("eager reentry", || {
-                cancellation_reentry(|arena| EagerGestureRecognizer::builder(arena).build());
             }),
             (
                 "other scale contacts",

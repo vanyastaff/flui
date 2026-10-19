@@ -22,8 +22,8 @@ mod settings_admission;
 mod smoothing;
 #[path = "recognizer_api/tap_contracts.rs"]
 mod tap_contracts;
-#[path = "recognizer_api/tapdrag_eager.rs"]
-mod tapdrag_eager;
+#[path = "recognizer_api/tapdrag.rs"]
+mod tapdrag;
 
 /// `clock`'s reading on the event timeline an arena built over it uses.
 fn at(clock: &flui_interaction::ManualClock) -> flui_platform_api::EventTime {

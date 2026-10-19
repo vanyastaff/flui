@@ -1,8 +1,7 @@
 //! Reusable owner-local composite recognizer contracts.
 use flui_foundation::geometry::Offset;
 use flui_interaction::{
-    CancelOutcome, EagerGestureRecognizer, GestureArena, GestureRecognizer, PointerId,
-    TapAndDragGestureRecognizer,
+    CancelOutcome, GestureArena, GestureRecognizer, PointerId, TapAndDragGestureRecognizer,
     events::{PointerKind, make_down_event_for_id, make_up_event_for_id},
     pointer::PointerDispatch,
 };
@@ -45,7 +44,7 @@ fn cancelling_tapdrag_from_tap_down_invalidates_the_queued_tap_up() {
 }
 
 #[test]
-fn tapdrag_cancel_is_reusable_and_eager_refuses_a_second_contact() {
+fn tapdrag_cancel_is_reusable() {
     let arena = GestureArena::new();
     let log = Rc::new(RefCell::new(Vec::new()));
     let output = log.clone();
@@ -65,23 +64,4 @@ fn tapdrag_cancel_is_reusable_and_eager_refuses_a_second_contact() {
         .expect("valid fixture sample");
     recognizer.handle_event(PointerDispatch::at_root(&up));
     assert_eq!(&*log.borrow(), &[1]);
-
-    let arena = GestureArena::new();
-    let eager = EagerGestureRecognizer::builder(arena.clone()).build();
-    eager.add_pointer(PointerDispatch::at_root(&down));
-    let other = PointerId::new(std::num::NonZeroU64::new(72).expect("nonzero fixture id"));
-    let other_down = make_down_event_for_id(other, Offset::ZERO, PointerKind::Touch)
-        .expect("valid fixture sample");
-    eager.add_pointer(PointerDispatch::at_root(&other_down));
-    assert!(
-        !arena.contains(other),
-        "busy admission must not create a second arena"
-    );
-    assert_eq!(eager.cancel(), CancelOutcome::Cancelled);
-    assert_eq!(eager.cancel(), CancelOutcome::Idle);
-    eager.add_pointer(PointerDispatch::at_root(&other_down));
-    assert!(
-        arena.contains(other),
-        "cancel must leave the recognizer reusable"
-    );
 }

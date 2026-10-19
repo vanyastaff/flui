@@ -763,6 +763,16 @@ fn refresh_indicator_spins_while_refreshing() {
         for y in [60.0, 100.0, 140.0, 180.0, 220.0] {
             laid.dispatch_pointer_move_after(100.0, y, ms(16));
         }
+        laid.pump_for(ms(16));
+        assert!(
+            refresh.pull_distance_px() > 0.0,
+            "the finger is still pulling"
+        );
+        assert_eq!(
+            arcs(&laid).len(),
+            1,
+            "without a style the band holds the spinner while pulling (ADR-0235)"
+        );
         laid.dispatch_pointer_up(100.0, 220.0);
         for _ in 0..30 {
             laid.pump_for(ms(16));
