@@ -88,8 +88,6 @@ enum Command {
     GpuTest(tasks::GpuTestArgs),
     /// The unsafe-code paths under Miri.
     Miri(tasks::MiriArgs),
-    /// Compile the benchmarks without running them.
-    BenchCompile(tasks::BenchCompileArgs),
     /// The demo layer snapshot suite.
     DemoSnapshots(tasks::DemoSnapshotsArgs),
     /// Remove the nested-cargo test caches under the target directory.
@@ -180,7 +178,6 @@ fn main() -> ExitCode {
         Command::LiveSmoke(args) => tasks::live_smoke(&args),
         Command::GpuTest(args) => tasks::gpu_test(&args),
         Command::Miri(args) => tasks::miri(&args),
-        Command::BenchCompile(args) => tasks::bench_compile(&args),
         Command::DemoSnapshots(args) => tasks::demo_snapshots(&args),
         Command::CleanNested(args) => tasks::clean_nested(&args),
         Command::Device(args) => device::device(&args),

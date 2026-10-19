@@ -6,13 +6,13 @@ use std::time::Duration;
 
 use flui_platform::shared::haptic_degradation::{
     ANDROID_USAGE_ASSISTANCE_SONIFICATION, ANDROID_USAGE_TOUCH, AndroidFeedbackAnswer,
-    AndroidHapticConstant, AndroidPatternPlan, AndroidPrimitive, AndroidVibrationUsage,
-    AndroidVibrator, CORE_HAPTICS_CURVE_POINTS, ComposedPrimitive, CoreHapticsControl,
-    CoreHapticsCurve, CoreHapticsEngine, CoreHapticsEvent, EnvelopeStep, IosGenerator, IosImpact,
-    IosNotification, MacFeedback, PEN_BUZZ, PenCommand, PenController, PenWaveform, WebVibration,
-    actuator_for, android_feedback, android_feedback_outcome, android_pattern,
-    android_vibration_usage, ios_feedback, ios_pattern, ios_pattern_parts, linux, macos_feedback,
-    macos_pattern, pen_feedback_step, pen_timeline, web_feedback, web_pattern,
+    AndroidHapticConstant, AndroidHapticsApi, AndroidPatternPlan, AndroidPrimitive,
+    AndroidVibrationUsage, AndroidVibrator, CORE_HAPTICS_CURVE_POINTS, ComposedPrimitive,
+    CoreHapticsControl, CoreHapticsCurve, CoreHapticsEngine, CoreHapticsEvent, EnvelopeStep,
+    IosGenerator, IosImpact, IosNotification, MacFeedback, PEN_BUZZ, PenCommand, PenController,
+    PenWaveform, WebVibration, actuator_for, android_feedback, android_feedback_outcome,
+    android_pattern, android_vibration_usage, ios_feedback, ios_pattern, ios_pattern_parts, linux,
+    macos_feedback, macos_pattern, pen_feedback_step, pen_timeline, web_feedback, web_pattern,
     windows_capabilities, windows_feedback, windows_pattern,
 };
 use flui_platform::traits::WindowOptions;
@@ -213,24 +213,27 @@ fn android_feedback_rows() {
         (HapticFeedback::Vibrate, 0, Approximated, 0, Approximated),
     ];
     for (kind, new_value, new_outcome, old_value, old_outcome) in rows {
-        let (constant, outcome) = android_feedback(kind, 34);
+        let (constant, outcome) = android_feedback(kind, AndroidHapticsApi::SegmentFeedback);
         assert_eq!(
             (constant.value, outcome),
             (new_value, new_outcome),
-            "{kind:?} on 34"
+            "{kind:?} with API 34's constants"
         );
-        let (constant, outcome) = android_feedback(kind, 29);
+        let (constant, outcome) = android_feedback(kind, AndroidHapticsApi::Floor);
         assert_eq!(
             (constant.value, outcome),
             (old_value, old_outcome),
-            "{kind:?} on 29"
+            "{kind:?} with the floor's constants"
         );
         assert!(
-            constant.since <= 29,
+            constant.since == AndroidHapticsApi::Floor,
             "{kind:?}: no constant newer than the device"
         );
     }
-    assert_eq!(AndroidHapticConstant::DRAG_START.since, 34);
+    assert_eq!(
+        AndroidHapticConstant::DRAG_START.since,
+        AndroidHapticsApi::SegmentFeedback
+    );
     // The view's own answer decides what is reported: a declined call
     // played nothing, whatever the table expected.
     for (table, answer, reported) in [
@@ -262,18 +265,18 @@ fn android_feedback_rows() {
 }
 
 fn vibrator(
-    api_level: u32,
+    api: AndroidHapticsApi,
     envelopes: bool,
     primitives: &[i32],
     amplitude: bool,
 ) -> AndroidVibrator {
-    AndroidVibrator::new(api_level, envelopes, primitives.to_vec(), amplitude)
+    AndroidVibrator::new(api, envelopes, primitives.to_vec(), amplitude)
 }
 
 const ALL_PRIMITIVES: &[i32] = &[1, 2, 7, 8];
 
 fn android_pattern_rows() {
-    let modern = vibrator(36, true, ALL_PRIMITIVES, true);
+    let modern = vibrator(AndroidHapticsApi::Envelopes, true, ALL_PRIMITIVES, true);
     let (plan, outcome) = android_pattern(&one_envelope(), &modern);
     assert_eq!(outcome, Submitted, "one envelope plays exactly");
     let AndroidPatternPlan::Envelope {
@@ -336,8 +339,10 @@ fn android_pattern_rows() {
         "overlapping events take the waveform route, which cannot play them"
     );
 
-    let (plan, outcome) =
-        android_pattern(&transients(), &vibrator(33, false, ALL_PRIMITIVES, true));
+    let (plan, outcome) = android_pattern(
+        &transients(),
+        &vibrator(AndroidHapticsApi::TouchUsage, false, ALL_PRIMITIVES, true),
+    );
     assert_eq!(
         outcome, Approximated,
         "sharpness is quantized to a primitive"
@@ -358,17 +363,27 @@ fn android_pattern_rows() {
         ])
     );
     assert_eq!(
-        android_pattern(&transients(), &vibrator(33, false, &[1, 7], true)),
+        android_pattern(
+            &transients(),
+            &vibrator(AndroidHapticsApi::TouchUsage, false, &[1, 7], true)
+        ),
         (AndroidPatternPlan::FallBack, FellBack),
         "one unsupported primitive falls back"
     );
     assert_eq!(
-        android_pattern(&transients(), &vibrator(30, false, ALL_PRIMITIVES, true)).1,
+        android_pattern(
+            &transients(),
+            &vibrator(AndroidHapticsApi::Composition, false, ALL_PRIMITIVES, true)
+        )
+        .1,
         FellBack,
         "LOW_TICK arrived in API 31"
     );
 
-    let (plan, outcome) = android_pattern(&mixed(), &vibrator(33, false, ALL_PRIMITIVES, true));
+    let (plan, outcome) = android_pattern(
+        &mixed(),
+        &vibrator(AndroidHapticsApi::TouchUsage, false, ALL_PRIMITIVES, true),
+    );
     assert_eq!(outcome, Approximated, "sharpness dropped");
     assert_eq!(
         plan,
@@ -382,27 +397,48 @@ fn android_pattern_rows() {
         "steps take the lower end and amplitudes round down"
     );
     assert_eq!(
-        android_pattern(&mixed(), &vibrator(33, false, ALL_PRIMITIVES, false)).1,
+        android_pattern(
+            &mixed(),
+            &vibrator(AndroidHapticsApi::TouchUsage, false, ALL_PRIMITIVES, false)
+        )
+        .1,
         FellBack,
         "no amplitude control"
     );
     assert_eq!(
-        android_pattern(&overlapping(), &vibrator(33, false, ALL_PRIMITIVES, true)).1,
+        android_pattern(
+            &overlapping(),
+            &vibrator(AndroidHapticsApi::TouchUsage, false, ALL_PRIMITIVES, true)
+        )
+        .1,
         FellBack
     );
     assert_eq!(
-        android_pattern(&one_envelope(), &vibrator(35, true, ALL_PRIMITIVES, true)).1,
+        android_pattern(
+            &one_envelope(),
+            &vibrator(
+                AndroidHapticsApi::SegmentFeedback,
+                true,
+                ALL_PRIMITIVES,
+                true
+            )
+        )
+        .1,
         Approximated,
         "envelopes need API 36"
     );
     assert_eq!(
-        android_pattern(&transients(), &vibrator(29, false, ALL_PRIMITIVES, true)).1,
+        android_pattern(
+            &transients(),
+            &vibrator(AndroidHapticsApi::Floor, false, ALL_PRIMITIVES, true)
+        )
+        .1,
         FellBack,
         "no composition before API 30"
     );
     // A Galaxy S21 on Android 15: amplitude control, no primitives. Its
     // transients fall back, its continuous events play as a waveform.
-    let amplitude_only = vibrator(35, false, &[], true);
+    let amplitude_only = vibrator(AndroidHapticsApi::SegmentFeedback, false, &[], true);
     assert_eq!(android_pattern(&transients(), &amplitude_only).1, FellBack);
     assert!(matches!(
         android_pattern(&one_envelope(), &amplitude_only),
@@ -411,20 +447,24 @@ fn android_pattern_rows() {
     // Without the VIBRATE permission the backend offers the vibrator nothing.
     for pattern in [transients(), one_envelope()] {
         assert_eq!(
-            android_pattern(&pattern, &vibrator(35, false, &[], false)).1,
+            android_pattern(
+                &pattern,
+                &vibrator(AndroidHapticsApi::SegmentFeedback, false, &[], false)
+            )
+            .1,
             FellBack
         );
     }
     // Pattern vibrations are touch feedback: VibrationAttributes from API
     // 33, sonification audio attributes before it.
     assert_eq!(
-        android_vibration_usage(33),
+        android_vibration_usage(AndroidHapticsApi::TouchUsage),
         AndroidVibrationUsage::Attributes {
             usage: ANDROID_USAGE_TOUCH
         }
     );
     assert_eq!(
-        android_vibration_usage(32),
+        android_vibration_usage(AndroidHapticsApi::RoundPrimitives),
         AndroidVibrationUsage::Audio {
             usage: ANDROID_USAGE_ASSISTANCE_SONIFICATION
         }

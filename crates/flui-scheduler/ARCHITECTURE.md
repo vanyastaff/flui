@@ -1044,9 +1044,9 @@ test pins this.
 
 `benches/async_driver_pump.rs` (criterion) is evidence attached to the PR, not
 a gate. CI's `clippy`/`feature-matrix` jobs pass `--all-targets`/`--benches`,
-so this file is type-checked and lint-checked on every PR; what CI never
-does is link or run it (`bench-compile` only `cargo bench -p flui-rendering
---no-run`s). Local measurement, `main` (`f2f1c4d9`) vs. this change, on a
+so this file is type-checked and lint-checked on every PR, and the `test`
+job's `cargo xtask build-all-targets` links it; what CI never does is run
+it. Local measurement, `main` (`f2f1c4d9`) vs. this change, on a
 13th Gen Intel Core i9-13900K (32 threads) running `rustc 1.98.1 (48a229cea
 2026-09-01)`:
 

@@ -288,21 +288,17 @@ fn field() -> Bounds<f64> {
     Bounds::new(Point::new(10.0, 20.0), Size::new(100.0, 30.0))
 }
 
-/// Handwriting starts from API 33, for a pen tip, inside the focused field.
+/// Handwriting starts for a pen tip, inside the focused field.
 fn handwriting_starts_for_a_pen_inside_the_focused_field() {
     let inside = Point::new(50.0, 30.0);
-    assert!(starts_handwriting(33, true, Some(field()), inside));
+    assert!(starts_handwriting(true, Some(field()), inside));
     assert!(
-        !starts_handwriting(32, true, Some(field()), inside),
-        "API 32"
-    );
-    assert!(
-        !starts_handwriting(35, false, Some(field()), inside),
+        !starts_handwriting(false, Some(field()), inside),
         "a finger"
     );
-    assert!(!starts_handwriting(35, true, None, inside), "no field");
+    assert!(!starts_handwriting(true, None, inside), "no field");
     assert!(
-        !starts_handwriting(35, true, Some(field()), Point::new(5.0, 30.0)),
+        !starts_handwriting(true, Some(field()), Point::new(5.0, 30.0)),
         "outside the field"
     );
 }

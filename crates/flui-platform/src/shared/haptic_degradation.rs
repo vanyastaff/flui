@@ -269,75 +269,114 @@ pub fn ios_pattern_parts(pattern: &HapticPattern) -> Vec<CoreHapticsPart> {
 
 // --- Android -----------------------------------------------------------------
 
-/// A `HapticFeedbackConstants` value and the API level that added it.
+/// The haptics APIs an Android device has, each set including the ones before it. The backend
+/// derives it from the device's API level gates; the tables below choose by it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[non_exhaustive]
+pub enum AndroidHapticsApi {
+    /// The floor's: the feedback constants up to `CONTEXT_CLICK` and amplitude waveforms.
+    #[default]
+    Floor,
+    /// API 30: `VibrationEffect.Composition` with `PRIMITIVE_CLICK` and `PRIMITIVE_TICK`, and
+    /// the `CONFIRM`, `REJECT` and `GESTURE_END` feedback constants.
+    Composition,
+    /// API 31: `PRIMITIVE_THUD`, `PRIMITIVE_LOW_TICK` and `Vibrator.getPrimitiveDurations`.
+    RoundPrimitives,
+    /// API 33: `VibrationAttributes` for the touch usage.
+    TouchUsage,
+    /// API 34: the `DRAG_START`, `SEGMENT_TICK`, `SEGMENT_FREQUENT_TICK` and
+    /// `GESTURE_THRESHOLD_ACTIVATE` feedback constants.
+    SegmentFeedback,
+    /// API 36: envelope effects (`VibrationEffect.BasicEnvelopeBuilder`).
+    Envelopes,
+}
+
+impl AndroidHapticsApi {
+    /// Whether this set includes `other`.
+    #[must_use]
+    pub const fn includes(self, other: Self) -> bool {
+        self as u8 >= other as u8
+    }
+}
+
+/// A `HapticFeedbackConstants` value and the haptics APIs that added it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AndroidHapticConstant {
     /// The constant's value.
     pub value: i32,
-    /// The API level that added it.
-    pub since: u32,
+    /// The haptics APIs that added it.
+    pub since: AndroidHapticsApi,
 }
 
 impl AndroidHapticConstant {
     /// `LONG_PRESS`.
-    pub const LONG_PRESS: Self = Self { value: 0, since: 3 };
+    pub const LONG_PRESS: Self = Self {
+        value: 0,
+        since: AndroidHapticsApi::Floor,
+    };
     /// `VIRTUAL_KEY`.
-    pub const VIRTUAL_KEY: Self = Self { value: 1, since: 5 };
+    pub const VIRTUAL_KEY: Self = Self {
+        value: 1,
+        since: AndroidHapticsApi::Floor,
+    };
     /// `KEYBOARD_TAP`.
-    pub const KEYBOARD_TAP: Self = Self { value: 3, since: 8 };
+    pub const KEYBOARD_TAP: Self = Self {
+        value: 3,
+        since: AndroidHapticsApi::Floor,
+    };
     /// `CLOCK_TICK`.
     pub const CLOCK_TICK: Self = Self {
         value: 4,
-        since: 21,
+        since: AndroidHapticsApi::Floor,
     };
     /// `CONTEXT_CLICK`.
     pub const CONTEXT_CLICK: Self = Self {
         value: 6,
-        since: 23,
+        since: AndroidHapticsApi::Floor,
     };
     /// `GESTURE_END`.
     pub const GESTURE_END: Self = Self {
         value: 13,
-        since: 30,
+        since: AndroidHapticsApi::Composition,
     };
     /// `CONFIRM`.
     pub const CONFIRM: Self = Self {
         value: 16,
-        since: 30,
+        since: AndroidHapticsApi::Composition,
     };
     /// `REJECT`.
     pub const REJECT: Self = Self {
         value: 17,
-        since: 30,
+        since: AndroidHapticsApi::Composition,
     };
     /// `GESTURE_THRESHOLD_ACTIVATE`.
     pub const GESTURE_THRESHOLD_ACTIVATE: Self = Self {
         value: 23,
-        since: 34,
+        since: AndroidHapticsApi::SegmentFeedback,
     };
     /// `DRAG_START`.
     pub const DRAG_START: Self = Self {
         value: 25,
-        since: 34,
+        since: AndroidHapticsApi::SegmentFeedback,
     };
     /// `SEGMENT_TICK`.
     pub const SEGMENT_TICK: Self = Self {
         value: 26,
-        since: 34,
+        since: AndroidHapticsApi::SegmentFeedback,
     };
     /// `SEGMENT_FREQUENT_TICK`.
     pub const SEGMENT_FREQUENT_TICK: Self = Self {
         value: 27,
-        since: 34,
+        since: AndroidHapticsApi::SegmentFeedback,
     };
 }
 
-/// Android tier 1 at `api_level`: `View.performHapticFeedback` with the
-/// constant for the kind, or the nearest older constant before the API level
+/// Android tier 1 with the haptics APIs `api`: `View.performHapticFeedback` with the
+/// constant for the kind, or the nearest older constant when `api` lacks the one
 /// that added it.
 pub const fn android_feedback(
     kind: HapticFeedback,
-    api_level: u32,
+    api: AndroidHapticsApi,
 ) -> (AndroidHapticConstant, HapticOutcome) {
     use AndroidHapticConstant as C;
     let (wanted, exact, older) = match kind {
@@ -361,7 +400,7 @@ pub const fn android_feedback(
         // `Vibrate` and a kind added later.
         _ => (C::LONG_PRESS, false, C::LONG_PRESS),
     };
-    let available = api_level >= wanted.since;
+    let available = api.includes(wanted.since);
     let constant = if available { wanted } else { older };
     (constant, exact_or_approximated(exact && available))
 }
@@ -397,35 +436,35 @@ pub const fn android_feedback_outcome(
     }
 }
 
-/// A `VibrationEffect.Composition` primitive and the API level that added it.
+/// A `VibrationEffect.Composition` primitive and the haptics APIs that added it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AndroidPrimitive {
     /// The `PRIMITIVE_*` value.
     pub value: i32,
-    /// The API level that added it.
-    pub since: u32,
+    /// The haptics APIs that added it.
+    pub since: AndroidHapticsApi,
 }
 
 impl AndroidPrimitive {
     /// `PRIMITIVE_CLICK`: sharp and strong.
     pub const CLICK: Self = Self {
         value: 1,
-        since: 30,
+        since: AndroidHapticsApi::Composition,
     };
     /// `PRIMITIVE_THUD`: round and strong.
     pub const THUD: Self = Self {
         value: 2,
-        since: 31,
+        since: AndroidHapticsApi::RoundPrimitives,
     };
     /// `PRIMITIVE_TICK`: sharp and light.
     pub const TICK: Self = Self {
         value: 7,
-        since: 30,
+        since: AndroidHapticsApi::Composition,
     };
     /// `PRIMITIVE_LOW_TICK`: round and light.
     pub const LOW_TICK: Self = Self {
         value: 8,
-        since: 31,
+        since: AndroidHapticsApi::RoundPrimitives,
     };
 
     /// The primitive nearest a transient's sharpness and intensity.
@@ -444,8 +483,8 @@ impl AndroidPrimitive {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct AndroidVibrator {
-    /// `Build.VERSION.SDK_INT`.
-    pub api_level: u32,
+    /// The haptics APIs of its device.
+    pub api: AndroidHapticsApi,
     /// `Vibrator.areEnvelopeEffectsSupported()` (API 36).
     pub envelopes: bool,
     /// The primitives `Vibrator.areAllPrimitivesSupported` admits.
@@ -455,17 +494,17 @@ pub struct AndroidVibrator {
 }
 
 impl AndroidVibrator {
-    /// A vibrator at `api_level` with the given envelope, primitive and
+    /// A vibrator on a device with the haptics APIs `api` with the given envelope, primitive and
     /// amplitude support.
     #[must_use]
     pub fn new(
-        api_level: u32,
+        api: AndroidHapticsApi,
         envelopes: bool,
         primitives: Vec<i32>,
         amplitude_control: bool,
     ) -> Self {
         Self {
-            api_level,
+            api,
             envelopes,
             primitives,
             amplitude_control,
@@ -499,10 +538,10 @@ pub const ANDROID_USAGE_TOUCH: i32 = 18;
 /// `AudioAttributes.USAGE_ASSISTANCE_SONIFICATION`.
 pub const ANDROID_USAGE_ASSISTANCE_SONIFICATION: i32 = 13;
 
-/// How a pattern vibration names its touch usage at `api_level`.
+/// How a pattern vibration names its touch usage with the haptics APIs `api`.
 #[must_use]
-pub const fn android_vibration_usage(api_level: u32) -> AndroidVibrationUsage {
-    if api_level >= 33 {
+pub const fn android_vibration_usage(api: AndroidHapticsApi) -> AndroidVibrationUsage {
+    if api.includes(AndroidHapticsApi::TouchUsage) {
         AndroidVibrationUsage::Attributes {
             usage: ANDROID_USAGE_TOUCH,
         }
@@ -645,7 +684,7 @@ pub fn android_pattern(
     vibrator: &AndroidVibrator,
 ) -> (AndroidPatternPlan, HapticOutcome) {
     let fall_back = (AndroidPatternPlan::FallBack, HapticOutcome::FellBack);
-    if vibrator.api_level < 30 {
+    if !vibrator.api.includes(AndroidHapticsApi::Composition) {
         return fall_back;
     }
     let has_transients = pattern
@@ -657,7 +696,7 @@ pub fn android_pattern(
         .iter()
         .any(|event| matches!(event, HapticEvent::Continuous { .. }));
     if vibrator.envelopes
-        && vibrator.api_level >= 36
+        && vibrator.api.includes(AndroidHapticsApi::Envelopes)
         && has_continuous
         && let Some((initial_sharpness, steps)) = envelope(pattern)
     {
@@ -695,7 +734,7 @@ pub fn android_pattern(
             })
             .collect();
         let supported = composed.iter().all(|step| {
-            vibrator.api_level >= step.primitive.since
+            vibrator.api.includes(step.primitive.since)
                 && vibrator.primitives.contains(&step.primitive.value)
         });
         return if supported {

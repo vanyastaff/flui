@@ -31,6 +31,8 @@ use jni::{Env, EnvUnowned, JValue, JavaVM, NativeMethod, jni_sig, jni_str};
 use parking_lot::Mutex;
 
 use crate::shared::android_ime::{EditorState, ImeEdit, Mirror, Snapshot};
+use crate::shared::os_version::Since;
+use crate::shared::os_version::android::{AndroidApi, InMemoryDex};
 use crate::shared::owner_signal::OwnerSignal;
 
 use super::drag::AndroidTransfer;
@@ -40,9 +42,6 @@ const DEX: &[u8] = include_bytes!("../../../android/classes.dex");
 
 /// The binary name of the view class.
 const VIEW_CLASS: &str = "dev.flui.platform.FluiView";
-
-/// The first API level with `InMemoryDexClassLoader`.
-const IN_MEMORY_DEX_API: i32 = 26;
 
 /// What the view reported, for the owner to deliver.
 pub(super) enum ViewEvent {
@@ -94,6 +93,8 @@ struct State {
 /// The bridge between the owner thread and `FluiView` (see the module doc).
 pub(crate) struct JavaView {
     app: AndroidApp,
+    /// The device's API level, which picks the dex loader.
+    api: AndroidApi,
     signal: Weak<OwnerSignal>,
     transfer: Arc<AndroidTransfer>,
     state: Mutex<State>,
@@ -112,9 +113,10 @@ impl std::fmt::Debug for JavaView {
 
 impl JavaView {
     /// The bridge, with the view's installation posted to the Java main thread.
-    pub(super) fn start(app: AndroidApp, signal: Weak<OwnerSignal>) -> Arc<Self> {
+    pub(super) fn start(app: AndroidApp, signal: Weak<OwnerSignal>, api: AndroidApi) -> Arc<Self> {
         let view = Arc::new_cyclic(|this: &Weak<Self>| Self {
             app,
+            api,
             signal,
             transfer: Arc::new(AndroidTransfer::new(this.clone())),
             state: Mutex::new(State {
@@ -245,9 +247,10 @@ impl JavaView {
     /// Load the dex, bind the native methods and lay the view over the
     /// Activity's content. Java main thread only.
     fn install(self: Arc<Self>) {
+        let in_memory = self.api.since::<InMemoryDex>();
         let handle = Box::into_raw(Box::new(Arc::downgrade(&self)));
         let installed = super::preferences::with_activity(&self.app, |env, activity| {
-            install_view(env, activity, handle as jlong).map_err(|error| {
+            install_view(env, activity, handle as jlong, in_memory).map_err(|error| {
                 tracing::warn!(target: "flui_platform::android", %error, "FluiView was not installed");
                 jni::errors::Error::JniCall(jni::errors::JniError::Unknown)
             })
@@ -279,8 +282,8 @@ impl JavaView {
         tracing::info!(
             target: "flui_platform::android",
             ready,
-            api = AndroidApp::sdk_version(),
-            loader = if AndroidApp::sdk_version() >= IN_MEMORY_DEX_API { "in-memory" } else { "code-cache file" },
+            api = %self.api,
+            loader = if in_memory.is_some() { "in-memory" } else { "code-cache file" },
             "FluiView installation finished"
         );
         self.push_event(ViewEvent::Installed);
@@ -344,11 +347,13 @@ enum InstallError {
 }
 
 /// Load the view class through a loader parented to the Activity's, bind its
-/// native methods and install the view.
+/// native methods and install the view. With `in_memory` the dex is loaded
+/// from this library's bytes, else from its copy in the code cache.
 fn install_view(
     env: &mut Env<'_>,
     activity: &JObject<'_>,
     handle: jlong,
+    in_memory: Option<Since<InMemoryDex>>,
 ) -> Result<Global<JObject<'static>>, InstallError> {
     let parent = env
         .call_method(
@@ -358,7 +363,7 @@ fn install_view(
             &[],
         )?
         .l()?;
-    let loader = if AndroidApp::sdk_version() >= IN_MEMORY_DEX_API {
+    let loader = if in_memory.is_some() {
         let bytes = env.byte_array_from_slice(DEX)?;
         let buffer = env
             .call_static_method(

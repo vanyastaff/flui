@@ -22,9 +22,13 @@ use jni::objects::JObject;
 use jni::{JValue, jni_sig, jni_str};
 
 use crate::shared::haptic_degradation::{
-    AndroidFeedbackAnswer, AndroidPatternPlan, AndroidPrimitive, AndroidVibrationUsage,
-    AndroidVibrator, ComposedPrimitive, EnvelopeStep, android_feedback, android_feedback_outcome,
-    android_pattern, android_vibration_usage,
+    AndroidFeedbackAnswer, AndroidHapticsApi, AndroidPatternPlan, AndroidPrimitive,
+    AndroidVibrationUsage, AndroidVibrator, ComposedPrimitive, EnvelopeStep, android_feedback,
+    android_feedback_outcome, android_pattern, android_vibration_usage,
+};
+use crate::shared::os_version::android::{
+    AndroidApi, EnvelopeEffects, HapticComposition, RoundPrimitives, SegmentFeedback,
+    VibrationTouchUsage,
 };
 
 /// `PackageManager.PERMISSION_GRANTED`.
@@ -46,19 +50,35 @@ const PRIMITIVES: [AndroidPrimitive; 4] = [
 /// vibrator.
 pub(super) struct AndroidHaptics {
     app: AndroidApp,
+    /// The haptics APIs of the device, from its API level.
+    api: AndroidHapticsApi,
     vibrator: OnceLock<AndroidVibrator>,
 }
 
 impl std::fmt::Debug for AndroidHaptics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AndroidHaptics")
+            .field("api", &self.api)
             .field("vibrator", &self.vibrator.get())
             .finish_non_exhaustive()
     }
 }
 
-fn api_level() -> u32 {
-    u32::try_from(AndroidApp::sdk_version()).unwrap_or(0)
+/// The haptics APIs a device at `api` has: the newest set whose gate it passes.
+fn haptics_api(api: AndroidApi) -> AndroidHapticsApi {
+    if api.since::<EnvelopeEffects>().is_some() {
+        AndroidHapticsApi::Envelopes
+    } else if api.since::<SegmentFeedback>().is_some() {
+        AndroidHapticsApi::SegmentFeedback
+    } else if api.since::<VibrationTouchUsage>().is_some() {
+        AndroidHapticsApi::TouchUsage
+    } else if api.since::<RoundPrimitives>().is_some() {
+        AndroidHapticsApi::RoundPrimitives
+    } else if api.since::<HapticComposition>().is_some() {
+        AndroidHapticsApi::Composition
+    } else {
+        AndroidHapticsApi::Floor
+    }
 }
 
 fn millis(duration: Duration) -> i64 {
@@ -66,9 +86,10 @@ fn millis(duration: Duration) -> i64 {
 }
 
 impl AndroidHaptics {
-    pub(super) fn new(app: AndroidApp) -> Self {
+    pub(super) fn new(app: AndroidApp, api: AndroidApi) -> Self {
         Self {
             app,
+            api: haptics_api(api),
             vibrator: OnceLock::new(),
         }
     }
@@ -79,7 +100,7 @@ impl AndroidHaptics {
     /// requires: semantic feedback goes through the view and needs none.
     fn vibrator(&self) -> &AndroidVibrator {
         self.vibrator.get_or_init(|| {
-            let api_level = api_level();
+            let api = self.api;
             super::preferences::with_activity(&self.app, |env, activity| {
                 let permission = env.new_string("android.permission.VIBRATE")?;
                 let granted = env
@@ -96,7 +117,7 @@ impl AndroidHaptics {
                         target: "flui_platform::android",
                         "the manifest lacks android.permission.VIBRATE; haptic patterns fall back to feedback"
                     );
-                    return Ok(AndroidVibrator::new(api_level, false, Vec::new(), false));
+                    return Ok(AndroidVibrator::new(api, false, Vec::new(), false));
                 }
                 let vibrator = system_vibrator(env, activity)?;
                 let amplitude_control = env
@@ -108,9 +129,9 @@ impl AndroidHaptics {
                     )?
                     .z()?;
                 let mut primitives = Vec::new();
-                if api_level >= 30 {
+                if api.includes(AndroidHapticsApi::Composition) {
                     for primitive in PRIMITIVES {
-                        if api_level < primitive.since {
+                        if !api.includes(primitive.since) {
                             continue;
                         }
                         let ids = env.new_int_array(1)?;
@@ -128,7 +149,7 @@ impl AndroidHaptics {
                         }
                     }
                 }
-                let envelopes = api_level >= 36
+                let envelopes = api.includes(AndroidHapticsApi::Envelopes)
                     && env
                         .call_method(
                             &vibrator,
@@ -138,7 +159,7 @@ impl AndroidHaptics {
                         )?
                         .z()?;
                 Ok(AndroidVibrator::new(
-                    api_level,
+                    api,
                     envelopes,
                     primitives,
                     amplitude_control,
@@ -150,7 +171,7 @@ impl AndroidHaptics {
                     %error,
                     "the vibrator could not be read; haptic patterns fall back"
                 );
-                AndroidVibrator::new(api_level, false, Vec::new(), false)
+                AndroidVibrator::new(api, false, Vec::new(), false)
             })
         })
     }
@@ -165,12 +186,12 @@ impl AndroidHaptics {
                     steps,
                 } => envelope(env, *initial_sharpness, steps)?,
                 AndroidPatternPlan::Composition(primitives) => {
-                    composition(env, &vibrator, primitives)?
+                    composition(env, &vibrator, self.api, primitives)?
                 }
                 AndroidPatternPlan::Waveform(steps) => waveform(env, steps)?,
                 _ => return Ok(false),
             };
-            match android_vibration_usage(api_level()) {
+            match android_vibration_usage(self.api) {
                 AndroidVibrationUsage::Attributes { usage } => {
                     let attributes = env
                         .call_static_method(
@@ -286,10 +307,11 @@ fn envelope<'local>(
 fn composition<'local>(
     env: &mut jni::Env<'local>,
     vibrator: &JObject<'_>,
+    api: AndroidHapticsApi,
     primitives: &[ComposedPrimitive],
 ) -> jni::errors::Result<JObject<'local>> {
     let mut durations = vec![0_i32; primitives.len()];
-    if api_level() >= 31 && !primitives.is_empty() {
+    if api.includes(AndroidHapticsApi::RoundPrimitives) && !primitives.is_empty() {
         let ids: Vec<i32> = primitives.iter().map(|step| step.primitive.value).collect();
         let id_array = env.new_int_array(ids.len())?;
         id_array.set_region(env, 0, &ids)?;
@@ -437,7 +459,7 @@ impl PlatformHaptics for AndroidHaptics {
     }
 
     fn perform_with(&self, feedback: HapticFeedback, _request: &HapticRequest) -> HapticOutcome {
-        let (constant, table) = android_feedback(feedback, api_level());
+        let (constant, table) = android_feedback(feedback, self.api);
         android_feedback_outcome(table, perform_on_view(&self.app, constant.value))
     }
 
@@ -462,7 +484,7 @@ impl PlatformHaptics for AndroidHaptics {
         let patterns = if vibrator.envelopes {
             // Exact for one continuous event; other patterns approximate.
             PatternPlayback::Exact
-        } else if vibrator.api_level >= 30
+        } else if vibrator.api.includes(AndroidHapticsApi::Composition)
             && (!vibrator.primitives.is_empty() || vibrator.amplitude_control)
         {
             PatternPlayback::Approximated

@@ -56,9 +56,6 @@ use crate::traits::PlatformInput;
 /// `InputDevice.SOURCE_MOUSE`. A touchpad in pointer mode reports from it.
 pub const SOURCE_MOUSE: u32 = 0x0000_2002;
 
-/// The first API level with the touchpad gesture axes.
-pub const TOUCHPAD_GESTURES_API: i32 = 34;
-
 /// How long a hover exit waits for the press it may continue into before it
 /// is delivered as a leave: a few owner turns at the backend's 16 ms poll,
 /// against the microseconds between the two in the dispatcher.

@@ -3,6 +3,8 @@
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform_api::pointer::{ScrollDelta, ScrollUnit};
 
+use super::os_version::android::{AndroidApi, ScaledScrollFactor};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FactorApi {
     ThemeAttribute,
@@ -10,11 +12,10 @@ pub(crate) enum FactorApi {
 }
 
 impl FactorApi {
-    pub(crate) const fn for_sdk(sdk: i32) -> Self {
-        if sdk >= 26 {
-            Self::ViewConfiguration
-        } else {
-            Self::ThemeAttribute
+    pub(crate) fn for_api(api: AndroidApi) -> Self {
+        match api.since::<ScaledScrollFactor>() {
+            Some(_) => Self::ViewConfiguration,
+            None => Self::ThemeAttribute,
         }
     }
 }
@@ -94,11 +95,19 @@ mod tests {
 
     #[test]
     fn android_axis_factor_policy() {
-        for sdk in [21, 22, 23, 24, 25] {
-            assert_eq!(FactorApi::for_sdk(sdk), FactorApi::ThemeAttribute);
+        for api in [23, 24, 25]
+            .map(AndroidApi::from_level)
+            .into_iter()
+            .chain([AndroidApi::UNKNOWN])
+        {
+            assert_eq!(FactorApi::for_api(api), FactorApi::ThemeAttribute, "{api}");
         }
-        for sdk in [26, 35, 36] {
-            assert_eq!(FactorApi::for_sdk(sdk), FactorApi::ViewConfiguration);
+        for api in [26, 35, 36].map(AndroidApi::from_level) {
+            assert_eq!(
+                FactorApi::for_api(api),
+                FactorApi::ViewConfiguration,
+                "{api}"
+            );
         }
         let mut cache = FactorCache::default();
         cache.observe(None);

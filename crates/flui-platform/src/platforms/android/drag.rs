@@ -35,9 +35,11 @@ use parking_lot::Mutex;
 
 use crate::shared::android_drag::{
     ACTION_DRAG_ENDED, ACTION_DRAG_ENTERED, ACTION_DRAG_EXITED, ACTION_DRAG_LOCATION,
-    ACTION_DRAG_STARTED, ClipSource, DRAG_API, DroppedClip, Held, clip_parts, drop_action, held,
+    ACTION_DRAG_STARTED, ClipSource, DroppedClip, Held, clip_parts, drop_action, held,
     incoming_allowed, offered, source_end,
 };
+use crate::shared::os_version::Since;
+use crate::shared::os_version::android::{AndroidApi, DragSource};
 use crate::shared::owner_slot::OwnerSlot;
 use crate::shared::panic_boundary::contain_owner_callback;
 
@@ -374,6 +376,8 @@ struct Running {
 /// A window's system drag source (see the module doc).
 pub(crate) struct AndroidDragSource {
     view: Arc<JavaView>,
+    /// `View.startDragAndDrop`, which the device has from API 24.
+    start_drag: Option<Since<DragSource>>,
     running: OwnerSlot<Running>,
 }
 
@@ -384,9 +388,10 @@ impl std::fmt::Debug for AndroidDragSource {
 }
 
 impl AndroidDragSource {
-    pub(super) fn new(view: Arc<JavaView>) -> Self {
+    pub(super) fn new(view: Arc<JavaView>, api: AndroidApi) -> Self {
         Self {
             view,
+            start_drag: api.since::<DragSource>(),
             running: OwnerSlot::new(),
         }
     }
@@ -461,7 +466,7 @@ impl PlatformDragSource for AndroidDragSource {
     }
 
     fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
-        let startable = android_activity::AndroidApp::sdk_version() >= DRAG_API
+        let startable = self.start_drag.is_some()
             && self.view.is_ready()
             && self.running.is_occupied() == Some(false);
         let OsDragRequest {

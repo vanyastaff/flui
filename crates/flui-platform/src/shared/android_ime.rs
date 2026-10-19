@@ -30,10 +30,6 @@ use super::web_text::diff;
 /// unit, so the input method's offsets still land where they do in the field.
 pub const PROTECTED_UNIT: char = '\u{2022}';
 
-/// The first API level whose input method manager starts stylus handwriting
-/// on a view (`InputMethodManager.startStylusHandwriting`).
-pub const HANDWRITING_API: i32 = 33;
-
 /// `InputConnection.CURSOR_UPDATE_IMMEDIATE`: send the cursor once, now.
 pub const CURSOR_UPDATE_IMMEDIATE: i32 = 1;
 /// `InputConnection.CURSOR_UPDATE_MONITOR`: send it whenever it changes.
@@ -354,20 +350,18 @@ pub fn cursor_anchor(
     ])
 }
 
-/// Whether a stylus press at `point` starts the input method's handwriting:
-/// on API [`HANDWRITING_API`] or later, a pen tip down inside the focused
-/// field's bounds. Android's automatic initiation sees only the stylus events
-/// native code leaves unhandled, so FLUI, which hit-tests on its owner, asks
-/// for it explicitly.
+/// Whether a stylus press at `point` starts the input method's handwriting, on
+/// a device that has it (API 33): a pen tip down inside the focused field's
+/// bounds. Android's automatic initiation sees only the stylus events native
+/// code leaves unhandled, so FLUI, which hit-tests on its owner, asks for it
+/// explicitly.
 #[must_use]
 pub fn starts_handwriting(
-    api_level: i32,
     pen_tip_down: bool,
     field: Option<Bounds<f64>>,
     point: Point<f64>,
 ) -> bool {
-    api_level >= HANDWRITING_API
-        && pen_tip_down
+    pen_tip_down
         && field.is_some_and(|field| {
             point.x >= field.origin.x
                 && point.y >= field.origin.y

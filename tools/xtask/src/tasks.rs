@@ -415,9 +415,9 @@ fn cross_typecheck_plan(host: Host) -> anyhow::Result<Vec<Step>> {
 
 /// CI's `test-features` job: the suites behind features the default run never
 /// enables (flui-assets and flui-widgets default to `default = []`). The
-/// facade's catalogs, neither on by default, are in [`TEST_SCOPE`]. The last step names
-/// the `signals` features, which are now accepted and ignored (signals are
-/// always compiled, ADR-0085 §5); it mirrors the job until the job drops it.
+/// facade's catalogs, neither on by default, are in [`TEST_SCOPE`]. The
+/// `signals` features of flui-view, flui-testing, flui-widgets and flui-app
+/// are empty (signals are always compiled, ADR-0085 §5), so no run names them.
 fn test_features_plan() -> Vec<Step> {
     let nextest =
         |args: &[&str]| Step::from(Cmd::cargo(["nextest", "run"]).args(args.iter().copied()));
@@ -446,20 +446,6 @@ fn test_features_plan() -> Vec<Step> {
             "images",
             "--test",
             "image",
-        ]),
-        nextest(&[
-            "-p",
-            "flui-view",
-            "-p",
-            "flui-testing",
-            "-p",
-            "flui-widgets",
-            "-p",
-            "flui-app",
-            "--features",
-            "flui-view/signals,flui-testing/signals,flui-widgets/signals,flui-app/signals",
-            "--locked",
-            "--no-fail-fast",
         ]),
     ]
 }
@@ -571,11 +557,6 @@ fn miri_plan() -> Vec<Step> {
             .into()
     })
     .collect()
-}
-
-/// CI's `bench-compile` job: the criterion benches compiled and linked, not run.
-fn bench_compile_plan() -> Vec<Step> {
-    vec![Cmd::cargo(["bench", "-p", "flui-rendering", "--no-run", "--locked"]).into()]
 }
 
 /// The workflow linters CI's `checks` job runs: actionlint (workflow
@@ -834,9 +815,9 @@ pub(crate) struct CiFullArgs {
 
 /// `cargo xtask ci-full`: `ci` plus every heavy CI job this host can run.
 ///
-/// Then: the all-targets build (the only step that links the examples),
-/// test-features, feature-matrix, wasm-check, wasm-link, wasm-test,
-/// cross-typecheck, bench-compile, `deps` (each tool when installed), the
+/// Then: the all-targets build (the only step that links the examples and
+/// benches), test-features, feature-matrix, wasm-check, wasm-link, wasm-test,
+/// cross-typecheck, `deps` (each tool when installed), the
 /// workflow linters (each when installed), miri, gpu-test, and on Linux
 /// live-smoke under X11 and Wayland. Slow on purpose:
 /// cargo-hack's per-feature matrix dominates; `cargo xtask doctor full` names
@@ -851,7 +832,6 @@ pub(crate) fn ci_full(args: &CiFullArgs) -> anyhow::Result<ExitCode> {
     web::link(runner)?;
     web::test(runner)?;
     runner.steps(&cross_typecheck_plan(Host::current())?)?;
-    runner.steps(&bench_compile_plan())?;
     deps::run(runner, None, false)?;
     runner.steps(&workflow_lint_plan(|program| {
         runner.dry_run || installed(program, &["--version"])
@@ -899,7 +879,7 @@ pub(crate) fn deps_tools() -> impl Iterator<Item = (&'static str, &'static str)>
 /// its advisories, and `cargo shear --locked` (`--format github` under GitHub
 /// Actions). Every step runs; exit 1 if any failed. CI's `deps` job runs
 /// `--only policy` and `--only advisories` as two steps, the second blocking
-/// only in the `wide`, `full` and `extended` lanes.
+/// only in the `wide` and `full` lanes; advisories.yml runs it daily on main.
 pub(crate) fn deps(args: &DepsArgs) -> anyhow::Result<ExitCode> {
     done(deps::run(args.run.runner(), args.only, args.strict))
 }
@@ -1047,18 +1027,6 @@ pub(crate) struct MiriArgs {
 /// Needs the nightly toolchain with the miri component.
 pub(crate) fn miri(args: &MiriArgs) -> anyhow::Result<ExitCode> {
     done(args.run.runner().steps(&miri_plan()))
-}
-
-/// Arguments for `cargo xtask bench-compile`.
-#[derive(Debug, clap::Args)]
-pub(crate) struct BenchCompileArgs {
-    #[command(flatten)]
-    pub(crate) run: RunOpts,
-}
-
-/// `cargo xtask bench-compile`: compile the benchmarks without running them.
-pub(crate) fn bench_compile(args: &BenchCompileArgs) -> anyhow::Result<ExitCode> {
-    done(args.run.runner().steps(&bench_compile_plan()))
 }
 
 /// Arguments for `cargo xtask demo-snapshots`.

@@ -570,7 +570,16 @@ fn input_after_the_snapshot_attempts_run_out_is_refused() {
 /// gestures, input regions, outgoing drags.
 fn every_backend_states_its_availability() {
     use Availability::{Emulated, Native, Unavailable};
-    use flui_platform::shared::input_availability::{self as table, WinitSession};
+    use flui_platform::shared::input_availability::{
+        self as table, AndroidInputApis, WinitSession,
+    };
+    let android = |gesture_exclusion, touchpad_gestures, drag_source| {
+        table::android(AndroidInputApis {
+            gesture_exclusion,
+            touchpad_gestures,
+            drag_source,
+        })
+    };
     let rows = [
         (
             "windows with DirectManipulation",
@@ -593,33 +602,28 @@ fn every_backend_states_its_availability() {
             [Native, Unavailable, Unavailable, Native, Unavailable],
         ),
         (
-            "android 34",
-            table::android(34, true),
+            "android with every input API",
+            android(true, true, true),
             [Native, Native, Native, Native, Native],
         ),
         (
-            "android 34 without FluiView",
-            table::android(34, false),
+            "android without FluiView",
+            android(true, true, false),
             [Native, Native, Native, Native, Unavailable],
         ),
         (
-            "android 33",
-            table::android(33, true),
+            "android before touchpad gestures",
+            android(true, false, true),
             [Native, Unavailable, Unavailable, Native, Native],
         ),
         (
-            "android 29",
-            table::android(29, true),
-            [Native, Unavailable, Unavailable, Native, Native],
-        ),
-        (
-            "android 28",
-            table::android(28, true),
+            "android before gesture exclusion",
+            android(false, false, true),
             [Native, Unavailable, Unavailable, Unavailable, Native],
         ),
         (
-            "android 23, before startDragAndDrop",
-            table::android(23, true),
+            "android before startDragAndDrop",
+            android(false, false, false),
             [Native, Unavailable, Unavailable, Unavailable, Unavailable],
         ),
         (

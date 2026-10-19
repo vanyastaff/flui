@@ -22,7 +22,13 @@ use flui_platform_api::{
 use parking_lot::Mutex;
 
 use crate::{
-    shared::{WindowCallbacks, owner_slot::OwnerSlot, window_state::WindowStateCell},
+    shared::{
+        WindowCallbacks,
+        input_availability::AndroidInputApis,
+        os_version::android::{AndroidApi, DragSource, GestureExclusion, TouchpadGestures},
+        owner_slot::OwnerSlot,
+        window_state::WindowStateCell,
+    },
     traits::{CursorError, PlatformWindow, WindowExecutionState, WindowId},
 };
 
@@ -57,6 +63,8 @@ pub struct AndroidWindow {
     text_input: Arc<OwnerSlot<Rc<super::text_input::AndroidTextInput>>>,
     drag_source: Arc<super::drag::AndroidDragSource>,
     system_chrome: Arc<super::system_chrome::AndroidSystemChrome>,
+    /// The platform's API level, for the safe-area gates.
+    api: AndroidApi,
     /// The night mode last reported to `on_appearance_changed`.
     appearance: Arc<Mutex<WindowAppearance>>,
     displays: Arc<super::display::AndroidDisplays>,
@@ -83,17 +91,16 @@ impl AndroidWindow {
         owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
         java_view: Arc<super::java_view::JavaView>,
         displays: Arc<super::display::AndroidDisplays>,
+        api: AndroidApi,
     ) -> Self {
         let callbacks = Arc::new(WindowCallbacks::new());
-        callbacks.set_input_capabilities(crate::shared::input_availability::android(
-            AndroidApp::sdk_version(),
-            java_view.is_ready(),
-        ));
+        callbacks.set_input_capabilities(input_capabilities(api, java_view.is_ready()));
         let text_input = Arc::new(OwnerSlot::new());
         if text_input
-            .replace(super::text_input::AndroidTextInput::new(Arc::clone(
-                &java_view,
-            )))
+            .replace(super::text_input::AndroidTextInput::new(
+                Arc::clone(&java_view),
+                api,
+            ))
             .is_err()
         {
             tracing::warn!(
@@ -101,18 +108,24 @@ impl AndroidWindow {
                 "the window's text input was made off its owner thread"
             );
         }
-        let drag_source = Arc::new(super::drag::AndroidDragSource::new(Arc::clone(&java_view)));
+        let drag_source = Arc::new(super::drag::AndroidDragSource::new(
+            Arc::clone(&java_view),
+            api,
+        ));
         if let Some(signal) = owner_signal.upgrade() {
             callbacks.set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
                 &signal, &callbacks,
             ));
         }
-        let system_chrome = Arc::new(super::system_chrome::AndroidSystemChrome::new(app.clone()));
+        let system_chrome = Arc::new(super::system_chrome::AndroidSystemChrome::new(
+            app.clone(),
+            api,
+        ));
         let snapshot = Arc::new(WindowStateCell::new(sample_state(
             &app, &displays, &activity,
         )));
         Self {
-            haptics: Arc::new(super::haptics::AndroidHaptics::new(app.clone())),
+            haptics: Arc::new(super::haptics::AndroidHaptics::new(app.clone(), api)),
             appearance: Arc::new(Mutex::new(night_mode(&app))),
             app,
             callbacks,
@@ -131,6 +144,7 @@ impl AndroidWindow {
             displays,
             frame_rate_hint: Arc::new(Mutex::new(FrameRateHint::Default)),
             snapshot,
+            api,
         }
     }
 
@@ -155,10 +169,7 @@ impl AndroidWindow {
     /// The view's installation finished: what the window can do now.
     pub(crate) fn refresh_capabilities(&self) {
         self.callbacks
-            .set_input_capabilities(crate::shared::input_availability::android(
-                AndroidApp::sdk_version(),
-                self.java_view.is_ready(),
-            ));
+            .set_input_capabilities(input_capabilities(self.api, self.java_view.is_ready()));
     }
 
     /// The window's text input; `None` off the owner thread.
@@ -242,11 +253,12 @@ impl AndroidWindow {
             capture.query = super::safe_area::Query::Waiting;
         }
         let app = self.app.clone();
+        let api = self.api;
         let capture = Arc::downgrade(&self.safe_area);
         let live = Arc::downgrade(&self.geometry_live);
         let signal = self.owner_signal.clone();
         self.app.run_on_java_main_thread(Box::new(move || {
-            let sample = super::safe_area::sample(&app);
+            let sample = super::safe_area::sample(&app, api);
             if !live
                 .upgrade()
                 .is_some_and(|live| live.load(Ordering::Acquire))
@@ -301,6 +313,18 @@ impl AndroidWindow {
         self.snapshot.invalidate();
         let _ = self.current_state();
     }
+}
+
+/// What the window's input can do at `api`, with `FluiView` installed or not.
+fn input_capabilities(
+    api: AndroidApi,
+    java_view: bool,
+) -> flui_platform_api::input_capabilities::InputCapabilities {
+    crate::shared::input_availability::android(AndroidInputApis {
+        gesture_exclusion: api.since::<GestureExclusion>().is_some(),
+        touchpad_gestures: api.since::<TouchpadGestures>().is_some(),
+        drag_source: java_view && api.since::<DragSource>().is_some(),
+    })
 }
 
 /// The native window's size in pixels, `(0, 0)` while there is none.
@@ -519,12 +543,9 @@ impl PlatformWindow for AndroidWindow {
     /// `FluiView.startDragAndDrop`, once the view is installed, from API 24:
     /// what `InputCapabilities::outgoing_drag` claims.
     fn drag_source(&self) -> Option<Arc<dyn flui_platform_api::drag::PlatformDragSource>> {
-        (self.java_view.is_ready()
-            && AndroidApp::sdk_version() >= crate::shared::android_drag::DRAG_API)
-            .then(|| {
-                Arc::clone(&self.drag_source)
-                    as Arc<dyn flui_platform_api::drag::PlatformDragSource>
-            })
+        (self.java_view.is_ready() && self.api.since::<DragSource>().is_some()).then(|| {
+            Arc::clone(&self.drag_source) as Arc<dyn flui_platform_api::drag::PlatformDragSource>
+        })
     }
 
     /// Projects the regions to the surface's pixels and, when the projection changed,
@@ -532,9 +553,7 @@ impl PlatformWindow for AndroidWindow {
     /// native surface fills the decor view, so both share one pixel space. Before API 29
     /// the OS has no such call and the capability reports `Unavailable`.
     fn set_input_regions(&self, regions: &[InputRegion]) {
-        if AndroidApp::sdk_version()
-            < crate::shared::input_availability::ANDROID_GESTURE_EXCLUSION_API
-        {
+        if self.api.since::<GestureExclusion>().is_none() {
             return;
         }
         let scale = self.scale_factor();

@@ -21,11 +21,12 @@ use flui_foundation::geometry::Point;
 use flui_platform::WindowOptions;
 use flui_platform::shared::android_ime;
 use flui_platform::shared::haptic_degradation::{
-    AndroidVibrator, CoreHapticsEngine, PenController, PenWaveform, WebVibration, android_feedback,
-    android_pattern, ios_feedback, ios_pattern, macos_feedback, macos_pattern, web_feedback,
-    web_pattern, windows_capabilities, windows_feedback, windows_pattern,
+    AndroidHapticsApi, AndroidVibrator, CoreHapticsEngine, PenController, PenWaveform,
+    WebVibration, android_feedback, android_pattern, ios_feedback, ios_pattern, macos_feedback,
+    macos_pattern, web_feedback, web_pattern, windows_capabilities, windows_feedback,
+    windows_pattern,
 };
-use flui_platform::shared::input_availability::{self, WinitSession};
+use flui_platform::shared::input_availability::{self, AndroidInputApis, WinitSession};
 use flui_platform::shared::keys::vk_to_key;
 use flui_platform::shared::keys_macos::{keycode_to_key, kvk};
 use flui_platform::shared::pointer_assembly::{
@@ -153,7 +154,11 @@ fn android() -> Profile {
         clock: ClockShape::Epoch,
         kinds: ALL_KINDS,
         names_devices: true,
-        capabilities: input_availability::android(34, true),
+        capabilities: input_availability::android(AndroidInputApis {
+            gesture_exclusion: true,
+            touchpad_gestures: true,
+            drag_source: true,
+        }),
         haptics: HapticsTable::Android,
         drag: Some(input_availability::DESKTOP_DRAG_START),
         keys: Some(KeyDecoder::Android),
@@ -164,7 +169,7 @@ fn android() -> Profile {
 /// drag stays in its window.
 fn android_api_23() -> Profile {
     Profile {
-        capabilities: input_availability::android(23, true),
+        capabilities: input_availability::android(AndroidInputApis::default()),
         drag: None,
         ..android()
     }
@@ -173,7 +178,11 @@ fn android_api_23() -> Profile {
 /// Android whose `FluiView` could not be installed: no outgoing drag.
 fn android_without_view() -> Profile {
     Profile {
-        capabilities: input_availability::android(34, false),
+        capabilities: input_availability::android(AndroidInputApis {
+            gesture_exclusion: true,
+            touchpad_gestures: true,
+            drag_source: false,
+        }),
         drag: None,
         ..android()
     }
@@ -300,7 +309,12 @@ struct TableHaptics {
 
 impl TableHaptics {
     fn vibrator() -> AndroidVibrator {
-        AndroidVibrator::new(34, false, vec![1, 2, 7, 8], true)
+        AndroidVibrator::new(
+            AndroidHapticsApi::SegmentFeedback,
+            false,
+            vec![1, 2, 7, 8],
+            true,
+        )
     }
 
     fn pen(pen: bool) -> Option<PenController> {
@@ -339,7 +353,7 @@ impl PlatformHaptics for TableHaptics {
                 .map_or(HapticOutcome::Unavailable, |(_, outcome)| outcome),
             HapticsTable::AppKit => macos_feedback(kind).1,
             HapticsTable::UiKit => ios_feedback(kind, true).1,
-            HapticsTable::Android => android_feedback(kind, 34).1,
+            HapticsTable::Android => android_feedback(kind, AndroidHapticsApi::SegmentFeedback).1,
             HapticsTable::Web => web_feedback(kind, WebVibration::Available)
                 .map_or(HapticOutcome::Unavailable, |(_, outcome)| outcome),
         }

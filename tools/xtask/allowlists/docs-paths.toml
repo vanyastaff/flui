@@ -36,8 +36,8 @@ reason = "trybuild's directory under the target directory, a build output"
 [[allow]]
 path = "design/ci.md"
 kind = "path"
-count = 2
-reason = "a crate the text records as it then was, and a fixture path inside a test's temporary repository"
+count = 1
+reason = "a crate the text records as it then was"
 
 [[allow]]
 path = "design/decisions.md"

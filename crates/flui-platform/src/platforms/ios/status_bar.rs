@@ -14,7 +14,7 @@ use std::sync::{
 
 use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, available, define_class, msg_send};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_foundation::NSObjectProtocol;
 use objc2_ui_kit::{UIRectEdge, UIStatusBarStyle, UIViewController};
 
@@ -37,10 +37,10 @@ fn encode(style: SystemUiOverlayStyle) -> u8 {
 fn status_bar_style(code: u8) -> UIStatusBarStyle {
     match code {
         LIGHT_ICONS => UIStatusBarStyle::LightContent,
-        DARK_ICONS if available!(ios = 13.0) => UIStatusBarStyle::DarkContent,
-        // Dark icons before iOS 13, where the default is dark content; and
-        // the unset state, where it is what a plain `UIViewController`
-        // reports, so an unannotated window keeps the system's style.
+        // `DarkContent` arrived in iOS 13, the floor.
+        DARK_ICONS => UIStatusBarStyle::DarkContent,
+        // The unset state: what a plain `UIViewController` reports, so an
+        // unannotated window keeps the system's style.
         _ => UIStatusBarStyle::Default,
     }
 }

@@ -68,32 +68,38 @@ pub const fn ios() -> InputCapabilities {
         .build()
 }
 
-/// The Android backend at API level `api_level`: stylus motion events carry pen
-/// input; system-gesture exclusion regions reach the decor view's
-/// `setSystemGestureExclusionRects` from API 29; a touchpad's two-finger
-/// scroll and pinch arrive as gesture axes from API 34
-/// ([`TOUCHPAD_GESTURES_API`](super::android_motion::TOUCHPAD_GESTURES_API)),
-/// delivered as phased scrolling and `PanZoom`. Outgoing drags start through
-/// `FluiView.startDragAndDrop` from API 24
-/// ([`DRAG_API`](super::android_drag::DRAG_API)) once the view is installed
-/// (`java_view`, ADR-0247); without it every drag stays in its window.
+/// The input APIs above the floor an Android window has, from the device's API
+/// level and the view's installation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct AndroidInputApis {
+    /// `View.setSystemGestureExclusionRects` (API 29).
+    pub gesture_exclusion: bool,
+    /// The touchpad gesture axes of `MotionEvent` (API 34).
+    pub touchpad_gestures: bool,
+    /// `FluiView.startDragAndDrop`: API 24, and the view installed (ADR-0247).
+    pub drag_source: bool,
+}
+
+/// The Android backend with `apis`: stylus motion events carry pen input;
+/// system-gesture exclusion regions reach the decor view's
+/// `setSystemGestureExclusionRects`; a touchpad's two-finger scroll and pinch
+/// arrive as gesture axes, delivered as phased scrolling and `PanZoom`.
+/// Outgoing drags start through `FluiView.startDragAndDrop`; without it every
+/// drag stays in its window.
 #[must_use]
-pub const fn android(api_level: i32, java_view: bool) -> InputCapabilities {
+pub const fn android(apis: AndroidInputApis) -> InputCapabilities {
     let mut builder = InputCapabilities::builder().pen(Native);
-    if api_level >= ANDROID_GESTURE_EXCLUSION_API {
+    if apis.gesture_exclusion {
         builder = builder.input_regions(Native);
     }
-    if api_level >= super::android_motion::TOUCHPAD_GESTURES_API {
+    if apis.touchpad_gestures {
         builder = builder.precise_scroll(Native).trackpad_gestures(Native);
     }
-    if java_view && api_level >= super::android_drag::DRAG_API {
+    if apis.drag_source {
         builder = builder.outgoing_drag(Native);
     }
     builder.build()
 }
-
-/// The first Android API level with `View.setSystemGestureExclusionRects`.
-pub const ANDROID_GESTURE_EXCLUSION_API: i32 = 29;
 
 /// The web backend: pointer events carry pen input; wheel events have no
 /// phases. A trackpad pinch arrives as WebKit gesture events where the

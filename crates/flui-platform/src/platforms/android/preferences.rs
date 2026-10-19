@@ -10,7 +10,7 @@ use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform_api::{MotionPreference, TextWeightPreference};
 use jni::{JValue, JavaVM, jni_sig, jni_str, objects::JObject, refs::Global};
 
-use crate::shared::android_os_version::AndroidApi;
+use crate::shared::os_version::android::{AndroidApi, TextWeight};
 use crate::{
     GestureGeometry, GesturePreferences, NativeTouchGeometry, PreferenceQueryError,
     SystemPreferences,
@@ -143,7 +143,7 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
         let text_weight = match scope {
             ReadScope::Geometry => None,
             ReadScope::Preferences(api) => {
-                crate::shared::android_text_weight::observe(api.sdk_int(), || {
+                crate::shared::android_text_weight::observe(api.since::<TextWeight>(), || {
                     let configuration = env
                         .call_method(
                             &resources,
@@ -315,7 +315,7 @@ pub(super) fn scroll_factors(
         let density = env
             .get_field(&metrics, jni_str!("density"), jni_sig!("F"))?
             .f()?;
-        if FactorApi::for_sdk(api.sdk_int()) == FactorApi::ThemeAttribute {
+        if FactorApi::for_api(api) == FactorApi::ThemeAttribute {
             let value =
                 env.new_object(jni_str!("android/util/TypedValue"), jni_sig!("()V"), &[])?;
             let theme = env

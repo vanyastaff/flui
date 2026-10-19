@@ -46,10 +46,10 @@ use super::native_owner::NativeOwner;
 use super::status_bar::FluiViewController;
 use crate::shared::WindowCallbacks;
 use crate::shared::apple_display_identity::change_screen;
-use crate::shared::apple_os_version::Since;
 use crate::shared::display_link_rate::{
     FrameRatePreference, FrameRateRange, FrameRateRangeProperty, LinkPeriod,
 };
+use crate::shared::os_version::Since;
 use crate::shared::window_state::WindowStateCell;
 use crate::traits::{CursorError, DisplayId, PlatformWindow, WindowExecutionState, WindowId};
 

@@ -1,0 +1,55 @@
+name: Tracking issue
+description: >-
+  Keep one open issue per recurring failure on main: a failed outcome opens
+  the issue with this title (or comments on the open one), a successful
+  outcome closes it, so the issue list says whether main is red right now.
+inputs:
+  title:
+    description: The issue's exact title; at most one open issue carries it
+    required: true
+  outcome:
+    description: >-
+      `failure` opens the issue or comments on it, `success` closes it;
+      any other value (`cancelled`, `skipped`) changes nothing
+    required: true
+  body:
+    description: The issue or comment body on failure
+    required: true
+runs:
+  using: composite
+  steps:
+    # `gh` reads GH_TOKEN and GH_REPO from the calling step's env.
+    - name: Open, comment on or close the issue
+      shell: bash
+      env:
+        TITLE: ${{ inputs.title }}
+        OUTCOME: ${{ inputs.outcome }}
+        BODY: ${{ inputs.body }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+        : "${GH_TOKEN:?the calling step must set GH_TOKEN}"
+        : "${GH_REPO:?the calling step must set GH_REPO}"
+        number=$(gh issue list --state open --search "\"$TITLE\" in:title" --json number,title \
+          | jq -r --arg title "$TITLE" 'map(select(.title == $title)) | .[0].number // empty')
+        case "$OUTCOME" in
+          failure)
+            if [ -n "$number" ]; then
+              gh issue comment "$number" --body "$BODY"
+              echo "commented on #$number"
+            else
+              gh issue create --title "$TITLE" --body "$BODY"
+            fi
+            ;;
+          success)
+            if [ -n "$number" ]; then
+              gh issue close "$number" --comment "Green again: $RUN_URL"
+              echo "closed #$number"
+            else
+              echo "no open issue titled '$TITLE': nothing to close"
+            fi
+            ;;
+          *)
+            echo "outcome '$OUTCOME': nothing to do"
+            ;;
+        esac

@@ -89,6 +89,18 @@ trait depends on `flui-platform-api` instead.
   maximized or fullscreen is created unmapped, gets its mode written into
   `_NET_WM_STATE`, and is mapped afterwards, because a window manager reads
   the mode from the property when it maps a window.
+- **An OS version is compared only inside `shared::os_version` (ADR-0244).**
+  Windows, iOS and Android each have one version type (`WindowsBuild`,
+  `AppleVersion`, `AndroidApi`), read once when the platform is built and kept
+  in it, with its number private. An API newer than the floor in
+  `platform-support.toml` is a marker type implementing `Gate`, whose doc says
+  what the code does without it; `version.since::<F>()` returns a `Since<F>` proof
+  or `None`, and the gated call takes the proof. A gate at or below the floor fails
+  to compile, so raising a floor turns the gates it makes dead into errors, and an
+  unreadable version unlocks nothing. Clippy refuses `objc2::available!` and
+  `AndroidApp::sdk_version`. The
+  table `os_version_gate_table` checks every marker at the version before its
+  `SINCE`, at `SINCE` and at an unknown version.
 
 ---
 
@@ -476,7 +488,7 @@ The refresh period is the path's `targetInfo.refreshRate` rational, converted
 through `RefreshPeriod::from_ratio` so 60000/1001 stays exact. A monitor whose
 path has no rate (0/0) or has no path takes `EnumDisplaySettingsW`'s
 `dmDisplayFrequency`, where 0 and 1 mean unknown. `QueryDisplayConfig` passes
-`QDC_VIRTUAL_MODE_AWARE` only with the proof `WindowsBuild::virtual_mode_aware`
+`QDC_VIRTUAL_MODE_AWARE` only with the `Since<QdcVirtualModeAware>` proof `WindowsBuild`
 hands out for build 18362 and later; the build comes from `RtlGetVersion` once
 and lives in the source, not in a `static`.
 
@@ -2814,7 +2826,7 @@ wakes the looper: the same iteration samples preferences every 500 ms, settles
 the safe area and consumes redraw requests that set a flag without waking the
 looper, so each of those would wait for the deadline.
 
-`shared/android_os_version.rs` reads the API level once, when the platform is
+`shared/android_ndk.rs` reads the API level once, when the platform is
 built, and keeps it in the platform (no `static`): `android_get_device_api_level`
 looked up by name, then `__system_property_get("ro.build.version.sdk")`. The
 function is exported by `libc.so` only from API 29 and is an inline function in the
@@ -2824,8 +2836,10 @@ reader is exported from API 23. NDK functions newer than `minSdk`
 30) come back as `NdkFn<N>`, a typed handle that exists only when the level and the
 symbol both do, and that keeps the `dlopen` handle of its library alive. `N` is a
 marker of the sealed `NdkFunction` trait, which pairs the symbol name, the first
-level and the pointer type taken from the NDK header, so resolving is safe code. Both
-`Build.VERSION.SDK_INT` reads in `preferences.rs` use the same level.
+level (as its `Gate`) and the pointer type taken from the NDK header, so resolving is
+safe code. The Java-side gates (`Context.getDisplay`, `fontWeightAdjustment`, the
+scaled scroll factors) take the same level, and an unreadable level is
+`AndroidApi::UNKNOWN`, which unlocks nothing.
 
 `PlatformWindow::set_frame_rate_hint` is `ANativeWindow_setFrameRate(window, max, DEFAULT)`
 for `High`, with `max` the highest supported-mode rate of the Activity's display, and

@@ -3,11 +3,11 @@
 //! ownership so an idle pump drains an index instead of scanning every
 //! resident task).
 //!
-//! **Evidence only, not a merge gate; not run or linked by CI.** CI's
+//! **Evidence only, not a merge gate; never run by CI.** CI's
 //! `clippy`/`feature-matrix` jobs pass `--all-targets`/`--benches`, so this
 //! file IS type-checked and lint-checked on every PR — `cargo clippy
-//! --all-targets` lints it. What CI never does is link or run it:
-//! `bench-compile` (`cargo bench --no-run`) only targets `flui-rendering`.
+//! --all-targets` lints it — and the `test` job's `cargo xtask
+//! build-all-targets` links it. What CI never does is run it.
 //! Run it locally, on demand: `cargo bench -p flui-scheduler --bench
 //! async_driver_pump`. `tests/async_driver_ready_index_allocation.rs` (a
 //! counting-allocator test) is the CI-run check for issue #1056's

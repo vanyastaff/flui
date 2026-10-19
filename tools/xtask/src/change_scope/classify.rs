@@ -3,9 +3,8 @@
 //! The four modes:
 //!
 //! - `docs`: every changed file is documentation ([`DOCS_ONLY`]); nothing compiles.
-//! - `none`: only repository tooling the `checks` job runs itself, or a
-//!   standalone crate (its own `[workspace]`, outside every member's graph);
-//!   nothing in the workspace compiles.
+//! - `none`: only repository tooling the `checks` job runs itself; nothing in
+//!   the workspace compiles.
 //! - `packages`: the changed packages plus every workspace package declaring a
 //!   dependency on them (normal, build, optional, target-specific; transitively),
 //!   and then the dev-dependents of all of those. A dev edge is the last hop: the
@@ -101,8 +100,7 @@ pub(super) const FULL_TRIGGERS: &[&str] = &[
 /// Mac. `tools/xtask/` is not here: it is the `xtask` workspace package, so a
 /// change to it scopes that package (its clippy and unit tests) like any other
 /// crate, and [`heavy_job_inputs`] adds the wide lane when a wide-lane job
-/// runs the command it touches. A standalone crate (see [`standalone_root`])
-/// counts as tooling too.
+/// runs the command it touches.
 pub(super) const TOOLING: &[&str] = &[
     "tools/device-checks/**",
     "typos.toml",
@@ -573,9 +571,6 @@ pub(super) struct Scope {
     pub(super) seeds: Vec<String>,
     /// Packages whose `Cargo.toml` changed.
     pub(super) manifests: Vec<String>,
-    /// Standalone crate directories a changed file belongs to (see
-    /// [`standalone_root`]), sorted.
-    pub(super) standalone: Vec<String>,
     pub(super) heavy_required: bool,
     pub(super) reason: String,
 }
@@ -587,48 +582,15 @@ impl Scope {
             packages: Vec::new(),
             seeds: Vec::new(),
             manifests: Vec::new(),
-            standalone: Vec::new(),
             heavy_required: false,
             reason,
         }
     }
 
-    /// The whole workspace, no diff (the wide, full and extended lanes).
+    /// The whole workspace, no diff (the wide and full lanes).
     pub(super) fn whole_workspace() -> Self {
         Self::new(Mode::Full, "the whole workspace".to_owned())
     }
-}
-
-/// The standalone crate `file` (repo-relative) belongs to: the nearest
-/// ancestor directory below the repository root whose `Cargo.toml` declares
-/// its own `[workspace]`, provided no workspace package has a path dependency
-/// into it. Such a crate is outside every member's graph, so a change to it
-/// compiles nothing in the workspace. `None` when the nearest such manifest is
-/// reached by a path dependency, or there is none (a deleted crate leaves no
-/// manifest: its files stay unowned).
-fn standalone_root(root: &Path, ws: &Workspace, file: &str) -> Option<String> {
-    let mut dir = file;
-    while let Some((parent, _)) = dir.rsplit_once('/') {
-        dir = parent;
-        let Some(text) = read_normalised(&root.join(dir).join("Cargo.toml")) else {
-            continue;
-        };
-        let has_workspace = text
-            .parse::<toml::Table>()
-            .is_ok_and(|manifest| manifest.contains_key("workspace"));
-        if !has_workspace {
-            continue;
-        }
-        let inside = format!("{dir}/");
-        let reached = ws
-            .packages
-            .values()
-            .flat_map(|p| &p.dependencies)
-            .filter_map(|d| relative(d.path.as_deref()?, root))
-            .any(|path| path == dir || path.starts_with(&inside));
-        return (!reached).then(|| dir.to_owned());
-    }
-    None
 }
 
 fn first_five(files: &[&str]) -> String {
@@ -685,7 +647,6 @@ pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
     }
     let ws = repo.workspace()?;
     let (mut seeds, mut manifests, mut unknown) = (BTreeSet::new(), BTreeSet::new(), Vec::new());
-    let mut standalone = BTreeSet::new();
     for f in code {
         if matches_any(f, TOOLING) {
             continue;
@@ -697,12 +658,7 @@ pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
                     manifests.insert(pkg.to_owned());
                 }
             }
-            None => match standalone_root(&repo.root, ws, f) {
-                Some(dir) => {
-                    standalone.insert(dir);
-                }
-                None => unknown.push(f),
-            },
+            None => unknown.push(f),
         }
     }
     if !unknown.is_empty() {
@@ -712,19 +668,11 @@ pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
         );
         return Ok(Scope::new(Mode::Full, reason));
     }
-    let standalone: Vec<String> = standalone.into_iter().collect();
     if seeds.is_empty() {
-        let reason = if standalone.is_empty() {
-            "only repository tooling the checks job runs changed".to_owned()
-        } else {
-            format!(
-                "only repository tooling and standalone crates changed: {} (own [workspace])",
-                standalone.join(", ")
-            )
-        };
-        let mut scope = Scope::new(Mode::None, reason);
-        scope.standalone = standalone;
-        return Ok(scope);
+        return Ok(Scope::new(
+            Mode::None,
+            "only repository tooling the checks job runs changed".to_owned(),
+        ));
     }
     let scope = ws.affected(&seeds);
     let seed_list: Vec<String> = seeds.into_iter().collect();
@@ -738,7 +686,6 @@ pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
         packages: scope.into_iter().collect(),
         seeds: seed_list,
         manifests: manifests.into_iter().collect(),
-        standalone,
         heavy_required: false,
         reason,
     })
@@ -961,94 +908,6 @@ pub(super) mod tests {
         );
     }
 
-    /// A throwaway repository holding `tools/spike`, a crate with its own
-    /// `[workspace]`, beside the workspace `packages` returns for its root.
-    fn with_a_standalone_crate(packages: impl FnOnce(&Path) -> Vec<Package>) -> (TempRepo, Repo) {
-        let tmp = TempRepo::new();
-        std::fs::create_dir_all(tmp.0.join("tools/spike/src")).expect("mkdir");
-        std::fs::write(
-            tmp.0.join("tools/spike/Cargo.toml"),
-            "[package]\nname = \"spike\"\n\n[workspace]\n",
-        )
-        .expect("write");
-        let repo = Repo {
-            root: tmp.0.clone(),
-            ci_yml: None,
-            xtask_main: None,
-            workspace: OnceLock::from(Workspace::from_packages(&tmp.0, packages(&tmp.0))),
-        };
-        (tmp, repo)
-    }
-
-    fn a_standalone_crate_is_tooling() {
-        let (_tmp, repo) = with_a_standalone_crate(|_| Vec::new());
-        let s = scope_in(
-            &repo,
-            &["tools/spike/Cargo.toml", "tools/spike/src/main.rs"],
-        );
-        assert_eq!(
-            (s.mode, s.standalone.as_slice()),
-            (Mode::None, ["tools/spike".to_owned()].as_slice())
-        );
-        assert!(
-            s.reason.contains("tools/spike") && s.reason.contains("[workspace]"),
-            "{}",
-            s.reason
-        );
-    }
-
-    fn a_standalone_crate_beside_a_member_change_is_not_unowned() {
-        let (_tmp, repo) = with_a_standalone_crate(|root| {
-            vec![
-                serde_json::from_value(serde_json::json!({
-                    "name": "member",
-                    "manifest_path": root.join("member/Cargo.toml"),
-                    "dependencies": [],
-                    "targets": [],
-                    "features": {},
-                }))
-                .expect("a package"),
-            ]
-        });
-        let s = scope_in(&repo, &["tools/spike/src/main.rs", "member/src/lib.rs"]);
-        assert_eq!(s.mode, Mode::Packages, "{}", s.reason);
-        assert_eq!(s.standalone, ["tools/spike"]);
-        assert_eq!(s.packages, ["member"]);
-    }
-
-    fn a_crate_a_member_depends_on_is_not_standalone() {
-        let tmp = TempRepo::new();
-        std::fs::create_dir_all(tmp.0.join("sub/src")).expect("mkdir");
-        std::fs::write(
-            tmp.0.join("sub/Cargo.toml"),
-            "[package]\nname = \"sub\"\n\n[workspace]\n",
-        )
-        .expect("write");
-        let member = |path: Option<PathBuf>| -> Package {
-            serde_json::from_value(serde_json::json!({
-                "name": "member",
-                "manifest_path": tmp.0.join("member/Cargo.toml"),
-                "dependencies": [{
-                    "name": "sub", "kind": null, "rename": null, "optional": false, "path": path,
-                }],
-                "targets": [],
-                "features": {},
-            }))
-            .expect("a package")
-        };
-        let apart = Workspace::from_packages(&tmp.0, vec![member(None)]);
-        assert_eq!(
-            standalone_root(&tmp.0, &apart, "sub/src/lib.rs").as_deref(),
-            Some("sub")
-        );
-        let reached = Workspace::from_packages(&tmp.0, vec![member(Some(tmp.0.join("sub")))]);
-        assert_eq!(standalone_root(&tmp.0, &reached, "sub/src/lib.rs"), None);
-        // the repository root's own manifest never makes a file standalone
-        std::fs::write(tmp.0.join("Cargo.toml"), "[workspace]\n").expect("write");
-        assert_eq!(standalone_root(&tmp.0, &apart, "loose.txt"), None);
-        assert_eq!(standalone_root(&tmp.0, &apart, "other/x.rs"), None);
-    }
-
     fn a_dev_dependent_is_the_last_hop() {
         // base <- mid (normal) <- tester (dev) <- above_tester (normal);
         // base <- both (normal and dev) <- above_both (normal).
@@ -1228,18 +1087,6 @@ pub(super) mod tests {
                 (
                     "unattributable_file_is_full",
                     unattributable_file_is_full as fn(),
-                ),
-                (
-                    "a_standalone_crate_is_tooling",
-                    a_standalone_crate_is_tooling as fn(),
-                ),
-                (
-                    "a_standalone_crate_beside_a_member_change_is_not_unowned",
-                    a_standalone_crate_beside_a_member_change_is_not_unowned as fn(),
-                ),
-                (
-                    "a_crate_a_member_depends_on_is_not_standalone",
-                    a_crate_a_member_depends_on_is_not_standalone as fn(),
                 ),
                 (
                     "a_dev_dependent_is_the_last_hop",

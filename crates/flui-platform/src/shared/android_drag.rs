@@ -22,9 +22,6 @@ use flui_platform_api::data_transfer::{
 };
 use flui_platform_api::drag::{IDENTITY_ESSENCE, OsDragEnd};
 
-/// The first API level with `View.startDragAndDrop` and drop permissions.
-pub const DRAG_API: i32 = 24;
-
 /// `DragEvent.ACTION_DRAG_STARTED`.
 pub const ACTION_DRAG_STARTED: i32 = 1;
 /// `DragEvent.ACTION_DRAG_LOCATION`.

@@ -84,7 +84,8 @@ use crate::{
         PlatformHandlers,
         android_display::idle_wait_until,
         android_lifecycle::{ActivityEvent, ActivityLifecycle, ActivityTarget, Reaction},
-        android_os_version::{AndroidApi, LoadedLibraries, SymbolSource},
+        android_ndk::{LoadedLibraries, SymbolSource},
+        os_version::android::{AndroidApi, StylusHandwriting},
         owner_signal::OwnerSignal,
     },
     traits::{
@@ -93,10 +94,6 @@ use crate::{
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
-
-/// The API level assumed when the system will not say: the floor (ADR-0244),
-/// so nothing newer than it is attempted.
-const FALLBACK_API_LEVEL: u32 = crate::shared::platform_floor::ANDROID_API;
 
 /// Whether the registered wake-deadline hook's answer means `run`'s loop
 /// should WANT to force a frame dispatch this iteration, even though
@@ -186,18 +183,17 @@ impl AndroidPlatform {
             waker.wake();
             Ok(())
         }));
-        let java_view = java_view::JavaView::start(app.clone(), Arc::downgrade(&owner_signal));
         // Opened once and kept for the platform's life: every function pointer
         // looked up in it is valid until the last handle to it is gone.
         let library: Arc<dyn SymbolSource> = Arc::new(LoadedLibraries::open());
         let api = AndroidApi::detect(library.as_ref()).unwrap_or_else(|| {
             tracing::warn!(
-                fallback = FALLBACK_API_LEVEL,
-                "Android: the API level could not be read; treating the system as the oldest supported"
+                "Android: the API level could not be read; nothing above the floor is attempted"
             );
-            AndroidApi::from_level(FALLBACK_API_LEVEL)
+            AndroidApi::UNKNOWN
         });
-        tracing::info!(api = api.level(), "Android API level");
+        tracing::info!(api = %api, "Android API level");
+        let java_view = java_view::JavaView::start(app.clone(), Arc::downgrade(&owner_signal), api);
         let owner = Arc::downgrade(&owner_signal);
         Self {
             java_view,
@@ -354,12 +350,11 @@ impl AndroidPlatform {
     /// A pen tip that touches down inside the focused field hands its stroke
     /// to the input method's handwriting (API 33+): Android's own initiation
     /// sees only the stylus events native code leaves unhandled.
-    fn offer_handwriting(window: &AndroidWindow, events: &[crate::traits::PlatformInput]) {
+    fn offer_handwriting(&self, window: &AndroidWindow, events: &[crate::traits::PlatformInput]) {
         use flui_platform_api::pointer::{PenTool, PointerEvent, PointerKind};
-        let api = AndroidApp::sdk_version();
-        if api < crate::shared::android_ime::HANDWRITING_API {
+        let Some(handwriting) = self.api.since::<StylusHandwriting>() else {
             return;
-        }
+        };
         for event in events {
             let crate::traits::PlatformInput::Pointer(PointerEvent::Down(press)) = event else {
                 continue;
@@ -372,12 +367,11 @@ impl AndroidPlatform {
                 return;
             };
             if crate::shared::android_ime::starts_handwriting(
-                api,
                 pen,
                 input.field_bounds(),
                 press.sample.position.get(),
             ) {
-                input.start_handwriting();
+                input.start_handwriting(handwriting);
             }
         }
     }
@@ -462,7 +456,7 @@ impl AndroidPlatform {
                                 motion_event!(tracing::Level::DEBUG);
                             }
                             let mut any_handled = false;
-                            Self::offer_handwriting(&window, &events);
+                            self.offer_handwriting(&window, &events);
                             for platform_input in events {
                                 let result = callbacks.dispatch_input(platform_input);
                                 if result.default_prevented {
@@ -1028,6 +1022,7 @@ impl Platform for AndroidPlatform {
             Arc::downgrade(&self.owner_signal),
             Arc::clone(&self.java_view),
             Arc::clone(&self.displays),
+            self.api,
         ));
         let previous = self.window.lock().replace(Arc::clone(&window));
         if let Some(previous) = previous {

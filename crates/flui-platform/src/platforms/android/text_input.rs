@@ -31,9 +31,11 @@ use flui_platform_api::text_store::{
 use jni::{JValue, jni_sig, jni_str};
 
 use crate::shared::android_ime::{
-    CURSOR_UPDATE_IMMEDIATE, CURSOR_UPDATE_MONITOR, HANDWRITING_API, ImeEdit, Replayed, Snapshot,
-    cursor_anchor, editor_info, replay_current,
+    CURSOR_UPDATE_IMMEDIATE, CURSOR_UPDATE_MONITOR, ImeEdit, Replayed, Snapshot, cursor_anchor,
+    editor_info, replay_current,
 };
+use crate::shared::os_version::Since;
+use crate::shared::os_version::android::{AndroidApi, StylusHandwriting};
 use crate::shared::panic_boundary::contain_owner_callback;
 
 use super::java_view::JavaView;
@@ -59,6 +61,8 @@ enum Publish {
 /// The window's text input (see the module doc).
 pub(crate) struct AndroidTextInput {
     view: Arc<JavaView>,
+    /// Whether the input method can start stylus handwriting on the view.
+    handwriting: Option<Since<StylusHandwriting>>,
     focused: RefCell<Option<Rc<dyn TextStore>>>,
     /// The generation of the snapshot published last; every replayed edit
     /// must have been made on it.
@@ -137,9 +141,10 @@ fn publish(view: &Arc<JavaView>, snapshot: Snapshot, how: Publish, status: (i32,
 }
 
 impl AndroidTextInput {
-    pub(super) fn new(view: Arc<JavaView>) -> Rc<Self> {
+    pub(super) fn new(view: Arc<JavaView>, api: AndroidApi) -> Rc<Self> {
         Rc::new_cyclic(|this| Self {
             view,
+            handwriting: api.since::<StylusHandwriting>(),
             focused: RefCell::new(None),
             published: Rc::new(Cell::new(0)),
             cursor_mode: Cell::new(0),
@@ -172,9 +177,9 @@ impl AndroidTextInput {
         next
     }
 
-    fn status(store: &dyn TextStore) -> (i32, i32, bool) {
+    fn status(&self, store: &dyn TextStore) -> (i32, i32, bool) {
         let (input_type, options) = editor_info(store.status());
-        let stylus = android_activity::AndroidApp::sdk_version() >= HANDWRITING_API;
+        let stylus = self.handwriting.is_some();
         (input_type, options, stylus)
     }
 
@@ -208,7 +213,7 @@ impl AndroidTextInput {
         };
         let published = Rc::clone(&self.published);
         let view = Arc::clone(&self.view);
-        let status = Self::status(&*store);
+        let status = self.status(&*store);
         let grant = LockGrant::read_write(move |session| {
             let outcome = replay_current(&edit, published.get(), session);
             if outcome == Replayed::Refused {
@@ -239,7 +244,7 @@ impl AndroidTextInput {
         };
         let published = Rc::clone(&self.published);
         let view = Arc::clone(&self.view);
-        let status = Self::status(&*store);
+        let status = self.status(&*store);
         let grant = move |session: &dyn TextStoreRead| {
             let generation = Self::next_generation(&published);
             publish(&view, Snapshot::read(session, generation), how, status);
@@ -294,7 +299,7 @@ impl AndroidTextInput {
     fn end_composition(&self, store: &Rc<dyn TextStore>) -> CompositionEnd {
         let published = Rc::clone(&self.published);
         let view = Arc::clone(&self.view);
-        let status = Self::status(&**store);
+        let status = self.status(&**store);
         let grant = LockGrant::read_write(move |session: &mut dyn TextStoreEdit| {
             if session.composition().is_some() {
                 let _ = session.set_composition(None);
@@ -332,7 +337,7 @@ impl AndroidTextInput {
         };
         let published = Rc::clone(&self.published);
         let view = Arc::clone(&self.view);
-        let status = Self::status(&*store);
+        let status = self.status(&*store);
         let grant = LockGrant::read_write(move |session: &mut dyn TextStoreEdit| {
             if session.composition().is_none() {
                 return;
@@ -418,7 +423,7 @@ impl AndroidTextInput {
     }
 
     /// Hand the stylus stroke that just began to the input method.
-    pub(super) fn start_handwriting(&self) {
+    pub(super) fn start_handwriting(&self, _handwriting: Since<StylusHandwriting>) {
         self.view.post(|env, view| {
             let started = env
                 .call_method(view, jni_str!("startHandwriting"), jni_sig!("()Z"), &[])?
