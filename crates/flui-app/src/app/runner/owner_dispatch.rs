@@ -144,10 +144,10 @@ pub(in crate::app) enum RuntimeEvent {
     WindowFocus(bool),
     /// Reversible native execution eligibility for one presentation.
     #[cfg_attr(
-        any(target_arch = "wasm32", target_os = "android"),
+        target_os = "android",
         expect(
             dead_code,
-            reason = "these runners retain their existing host lifecycle transport"
+            reason = "this runner retains its existing host lifecycle transport"
         )
     )]
     WindowExecution(flui_platform::WindowExecutionState),

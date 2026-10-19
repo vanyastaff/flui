@@ -228,6 +228,11 @@ impl WebFrameDriver {
         });
     }
     pub(super) fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
+        // A lost context cannot be configured; the rebuild reads the window's
+        // size when it finishes.
+        if !self.loss.frames_allowed() {
+            return;
+        }
         if let Some(renderer) = self.renderer.lock().as_mut() {
             // Match the browser canvas backing store at fractional DPR.
             renderer.resize(
