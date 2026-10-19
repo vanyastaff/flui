@@ -229,6 +229,17 @@ impl Trigger {
             self.window.as_micros()
         )
     }
+
+    /// The bytes to write to `/proc/pressure/memory`: the request and a NUL.
+    /// The kernel overwrites the last byte it is given with its own
+    /// terminator, so a write without one loses the last digit of the window
+    /// (`some 150000 1000000` arrives as `some 150000 100000`, a threshold
+    /// longer than its window, and is refused).
+    pub(crate) fn request_bytes(&self) -> Vec<u8> {
+        let mut bytes = self.request().into_bytes();
+        bytes.push(0);
+        bytes
+    }
 }
 
 /// The triggers to try for `stall`, in the order to try them: the one with a
@@ -431,6 +442,15 @@ mod tests {
             let triggers = triggers_for(stall);
             let requests = triggers.map(|trigger| trigger.request());
             assert_eq!(requests, expected, "{stall:?}");
+            for (trigger, text) in triggers.iter().zip(expected) {
+                let bytes = trigger.request_bytes();
+                assert_eq!(
+                    bytes.last(),
+                    Some(&0),
+                    "{text}: the kernel eats a last byte"
+                );
+                assert_eq!(&bytes[..bytes.len() - 1], text.as_bytes());
+            }
             assert!(
                 triggers
                     .iter()

@@ -112,7 +112,7 @@ fn set_trigger(stall: Stall) -> Option<(Trigger, File)> {
                 return None;
             }
         };
-        match file.write_all(trigger.request().as_bytes()) {
+        match file.write_all(&trigger.request_bytes()) {
             Ok(()) => return Some((trigger, file)),
             // The kernel refuses a window an unprivileged process may not use
             // with `EPERM`, and a window or threshold out of range with
@@ -129,7 +129,7 @@ fn set_trigger(stall: Stall) -> Option<(Trigger, File)> {
     None
 }
 
-fn run(mut triggers: Vec<(Trigger, File)>, stop: &OwnedFd, inbox: &Inbox) {
+fn run<F: AsFd>(mut triggers: Vec<(Trigger, F)>, stop: &OwnedFd, inbox: &Inbox) {
     loop {
         let mut fds = Vec::with_capacity(triggers.len() + 1);
         fds.push(PollFd::new(stop, PollFlags::IN));
@@ -187,7 +187,154 @@ fn run(mut triggers: Vec<(Trigger, File)>, stop: &OwnedFd, inbox: &Inbox) {
 
 #[cfg(test)]
 mod tests {
+    use flui_foundation::memory::MemoryPressureLevel;
+
     use super::*;
+
+    /// A pair of sockets whose server end can raise `POLLPRI` on the client
+    /// end by sending out-of-band data: the kernel raises it the same way for
+    /// a pressure trigger.
+    fn raising_pair() -> (
+        std::os::unix::net::UnixStream,
+        std::os::unix::net::UnixStream,
+    ) {
+        std::os::unix::net::UnixStream::pair().expect("a socket pair")
+    }
+
+    fn raise(server: &std::os::unix::net::UnixStream) {
+        rustix::net::send(server, b"!", rustix::net::SendFlags::OOB).expect("out-of-band data");
+    }
+
+    fn inbox() -> Arc<Inbox> {
+        Arc::new(Inbox {
+            queue: parking_lot::Mutex::new(std::collections::VecDeque::new()),
+            signal: std::sync::Weak::new(),
+        })
+    }
+
+    fn levels(inbox: &Inbox) -> Vec<MemoryPressureLevel> {
+        inbox
+            .queue
+            .lock()
+            .drain(..)
+            .map(|delivery| match delivery.event {
+                HostEvent::Notice(SystemNotice::MemoryPressure(level)) => level,
+                other => panic!("only pressure notices come from here, got {other:?}"),
+            })
+            .collect()
+    }
+
+    fn wait_for(what: &str, mut check: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !check() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {what}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// Take the out-of-band byte, as the kernel clears a trigger's event once
+    /// it has been polled: the stand-in socket stays readable until then.
+    fn consume(client: &std::os::unix::net::UnixStream) {
+        let mut byte = [0_u8; 1];
+        rustix::net::recv(client, &mut byte, rustix::net::RecvFlags::OOB)
+            .expect("the out-of-band byte");
+    }
+
+    /// The watcher thread's loop on sockets that stand in for the kernel's
+    /// trigger files. A trigger raised alone posts its own level; triggers
+    /// raised together post the heaviest; a trigger that ends is dropped and
+    /// the thread ends with the last one. The sockets stay raised until read,
+    /// where the kernel clears a trigger's event once it is polled, so the
+    /// test reads the byte when it has heard enough.
+    #[test]
+    fn pressure_loop_posts_the_level_of_the_trigger_raised() {
+        // (case, which are raised before the loop starts, the first level)
+        let table = [
+            ("some alone", [true, false], MemoryPressureLevel::Moderate),
+            ("full alone", [false, true], MemoryPressureLevel::Critical),
+            ("both at once", [true, true], MemoryPressureLevel::Critical),
+        ];
+        for (case, raised, expected) in table {
+            let inbox = inbox();
+            let stop =
+                eventfd(0, EventfdFlags::CLOEXEC | EventfdFlags::NONBLOCK).expect("an eventfd");
+            let (some_server, some_client) = raising_pair();
+            let (full_server, full_client) = raising_pair();
+            let some_kept = some_client.try_clone().expect("a duplicate");
+            let full_kept = full_client.try_clone().expect("a duplicate");
+            if raised[0] {
+                raise(&some_server);
+            }
+            if raised[1] {
+                raise(&full_server);
+            }
+            std::thread::scope(|scope| {
+                let triggers = vec![
+                    (triggers_for(Stall::Partial)[0], some_client),
+                    (triggers_for(Stall::Full)[0], full_client),
+                ];
+                let thread = scope.spawn(|| run(triggers, &stop, &inbox));
+                wait_for(case, || !inbox.queue.lock().is_empty());
+                if raised[0] {
+                    consume(&some_kept);
+                }
+                if raised[1] {
+                    consume(&full_kept);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                let heard = levels(&inbox);
+                assert_eq!(heard.first(), Some(&expected), "{case}: {heard:?}");
+
+                // Quiet once read; both ending leaves nothing to wait for.
+                assert_eq!(levels(&inbox), [], "{case}: no pressure while quiet");
+                drop(some_server);
+                drop(full_server);
+                wait_for("the thread to end", || thread.is_finished());
+            });
+            assert_eq!(
+                levels(&inbox),
+                [],
+                "{case}: ending a trigger is not pressure"
+            );
+        }
+    }
+
+    #[test]
+    fn pressure_loop_ends_when_asked_to_stop() {
+        let inbox = inbox();
+        let stop = eventfd(0, EventfdFlags::CLOEXEC | EventfdFlags::NONBLOCK).expect("an eventfd");
+        let (server, client) = raising_pair();
+        std::thread::scope(|scope| {
+            let thread =
+                scope.spawn(|| run(vec![(triggers_for(Stall::Full)[0], client)], &stop, &inbox));
+            rustix::io::write(&stop, &1_u64.to_ne_bytes()).expect("the stop signal");
+            wait_for("the thread to stop", || thread.is_finished());
+        });
+        drop(server);
+    }
+
+    /// The real thing, where the kernel offers it: a process that may write the
+    /// pressure file and has the privilege for a 1 s window gets its triggers
+    /// (the kernel drops the last byte of a write, so an unterminated request
+    /// would be refused), and stopping the watcher returns.
+    #[test]
+    fn the_watcher_starts_and_stops_on_the_kernels_triggers() {
+        let writable = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(PRESSURE_FILE)
+            .is_ok();
+        let inbox = inbox();
+        let watcher = PressureWatcher::start(&inbox);
+        if writable && rustix::process::geteuid().is_root() {
+            assert!(watcher.is_some(), "root sets pressure triggers");
+        }
+        drop(watcher);
+        assert_eq!(levels(&inbox), []);
+    }
 
     /// Reading the real file needs a kernel with pressure information, which a
     /// CI runner may lack; the test then has nothing to check.
