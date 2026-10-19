@@ -81,7 +81,7 @@ impl Probe {
         }
     }
 
-    fn set_observe(&self, observer: impl Fn(&Seen) + 'static) {
+    pub(crate) fn set_observe(&self, observer: impl Fn(&Seen) + 'static) {
         *self.observe.borrow_mut() = Some(Box::new(observer));
     }
 
@@ -284,7 +284,7 @@ pub(crate) fn press(device: Device, point: Offset<f64>) -> PointerScript {
 
 /// [`LaidOut::replay`], each step on its own: a step that panics is caught
 /// and the rest of the script still runs. Returns the caught messages.
-fn replay_contained(laid: &mut LaidOut, script: &PointerScript) -> Vec<String> {
+pub(crate) fn replay_contained(laid: &mut LaidOut, script: &PointerScript) -> Vec<String> {
     let mut failures = Vec::new();
     let mut previous = Duration::ZERO;
     for step in script.steps() {

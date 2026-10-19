@@ -819,13 +819,17 @@ impl ViewerLeaf {
 
     /// The contact lifted with `velocity` (physical channel axes): the
     /// release settles every scrollable the pan moved. Returns the sequence,
-    /// for the viewer's own inertia, and the axes the viewer holds.
-    fn release(&self, velocity: Vec2) -> Option<(Rc<ScrollSequence>, [bool; 2])> {
+    /// for the viewer's own inertia, and the axes the viewer holds. A
+    /// participant's failure stays in `recovery`: the caller resumes it only
+    /// once the sequence has a run or an end.
+    fn release(
+        &self,
+        velocity: Vec2,
+        recovery: &mut PanicRecovery,
+    ) -> Option<(Rc<ScrollSequence>, [bool; 2])> {
         let sequence = self.contact.borrow_mut().take()?;
-        let mut recovery = PanicRecovery::new();
-        sequence.release(velocity, &mut recovery);
+        sequence.release(velocity, recovery);
         let held = sequence.leaf_holds();
-        recovery.finish();
         Some((sequence, held))
     }
 
@@ -2179,48 +2183,58 @@ impl InteractiveViewerState {
                 core.gesture.reset();
                 let native = core.gesture.native.replace(false);
                 let overlay = core.overlay.get();
+                // A participant that fails at the release still leaves the
+                // sequence to the run below, which owns its end; the failure
+                // resumes after it.
+                let mut recovery = PanicRecovery::new();
                 let sequence = if native {
                     None
                 } else {
-                    core.leaf.release(Vec2::new(-velocity.dx, -velocity.dy))
+                    core.leaf
+                        .release(Vec2::new(-velocity.dx, -velocity.dy), &mut recovery)
                 };
-                if !overlay.is_rest() {
-                    // Pulled past the bounds: the scene comes back, and no
-                    // inertia runs from outside them.
-                    core.fling.snap_back(
-                        core,
-                        Motion::Release(overlay),
-                        sequence.map(|(sequence, _)| sequence),
-                        end_post_frame.clone(),
-                    );
-                } else if native {
-                    if config.pan_enabled {
+                recovery.run(|| {
+                    if !overlay.is_rest() {
+                        // Pulled past the bounds: the scene comes back, and no
+                        // inertia runs from outside them.
+                        core.fling.snap_back(
+                            core,
+                            Motion::Release(overlay),
+                            sequence.map(|(sequence, _)| sequence),
+                            end_post_frame.clone(),
+                        );
+                    } else if native {
+                        if config.pan_enabled {
+                            core.fling
+                                .start(core, velocity, None, end_post_frame.clone());
+                        }
+                    } else if let Some((sequence, held)) = sequence {
+                        let own = Offset::new(
+                            if held[0] { velocity.dx } else { 0.0 },
+                            if held[1] { velocity.dy } else { 0.0 },
+                        );
+                        let own = if config.pan_enabled {
+                            own
+                        } else {
+                            Offset::ZERO
+                        };
                         core.fling
-                            .start(core, velocity, None, end_post_frame.clone());
+                            .start(core, own, Some(sequence), end_post_frame.clone());
                     }
-                } else if let Some((sequence, held)) = sequence {
-                    let own = Offset::new(
-                        if held[0] { velocity.dx } else { 0.0 },
-                        if held[1] { velocity.dy } else { 0.0 },
-                    );
-                    let own = if config.pan_enabled {
-                        own
-                    } else {
-                        Offset::ZERO
-                    };
-                    core.fling
-                        .start(core, own, Some(sequence), end_post_frame.clone());
-                }
+                });
                 if let Some(callback) = core.callbacks().end {
-                    callback(
-                        cx,
-                        InteractionEndDetails {
-                            reason: GestureEndReason::Completed,
-                            velocity: details.focal_velocity,
-                            scale_velocity: details.velocity,
-                        },
-                    );
+                    recovery.run(|| {
+                        callback(
+                            cx,
+                            InteractionEndDetails {
+                                reason: GestureEndReason::Completed,
+                                velocity: details.focal_velocity,
+                                scale_velocity: details.velocity,
+                            },
+                        );
+                    });
                 }
+                recovery.finish();
             };
 
             let cancel_core = Rc::clone(&core);

@@ -1132,6 +1132,7 @@ fn nested_scroll_channel() {
             ("interactive_viewer::photo_in_pager_hands_pan_remainder_to_pager", crate::interactive_viewer::photo_in_pager_hands_pan_remainder_to_pager),
             ("interactive_viewer::photo_in_rtl_pager_turns_toward_the_reading_end", crate::interactive_viewer::photo_in_rtl_pager_turns_toward_the_reading_end),
             ("interactive_viewer::viewer_inertia_is_a_side_effect_of_the_releasing_sequence", crate::interactive_viewer::viewer_inertia_is_a_side_effect_of_the_releasing_sequence),
+            ("interactive_viewer::viewer_release_failure_still_ends_the_sequence", crate::interactive_viewer::viewer_release_failure_still_ends_the_sequence),
             ("interactive_viewer::plain_wheel_pans_the_viewer_then_leaves_its_edge_to_the_list", crate::interactive_viewer::plain_wheel_pans_the_viewer_then_leaves_its_edge_to_the_list),
             ("interactive_viewer::viewer_pan_past_its_boundary_stretches_and_snaps_back", crate::interactive_viewer::viewer_pan_past_its_boundary_stretches_and_snaps_back),
             ("interactive_viewer::viewer_fling_into_its_boundary_overshoots_and_settles", crate::interactive_viewer::viewer_fling_into_its_boundary_overshoots_and_settles),
