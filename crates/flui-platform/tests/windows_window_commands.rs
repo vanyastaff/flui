@@ -453,6 +453,34 @@ fn normal_on_a_hidden_maximized_window_restores_it_without_showing() {
     assert!(shown(&window));
 }
 
+fn a_size_set_under_limits_while_maximized_still_restores_within_them() {
+    let platform = platform();
+    let window = open(&platform, options().with_decorated(false));
+    apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
+    apply(
+        &window,
+        WindowCommand::SetConstraints(SizeConstraints::new(None, Some(Size::new(400.0, 300.0)))),
+    );
+    apply(&window, WindowCommand::SetSize(Size::new(900.0, 700.0)));
+    apply(&window, WindowCommand::SetMode(WindowMode::Normal));
+    let content = window.state().content_size;
+    assert!(
+        content.width <= 402.0 && content.height <= 302.0,
+        "restored to {content:?} past the maximum"
+    );
+}
+
+fn a_frame_changed_while_maximized_keeps_the_content_it_restores_to() {
+    let platform = platform();
+    let window = open(&platform, options());
+    apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
+    apply(&window, WindowCommand::SetDecorated(false));
+    apply(&window, WindowCommand::SetMode(WindowMode::Normal));
+    let state = window.state();
+    assert!(!state.decorated);
+    assert!(content_is(&state, 640.0, 480.0), "{state:?}");
+}
+
 fn limits_set_while_maximized_hold_when_it_is_restored() {
     let platform = platform();
     // Without a sizing border the system does not ask for the limits on its own.
@@ -825,6 +853,14 @@ fn native_window_commands() {
         (
             "normal_on_a_hidden_maximized_window_restores_it_without_showing",
             normal_on_a_hidden_maximized_window_restores_it_without_showing,
+        ),
+        (
+            "a_size_set_under_limits_while_maximized_still_restores_within_them",
+            a_size_set_under_limits_while_maximized_still_restores_within_them,
+        ),
+        (
+            "a_frame_changed_while_maximized_keeps_the_content_it_restores_to",
+            a_frame_changed_while_maximized_keeps_the_content_it_restores_to,
         ),
         (
             "limits_set_while_maximized_hold_when_it_is_restored",

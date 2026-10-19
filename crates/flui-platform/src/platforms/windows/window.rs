@@ -1230,6 +1230,7 @@ impl WindowsWindow {
                         size: Size::new(width, height),
                     }));
                 });
+                self.clamp_restore_rectangle();
                 return Ok(());
             }
             let mut placement =
@@ -1244,8 +1245,11 @@ impl WindowsWindow {
                     placement.rcNormalPosition.left.saturating_add(width);
                 placement.rcNormalPosition.bottom =
                     placement.rcNormalPosition.top.saturating_add(height);
-                return SetWindowPlacement(self.hwnd, &raw const placement)
-                    .map_err(|e| backend_error("SetWindowPlacement", e));
+                SetWindowPlacement(self.hwnd, &raw const placement)
+                    .map_err(|e| backend_error("SetWindowPlacement", e))?;
+                // A size command must not make the next restore break the limits.
+                self.clamp_restore_rectangle();
+                return Ok(());
             }
             let (width, height) = outer_size(style, ex_style, dpi, content)
                 .map_err(|e| backend_error("AdjustWindowRectExForDpi", e))?;
@@ -1417,7 +1421,23 @@ impl WindowsWindow {
                         flags |= SWP_NOSIZE;
                     }
                     SetWindowPos(self.hwnd, None, 0, 0, width, height, flags)
-                        .map_err(|e| backend_error("SetWindowPos", e))
+                        .map_err(|e| backend_error("SetWindowPos", e))?;
+                    if !normal {
+                        // The rectangle the window returns to grows or shrinks by
+                        // the change of frame, so restoring it keeps its content.
+                        let was = outer_size(style, ex_style, dpi, (0, 0));
+                        let now = outer_size(changed, ex_style, dpi, (0, 0));
+                        if let (Ok(was), Ok(now), Ok(mut placement)) =
+                            (was, now, placement_of(self.hwnd))
+                        {
+                            let normal = &mut placement.rcNormalPosition;
+                            normal.right = normal.right.saturating_add(now.0 - was.0);
+                            normal.bottom = normal.bottom.saturating_add(now.1 - was.1);
+                            SetWindowPlacement(self.hwnd, &raw const placement)
+                                .map_err(|e| backend_error("SetWindowPlacement", e))?;
+                        }
+                    }
+                    Ok(())
                 }
             },
         )
