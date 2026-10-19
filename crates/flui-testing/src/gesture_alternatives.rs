@@ -19,7 +19,13 @@
 //!   [`ContextMenu`](Alternative::ContextMenu) opened by a secondary click, a
 //!   long press, each of the platform's menu keys, assistive technology's
 //!   `ShowContextMenu` and the control focus reveals, and its item chosen by
-//!   assistive technology and by a click.
+//!   assistive technology and by a click; a
+//!   [`Companion`](Alternative::Companion) through the node the registered
+//!   companion publishes for the command, activated by assistive technology
+//!   and pressed with a mouse, a finger and a virtual pointer. That node must
+//!   exist, be published and be at least the minimum target; with no companion
+//!   registered, or none with a node for the command, the check fails, since
+//!   the alternatives claim a path that is not there.
 //!
 //! Every path must change the subject's model, and to the same value as the
 //! reference path (the gesture for the first command, the custom action for
@@ -42,7 +48,10 @@ use flui_platform_api::pointer::PointerButton;
 use flui_platform_api::{DeviceId, EventTime, MotionPreference, SystemPreferences, TargetPlatform};
 use flui_rendering::constraints::BoxConstraints;
 use flui_view::{BoxedView, View, ViewExt};
-use flui_widgets::{Alternative, GestureAlternatives, ShowContextMenuIntent, SingleActivator};
+use flui_widgets::{
+    Alternative, CompanionGap, GestureAlternatives, GestureCommand, ShowContextMenuIntent,
+    SingleActivator,
+};
 
 use crate::a11y::{A11yTree, Action, ActionData, ActionRequest, Role, TreeId};
 use crate::replay::{MouseScript, PointerScript, TouchScript, VirtualScript};
@@ -176,23 +185,25 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
     fn all(&mut self) {
         let probe = self.mount();
         let initial = (probe.model)();
-        let commands: Vec<(String, Vec<SingleActivator>)> = probe
+        let commands: Vec<(GestureCommand, Vec<SingleActivator>)> = probe
             .alternatives
             .commands()
             .map(|command| {
                 (
-                    command.label().to_owned(),
+                    command.clone(),
                     command.keys(TargetPlatform::current()).cloned().collect(),
                 )
             })
             .collect();
-        let menu = matches!(
-            probe.alternatives.alternative(),
-            Alternative::ContextMenu(_)
-        );
+        let pointer = match probe.alternatives.alternative() {
+            Alternative::VisibleControl(_) => PointerPath::Controls,
+            Alternative::ContextMenu(_) => PointerPath::Menu,
+            Alternative::Companion(_) => PointerPath::Companion,
+        };
         drop(probe);
 
-        for (index, (label, keys)) in commands.iter().enumerate() {
+        for (index, (command, keys)) in commands.iter().enumerate() {
+            let label = command.label();
             let reference = if index == 0 {
                 let mut mounted = self.mount();
                 mounted.laid.replay(&self.check.gesture);
@@ -232,14 +243,17 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
                 }
             }
 
-            if menu {
-                self.menu_paths(label, &reference, &initial);
-            } else {
-                self.control_paths(label, &reference, &initial);
+            match pointer {
+                PointerPath::Controls => self.control_paths(label, &reference, &initial),
+                PointerPath::Menu => self.menu_paths(label, &reference, &initial),
+                PointerPath::Companion => self.companion_paths(command, &reference, &initial),
             }
         }
 
-        self.escape_changes_nothing(commands.first().map(|(label, _)| label.as_str()), &initial);
+        self.escape_changes_nothing(
+            commands.first().map(|(command, _)| command.label()),
+            &initial,
+        );
     }
 
     fn mount(&self) -> Mounted<M> {
@@ -442,6 +456,58 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
         }
     }
 
+    /// The command through the node a registered companion publishes for it.
+    fn companion_paths(
+        &mut self,
+        command: &GestureCommand,
+        reference: &(&str, Outcome<M>),
+        initial: &M,
+    ) {
+        let label = command.label();
+        let probe = self.mount();
+        let bounds = companion_node(&probe, command)
+            .and_then(|node| node_bounds(&probe, node).ok_or(CompanionFailure::Unplaced));
+        drop(probe);
+        let bounds = match bounds {
+            Ok(bounds) => bounds,
+            Err(failure) => {
+                self.failures.push(format!(
+                    "  - {label:?}: the alternatives declare a companion, but {failure}"
+                ));
+                return;
+            }
+        };
+        let min_target = GestureSettings::default().min_target();
+        if bounds.x1 - bounds.x0 < min_target || bounds.y1 - bounds.y0 < min_target {
+            self.failures.push(format!(
+                "  - {label:?}: its companion's node is {}×{}, under the {min_target} minimum target",
+                bounds.x1 - bounds.x0,
+                bounds.y1 - bounds.y0
+            ));
+        }
+        for device in [Device::Mouse, Device::Touch, Device::Virtual] {
+            let path = format!("its companion's node, pressed with {device:?}");
+            if let Some(outcome) = self.path(label, &path, |_, mounted| {
+                let node = companion_node(mounted, command).ok()?;
+                let center = center_of(node_bounds(mounted, node)?);
+                mounted.laid.replay(&device.tap(center));
+                Some(())
+            }) {
+                self.compare(label, reference, (&path, outcome), initial);
+            }
+        }
+        let path = "its companion's node, clicked by assistive technology";
+        if let Some(outcome) = self.path(label, path, |_, mounted| {
+            let node = companion_node(mounted, command).ok()?;
+            mounted
+                .laid
+                .invoke_semantics_action(request(Action::Click, node, None))
+                .ok()
+        }) {
+            self.compare(label, reference, (path, outcome), initial);
+        }
+    }
+
     fn menu_paths(&mut self, label: &str, reference: &(&str, Outcome<M>), initial: &M) {
         let mut openers: Vec<(String, Opener)> = vec![
             ("a secondary click".to_owned(), Opener::SecondaryClick),
@@ -573,6 +639,14 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
     }
 }
 
+/// Which kind of single-pointer alternative the subject declares.
+#[derive(Clone, Copy)]
+enum PointerPath {
+    Controls,
+    Menu,
+    Companion,
+}
+
 /// How a menu path opens the menu.
 enum Opener {
     SecondaryClick,
@@ -620,6 +694,54 @@ impl Device {
 
 fn tree<M>(mounted: &Mounted<M>) -> Option<A11yTree> {
     mounted.laid.a11y_tree()
+}
+
+/// Why a companion has no node to activate for a command.
+#[derive(Debug, thiserror::Error)]
+enum CompanionFailure {
+    #[error("{0}")]
+    Gap(#[from] CompanionGap),
+    #[error("the node it named is not in the published accessibility tree")]
+    Unpublished,
+    #[error("it named {0} nodes for one command")]
+    Ambiguous(usize),
+    #[error("the node it named has no bounds in the window")]
+    Unplaced,
+}
+
+/// The published node the companion registered on `mounted`'s link names for
+/// `command`.
+fn companion_node<M>(
+    mounted: &Mounted<M>,
+    command: &GestureCommand,
+) -> Result<crate::a11y::NodeId, CompanionFailure> {
+    let Alternative::Companion(spec) = mounted.alternatives.alternative() else {
+        unreachable!("BUG: only a companion's alternatives are asked for a companion's node");
+    };
+    let anchor = spec.node_for(command)?;
+    let named = mounted.laid.a11y_nodes_named_by(&anchor);
+    let published = tree(mounted);
+    let [node] = named.as_slice() else {
+        return Err(if named.is_empty() {
+            CompanionFailure::Unpublished
+        } else {
+            CompanionFailure::Ambiguous(named.len())
+        });
+    };
+    if published.is_some_and(|tree| tree.nodes().any(|candidate| candidate.id() == *node)) {
+        Ok(*node)
+    } else {
+        Err(CompanionFailure::Unpublished)
+    }
+}
+
+fn node_bounds<M>(
+    mounted: &Mounted<M>,
+    node: crate::a11y::NodeId,
+) -> Option<crate::a11y::A11yRect> {
+    let tree = tree(mounted)?;
+    let node = tree.nodes().find(|candidate| candidate.id() == node)?;
+    tree.window_bounds(&node)
 }
 
 fn request(action: Action, target: crate::a11y::NodeId, data: Option<ActionData>) -> ActionRequest {

@@ -833,6 +833,16 @@ impl ScrollSequence {
         called
     }
 
+    /// New input on the leaf cancels what this sequence handed off: every
+    /// scrollable of the chain stops the run it drives for it, and the
+    /// last one to stop ends the sequence
+    /// [`Preempted`](ScrollEndReason::Preempted).
+    pub(crate) fn preempt_runs(&self, recovery: &mut PanicRecovery) {
+        for owner in self.owners() {
+            owner.stop_run_of(self, recovery);
+        }
+    }
+
     /// The leaf `retired` handed the sequence to `successor`: its passes
     /// count on the successor from now on. A sequence of another leaf (one
     /// `retired` runs a residual of) keeps its own.

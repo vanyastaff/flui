@@ -13,13 +13,13 @@
 //! | gesture | the widget, through [`GestureAlternatives::handle`] |
 //! | assistive technology | one custom action per command, labelled by it; `ShowContextMenu` for a menu |
 //! | keyboard | the command's own keys, and the platform's menu keys for a menu, while focus is in the row |
-//! | one pointer | [`Alternative::VisibleControl`] or [`Alternative::ContextMenu`] |
+//! | one pointer | [`Alternative::VisibleControl`], [`Alternative::ContextMenu`] or [`Alternative::Companion`] |
 //!
 //! Every command sits inside the [`Alternative`], so no command can exist
 //! without its single-pointer path.
 
 use std::any::Any;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::rc::{Rc, Weak};
 
@@ -39,6 +39,7 @@ use super::actions::{
     Action, ActionChain, ActionChainProvider, ActionOutcome, Actions, Intent,
     ShowContextMenuIntent, resolve,
 };
+use super::companion::{CompanionGap, CompanionLink, LinkedCompanions};
 use super::focus::Focus;
 use super::focus_ring::FocusRing;
 use super::gesture_arena_scope::GestureArenaScope;
@@ -62,6 +63,7 @@ use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::parent_data::FlexFit;
+use flui_rendering::semantics::SemanticsAnchor;
 
 // ============================================================================
 // Commands
@@ -151,6 +153,10 @@ impl GestureCommand {
         intent.is::<I>()
     }
 
+    fn intent_any(&self) -> &dyn Any {
+        &*self.intent
+    }
+
     /// Perform the intent through `chain`.
     fn perform(&self, cx: &mut EventCx<'_>, chain: Option<&ActionChain>) -> ActionOutcome {
         let intent: &dyn Any = &*self.intent;
@@ -227,7 +233,8 @@ impl fmt::Debug for CommandHandle {
 /// How a behavioural widget's commands are reached with one pointer and no
 /// path or second contact (WCAG 2.2, 2.5.1 and 2.5.7).
 ///
-/// The set is closed: a control always shown, or a context menu.
+/// The set is closed: a control always shown, a context menu, or controls a
+/// companion widget already draws.
 #[derive(Clone, Debug)]
 pub enum Alternative {
     /// Controls always shown beside the content, each performing its
@@ -236,6 +243,9 @@ pub enum Alternative {
     /// A context menu opened by a secondary click, a long press, the
     /// platform's menu key and assistive technology, one item per command.
     ContextMenu(MenuSpec),
+    /// Controls drawn by another widget that is mounted beside the content
+    /// and registered on a [`CompanionLink`]: a tab bar for a pager.
+    Companion(CompanionSpec),
 }
 
 /// Where controls sit beside the content, in reading order: mirrored in a
@@ -376,6 +386,69 @@ impl fmt::Debug for MenuSpec {
                     .collect::<Vec<_>>(),
             )
             .finish_non_exhaustive()
+    }
+}
+
+/// The commands of [`Alternative::Companion`], and the [`CompanionLink`] the
+/// widget that draws their controls registers on.
+///
+/// The alternatives draw no control: each command is performed by the node a
+/// registered companion publishes for it. With no companion registered the
+/// alternatives are unfulfilled, which is a `flui::a11y` warning once the frame
+/// that mounted them has run and a failure of
+/// `flui_testing::assert_gesture_alternatives`.
+///
+/// Every command performs an intent the link carries; the first is the
+/// widget's gesture command.
+#[derive(Clone)]
+pub struct CompanionSpec {
+    commands: Vec<GestureCommand>,
+    link: Rc<dyn LinkedCompanions>,
+}
+
+impl CompanionSpec {
+    /// Alternatives whose first command is `first`, the gesture's, performed
+    /// by the companions registered on `link`.
+    #[must_use]
+    pub fn new<I: Intent>(first: GestureCommand, link: &CompanionLink<I>) -> Self {
+        Self {
+            commands: vec![first],
+            link: link.linked(),
+        }
+    }
+
+    /// Another command, for a further operation the widget's gestures
+    /// perform.
+    #[must_use]
+    pub fn command(mut self, command: GestureCommand) -> Self {
+        self.commands.push(command);
+        self
+    }
+
+    /// The node of a registered companion that performs `command` now.
+    ///
+    /// # Errors
+    ///
+    /// [`CompanionGap::Unregistered`] when no companion is registered,
+    /// [`CompanionGap::Unavailable`] when none has a node for the command.
+    pub fn node_for(&self, command: &GestureCommand) -> Result<SemanticsAnchor, CompanionGap> {
+        self.link.node_for(command.intent_any())
+    }
+}
+
+impl fmt::Debug for CompanionSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompanionSpec")
+            .field(
+                "commands",
+                &self
+                    .commands
+                    .iter()
+                    .map(GestureCommand::label)
+                    .collect::<Vec<_>>(),
+            )
+            .field("fulfilled", &self.link.is_fulfilled())
+            .finish()
     }
 }
 
@@ -603,6 +676,14 @@ pub enum GestureAlternativesError {
         /// The shared label.
         label: String,
     },
+    /// A companion command performs an intent of a type its
+    /// [`CompanionLink`] does not carry, so no companion could ever publish
+    /// a node for it.
+    #[error("the gesture command {label:?} performs an intent its companion link does not carry")]
+    ForeignIntent {
+        /// The command's label.
+        label: String,
+    },
 }
 
 /// The alternatives of a behavioural widget's gestures: a required argument
@@ -638,7 +719,8 @@ impl GestureAlternatives {
     ///
     /// [`GestureAlternativesError::EmptyLabel`] for a command without a
     /// label, [`GestureAlternativesError::DuplicateLabel`] for two commands
-    /// with one.
+    /// with one, [`GestureAlternativesError::ForeignIntent`] for a companion
+    /// command whose intent its link does not carry.
     pub fn new(alternative: Alternative) -> Result<Self, GestureAlternativesError> {
         let alternatives = Self {
             alternative,
@@ -657,6 +739,13 @@ impl GestureAlternatives {
                 });
             }
             seen.push(command.label());
+            if let Alternative::Companion(spec) = &alternatives.alternative
+                && !spec.link.accepts(command.intent_any())
+            {
+                return Err(GestureAlternativesError::ForeignIntent {
+                    label: command.label().to_owned(),
+                });
+            }
         }
         Ok(alternatives)
     }
@@ -696,6 +785,7 @@ impl GestureAlternatives {
             match &self.alternative {
                 Alternative::VisibleControl(spec) => (&spec.controls, &[]),
                 Alternative::ContextMenu(menu) => (&[], &menu.items),
+                Alternative::Companion(spec) => (&[], &spec.commands),
             };
         controls.iter().map(|(command, _)| command).chain(items)
     }
@@ -743,8 +833,27 @@ impl StatefulView for GestureAlternatives {
             hold: None,
             hold_attachment: Rc::new(RecognizerAttachment::default()),
             pressed: Rc::default(),
+            companion: match &self.alternative {
+                Alternative::Companion(spec) => Some(CompanionWatch {
+                    link: Rc::downgrade(&spec.link),
+                    commands: spec
+                        .commands
+                        .iter()
+                        .map(|command| command.label().to_owned())
+                        .collect(),
+                }),
+                _ => None,
+            },
+            mounted: Rc::new(Cell::new(true)),
         }
     }
+}
+
+/// What a companion's alternatives need to report, after the frame they
+/// mounted in, that no companion registered.
+struct CompanionWatch {
+    link: Weak<dyn LinkedCompanions>,
+    commands: Vec<String>,
 }
 
 /// What a mounted [`GestureAlternatives`] keeps across rebuilds: the menu
@@ -762,6 +871,11 @@ pub struct GestureAlternativesState {
     hold_attachment: Rc<RecognizerAttachment<LongPressGestureRecognizer>>,
     /// The contacts down on the row, one of which the long press holds.
     pressed: Rc<RefCell<SmallVec<[PointerId; 2]>>>,
+    /// A companion alternative's link, until its check has been scheduled.
+    companion: Option<CompanionWatch>,
+    /// Cleared on dispose, so a check queued by the mount frame stays silent
+    /// for alternatives that have gone.
+    mounted: Rc<Cell<bool>>,
 }
 
 /// A menu's long press: a hold whose successors are the long-press drags
@@ -908,6 +1022,7 @@ fn menu_long_press(
 impl ViewState<GestureAlternatives> for GestureAlternativesState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.acquire(ctx);
+        self.watch_companion(ctx);
     }
 
     /// A new arena, policy or writer replaces the menu's long press.
@@ -924,6 +1039,7 @@ impl ViewState<GestureAlternatives> for GestureAlternativesState {
     }
 
     fn dispose(&mut self) {
+        self.mounted.set(false);
         self.hold_attachment.clear();
         if let Some(hold) = self.hold.take() {
             let _ = hold.recognizer.cancel();
@@ -932,6 +1048,37 @@ impl ViewState<GestureAlternatives> for GestureAlternativesState {
 
     fn build(&self, view: &GestureAlternatives, ctx: &dyn BuildContext) -> impl IntoView {
         view.build_alternatives(ctx, self)
+    }
+}
+
+impl GestureAlternativesState {
+    /// Report, once the frame this mounted in has run, that no companion
+    /// registered. A companion is usually mounted in the same frame, in
+    /// either order with these alternatives, so the question is asked after
+    /// it rather than during mount. A context with no post-frame lane has no
+    /// such moment, and asks nothing.
+    fn watch_companion(&mut self, ctx: &dyn LifecycleContext) {
+        let (Some(watch), Some(frame)) = (self.companion.take(), ctx.post_frame_handle()) else {
+            return;
+        };
+        let mounted = Rc::clone(&self.mounted);
+        let scheduled = frame.schedule(move |_timing| {
+            let unfulfilled = watch
+                .link
+                .upgrade()
+                .is_some_and(|link| !link.is_fulfilled());
+            if mounted.get() && unfulfilled {
+                tracing::warn!(
+                    target: "flui::a11y",
+                    commands = ?watch.commands,
+                    "a gesture's alternatives rely on a companion, and none is registered on \
+                     their CompanionLink; its commands have no single-pointer path"
+                );
+            }
+        });
+        if let Err(error) = scheduled {
+            tracing::debug!(?error, "the companion check found its lane gone");
+        }
     }
 }
 
@@ -1020,6 +1167,18 @@ impl GestureAlternatives {
                 })
                 .boxed();
                 (row, None)
+            }
+            // The controls are the companion's: the row is its content under
+            // the focus decorations, and its commands reach assistive
+            // technology and the keyboard as custom actions and keys.
+            Alternative::Companion(_) => {
+                let content = FocusDecorations {
+                    content,
+                    menu_control: None,
+                    min_target,
+                }
+                .boxed();
+                (content, None)
             }
             Alternative::ContextMenu(menu) => {
                 let items: Rc<[MenuItem]> = menu

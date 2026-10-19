@@ -5,6 +5,7 @@
 mod absorb_pointer;
 pub(crate) mod actions;
 mod animated_cross_fade;
+mod companion;
 mod draggable;
 mod drop_target;
 pub(crate) mod focus;
@@ -41,6 +42,7 @@ pub use actions::{
     ShowContextMenuIntent,
 };
 pub use animated_cross_fade::{AnimatedCrossFade, AnimatedCrossFadeState, CrossFadeState};
+pub use companion::{CompanionGap, CompanionLink, CompanionRegistration};
 pub use draggable::{DragAnchor, DragCommands, Draggable, DraggableState};
 pub use drop_target::{DropCommands, DropHover, DropTarget, DropTargetState};
 pub use focus::{
@@ -50,9 +52,10 @@ pub use focus::{
 pub use focus_ring::{DefaultFocusRingStyle, FocusRing, FocusRingStyle};
 pub use focus_traversal_group::{FocusTraversalGroup, FocusTraversalGroupState};
 pub use gesture_alternatives::{
-    Alternative, AlternativeKind, CommandAppearance, CommandHandle, ControlPlacement, ControlSpec,
-    GestureAlternatives, GestureAlternativesError, GestureAlternativesState, GestureCommand,
-    MenuCause, MenuItem, MenuPresenter, MenuRequest, MenuSpec,
+    Alternative, AlternativeKind, CommandAppearance, CommandHandle, CompanionSpec,
+    ControlPlacement, ControlSpec, GestureAlternatives, GestureAlternativesError,
+    GestureAlternativesState, GestureCommand, MenuCause, MenuItem, MenuPresenter, MenuRequest,
+    MenuSpec,
 };
 pub use gesture_arena_scope::GestureArenaScope;
 pub use gesture_detector::{

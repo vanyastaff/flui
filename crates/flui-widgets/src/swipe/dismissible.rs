@@ -993,8 +993,7 @@ impl DismissibleState {
             Rc::clone(&self.origin),
             Rc::clone(&self.motion),
         );
-        let drag = AnchoredDrag::new(controller.clone(), axis, view.child.clone())
-            .withhold_semantics()
+        let drag = AnchoredDrag::inside(controller.clone(), axis, view.child.clone())
             .admission(ContactAdmission::outside_system_edges(ctx, axis))
             .on_cancelled(move || origin_cancel.cancelled(&cancel, motion.get()));
         let (down, origin_down) = (controller.clone(), Rc::clone(&self.origin));

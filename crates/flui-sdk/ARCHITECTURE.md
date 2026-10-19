@@ -203,6 +203,7 @@ through a parent rebuild (`a_rebuild_mid_gesture_keeps_the_drag`).
 A package's behavioural widget takes a `GestureAlternatives` (ADR-0216):
 `GestureAlternatives`, `Alternative`, `ControlSpec`, `ControlPlacement`,
 `MenuSpec`, `MenuPresenter`, `MenuRequest`, `MenuItem`, `MenuCause`,
+`CompanionSpec`, `CompanionLink`, `CompanionRegistration`, `CompanionGap`,
 `GestureCommand`, `CommandHandle`, `GestureAlternativesError` and
 `ShowContextMenuIntent` come through the whole `widgets` export, with
 `SingleActivator` for a command's keys and `WidgetsLocalizations` for the
@@ -213,6 +214,11 @@ command's intent with `GestureCommand::performs`, as `SwipeActions` and
 system-gesture strip to the operating system with
 `ContactAdmission::outside_system_edges`, through `GestureDetector`,
 `RawGestureDetector` or `AnchoredDrag::admission`, as the swiped rows do.
+A widget whose commands another widget already draws as controls declares
+`Alternative::Companion` over a `CompanionLink` that the owner of the shared state
+makes; the companion registers on it with `CompanionLink::register` and names the node
+that performs each command by a `SemanticsAnchor`, as `flui-material`'s `TabBar` does for
+`TabBarView` (`gesture_alternatives::tab_bar_view_with_its_tab_bar`).
 `tests/surface/behavioural_widget.rs` is the proof: a fling-to-file widget
 written against `flui_sdk` alone, whose left fling performs its first command
 through `GestureAlternatives::handle` and whose right fling performs its

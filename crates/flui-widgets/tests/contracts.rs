@@ -1097,6 +1097,7 @@ fn nested_scroll_channel() {
             ("nested_scroll::fling_handoff_inherits_sequence_across_three_levels", crate::nested_scroll::fling_handoff_inherits_sequence_across_three_levels),
             ("nested_scroll::momentum_never_offers_post_fling", crate::nested_scroll::momentum_never_offers_post_fling),
             ("nested_scroll::new_touch_preempts_handed_off_fling", crate::nested_scroll::new_touch_preempts_handed_off_fling),
+            ("nested_scroll::new_wheel_or_assistive_scroll_preempts_handed_off_fling", crate::nested_scroll::new_wheel_or_assistive_scroll_preempts_handed_off_fling),
             ("nested_scroll::user_input_preempts_programmatic_scroll", crate::nested_scroll::user_input_preempts_programmatic_scroll),
             ("nested_scroll::anchor_correction_bypasses_the_channel", crate::nested_scroll::anchor_correction_bypasses_the_channel),
             ("nested_scroll::participant_result_is_clamped", crate::nested_scroll::participant_result_is_clamped),
@@ -1147,7 +1148,7 @@ fn nested_scroll_channel() {
             ("anchored_drag::anchored_drag_plays_a_haptic_on_each_new_anchor", crate::anchored_drag::anchored_drag_plays_a_haptic_on_each_new_anchor),
             ("anchored_drag::anchored_drag_is_a_bounded_leaf_and_a_participant", crate::anchored_drag::anchored_drag_is_a_bounded_leaf_and_a_participant),
             ("anchored_drag::anchored_drag_is_no_drop_autoscroll_target", crate::anchored_drag::anchored_drag_is_no_drop_autoscroll_target),
-            ("anchored_drag::anchored_drag_named_is_a_slider_and_a_tab_stop", crate::anchored_drag::anchored_drag_named_is_a_slider_and_a_tab_stop),
+            ("anchored_drag::anchored_drag_is_a_tab_stop_and_a_named_slider", crate::anchored_drag::anchored_drag_is_a_tab_stop_and_a_named_slider),
             ("anchored_drag::anchored_drag_offset_listenable_follows_every_move", crate::anchored_drag::anchored_drag_offset_listenable_follows_every_move),
             ("swipe_actions::swipe_actions_reveal_settle_and_perform_a_tapped_action", crate::swipe_actions::swipe_actions_reveal_settle_and_perform_a_tapped_action),
             ("swipe_actions::swipe_actions_full_swipe_performs_the_first_action_on_release", crate::swipe_actions::swipe_actions_full_swipe_performs_the_first_action_on_release),
@@ -1167,6 +1168,7 @@ fn nested_scroll_channel() {
             ("collapsing_header::collapsing_header_with_equal_extents_takes_no_scroll", crate::collapsing_header::collapsing_header_with_equal_extents_takes_no_scroll),
             ("nested_scroll::scroll_channel_data_is_send", crate::nested_scroll::scroll_channel_data_is_send),
             ("nested_scroll::reveal_and_assistive_scroll_go_through_the_chain", crate::nested_scroll::reveal_and_assistive_scroll_go_through_the_chain),
+            ("nested_scroll::a_nested_reveal_moves_each_ancestor_in_a_sequence_of_its_own", crate::nested_scroll::a_nested_reveal_moves_each_ancestor_in_a_sequence_of_its_own),
             ("nested_scroll::connection_defaults_take_nothing", crate::nested_scroll::connection_defaults_take_nothing),
             ("nested_scroll::fling_residual_survives_a_participant_taking_part_of_it", crate::nested_scroll::fling_residual_survives_a_participant_taking_part_of_it),
             ("nested_scroll::a_run_short_of_the_edge_of_a_long_list_hands_nothing_on", crate::nested_scroll::a_run_short_of_the_edge_of_a_long_list_hands_nothing_on),
@@ -1231,6 +1233,30 @@ fn gesture_alternatives() {
             (
                 "gesture_alternatives::interactive_viewer_with_pan_controls",
                 crate::gesture_alternatives::interactive_viewer_with_pan_controls,
+            ),
+            (
+                "gesture_alternatives::page_view_with_page_controls",
+                crate::gesture_alternatives::page_view_with_page_controls,
+            ),
+            (
+                "gesture_alternatives::anchored_drag_with_anchor_controls",
+                crate::gesture_alternatives::anchored_drag_with_anchor_controls,
+            ),
+            (
+                "gesture_alternatives::page_view_with_buttons_beside_it",
+                crate::gesture_alternatives::page_view_with_buttons_beside_it,
+            ),
+            (
+                "gesture_alternatives::a_companion_link_follows_its_registrations",
+                crate::gesture_alternatives::a_companion_link_follows_its_registrations,
+            ),
+            (
+                "gesture_alternatives::a_companion_command_must_perform_an_intent_its_link_carries",
+                crate::gesture_alternatives::a_companion_command_must_perform_an_intent_its_link_carries,
+            ),
+            (
+                "gesture_alternatives::unfulfilled_companion_alternatives_are_reported",
+                crate::gesture_alternatives::unfulfilled_companion_alternatives_are_reported,
             ),
             (
                 "gesture_alternatives::every_preset_opens_the_menu_by_its_pointer_trigger",

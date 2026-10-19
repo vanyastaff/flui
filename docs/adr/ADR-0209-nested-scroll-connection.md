@@ -13,7 +13,11 @@
   an ancestor's own motion, and the sequence settles every scrollable it moved
   ([research](../research/2026-10-17-nested-scroll-spring-remainder.md)). 2026-10-18 — §1:
   a step says whether a contact drives it; §5: a leaf at its extent still carries a wheel or
-  trackpad packet to the connections below the nearest enclosing scrollable.
+  trackpad packet to the connections below the nearest enclosing scrollable. 2026-10-18 — §3:
+  a reveal moves each scroll ancestor by its own geometry in a programmatic sequence of its
+  own, not as one sequence handing a remainder up; §4: new input on a leaf stops the run an
+  ancestor drives for the fling the leaf handed it; §5: a contactless source finds its leaf by
+  the hit path's event propagation, not by `AxisLock`'s code.
 - **Supersedes:** [ADR-0169](ADR-0169-nested-scroll-ballistic-handoff.md)
 - **Related:** [ADR-0051](ADR-0051-anchor-stationary-scroll-correction.md),
   [ADR-0157](ADR-0157-native-scroll-range-actions.md),
@@ -74,8 +78,19 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    participant that only a dragging hand may move (pull-to-refresh) needs the difference.
 3. **One offset primitive.** Every scroll (drag, wheel, keyboard, assistive actions per ADR-0157,
    `reveal(rect)` per ADR-0168, controller jumps and animations, DnD autoscroll) goes through the
-   dispatcher with its cause. `reveal(rect)` passes every ancestor through the chain and keeps
-   ADR-0169's rebasing of the published target by the signed current-minus-published pixels. A
+   dispatcher with its cause. `reveal(rect)` keeps ADR-0169's rebasing of the published target
+   by the signed current-minus-published pixels and moves every scroll ancestor nearest first,
+   each by its own geometry (the target, or the visible part of the viewport the previous one
+   moved, shifted by that move) as a `Programmatic` sequence of its own through that
+   ancestor's chain, so every connection above an ancestor is offered that ancestor's step.
+   It is not one sequence whose remainder goes up through `post_scroll`: what an ancestor must
+   move to show the inner viewport is not what the inner scrollable could not move (an inner
+   list that shows its target leaves no remainder while its own viewport is still off screen,
+   and an inner viewport taller than the outer one asks less of it than the remainder would),
+   and a remainder is the channel's answer to one user delta, which a reveal is not. A
+   participant that wants to answer a reveal (a collapsing header expanding for a row it
+   clips) does so as a reveal scope, not as a consumer of programmatic remainders. Row:
+   `a_nested_reveal_moves_each_ancestor_in_a_sequence_of_its_own`. A
    `UserInput` step on a surface ends a running `Programmatic` or smooth scroll with `Preempted`.
    Anchor correction (ADR-0051) is not a scroll: the viewport applies it inside layout without
    dispatch, no participant sees it, and it neither ends nor latches a sequence.
@@ -131,8 +146,16 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    boundary probe and simulation factory of the chain; no policy sees a default ratio.
 5. **Leaf and latch.** The chain latches, per direction, to the deepest participant that consumes
    a non-zero part of the sequence's first non-zero delta (the arena owner included; an owner at
-   its edge does not latch); contactless sources start under the point or focus, by the same code
-   as `AxisLock`. A keyboard sequence is one key press: the focused scrollable (or the one holding
+   its edge does not latch). A contactless source starts at a leaf found without a contact: a
+   wheel or trackpad packet at the deepest scrollable on the hit path that can act on it (each
+   `Scrollable` passes on a packet it cannot move by, leaf first), a key at the focused
+   scrollable; from that leaf on, the sequence latches by the rule above, in the same
+   `ScrollSequence` a contact uses. This is not `AxisLock`'s code: `AxisLock` rails a pan's
+   motion onto an axis inside a recognizer that already owns a contact, while a contactless
+   source has no contact, no slop and no path to rail, and the event propagation of the hit path
+   already names the deepest scrollable that can take it. Rows:
+   `keyboard_bubbles_to_the_enclosing_scrollable_and_follows_the_axis` and
+   `plain_wheel_pans_the_viewer_then_leaves_its_edge_to_the_list`. A keyboard sequence is one key press: the focused scrollable (or the one holding
    the focus in its subtree) takes arrows along its axis, PageUp/PageDown and Space/Shift+Space,
    Home and End, from the keyboard device; the key's auto-repeats continue the sequence, its release
    or the next press ends it, and a scrollable that cannot move lets the key bubble to the enclosing
@@ -233,7 +256,8 @@ The `nested_scroll_channel` table in `crates/flui-widgets/tests/contracts.rs`, d
 cancel), `pull_to_refresh_ignores_wheel_and_momentum_and_resets_on_loss`,
 `collapsing_header_reveals_focused_row_from_tab_and_assistive_request`,
 `fling_handoff_inherits_sequence_across_three_levels`, `momentum_never_offers_post_fling`,
-`new_touch_preempts_handed_off_fling`, `edge_at_start_latches_ancestor_on_every_preset`,
+`new_touch_preempts_handed_off_fling`, `new_wheel_or_assistive_scroll_preempts_handed_off_fling`,
+`edge_at_start_latches_ancestor_on_every_preset`,
 `channel_latch_ends_exactly_when_binding_mints_a_new_sequence`,
 `anchor_correction_bypasses_the_channel`, `user_input_preempts_programmatic_scroll`,
 `participant_result_is_clamped`, `a_participant_cannot_dispatch_input_into_its_own_chain` and

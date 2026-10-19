@@ -41,8 +41,8 @@ use flui_rendering::constraints::AxisDirection;
 use flui_rendering::pipeline::WeakPipelineCell;
 use flui_view::element::ElementKind;
 use flui_view::{
-    AnimatedView, BoxedView, BuildContext, IntoView, LifecycleContext, StatefulView, View, ViewExt,
-    ViewState,
+    AnimatedView, BoxedView, BuildContext, EventCx, IntoView, LifecycleContext, StatefulView, View,
+    ViewExt, ViewState,
 };
 
 use super::nested::{
@@ -54,8 +54,12 @@ use super::scrollable::presentation_device_pixel_ratio;
 use super::{ScrollController, Scrollable};
 use crate::interaction::raw_gesture_detector::ContactAdmission;
 use crate::transitions::transform_view::AnimatedTransformView;
-use crate::{Directionality, Listener, Semantics, SemanticsRole};
+use crate::{
+    Action, ActionOutcome, Actions, Directionality, GestureAlternatives, Intent, Listener,
+    Semantics, SemanticsRole, Shortcuts, SingleActivator,
+};
 use flui_objects::TransformMotion;
+use flui_platform_api::keyboard::NamedKey;
 use flui_rendering::hit_testing::HitTestBehavior;
 
 /// The largest distance from zero an anchor may lie at, in logical pixels:
@@ -314,15 +318,14 @@ impl LeafSlot {
 
 /// What an [`AnchoredDrag`] hands the [`Scrollable`] it drives: the hook
 /// that hears every move, the slot the owner is published in, which
-/// contacts its drag takes, what hears a cancelled drag after its settle
-/// began, and whether it is a stop of focus traversal.
+/// contacts its drag takes, and what hears a cancelled drag after its settle
+/// began.
 #[derive(Clone)]
 pub(crate) struct AnchoredLeaf {
     pub(crate) motion: MotionHook,
     pub(crate) slot: Rc<LeafSlot>,
     pub(crate) admission: Option<ContactAdmission>,
     pub(crate) cancelled: Option<Rc<dyn Fn()>>,
-    pub(crate) traversable: bool,
 }
 
 struct Inner<K> {
@@ -576,20 +579,29 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
 /// hands the rest of a drag on the drag's axis to it, and the list's release
 /// settles it.
 ///
-/// Assistive technology sees a slider: increment and decrement move to the
-/// next and the previous anchor by offset. Named with
-/// [`semantics`](Self::semantics), the slider reads its label and the current
-/// anchor's description, and the drag is a stop of focus traversal; focused
-/// by Tab or by a drag, the arrow keys along the axis move to the next anchor
-/// the way they point. An unnamed drag is no Tab stop, since a stop without
-/// a name tells a keyboard user nothing.
+/// A drag is a path: the constructor takes the drag's
+/// [`GestureAlternatives`] (ADR-0216), whose commands name [`AnchorIntent`],
+/// which the drag answers by moving to the next or the previous anchor by
+/// offset. They make the drag a row of focus traversal, its one stop, with one
+/// custom action per command, the commands' keys while focus is in the row,
+/// and a control per command for one pointer, so a sheet opens and closes
+/// without a drag. Focused by Tab or by a drag, the arrow keys along the axis
+/// move to the next anchor the way they point.
+///
+/// Assistive technology also sees a slider: increment and decrement move to
+/// the next and the previous anchor by offset. Named with
+/// [`semantics`](Self::semantics), the slider reads its label and the
+/// current anchor's description.
 ///
 /// A [`VsyncScope`](crate::VsyncScope) above it runs the settle.
 ///
 /// ```
 /// use flui_animation::Vsync;
 /// use flui_foundation::geometry::Axis;
-/// use flui_widgets::{AnchoredDrag, AnchoredDragController, DraggableAnchors, SizedBox, VsyncScope};
+/// use flui_widgets::{
+///     Alternative, AnchorIntent, AnchoredDrag, AnchoredDragController, ControlSpec,
+///     DraggableAnchors, GestureAlternatives, GestureCommand, SizedBox, Text, VsyncScope,
+/// };
 ///
 /// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// enum Row {
@@ -603,9 +615,19 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
 ///     .build()
 ///     .expect("two finite anchors");
 /// let controller = AnchoredDragController::new(anchors, Row::Closed).expect("a known anchor");
+/// let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+///     ControlSpec::new(GestureCommand::new("Show actions", AnchorIntent::Previous), Text::new("<"))
+///         .control(GestureCommand::new("Hide actions", AnchorIntent::Next), Text::new(">")),
+/// ))
+/// .expect("two distinct labels");
 /// let row = VsyncScope::new(
 ///     Vsync::new(),
-///     AnchoredDrag::new(controller.clone(), Axis::Horizontal, SizedBox::new(320.0, 56.0)),
+///     AnchoredDrag::new(
+///         controller.clone(),
+///         Axis::Horizontal,
+///         SizedBox::new(320.0, 56.0),
+///         alternatives,
+///     ),
 /// );
 /// assert_eq!(controller.current(), Row::Closed);
 /// ```
@@ -617,6 +639,8 @@ pub struct AnchoredDrag<K> {
     assistive: Assistive<K>,
     admission: Option<ContactAdmission>,
     cancelled: Option<Rc<dyn Fn()>>,
+    /// `None` inside a widget whose own alternatives perform its outcomes.
+    alternatives: Option<GestureAlternatives>,
 }
 
 /// What assistive technology sees of an [`AnchoredDrag`].
@@ -660,8 +684,15 @@ impl<K: fmt::Debug + Copy> fmt::Debug for AnchoredDrag<K> {
 }
 
 impl<K: Copy + Eq + 'static> AnchoredDrag<K> {
-    /// Drag `child` along `axis` between `controller`'s anchors.
-    pub fn new(controller: AnchoredDragController<K>, axis: Axis, child: impl IntoView) -> Self {
+    /// Drag `child` along `axis` between `controller`'s anchors, moved
+    /// between them without a drag through `alternatives`, whose commands
+    /// name [`AnchorIntent`].
+    pub fn new(
+        controller: AnchoredDragController<K>,
+        axis: Axis,
+        child: impl IntoView,
+        alternatives: GestureAlternatives,
+    ) -> Self {
         Self {
             controller,
             axis,
@@ -669,12 +700,31 @@ impl<K: Copy + Eq + 'static> AnchoredDrag<K> {
             assistive: Assistive::Unnamed,
             admission: None,
             cancelled: None,
+            alternatives: Some(alternatives),
         }
     }
 
-    /// Name the drag for assistive technology and the keyboard: its slider
-    /// reads `label` and, as its value, `describe` of the current anchor
-    /// ("Half open"), and the drag becomes a stop of focus traversal.
+    /// The drag of a widget that reaches its outcomes by assistive
+    /// technology, the keyboard and one pointer itself (a swiped row): no
+    /// slider and no alternatives of its own.
+    pub(crate) fn inside(
+        controller: AnchoredDragController<K>,
+        axis: Axis,
+        child: impl IntoView,
+    ) -> Self {
+        Self {
+            controller,
+            axis,
+            child: child.into_view().boxed(),
+            assistive: Assistive::Withheld,
+            admission: None,
+            cancelled: None,
+            alternatives: None,
+        }
+    }
+
+    /// Name the drag's slider for assistive technology: it reads `label`
+    /// and, as its value, `describe` of the current anchor ("Half open").
     #[must_use]
     pub fn semantics(
         mut self,
@@ -685,14 +735,6 @@ impl<K: Copy + Eq + 'static> AnchoredDrag<K> {
             label: Rc::from(label.into()),
             describe: Rc::new(describe),
         };
-        self
-    }
-
-    /// Publish no slider: the widget around the drag reaches its outcomes by
-    /// assistive technology and the keyboard itself.
-    #[must_use]
-    pub(crate) fn withhold_semantics(mut self) -> Self {
-        self.assistive = Assistive::Withheld;
         self
     }
 
@@ -968,6 +1010,95 @@ impl<K: Copy + Eq + 'static> AnchoredDragState<K> {
             owner.controller().position().set_is_scrolling(false);
         }
     }
+
+    /// `drag` as assistive technology's slider: increment and decrement move
+    /// to the next and the previous anchor by offset.
+    fn slider(
+        &self,
+        controller: &AnchoredDragController<K>,
+        assistive: &Assistive<K>,
+        drag: BoxedView,
+    ) -> BoxedView {
+        let anchors = controller.anchors();
+        let semantics = match assistive {
+            Assistive::Named { label, describe } => Semantics::new()
+                .label(label.to_string())
+                .value(describe(controller.current())),
+            Assistive::Unnamed | Assistive::Withheld => Semantics::new(),
+        };
+        let mut semantics = semantics.container(true).role(SemanticsRole::Slider);
+        let from = anchors
+            .offset(controller.current())
+            .unwrap_or_else(|| controller.offset());
+        if let Some(target) = anchors.after(from) {
+            let slot = Rc::clone(&controller.inner.slot);
+            let pipeline = Rc::clone(&self.pipeline);
+            semantics = semantics.on_increment(move |_cx| {
+                Self::assistive_move(&slot, &pipeline, target);
+            });
+        }
+        if let Some(target) = anchors.before(from) {
+            let slot = Rc::clone(&controller.inner.slot);
+            let pipeline = Rc::clone(&self.pipeline);
+            semantics = semantics.on_decrement(move |_cx| {
+                Self::assistive_move(&slot, &pipeline, target);
+            });
+        }
+        semantics.child(drag).boxed()
+    }
+}
+
+/// Move the enclosing [`AnchoredDrag`] to the next or the previous anchor
+/// by offset: down on a vertical drag, toward the reading end on a
+/// horizontal one, or back.
+///
+/// The drag answers it for everything inside it: the commands of its
+/// [`GestureAlternatives`] name it. Past the last or before the first anchor
+/// it is not performed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AnchorIntent {
+    /// The anchor after the current one by offset.
+    Next,
+    /// The anchor before the current one by offset.
+    Previous,
+}
+
+impl Intent for AnchorIntent {}
+
+/// Answers [`AnchorIntent`] for everything inside an [`AnchoredDrag`].
+struct AnchorAction<K> {
+    controller: AnchoredDragController<K>,
+    pipeline: Rc<RefCell<Option<WeakPipelineCell>>>,
+}
+
+impl<K: Copy + Eq + 'static> AnchorAction<K> {
+    /// The offset of the anchor `intent` moves to, if there is one.
+    fn target(&self, intent: AnchorIntent) -> Option<f64> {
+        let anchors = self.controller.anchors();
+        let from = anchors
+            .offset(self.controller.current())
+            .unwrap_or_else(|| self.controller.offset());
+        match intent {
+            AnchorIntent::Next => anchors.after(from),
+            AnchorIntent::Previous => anchors.before(from),
+        }
+    }
+}
+
+impl<K: Copy + Eq + 'static> Action<AnchorIntent> for AnchorAction<K> {
+    /// Past the last or before the first anchor the intent is not enabled,
+    /// so a key there bubbles on.
+    fn is_enabled(&self, intent: &AnchorIntent) -> bool {
+        self.target(*intent).is_some()
+    }
+
+    fn invoke(&self, _cx: &mut EventCx<'_>, intent: &AnchorIntent) -> ActionOutcome {
+        let Some(target) = self.target(*intent) else {
+            return ActionOutcome::NotPerformed;
+        };
+        AnchoredDragState::<K>::assistive_move(&self.controller.inner.slot, &self.pipeline, target);
+        ActionOutcome::Performed
+    }
 }
 
 /// The hook that tracks the current anchor of `inner` and plays the anchor
@@ -1080,34 +1211,31 @@ impl<K: Copy + Eq + 'static> ViewState<AnchoredDrag<K>> for AnchoredDragState<K>
                 slot: Rc::clone(&controller.inner.slot),
                 admission: view.admission.clone(),
                 cancelled: view.cancelled.clone(),
-                traversable: matches!(view.assistive, Assistive::Named { .. }),
             });
-        let mut semantics = match &view.assistive {
-            Assistive::Withheld => return scrollable.boxed(),
-            Assistive::Unnamed => Semantics::new(),
-            Assistive::Named { label, describe } => Semantics::new()
-                .label(label.to_string())
-                .value(describe(controller.current())),
+        let drag = match &view.assistive {
+            Assistive::Withheld => scrollable.boxed(),
+            assistive => self.slider(controller, assistive, scrollable.boxed()),
         };
-        semantics = semantics.container(true).role(SemanticsRole::Slider);
-        let from = anchors
-            .offset(controller.current())
-            .unwrap_or_else(|| controller.offset());
-        if let Some(target) = anchors.after(from) {
-            let slot = Rc::clone(&controller.inner.slot);
-            let pipeline = Rc::clone(&self.pipeline);
-            semantics = semantics.on_increment(move |_cx| {
-                Self::assistive_move(&slot, &pipeline, target);
-            });
-        }
-        if let Some(target) = anchors.before(from) {
-            let slot = Rc::clone(&controller.inner.slot);
-            let pipeline = Rc::clone(&self.pipeline);
-            semantics = semantics.on_decrement(move |_cx| {
-                Self::assistive_move(&slot, &pipeline, target);
-            });
-        }
-        semantics.child(scrollable).boxed()
+        let Some(alternatives) = &view.alternatives else {
+            return drag;
+        };
+        // The row of the alternatives is the drag's stop of focus traversal:
+        // there the arrow keys move to the next anchor the way they point,
+        // as they do once a drag has focused the drag itself.
+        let (next, previous) = match (axis, rtl) {
+            (Axis::Vertical, _) => (NamedKey::ArrowDown, NamedKey::ArrowUp),
+            (Axis::Horizontal, false) => (NamedKey::ArrowRight, NamedKey::ArrowLeft),
+            (Axis::Horizontal, true) => (NamedKey::ArrowLeft, NamedKey::ArrowRight),
+        };
+        let keys = Shortcuts::new(alternatives.clone().child(drag))
+            .shortcut(SingleActivator::named(next), AnchorIntent::Next)
+            .shortcut(SingleActivator::named(previous), AnchorIntent::Previous);
+        Actions::new(keys)
+            .action(AnchorAction {
+                controller: controller.clone(),
+                pipeline: Rc::clone(&self.pipeline),
+            })
+            .boxed()
     }
 
     fn did_update_view(&mut self, _old_view: &AnchoredDrag<K>, new_view: &AnchoredDrag<K>) {

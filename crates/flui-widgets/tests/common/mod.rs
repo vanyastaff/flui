@@ -46,3 +46,21 @@ pub fn viewer_alternatives() -> flui_widgets::GestureAlternatives {
     ))
     .expect("two labelled commands")
 }
+
+/// Alternatives for a `PageView` under test whose alternatives are not what
+/// the test is about: page commands in a context menu nobody opens, so the
+/// pager keeps its whole row.
+#[allow(dead_code)]
+pub fn pager_alternatives() -> flui_widgets::GestureAlternatives {
+    flui_widgets::GestureAlternatives::new(flui_widgets::Alternative::ContextMenu(
+        flui_widgets::MenuSpec::new(
+            flui_widgets::GestureCommand::new("Previous page", flui_widgets::PageIntent::Previous),
+            |_cx, _request| {},
+        )
+        .item(flui_widgets::GestureCommand::new(
+            "Next page",
+            flui_widgets::PageIntent::Next,
+        )),
+    ))
+    .expect("two labelled commands")
+}

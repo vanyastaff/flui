@@ -13,7 +13,7 @@ use flui_view::BoxedView;
 use flui_view::prelude::*;
 use flui_widgets::{ColoredBox, ListView, PageController, PageView, SizedBox};
 
-use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, tight};
+use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, pager_alternatives, tight};
 
 const PAGE: f64 = 300.0;
 
@@ -28,7 +28,7 @@ fn pages() -> Vec<BoxedView> {
 }
 
 fn page_view(controller: &PageController) -> PageView {
-    PageView::new(pages()).controller(controller.clone())
+    PageView::new(pages(), pager_alternatives()).controller(controller.clone())
 }
 
 fn mounted(probe: &SignalProbe) -> LaidOut {

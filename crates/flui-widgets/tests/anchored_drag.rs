@@ -13,13 +13,14 @@ use flui_painting::typography::TextDirection;
 use flui_platform_api::HapticFeedback;
 use flui_view::{BoxedView, IntoView, ViewExt};
 use flui_widgets::{
-    AnchoredDrag, AnchoredDragController, AnchorsError, ColoredBox, Directionality,
-    DraggableAnchors, NestedScroll, ScrollCause, ScrollController, ScrollDevice, Scrollable,
+    Alternative, AnchorIntent, AnchoredDrag, AnchoredDragController, AnchorsError, ColoredBox,
+    ControlPlacement, ControlSpec, Directionality, DraggableAnchors, GestureAlternatives,
+    GestureCommand, NestedScroll, ScrollCause, ScrollController, ScrollDevice, Scrollable,
     SizedBox, VsyncScope,
 };
 
-use crate::common::LaidOut;
-use crate::nested_scroll::{DEVICES, Device, Keys, Probe, at, fling, mounted, settle, slow};
+use crate::common::{LaidOut, lay_out_animated, tight};
+use crate::nested_scroll::{DEVICES, Device, Keys, Probe, at, fling, settle, slow};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stop {
@@ -55,17 +56,66 @@ fn controller(anchors: DraggableAnchors<Stop>) -> AnchoredDragController<Stop> {
     AnchoredDragController::new(anchors, Stop::Closed).expect("Closed is an anchor")
 }
 
+/// The side of the dragged square and of the area it is dragged in.
+const SIDE: f64 = 300.0;
+
+/// How wide the alternatives' two controls are: the touch minimum target
+/// each.
+fn controls_width() -> f64 {
+    2.0 * flui_interaction::GestureSettingsProvider::default()
+        .min_target_for(flui_interaction::PointerKind::Touch)
+}
+
+/// Alternatives for a drag under test whose alternatives are not what the
+/// test is about: two empty controls on the right of the drag in either
+/// reading direction, so the drag keeps the area a test drags in.
+fn alternatives_in(direction: TextDirection) -> GestureAlternatives {
+    let placement = match direction {
+        TextDirection::Ltr => ControlPlacement::Trailing,
+        TextDirection::Rtl => ControlPlacement::Leading,
+    };
+    GestureAlternatives::new(Alternative::VisibleControl(
+        ControlSpec::new(
+            GestureCommand::new("Next anchor", AnchorIntent::Next),
+            SizedBox::shrink(),
+        )
+        .control(
+            GestureCommand::new("Previous anchor", AnchorIntent::Previous),
+            SizedBox::shrink(),
+        )
+        .placement(placement),
+    ))
+    .expect("two labelled commands")
+}
+
 /// A 300 × 300 square dragged along `axis`.
 fn drag_view(controller: &AnchoredDragController<Stop>, axis: Axis) -> AnchoredDrag<Stop> {
+    drag_view_in(controller, axis, TextDirection::Ltr)
+}
+
+/// A 300 × 300 square dragged along `axis`, its alternatives' controls on
+/// its right under `direction`.
+fn drag_view_in(
+    controller: &AnchoredDragController<Stop>,
+    axis: Axis,
+    direction: TextDirection,
+) -> AnchoredDrag<Stop> {
     AnchoredDrag::new(
         controller.clone(),
         axis,
-        ColoredBox::new(CONTENT).child(SizedBox::new(300.0, 300.0)),
+        ColoredBox::new(CONTENT).child(SizedBox::new(SIDE, SIDE)),
+        alternatives_in(direction),
     )
 }
 
+/// `view` laid out with room for the drag's square and, on its right, its
+/// alternatives' controls.
 fn mount(view: impl IntoView, vsync: &Vsync) -> LaidOut {
-    let mut laid = mounted(VsyncScope::new(vsync.clone(), view).boxed(), vsync.clone());
+    let mut laid = lay_out_animated(
+        VsyncScope::new(vsync.clone(), view).boxed(),
+        tight(SIDE + controls_width(), SIDE),
+        vsync.clone(),
+    );
     laid.tick();
     laid
 }
@@ -170,7 +220,10 @@ pub(crate) fn anchored_drag_reads_offsets_toward_the_reading_end() {
         for direction in [TextDirection::Ltr, TextDirection::Rtl] {
             let vsync = Vsync::new();
             let anchors = controller(three());
-            let view = Directionality::new(direction, drag_view(&anchors, Axis::Horizontal));
+            let view = Directionality::new(
+                direction,
+                drag_view_in(&anchors, Axis::Horizontal, direction),
+            );
             let mut laid = mount(view, &vsync);
             let (from, to) = match direction {
                 TextDirection::Rtl => (at(200.0, 150.0), at(120.0, 150.0)),
@@ -472,7 +525,10 @@ pub(crate) fn anchored_drag_assistive_and_key_steps_move_between_anchors() {
     for direction in [TextDirection::Ltr, TextDirection::Rtl] {
         let vsync = Vsync::new();
         let anchors = controller(three());
-        let view = Directionality::new(direction, drag_view(&anchors, Axis::Horizontal));
+        let view = Directionality::new(
+            direction,
+            drag_view_in(&anchors, Axis::Horizontal, direction),
+        );
         let mut laid = mount(view, &vsync);
         let right = Key::Named(NamedKey::ArrowRight);
         let left = Key::Named(NamedKey::ArrowLeft);
@@ -500,14 +556,28 @@ pub(crate) fn anchored_drag_assistive_and_key_steps_move_between_anchors() {
         keys.up(close.0, close.1.clone());
         settle(&mut laid);
         assert_eq!(anchors.current(), Stop::Closed, "{direction:?}: and back");
+        // A key the drag cannot act on bubbles past it: nothing handles it,
+        // or the focus traversal around the drag takes the focus elsewhere
+        // (to its alternatives' controls); the drag stays where it is.
+        let bubbles = |laid: &mut LaidOut, code: Code, key: Key| {
+            let focused = || laid.focus_manager().primary_focus().map(|node| node.id());
+            let before = focused();
+            let handled = keys.down(code, key.clone());
+            keys.up(code, key);
+            let moved_focus = focused() != before;
+            settle(laid);
+            (!handled || moved_focus) && anchors.current() == Stop::Closed
+        };
         assert!(
-            !keys.down(close.0, close.1.clone()),
-            "{direction:?}: at the lowest anchor the key bubbles"
-        );
-        let down = Key::Named(NamedKey::ArrowDown);
-        assert!(
-            !keys.down(Code::ArrowDown, down),
+            bubbles(&mut laid, Code::ArrowDown, Key::Named(NamedKey::ArrowDown)),
             "{direction:?}: keys across the axis bubble"
+        );
+        // The drag takes the focus again from a drag that returns home.
+        laid.replay(&slow(Device::Mouse, at(150.0, 150.0), at(160.0, 150.0)));
+        settle(&mut laid);
+        assert!(
+            bubbles(&mut laid, close.0, close.1.clone()),
+            "{direction:?}: at the lowest anchor the key bubbles"
         );
     }
 }
@@ -636,7 +706,12 @@ pub(crate) fn anchored_drag_is_a_bounded_leaf_and_a_participant() {
         let content = Scrollable::new()
             .controller(list.clone())
             .child(SizedBox::new(300.0, 1000.0));
-        let view = AnchoredDrag::new(sheet.clone(), Axis::Vertical, content);
+        let view = AnchoredDrag::new(
+            sheet.clone(),
+            Axis::Vertical,
+            content,
+            alternatives_in(TextDirection::Ltr),
+        );
         let mut laid = mount(view, &vsync);
         laid.replay(&slow(device, at(150.0, 20.0), at(150.0, 150.0)));
         settle(&mut laid);
@@ -797,11 +872,11 @@ pub(crate) fn anchored_drag_is_no_drop_autoscroll_target() {
     });
 }
 
-/// Named, the drag is a slider assistive technology reads by its label and
-/// its current anchor's description, and a stop of focus traversal: Tab
-/// reaches it, assistive technology follows the focus onto the slider, and
-/// the arrow keys then move it. Unnamed, Tab passes it by.
-pub(crate) fn anchored_drag_named_is_a_slider_and_a_tab_stop() {
+/// The drag is a stop of focus traversal, named or not: Tab reaches the row
+/// of its gesture alternatives, where the arrow keys move it. Named, its
+/// slider reads its label and its current anchor's description; unnamed, the
+/// slider has neither.
+pub(crate) fn anchored_drag_is_a_tab_stop_and_a_named_slider() {
     use flui_testing::a11y::Role;
     let tab = || Key::Named(NamedKey::Tab);
     let right = Key::Named(NamedKey::ArrowRight);
@@ -832,32 +907,25 @@ pub(crate) fn anchored_drag_named_is_a_slider_and_a_tab_stop() {
         keys.down(Code::Tab, tab());
         keys.up(Code::Tab, tab());
         laid.tick();
-        let focus = laid
-            .a11y_tree()
-            .expect("published semantics")
-            .focus()
-            .map(|node| (node.role(), node.label().map(str::to_owned)));
         let moved = keys.down(Code::ArrowRight, right.clone());
         keys.up(Code::ArrowRight, right.clone());
         settle(&mut laid);
-        if named {
-            assert!(moved, "Tab focused the named drag");
-            assert_eq!(
-                focus,
-                Some((Role::Slider, Some("Drawer".to_owned()))),
-                "assistive technology follows the focus onto the slider"
-            );
-            assert_eq!(anchors.current(), Stop::Open, "and the arrow moved it");
-            assert_eq!(
-                slider(&laid),
-                Some((Some("Drawer".to_owned()), Some("Open".to_owned()))),
-                "a slider reading its label and its anchor"
-            );
+        assert!(moved, "named {named}: Tab focused the drag's row");
+        assert_eq!(
+            anchors.current(),
+            Stop::Open,
+            "named {named}: and the arrow moved it"
+        );
+        let expected = if named {
+            Some((Some("Drawer".to_owned()), Some("Open".to_owned())))
         } else {
-            assert!(!moved, "Tab passes an unnamed drag by");
-            assert_eq!(anchors.current(), Stop::Closed);
-            assert_eq!(slider(&laid), Some((None, None)), "an unnamed slider");
-        }
+            Some((None, None))
+        };
+        assert_eq!(
+            slider(&laid),
+            expected,
+            "named {named}: the slider reads its label and its anchor"
+        );
     }
 }
 

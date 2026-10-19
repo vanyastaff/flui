@@ -45,8 +45,8 @@ mod sliver_to_box_adapter;
 mod viewport;
 
 pub use anchored_drag::{
-    AnchoredDrag, AnchoredDragController, AnchoredDragState, AnchorsError, DraggableAnchors,
-    DraggableAnchorsBuilder,
+    AnchorIntent, AnchoredDrag, AnchoredDragController, AnchoredDragState, AnchorsError,
+    DraggableAnchors, DraggableAnchorsBuilder,
 };
 pub use animated_list::{AnimatedGrid, AnimatedList, SliverAnimatedList, SliverAnimatedListState};
 pub use collapsing_header::{
@@ -65,7 +65,7 @@ pub use nested::{
     NestedScrollConnection, NestedScrollState, OverscrollBehavior, PageSnap, ScrollCause,
     ScrollDevice, ScrollEndReason, ScrollStep, SnapPolicy, ViewportFraction,
 };
-pub use page_view::{PageController, PageView, PageViewState};
+pub use page_view::{PageController, PageIntent, PageView, PageViewState};
 pub use refresh_indicator::{
     RefreshController, RefreshIndicator, RefreshIndicatorBuilder, RefreshIndicatorPhase,
     RefreshIndicatorState, RefreshIndicatorStyle, RefreshIntent,

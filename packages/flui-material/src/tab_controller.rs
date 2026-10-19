@@ -48,7 +48,39 @@ use flui_sdk::pipeline::ScrollDirection;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, InheritedView, impl_inherited_view};
 use flui_sdk::widgets::animated::VsyncScope;
-use flui_sdk::widgets::{MotionBuilder, PageController, ViewportFraction};
+use flui_sdk::widgets::{
+    Alternative, CompanionLink, CompanionRegistration, CompanionSpec, GestureAlternatives,
+    GestureCommand, Intent, MotionBuilder, PageController, SemanticsAnchor, SingleActivator,
+    ViewportFraction,
+};
+
+/// Select the tab after or before the selected one: what a
+/// [`TabBarView`](crate::TabBarView)'s commands perform without a swipe, and
+/// what tapping the adjacent tab of a [`TabBar`](crate::TabBar) does.
+///
+/// The view answers it through the controller, not by turning its pager: a
+/// controller commits the selection when the user lets go of the pager, so a
+/// page turned by the pager's own intent would leave the selection behind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum TabStep {
+    /// The tab after the selected one.
+    Next,
+    /// The tab before the selected one.
+    Previous,
+}
+
+impl Intent for TabStep {}
+
+impl TabStep {
+    /// The tab this step selects from `index` among `length` tabs; `None`
+    /// past either end.
+    pub(crate) fn target(self, index: usize, length: usize) -> Option<usize> {
+        match self {
+            Self::Next => index.checked_add(1).filter(|next| *next < length),
+            Self::Previous => index.checked_sub(1),
+        }
+    }
+}
 
 /// `(index, previous_index)`, mutated and read as one unit.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -180,6 +212,9 @@ struct Shared {
     next_clock: Cell<u64>,
     /// Notifies whenever the position may have moved, from either source.
     position_listeners: ChangeNotifier,
+    /// Where a [`TabBar`](crate::TabBar) registers as the single-pointer path
+    /// of the attached [`TabBarView`](crate::TabBarView)'s step commands.
+    tab_steps: CompanionLink<TabStep>,
 }
 
 /// The default tab-change motion: 300 ms ease-in-out.
@@ -588,6 +623,7 @@ impl TabController {
                 clocks: RefCell::new(Vec::new()),
                 next_clock: Cell::new(0),
                 position_listeners,
+                tab_steps: CompanionLink::new(),
             }),
         }
     }
@@ -715,6 +751,50 @@ impl TabController {
             shared: Rc::downgrade(&self.shared),
             id,
         }
+    }
+
+    /// The alternatives to a swipe that a [`TabBarView`](crate::TabBarView) on
+    /// this controller offers: "Previous tab" and "Next tab", each selecting
+    /// the adjacent tab as tapping it does, and disabled at the ends. They
+    /// draw no control. Their single-pointer path is the
+    /// [`TabBar`](crate::TabBar) on this controller, which registers on the
+    /// controller's companion link while it is mounted, so a view with no bar
+    /// leaves them unfulfilled.
+    ///
+    /// The view builds these itself. They are public so that
+    /// `flui_testing::assert_gesture_alternatives` can check the pair against
+    /// a mounted view and bar.
+    #[must_use]
+    pub fn step_alternatives(&self) -> GestureAlternatives {
+        GestureAlternatives::new(Alternative::Companion(
+            CompanionSpec::new(
+                GestureCommand::new("Previous tab", TabStep::Previous)
+                    .key(SingleActivator::character("[").control()),
+                &self.shared.tab_steps,
+            )
+            .command(
+                GestureCommand::new("Next tab", TabStep::Next)
+                    .key(SingleActivator::character("]").control()),
+            ),
+        ))
+        .expect(
+            "BUG: two distinct labels, both performing the intent the controller's link carries",
+        )
+    }
+
+    /// Registers a tab bar as the companion of the step commands, until the
+    /// registration drops. `tabs` holds the anchor each tab's node declares,
+    /// in tab order. The tab a step performs is read from the selection when
+    /// asked, so the bar follows it; none at either end.
+    pub(crate) fn register_tab_bar(&self, tabs: Rc<[SemanticsAnchor]>) -> CompanionRegistration {
+        // Weak: the registration lives in the controller's own link, and a
+        // strong handle would make the controller own itself.
+        let shared = Rc::downgrade(&self.shared);
+        self.shared.tab_steps.register(move |step| {
+            let shared = shared.upgrade()?;
+            let target = step.target(shared.index(), shared.length)?;
+            tabs.get(target).cloned()
+        })
     }
 
     /// Makes a new pager at the current index the position source until the

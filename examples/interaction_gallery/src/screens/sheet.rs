@@ -7,7 +7,8 @@ use std::rc::Rc;
 
 use flui::prelude::*;
 use flui::widgets::{
-    AnchoredDrag, AnchoredDragController, AnimatedBuilder, DraggableAnchors, column, row,
+    Alternative, AnchorIntent, AnchoredDrag, AnchoredDragController, AnimatedBuilder, ControlSpec,
+    DraggableAnchors, GestureAlternatives, GestureCommand, column, row,
 };
 
 use super::{divider, list_row, page};
@@ -125,7 +126,20 @@ impl ViewState<SheetScreen> for SheetState {
                 ])
                 .cross_axis_alignment(CrossAxisAlignment::Stretch),
             );
-        let sheet = AnchoredDrag::new(self.sheet.clone(), Axis::Vertical, sheet_face)
+        // The sheet moves between its stops by its Expand and Collapse
+        // controls too, without a drag.
+        let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+            ControlSpec::new(
+                GestureCommand::new("Expand", AnchorIntent::Previous),
+                Padding::symmetric(8.0, 8.0).child(style::quiet_button("Expand")),
+            )
+            .control(
+                GestureCommand::new("Collapse", AnchorIntent::Next),
+                Padding::symmetric(8.0, 8.0).child(style::quiet_button("Collapse")),
+            ),
+        ))
+        .expect("BUG: two distinct labels");
+        let sheet = AnchoredDrag::new(self.sheet.clone(), Axis::Vertical, sheet_face, alternatives)
             .semantics("Places sheet", |stop: Stop| stop.to_string());
         let map = CustomPaint::new()
             .painter(Rc::new(MapPainter))
@@ -142,8 +156,9 @@ impl ViewState<SheetScreen> for SheetState {
         });
         page(
             "Bottom sheet",
-            "Drag the sheet by its handle or its list between Full, Half and Peek. Tab to the \
-             sheet and use the up and down arrows to step between them.",
+            "Drag the sheet by its handle or its list between Full, Half and Peek, or use its \
+             Expand and Collapse buttons. Tab to the sheet and use the up and down arrows to \
+             step between them.",
             readout,
             ClipRRect::circular(12.0).child(Stack::new(vec![
                 Positioned::fill(map).boxed(),

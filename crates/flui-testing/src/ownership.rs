@@ -37,7 +37,7 @@ use flui_view::prelude::*;
 use flui_view::{BoxedView, LifecycleContext, ViewState};
 use flui_widgets::{
     Alternative, ColoredBox, Column, GestureAlternatives, GestureArenaScope, GestureCommand,
-    GestureDetector, InteractiveViewer, Listener, MenuSpec, PageController, PageView,
+    GestureDetector, InteractiveViewer, Listener, MenuSpec, PageController, PageIntent, PageView,
     ScrollController, Scrollable, SizedBox, SwipeAction, SwipeActions, SwipeAlternative,
     ZoomIntent,
 };
@@ -843,7 +843,7 @@ const PAGE: f64 = 300.0;
 fn pager(controller: &PageController, page: impl Fn() -> BoxedView) -> LaidOut {
     let pages: Vec<BoxedView> = (0..3).map(|_| page()).collect();
     lay_out(
-        PageView::new(pages).controller(controller.clone()),
+        PageView::new(pages, pager_alternatives()).controller(controller.clone()),
         tight(PAGE, PAGE),
     )
 }
@@ -925,6 +925,19 @@ fn viewer_alternatives() -> GestureAlternatives {
             |_cx, _request| {},
         )
         .item(GestureCommand::new("Zoom out", ZoomIntent::Out)),
+    ))
+    .expect("BUG: two distinct labels")
+}
+
+/// A pager's page commands in a context menu nobody opens, so the pager
+/// keeps the whole row.
+fn pager_alternatives() -> GestureAlternatives {
+    GestureAlternatives::new(Alternative::ContextMenu(
+        MenuSpec::new(
+            GestureCommand::new("Previous page", PageIntent::Previous),
+            |_cx, _request| {},
+        )
+        .item(GestureCommand::new("Next page", PageIntent::Next)),
     ))
     .expect("BUG: two distinct labels")
 }

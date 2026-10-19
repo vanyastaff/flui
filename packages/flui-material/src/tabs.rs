@@ -73,15 +73,11 @@
 //! - **`onHover`/`onFocusChange`/`mouseCursor`/`splashFactory`/
 //!   `splashBorderRadius`/`dragStartBehavior`/`physics`/`textScaler`** — no
 //!   consumer yet; `InkWell`'s own defaults apply.
-//! - **Per-tab `Semantics`** — a full tab bar wraps each tab in
-//!   `Semantics(role: SemanticsRole.tab, child: Stack([content,
-//!   Semantics(selected: ..., label: "Tab N of M")]))` plus a
-//!   `SemanticsRole.tabBar` container on the bar itself. This crate
-//!   mounts no semantics annotation at all for `TabBar` — no "Tab 2 of 3"
-//!   label, no `selected` flag, no `tab`/`tabBar` role — so an assistive
-//!   technology gets no structured information about a mounted `TabBar`
-//!   today. Named, not silently dropped: a real gap, not a stylistic
-//!   simplification.
+//! - **The "Tab N of M" label** — a full tab bar adds it to each tab's
+//!   semantics. Each tab here is one `SemanticsRole::Tab` node carrying its
+//!   selected state and its content's text, inside a `SemanticsRole::TabList`
+//!   node for the bar, as [`crate::NavigationBar`]'s destinations are; the
+//!   position label needs a localizations table this crate does not have yet.
 //! - **`enableFeedback`** — `InkWell.enableFeedback` (haptic/
 //!   acoustic click feedback on tap, defaulting to `true`) has no analog
 //!   here; [`crate::InkWell`] itself has no `enableFeedback` parameter yet
@@ -107,9 +103,10 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, RebuildHandle};
 use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
-    Center, Column, Container, CrossAxisAlignment, CustomPaint, CustomPainter, DefaultTextStyle,
-    Directionality, Expanded, IgnorePointer, Padding, Positioned, PreferredSizeView, Row, SizedBox,
-    Stack, Text, WidgetState, WidgetStateConstraint, WidgetStateProperty,
+    Center, Column, CompanionRegistration, Container, CrossAxisAlignment, CustomPaint,
+    CustomPainter, DefaultTextStyle, Directionality, Expanded, IgnorePointer, MergeSemantics,
+    Padding, Positioned, PreferredSizeView, Row, Semantics, SemanticsAnchor, SemanticsRole,
+    SizedBox, Stack, Text, WidgetState, WidgetStateConstraint, WidgetStateProperty,
 };
 
 use crate::ink_well::InkWell;
@@ -482,6 +479,17 @@ pub struct TabBarState {
     vsync: Option<Vsync>,
     /// This bar's registration of that clock with the subscribed controller.
     clock: RefCell<Option<ClockLease>>,
+    /// The anchor each tab's node declares, made with the subscribed
+    /// controller, and the bar's registration of them as the companion of the
+    /// controller's step commands.
+    companion: RefCell<Option<TabCompanion>>,
+}
+
+/// A bar's tabs as the single-pointer path of a [`crate::TabBarView`]'s
+/// commands: registered while the bar is mounted.
+struct TabCompanion {
+    anchors: Rc<[SemanticsAnchor]>,
+    _registration: CompanionRegistration,
 }
 
 impl std::fmt::Debug for TabBarState {
@@ -502,6 +510,7 @@ impl StatefulView for TabBar {
             rebuild: None,
             vsync: None,
             clock: RefCell::new(None),
+            companion: RefCell::new(None),
         }
     }
 }
@@ -557,6 +566,18 @@ impl TabBarState {
             let lease = resolved.lease_clock(self.vsync.clone());
             let _previous_lease = self.clock.borrow_mut().replace(lease);
             let _prev = self.controller.borrow_mut().replace(resolved.clone());
+
+            // The previous registration leaves the previous controller's link
+            // once the new one is in place; each tab keeps its anchor across
+            // rebuilds, so the published tree does not churn.
+            let anchors: Rc<[SemanticsAnchor]> = (0..resolved.length())
+                .map(|_| SemanticsAnchor::new())
+                .collect();
+            let companion = TabCompanion {
+                _registration: resolved.register_tab_bar(Rc::clone(&anchors)),
+                anchors,
+            };
+            let _previous_companion = self.companion.borrow_mut().replace(companion);
         }
 
         resolved
@@ -593,6 +614,7 @@ impl ViewState<TabBar> for TabBarState {
     /// field access with no runtime borrow check — rather than
     /// `borrow_mut`.
     fn dispose(&mut self) {
+        drop(self.companion.get_mut().take());
         drop(self.clock.get_mut().take());
         let controller = self.controller.get_mut().take();
         let listener_id = self.listener_id.get_mut().take();
@@ -638,6 +660,12 @@ impl ViewState<TabBar> for TabBarState {
 
         let mixed = tab_has_text_and_icon(&view.tabs);
         let current_index = controller.index();
+        let anchors = self
+            .companion
+            .borrow()
+            .as_ref()
+            .map(|companion| Rc::clone(&companion.anchors))
+            .expect("BUG: resolving the controller made the tab anchors");
 
         let cells: Vec<BoxedView> = view
             .tabs
@@ -646,6 +674,7 @@ impl ViewState<TabBar> for TabBarState {
             .map(|(index, tab)| {
                 build_tab_cell(
                     index,
+                    &anchors[index],
                     tab,
                     index == current_index,
                     mixed,
@@ -692,7 +721,13 @@ impl ViewState<TabBar> for TabBarState {
         layers.push(row.boxed());
         layers.push(indicator.boxed());
 
-        SizedBox::height(height).child(Stack::new(layers)).boxed()
+        let bar = SizedBox::height(height).child(Stack::new(layers));
+        Semantics::new()
+            .role(SemanticsRole::TabList)
+            .container(true)
+            .explicit_child_nodes(true)
+            .child(bar)
+            .boxed()
     }
 }
 
@@ -805,6 +840,7 @@ impl CustomPainter for TabIndicatorPainter {
 #[expect(clippy::too_many_arguments, reason = "internal helper, not public API")]
 fn build_tab_cell(
     index: usize,
+    anchor: &SemanticsAnchor,
     tab: &Tab,
     selected: bool,
     bar_has_mixed_tabs: bool,
@@ -846,5 +882,13 @@ fn build_tab_cell(
             recovery.finish();
         });
 
-    Expanded::new(ink_well).boxed()
+    // One node per tab, as a navigation destination is: the well's tap and
+    // the label text fold into it, and the anchor names it for the
+    // alternatives a [`crate::TabBarView`] relies on this bar for.
+    let tab_node = Semantics::new()
+        .role(SemanticsRole::Tab)
+        .selected(selected)
+        .anchor(anchor.clone())
+        .child(ink_well);
+    Expanded::new(MergeSemantics::new().child(tab_node)).boxed()
 }

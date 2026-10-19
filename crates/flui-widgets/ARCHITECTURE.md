@@ -795,6 +795,29 @@ live-region nodes, which `assert_gesture_alternatives` compares across paths.
 Pinned by the `gesture_alternatives` family in `tests/contracts.rs` and by
 `a_package_gesture_widget_reaches_its_intent_on_every_path` in flui-sdk.
 
+An `Alternative::Companion` draws no control: its `CompanionSpec` holds the
+commands and a `CompanionLink<I>`, an `Rc` registry of resolvers
+(`Fn(&I) -> Option<SemanticsAnchor>`) that the owner of the shared state makes
+and a companion widget registers on while it is mounted. A
+`CompanionRegistration` withdraws by registration id when it drops (ids are
+never reused, and exhausting them panics rather than wraps). The registry is
+borrowed only to push, remove or snapshot: `CompanionSpec::node_for` clones the
+resolvers out before running the first, and a withdrawn entry is dropped after
+the borrow ends, so a resolver or the captures of a leaving registration may
+register, leave and read the link
+(`a_companion_link_follows_its_registrations`). A read answers for the
+companions registered when it began. The alternatives are checked twice: a
+post-frame callback queued by `init_state` warns on `flui::a11y` when the link
+has no registration by then (the companion may mount before or after the
+behavioural widget in the same frame, which is why the question waits for the
+frame to end; `unfulfilled_companion_alternatives_are_reported`), and
+`assert_gesture_alternatives` resolves the anchor in the published tree and
+activates that node. The type erasure sits in `CompanionSpec` so that
+`Alternative` stays one non-generic enum; `GestureAlternatives::new` refuses a
+command whose intent is not the link's (`ForeignIntent`). Rows:
+`page_view_with_buttons_beside_it`, and flui-material's `TabBar` beside a
+`TabBarView`.
+
 A widget that answers a fixed intent itself takes its commands' appearance
 instead of alternatives: `Draggable` a `DragCommands` (cut, optional copy) and
 `DropTarget` a `DropCommands` (paste), each a `CommandAppearance` and an
@@ -3079,7 +3102,11 @@ simulation's velocity at that edge) is offered through `post_fling` nearest firs
 and an accepting scrollable runs it from its own place in the same snapshot. The
 sequence ends once, after its last run. A new contact, wheel latch or programmatic
 command on an owner ends what it drove `Preempted`; a programmatic step never ends a
-contact that is still down. A press on a moving scrollable begins the contact's
+contact that is still down. A new contact, wheel latch, key press or assistive action on a
+leaf also stops the run a scrollable above drives for the fling the leaf handed it
+(`ScrollSequence::preempt_runs`), even when the leaf takes the input whole and no
+remainder reaches that scrollable: the fling's sequence ends `Preempted` before the new
+one starts (`new_wheel_or_assistive_scroll_preempts_handed_off_fling`). A press on a moving scrollable begins the contact's
 sequence at the hold; when another scrollable's drag takes the contact the sequence
 ends `ArenaLost`.
 
@@ -3195,8 +3222,16 @@ page length from one `ViewportFraction` (finite and positive, refused with a `Re
 is made), and a page shorter than a logical pixel names no page, so a release rests where it
 is. The policy `Arc` lives in `PageViewState` for the
 life of the controller. The scroll view's label is `WidgetsLocalizations::page_label` ("Page N of M" by default); the
-page listener rebuilds the page view on every page change to keep it current. Tests:
-`tests/page_view.rs`.
+page listener rebuilds the page view on every page change to keep it current.
+
+A swipe is a path, and the pages it hides are content, so the pager is a behavioural widget
+(ADR-0216): its constructor takes `GestureAlternatives`, mounted around the scrollable below an
+`Actions` that answers `PageIntent::{Next, Previous}` by animating one page in page order (300
+ms, ease in and out; at once under reduced motion) and declines a turn past either end. The swipe itself stays a scroll of
+the channel and performs no command. A plain `Scrollable` and a `CollapsingHeader` take no
+alternatives: what they move stays reachable by the scroll keys, the scroll semantics actions
+(ADR-0157) and the focus reveal, and their motion operates nothing. Tests: `tests/page_view.rs`
+and the matrix row `page_view_with_page_controls` in `gesture_alternatives`.
 
 The `nested_scroll_channel` table holds the channel's rows, each scripted for touch
 and mouse, and ADR-0169's nested fling and reveal witnesses (both axes, reversal,
@@ -3233,16 +3268,23 @@ policy to the owner in place and, unless a contact holds the child, animates it 
 current anchor's new offset. Unmounting (or swapping the controller) puts the child on the
 nearest anchor at once. Assistive increment and decrement move to the next and the previous
 anchor by offset through `ScrollOwner::move_to`. The node is a slider; named with
-`AnchoredDrag::semantics` it reads its label and the current anchor's description and the
-drag is a stop of focus traversal, an unnamed one is not (a stop without a name tells a
-keyboard user nothing). The child is translated by a `RenderAnimatedTransform` following a
+`AnchoredDrag::semantics` it reads its label and the current anchor's description. A drag
+is a path (ADR-0216), so the constructor takes `GestureAlternatives` whose commands name
+`AnchorIntent::{Next, Previous}`, which an `Actions` above them answers by the same move as
+the slider's; their row is the drag's one stop of focus traversal (the scrollable inside is
+none), and a `Shortcuts` above the row maps the arrow keys along the axis, in reading order
+on a horizontal one, to the intent, so a key there moves the drag as it does once a drag has
+focused the scrollable. At either end the intent is disabled and a key bubbles on. A swiped
+row builds its drag with the crate-private `AnchoredDrag::inside`, without a slider or
+alternatives, since the row's own alternatives perform its outcomes. The matrix row is
+`anchored_drag_with_anchor_controls` in `gesture_alternatives`. The child is translated by a `RenderAnimatedTransform` following a
 `TransformMotion::Translate` of the offset in logical pixels, so a move patches a transform
 layer and rebuilds nothing; the child sits in an opaque `Listener` and the scrollable defers
 hit-testing to it, so the drag is hit where the child is painted and the strip a drag
 uncovers reaches what lies under the drag. `offset_listenable` is the position's own
 listenable, which hears each move as the drag publishes it, before the frame that shows it.
 **Tests:** the `anchored_drag_*` rows of `nested_scroll_channel`, among them
-`anchored_drag_named_is_a_slider_and_a_tab_stop` and
+`anchored_drag_is_a_tab_stop_and_a_named_slider` and
 `anchored_drag_offset_listenable_follows_every_move`; `dismissible_slides_without_rebuilding_per_frame`
 pins the rebuild-free motion.
 
@@ -3361,8 +3403,10 @@ where it moves the header. A `ScrollIntoView` reaching the banner for content it
 part expands it; content it clips entirely is not published. Equal extents give a header that
 takes nothing and offers no scroll action; `HeaderExtents::new` refuses extents that are not
 finite, negative, past `HeaderExtents::MAX` or inverted. Vertical only: a horizontal header
-(and its RTL reading) is not built. **Tests:** the `collapsing_header_*` rows of
-`nested_scroll_channel`.
+(and its RTL reading) is not built. The header takes no `GestureAlternatives`: its collapse is
+what scrolling the body does, never an operation, and what it clips stays reachable by the
+banner's scroll actions, the focus reveal and the body's scroll keys, which these rows pin
+(ADR-0216 §1). **Tests:** the `collapsing_header_*` rows of `nested_scroll_channel`.
 
 ### Shown focus is revealed through the scopes above it
 
@@ -3377,8 +3421,10 @@ node's rectangle), to the scope above; a `CollapsingHeader` expands for content 
 hands on the same way. The handed-on rectangle is the target's visible part rather than
 ADR-0168's whole inner viewport, so an inner viewport taller than the outer one does not pull
 the outer one off the focused row. All rectangles come from the last layout, which each
-scope's own move does not change for the scopes above. **Tests:**
-`collapsing_header_reveals_focused_row_from_tab_and_assistive_request`.
+scope's own move does not change for the scopes above. Each scope's move is a programmatic
+sequence of its own through its own chain, never a remainder of the move below it (ADR-0209
+§3). **Tests:** `collapsing_header_reveals_focused_row_from_tab_and_assistive_request`,
+`a_nested_reveal_moves_each_ancestor_in_a_sequence_of_its_own`.
 
 ### Terminal inertia uses admitted gesture policy
 

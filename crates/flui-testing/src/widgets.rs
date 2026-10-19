@@ -823,6 +823,33 @@ impl LaidOut {
         a11y_tree(&self.pipeline_owner)
     }
 
+    /// The published ids of the nodes that declare `anchor`
+    /// ([`Semantics::anchor`](flui_widgets::Semantics::anchor)), in the
+    /// vocabulary of [`a11y_tree`](Self::a11y_tree): how a test finds the
+    /// node a widget named without naming it by label. Empty until
+    /// [`enable_semantics`](Self::enable_semantics) has been called and a
+    /// frame has run, and while no addressable node declares the anchor.
+    #[must_use]
+    pub fn a11y_nodes_named_by(
+        &self,
+        anchor: &flui_semantics::SemanticsAnchor,
+    ) -> Vec<crate::a11y::NodeId> {
+        self.pipeline_owner.with(|owner| {
+            owner
+                .semantics_owner()
+                .map(|semantics| {
+                    semantics
+                        .tree()
+                        .iter()
+                        .filter(|(_, node)| node.config().anchors().contains(anchor))
+                        .filter_map(|(_, node)| node.accessibility_id())
+                        .map(|identity| crate::a11y::NodeId(identity.as_u64()))
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+    }
+
     /// Drive one more frame after external state has changed — the headless
     /// equivalent of what `setState` schedules: mark the root dirty, then pump a
     /// zero-time frame (rebuild the subtree + re-run layout/paint). Used by the

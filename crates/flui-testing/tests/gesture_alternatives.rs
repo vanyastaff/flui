@@ -18,8 +18,9 @@ use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
-    Actions, Alternative, CallbackAction, ColoredBox, ControlSpec, Dismissible,
-    GestureAlternatives, GestureCommand, Intent, MenuSpec, SizedBox, VsyncScope,
+    Actions, Alternative, CallbackAction, ColoredBox, Column, CompanionLink, CompanionRegistration,
+    CompanionSpec, ControlSpec, Dismissible, GestureAlternatives, GestureCommand, Intent, Listener,
+    MenuSpec, RawButton, Semantics, SemanticsAnchor, SizedBox, VsyncScope,
 };
 
 /// Count one removal.
@@ -39,6 +40,95 @@ enum Subject {
     SilentMenu,
     /// Removal waits for an animation that plays under reduced motion too.
     IgnoresReducedMotion,
+    /// The alternatives rely on a companion, and none is registered.
+    NoCompanion,
+    /// A companion backs them with a button that every pointer can press.
+    Companioned,
+    /// A companion registers a node that assistive technology can click and
+    /// no pointer can press.
+    CompanionIgnoresPointers,
+    /// A companion whose button is too small to hit.
+    CompanionUnderTarget,
+    /// A companion registers a node that every pointer can press and
+    /// assistive technology cannot click.
+    CompanionIgnoresAssistiveTechnology,
+}
+
+/// Who can activate a companion's node.
+#[derive(Clone, Copy)]
+enum Reach {
+    Everyone,
+    /// Assistive technology clicks it; no pointer presses it.
+    AssistiveOnly,
+    /// A pointer presses it; assistive technology has no click for it.
+    PointersOnly,
+}
+
+/// Registers on a link while mounted, naming a 48 px node that removes the row
+/// when it is activated.
+#[derive(Clone, StatefulView)]
+struct RemoveButton {
+    link: CompanionLink<Remove>,
+    removed: Rc<Cell<u32>>,
+    reach: Reach,
+    /// Its side, in logical pixels.
+    side: f64,
+}
+
+struct RemoveButtonState {
+    anchor: SemanticsAnchor,
+    _registration: CompanionRegistration,
+}
+
+impl StatefulView for RemoveButton {
+    type State = RemoveButtonState;
+
+    fn create_state(&self) -> Self::State {
+        let anchor = SemanticsAnchor::new();
+        let named = anchor.clone();
+        RemoveButtonState {
+            _registration: self.link.register(move |_| Some(named.clone())),
+            anchor,
+        }
+    }
+}
+
+impl ViewState<RemoveButton> for RemoveButtonState {
+    fn build(&self, view: &RemoveButton, _ctx: &dyn BuildContext) -> impl IntoView {
+        let removed = Rc::clone(&view.removed);
+        let semantics = Semantics::new()
+            .label("Remove row")
+            .anchor(self.anchor.clone());
+        let body = SizedBox::new(view.side, view.side);
+        match view.reach {
+            Reach::Everyone => RawButton::new(semantics.child(body))
+                .on_press(move |_cx| removed.set(removed.get() + 1))
+                .boxed(),
+            Reach::AssistiveOnly => semantics
+                .on_click(move |_cx| removed.set(removed.get() + 1))
+                .child(body)
+                .boxed(),
+            Reach::PointersOnly => semantics
+                .child(
+                    Listener::new()
+                        .on_pointer_down(move |_cx, _dispatch| removed.set(removed.get() + 1))
+                        .child(body),
+                )
+                .boxed(),
+        }
+    }
+}
+
+impl std::fmt::Debug for RemoveButton {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RemoveButton")
+    }
+}
+
+impl std::fmt::Debug for RemoveButtonState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RemoveButtonState")
+    }
 }
 
 /// Performs `Remove` once a 300 ms animation that ignores reduced motion
@@ -96,8 +186,16 @@ impl ViewState<AnimatedRemoval> for AnimatedRemovalState {
 fn mount(subject: Subject) -> AlternativesSubject<u32> {
     let removed = Rc::new(Cell::new(0));
     let command = GestureCommand::new("Remove row", Remove);
+    let link = CompanionLink::<Remove>::new();
     let alternative = match subject {
         Subject::SilentMenu => Alternative::ContextMenu(MenuSpec::new(command, |_cx, _request| {})),
+        Subject::NoCompanion
+        | Subject::Companioned
+        | Subject::CompanionIgnoresPointers
+        | Subject::CompanionUnderTarget
+        | Subject::CompanionIgnoresAssistiveTechnology => {
+            Alternative::Companion(CompanionSpec::new(command, &link))
+        }
         _ => Alternative::VisibleControl(ControlSpec::new(command, SizedBox::new(16.0, 16.0))),
     };
     let alternatives = GestureAlternatives::new(alternative).expect("one labelled command");
@@ -124,6 +222,31 @@ fn mount(subject: Subject) -> AlternativesSubject<u32> {
                 count.set(count.get() + 1);
             }))
             .boxed()
+    };
+    let view = match subject {
+        Subject::Companioned
+        | Subject::CompanionIgnoresPointers
+        | Subject::CompanionUnderTarget
+        | Subject::CompanionIgnoresAssistiveTechnology => Column::new(vec![
+            view,
+            RemoveButton {
+                link,
+                removed: Rc::clone(&removed),
+                reach: match subject {
+                    Subject::CompanionIgnoresPointers => Reach::AssistiveOnly,
+                    Subject::CompanionIgnoresAssistiveTechnology => Reach::PointersOnly,
+                    _ => Reach::Everyone,
+                },
+                side: if matches!(subject, Subject::CompanionUnderTarget) {
+                    10.0
+                } else {
+                    48.0
+                },
+            }
+            .boxed(),
+        ])
+        .boxed(),
+        _ => view,
     };
     AlternativesSubject::new(view, &alternatives, move || removed.get())
 }
@@ -183,5 +306,42 @@ fn the_check_passes_a_conforming_row_and_names_each_broken_path() {
     assert!(
         silent.contains("its menu, opened by a secondary click, item chosen by assistive technology: the path could not be driven"),
         "a menu assistive technology cannot reach is caught:\n{silent}"
+    );
+
+    assert_gesture_alternatives(&check(Subject::Companioned));
+    let dead = failure(Subject::CompanionIgnoresPointers);
+    for device in ["Mouse", "Touch", "Virtual"] {
+        assert!(
+            dead.contains(&format!(
+                "by its companion's node, pressed with {device}: the model did not change from 0"
+            )),
+            "a companion no {device} pointer can press is caught:\n{dead}"
+        );
+    }
+    assert!(
+        !dead.contains("clicked by assistive technology"),
+        "while assistive technology still reaches it:\n{dead}"
+    );
+
+    let deaf = failure(Subject::CompanionIgnoresAssistiveTechnology);
+    assert!(
+        deaf.contains(
+            "its companion's node, clicked by assistive technology: the path could not be driven"
+        ),
+        "a companion assistive technology cannot click is caught:\n{deaf}"
+    );
+
+    let tiny = failure(Subject::CompanionUnderTarget);
+    assert!(
+        tiny.contains("its companion's node is 10×10, under the"),
+        "a companion too small to hit is caught:\n{tiny}"
+    );
+
+    let companionless = failure(Subject::NoCompanion);
+    assert!(
+        companionless.contains(
+            "\"Remove row\": the alternatives declare a companion, but no companion is registered on the link"
+        ),
+        "alternatives that rely on a companion nobody mounted are caught:\n{companionless}"
     );
 }

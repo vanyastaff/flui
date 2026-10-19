@@ -936,6 +936,100 @@ pub(crate) fn new_touch_preempts_handed_off_fling() {
     }
 }
 
+/// New input on the list whose fling an ancestor carries on stops that run
+/// even when the list takes the input whole and nothing reaches the
+/// ancestor: a wheel notch or an assistive scroll back the other way. The
+/// fling's sequence ends `Preempted` before the new one starts (ADR-0209 §4,
+/// C5). A key needs no row of its own here: the first key after the
+/// fling's pointer contact shows the focus, whose reveal already stops the
+/// ancestor.
+pub(crate) fn new_wheel_or_assistive_scroll_preempts_handed_off_fling() {
+    use flui_testing::a11y::{Action, ActionRequest, Role, TreeId};
+    #[derive(Debug, Clone, Copy)]
+    enum Input {
+        Wheel,
+        Assistive,
+    }
+    for input in [Input::Wheel, Input::Assistive] {
+        let (outer, inner, top, middle, vsync) = (
+            ScrollController::new(),
+            ScrollController::new(),
+            Probe::new(),
+            Probe::new(),
+            Vsync::new(),
+        );
+        let mut laid = mounted(
+            list_in_list(&outer, &inner, &top, &middle, None, &vsync),
+            vsync,
+        );
+        outer.jump_to(600.0);
+        inner.jump_to(650.0);
+        laid.enable_semantics();
+        laid.tick();
+        top.take();
+        laid.replay(&fling(Device::Mouse, at(150.0, 150.0), at(150.0, 60.0)));
+        let released = top.started()[0];
+        for _ in 0..30 {
+            if outer.pixels() > 610.0 {
+                break;
+            }
+            laid.pump_for(SAMPLE);
+        }
+        assert!(
+            outer.pixels() > 600.0,
+            "{input:?}: the outer list runs the residual"
+        );
+        let at_end = inner.pixels();
+        match input {
+            Input::Wheel => laid.replay(
+                &MouseScript::new("wheel up")
+                    .move_to(at(150.0, 100.0))
+                    .wheel(-1.0)
+                    .build()
+                    .expect("a hovering mouse"),
+            ),
+            Input::Assistive => {
+                let inner_view = laid
+                    .a11y_tree()
+                    .expect("published semantics")
+                    .find_all(Role::ScrollView)
+                    .get(1)
+                    .expect("the inner scroll view follows the outer one")
+                    .id();
+                laid.invoke_semantics_action(ActionRequest {
+                    action: Action::ScrollUp,
+                    target_tree: TreeId::ROOT,
+                    target_node: inner_view,
+                    data: None,
+                })
+                .expect("the request resolves");
+            }
+        }
+        let stopped = outer.pixels();
+        settle(&mut laid);
+        assert!(
+            inner.pixels() < at_end,
+            "{input:?}: the inner list takes the input back up"
+        );
+        assert_eq!(
+            outer.pixels(),
+            stopped,
+            "{input:?}: the new input stopped the handed-off run"
+        );
+        let seen = top.seen();
+        let ended = seen
+            .iter()
+            .position(|seen| *seen == Seen::Ended(released, ScrollEndReason::Preempted));
+        let next = seen
+            .iter()
+            .position(|seen| matches!(seen, Seen::Started(id) if *id != released));
+        assert!(
+            ended.is_some() && ended < next,
+            "{input:?}: the fling's sequence ends preempted before the next starts: {seen:?}"
+        );
+    }
+}
+
 /// A hard-edged physics whose run glides to `short_by` pixels before the
 /// edge it reports a boundary velocity for.
 #[derive(Debug)]
@@ -1962,6 +2056,117 @@ pub(crate) fn reveal_and_assistive_scroll_go_through_the_chain() {
             && steps.iter().all(|step| step.cause == ScrollCause::UserInput
                 && step.device == ScrollDevice::Assistive),
         "an assistive action offers user steps from the assistive device: {steps:?}"
+    );
+}
+
+/// A reveal in a list inside a list moves each scrollable by its own
+/// geometry, nearest first, as a programmatic sequence of its own through
+/// that scrollable's chain: the connection between the two hears only the
+/// inner list's move, the one above both hears each move once, and neither
+/// is offered the other's remainder (ADR-0209 §3, C8).
+pub(crate) fn a_nested_reveal_moves_each_ancestor_in_a_sequence_of_its_own() {
+    use flui_testing::a11y::{Action, ActionRequest, TreeId};
+    let (outer, inner, top, middle, vsync) = (
+        ScrollController::new(),
+        ScrollController::new(),
+        Probe::new(),
+        Probe::new(),
+        Vsync::new(),
+    );
+    let target = flui_widgets::Semantics::new()
+        .container(true)
+        .role(flui_widgets::SemanticsRole::Button)
+        .label("nested target")
+        .child(SizedBox::new(300.0, 40.0));
+    let inner_list = Scrollable::new()
+        .controller(inner.clone())
+        .child(Column::new(vec![
+            SizedBox::new(300.0, 400.0).boxed(),
+            target.boxed(),
+            SizedBox::new(300.0, 600.0).boxed(),
+        ]));
+    let content = Column::new(vec![
+        SizedBox::new(300.0, 600.0).boxed(),
+        SizedBox::new(300.0, 200.0)
+            .child(NestedScroll::new(middle.connection(), inner_list))
+            .boxed(),
+        SizedBox::new(300.0, 600.0).boxed(),
+    ]);
+    let tree = VsyncScope::new(
+        vsync.clone(),
+        NestedScroll::new(
+            top.connection(),
+            Scrollable::new().controller(outer.clone()).child(content),
+        ),
+    )
+    .boxed();
+    let mut laid = mounted(tree, vsync);
+    laid.enable_semantics();
+    laid.tick();
+    top.take();
+    middle.take();
+    let target = laid
+        .a11y_tree()
+        .expect("published semantics")
+        .find_by_label("nested target")
+        .expect("the offscreen target is addressable")
+        .id();
+    laid.invoke_semantics_action(ActionRequest {
+        action: Action::ScrollIntoView,
+        target_tree: TreeId::ROOT,
+        target_node: target,
+        data: None,
+    })
+    .expect("the request resolves");
+    settle(&mut laid);
+    assert_eq!(inner.pixels(), 240.0, "the inner list shows the target");
+    assert_eq!(outer.pixels(), 500.0, "the outer list shows the inner list");
+
+    let programmatic = |probe: &Probe| {
+        probe.steps().iter().all(|step| {
+            step.cause == ScrollCause::Programmatic && step.device == ScrollDevice::Programmatic
+        })
+    };
+    let between = middle.started();
+    assert_eq!(
+        between.len(),
+        1,
+        "the connection between hears the inner move alone: {:?}",
+        middle.seen()
+    );
+    assert!(programmatic(&middle), "{:?}", middle.seen());
+    assert_eq!(
+        middle
+            .steps()
+            .iter()
+            .map(|step| step.available.y)
+            .sum::<f64>(),
+        240.0,
+        "it is offered the inner list's own distance"
+    );
+    let above = top.started();
+    assert_eq!(
+        above.len(),
+        2,
+        "the connection above hears each move as its own sequence: {:?}",
+        top.seen()
+    );
+    assert_eq!(above[0], between[0], "the nearest scrollable moves first");
+    assert!(programmatic(&top), "{:?}", top.seen());
+    assert_eq!(
+        top.ended(),
+        vec![
+            (above[0], ScrollEndReason::Released),
+            (above[1], ScrollEndReason::Released),
+        ],
+        "each ends once"
+    );
+    assert!(
+        top.seen()
+            .iter()
+            .chain(middle.seen().iter())
+            .all(|seen| !matches!(seen, Seen::Post(_))),
+        "a reveal hands no remainder up"
     );
 }
 

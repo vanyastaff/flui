@@ -3,6 +3,10 @@
 - **Status:** Accepted (2026-10-13); §4 records the shape it shipped with
   ([tasks](../plans/specs/flui-interaction/completeness/tasks.md); design §14, §18).
 - **Date:** 2026-10-13
+- **Amended:** 2026-10-18 — §1 names `AnchoredDrag`, `PageView` and `RefreshIndicator` as
+  behavioural widgets and scroll views whose motion operates nothing as not behavioural.
+- **Amended:** 2026-10-18 — §1 and §4: the single-pointer path may be drawn by a companion widget
+  linked through `CompanionLink`, and `assert_gesture_alternatives` certifies it.
 - **Related:** [ADR-0023](ADR-0023-actions-shortcuts-seam.md),
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md),
   [ADR-0172](ADR-0172-host-owned-system-preferences.md),
@@ -28,13 +32,18 @@ also addresses the related 2.5.2 Pointer Cancellation (activation on release), 2
 ### 1. `GestureAlternatives` is a required argument, not a convention
 
 Every gesture of a behavioural widget (`SwipeActions`, `Dismissible`, `ReorderableList`,
-`ReorderableGrid`, `InteractiveViewer`, `ContextMenuArea`, `SelectionArea`, `AnchoredDrag`
-sheets) leads to an `Intent` (ADR-0023). `GestureAlternatives` registers that one `Intent` on
-three paths besides the gesture, and the widget's constructor takes it:
+`ReorderableGrid`, `InteractiveViewer`, `ContextMenuArea`, `SelectionArea`, `AnchoredDrag`,
+`PageView`, `RefreshIndicator`) leads to an `Intent` (ADR-0023). `GestureAlternatives`
+registers that one `Intent` on three paths besides the gesture, and the widget's constructor
+takes it. A scroll view whose motion operates nothing (`Scrollable`, `CollapsingHeader`) is no
+behavioural widget: what it moves stays reachable by the scroll keys, the scroll semantics
+actions (ADR-0157) and the focus reveal. A pager is one, because the pages a swipe turns are
+content a single pointer must reach. The argument:
 
 ```rust
-pub enum Alternative { VisibleControl(ControlSpec), ContextMenu(MenuSpec) }
+pub enum Alternative { VisibleControl(ControlSpec), ContextMenu(MenuSpec), Companion(CompanionSpec) }
 // `ControlSpec`: the control and the `Intent` it invokes.
+// `CompanionSpec`: the `Intent` of each command and the `CompanionLink` its controls register on.
 // `I: Intent` is typed; `Intent` carries `#[diagnostic::on_unimplemented]`.
 ```
 
@@ -52,7 +61,18 @@ pub enum Alternative { VisibleControl(ControlSpec), ContextMenu(MenuSpec) }
    window or tab close, or text-editing keys of a focused field; a table test checks the
    collisions per platform.
 3. **Single-pointer alternative** without a path or a second contact (2.5.1, 2.5.7):
-   `Alternative::VisibleControl` (the default) or `Alternative::ContextMenu`.
+   `Alternative::VisibleControl` (the default), `Alternative::ContextMenu` or
+   `Alternative::Companion`. A companion is a widget that already draws the controls beside the
+   behavioural widget and performs the same operation by tap: a tab bar beside the pager it
+   turns, carousel dots, a stepper, Previous and Next buttons placed where the layout wants
+   them. The behavioural widget declares its commands as usual (label, `Intent`, keys; the
+   custom actions and keys are its own) and draws nothing; it carries a `CompanionLink<I>`
+   instead, made by whoever owns the state both widgets read (a tab controller), and the
+   companion registers on it while it is mounted, publishing for each command the semantics
+   node that performs it (a `SemanticsAnchor` its widget declares), or none when it has none
+   (the tab after the last). An alternative that no companion backs is unfulfilled, and a
+   claim must be checkable: the behavioural widget warns on `flui::a11y` once the frame it
+   mounted in has run, and `assert_gesture_alternatives` fails.
 
 A path or multipoint callback on a behavioural widget without an `Intent` is a diagnostic.
 `GestureDetector` and `RawGestureDetector` are the mechanism behavioural widgets are built on,
@@ -115,9 +135,13 @@ start" and "move to end" actions.
 
 ```rust
 GestureAlternatives::new(Alternative) -> Result<GestureAlternatives, GestureAlternativesError>
-enum Alternative { VisibleControl(ControlSpec), ContextMenu(MenuSpec) }
+enum Alternative { VisibleControl(ControlSpec), ContextMenu(MenuSpec), Companion(CompanionSpec) }
 ControlSpec::new(GestureCommand, content).control(GestureCommand, content).placement(ControlPlacement)
 MenuSpec::new(GestureCommand, presenter: impl Fn(&mut EventCx, MenuRequest)).item(GestureCommand)
+CompanionSpec::new<I: Intent>(GestureCommand, &CompanionLink<I>).command(GestureCommand)
+CompanionSpec::node_for(&self, &GestureCommand) -> Result<SemanticsAnchor, CompanionGap>
+CompanionLink::<I>::new() -> CompanionLink<I>
+CompanionLink::register(&self, impl Fn(&I) -> Option<SemanticsAnchor>) -> CompanionRegistration
 GestureCommand::new(label, impl Intent).key(SingleActivator)
 GestureAlternatives::handle(&self, &dyn BuildContext) -> CommandHandle   // the gesture's path
 ```
@@ -144,6 +168,16 @@ GestureAlternatives::handle(&self, &dyn BuildContext) -> CommandHandle   // the 
   menu through `MenuSpec::dismiss` (ADR-0208 §3). The menu itself is the
   `MenuSpec`'s presenter, which receives the items, the cause and the pointer position;
   `assert_gesture_alternatives` finds the items it shows in the semantics tree.
+- **Companions.** A `CompanionLink<I>` is an `Rc`: clones are one link and equality is the
+  allocation's, and `GestureAlternatives::new` refuses a companion command whose intent is not an
+  `I` (`GestureAlternativesError::ForeignIntent`). A `CompanionRegistration` ends when it is
+  dropped, which is how a companion leaves on unmount. Nothing is borrowed while a companion's
+  resolver, or the captures of a registration being dropped, run, so a companion may register or
+  leave during the owner's build and a resolver may read the link; a read answers for the
+  companions registered when it began, the first to name a node winning. `CompanionGap`
+  (`Unregistered`, `Unavailable`) says why a command has no node. The companion's node is a
+  `SemanticsAnchor` (ADR-0205), never a label. The same mechanism serves carousel dots,
+  steppers and external Previous and Next buttons.
 - **Controls** are focusable buttons labelled by their command, drawn at least the touch minimum
   target square, after the content in reading order by default and mirrored in a right-to-left
   locale. The control a menu row reveals on keyboard or assistive-technology focus is labelled
@@ -158,7 +192,12 @@ GestureAlternatives::handle(&self, &dyn BuildContext) -> CommandHandle   // the 
   through `PointerScript`, the semantics action through an AT request, the key through the
   platform's keys, and the single-pointer path with a mouse, a finger and a virtual pointer. It
   asserts one identical model effect and announcement per path, Esc non-destructive, the
-  controls' target size, and reachability without hover. Under `MotionPreference::Reduce`, set
+  controls' target size, and reachability without hover. A companion path is driven by activating
+  the node the registered companion published for the command (resolved through its anchor in
+  the published tree) by assistive technology and with a mouse, a finger and a virtual pointer,
+  and requires the same effect as the gesture; the node must exist, be published, and be at least
+  the minimum target. With no companion registered, or none with a node for a command, the check
+  fails. Under `MotionPreference::Reduce`, set
   directly and derived from an animator duration scale of 0, the semantics action must reach the
   same end state within two frames, so an alternative that waits on an animation reduced motion
   does not settle fails there.

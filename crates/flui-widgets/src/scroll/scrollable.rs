@@ -924,9 +924,6 @@ impl ViewState<Scrollable> for ScrollableState {
             .anchored
             .as_ref()
             .and_then(|leaf| leaf.cancelled.clone());
-        // An anchored drag is a stop of focus traversal only when it is a
-        // control of its own; a plain scrollable never is.
-        let traversable = view.anchored.as_ref().is_some_and(|leaf| leaf.traversable);
         let motion = view.anchored.as_ref().map(|leaf| {
             *leaf.slot.owner.borrow_mut() = Rc::downgrade(&owner);
             Rc::clone(&leaf.motion)
@@ -1368,12 +1365,11 @@ impl ViewState<Scrollable> for ScrollableState {
                 .focus_node(Rc::clone(&self.focus))
                 .autofocus(view.autofocus)
                 .can_request_focus(true)
-                .skip_traversal(!traversable)
-                // A stop of traversal tells assistive technology when it
-                // holds the focus, on the control's own node (an anchored
-                // drag's slider), or a screen reader loses keyboard focus
-                // there; a plain scrollable is no stop and adds nothing.
-                .include_semantics(traversable)
+                // No stop of traversal, and no semantics of its own: an
+                // anchored drag's stop is the row of its gesture
+                // alternatives, around it.
+                .skip_traversal(true)
+                .include_semantics(false)
                 .on_key_event(move |_cx, event| {
                     let pipeline = key_pipeline.as_ref();
                     if event.state() == KeyState::Up {

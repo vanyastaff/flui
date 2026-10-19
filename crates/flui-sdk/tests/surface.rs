@@ -193,6 +193,7 @@ mod measured {
     };
     use flui_sdk::widgets::{
         Alternative as _, AlternativeKind as _, CommandAppearance as _, CommandHandle as _,
+        CompanionGap as _, CompanionLink as _, CompanionRegistration as _, CompanionSpec as _,
         ContactAdmission as _, ContextMenuArea as _, ControlPlacement as _, ControlSpec as _,
         GestureAlternatives as _, GestureAlternativesError as _, GestureCommand as _,
         InteractiveViewer as _, MenuCause as _, MenuItem as _, MenuPresenter as _,

@@ -17,7 +17,7 @@ use flui_widgets::{
     ColoredBox, Directionality, PageController, PageView, ViewportFraction, VsyncScope,
 };
 
-use crate::common::{LaidOut, lay_out_animated, tight};
+use crate::common::{LaidOut, lay_out_animated, pager_alternatives, tight};
 
 const PAGE: f64 = 300.0;
 
@@ -127,7 +127,8 @@ fn a_release_settles_on_a_page() {
     for device in [Device::Touch, Device::Mouse] {
         let rests = |from: f64, to: f64| {
             let controller = PageController::new();
-            let (mut laid, _vsync) = mount(PageView::new(pages(3)).controller(controller.clone()));
+            let (mut laid, _vsync) =
+                mount(PageView::new(pages(3), pager_alternatives()).controller(controller.clone()));
             laid.replay(&slow_drag(device, at(from, 150.0), at(to, 150.0)));
             settle(&mut laid);
             controller.position().extents_snapshot().pixels
@@ -149,7 +150,7 @@ fn a_release_settles_on_a_page() {
 fn a_page_view_turns_pages_with_the_scroll_keys() {
     let controller = PageController::new();
     let (mut laid, _vsync) = mount(
-        PageView::new(pages(4))
+        PageView::new(pages(4), pager_alternatives())
             .controller(controller.clone())
             .autofocus(true),
     );
@@ -169,14 +170,6 @@ fn a_page_view_turns_pages_with_the_scroll_keys() {
         settle(&mut laid);
         assert_eq!(pixels(), expected, "{code:?}");
     }
-    assert!(
-        !keys.press(Code::ArrowLeft, NamedKey::ArrowLeft),
-        "before the first page, left moves nothing and bubbles"
-    );
-    assert!(
-        !keys.press(Code::ArrowDown, NamedKey::ArrowDown),
-        "an arrow across the axis is not a page key"
-    );
     controller.jump_to_page(3);
     laid.tick();
     assert!(
@@ -185,6 +178,34 @@ fn a_page_view_turns_pages_with_the_scroll_keys() {
     );
     settle(&mut laid);
     assert_eq!(pixels(), 2.0 * PAGE);
+
+    // A key the pager cannot act on bubbles past it: the enclosing focus
+    // traversal takes it to the pager's alternatives, and no page turns.
+    let pager_focus = laid.focus_manager().primary_focus();
+    controller.jump_to_page(0);
+    laid.tick();
+    keys.press(Code::ArrowLeft, NamedKey::ArrowLeft);
+    settle(&mut laid);
+    assert_eq!(pixels(), 0.0, "before the first page, left moves nothing");
+    assert_ne!(
+        laid.focus_manager().primary_focus().map(|node| node.id()),
+        pager_focus.map(|node| node.id()),
+        "and bubbles past the pager"
+    );
+}
+
+#[test]
+fn an_arrow_across_the_axis_is_not_a_page_key() {
+    let controller = PageController::new();
+    let (mut laid, _vsync) = mount(
+        PageView::new(pages(3), pager_alternatives())
+            .controller(controller.clone())
+            .autofocus(true),
+    );
+    laid.tick();
+    Keys(laid.focus_manager()).press(Code::ArrowDown, NamedKey::ArrowDown);
+    settle(&mut laid);
+    assert_eq!(controller.page(), Some(0.0), "no page turns");
 }
 
 #[test]
@@ -199,7 +220,7 @@ fn arrow_keys_follow_the_reading_direction_and_the_axis() {
                 vsync,
                 Directionality::new(
                     direction,
-                    PageView::new(pages(3))
+                    PageView::new(pages(3), pager_alternatives())
                         .controller(controller.clone())
                         .autofocus(true),
                 ),
@@ -215,7 +236,7 @@ fn arrow_keys_follow_the_reading_direction_and_the_axis() {
 
     let controller = PageController::new();
     let (mut laid, _vsync) = mount(
-        PageView::new(pages(3))
+        PageView::new(pages(3), pager_alternatives())
             .controller(controller.clone())
             .scroll_direction(Axis::Vertical)
             .autofocus(true),
@@ -239,7 +260,8 @@ fn allowed_devices_name_who_may_turn_the_page() {
         settle(&mut laid);
         controller.page()
     };
-    let touch_only = || PageView::new(pages(3)).allowed_devices(PointerKindSet::TOUCH);
+    let touch_only =
+        || PageView::new(pages(3), pager_alternatives()).allowed_devices(PointerKindSet::TOUCH);
     assert_eq!(drag_page(touch_only(), Device::Touch), Some(1.0));
     assert_eq!(
         drag_page(touch_only(), Device::Mouse),
@@ -247,7 +269,7 @@ fn allowed_devices_name_who_may_turn_the_page() {
         "a mouse drag is refused"
     );
     assert_eq!(
-        drag_page(PageView::new(pages(3)), Device::Mouse),
+        drag_page(PageView::new(pages(3), pager_alternatives()), Device::Mouse),
         Some(1.0),
         "every device by default"
     );
@@ -280,12 +302,14 @@ fn a_refused_device_does_not_stop_a_pager_in_motion() {
         controller.page()
     };
     assert_eq!(
-        rests_at(PageView::new(pages(3))),
+        rests_at(PageView::new(pages(3), pager_alternatives())),
         Some(0.0),
         "a press on the moving pager holds it, and it settles back"
     );
     assert_eq!(
-        rests_at(PageView::new(pages(3)).allowed_devices(PointerKindSet::TOUCH)),
+        rests_at(
+            PageView::new(pages(3), pager_alternatives()).allowed_devices(PointerKindSet::TOUCH)
+        ),
         Some(1.0),
         "a mouse press the pager refuses leaves its motion alone"
     );
@@ -306,7 +330,8 @@ fn a_viewport_fraction_that_is_not_finite_and_positive_is_refused() {
 
     let half = ViewportFraction::new(0.5).expect("a positive share");
     let controller = PageController::with_params(1, half);
-    let (mut laid, _vsync) = mount(PageView::new(pages(4)).controller(controller.clone()));
+    let (mut laid, _vsync) =
+        mount(PageView::new(pages(4), pager_alternatives()).controller(controller.clone()));
     laid.tick();
     assert_eq!(controller.page(), Some(1.0));
     assert!(near(
@@ -329,7 +354,8 @@ fn a_viewport_fraction_that_is_not_finite_and_positive_is_refused() {
 #[test]
 fn the_controller_jumps_and_animates_to_a_page() {
     let controller = PageController::new();
-    let (mut laid, _vsync) = mount(PageView::new(pages(4)).controller(controller.clone()));
+    let (mut laid, _vsync) =
+        mount(PageView::new(pages(4), pager_alternatives()).controller(controller.clone()));
     laid.tick();
     assert_eq!(controller.page(), Some(0.0));
 
@@ -348,7 +374,8 @@ fn the_controller_jumps_and_animates_to_a_page() {
 #[test]
 fn assistive_technology_reads_the_page_showing() {
     let controller = PageController::new();
-    let (mut laid, _vsync) = mount(PageView::new(pages(3)).controller(controller.clone()));
+    let (mut laid, _vsync) =
+        mount(PageView::new(pages(3), pager_alternatives()).controller(controller.clone()));
     laid.enable_semantics();
     laid.tick();
     let tree = laid.a11y_tree().expect("published semantics");
@@ -444,7 +471,7 @@ fn the_page_label_comes_from_the_widgets_localizations() {
         Localizations::new(
             Locale::new("de", None::<&str>).expect("valid German locale"),
             vec![BoxedLocalizationsDelegate::new(GermanDelegate)],
-            VsyncScope::new(vsync, PageView::new(pages(3))),
+            VsyncScope::new(vsync, PageView::new(pages(3), pager_alternatives())),
         )
         .boxed()
     });

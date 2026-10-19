@@ -6,9 +6,11 @@
 //! controls mirror in a right-to-left locale and the localized labels take
 //! their parameters.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Duration;
 
-use flui_foundation::geometry::Offset;
+use flui_foundation::geometry::{Axis, Offset};
 use flui_interaction::GestureProfiles;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
@@ -20,10 +22,12 @@ use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture
 use flui_view::prelude::*;
 use flui_view::{BoxedView, StateHandle};
 use flui_widgets::{
-    Actions, Alternative, CallbackAction, ColoredBox, Column, ControlPlacement, ControlSpec,
-    Directionality, DismissDirection, Dismissible, GestureAlternatives, GestureAlternativesError,
-    GestureCommand, Intent, MenuRequest, MenuSpec, RawButton, Semantics, SingleActivator, SizedBox,
-    SwipeAction, SwipeActions, SwipeAlternative, SwipeEdge, Text,
+    Actions, Alternative, CallbackAction, ColoredBox, Column, CompanionGap, CompanionLink,
+    CompanionRegistration, CompanionSpec, ControlPlacement, ControlSpec, Directionality,
+    DismissDirection, Dismissible, Expanded, GestureAlternatives, GestureAlternativesError,
+    GestureCommand, Intent, MenuRequest, MenuSpec, PageController, PageIntent, PageView, RawButton,
+    Row, Semantics, SemanticsAnchor, SingleActivator, SizedBox, SwipeAction, SwipeActions,
+    SwipeAlternative, SwipeEdge, Text, ViewportFraction,
 };
 
 use crate::common::{lay_out, tight};
@@ -516,6 +520,120 @@ pub(crate) fn interactive_viewer_with_pan_controls() {
     ));
 }
 
+/// Matrix row: `PageView` with page controls. A swipe toward the reading
+/// start turns back a page, as "Previous page" does; each command is reached
+/// by assistive technology, by its key and by its control with each pointer,
+/// to the same page.
+pub(crate) fn page_view_with_page_controls() {
+    let mount = || {
+        let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+            ControlSpec::new(
+                GestureCommand::new("Previous page", PageIntent::Previous)
+                    .key(SingleActivator::character("[").control()),
+                Text::new("<"),
+            )
+            .control(
+                GestureCommand::new("Next page", PageIntent::Next)
+                    .key(SingleActivator::character("]").control()),
+                Text::new(">"),
+            ),
+        ))
+        .expect("two distinct labels");
+        // On the middle page, so both commands turn one.
+        let controller = PageController::with_params(1, ViewportFraction::FULL);
+        let model = controller.clone();
+        let pages: Vec<BoxedView> = (0..3_u8)
+            .map(|index| ColoredBox::new(Color::rgb(40 * index, 20, 30)).boxed())
+            .collect();
+        let view = PageView::new(pages, alternatives.clone()).controller(controller);
+        AlternativesSubject::new(view, &alternatives, move || {
+            model.page().map(|page| (page * 1000.0).round() as i64)
+        })
+    };
+    let mut swipe = MouseScript::new("swipe back").press(Offset::new(60.0, 150.0));
+    for step in 1..=10 {
+        swipe = swipe
+            .wait(Duration::from_millis(16))
+            .move_to(Offset::new(60.0 + 30.0 * f64::from(step), 150.0));
+    }
+    let swipe = swipe
+        .wait(Duration::from_millis(300))
+        .release()
+        .build()
+        .expect("one whole press");
+    assert_gesture_alternatives(&GestureAlternativesCheck::new(
+        "PageView / page controls",
+        tight(500.0, 300.0),
+        swipe,
+        mount,
+    ));
+}
+
+/// Matrix row: an `AnchoredDrag` sheet with expand and collapse controls. A
+/// drag up from its middle anchor expands it, as "Expand sheet" does; each
+/// command is reached by assistive technology, by its key and by its control
+/// with each pointer, to the same anchor.
+pub(crate) fn anchored_drag_with_anchor_controls() {
+    use flui_widgets::{AnchorIntent, AnchoredDrag, AnchoredDragController, DraggableAnchors};
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Stop {
+        Full,
+        Half,
+        Peek,
+    }
+
+    let mount = || {
+        let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+            ControlSpec::new(
+                GestureCommand::new("Expand sheet", AnchorIntent::Previous)
+                    .key(SingleActivator::character("[").control()),
+                Text::new("^"),
+            )
+            .control(
+                GestureCommand::new("Collapse sheet", AnchorIntent::Next)
+                    .key(SingleActivator::character("]").control()),
+                Text::new("v"),
+            ),
+        ))
+        .expect("two distinct labels");
+        let anchors = DraggableAnchors::builder()
+            .at(Stop::Full, 0.0)
+            .at(Stop::Half, 100.0)
+            .at(Stop::Peek, 200.0)
+            .build()
+            .expect("three distinct anchors");
+        // At the middle anchor, so both commands move it.
+        let controller = AnchoredDragController::new(anchors, Stop::Half).expect("a known anchor");
+        let model = controller.clone();
+        let view = AnchoredDrag::new(
+            controller,
+            Axis::Vertical,
+            ColoredBox::new(Color::rgb(10, 20, 30)),
+            alternatives.clone(),
+        )
+        .semantics("Sheet", |stop: Stop| format!("{stop:?}"));
+        AlternativesSubject::new(view, &alternatives, move || model.current())
+    };
+    let mut drag = MouseScript::new("drag up").press(Offset::new(120.0, 200.0));
+    for step in 1..=10 {
+        drag = drag
+            .wait(Duration::from_millis(16))
+            .move_to(Offset::new(120.0, 200.0 - 10.0 * f64::from(step)));
+    }
+    let drag = drag
+        .wait(Duration::from_millis(300))
+        .release()
+        .build()
+        .expect("one whole press");
+    assert_gesture_alternatives(&GestureAlternativesCheck::new(
+        "AnchoredDrag / anchor controls",
+        tight(400.0, 400.0),
+        drag,
+        mount,
+    ));
+}
+
 /// Every platform's preset opens the menu with its own pointer trigger: a
 /// secondary click on the desktop, a long press under the preset's timeout
 /// on touch platforms.
@@ -890,4 +1008,290 @@ pub(crate) fn an_unanswered_intent_and_a_reserved_key_are_reported() {
         "the unanswered intent is reported:\n{log}"
     );
     assert!(warned("reserved"), "the reserved key is reported:\n{log}");
+}
+
+// ============================================================================
+// Companions
+// ============================================================================
+
+/// Previous and Next buttons beside a pager, outside it: the companion of its
+/// page commands. Registered while mounted.
+#[derive(Clone, StatefulView)]
+struct PageButtons {
+    link: CompanionLink<PageIntent>,
+    pager: PageController,
+}
+
+struct PageButtonsState {
+    previous: SemanticsAnchor,
+    next: SemanticsAnchor,
+    _registration: CompanionRegistration,
+}
+
+impl StatefulView for PageButtons {
+    type State = PageButtonsState;
+
+    fn create_state(&self) -> Self::State {
+        let (previous, next) = (SemanticsAnchor::new(), SemanticsAnchor::new());
+        let (named_previous, named_next) = (previous.clone(), next.clone());
+        PageButtonsState {
+            _registration: self.link.register(move |intent| {
+                Some(match intent {
+                    PageIntent::Previous => named_previous.clone(),
+                    PageIntent::Next => named_next.clone(),
+                })
+            }),
+            previous,
+            next,
+        }
+    }
+}
+
+impl ViewState<PageButtons> for PageButtonsState {
+    fn build(&self, view: &PageButtons, _ctx: &dyn BuildContext) -> impl IntoView {
+        let button = |anchor: &SemanticsAnchor, label: &str, forward: bool| {
+            let pager = view.pager.clone();
+            RawButton::new(
+                Semantics::new()
+                    .label(label.to_owned())
+                    .anchor(anchor.clone())
+                    .child(SizedBox::new(48.0, 48.0)),
+            )
+            .on_press(move |_cx| {
+                let curve = flui_animation::ArcCurve::new(flui_animation::curves::EASE_IN_OUT);
+                if forward {
+                    pager.next_page(Duration::from_millis(300), curve);
+                } else {
+                    pager.previous_page(Duration::from_millis(300), curve);
+                }
+            })
+            .boxed()
+        };
+        Row::new(vec![
+            button(&self.previous, "Show the page before", false),
+            button(&self.next, "Show the page after", true),
+        ])
+    }
+}
+
+impl std::fmt::Debug for PageButtons {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PageButtons")
+    }
+}
+
+impl std::fmt::Debug for PageButtonsState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PageButtonsState")
+    }
+}
+
+/// Page commands whose single-pointer path is the buttons of `link`'s
+/// companion.
+fn companion_page_alternatives(link: &CompanionLink<PageIntent>) -> GestureAlternatives {
+    GestureAlternatives::new(Alternative::Companion(
+        CompanionSpec::new(
+            GestureCommand::new("Previous page", PageIntent::Previous)
+                .key(SingleActivator::character("[").control()),
+            link,
+        )
+        .command(
+            GestureCommand::new("Next page", PageIntent::Next)
+                .key(SingleActivator::character("]").control()),
+        ),
+    ))
+    .expect("two distinct labels, both carried by the link")
+}
+
+/// The pager over three pages, with the buttons above or below it when
+/// `buttons`.
+fn buttons_over_pager(
+    link: &CompanionLink<PageIntent>,
+    controller: &PageController,
+    buttons: bool,
+    buttons_first: bool,
+) -> impl View {
+    let pages: Vec<BoxedView> = (0..3_u8)
+        .map(|index| ColoredBox::new(Color::rgb(40 * index, 20, 30)).boxed())
+        .collect();
+    let pager =
+        PageView::new(pages, companion_page_alternatives(link)).controller(controller.clone());
+    let mut column = vec![Expanded::new(pager).boxed()];
+    if buttons {
+        let row = PageButtons {
+            link: link.clone(),
+            pager: controller.clone(),
+        }
+        .boxed();
+        if buttons_first {
+            column.insert(0, row);
+        } else {
+            column.push(row);
+        }
+    }
+    Column::new(column)
+}
+
+/// Matrix row: a `PageView` whose Previous and Next buttons sit beside it,
+/// outside it. A swipe toward the reading start turns back a page, as
+/// "Previous page" does; each command is reached by assistive technology, by
+/// its key and by the button that performs it with each pointer, to the same
+/// page.
+pub(crate) fn page_view_with_buttons_beside_it() {
+    let mount = || {
+        let link = CompanionLink::<PageIntent>::new();
+        // On the middle page, so both commands turn one.
+        let controller = PageController::with_params(1, ViewportFraction::FULL);
+        let model = controller.clone();
+        AlternativesSubject::new(
+            buttons_over_pager(&link, &controller, true, true),
+            &companion_page_alternatives(&link),
+            move || model.page().map(|page| (page * 1000.0).round() as i64),
+        )
+    };
+    let mut swipe = MouseScript::new("swipe back").press(Offset::new(60.0, 200.0));
+    for step in 1..=10 {
+        swipe = swipe
+            .wait(Duration::from_millis(16))
+            .move_to(Offset::new(60.0 + 30.0 * f64::from(step), 200.0));
+    }
+    let swipe = swipe
+        .wait(Duration::from_millis(300))
+        .release()
+        .build()
+        .expect("one whole press");
+    assert_gesture_alternatives(&GestureAlternativesCheck::new(
+        "PageView / buttons beside it",
+        tight(500.0, 300.0),
+        swipe,
+        mount,
+    ));
+}
+
+/// A link names the node of the first companion that has one, forgets a
+/// companion when its registration drops, and stays usable while it is read:
+/// a resolver, or the captures of a registration being dropped, may register,
+/// leave and read the link.
+pub(crate) fn a_companion_link_follows_its_registrations() {
+    let link = CompanionLink::<PageIntent>::new();
+    let alternatives = companion_page_alternatives(&link);
+    let Alternative::Companion(spec) = alternatives.alternative().clone() else {
+        panic!("the alternatives rely on a companion");
+    };
+    let command = |label: &str| {
+        alternatives
+            .commands()
+            .find(|command| command.label() == label)
+            .expect("the command")
+            .clone()
+    };
+    let (next, previous) = (command("Next page"), command("Previous page"));
+    assert_eq!(spec.node_for(&next), Err(CompanionGap::Unregistered));
+    assert!(!link.is_fulfilled());
+
+    let (first, second) = (SemanticsAnchor::new(), SemanticsAnchor::new());
+    let named = first.clone();
+    let earlier = link.register(move |intent| match intent {
+        PageIntent::Previous => Some(named.clone()),
+        PageIntent::Next => None,
+    });
+    let named = second.clone();
+    let later = link.register(move |_| Some(named.clone()));
+    assert_eq!(spec.node_for(&previous), Ok(first), "the first to name one");
+    assert_eq!(spec.node_for(&next), Ok(second.clone()), "or the next");
+
+    drop(earlier);
+    assert_eq!(spec.node_for(&previous), Ok(second));
+    drop(later);
+    assert_eq!(spec.node_for(&next), Err(CompanionGap::Unregistered));
+    assert_eq!(link, link.clone(), "a clone is the same link");
+    assert_ne!(link, CompanionLink::new(), "another link is another");
+
+    // A resolver that drops another registration and registers a third while
+    // the link is being read.
+    let doomed: Rc<RefCell<Option<CompanionRegistration>>> =
+        Rc::new(RefCell::new(Some(link.register(|_| None))));
+    let joined: Rc<RefCell<Vec<CompanionRegistration>>> = Rc::default();
+    let (leaving, collected, reader) = (Rc::clone(&doomed), Rc::clone(&joined), link.clone());
+    let busy = link.register(move |_| {
+        drop(leaving.borrow_mut().take());
+        collected
+            .borrow_mut()
+            .push(reader.register(|_| Some(SemanticsAnchor::new())));
+        None
+    });
+    assert_eq!(
+        spec.node_for(&next),
+        Err(CompanionGap::Unavailable),
+        "a read answers for the companions registered when it began"
+    );
+    assert!(doomed.borrow().is_none(), "and the one that left is gone");
+    assert!(
+        spec.node_for(&next).is_ok(),
+        "the next read finds the one registered during the first"
+    );
+    drop((busy, joined.take()));
+    assert!(!link.is_fulfilled());
+
+    // Captures that read and register on the link as they drop.
+    struct TouchesLink(CompanionLink<PageIntent>);
+    impl Drop for TouchesLink {
+        fn drop(&mut self) {
+            let _ = self.0.is_fulfilled();
+            drop(self.0.register(|_| None));
+        }
+    }
+    let probe = TouchesLink(link.clone());
+    let registration = link.register(move |_| {
+        let _ = &probe;
+        None
+    });
+    drop(registration);
+    assert!(
+        !link.is_fulfilled(),
+        "a registration's captures may use the link"
+    );
+}
+
+/// A companion command must perform an intent its link carries.
+pub(crate) fn a_companion_command_must_perform_an_intent_its_link_carries() {
+    use flui_widgets::AnchorIntent;
+
+    let link = CompanionLink::<PageIntent>::new();
+    let foreign = GestureAlternatives::new(Alternative::Companion(
+        CompanionSpec::new(GestureCommand::new("Next page", PageIntent::Next), &link)
+            .command(GestureCommand::new("Collapse sheet", AnchorIntent::Next)),
+    ));
+    assert_eq!(
+        foreign.err(),
+        Some(GestureAlternativesError::ForeignIntent {
+            label: "Collapse sheet".to_owned()
+        })
+    );
+}
+
+/// Alternatives that rely on a companion say so once the frame they mounted
+/// in has run, unless a companion registered by then, in whichever order the
+/// two mounted.
+pub(crate) fn unfulfilled_companion_alternatives_are_reported() {
+    let warnings = |buttons: bool, buttons_first: bool| {
+        let link = CompanionLink::<PageIntent>::new();
+        let controller = PageController::new();
+        let ((), log) = flui_testing::log_capture::capture(|| {
+            let mut laid = lay_out(
+                buttons_over_pager(&link, &controller, buttons, buttons_first),
+                tight(500.0, 300.0),
+            );
+            laid.pump();
+        });
+        log.records()
+            .iter()
+            .filter(|record| {
+                record.target == "flui::a11y" && record.message.contains("none is registered")
+            })
+            .count()
+    };
+    assert_eq!(warnings(false, true), 1, "no companion at all");
+    assert_eq!(warnings(true, true), 0, "a companion mounted before");
+    assert_eq!(warnings(true, false), 0, "a companion mounted after");
 }

@@ -482,8 +482,7 @@ impl ViewState<SwipeActions> for SwipeActionsState {
             Rc::clone(&self.origin),
             Rc::clone(&self.motion),
         );
-        let drag = AnchoredDrag::new(controller.clone(), Axis::Horizontal, view.child.clone())
-            .withhold_semantics()
+        let drag = AnchoredDrag::inside(controller.clone(), Axis::Horizontal, view.child.clone())
             .admission(ContactAdmission::outside_system_edges(
                 ctx,
                 Axis::Horizontal,

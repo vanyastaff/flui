@@ -54,7 +54,10 @@ fn photo_pager(
     ];
     VsyncScope::new(
         vsync.clone(),
-        Directionality::new(direction, PageView::new(pages).controller(pager.clone())),
+        Directionality::new(
+            direction,
+            PageView::new(pages, crate::common::pager_alternatives()).controller(pager.clone()),
+        ),
     )
     .boxed()
 }

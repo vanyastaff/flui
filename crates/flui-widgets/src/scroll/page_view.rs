@@ -10,6 +10,19 @@
 //! [`PageView`]'s own docs). A drag along the axis, a press on a moving
 //! pager and an assistive scroll all settle on a page through the policy.
 //!
+//! # Alternatives
+//!
+//! A swipe is a path: the constructor takes the pager's
+//! [`GestureAlternatives`] (ADR-0216). Commands that name [`PageIntent`] are
+//! answered by the pager, by turning one page; a pager whose owner keeps the
+//! selection (a tab view) names an intent of its own and answers it above the
+//! pager. The alternatives make the pager a row of focus traversal with one
+//! custom action per command for assistive technology, the commands' keys
+//! while focus is in the row, and a path for one pointer, so a finger, a
+//! mouse, a dwell or a switch device turns a page without a swipe: a control
+//! per command, or the companion widget (page dots, a tab bar, Previous and
+//! Next buttons) that already draws them.
+//!
 //! # Keys
 //!
 //! While the pager holds the focus ([`PageView::autofocus`], or a drag on
@@ -51,7 +64,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 
-use flui_animation::ArcCurve;
+use flui_animation::{ArcCurve, curves};
 use flui_foundation::geometry::Axis;
 use flui_foundation::{Listenable, ListenerId};
 use flui_interaction::PointerKindSet;
@@ -76,6 +89,7 @@ use crate::scroll::{
     ViewportFraction,
 };
 use crate::support::{ValueCallback, value_callback};
+use crate::{Action, ActionOutcome, Actions, GestureAlternatives, Intent, MediaQuery};
 
 // ============================================================================
 // PageController
@@ -271,6 +285,74 @@ impl PageController {
 }
 
 // ============================================================================
+// PageIntent
+// ============================================================================
+
+/// How long a [`PageIntent`]'s page turn takes.
+const TURN: Duration = Duration::from_millis(300);
+
+/// Turn the enclosing [`PageView`] one page, in page order (the reading
+/// order on a horizontal axis).
+///
+/// The pager answers it for everything inside it: the commands of its
+/// [`GestureAlternatives`] name it. A turn animates over 300 ms, and lands at
+/// once under reduced motion. At the first or the last page the turn past it
+/// is not performed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PageIntent {
+    /// Show the page after the current one.
+    Next,
+    /// Show the page before the current one.
+    Previous,
+}
+
+impl Intent for PageIntent {}
+
+/// Answers [`PageIntent`] for everything inside a [`PageView`] of `pages`
+/// pages.
+struct PageAction {
+    controller: PageController,
+    pages: usize,
+    /// Under reduced motion a turn lands at once.
+    reduced_motion: bool,
+}
+
+impl PageAction {
+    /// The page `intent` turns to from the one showing, if there is one.
+    fn target(&self, intent: PageIntent) -> Option<usize> {
+        let current = self.controller.page()?.round();
+        if !current.is_finite() {
+            return None;
+        }
+        let current = current.max(0.0) as usize;
+        match intent {
+            PageIntent::Next => current.checked_add(1).filter(|page| *page < self.pages),
+            PageIntent::Previous => current.checked_sub(1),
+        }
+    }
+}
+
+impl Action<PageIntent> for PageAction {
+    /// Past either end the intent is not enabled, so a key there bubbles on.
+    fn is_enabled(&self, intent: &PageIntent) -> bool {
+        self.target(*intent).is_some()
+    }
+
+    fn invoke(&self, _cx: &mut EventCx<'_>, intent: &PageIntent) -> ActionOutcome {
+        let Some(page) = self.target(*intent) else {
+            return ActionOutcome::NotPerformed;
+        };
+        if self.reduced_motion {
+            self.controller.jump_to_page(page);
+        } else {
+            self.controller
+                .animate_to_page(page, TURN, ArcCurve::new(curves::EASE_IN_OUT));
+        }
+        ActionOutcome::Performed
+    }
+}
+
+// ============================================================================
 // PageView (configuration)
 // ============================================================================
 
@@ -291,6 +373,26 @@ type OnPageChanged = ValueCallback<usize>;
 /// See the module docs for the v1 limits (eager children, listener-based
 /// `on_page_changed` delivered after the frame, no non-snapping mode, `reverse`
 /// or end padding).
+///
+/// ```rust
+/// use flui_widgets::{
+///     Alternative, ControlSpec, GestureAlternatives, GestureCommand, PageIntent, PageView,
+///     SizedBox, Text,
+/// };
+///
+/// let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+///     ControlSpec::new(
+///         GestureCommand::new("Previous page", PageIntent::Previous),
+///         Text::new("<"),
+///     )
+///     .control(GestureCommand::new("Next page", PageIntent::Next), Text::new(">")),
+/// ))
+/// .expect("two distinct labels");
+/// let pager = PageView::new(
+///     vec![SizedBox::expand(), SizedBox::expand(), SizedBox::expand()],
+///     alternatives,
+/// );
+/// ```
 #[derive(Clone, StatefulView)]
 pub struct PageView {
     /// `None` when the caller never called [`PageView::controller`] — in
@@ -305,13 +407,17 @@ pub struct PageView {
     allowed_devices: PointerKindSet,
     autofocus: bool,
     children: Vec<BoxedView>,
+    alternatives: GestureAlternatives,
 }
 
 impl PageView {
-    /// A horizontally-scrolling page view over `children`. By default
-    /// [`PageView::cache_extent`] keeps no neighbouring pages laid out.
-    pub fn new(children: impl ViewSeq) -> Self {
+    /// A horizontally-scrolling page view over `children`, its pages turned
+    /// without a swipe through `alternatives`, whose commands name
+    /// [`PageIntent`] or an intent the surroundings answer. By default [`PageView::cache_extent`] keeps no
+    /// neighbouring pages laid out.
+    pub fn new(children: impl ViewSeq, alternatives: GestureAlternatives) -> Self {
         Self {
+            alternatives,
             controller: None,
             scroll_direction: Axis::Horizontal,
             on_page_changed: None,
@@ -405,6 +511,7 @@ impl std::fmt::Debug for PageView {
             .field("cache_extent", &self.cache_extent)
             .field("allowed_devices", &self.allowed_devices)
             .field("children", &self.children.len())
+            .field("alternatives", &self.alternatives)
             .finish_non_exhaustive()
     }
 }
@@ -658,7 +765,7 @@ impl ViewState<PageView> for PageViewState {
             };
             scrollable = scrollable.semantic_label(label);
         }
-        scrollable
+        let scrollable = scrollable
             // The inner `Viewport` below is built with this SAME
             // `axis_direction`. Handing it to `Scrollable` explicitly (rather
             // than relying on `Scrollable`'s own ambient-`Directionality`
@@ -685,7 +792,14 @@ impl ViewState<PageView> for PageViewState {
                     viewport = viewport.cache_extent(extent, style);
                 }
                 viewport.boxed()
-            }))
+            }));
+        Actions::new(view.alternatives.clone().child(scrollable))
+            .action(PageAction {
+                controller,
+                pages: page_count,
+                reduced_motion: MediaQuery::motion_of(ctx)
+                    == Some(flui_animation::MotionPolicy::Reduce),
+            })
             .boxed()
     }
 

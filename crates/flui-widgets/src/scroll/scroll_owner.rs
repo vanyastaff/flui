@@ -606,6 +606,38 @@ impl ScrollOwner {
         sequence.end(reason, recovery);
     }
 
+    /// New user input `incoming` reached this leaf: the fling it handed to a
+    /// scrollable above, still running under the sequence the leaf drove,
+    /// stops, and that sequence ends [`Preempted`](ScrollEndReason::Preempted)
+    /// before the new one starts (ADR-0209 §4). The leaf may take the input
+    /// whole, so no remainder would reach the ancestor to catch it.
+    fn preempt_handoff(&self, incoming: Option<InputSequenceId>, recovery: &mut PanicRecovery) {
+        let handed_off = self
+            .driving
+            .borrow()
+            .as_ref()
+            .filter(|driving| {
+                driving.run.is_none()
+                    && Some(driving.sequence.id()) != incoming
+                    && driving.sequence.has_runs()
+                    && !driving.sequence.is_ended()
+            })
+            .map(|driving| Rc::clone(&driving.sequence));
+        if let Some(sequence) = handed_off {
+            sequence.preempt_runs(recovery);
+        }
+    }
+
+    /// Stop the run this owner drives if it belongs to `sequence`.
+    pub(crate) fn stop_run_of(&self, sequence: &ScrollSequence, recovery: &mut PanicRecovery) {
+        let drives = self.driving.borrow().as_ref().is_some_and(|driving| {
+            driving.run.is_some() && std::ptr::eq(Rc::as_ptr(&driving.sequence), sequence)
+        });
+        if drives {
+            self.stop_motion(recovery);
+        }
+    }
+
     /// End `sequence` once nothing drives it any more: no run, and no live
     /// input — a contact still down, a wheel burst that may go on.
     fn settle(sequence: &ScrollSequence, reason: ScrollEndReason, recovery: &mut PanicRecovery) {
@@ -630,6 +662,7 @@ impl ScrollOwner {
             return Some(Rc::clone(current));
         }
         let id = id.or_else(|| self.mint())?;
+        self.preempt_handoff(Some(id), recovery);
         let sequence = ScrollSequence::new(self, id, device, true, self.remainder_rule(device));
         let outgoing = self.contact.replace(Some(Rc::clone(&sequence)));
         let was_running = self
@@ -1246,6 +1279,7 @@ impl ScrollOwner {
     ) -> Option<Rc<ScrollSequence>> {
         let id = self.dispatched_or_mint()?;
         let mut recovery = PanicRecovery::new();
+        self.preempt_handoff(Some(id), &mut recovery);
         let sequence = self.begin_contactless(id, device, &mut recovery);
         recovery.finish();
         Some(sequence)
@@ -1585,6 +1619,7 @@ impl ScrollOwner {
             let Some(id) = self.dispatched_or_mint() else {
                 return MoveOutcome::Unmoved;
             };
+            self.preempt_handoff(Some(id), recovery);
             self.begin_contactless(id, ScrollDevice::Assistive, recovery)
         };
         sequence.finish_input();
@@ -1643,6 +1678,7 @@ impl ScrollOwner {
                     recovery.finish();
                     return MoveOutcome::Unmoved;
                 };
+                self.preempt_handoff(Some(id), &mut recovery);
                 let sequence = self.begin_contactless(id, ScrollDevice::Keyboard, &mut recovery);
                 *self.keyboard.borrow_mut() = Some(KeyHold {
                     code,

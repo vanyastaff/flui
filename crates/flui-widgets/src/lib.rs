@@ -198,8 +198,9 @@ pub use interaction::{
     AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, ActivationPressIntent,
     Alternative, AlternativeKind, AnimatedCrossFade, AnimatedCrossFadeState, BackIntent,
     ButtonActivateIntent, CallbackAction, CallbackShortcuts, CommandAppearance, CommandHandle,
-    ContactAdmission, ContentShape, ControlPlacement, ControlSpec, CopySelectionTextIntent,
-    CrossFadeState, DefaultFocusRingStyle, DefaultFocusTraversal, DefaultFocusTraversalState,
+    CompanionGap, CompanionLink, CompanionRegistration, CompanionSpec, ContactAdmission,
+    ContentShape, ControlPlacement, ControlSpec, CopySelectionTextIntent, CrossFadeState,
+    DefaultFocusRingStyle, DefaultFocusTraversal, DefaultFocusTraversalState,
     DirectionalFocusAction, DirectionalFocusIntent, DismissIntent, DragAnchor, DragCommands,
     Draggable, DraggableState, DropCommands, DropHover, DropTarget, DropTargetState, ExcludeFocus,
     Focus, FocusChangeHandler, FocusRing, FocusRingStyle, FocusRoot, FocusRootState, FocusScope,
@@ -268,6 +269,7 @@ pub use physical_model::{PhysicalModel, PhysicalShape};
 pub use router::{
     Routable, RouteParseError, RoutePath, Router, RouterError, RouterHandle, RouterState,
 };
+pub use scroll::{AnchorIntent, PageIntent};
 pub use scroll::{
     AnchorSnap, AnchorSnapError, AnchoredDrag, AnchoredDragController, AnchoredDragState,
     AnchorsError, AnimatedGrid, AnimatedList, BouncingScrollPhysics, ClampingScrollPhysics,
