@@ -54,12 +54,17 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
    | Windows | 10 1507 (build 10240) | rustc target and D3D12; per-monitor DPI v2 (1703) and later APIs are gates |
    | macOS | 10.13 on x86_64, 11.0 on arm64 | wgpu Metal on x86_64; 11.0 is the first arm64 release |
    | iOS | 13.0 | `UIScene`/`UIWindowScene`, through which the backend gets its window |
-   | Android | API 24 | Vulkan, the only GPU backend enabled |
-   | Linux | glibc 2.17, a Vulkan 1.0 driver, Wayland `xdg_wm_base` 1 or X11 with RandR 1.5 | rustc target, wgpu Vulkan, the window and display protocols the backend binds |
-   | Web | a browser exposing `navigator.gpu` | WebGPU, detected, never a browser version |
+   | Android | API 23 | the backend's own NDK use (`__system_property_get`, `AndroidApi::detect`); Vulkan or GLES 3.0 |
+   | Linux | glibc 2.17, a Vulkan 1.0 or GLES 3.0 driver, Wayland `xdg_wm_base` 1 or X11 with RandR 1.5 | rustc target, wgpu, the window and display protocols the backend binds |
+   | Web | a browser with WebGPU or WebGL2 | detected, never a browser version |
 
-   Enabling another GPU backend (GLES on Android or Linux, WebGL2 on the Web) would lower these floors;
-   that is a separate decision with its own proof cost.
+   **The GPU API is a probe, not a floor.** Whether a device has a working Vulkan driver, or a browser
+   WebGPU, depends on the device, not on the OS version, so it is decided as in decision 5: the
+   renderer asks for the preferred backend (Vulkan on Android and Linux, WebGPU on the Web) and falls
+   back to GLES 3.0 (WebGL2 on the Web) when no adapter answers. The engine therefore needs nothing
+   the downlevel backend lacks: features stay optional, limits come from the adapter, and no shader
+   reads a storage buffer in a fragment stage (gradient stops move to a uniform array or a texture).
+   Every pixel suite runs on both backends; on Linux, Mesa's llvmpipe gives CI a GLES adapter.
 
 2. **Declared once.** `platform-support.toml` at the repository root holds, per environment, the floor
    and what sets it (decision 1's last column). It is the only place a floor number is written.
@@ -134,8 +139,14 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
 
 ## Consequences
 
-- The Android `minSdk` becomes 24, which removes a launch path that could never render; `doctor`'s
-  API 21 check follows the file.
+- `flui-engine` enables `gles` on Android and Linux and `webgl` on the Web, and `select_backend`
+  returns the preferred backend with GL behind it; today the Web branch already names `GL` without
+  the `webgl` feature, so its "WebGL fallback" is never compiled. On GL wgpu ignores
+  `desired_maximum_frame_latency`, so the clock-side in-flight bound is the only one there.
+- The linear, radial and sweep gradient shaders stop reading their stops from a storage buffer, which
+  GLES 3.0, WebGL2 and many GLES 3.1 drivers do not offer in a fragment shader.
+- The Android `minSdk` stays 23 and becomes a decision instead of a template literal; an API 23 device
+  without Vulkan renders through GLES instead of failing. `doctor`'s API 21 check follows the file.
 - iOS builds target 13.0 and macOS builds 10.13 / 11.0 explicitly instead of inheriting the build
   environment's deployment target.
 - Windows' DPI-awareness call moves behind a 1703 gate with per-monitor v1 below it, and every other
@@ -169,5 +180,7 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
   be faked in a test without the real OS, and does not fail when a floor rise makes it dead.
 - **A hand-written per-version table.** It drifts from the code the day a marker is added; the map is
   generated from the markers instead.
+- **Raise Android to API 24 for Vulkan and keep Vulkan the only backend.** It refuses devices the
+  stack can serve through GLES, and Vulkan driver presence is a device property, not a version one.
 - **Gate on browser versions.** Features ship behind flags, in secure contexts only, or are withdrawn;
   the version answers none of that.
