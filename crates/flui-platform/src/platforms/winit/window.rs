@@ -22,6 +22,10 @@ use winit::{
     window::{Fullscreen, Window},
 };
 
+#[cfg(target_os = "linux")]
+use super::super::linux::{
+    lifecycle_model::x11_window_mode::X11WindowMode, x11_window_probe::X11WindowProbe,
+};
 use super::control::ControlSender;
 use super::display::WinitDisplaySource;
 use super::window_plan::{FrameInset, OpenPlan, WindowShell, mode_of};
@@ -90,6 +94,9 @@ pub struct WinitWindow {
     /// The frame around decorated windows, measured from this and the
     /// platform's other windows.
     frame_inset: Arc<FrameInset>,
+    /// The X11 probe and this window's X11 id, once attached.
+    #[cfg(target_os = "linux")]
+    x11: std::sync::OnceLock<(Arc<X11WindowProbe>, u32)>,
 }
 
 /// What the window system lets a program do to `window`: a Wayland surface
@@ -172,6 +179,7 @@ impl WinitWindow {
                 focused: true,
                 visible: true,
                 display,
+                probed_mode: None,
             },
         );
         Self {
@@ -185,6 +193,8 @@ impl WinitWindow {
             normal_geometry: Mutex::new(plan.normal_geometry),
             reveal_pending: AtomicBool::new(plan.hidden_until_first_frame),
             frame_inset,
+            #[cfg(target_os = "linux")]
+            x11: std::sync::OnceLock::new(),
             window,
             is_focused: parking_lot::Mutex::new(true),
             is_visible: parking_lot::Mutex::new(true),
@@ -197,6 +207,51 @@ impl WinitWindow {
             displays,
             reported_display: parking_lot::Mutex::new(None),
         }
+    }
+
+    /// Read this window's mode, and hear of its changes, through the probe
+    /// `probe` makes. Does nothing, and makes none, for a window that is not
+    /// an X11 window.
+    #[cfg(target_os = "linux")]
+    pub(super) fn attach_x11_probe(&self, probe: impl FnOnce() -> Option<Arc<X11WindowProbe>>) {
+        use raw_window_handle::RawWindowHandle;
+
+        let id = match self.window.window_handle().map(|handle| handle.as_raw()) {
+            Ok(RawWindowHandle::Xlib(handle)) => u32::try_from(handle.window).ok(),
+            Ok(RawWindowHandle::Xcb(handle)) => Some(handle.window.get()),
+            _ => None,
+        };
+        let Some(id) = id else {
+            return;
+        };
+        if let Some(probe) = probe() {
+            probe.watch(id);
+            let _ = self.x11.set((probe, id));
+        }
+    }
+
+    /// The X11 id of this window, when a probe is attached.
+    #[cfg(target_os = "linux")]
+    pub(super) fn x11_id(&self) -> Option<u32> {
+        self.x11.get().map(|(_, id)| *id)
+    }
+
+    /// The mode the X server and window manager report, if a probe is attached
+    /// and can say.
+    #[cfg(target_os = "linux")]
+    fn probed_mode(&self) -> Option<WindowMode> {
+        let (probe, id) = self.x11.get()?;
+        Some(match probe.mode(*id)? {
+            X11WindowMode::Normal => WindowMode::Normal,
+            X11WindowMode::Minimized => WindowMode::Minimized,
+            X11WindowMode::Maximized => WindowMode::Maximized,
+            X11WindowMode::Fullscreen => WindowMode::Fullscreen,
+        })
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn probed_mode(&self) -> Option<WindowMode> {
+        None
     }
 
     /// The cell a wake from sleep marks stale.
@@ -283,6 +338,7 @@ impl WinitWindow {
                 focused: *self.is_focused.lock(),
                 visible: *self.is_visible.lock(),
                 display: PlatformWindow::display_id(self),
+                probed_mode: self.probed_mode(),
             },
         );
         let mut remembered = self.normal_geometry.lock();
@@ -342,6 +398,9 @@ struct Facts<'a> {
     focused: bool,
     visible: bool,
     display: Option<DisplayId>,
+    /// The mode the window system reports directly, where winit's flags fall
+    /// short of it (X11 minimization).
+    probed_mode: Option<WindowMode>,
 }
 
 /// A device-pixel extent as the signed one the frame measurement takes.
@@ -370,11 +429,13 @@ fn sample_state(window: &Window, shell: WindowShell, facts: &Facts<'_>) -> Windo
         WindowGeometry::new(position, logical(window.outer_size())),
         logical(window.inner_size()),
     )
-    .with_mode(mode_of(
-        minimized,
-        window.fullscreen().is_some(),
-        window.is_maximized(),
-    ))
+    .with_mode(facts.probed_mode.unwrap_or_else(|| {
+        mode_of(
+            minimized,
+            window.fullscreen().is_some(),
+            window.is_maximized(),
+        )
+    }))
     .with_visible(facts.visible)
     .with_focused(facts.focused)
     .with_title(Some(facts.title.to_owned()))

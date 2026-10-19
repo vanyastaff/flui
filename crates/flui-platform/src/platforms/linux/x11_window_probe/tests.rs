@@ -1,0 +1,203 @@
+//! The probe against a real X server.
+//!
+//! CI runs the crate's tests under `xvfb-run`, which sets `DISPLAY`; the tests
+//! skip without it. A bare server has no window manager, so the tests set the
+//! properties a window manager would: they stand in for one, and the probe
+//! reads and watches them as it would a real one's.
+
+use std::time::{Duration, Instant};
+
+use x11rb::{
+    connection::Connection,
+    protocol::xproto::{AtomEnum, CreateWindowAux, PropMode, WindowClass},
+    rust_connection::RustConnection,
+    wrapper::ConnectionExt as _,
+};
+
+use super::*;
+
+fn x_server() -> bool {
+    let present = std::env::var_os("DISPLAY").is_some_and(|display| !display.is_empty());
+    if !present {
+        eprintln!("skipped: no X server (DISPLAY is not set); CI runs this under xvfb-run");
+    }
+    present
+}
+
+fn signal() -> Arc<OwnerSignal> {
+    OwnerSignal::new(Arc::new(|| Ok(())))
+}
+
+/// A window on its own connection, which stands in for the window manager when
+/// it sets the window's properties.
+struct Fixture {
+    connection: RustConnection,
+    window: u32,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let (connection, screen) = RustConnection::connect(None).expect("an X server answers");
+        let root = connection.setup().roots[screen].root;
+        let window = connection.generate_id().expect("a window id");
+        connection
+            .create_window(
+                0,
+                window,
+                root,
+                0,
+                0,
+                16,
+                16,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                0,
+                &CreateWindowAux::new(),
+            )
+            .expect("request")
+            .check()
+            .expect("the server creates the window");
+        Self { connection, window }
+    }
+
+    fn atom(&self, name: &str) -> u32 {
+        self.connection
+            .intern_atom(false, name.as_bytes())
+            .expect("request")
+            .reply()
+            .expect("the atom")
+            .atom
+    }
+
+    /// Set `_NET_WM_STATE` to the named atoms.
+    fn set_state(&self, names: &[&str]) {
+        let atoms: Vec<u32> = names.iter().map(|name| self.atom(name)).collect();
+        self.connection
+            .change_property32(
+                PropMode::REPLACE,
+                self.window,
+                self.atom("_NET_WM_STATE"),
+                AtomEnum::ATOM,
+                &atoms,
+            )
+            .expect("request")
+            .check()
+            .expect("the server sets the property");
+    }
+
+    /// Set `WM_STATE` the way a window manager does.
+    fn set_wm_state(&self, state: u32) {
+        let wm_state = self.atom("WM_STATE");
+        self.connection
+            .change_property32(
+                PropMode::REPLACE,
+                self.window,
+                wm_state,
+                wm_state,
+                &[state, 0],
+            )
+            .expect("request")
+            .check()
+            .expect("the server sets the property");
+    }
+}
+
+#[test]
+fn x11_probe_reads_the_mode_from_the_properties() {
+    if !x_server() {
+        return;
+    }
+    let probe = X11WindowProbe::connect(&signal()).expect("the probe connects");
+    let fixture = Fixture::new();
+    let window = fixture.window;
+
+    assert_eq!(
+        probe.mode(window),
+        Some(X11WindowMode::Normal),
+        "a window with no properties"
+    );
+
+    fixture.set_wm_state(1);
+    fixture.set_state(&[
+        "_NET_WM_STATE_MAXIMIZED_HORZ",
+        "_NET_WM_STATE_MAXIMIZED_VERT",
+    ]);
+    assert_eq!(probe.mode(window), Some(X11WindowMode::Maximized));
+
+    fixture.set_state(&[
+        "_NET_WM_STATE_MAXIMIZED_HORZ",
+        "_NET_WM_STATE_MAXIMIZED_VERT",
+        "_NET_WM_STATE_FULLSCREEN",
+    ]);
+    assert_eq!(probe.mode(window), Some(X11WindowMode::Fullscreen));
+
+    fixture.set_state(&["_NET_WM_STATE_MAXIMIZED_HORZ"]);
+    assert_eq!(probe.mode(window), Some(X11WindowMode::Normal), "tiled");
+
+    fixture.set_wm_state(3);
+    fixture.set_state(&["_NET_WM_STATE_HIDDEN"]);
+    assert_eq!(probe.mode(window), Some(X11WindowMode::Minimized));
+
+    fixture.set_wm_state(1);
+    assert_eq!(
+        probe.mode(window),
+        Some(X11WindowMode::Normal),
+        "hidden but mapped is on another desktop, not minimized"
+    );
+
+    // The window goes away: the server cannot say.
+    fixture
+        .connection
+        .destroy_window(window)
+        .expect("request")
+        .check()
+        .expect("the server destroys the window");
+    assert_eq!(probe.mode(window), None);
+}
+
+#[test]
+fn x11_probe_hears_of_a_change_to_a_watched_window() {
+    if !x_server() {
+        return;
+    }
+    let probe = X11WindowProbe::connect(&signal()).expect("the probe connects");
+    let fixture = Fixture::new();
+    let other = Fixture::new();
+    probe.watch(fixture.window);
+
+    let hears = |expected: &[u32]| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut heard = Vec::new();
+        while Instant::now() < deadline {
+            heard.extend(probe.take_changed());
+            if heard == expected {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        eprintln!("heard {heard:?}, expected {expected:?}");
+        false
+    };
+
+    // An unwatched window's change is not heard; the watched one's is.
+    other.set_state(&["_NET_WM_STATE_FULLSCREEN"]);
+    fixture.set_state(&["_NET_WM_STATE_FULLSCREEN"]);
+    assert!(hears(&[fixture.window]));
+
+    // A property this model does not read is not a change of mode.
+    let name = fixture.atom("WM_NAME");
+    fixture
+        .connection
+        .change_property8(
+            PropMode::REPLACE,
+            fixture.window,
+            name,
+            AtomEnum::STRING,
+            b"x",
+        )
+        .expect("request")
+        .check()
+        .expect("the server sets the property");
+    fixture.set_wm_state(3);
+    assert!(hears(&[fixture.window]), "WM_STATE is read");
+}

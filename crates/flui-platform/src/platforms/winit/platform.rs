@@ -106,6 +106,8 @@ use winit::{
 
 use flui_foundation::geometry::Point;
 
+#[cfg(target_os = "linux")]
+use super::super::linux::x11_window_probe::X11WindowProbe;
 use super::window::{WinitWindow, shell_of};
 use super::window_plan::{FrameInset, OpenPlan, PlacementDisplay, WindowShell};
 use super::{
@@ -220,6 +222,12 @@ pub struct WinitPlatform {
     /// Where system notices go, and what a wake marks stale before the host
     /// hears of it.
     notices: Arc<SystemNotices>,
+
+    /// The X11 connections that read what winit cannot of a window, started
+    /// with the first X11 window; `None` inside when the server cannot be
+    /// reached a second time.
+    #[cfg(target_os = "linux")]
+    x11_probe: std::sync::OnceLock<Option<Arc<X11WindowProbe>>>,
 
     state: Arc<Mutex<WinitPlatformState>>,
 }
@@ -375,6 +383,8 @@ impl WinitPlatform {
             displays: WinitDisplaySource::new(),
             frame_inset: Arc::new(FrameInset::default()),
             notices: Arc::new(SystemNotices::default()),
+            #[cfg(target_os = "linux")]
+            x11_probe: std::sync::OnceLock::new(),
             state: Arc::new(Mutex::new(WinitPlatformState::new())),
         };
         #[cfg(target_os = "linux")]
@@ -402,6 +412,23 @@ impl WinitPlatform {
             }
         });
         answer.unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+    }
+
+    /// The X11 window probe, started on first use. `None` when the platform
+    /// is not running, or the X server cannot be reached again; windows then
+    /// report what winit does.
+    #[cfg(target_os = "linux")]
+    fn x11_probe(&self) -> Option<Arc<X11WindowProbe>> {
+        let signal = self.owner_signal.lock().clone()?;
+        self.x11_probe
+            .get_or_init(|| match X11WindowProbe::connect(&signal) {
+                Ok(probe) => Some(probe),
+                Err(error) => {
+                    tracing::debug!(%error, "window state is read from winit alone");
+                    None
+                }
+            })
+            .clone()
     }
 
     /// The shell windows opened from here will be on, before any exists.
@@ -688,6 +715,8 @@ impl WinitPlatform {
             state.register_window(winit_id, platform_id, winit_window.clone());
         });
         self.notices.mark_stale_on_wake(winit_window.state_cell());
+        #[cfg(target_os = "linux")]
+        winit_window.attach_x11_probe(|| self.x11_probe());
         // A monitor attached since the last sample is first seen here.
         self.resample_displays(event_loop);
 
@@ -1716,6 +1745,31 @@ impl WinitApp {
         Ok(())
     }
 
+    /// Sample again the windows whose mode properties the X11 window manager
+    /// changed, so `on_state_changed` follows a minimize or a maximize that
+    /// winit reports no event for.
+    #[cfg(target_os = "linux")]
+    fn refresh_x11_windows(&self) {
+        let Some(Some(probe)) = self.platform.x11_probe.get() else {
+            return;
+        };
+        let changed = probe.take_changed();
+        if changed.is_empty() {
+            return;
+        }
+        let windows: Vec<_> = self.platform.with_state(|state| {
+            state
+                .windows
+                .values()
+                .filter(|window| window.x11_id().is_some_and(|id| changed.contains(&id)))
+                .cloned()
+                .collect()
+        });
+        for window in windows {
+            window.refresh_state();
+        }
+    }
+
     /// Start listening for sleep, shutdown, lock and memory pressure. A source
     /// that cannot start says so in the log and leaves the others running.
     #[cfg(target_os = "linux")]
@@ -2007,6 +2061,8 @@ impl WinitApp {
         self.deliver_portal_appearance();
         #[cfg(target_os = "linux")]
         self.deliver_host_notices();
+        #[cfg(target_os = "linux")]
+        self.refresh_x11_windows();
         if let Some(signal) = signal
             && signal.drive()
         {

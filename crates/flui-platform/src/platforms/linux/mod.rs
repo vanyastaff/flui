@@ -82,8 +82,10 @@ mod accessibility;
 pub(crate) mod display;
 #[cfg(feature = "winit-backend")]
 pub(crate) mod host_notices;
-mod lifecycle_model;
+pub(crate) mod lifecycle_model;
 mod window_ext;
+#[cfg(feature = "winit-backend")]
+pub(crate) mod x11_window_probe;
 
 use std::sync::Arc;
 
