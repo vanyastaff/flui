@@ -11,14 +11,17 @@
 //! listener's admission predicate, and stop the motion in
 //! [`on_hold`](HoldGestureRecognizerBuilder::on_hold).
 
-use std::rc::{Rc, Weak};
+use std::{
+    cell::Cell,
+    rc::{Rc, Weak},
+};
 
-use flui_foundation::geometry::Offset;
+use flui_foundation::{geometry::Offset, panic::FailureClass};
 use flui_platform_api::input_capabilities::PointerKindSet;
 
 use super::{
-    ArenaMembership, CancelOutcome, GestureRecognizer, PrimaryContact,
-    callback_containment::{invoke_callback, retire_callbacks},
+    ArenaMembership, CancelOutcome, ContactId, ContactSnapshot, GestureRecognizer, PrimaryContact,
+    callback_containment::{CallbackSequence, invoke_callback, retire_callbacks},
     recognizer::{admission_kind, is_primary_down},
 };
 use crate::gesture::observer::GestureContest;
@@ -77,6 +80,8 @@ pub struct HoldGestureRecognizer {
     settings: GestureSettingsProvider,
     allowed_devices: PointerKindSet,
     callbacks: HoldCallbacks,
+    /// The contact `on_hold` announced, owed one `on_release`.
+    announced: Cell<Option<ContactId>>,
 }
 
 impl std::fmt::Debug for HoldGestureRecognizer {
@@ -134,6 +139,7 @@ impl HoldGestureRecognizerBuilder {
                 settings: GestureSettingsProvider::default(),
                 allowed_devices: self.allowed_devices,
                 callbacks: self.callbacks,
+                announced: Cell::new(None),
             }
         })
     }
@@ -149,7 +155,14 @@ impl HoldGestureRecognizer {
         }
     }
 
-    fn release(&self, end: HoldEnd) {
+    /// End `ended`'s hold: `on_release` answers only the `on_hold` it
+    /// announced, so a contest a beaten member ended during admission stays
+    /// silent.
+    fn release(&self, ended: &ContactSnapshot, end: HoldEnd) {
+        if self.announced.get() != Some(ended.id) {
+            return;
+        }
+        self.announced.set(None);
         invoke_callback(
             self.callbacks.on_release.clone(),
             || {},
@@ -176,25 +189,32 @@ impl GestureRecognizer for HoldGestureRecognizer {
         };
         let kind = admission_kind(down.local);
         let settings = self.settings.snapshot_for(kind);
-        if self.contact.begin(down, &settings).is_err() {
-            return;
-        }
-        let sequence = self
-            .contact
-            .current()
-            .and_then(|snapshot| snapshot.sequence);
-        invoke_callback(
-            self.callbacks.on_hold.clone(),
-            || {},
-            |callback| {
-                callback(HoldDetails {
-                    global_position,
-                    local_position,
-                    kind,
-                    sequence,
+        let arena = self.contact.arena();
+        // One operation: a beaten member's failure is raised after `on_hold`,
+        // which still announces the contact this hold now tracks.
+        arena.run_owned_recovery(|recovery| {
+            let Ok(id) = self.contact.begin_with_recovery(down, &settings, recovery) else {
+                return;
+            };
+            let Some(snapshot) = self.contact.current().filter(|current| current.id == id) else {
+                // A beaten member's callback ended the contest.
+                return;
+            };
+            self.announced.set(Some(id));
+            let preserving = recovery.has_failure();
+            arena.invoke_with_recovery(FailureClass::Delivery, recovery, |_| {
+                let mut notices = CallbackSequence::preserving_failure(preserving);
+                notices.call(self.callbacks.on_hold.clone(), |callback| {
+                    callback(HoldDetails {
+                        global_position,
+                        local_position,
+                        kind,
+                        sequence: snapshot.sequence,
+                    });
                 });
-            },
-        );
+                notices.finish();
+            });
+        });
     }
 
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
@@ -207,8 +227,8 @@ impl GestureRecognizer for HoldGestureRecognizer {
         }
         match dispatch.local {
             PointerEvent::Up(_) => {
-                if self.contact.finish().is_some() {
-                    self.release(HoldEnd::Lifted);
+                if let Some(ended) = self.contact.finish() {
+                    self.release(&ended, HoldEnd::Lifted);
                 }
             }
             PointerEvent::Cancel(_) => {
@@ -219,8 +239,8 @@ impl GestureRecognizer for HoldGestureRecognizer {
     }
 
     fn cancel(&self) -> CancelOutcome {
-        if self.contact.cancel().is_some() {
-            self.release(HoldEnd::Cancelled);
+        if let Some(ended) = self.contact.cancel() {
+            self.release(&ended, HoldEnd::Cancelled);
             CancelOutcome::Cancelled
         } else {
             CancelOutcome::Idle
@@ -233,8 +253,11 @@ impl GestureArenaMember for HoldGestureRecognizer {
     fn accept_gesture(&self, _: GestureContest) {}
 
     fn reject_gesture(&self, contest: GestureContest) {
-        if self.contact.tracks_contest(contest) && self.contact.withdraw().is_some() {
-            self.release(HoldEnd::Yielded);
+        if !self.contact.tracks_contest(contest) {
+            return;
+        }
+        if let Some(ended) = self.contact.withdraw() {
+            self.release(&ended, HoldEnd::Yielded);
         }
     }
 }

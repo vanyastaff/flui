@@ -747,3 +747,82 @@ pub(crate) fn hold_on_down_beats_tap_and_long_press_not_drag() {
         }
     }
 }
+
+/// A hold records its contact before the members it beats hear they lost
+/// (ADR-0208 rule 4): a beaten member whose rejection fails leaves the hold
+/// tracking, announced and released, and one whose rejection abandons the
+/// contest leaves no hold announced for it.
+pub(crate) fn a_hold_tracks_its_contact_before_beaten_members_hear() {
+    use flui_interaction::gesture::GestureRecognizer;
+    use flui_interaction::{HoldEnd, HoldGestureRecognizer};
+
+    struct Beaten {
+        on_reject: Box<dyn Fn()>,
+    }
+    impl GestureArenaMember for Beaten {
+        fn accept_gesture(&self, _: GestureContest) {}
+        fn reject_gesture(&self, _: GestureContest) {
+            (self.on_reject)();
+        }
+    }
+
+    type Case = (
+        &'static str,
+        fn(&GestureArena, PointerId),
+        bool,
+        &'static [&'static str],
+    );
+    let cases: [Case; 2] = [
+        (
+            "a failing rejection",
+            |_, _| std::panic::panic_any("beaten member failure"),
+            true,
+            &["hold", "released Lifted"],
+        ),
+        (
+            "a rejection that abandons the contest",
+            |arena, pointer| arena.abandon(pointer),
+            false,
+            &[],
+        ),
+    ];
+    for (name, on_reject, fails, heard) in cases {
+        let arena = GestureArena::new();
+        let log = Events::default();
+        let (held, released) = (Rc::clone(&log), Rc::clone(&log));
+        let hold = HoldGestureRecognizer::builder(arena.clone())
+            .on_hold(move |_| held.borrow_mut().push("hold"))
+            .on_release(move |end| {
+                released.borrow_mut().push(match end {
+                    HoldEnd::Lifted => "released Lifted",
+                    HoldEnd::Yielded => "released Yielded",
+                    _ => "released otherwise",
+                });
+            })
+            .build();
+        let pointer = id(1);
+        let reentry = arena.clone();
+        let beaten = Rc::new(Beaten {
+            on_reject: Box::new(move || on_reject(&reentry, pointer)),
+        });
+        let _beaten_entry = arena.add(pointer, &beaten);
+        let pressed = down(pointer, at(0.0, 0.0), PointerKind::Touch);
+        let admitted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            hold.add_pointer(PointerDispatch::at_root(&pressed));
+        }));
+        assert_eq!(
+            admitted.is_err(),
+            fails,
+            "{name}: the beaten member's failure"
+        );
+        let lifted = make_up_event_for_id_with_button(
+            pointer,
+            at(0.0, 0.0),
+            PointerKind::Touch,
+            PointerButton::PRIMARY,
+        )
+        .expect("finite up");
+        hold.handle_event(PointerDispatch::at_root(&lifted));
+        assert_eq!(*log.borrow(), heard, "{name}");
+    }
+}

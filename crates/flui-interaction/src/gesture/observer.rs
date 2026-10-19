@@ -397,6 +397,9 @@ pub(crate) struct ObserverHub {
     wake: RefCell<Option<SyncWeak<dyn PlatformWindow>>>,
     /// The arena's clock, read when a verdict is committed.
     clock: Option<Arc<dyn MonotonicClock>>,
+    /// The first failure of that clock, raised by the arena operation once
+    /// the verdicts it committed are delivered.
+    clock_failure: RefCell<Option<Box<dyn Any + Send>>>,
 }
 
 impl ObserverHub {
@@ -410,10 +413,33 @@ impl ObserverHub {
 
     /// Now on the arena's event timeline: when a verdict being recorded was
     /// committed.
+    ///
+    /// The verdict is already committed when it is stamped, so a failing
+    /// clock cannot unwind past it: the failure is kept for
+    /// [`Self::take_clock_failure`] and the verdict is stamped as a hub
+    /// without a clock stamps it.
     pub(crate) fn now(&self) -> EventTime {
-        self.clock
-            .as_deref()
-            .map_or(EventTime::from_nanos(0), crate::events::interaction_now)
+        let Some(clock) = self.clock.as_deref() else {
+            return EventTime::from_nanos(0);
+        };
+        match catch_unwind(AssertUnwindSafe(|| crate::events::interaction_now(clock))) {
+            Ok(now) => now,
+            Err(payload) => {
+                let mut first = self.clock_failure.borrow_mut();
+                if first.is_none() {
+                    *first = Some(payload);
+                } else {
+                    drop(first);
+                    flui_foundation::panic::retain_opaque_payload(payload);
+                }
+                EventTime::from_nanos(0)
+            }
+        }
+    }
+
+    /// The clock failure [`Self::now`] kept, for the operation to raise.
+    pub(crate) fn take_clock_failure(&self) -> Option<Box<dyn Any + Send>> {
+        self.clock_failure.borrow_mut().take()
     }
 
     /// Queue one observation if anyone observes; build nothing otherwise.

@@ -19,7 +19,7 @@ use crate::{
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{
         AdmissionContext, GestureArena, GestureArenaEntry, GestureArenaMember,
-        GestureDeadlineRegistration, GestureDisposition, MotionRole, SweepModel,
+        GestureDeadlineRegistration, GestureDisposition, HeldOut, MotionRole, SweepModel,
     },
     gesture::observer::GestureContest,
     gesture::settings::GestureSettings,
@@ -76,6 +76,10 @@ impl ArenaMembership {
     }
 
     /// Join an open competition, refusing a dead owner or closed arena.
+    ///
+    /// A hold's beaten members learn they lost before this returns; a
+    /// recognizer that must record its contact first admits through
+    /// [`PrimaryContact::begin`].
     #[must_use]
     pub fn join(&self, pointer: PointerId) -> Option<GestureArenaEntry> {
         self.join_from(pointer, None)
@@ -88,6 +92,18 @@ impl ArenaMembership {
         pointer: PointerId,
         feeder: Option<ContactFeeder>,
     ) -> Option<GestureArenaEntry> {
+        let (entry, held_out) = self.admit_from(pointer, feeder)?;
+        self.arena.deliver_held_out(held_out);
+        Some(entry)
+    }
+
+    /// [`Self::join_from`], leaving the rejections a hold owes the members
+    /// it beat to the caller, who delivers them once its contact is recorded.
+    fn admit_from(
+        &self,
+        pointer: PointerId,
+        feeder: Option<ContactFeeder>,
+    ) -> Option<(GestureArenaEntry, HeldOut)> {
         let member = self.this.upgrade()?;
         self.arena.try_add_erased(
             pointer,
@@ -223,11 +239,41 @@ impl PrimaryContact {
     /// # Errors
     /// Refuses non-Down or non-finite input, an already active contact, closed
     /// arena membership, and permanently exhausted contact identities.
+    ///
+    /// The contact is recorded before the members a hold beats learn they
+    /// lost, so their callbacks find it tracking; one that ends the contest
+    /// leaves this contact no longer [current](Self::is_current) on return.
     pub fn begin(
         &self,
         down: PointerDispatch<'_>,
         settings: &GestureSettings,
     ) -> Result<ContactId, BeginContactError> {
+        let (id, held_out) = self.admit(down, settings)?;
+        self.arena().deliver_held_out(held_out);
+        Ok(id)
+    }
+
+    /// [`Self::begin`] inside the caller's recovery operation: a beaten
+    /// member's failure is captured there, not raised.
+    pub(crate) fn begin_with_recovery(
+        &self,
+        down: PointerDispatch<'_>,
+        settings: &GestureSettings,
+        recovery: &mut RecoveryScope<'_>,
+    ) -> Result<ContactId, BeginContactError> {
+        let (id, held_out) = self.admit(down, settings)?;
+        self.arena()
+            .deliver_held_out_with_recovery(held_out, recovery);
+        Ok(id)
+    }
+
+    /// Record the admitted contact, returning the rejections owed to the
+    /// members a hold beat.
+    fn admit(
+        &self,
+        down: PointerDispatch<'_>,
+        settings: &GestureSettings,
+    ) -> Result<(ContactId, HeldOut), BeginContactError> {
         let PointerEvent::Down(data) = down.local else {
             return Err(BeginContactError::NotDown);
         };
@@ -249,9 +295,9 @@ impl PrimaryContact {
             .membership
             .register_deadline(pointer)
             .ok_or(BeginContactError::ArenaClosed)?;
-        let entry = self
+        let (entry, held_out) = self
             .membership
-            .join_from(pointer, down.feeder())
+            .admit_from(pointer, down.feeder())
             .ok_or(BeginContactError::ArenaClosed)?;
         let contact = Contact {
             snapshot: ContactSnapshot {
@@ -272,7 +318,7 @@ impl PrimaryContact {
         tracing::debug!(name: "recognizer.start_tracking", ?pointer,
             event = %crate::gesture::observability::GestureEvent::StartedTracking,
             "recognizer started tracking");
-        Ok(id)
+        Ok((id, held_out))
     }
 
     /// Return an owned view without retaining an internal borrow.
