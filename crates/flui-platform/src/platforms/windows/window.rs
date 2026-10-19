@@ -21,13 +21,14 @@ use windows::{
                 GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos, GetForegroundWindow,
                 GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, IDC_APPSTARTING, IDC_ARROW,
                 IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
-                IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, LoadCursorW, PostMessageW, SW_MAXIMIZE,
-                SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED,
-                SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-                SWP_NOZORDER, SetClassLongPtrW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
+                IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, IsIconic, IsWindowVisible, IsZoomed,
+                LoadCursorW, PostMessageW, SC_RESTORE, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE,
+                SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_FRAMECHANGED,
+                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
+                SetClassLongPtrW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
                 SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, WINDOWPLACEMENT,
-                WM_CLOSE, WS_CAPTION, WS_EX_APPWINDOW, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW,
-                WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
+                WM_APP, WM_CLOSE, WM_SYSCOMMAND, WS_CAPTION, WS_EX_APPWINDOW, WS_MAXIMIZE,
+                WS_MAXIMIZEBOX, WS_MINIMIZE, WS_THICKFRAME,
             },
         },
     },
@@ -35,14 +36,21 @@ use windows::{
 };
 
 use super::util::{USER_DEFAULT_SCREEN_DPI, WINDOW_CLASS_NAME, logical_to_device};
+use super::window_frame::{
+    FirstShow, first_show_command, frame_style, restyled, to_screen, to_workspace,
+};
+
+/// Posted to a window nothing paints, so its frame still runs: a hidden window
+/// never receives `WM_PAINT`.
+pub(super) const REQUEST_FRAME: u32 = WM_APP + 1;
 use crate::shared::window_state::WindowStateCell;
 use crate::{
     shared::{PlatformHandlers, WindowCallbacks, hwnd_affinity::UserDataRefusal},
     traits::{
         CursorError, DispatchEventResult, OpenWindowError, PlatformInput, PlatformWindow,
-        WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
-        WindowCommandError, WindowExecutionState, WindowGeometry, WindowId, WindowMode,
-        WindowOptions, WindowState,
+        SizeConstraints, WindowAppearance, WindowBackgroundAppearance, WindowCapabilities,
+        WindowCommand, WindowCommandError, WindowExecutionState, WindowGeometry, WindowId,
+        WindowMode, WindowOptions, WindowReveal, WindowState,
     },
 };
 
@@ -145,9 +153,6 @@ pub(super) struct WindowRecord {
 
     /// Is window focused?
     pub(super) focused: bool,
-
-    /// Window title
-    title: String,
 }
 
 /// How the window occupies its monitor, with what the way back needs: the
@@ -156,8 +161,11 @@ pub(super) struct WindowRecord {
 pub(super) enum NativeMode {
     #[default]
     Normal,
-    /// Iconified.
-    Minimized,
+    /// Iconified. A fullscreen window that was minimized keeps the rectangle it
+    /// returns to, so restoring it brings fullscreen back.
+    Minimized {
+        from_fullscreen: Option<Bounds<i32>>,
+    },
     /// Maximized.
     Maximized,
     /// Borderless over the whole monitor; `restore_bounds` is the outer
@@ -170,8 +178,42 @@ impl NativeMode {
         matches!(self, Self::Fullscreen { .. })
     }
 
+    /// The rectangle a fullscreen window returns to, also while it is minimized
+    /// (a minimized fullscreen window is still the fullscreen window it comes
+    /// back as); `None` for every other mode.
+    pub(super) fn fullscreen_bounds(&self) -> Option<Bounds<i32>> {
+        match *self {
+            Self::Fullscreen { restore_bounds }
+            | Self::Minimized {
+                from_fullscreen: Some(restore_bounds),
+            } => Some(restore_bounds),
+            _ => None,
+        }
+    }
+
+    /// Whether this is fullscreen, or minimized out of fullscreen.
+    pub(super) fn holds_fullscreen(&self) -> bool {
+        self.fullscreen_bounds().is_some()
+    }
+
+    /// The same mode with the rectangle a fullscreen window returns to
+    /// replaced; any other mode is returned as it is.
+    pub(super) fn with_fullscreen_bounds(self, bounds: Bounds<i32>) -> Self {
+        match self {
+            Self::Fullscreen { .. } => Self::Fullscreen {
+                restore_bounds: bounds,
+            },
+            Self::Minimized {
+                from_fullscreen: Some(_),
+            } => Self::Minimized {
+                from_fullscreen: Some(bounds),
+            },
+            other => other,
+        }
+    }
+
     pub(super) fn is_minimized(&self) -> bool {
-        matches!(self, Self::Minimized)
+        matches!(self, Self::Minimized { .. })
     }
 
     pub(super) fn is_maximized(&self) -> bool {
@@ -190,30 +232,60 @@ impl NativeMode {
     fn public(&self) -> WindowMode {
         match self {
             Self::Normal => WindowMode::Normal,
-            Self::Minimized => WindowMode::Minimized,
+            Self::Minimized { .. } => WindowMode::Minimized,
             Self::Maximized => WindowMode::Maximized,
             Self::Fullscreen { .. } => WindowMode::Fullscreen,
         }
     }
 }
 
-/// The window as Win32 reports it now (ADR-0237). `mode` is the tracking the
-/// owner context keeps from `WM_SIZE`; everything else is read from `hwnd`.
+/// What the owner context knows about a window that Win32 does not say: the
+/// mode it tracks from `WM_SIZE` and its own fullscreen toggle, the style a
+/// fullscreen window returns to, the limits the app set and the display the
+/// window is on.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct OwnerTracking {
+    pub(super) mode: NativeMode,
+    pub(super) restore_style: u32,
+    pub(super) constraints: SizeConstraints,
+    pub(super) display: Option<flui_platform_api::DisplayId>,
+}
+
+/// The window's title as the system holds it, `None` when it cannot be read.
+fn window_text(hwnd: HWND) -> Option<String> {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW};
+
+    // SAFETY: the buffer is a live stack/heap slice the call fills up to its
+    // length, terminator included; a stale handle only reports zero.
+    unsafe {
+        let length = usize::try_from(GetWindowTextLengthW(hwnd)).ok()?;
+        let mut buffer = vec![0_u16; length + 1];
+        let copied = usize::try_from(GetWindowTextW(hwnd, &mut buffer)).ok()?;
+        Some(String::from_utf16_lossy(&buffer[..copied]))
+    }
+}
+
+/// The window as Win32 reports it now (ADR-0237). `tracking.mode` is the mode
+/// the owner context keeps from `WM_SIZE`; everything else is read from `hwnd`.
 /// Win32 reports a minimized window at a parking position, so there the
 /// outer rectangle is the last known size with no position.
 pub(super) fn sample_state(
     hwnd: HWND,
     record: &Mutex<WindowRecord>,
-    mode: NativeMode,
-    display: Option<flui_platform_api::DisplayId>,
+    tracking: OwnerTracking,
 ) -> WindowState {
-    let (scale, visible, focused, title, cached) = {
+    let OwnerTracking {
+        mode,
+        restore_style,
+        constraints,
+        display,
+    } = tracking;
+    let (scale, visible, focused, cached) = {
         let record = record.lock();
         (
             record.scale_factor,
             record.visible,
             record.focused,
-            record.title.clone(),
             record.bounds.size,
         )
     };
@@ -226,7 +298,13 @@ pub(super) fn sample_state(
         (
             GetWindowRect(hwnd, &raw mut window).is_ok(),
             GetClientRect(hwnd, &raw mut client).is_ok(),
-            GetWindowLongPtrW(hwnd, GWL_STYLE) as u32,
+            // A fullscreen window has been stripped of its frame; whether the
+            // user can resize it or sees a title bar is the style it returns to.
+            if mode.holds_fullscreen() {
+                restore_style
+            } else {
+                GetWindowLongPtrW(hwnd, GWL_STYLE) as u32
+            },
         )
     };
     let content = if have_client {
@@ -255,8 +333,11 @@ pub(super) fn sample_state(
     // minimized window (`rcNormalPosition`), and for a fullscreen one the
     // rectangle it was given on entering, taken from the same source.
     let restore = match mode {
-        NativeMode::Fullscreen { restore_bounds } => Some(restore_bounds),
-        NativeMode::Maximized | NativeMode::Minimized => restore_rectangle(hwnd),
+        NativeMode::Fullscreen { restore_bounds }
+        | NativeMode::Minimized {
+            from_fullscreen: Some(restore_bounds),
+        } => Some(restore_bounds),
+        NativeMode::Maximized | NativeMode::Minimized { .. } => restore_rectangle(hwnd),
         NativeMode::Normal => None,
     };
     let normal = restore.map(|bounds| {
@@ -276,7 +357,8 @@ pub(super) fn sample_state(
         .with_normal_geometry(normal)
         .with_visible(visible)
         .with_focused(focused)
-        .with_title(Some(title))
+        .with_title(window_text(hwnd))
+        .with_constraints(constraints)
         .with_resizable(style & WS_THICKFRAME.0 != 0)
         .with_decorated(style & WS_CAPTION.0 == WS_CAPTION.0)
         .with_display(display)
@@ -290,6 +372,25 @@ impl std::fmt::Debug for WindowsWindow {
             .field("hwnd", &self.hwnd.0)
             .finish_non_exhaustive()
     }
+}
+
+/// A Win32 call that failed, as the error of the command that made it.
+fn backend_error(what: &str, error: windows::core::Error) -> WindowCommandError {
+    WindowCommandError::Backend {
+        message: format!("{what} failed: {error}"),
+    }
+}
+
+/// The window's placement: its show state and the rectangles it returns to.
+pub(super) fn placement_of(hwnd: HWND) -> windows::core::Result<WINDOWPLACEMENT> {
+    let mut placement = WINDOWPLACEMENT {
+        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `placement` is a stack local with `length` set; a stale `hwnd`
+    // only makes the call fail.
+    unsafe { GetWindowPlacement(hwnd, &raw mut placement) }?;
+    Ok(placement)
 }
 
 /// How far the work area of `hwnd`'s monitor starts from the monitor's own
@@ -326,17 +427,11 @@ fn workspace_origin(hwnd: HWND) -> (i32, i32) {
 /// `GetWindowRect` it is the normal rectangle whatever state the window is in
 /// now.
 fn restore_rectangle(hwnd: HWND) -> Option<Bounds<i32>> {
-    let mut placement = WINDOWPLACEMENT {
-        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-        ..Default::default()
-    };
-    // SAFETY: `placement` is a stack local with `length` set.
-    unsafe { GetWindowPlacement(hwnd, &raw mut placement) }.ok()?;
-    let (dx, dy) = workspace_origin(hwnd);
-    let rect = placement.rcNormalPosition;
+    let placement = placement_of(hwnd).ok()?;
+    let screen = to_screen(placement.rcNormalPosition, workspace_origin(hwnd));
     Some(Bounds {
-        origin: Point::new(rect.left + dx, rect.top + dy),
-        size: Size::new(rect.right - rect.left, rect.bottom - rect.top),
+        origin: Point::new(screen.left, screen.top),
+        size: Size::new(screen.right - screen.left, screen.bottom - screen.top),
     })
 }
 
@@ -387,8 +482,8 @@ fn open_spot(
     });
     let place = |at: Point<f64>| {
         (
-            anchor.0 + logical_to_device(at.x, scale),
-            anchor.1 + logical_to_device(at.y, scale),
+            anchor.0.saturating_add(logical_to_device(at.x, scale)),
+            anchor.1.saturating_add(logical_to_device(at.y, scale)),
         )
     };
     let origin = options.position.map(place);
@@ -397,8 +492,8 @@ fn open_spot(
         Some((
             left,
             top,
-            left + logical_to_device(geometry.size.width, scale),
-            top + logical_to_device(geometry.size.height, scale),
+            left.saturating_add(logical_to_device(geometry.size.width, scale)),
+            top.saturating_add(logical_to_device(geometry.size.height, scale)),
         ))
     });
     OpenSpot {
@@ -414,7 +509,7 @@ fn open_spot(
 /// borders (`AdjustWindowRectExForDpi`), measured for the style given and not
 /// for the window's current rectangle, which a maximized or minimized window
 /// does not keep.
-fn outer_size(
+pub(super) fn outer_size(
     style: u32,
     ex_style: u32,
     dpi: u32,
@@ -450,11 +545,16 @@ fn outer_size(
 pub(crate) const fn window_capabilities() -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::NONE;
     capabilities.sets_title = true;
+    capabilities.sets_position = true;
     capabilities.sets_size = true;
+    capabilities.sets_constraints = true;
+    capabilities.sets_resizable = true;
+    capabilities.sets_decorated = true;
     capabilities.minimizes = true;
     capabilities.maximizes = true;
     capabilities.enters_fullscreen = true;
     capabilities.shows = true;
+    capabilities.hides = true;
     capabilities.activates = true;
     capabilities.observes_position = true;
     capabilities.observes_minimized = true;
@@ -481,6 +581,7 @@ impl WindowsWindow {
             frames,
             exit_policy,
             displays,
+            notices,
             ..
         } = shares;
         // Admission refuses identity exhaustion before creating an HWND
@@ -497,6 +598,7 @@ impl WindowsWindow {
             frames,
             exit_policy,
             displays,
+            notices,
             config,
             identity,
             hwnd,
@@ -530,13 +632,12 @@ impl WindowsWindow {
             let system_scale = GetDpiForSystem() as f64 / USER_DEFAULT_SCREEN_DPI as f64;
 
             // Determine window style
-            let style = if options.decorated {
-                WS_OVERLAPPEDWINDOW
-            } else if options.visible {
-                WS_POPUP | WS_VISIBLE
-            } else {
-                WS_POPUP
-            };
+            // Always created hidden: the window is placed and put in its mode
+            // first, and shown afterwards, so its first sight is the final one.
+            let style = windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(frame_style(
+                options.decorated,
+                options.resizable,
+            ));
 
             let ex_style = WS_EX_APPWINDOW;
 
@@ -598,6 +699,7 @@ impl WindowsWindow {
         frames: Rc<super::platform::FrameCount>,
         exit_policy: super::owner_control::ExitPolicyRequest,
         displays: Arc<super::display::WindowsDisplays>,
+        notices: Arc<crate::shared::system_notice::SystemNotices>,
         config: crate::config::WindowConfiguration,
         identity: super::platform::WindowIdentity,
         hwnd: HWND,
@@ -653,6 +755,7 @@ impl WindowsWindow {
             let _ = ClientToScreen(hwnd, &raw mut origin);
 
             let created_style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+            let deferred = options.visible && options.reveal == WindowReveal::AfterFirstFrame;
             let state = Arc::new(Mutex::new(WindowRecord {
                 bounds: Bounds {
                     origin: Point::new(
@@ -665,17 +768,25 @@ impl WindowsWindow {
                     ),
                 },
                 scale_factor,
-                visible: crate::shared::visibility::win32_initial_visibility(created_style),
+                visible: options.visible,
                 focused: false,
-                title: options.title.clone(),
             }));
 
+            let constraints = SizeConstraints::new(options.min_size, options.max_size);
             let snapshot = Arc::new(WindowStateCell::new(sample_state(
                 hwnd,
                 &state,
-                NativeMode::Normal,
-                displays.display_of_window(hwnd),
+                OwnerTracking {
+                    mode: NativeMode::Normal,
+                    restore_style: 0,
+                    constraints,
+                    display: displays.display_of_window(hwnd),
+                },
             )));
+
+            // A wake marks the published state stale, so the first read after
+            // the machine slept asks the system again.
+            notices.mark_stale_on_wake(&snapshot);
 
             // Create and install the WindowContext for event dispatch
             // BEFORE building the wrapper: the wrapper keeps the pointer as
@@ -715,8 +826,19 @@ impl WindowsWindow {
                 modifiers: std::cell::Cell::new(flui_platform_api::Modifiers::NONE),
                 cursor: std::cell::Cell::new(CursorIcon::default()),
                 restore_style: std::cell::Cell::new(0),
+                constraints: std::cell::Cell::new(constraints),
+                resizable: std::cell::Cell::new(options.resizable),
+                first_show: std::cell::Cell::new(if deferred {
+                    FirstShow::AfterFirstFrame(options.mode)
+                } else {
+                    FirstShow::OnShow(options.mode)
+                }),
+                publish_hold: std::cell::Cell::new(0),
+                limits_waived: std::cell::Cell::new(false),
+                // A window whose reveal waits for its first frame is visible to
+                // the runtime already: its frames must run to earn the reveal.
                 last_visibility_dispatched: std::cell::Cell::new(
-                    crate::shared::visibility::win32_initial_visibility(created_style),
+                    deferred || crate::shared::visibility::win32_initial_visibility(created_style),
                 ),
                 pending_high_surrogate: std::cell::Cell::new(None),
                 text_services: std::cell::RefCell::new(None),
@@ -748,95 +870,61 @@ impl WindowsWindow {
                 });
             }
 
-            // Show window if requested
-            if options.visible {
-                // ShowWindow's return value reports the window's PREVIOUS
-                // visibility state (nonzero if it was already visible), not
-                // success/failure -- a freshly created window is always
-                // previously-hidden, so treating the BOOL as a Result would
-                // warn on every visible window creation. Nothing meaningful
-                // to check here; UpdateWindow below does return a genuine
-                // success/failure BOOL.
-                Self::show_opened(hwnd, options.mode, normal);
-                if let Err(error) = UpdateWindow(hwnd).ok() {
-                    tracing::warn!(?hwnd, ?error, "UpdateWindow failed in WindowsWindow::new");
-                }
-                window.state.lock().visible = true;
+            // The window is still hidden: put it where and in the mode it
+            // opens, then show it now, later (first frame) or never (hidden).
+            Self::prepare_opening(hwnd, options.mode, normal);
+            if constraints != SizeConstraints::NONE {
+                window.enforce_constraints();
+            }
+            if options.visible && !deferred {
+                window.show_first();
             }
 
             Ok(window)
         }
     }
 
-    /// Show a window that has just opened, in the mode the options ask for.
+    /// Put a window that is still hidden where and in the mode it opens, so
+    /// its first sight is already the final one.
     ///
-    /// A normal window is simply shown. A maximized or minimized one is shown
-    /// through `SetWindowPlacement`, whose `rcNormalPosition` is the rectangle
-    /// it returns to (`normal`, in screen coordinates, converted to the
-    /// workspace coordinates the call takes), so the first frame is already in
-    /// the right mode and a restored window keeps its earlier bounds. A
-    /// fullscreen one is placed normally first and then enters fullscreen, so
-    /// the bounds it returns to are `normal`'s.
-    ///
-    /// # Safety
-    /// `hwnd` must be a live window created on this thread.
-    unsafe fn show_opened(hwnd: HWND, mode: WindowMode, normal: Option<RECT>) {
-        if mode == WindowMode::Normal || (normal.is_none() && mode == WindowMode::Fullscreen) {
-            // ShowWindow's return value is the window's PREVIOUS visibility, not
-            // success: nothing to check.
-            // SAFETY: the caller guarantees `hwnd` is a live window.
-            let _ = unsafe { ShowWindow(hwnd, SW_SHOW) };
-            if mode == WindowMode::Fullscreen {
-                Self::toggle_fullscreen_for_hwnd(hwnd);
+    /// `normal` is the rectangle (screen coordinates) a window that opens
+    /// maximized, minimized or fullscreen returns to. It becomes the window's
+    /// `rcNormalPosition` through a hidden `SetWindowPlacement`, so a restored
+    /// window keeps its earlier bounds. Fullscreen is entered here, hidden.
+    fn prepare_opening(hwnd: HWND, mode: WindowMode, normal: Option<RECT>) {
+        if let Some(rect) = normal
+            && mode != WindowMode::Normal
+        {
+            let placed = placement_of(hwnd).and_then(|mut placement| {
+                placement.showCmd = SW_HIDE.0 as u32;
+                placement.rcNormalPosition = to_workspace(rect, workspace_origin(hwnd));
+                // SAFETY: `placement` is fully initialized; a stale `hwnd` only
+                // makes the call fail.
+                unsafe { SetWindowPlacement(hwnd, &raw const placement) }
+            });
+            if let Err(error) = placed {
+                tracing::warn!(?hwnd, ?error, "the opening rectangle could not be set");
             }
-            return;
-        }
-        let mut placement = WINDOWPLACEMENT {
-            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-            ..Default::default()
-        };
-        // SAFETY: `placement` is a stack local with `length` set; `hwnd` is live
-        // by the caller's guarantee.
-        if let Err(error) = unsafe { GetWindowPlacement(hwnd, &raw mut placement) } {
-            tracing::warn!(
-                ?hwnd,
-                ?error,
-                "GetWindowPlacement failed at open; showing normally"
-            );
-            // SAFETY: as above.
-            let _ = unsafe { ShowWindow(hwnd, SW_SHOW) };
-            return;
-        }
-        placement.showCmd = match mode {
-            WindowMode::Maximized => SW_SHOWMAXIMIZED,
-            WindowMode::Minimized => SW_SHOWMINIMIZED,
-            _ => SW_SHOWNORMAL,
-        }
-        .0 as u32;
-        if let Some(rect) = normal {
-            // `rcNormalPosition` is in workspace coordinates: relative to the
-            // work area, which a taskbar on the top or left edge moves away
-            // from the monitor's origin.
-            let (dx, dy) = workspace_origin(hwnd);
-            placement.rcNormalPosition = RECT {
-                left: rect.left - dx,
-                top: rect.top - dy,
-                right: rect.right - dx,
-                bottom: rect.bottom - dy,
-            };
-        }
-        // SAFETY: `placement` is fully initialized above.
-        if let Err(error) = unsafe { SetWindowPlacement(hwnd, &raw const placement) } {
-            tracing::warn!(
-                ?hwnd,
-                ?error,
-                "SetWindowPlacement failed at open; showing normally"
-            );
-            // SAFETY: as above.
-            let _ = unsafe { ShowWindow(hwnd, SW_SHOW) };
         }
         if mode == WindowMode::Fullscreen {
             Self::toggle_fullscreen_for_hwnd(hwnd);
+        }
+    }
+
+    /// Show a window that has never been shown, in the mode it opened in; does
+    /// nothing for one that was. This settles a deferred reveal too.
+    fn show_first(&self) {
+        let mode = super::platform::with_window_context(self.hwnd, "show_first", |ctx| {
+            ctx.first_show.replace(FirstShow::Done).mode()
+        })
+        .flatten();
+        let Some(mode) = mode else {
+            return;
+        };
+        self.show_native(first_show_command(mode));
+        // SAFETY: a plain call on this wrapper's window handle.
+        if let Err(error) = unsafe { UpdateWindow(self.hwnd) }.ok() {
+            tracing::warn!(hwnd = ?self.hwnd, ?error, "UpdateWindow failed after the first show");
         }
     }
 
@@ -1017,7 +1105,6 @@ impl WindowsWindow {
                 tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowTextW failed");
             }
         }
-        self.state.lock().title = title.to_string();
     }
 
     /// Resize the content area to `size`.
@@ -1034,21 +1121,16 @@ impl WindowsWindow {
     /// # Errors
     /// [`WindowCommandError::Backend`] when Win32 refuses or fails the resize.
     fn set_inner_size(&self, size: Size<f64>) -> Result<(), WindowCommandError> {
-        let backend = |what: &str, error: windows::core::Error| WindowCommandError::Backend {
-            message: format!("{what} failed: {error}"),
-        };
         let scale = self.state.lock().scale_factor;
         let content = (
             logical_to_device(size.width, scale),
             logical_to_device(size.height, scale),
         );
         let fullscreen = super::platform::with_window_context(self.hwnd, "set_inner_size", |ctx| {
-            match ctx.mode.get() {
-                NativeMode::Fullscreen { restore_bounds } => {
-                    Some((restore_bounds, ctx.restore_style.get()))
-                }
-                _ => None,
-            }
+            ctx.mode
+                .get()
+                .fullscreen_bounds()
+                .map(|restore_bounds| (restore_bounds, ctx.restore_style.get()))
         })
         .flatten();
         // SAFETY: `self.hwnd` is this wrapper's live window handle. Every
@@ -1062,36 +1144,36 @@ impl WindowsWindow {
             let ex_style = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) as u32;
             if let Some((restore_bounds, restore_style)) = fullscreen {
                 let (width, height) = outer_size(restore_style, ex_style, dpi, content)
-                    .map_err(|e| backend("AdjustWindowRectExForDpi", e))?;
+                    .map_err(|e| backend_error("AdjustWindowRectExForDpi", e))?;
                 super::platform::with_window_context(self.hwnd, "set_inner_size", |ctx| {
-                    ctx.mode.set(NativeMode::Fullscreen {
-                        restore_bounds: Bounds {
-                            origin: restore_bounds.origin,
-                            size: Size::new(width, height),
-                        },
-                    });
+                    ctx.mode.set(ctx.mode.get().with_fullscreen_bounds(Bounds {
+                        origin: restore_bounds.origin,
+                        size: Size::new(width, height),
+                    }));
                 });
+                self.clamp_restore_rectangle();
                 return Ok(());
             }
-            let mut placement = WINDOWPLACEMENT {
-                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-                ..Default::default()
-            };
-            GetWindowPlacement(self.hwnd, &raw mut placement)
-                .map_err(|e| backend("GetWindowPlacement", e))?;
+            let mut placement =
+                placement_of(self.hwnd).map_err(|e| backend_error("GetWindowPlacement", e))?;
             let away_from_normal = placement.showCmd == SW_SHOWMAXIMIZED.0 as u32
                 || placement.showCmd == SW_SHOWMINIMIZED.0 as u32;
             let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
             if away_from_normal {
                 let (width, height) = outer_size(style, ex_style, dpi, content)
-                    .map_err(|e| backend("AdjustWindowRectExForDpi", e))?;
-                placement.rcNormalPosition.right = placement.rcNormalPosition.left + width;
-                placement.rcNormalPosition.bottom = placement.rcNormalPosition.top + height;
-                return SetWindowPlacement(self.hwnd, &raw const placement)
-                    .map_err(|e| backend("SetWindowPlacement", e));
+                    .map_err(|e| backend_error("AdjustWindowRectExForDpi", e))?;
+                placement.rcNormalPosition.right =
+                    placement.rcNormalPosition.left.saturating_add(width);
+                placement.rcNormalPosition.bottom =
+                    placement.rcNormalPosition.top.saturating_add(height);
+                SetWindowPlacement(self.hwnd, &raw const placement)
+                    .map_err(|e| backend_error("SetWindowPlacement", e))?;
+                // A size command must not make the next restore break the limits.
+                self.clamp_restore_rectangle();
+                return Ok(());
             }
             let (width, height) = outer_size(style, ex_style, dpi, content)
-                .map_err(|e| backend("AdjustWindowRectExForDpi", e))?;
+                .map_err(|e| backend_error("AdjustWindowRectExForDpi", e))?;
             SetWindowPos(
                 self.hwnd,
                 None,
@@ -1101,8 +1183,329 @@ impl WindowsWindow {
                 height,
                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
             )
-            .map_err(|e| backend("SetWindowPos", e))
+            .map_err(|e| backend_error("SetWindowPos", e))
         }
+    }
+
+    /// Move the window's outer top-left corner to `at`, global logical pixels.
+    ///
+    /// Like the size, the position is the window's **normal** one: a maximized
+    /// or minimized window keeps its mode and takes the position when it is
+    /// restored, and a fullscreen window takes it for the bounds it returns to.
+    ///
+    /// # Errors
+    /// [`WindowCommandError::Backend`] when Win32 refuses or fails the move.
+    fn set_outer_position(&self, at: Point<f64>) -> Result<(), WindowCommandError> {
+        let scale = self.state.lock().scale_factor;
+        let (x, y) = (
+            logical_to_device(at.x, scale),
+            logical_to_device(at.y, scale),
+        );
+        let fullscreen =
+            super::platform::with_window_context(self.hwnd, "set_outer_position", |ctx| {
+                let mode = ctx.mode.get();
+                mode.fullscreen_bounds().is_some_and(|restore_bounds| {
+                    ctx.mode.set(mode.with_fullscreen_bounds(Bounds {
+                        origin: Point::new(x, y),
+                        size: restore_bounds.size,
+                    }));
+                    true
+                })
+            })
+            .unwrap_or(false);
+        if fullscreen {
+            return Ok(());
+        }
+        // SAFETY: `self.hwnd` is this wrapper's live window handle; the
+        // `WINDOWPLACEMENT` is a stack local with `length` set.
+        unsafe {
+            let mut placement =
+                placement_of(self.hwnd).map_err(|e| backend_error("GetWindowPlacement", e))?;
+            let away_from_normal = placement.showCmd == SW_SHOWMAXIMIZED.0 as u32
+                || placement.showCmd == SW_SHOWMINIMIZED.0 as u32;
+            if away_from_normal {
+                let rect = to_screen(placement.rcNormalPosition, workspace_origin(self.hwnd));
+                let moved = RECT {
+                    left: x,
+                    top: y,
+                    right: x.saturating_add(rect.right.saturating_sub(rect.left)),
+                    bottom: y.saturating_add(rect.bottom.saturating_sub(rect.top)),
+                };
+                placement.rcNormalPosition = to_workspace(moved, workspace_origin(self.hwnd));
+                return SetWindowPlacement(self.hwnd, &raw const placement)
+                    .map_err(|e| backend_error("SetWindowPlacement", e));
+            }
+            SetWindowPos(
+                self.hwnd,
+                None,
+                x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+            .map_err(|e| backend_error("SetWindowPos", e))
+        }
+    }
+
+    /// Set the inner-size limits and apply them to the size the window has.
+    fn set_constraints(&self, constraints: SizeConstraints) {
+        let kept = super::platform::with_window_context(self.hwnd, "set_constraints", |ctx| {
+            ctx.constraints.set(constraints);
+        });
+        if kept.is_some() {
+            self.enforce_constraints();
+        }
+    }
+
+    /// Give the window a frame of this kind, keeping its content size.
+    ///
+    /// A fullscreen window has no frame to change: the style it returns to
+    /// changes instead, and it is the one the next sample reports.
+    ///
+    /// # Errors
+    /// [`WindowCommandError::Backend`] when Win32 refuses or fails the change.
+    fn restyle_frame(&self, decorated: bool, resizable: bool) -> Result<(), WindowCommandError> {
+        let fullscreen = super::platform::with_window_context(self.hwnd, "restyle_frame", |ctx| {
+            ctx.resizable.set(resizable);
+            let mode = ctx.mode.get();
+            mode.fullscreen_bounds().map(|bounds| {
+                let old = ctx.restore_style.get();
+                let new = restyled(old, decorated, resizable);
+                ctx.restore_style.set(new);
+                // The frame it returns to changes size: the outer rectangle
+                // follows, so the content it returns to is the one it had.
+                // SAFETY: plain queries of this wrapper's live window.
+                let (dpi, ex_style) = unsafe {
+                    (
+                        GetDpiForWindow(self.hwnd).max(USER_DEFAULT_SCREEN_DPI),
+                        GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) as u32,
+                    )
+                };
+                if let (Ok(was), Ok(now)) = (
+                    outer_size(old, ex_style, dpi, (0, 0)),
+                    outer_size(new, ex_style, dpi, (0, 0)),
+                ) {
+                    ctx.mode.set(
+                        mode.with_fullscreen_bounds(Bounds {
+                            origin: bounds.origin,
+                            size: Size::new(
+                                bounds
+                                    .size
+                                    .width
+                                    .saturating_sub(was.0)
+                                    .saturating_add(now.0)
+                                    .max(1),
+                                bounds
+                                    .size
+                                    .height
+                                    .saturating_sub(was.1)
+                                    .saturating_add(now.1)
+                                    .max(1),
+                            ),
+                        }),
+                    );
+                }
+            })
+        })
+        .flatten()
+        .is_some();
+        if fullscreen {
+            return Ok(());
+        }
+        // SAFETY: `self.hwnd` is this wrapper's live window handle; the RECT is
+        // a stack local out-parameter; the style calls take plain integers.
+        super::platform::with_window_context(
+            self.hwnd,
+            "restyle_frame",
+            |ctx| -> Result<(), WindowCommandError> {
+                // The frame changes in two steps; a subscriber sees the result only.
+                let _hold = ctx.hold_publishing();
+                unsafe {
+                    let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
+                    let changed = restyled(style, decorated, resizable);
+                    if changed == style {
+                        return Ok(());
+                    }
+                    let mut client = RECT::default();
+                    GetClientRect(self.hwnd, &raw mut client)
+                        .map_err(|e| backend_error("GetClientRect", e))?;
+                    let content = (client.right - client.left, client.bottom - client.top);
+                    let ex_style = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) as u32;
+                    let dpi = GetDpiForWindow(self.hwnd).max(USER_DEFAULT_SCREEN_DPI);
+                    let normal = !IsZoomed(self.hwnd).as_bool() && !IsIconic(self.hwnd).as_bool();
+                    SetWindowLongPtrW(self.hwnd, GWL_STYLE, changed as isize);
+                    let (width, height) = outer_size(changed, ex_style, dpi, content)
+                        .map_err(|e| backend_error("AdjustWindowRectExForDpi", e))?;
+                    let mut flags = SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE;
+                    if !normal {
+                        flags |= SWP_NOSIZE;
+                    }
+                    SetWindowPos(self.hwnd, None, 0, 0, width, height, flags)
+                        .map_err(|e| backend_error("SetWindowPos", e))?;
+                    if !normal {
+                        // The rectangle the window returns to grows or shrinks by
+                        // the change of frame, so restoring it keeps its content.
+                        let was = outer_size(style, ex_style, dpi, (0, 0));
+                        let now = outer_size(changed, ex_style, dpi, (0, 0));
+                        if let (Ok(was), Ok(now), Ok(mut placement)) =
+                            (was, now, placement_of(self.hwnd))
+                        {
+                            let normal = &mut placement.rcNormalPosition;
+                            normal.right = normal.right.saturating_add(now.0 - was.0);
+                            normal.bottom = normal.bottom.saturating_add(now.1 - was.1);
+                            SetWindowPlacement(self.hwnd, &raw const placement)
+                                .map_err(|e| backend_error("SetWindowPlacement", e))?;
+                        }
+                    }
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_or(Err(WindowCommandError::Closed))
+    }
+
+    /// Whether the window waits for its first presented frame to be shown.
+    fn awaiting_reveal(&self) -> bool {
+        super::platform::with_window_context(self.hwnd, "awaiting_reveal", |ctx| {
+            ctx.first_show.get().awaits_frame()
+        })
+        .unwrap_or(false)
+    }
+
+    /// Put the window in `mode`.
+    ///
+    /// A window that waits for its first frame takes the mode as the one it is
+    /// revealed in: setting a mode must not show it early.
+    ///
+    /// # Errors
+    /// [`WindowCommandError::Unsupported`] for a mode this backend does not know.
+    fn set_mode(&self, mode: WindowMode) -> Result<(), WindowCommandError> {
+        if !matches!(
+            mode,
+            WindowMode::Normal
+                | WindowMode::Minimized
+                | WindowMode::Maximized
+                | WindowMode::Fullscreen
+        ) {
+            return Err(WindowCommandError::Unsupported);
+        }
+        if self.awaiting_reveal() {
+            self.set_fullscreen(mode == WindowMode::Fullscreen);
+            super::platform::with_window_context(self.hwnd, "stage_mode", |ctx| {
+                // Fullscreen is entered hidden and shown like a normal window.
+                let staged = match mode {
+                    WindowMode::Fullscreen => WindowMode::Normal,
+                    other => other,
+                };
+                ctx.first_show.set(ctx.first_show.get().staged(staged));
+            });
+            return Ok(());
+        }
+        match mode {
+            WindowMode::Minimized => self.show_native(SW_MINIMIZE),
+            WindowMode::Maximized => {
+                // A fullscreen popup is not maximized: it leaves fullscreen first.
+                self.set_fullscreen(false);
+                self.show_native(SW_MAXIMIZE);
+            }
+            WindowMode::Fullscreen => self.set_fullscreen(true),
+            _ => self.restore_normal(),
+        }
+        // A window that was never shown has had its first show if the mode
+        // showed it (minimized, maximized); otherwise it is still to be shown,
+        // and it is shown as the normal or fullscreen window it now is.
+        super::platform::with_window_context(self.hwnd, "set_mode", |ctx| {
+            if ctx.first_show.get().mode().is_some() {
+                // SAFETY: a plain query of this wrapper's window handle.
+                let shown = unsafe { IsWindowVisible(self.hwnd) }.as_bool();
+                ctx.first_show.set(if shown {
+                    FirstShow::Done
+                } else {
+                    FirstShow::OnShow(WindowMode::Normal)
+                });
+            }
+        });
+        Ok(())
+    }
+
+    /// Bring the window back to its normal mode from any other: a minimized or
+    /// maximized window is restored, and a fullscreen one gets its frame and
+    /// bounds back. A hidden window stays hidden.
+    fn restore_normal(&self) {
+        // SAFETY: plain state queries on this wrapper's window handle.
+        let (away, shown) = unsafe {
+            (
+                IsIconic(self.hwnd).as_bool() || IsZoomed(self.hwnd).as_bool(),
+                IsWindowVisible(self.hwnd).as_bool(),
+            )
+        };
+        if away && shown {
+            self.show_native(SW_RESTORE);
+        } else if away {
+            self.restore_hidden();
+        }
+        // A fullscreen window that was minimized comes back fullscreen from the
+        // restore above; leaving fullscreen is the second step.
+        self.set_fullscreen(false);
+    }
+
+    /// Take a hidden maximized or minimized window back to its normal rectangle
+    /// without showing it: `SW_RESTORE` would show it. The state bits go and the
+    /// window is moved to the rectangle it returns to.
+    fn restore_hidden(&self) {
+        let Some(normal) = restore_rectangle(self.hwnd) else {
+            return;
+        };
+        // SAFETY: plain style and position calls on this wrapper's window; a
+        // stale handle only makes them fail.
+        unsafe {
+            let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
+            SetWindowLongPtrW(
+                self.hwnd,
+                GWL_STYLE,
+                (style & !(WS_MAXIMIZE.0 | WS_MINIMIZE.0)) as isize,
+            );
+            if let Err(error) = SetWindowPos(
+                self.hwnd,
+                None,
+                normal.origin.x,
+                normal.origin.y,
+                normal.size.width,
+                normal.size.height,
+                SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER,
+            ) {
+                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowPos (restore hidden) failed");
+            }
+        }
+        super::platform::with_window_context(self.hwnd, "restore_hidden", |ctx| {
+            // A fullscreen window that was minimized is fullscreen again; any
+            // other mode is the normal one.
+            let mode = ctx.mode.get();
+            ctx.mode.set(
+                mode.fullscreen_bounds()
+                    .map_or(NativeMode::Normal, |restore_bounds| {
+                        NativeMode::Fullscreen { restore_bounds }
+                    }),
+            );
+        });
+    }
+
+    /// Hide the window. A window whose first show was still to come stays
+    /// hidden until it is shown explicitly.
+    fn hide_native(&self) {
+        self.show_native(SW_HIDE);
+        self.state.lock().visible = false;
+        super::platform::with_window_context(self.hwnd, "hide", |ctx| {
+            // The first frame no longer shows it; an explicit show still does.
+            ctx.first_show
+                .set(ctx.first_show.get().without_frame_wait());
+            // A window hidden before it was ever shown sends no `WM_SHOWWINDOW`;
+            // the runtime still has to hear that it is no longer visible.
+            if ctx.last_visibility_dispatched.replace(false) {
+                ctx.callbacks.dispatch_visibility_status_change(false);
+            }
+        });
     }
 
     /// Get current scale factor
@@ -1143,7 +1546,8 @@ impl WindowsWindow {
     pub fn toggle_fullscreen_for_hwnd(hwnd: HWND) {
         use windows::Win32::{
             Graphics::Gdi::{
-                GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow,
+                GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect,
+                MonitorFromWindow,
             },
             UI::WindowsAndMessaging::{
                 GWL_STYLE, GetWindowLongPtrW, GetWindowRect, HWND_TOP, SWP_FRAMECHANGED,
@@ -1154,6 +1558,7 @@ impl WindowsWindow {
 
         let toggled = super::platform::with_window_context(hwnd, "toggle_fullscreen", |ctx| {
             let current_mode = ctx.mode.get();
+            let hold = ctx.hold_publishing();
 
             // SAFETY: `GetWindowRect`/`GetWindowLongPtrW`/`SetWindowLongPtrW`/
             // `SetWindowPos`/`MonitorFromWindow`/`GetMonitorInfoW` below all
@@ -1183,9 +1588,15 @@ impl WindowsWindow {
                         return;
                     }
 
-                    // Restore window style from WindowContext
-                    let restore_style = ctx.restore_style.get();
+                    // Restore the style the window had, but not its visibility:
+                    // a window entered hidden and shown since must stay shown.
+                    let shown = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & WS_VISIBLE.0;
+                    let restore_style = (ctx.restore_style.get() & !WS_VISIBLE.0) | shown;
                     SetWindowLongPtrW(hwnd, GWL_STYLE, restore_style as isize);
+
+                    // The window is normal from here on, so the size limits the app set
+                    // (also while it was fullscreen) apply to the rectangle it returns to.
+                    ctx.mode.set(NativeMode::Normal);
 
                     // Restore window position and size
                     if let Err(error) = SetWindowPos(
@@ -1204,9 +1615,7 @@ impl WindowsWindow {
                         );
                     }
 
-                    // Update state
-                    ctx.mode.set(NativeMode::Normal);
-
+                    drop(hold);
                     ctx.publish_window_state(hwnd);
                 } else {
                     // Enter fullscreen - save current state and go borderless on monitor
@@ -1222,9 +1631,13 @@ impl WindowsWindow {
                         );
                     }
 
-                    // Save current style to WindowContext
+                    // Save the style the window returns to. Whether it is
+                    // maximized or minimized is its state, not its style: that
+                    // is restored below, so it never comes back from fullscreen
+                    // flagged as something it no longer is.
                     let current_style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-                    ctx.restore_style.set(current_style);
+                    ctx.restore_style
+                        .set(current_style & !(WS_MAXIMIZE.0 | WS_MINIMIZE.0));
 
                     // Save the bounds the window returns to: its normal
                     // rectangle, which is not its current one when it was
@@ -1244,8 +1657,36 @@ impl WindowsWindow {
                         return;
                     }
 
-                    // Get monitor containing this window
-                    let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+                    // The monitor the window is on. A minimized window is parked
+                    // off-screen, so it goes to the monitor of its normal rectangle.
+                    let iconic = IsIconic(hwnd).as_bool();
+                    let monitor = if iconic {
+                        let normal = RECT {
+                            left: restore_bounds.origin.x,
+                            top: restore_bounds.origin.y,
+                            right: restore_bounds
+                                .origin
+                                .x
+                                .saturating_add(restore_bounds.size.width),
+                            bottom: restore_bounds
+                                .origin
+                                .y
+                                .saturating_add(restore_bounds.size.height),
+                        };
+                        MonitorFromRect(&raw const normal, MONITOR_DEFAULTTONEAREST)
+                    } else {
+                        MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+                    };
+                    // Fullscreen starts from the normal state: a visible maximized
+                    // or minimized window is restored first.
+                    if (iconic || IsZoomed(hwnd).as_bool()) && IsWindowVisible(hwnd).as_bool() {
+                        SendMessageW(
+                            hwnd,
+                            WM_SYSCOMMAND,
+                            Some(WPARAM(SC_RESTORE as usize)),
+                            Some(LPARAM(0)),
+                        );
+                    }
                     let mut monitor_info = MONITORINFO {
                         cbSize: std::mem::size_of::<MONITORINFO>() as u32,
                         ..Default::default()
@@ -1260,11 +1701,14 @@ impl WindowsWindow {
 
                     let monitor_rect = monitor_info.rcMonitor;
 
-                    // Set borderless style
-                    let fullscreen_style = WS_POPUP | WS_VISIBLE;
-                    SetWindowLongPtrW(hwnd, GWL_STYLE, fullscreen_style.0 as isize);
+                    // Set borderless style, shown only if the window is.
+                    let shown = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & WS_VISIBLE.0;
+                    let fullscreen_style = WS_POPUP.0 | shown;
+                    SetWindowLongPtrW(hwnd, GWL_STYLE, fullscreen_style as isize);
 
-                    // Position window to cover entire monitor
+                    // Position window to cover entire monitor. The size limits do not
+                    // apply: a fullscreen window covers its monitor whatever they say.
+                    ctx.limits_waived.set(true);
                     if let Err(error) = SetWindowPos(
                         hwnd,
                         Some(HWND_TOP),
@@ -1276,10 +1720,12 @@ impl WindowsWindow {
                     ) {
                         tracing::warn!(?hwnd, ?error, "SetWindowPos (enter fullscreen) failed");
                     }
+                    ctx.limits_waived.set(false);
 
                     // Update state
                     ctx.mode.set(candidate);
 
+                    drop(hold);
                     ctx.publish_window_state(hwnd);
                 }
             }
@@ -1300,7 +1746,7 @@ impl WindowsWindow {
     /// context gate refuses the read instead of racing `WM_DESTROY`'s free.
     pub fn is_fullscreen(&self) -> bool {
         super::platform::with_window_context(self.hwnd, "is_fullscreen", |ctx| {
-            ctx.mode.get().is_fullscreen()
+            ctx.mode.get().holds_fullscreen()
         })
         .unwrap_or(false)
     }
@@ -1310,10 +1756,23 @@ impl WindowsWindow {
     /// # Arguments
     /// * `fullscreen` - true to enter fullscreen, false to exit fullscreen
     pub fn set_fullscreen(&self, fullscreen: bool) {
-        let is_fullscreen = self.is_fullscreen();
-
+        // A fullscreen window that is minimized comes back fullscreen when it
+        // is restored; leaving fullscreen starts from there.
+        let minimized_from_fullscreen =
+            super::platform::with_window_context(self.hwnd, "set_fullscreen", |ctx| {
+                matches!(
+                    ctx.mode.get(),
+                    NativeMode::Minimized {
+                        from_fullscreen: Some(_)
+                    }
+                )
+            })
+            .unwrap_or(false);
+        if minimized_from_fullscreen {
+            self.show_native(SW_RESTORE);
+        }
         // Only toggle if state needs to change
-        if fullscreen != is_fullscreen {
+        if fullscreen != self.is_fullscreen() {
             Self::toggle_fullscreen_for_hwnd(self.hwnd);
         }
     }
@@ -1451,13 +1910,23 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn request_redraw(&self) {
+        // A handle the OS has reused for another window is not this one.
+        if !handle_available(super::platform::teardown_route(self.hwnd, self.context)) {
+            return;
+        }
         // SAFETY: `InvalidateRect` takes `self.hwnd` and `None` for the
         // rect (invalidate the whole client area) — no pointer to validate.
         // Failure just means nothing was invalidated (e.g. the window is
         // already gone); requesting a redraw is inherently best-effort, so
         // discarding the result keeps this fire-and-forget by design.
         unsafe {
-            let _ = InvalidateRect(Some(self.hwnd), None, false);
+            if IsWindowVisible(self.hwnd).as_bool() {
+                let _ = InvalidateRect(Some(self.hwnd), None, false);
+            } else {
+                // A hidden window is never painted, and its first frame is
+                // what earns it the reveal: post the frame request instead.
+                let _ = PostMessageW(Some(self.hwnd), REQUEST_FRAME, WPARAM(0), LPARAM(0));
+            }
         }
     }
 
@@ -1506,14 +1975,35 @@ impl PlatformWindow for WindowsWindow {
         command.admit(&PlatformWindow::capabilities(self))?;
         match command {
             WindowCommand::SetTitle(title) => self.set_native_title(&title),
+            WindowCommand::SetPosition(at) => self.set_outer_position(at)?,
             WindowCommand::SetSize(size) => self.set_inner_size(size)?,
-            WindowCommand::SetMode(WindowMode::Minimized) => self.show_native(SW_MINIMIZE),
-            WindowCommand::SetMode(WindowMode::Maximized) => self.show_native(SW_MAXIMIZE),
-            WindowCommand::SetMode(WindowMode::Fullscreen) => self.set_fullscreen(true),
-            WindowCommand::SetMode(WindowMode::Normal) => {
-                self.set_fullscreen(false);
-                self.show_native(SW_RESTORE);
+            WindowCommand::SetConstraints(constraints) => self.set_constraints(constraints),
+            WindowCommand::SetResizable(on) => {
+                let decorated =
+                    super::platform::with_window_context(self.hwnd, "set_resizable", |ctx| {
+                        // A fullscreen window has been stripped of its frame:
+                        // the style it returns to says whether it has one.
+                        let style = if ctx.mode.get().holds_fullscreen() {
+                            ctx.restore_style.get()
+                        } else {
+                            // SAFETY: a plain style query on this window.
+                            unsafe { GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32 }
+                        };
+                        style & WS_CAPTION.0 == WS_CAPTION.0
+                    })
+                    .unwrap_or(true);
+                self.restyle_frame(decorated, on)?;
             }
+            WindowCommand::SetDecorated(on) => {
+                let resizable =
+                    super::platform::with_window_context(self.hwnd, "set_decorated", |ctx| {
+                        ctx.resizable.get()
+                    })
+                    .unwrap_or(true);
+                self.restyle_frame(on, resizable)?;
+            }
+            WindowCommand::SetMode(mode) => self.set_mode(mode)?,
+            WindowCommand::Hide => self.hide_native(),
             WindowCommand::Show => self.show().map_err(|error| match error {
                 crate::WindowShowError::Closed => WindowCommandError::Closed,
                 crate::WindowShowError::Native { message } => {
@@ -1608,21 +2098,21 @@ impl PlatformWindow for WindowsWindow {
                 }
             },
             || {
-                super::platform::with_window_context(self.hwnd, "show", |_| {
+                super::platform::with_window_context(self.hwnd, "show", |ctx| {
+                    // A window never shown opens in the mode it was given.
+                    let first = ctx.first_show.replace(FirstShow::Done).mode();
                     // SAFETY: the identity check proves this wrapper's live HWND
                     // on its owner thread. The context guard pins userdata through
                     // ShowWindow reentry; placement is an initialized out pointer.
                     unsafe {
-                        let mut placement = WINDOWPLACEMENT {
-                            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-                            ..Default::default()
-                        };
-                        GetWindowPlacement(self.hwnd, &raw mut placement).map_err(|error| {
+                        let placement = placement_of(self.hwnd).map_err(|error| {
                             crate::WindowShowError::Native {
                                 message: error.to_string(),
                             }
                         })?;
-                        let command = if placement.showCmd == SW_SHOWMINIMIZED.0 as u32 {
+                        let command = if let Some(mode) = first {
+                            first_show_command(mode)
+                        } else if placement.showCmd == SW_SHOWMINIMIZED.0 as u32 {
                             if placement.flags.0 & WPF_RESTORETOMAXIMIZED.0 != 0 {
                                 SW_SHOWMAXIMIZED
                             } else {
@@ -1649,7 +2139,22 @@ impl PlatformWindow for WindowsWindow {
         )
     }
 
+    fn reveal_after_first_frame(&self) {
+        // Only a window whose reveal was deferred waits for this call; one
+        // opened hidden, or already shown, ignores it.
+        let deferred = super::platform::with_window_context(self.hwnd, "reveal", |ctx| {
+            ctx.first_show.get().awaits_frame()
+        })
+        .unwrap_or(false);
+        if deferred {
+            self.show_first();
+            tracing::debug!("Windows: window revealed after its first presented frame");
+        }
+    }
+
     fn activate(&self) {
+        // Activating a window that was never shown shows it.
+        self.show_first();
         // SAFETY: `SetForegroundWindow` takes `self.hwnd` by value, no
         // pointer arguments.
         unsafe {
@@ -2517,6 +3022,21 @@ mod open_tests {
         assert_eq!(open_spot(&unplaced, None, 1.0, with_frame).normal, None);
     }
 
+    fn an_opening_rectangle_at_the_edge_of_the_range_saturates() {
+        let options = WindowOptions::default()
+            .with_mode(WindowMode::Maximized)
+            .with_normal_geometry(Some(WindowGeometry::new(
+                Some(Point::new(3.0e9, 3.0e9)),
+                Size::new(700.0, 500.0),
+            )));
+        let spot = open_spot(&options, None, 1.0, with_frame);
+        assert_eq!(
+            spot.normal,
+            Some((i32::MAX, i32::MAX, i32::MAX, i32::MAX)),
+            "no wrap into a rectangle on the other side of the desktop"
+        );
+    }
+
     #[test]
     fn open_geometry() {
         crate::table_test::run_table(
@@ -2537,6 +3057,10 @@ mod open_tests {
                 (
                     "the_normal_rectangle_is_the_outer_geometry_it_returns_to",
                     the_normal_rectangle_is_the_outer_geometry_it_returns_to as fn(),
+                ),
+                (
+                    "an_opening_rectangle_at_the_edge_of_the_range_saturates",
+                    an_opening_rectangle_at_the_edge_of_the_range_saturates as fn(),
                 ),
                 (
                     "a_normal_rectangle_without_a_position_follows_the_windows_own",
