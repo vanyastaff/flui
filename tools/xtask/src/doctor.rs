@@ -75,22 +75,31 @@ struct Doctor {
 
 impl Doctor {
     fn check_android_ndk(&mut self, compiler: &OsStr, archiver: &OsStr) {
-        let compiler_ok = android_compiler_available(compiler);
+        // The floor in platform-support.toml (ADR-0244); an unreadable file fails the row.
+        let api = crate::platform_floor::android_api();
+        let compiler_ok = api
+            .as_ref()
+            .is_ok_and(|api| android_compiler_available(compiler, *api));
         let archiver_ok = android_archiver_available(archiver);
-        let hint = "install the Android NDK; set CC_aarch64_linux_android to its API-21 clang wrapper and AR_aarch64_linux_android to its llvm-ar";
+        let hint = match &api {
+            Ok(api) => format!(
+                "install the Android NDK; set CC_aarch64_linux_android to its API-{api} clang wrapper and AR_aarch64_linux_android to its llvm-ar"
+            ),
+            Err(error) => format!("{error:#}"),
+        };
         self.row(
             Scope::Full,
             "Android NDK compiler",
             compiler_ok,
             &compiler.to_string_lossy(),
-            hint,
+            &hint,
         );
         self.row(
             Scope::Full,
             "Android NDK archiver",
             archiver_ok,
             &archiver.to_string_lossy(),
-            hint,
+            &hint,
         );
     }
 
@@ -203,8 +212,9 @@ impl Doctor {
     }
 }
 
-/// Probe the configured compiler's Android target and sysroot, without an object file.
-pub(crate) fn android_compiler_available(compiler: &OsStr) -> bool {
+/// Probe the configured compiler's Android target and sysroot for API `api` or later, without an
+/// object file.
+pub(crate) fn android_compiler_available(compiler: &OsStr, api: u32) -> bool {
     let Ok(mut child) = Command::new(compiler)
         .args(["-x", "c", "-fsyntax-only", "-"])
         .stdin(Stdio::piped())
@@ -215,7 +225,10 @@ pub(crate) fn android_compiler_available(compiler: &OsStr) -> bool {
         return false;
     };
     let input_ok = child.stdin.take().is_some_and(|mut input| {
-        input.write_all(b"#include <android/api-level.h>\n#if !defined(__ANDROID__) || !defined(__ANDROID_API__) || __ANDROID_API__ < 21\n#error Android API 21 or later required\n#endif\n").is_ok()
+        let probe = format!(
+            "#include <android/api-level.h>\n#if !defined(__ANDROID__) || !defined(__ANDROID_API__) || __ANDROID_API__ < {api}\n#error Android API {api} or later required\n#endif\n"
+        );
+        input.write_all(probe.as_bytes()).is_ok()
     });
     let status = child.wait();
     input_ok && status.is_ok_and(|status| status.success())

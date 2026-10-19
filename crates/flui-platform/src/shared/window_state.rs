@@ -7,6 +7,33 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use flui_platform_api::WindowState;
 use parking_lot::Mutex;
 
+/// The mode of a window from what the window system says of it. A minimized
+/// window is hidden whatever else is set; a fullscreen one often keeps its
+/// maximized flag, so fullscreen comes before maximized.
+#[cfg(any(
+    all(
+        feature = "winit-backend",
+        any(windows, target_os = "macos", target_os = "linux")
+    ),
+    test
+))]
+pub(crate) const fn mode_of(
+    minimized: bool,
+    fullscreen: bool,
+    maximized: bool,
+) -> flui_platform_api::WindowMode {
+    use flui_platform_api::WindowMode;
+    if minimized {
+        WindowMode::Minimized
+    } else if fullscreen {
+        WindowMode::Fullscreen
+    } else if maximized {
+        WindowMode::Maximized
+    } else {
+        WindowMode::Normal
+    }
+}
+
 /// What a read of the cell answered.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Published {
@@ -130,9 +157,9 @@ mod tests {
     use std::cell::Cell;
 
     use flui_foundation::geometry::Size;
-    use flui_platform_api::{WindowGeometry, WindowRevision, WindowState};
+    use flui_platform_api::{WindowGeometry, WindowMode, WindowRevision, WindowState};
 
-    use super::WindowStateCell;
+    use super::{WindowStateCell, mode_of};
 
     fn state(width: f64) -> WindowState {
         WindowState::new(
@@ -178,5 +205,45 @@ mod tests {
             last,
             "a frozen cell stays frozen even for a sample equal to its state"
         );
+    }
+
+    #[test]
+    fn window_mode_precedence() {
+        // (case, minimized, fullscreen, maximized, mode)
+        let table = [
+            ("nothing set", false, false, false, WindowMode::Normal),
+            ("maximized", false, false, true, WindowMode::Maximized),
+            ("fullscreen", false, true, false, WindowMode::Fullscreen),
+            ("minimized", true, false, false, WindowMode::Minimized),
+            (
+                "fullscreen that kept its maximized flag",
+                false,
+                true,
+                true,
+                WindowMode::Fullscreen,
+            ),
+            (
+                "minimized from fullscreen",
+                true,
+                true,
+                false,
+                WindowMode::Minimized,
+            ),
+            (
+                "minimized from maximized",
+                true,
+                false,
+                true,
+                WindowMode::Minimized,
+            ),
+            ("all three", true, true, true, WindowMode::Minimized),
+        ];
+        for (case, minimized, fullscreen, maximized, expected) in table {
+            assert_eq!(
+                mode_of(minimized, fullscreen, maximized),
+                expected,
+                "{case}"
+            );
+        }
     }
 }

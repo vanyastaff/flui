@@ -58,6 +58,11 @@ impl WinitDisplaySource {
         })
     }
 
+    /// The platform's outputs, for what must be marked stale on a wake.
+    pub(super) fn native(&self) -> Arc<LinuxDisplays> {
+        Arc::clone(&self.native)
+    }
+
     /// The current snapshot. Before the event loop runs it is read once from the
     /// compositor the environment names.
     pub(super) fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
@@ -109,6 +114,17 @@ impl WinitDisplaySource {
                 // The source now answers with the error; the host reports it.
                 true
             }
+        }
+    }
+
+    /// Whether windows will be Wayland surfaces: the protocol the watcher reads
+    /// once one runs (winit's own choice), else the one the environment names.
+    /// A caller that asks before the event loop runs gets the environment's
+    /// answer, which is winit's too unless winit was told otherwise.
+    pub(super) fn is_wayland(&self) -> bool {
+        match &*self.watcher.lock() {
+            Some((protocol, _)) => *protocol == Protocol::Wayland,
+            None => crate::platforms::linux::LinuxPlatform::is_wayland(),
         }
     }
 

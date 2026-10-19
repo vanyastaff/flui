@@ -26,6 +26,7 @@ mod key_vocabulary;
 mod markers;
 mod module_dag;
 mod perf;
+mod platform_floor;
 mod ratchet;
 mod testing;
 mod toolchain;
@@ -133,6 +134,8 @@ enum Command {
     Testing(testing::TestingArgs),
     /// Check (or --write) the W3C key tables generated from keyboard-types (ADR-0089 §4).
     KeyVocabulary(key_vocabulary::KeyVocabularyArgs),
+    /// Check (or --write) the floors generated from platform-support.toml (ADR-0244).
+    PlatformFloor(platform_floor::PlatformFloorArgs),
     /// Validate changelog.d fragments; --write merges them into CHANGELOG.md and deletes them.
     Changelog(changelog::ChangelogArgs),
     /// List missing tools for `ci` / `ci-full`.
@@ -195,6 +198,7 @@ fn main() -> ExitCode {
         Command::Markers(args) => markers::markers(&args),
         Command::Testing(args) => testing::testing(&args),
         Command::KeyVocabulary(args) => key_vocabulary::key_vocabulary(&args),
+        Command::PlatformFloor(args) => platform_floor::platform_floor(&args),
         Command::Changelog(args) => changelog::changelog(&args),
         Command::Doctor(args) => doctor::doctor(&args),
         Command::BenchCollect(args) => bench::bench_collect(&args),

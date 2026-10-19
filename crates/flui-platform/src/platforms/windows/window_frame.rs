@@ -131,13 +131,30 @@ impl super::platform::WindowContext {
         }
     }
 
-    /// After a window was first shown in `mode`. A window shown minimized is
-    /// not visible to the runtime, whatever it was told before (a deferred
-    /// window is told it is visible so that its frames run).
-    pub(super) fn end_first_show(&self, mode: WindowMode) {
-        if mode == WindowMode::Minimized && self.last_visibility_dispatched.replace(false) {
+    /// After a window was first shown. A window that came up minimized is not
+    /// visible to the runtime, whatever it was told before (a deferred window
+    /// is told it is visible so that its frames run). Whether it did is read
+    /// from the window, not from the mode asked for: a launcher can choose the
+    /// first show state.
+    pub(super) fn end_first_show(&self, minimized: bool) {
+        if minimized && self.last_visibility_dispatched.replace(false) {
             self.callbacks.dispatch_visibility_status_change(false);
         }
+    }
+
+    /// Tell the runtime the window's real visibility if what it was told after
+    /// a muted restore disagrees with it (a show that came in meanwhile).
+    pub(super) fn reconcile_visibility(&self, visible: bool) {
+        if self.last_visibility_dispatched.replace(visible) != visible {
+            self.callbacks.dispatch_visibility_status_change(visible);
+        }
+    }
+
+    /// Note that the app asked for the window to be shown, so a restore that
+    /// hides it again afterwards can tell it was overtaken.
+    pub(super) fn note_show_request(&self) {
+        self.show_requests
+            .set(self.show_requests.get().wrapping_add(1));
     }
 }
 

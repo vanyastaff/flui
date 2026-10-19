@@ -708,6 +708,25 @@ fn record_visibility(window: &Arc<dyn HostWindow>) -> Arc<std::sync::Mutex<Vec<b
     events
 }
 
+fn a_show_asked_for_while_a_hidden_window_is_restored_is_kept() {
+    let platform = platform();
+    let window = open(&platform, options());
+    apply(&window, WindowCommand::SetMode(WindowMode::Minimized));
+    apply(&window, WindowCommand::Hide);
+    let events = record_visibility(&window);
+    // The app answers the restore's resize by showing the window.
+    let inner = Arc::clone(&window);
+    window.on_resize(Box::new(move |_, _| {
+        let _ = inner.apply(WindowCommand::Show);
+    }));
+    apply(&window, WindowCommand::SetMode(WindowMode::Normal));
+    assert!(
+        shown(&window),
+        "the newer show request is not undone by the hide"
+    );
+    assert_eq!(*events.lock().expect("log"), [true]);
+}
+
 fn a_window_first_shown_minimized_is_never_reported_visible() {
     let platform = platform();
     let window = open(&platform, deferred().with_mode(WindowMode::Minimized));
@@ -957,6 +976,10 @@ fn native_window_commands() {
         (
             "a_hidden_windows_frame_request_reaches_the_global_redraw_event",
             a_hidden_windows_frame_request_reaches_the_global_redraw_event,
+        ),
+        (
+            "a_show_asked_for_while_a_hidden_window_is_restored_is_kept",
+            a_show_asked_for_while_a_hidden_window_is_restored_is_kept,
         ),
         (
             "a_window_first_shown_minimized_is_never_reported_visible",

@@ -280,6 +280,7 @@ fn view_of(global: u32, state: &OutputState, key_name: Option<&str>) -> Option<O
         scale_factor,
         refresh_period: refresh_period(mode.refresh_millihertz),
         is_primary: false,
+        persistent_key: key_name.map(str::to_owned),
     })
 }
 
@@ -398,6 +399,11 @@ mod tests {
             Identity::Keyed(DisplayKey::WaylandOutput("DP-1".into()))
         );
         assert_eq!(view.name, "Acme Panel (DP-1)");
+        assert_eq!(
+            view.persistent_key.as_deref(),
+            Some("DP-1"),
+            "the connector"
+        );
 
         // The connector is unplugged and plugged in again: a new global, the
         // same key, so the same display.
@@ -431,6 +437,7 @@ mod tests {
         let view = only(&outputs);
         assert_eq!(view.identity, Identity::Fresh { slot: GLOBAL });
         assert_eq!(view.name, "Acme Panel", "the make and model label it");
+        assert_eq!(view.persistent_key, None, "no connector name to key it by");
 
         let first = fresh.resolve(&outputs.views(), |key| registry.mint(key).ok());
         // A later change keeps the id of the same global.
