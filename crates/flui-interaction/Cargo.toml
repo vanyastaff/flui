@@ -140,8 +140,8 @@ globals = [
 [package.metadata.flui.modules]
 # The top-level modules of src/lib.rs, bottom to top (`cargo xtask module-dag`, ADR-0217 §1).
 # Production code names a module only in a lower layer; modules in one layer name none of each
-# other. Row N is ADR-0217's layer N. The runtime's cleanup seam and the test builders sit above
-# the binding they close and drive.
+# other. Row N, counting from 0, is ADR-0217's layer N. The runtime's cleanup seam and the test
+# builders sit above the binding they close and drive.
 layers = [
     [
         "events",
