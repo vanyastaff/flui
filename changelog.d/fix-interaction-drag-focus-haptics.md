@@ -31,4 +31,8 @@
   the first failure propagates, and the observer hears the end first.
 - **The same OS offer over two windows shared one record on exit** (`flui-interaction`): offers
   are keyed by presentation and id everywhere, so closing one window no longer ends the other
-  window's hover.
+  window's hover. A hover over a window the pointer left no longer withdraws the drop feedback,
+  and a dropped offer is told done only once no window's fetch from it is outstanding, even after
+  the window it dropped in closes.
+- **A haptic suppressed while the backend played it still played, or resolved out of ticket
+  order** (`flui-interaction`).
