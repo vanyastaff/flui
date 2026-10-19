@@ -8,9 +8,11 @@
 //! - [`WindowCallbacks`]: Per-window callbacks (input, resize, close, etc.)
 
 use std::collections::VecDeque;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use flui_foundation::IdMint;
 use flui_foundation::geometry::Size;
 use parking_lot::Mutex;
 
@@ -54,9 +56,11 @@ struct InputFeed {
     snapshot_pending: bool,
     /// An input callback has been registered.
     registered: bool,
-    /// Bumped by every registration, so a snapshot delivered to an outgoing
-    /// callback is not credited to its replacement.
+    /// The current registration, so a snapshot delivered to an outgoing
+    /// callback is not credited to its replacement; zero before the first.
     registration: u64,
+    /// Issues every registration's identity, never one twice.
+    registrations: IdMint<NonZeroU64>,
     /// Failed passes over the current registration's snapshot.
     failed_snapshots: u8,
     /// Input admitted behind the snapshot or behind a failed pass's tail, in
@@ -77,6 +81,7 @@ impl InputFeed {
             snapshot_pending: true,
             registered: false,
             registration: 0,
+            registrations: IdMint::new(),
             failed_snapshots: 0,
             held: VecDeque::new(),
             redirected: 0,
@@ -725,24 +730,40 @@ impl<'a> InputLease<'a> {
     fn callback_mut(&mut self) -> Option<&mut InputCallback> {
         self.callback.as_mut()
     }
+
+    /// Put the callback back; the outgoing one when the window cleared or a
+    /// replacement was registered meanwhile.
+    fn release(&mut self) -> Option<InputCallback> {
+        let callback = self.callback.take()?;
+        if self.cleared.load(Ordering::SeqCst) {
+            return Some(callback);
+        }
+        self.slot.restore(callback).err()
+    }
+
+    /// End the lease after a call; `failed` when the call panicked and the
+    /// panic was caught. An outgoing callback then is retained, not dropped:
+    /// its captures stay out of an operation that already failed (ADR-0127
+    /// §2). Otherwise it retires here, its capture failure contained.
+    fn retire(mut self, failed: bool) {
+        let outgoing = self.release();
+        if failed {
+            std::mem::forget(outgoing);
+        } else {
+            super::panic_boundary::contain_owner_callback(|| drop(outgoing));
+        }
+    }
 }
 
 impl Drop for InputLease<'_> {
     fn drop(&mut self) {
-        let Some(callback) = self.callback.take() else {
+        let Some(outgoing) = self.release() else {
             return;
         };
-        let outgoing = if self.cleared.load(Ordering::SeqCst) {
-            callback
-        } else {
-            match self.slot.restore(callback) {
-                Ok(()) => return,
-                Err(replaced) => replaced,
-            }
-        };
         if std::thread::panicking() {
-            // An invocation failure remains authoritative.
-            super::panic_boundary::contain_owner_callback(|| drop(outgoing));
+            // The invocation's failure is unwinding: the outgoing callback is
+            // retained, so its captures cannot fail a second time (ADR-0127 §2).
+            std::mem::forget(outgoing);
         } else {
             drop(outgoing);
         }
@@ -1045,7 +1066,7 @@ impl WindowCallbacks {
                         .map_or_else(DispatchEventResult::default, |callback| callback(event));
                     // An outgoing callback replaced during its call retires
                     // here, after its result; its capture failure is contained.
-                    super::panic_boundary::contain_owner_callback(|| drop(lease));
+                    lease.retire(false);
                     input_result.get_or_insert(result);
                 }
                 WindowCallbackEvent::RequestFrame => {
@@ -1258,21 +1279,30 @@ impl WindowCallbacks {
         let outgoing = if self.cleared.load(Ordering::SeqCst) {
             Some(callback)
         } else {
-            match self.on_input.replace(callback) {
-                Ok(outgoing) => {
-                    let mut feed = self.input_feed.lock();
-                    feed.snapshot_pending = true;
-                    feed.registered = true;
-                    feed.failed_snapshots = 0;
-                    feed.registration = feed.registration.wrapping_add(1);
-                    outgoing
-                }
-                Err(refused) => {
+            let registration = self.input_feed.lock().registrations.next();
+            match registration {
+                Ok(registration) => match self.on_input.replace(callback) {
+                    Ok(outgoing) => {
+                        let mut feed = self.input_feed.lock();
+                        feed.snapshot_pending = true;
+                        feed.registered = true;
+                        feed.failed_snapshots = 0;
+                        feed.registration = registration.get();
+                        outgoing
+                    }
+                    Err(refused) => {
+                        tracing::error!(
+                            "input callback refused: a window's input callback is registered \
+                             on its owner thread; the callback was dropped on the calling thread"
+                        );
+                        Some(refused)
+                    }
+                },
+                Err(_exhausted) => {
                     tracing::error!(
-                        "input callback refused: a window's input callback is registered on \
-                         its owner thread; the callback was dropped on the calling thread"
+                        "input callback refused: this window issued every registration it can"
                     );
-                    Some(refused)
+                    Some(callback)
                 }
             }
         };
@@ -1397,7 +1427,7 @@ impl WindowCallbacks {
                 HeldEntry::Input(input) => (input, None),
             };
             let delivered = invoke_contained(&mut lease, input);
-            super::panic_boundary::contain_owner_callback(|| drop(lease));
+            lease.retire(!delivered);
             match (delivered, snapshot) {
                 (true, Some(registration)) => self.snapshot_delivered(registration),
                 (true, None) => {}
@@ -1447,7 +1477,7 @@ impl WindowCallbacks {
             return false;
         }
         let delivered = invoke_contained(&mut lease, PlatformInput::Capabilities(capabilities));
-        super::panic_boundary::contain_owner_callback(|| drop(lease));
+        lease.retire(!delivered);
         if delivered {
             self.snapshot_delivered(registration);
         } else if self.snapshot_failed(registration) {
