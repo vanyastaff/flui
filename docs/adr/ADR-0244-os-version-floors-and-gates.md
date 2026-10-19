@@ -8,7 +8,8 @@
   stays in force as a gate of this shape.
 - **Related:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (where OS types live),
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (the runtime has no platform edge),
-  [ADR-0097](ADR-0097-no-process-global-state-gate.md) (no process-wide version state).
+  [ADR-0097](ADR-0097-no-process-global-state-gate.md) (no process-wide version state),
+  [ADR-0213](ADR-0213-input-capabilities.md) (capability queries applications branch on).
 
 ## Context
 
@@ -154,6 +155,27 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
    essential API moves (decision 1), or when the floor can no longer be run for the proof of decision 8;
    the change edits `platform-support.toml`, records the reason there, adds a `changelog.d` entry under
    `### Changed`, and deletes the gates decision 4 now rejects.
+
+10. **An application may raise its floor, never lower it.** The chain is FLUI's floor, then the
+    application's, and each link can only raise the one before it:
+    - FLUI's floor (decision 2) is compiled into `flui-platform` and applies to every build, including
+      one made with plain `cargo` and no `flui.toml`;
+    - an application states its own minimum per environment in `flui.toml`, in an optional
+      `[platforms.<environment>]` table with a `min` key. An absent table inherits FLUI's floor, so
+      `flui create` writes none;
+    - `flui build` and `flui run` reject a `min` below FLUI's floor with an error naming both values,
+      and package with the application's value (Android `minSdk`, `MinimumOSVersion`, the deployment
+      target, the Windows manifest);
+    - at start, the platform compares the running version with the higher of the two. The CLI hands
+      the application's value to the build as an environment variable that `flui-app`'s build script
+      reads (with `rerun-if-env-changed`), so the run-time check of decision 3 also covers an
+      application floor where the system itself does not refuse (Windows, Linux, the Web).
+
+11. **Application code asks for capabilities, never versions.** Version types and markers stay inside
+    the backends. What an application or widget may branch on is a capability through the platform's
+    capability queries (the shape of ADR-0213): present with its typed handle, or absent. The running
+    OS version is published only as a display value (about screens, logs, bug reports) with no
+    ordering, so `if os >= 14` cannot be written outside FLUI either.
 
 ## Consequences
 
