@@ -36,12 +36,12 @@ use flui_rendering::pipeline::WeakPipelineCell;
 use flui_view::prelude::StatefulView;
 use flui_view::{BoxedView, BuildContext, IntoView, LifecycleContext, ViewExt, ViewState};
 
+use super::nested::presentation_device_pixel_ratio;
 use super::nested::{
     FlingHandoff, FlingStep, NestedScroll, NestedScrollConnection, ScrollCause, ScrollEndReason,
     ScrollStep,
 };
 use super::scroll_owner::{SharedSnapPolicy, settle_spring, snap_target};
-use super::nested::presentation_device_pixel_ratio;
 use super::scroll_physics::rest_slop;
 use super::{ClampingScrollPhysics, ScrollMetrics, ScrollPhysics};
 use crate::interaction::focus_reveal::{FocusRevealScope, RevealTarget, SharedRevealTarget};

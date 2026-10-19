@@ -34,12 +34,12 @@ use flui_platform_api::keyboard::Code;
 use flui_platform_api::pointer::{DeviceId, PointerKind};
 use flui_rendering::view::ScrollDirection;
 
+use super::nested::presentation_device_pixel_ratio;
 use super::nested::{
     Acceptance, ChainNode, Handoff, OverscrollBehavior, Participant, PlaneSource, ScrollCause,
-    ScrollDevice, ScrollEndReason, ScrollSequence, ScrollStep, SnapPolicy, follow_latch,
+    ScrollDevice, ScrollEndReason, ScrollSequence, ScrollStep, SequenceSource, SnapPolicy,
 };
 use super::scroll_controller::PendingScrollCommand;
-use super::nested::presentation_device_pixel_ratio;
 use super::scroll_physics::rest_slop;
 use super::{ScrollController, ScrollMetrics, SharedScrollPhysics};
 use flui_interaction::drag::DragIdentity;
@@ -56,7 +56,7 @@ pub type SharedSnapPolicy = Arc<dyn SnapPolicy>;
 /// presets that pick the remainder rule.
 #[derive(Default)]
 pub(crate) struct OwnerEnv {
-    pub(crate) arena: RefCell<Option<GestureArena>>,
+    pub(crate) sequences: SequenceSource,
     pub(crate) settings: RefCell<GestureSettingsProvider>,
     /// Told of every offset change the owner makes, with its cause: an
     /// [`AnchoredDrag`](super::AnchoredDrag) tracks its anchors through it.
@@ -551,25 +551,12 @@ impl ScrollOwner {
     /// A fresh sequence id from the binding's issuer, for input no binding
     /// dispatch named.
     fn mint(&self) -> Option<InputSequenceId> {
-        let arena = self.env.arena.borrow().clone()?;
-        match arena.begin_contactless_sequence() {
-            Ok(sequence) => Some(sequence),
-            Err(error) => {
-                tracing::debug!(%error, "a scroll runs without a sequence: identities exhausted");
-                None
-            }
-        }
+        self.env.sequences.mint()
     }
 
     /// The sequence the binding is dispatching input of, or a fresh one.
     fn dispatched_or_mint(&self) -> Option<InputSequenceId> {
-        let dispatched = self
-            .env
-            .arena
-            .borrow()
-            .as_ref()
-            .and_then(GestureArena::dispatched_sequence);
-        dispatched.or_else(|| self.mint())
+        self.env.sequences.dispatched_or_mint()
     }
 
     /// Replace the driving sequence. The outgoing one ends unless it is the
@@ -1292,24 +1279,13 @@ impl ScrollOwner {
     /// §5). Call once the packet is handled, so a last packet's delta is
     /// still a step of the sequence.
     pub(crate) fn wheel_latch(&self) {
-        let Some(arena) = self.env.arena.borrow().clone() else {
-            return;
-        };
-        let (Some(id), Some(end)) = (arena.dispatched_sequence(), arena.dispatched_latch_end())
-        else {
-            return;
-        };
-        let sequence = self
-            .driving
-            .borrow()
-            .as_ref()
-            .filter(|driving| driving.position == 0 && driving.sequence.id() == id)
-            .map(|driving| Rc::clone(&driving.sequence));
-        if let Some(sequence) = sequence {
-            let mut recovery = PanicRecovery::new();
-            follow_latch(&sequence, &arena, end, &mut recovery);
-            recovery.finish();
-        }
+        self.env.sequences.follow_dispatched_latch(|id| {
+            self.driving
+                .borrow()
+                .as_ref()
+                .filter(|driving| driving.position == 0 && driving.sequence.id() == id)
+                .map(|driving| Rc::clone(&driving.sequence))
+        });
     }
 
     /// Detach the run the owner drives before new input of `sequence`

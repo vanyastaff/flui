@@ -785,12 +785,7 @@ impl StatefulView for RefreshIndicator {
 impl RefreshIndicatorState {
     fn bind_vsync(&mut self, ctx: &dyn LifecycleContext) {
         let incoming = VsyncScope::maybe_of(ctx);
-        let unchanged = match (&self.vsync, &incoming) {
-            (None, None) => true,
-            (Some(current), Some(incoming)) => current.is_same(incoming),
-            _ => false,
-        };
-        if unchanged {
+        if VsyncScope::same_registry(self.vsync.as_ref(), incoming.as_ref()) {
             return;
         }
         self.vsync = incoming;

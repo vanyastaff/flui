@@ -121,7 +121,7 @@ use stretch::{Overlay, Travel};
 use super::WheelScrollDistances;
 use super::nested::{
     ChainNode, NestedScrollScope, PlaneSource, ScrollCause, ScrollDevice, ScrollEndReason,
-    ScrollSequence, follow_latch,
+    ScrollSequence, SequenceSource,
 };
 use super::wheel_axis_delta;
 use crate::anchored_box::AnchoredBox;
@@ -676,7 +676,7 @@ impl ViewerCallbacks {
 #[derive(Default)]
 struct ViewerLeaf {
     parent: RefCell<Option<Rc<ChainNode>>>,
-    arena: RefCell<Option<GestureArena>>,
+    sequences: SequenceSource,
     settings: RefCell<GestureSettingsProvider>,
     /// The device of the last contact that went down on the viewer.
     device: Cell<Option<ScrollDevice>>,
@@ -706,24 +706,12 @@ struct Contactless {
 
 impl ViewerLeaf {
     fn mint(&self) -> Option<InputSequenceId> {
-        let arena = self.arena.borrow().clone()?;
-        match arena.begin_contactless_sequence() {
-            Ok(sequence) => Some(sequence),
-            Err(error) => {
-                tracing::debug!(%error, "a viewer pans without a sequence: identities exhausted");
-                None
-            }
-        }
+        self.sequences.mint()
     }
 
     /// The sequence the binding is dispatching input of, or a fresh one.
     fn dispatched_or_mint(&self) -> Option<InputSequenceId> {
-        let dispatched = self
-            .arena
-            .borrow()
-            .as_ref()
-            .and_then(GestureArena::dispatched_sequence);
-        dispatched.or_else(|| self.mint())
+        self.sequences.dispatched_or_mint()
     }
 
     fn remainder_rule(&self, device: ScrollDevice) -> RemainderHandoff {
@@ -899,24 +887,13 @@ impl ViewerLeaf {
     /// the sequence it leads for the packet's latch ends where the binding
     /// says the latch ends (ADR-0209 §5).
     fn wheel_latch(&self) {
-        let Some(arena) = self.arena.borrow().clone() else {
-            return;
-        };
-        let (Some(id), Some(end)) = (arena.dispatched_sequence(), arena.dispatched_latch_end())
-        else {
-            return;
-        };
-        let sequence = self
-            .contactless
-            .borrow()
-            .as_ref()
-            .filter(|current| current.key.is_none() && current.sequence.id() == id)
-            .map(|current| Rc::clone(&current.sequence));
-        if let Some(sequence) = sequence {
-            let mut recovery = PanicRecovery::new();
-            follow_latch(&sequence, &arena, end, &mut recovery);
-            recovery.finish();
-        }
+        self.sequences.follow_dispatched_latch(|id| {
+            self.contactless
+                .borrow()
+                .as_ref()
+                .filter(|current| current.key.is_none() && current.sequence.id() == id)
+                .map(|current| Rc::clone(&current.sequence))
+        });
     }
 
     /// The key sequence `code` held is continued by its auto-repeat.
@@ -1973,7 +1950,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                 .as_ref()
                 .map(PipelineCell::downgrade),
         );
-        *leaf.arena.borrow_mut() = Some(GestureArenaScope::of(ctx));
+        leaf.sequences.bind(GestureArenaScope::of(ctx));
         *leaf.settings.borrow_mut() = GestureArenaScope::settings_or_default_of(ctx);
         self.wheel_preferences = Some(GestureArenaScope::wheel_preferences_of(ctx));
         self.bind_vsync(ctx);
@@ -2399,12 +2376,7 @@ impl InteractiveViewerState {
 
     fn bind_vsync(&mut self, ctx: &dyn LifecycleContext) {
         let incoming = VsyncScope::maybe_of(ctx);
-        let unchanged = match (&self.clock, &incoming) {
-            (None, None) => true,
-            (Some(current), Some(incoming)) => current.is_same(incoming),
-            _ => false,
-        };
-        if unchanged {
+        if VsyncScope::same_registry(self.clock.as_ref(), incoming.as_ref()) {
             return;
         }
         self.clock = incoming;

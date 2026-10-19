@@ -104,7 +104,7 @@ impl GestureArenaMember for Lapse {
 
 /// Follow the binding's report of where the latch of the packet just
 /// dispatched ends, for `sequence`, the one its leaf leads for it.
-pub(crate) fn follow_latch(
+pub(super) fn follow_latch(
     sequence: &Rc<ScrollSequence>,
     arena: &GestureArena,
     end: ScrollLatchEnd,

@@ -613,12 +613,7 @@ impl StatefulView for Scrollable {
 impl ScrollableState {
     fn bind_vsync(&mut self, ctx: &dyn LifecycleContext) {
         let incoming = VsyncScope::maybe_of(ctx);
-        let unchanged = match (&self.fling_clock, &incoming) {
-            (None, None) => true,
-            (Some(current), Some(incoming)) => current.is_same(incoming),
-            _ => false,
-        };
-        if unchanged {
+        if VsyncScope::same_registry(self.fling_clock.as_ref(), incoming.as_ref()) {
             return;
         }
         self.fling_clock = incoming;
@@ -883,7 +878,7 @@ impl ViewState<Scrollable> for ScrollableState {
         self.install_flush_handle(ctx);
         self.bind_vsync(ctx);
         let arena = GestureArenaScope::of(ctx);
-        *self.env.arena.borrow_mut() = Some(arena.clone());
+        self.env.sequences.bind(arena.clone());
         *self.env.settings.borrow_mut() = GestureArenaScope::settings_or_default_of(ctx);
         self.hold = Some(self.hold_recognizer(arena));
     }
