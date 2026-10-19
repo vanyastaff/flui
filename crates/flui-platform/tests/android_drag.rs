@@ -13,8 +13,8 @@ use flui_platform::shared::android_drag::{
     drop_action, held, incoming_allowed, offered, source_end,
 };
 use flui_platform_api::data_transfer::{
-    DropFeedback, Mime, RepresentationDescriptor, TransferActions, TransferFormat, TransferPayload,
-    TransferUri,
+    DropFeedback, Mime, RepresentationDescriptor, TransferActions, TransferFormat, TransferImage,
+    TransferPayload, TransferUri,
 };
 use flui_platform_api::drag::{DragSessionKey, OsDragEnd, ProcessNonce};
 
@@ -76,10 +76,17 @@ fn a_description_offers_its_media_types() {
 }
 
 /// The drop holds the clip's text, HTML and URIs in memory, and the bytes of
-/// a typed representation as its first URI, read when requested; what the
-/// clip did not carry is missing.
+/// a typed representation as its first URI, read when requested and resolved
+/// as the format it announced: an image as an image, another type as raw
+/// bytes of its essence; what the clip did not carry is missing.
 fn a_drop_holds_what_the_clip_carried() {
-    let offer = offered(["text/plain", "text/html", "image/png", "text/uri-list"]);
+    let offer = offered([
+        "text/plain",
+        "text/html",
+        "image/png",
+        "text/uri-list",
+        "application/pdf; q=1",
+    ]);
     let clip = DroppedClip {
         text: Some("hello".to_owned()),
         html: None,
@@ -94,13 +101,33 @@ fn a_drop_holds_what_the_clip_carried() {
         .collect();
     assert!(matches!(&holds[0], Held::Payload(TransferPayload::Text(text)) if text == "hello"));
     assert!(matches!(holds[1], Held::Missing), "no HTML");
+    let Held::Uri(image) = &holds[2] else {
+        panic!("the image is read from the clip's URI, not {:?}", holds[2]);
+    };
+    assert_eq!(image.uri, "content://media/1");
     assert!(
-        matches!(&holds[2], Held::Uri { uri, mime } if uri == "content://media/1" && mime == "image/png")
+        matches!(
+            image.payload(vec![1, 2, 3]),
+            TransferPayload::Image(TransferImage { mime, bytes })
+                if mime.as_str() == "image/png" && *bytes == [1, 2, 3]
+        ),
+        "an image offer resolves as the image it announced"
     );
     assert!(matches!(
         &holds[3],
         Held::Payload(TransferPayload::UriList(uris)) if uris.len() == 2
             && matches!(&uris[1], TransferUri::Uri(uri) if uri == "content://media/2")
+    ));
+    let Held::Uri(document) = &holds[4] else {
+        panic!(
+            "the document is read from the clip's URI, not {:?}",
+            holds[4]
+        );
+    };
+    assert!(matches!(
+        document.payload(vec![4]),
+        TransferPayload::Custom { mime, bytes }
+            if mime.as_str() == "application/pdf" && *bytes == [4]
     ));
 }
 

@@ -290,7 +290,7 @@ impl DataTransferSource for AndroidTransfer {
                 })
             }
             Held::Missing => TransferRequest::ready(Err(TransferError::SourceGone)),
-            Held::Uri { uri, mime } => {
+            Held::Uri(held) => {
                 let Some(view) = self.view.upgrade() else {
                     return TransferRequest::ready(Err(TransferError::SourceGone));
                 };
@@ -298,12 +298,8 @@ impl DataTransferSource for AndroidTransfer {
                 let spawned = std::thread::Builder::new()
                     .name("flui-drop-read".into())
                     .spawn(move || {
-                        let result = read_uri(&view, &uri, limits.max_bytes).map(|bytes| {
-                            TransferPayload::Custom {
-                                mime: flui_platform_api::data_transfer::Mime::new(&mime),
-                                bytes: Arc::from(bytes),
-                            }
-                        });
+                        let result = read_uri(&view, &held.uri, limits.max_bytes)
+                            .map(|bytes| held.payload(bytes));
                         completer.complete(result);
                     });
                 if let Err(error) = spawned {

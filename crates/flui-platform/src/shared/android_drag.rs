@@ -113,15 +113,28 @@ pub struct DroppedClip {
 pub enum Held {
     /// Served from memory.
     Payload(TransferPayload),
-    /// The bytes behind this URI, of this media type, read when requested.
-    Uri {
-        /// The content URI.
-        uri: String,
-        /// The announced media type.
-        mime: String,
-    },
+    /// The bytes behind a URI, read when requested.
+    Uri(HeldUri),
     /// Announced, but the clip did not carry it.
     Missing,
+}
+
+/// A dropped content URI whose bytes are read when requested.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldUri {
+    /// The content URI.
+    pub uri: String,
+    /// The format the offer announced for its bytes.
+    pub format: TransferFormat,
+}
+
+impl HeldUri {
+    /// The payload the URI's `bytes` resolve as: an image for an image
+    /// offer, as announced, and raw bytes of the type's essence otherwise.
+    #[must_use]
+    pub fn payload(&self, bytes: Vec<u8>) -> TransferPayload {
+        super::html_drag_drop::payload_of_bytes(&self.format, bytes)
+    }
 }
 
 /// What `source` of `descriptor` holds once `clip` dropped.
@@ -149,14 +162,11 @@ pub fn held(
             },
             bytes: Arc::from(Vec::new()),
         }),
-        ClipSource::UriBytes => clip.uris.first().map_or(Held::Missing, |uri| Held::Uri {
-            uri: uri.clone(),
-            mime: match &descriptor.format {
-                TransferFormat::Image { mime } | TransferFormat::Custom { mime } => {
-                    mime.as_str().to_owned()
-                }
-                _ => "application/octet-stream".to_owned(),
-            },
+        ClipSource::UriBytes => clip.uris.first().map_or(Held::Missing, |uri| {
+            Held::Uri(HeldUri {
+                uri: uri.clone(),
+                format: descriptor.format.clone(),
+            })
         }),
     }
 }
