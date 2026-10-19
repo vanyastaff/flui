@@ -47,6 +47,19 @@ pub(crate) fn cocoa_frame(
     }
 }
 
+/// The frame that gives a window the outer size `size` while its top edge stays
+/// where it is: AppKit keeps a frame's bottom-left corner, so a taller or
+/// shorter window has to move to keep its top.
+pub(crate) fn cocoa_frame_keeping_top(current: Bounds<f64>, size: Size<f64>) -> Bounds<f64> {
+    Bounds {
+        origin: Point::new(
+            current.origin.x,
+            current.origin.y + current.size.height - size.height,
+        ),
+        size,
+    }
+}
+
 /// A screen's frame in the display snapshot's terms: device pixels of that
 /// screen, measured from the top-left of the primary screen.
 pub(crate) fn device_bounds_of_screen(
@@ -194,6 +207,22 @@ mod tests {
             let point = cocoa_top_left_point(top_left, PRIMARY);
             assert_eq!(point.x, frame.origin.x);
             assert_eq!(point.y, frame.origin.y + frame.size.height);
+        }
+    }
+
+    #[test]
+    fn a_resized_frame_keeps_its_top_edge() {
+        let current = frame(100.0, 300.0, 800.0, 500.0);
+        // (new height, expected bottom-left y)
+        let rows = [(300.0, 500.0), (500.0, 300.0), (700.0, 100.0)];
+        for (height, y) in rows {
+            let resized = cocoa_frame_keeping_top(current, Size::new(640.0, height));
+            assert_eq!(resized.origin, Point::new(100.0, y), "height {height}");
+            assert_eq!(
+                resized.origin.y + resized.size.height,
+                800.0,
+                "the top edge"
+            );
         }
     }
 

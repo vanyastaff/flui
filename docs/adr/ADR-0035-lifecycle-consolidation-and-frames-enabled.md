@@ -75,8 +75,9 @@ state. A UI runtime derives the scheduler state from its live presentations: any
 - Observed `Detached` is reversible and only rejects input. Explicit stopping is a separate
   terminal intent. Closing a presentation removes it from the aggregate, delivers `Detached`
   while its tree is alive, then disposes it; an observer panic cannot skip removal.
-- Android maps its single active-status signal to the ladder: `false` walks to `Paused`, `true`
-  back to `Resumed`.
+- Android feeds the same three signals as every other backend: `onStart`/`onStop` give visibility,
+  `onResume`/`onPause` the execution state and `onWindowFocusChanged` focus, and the ladder comes
+  from `derive_lifecycle_state`. Focus alone never walks to `Paused` (ADR-0237).
 
 ### 5. Platform quit reaches every UI runtime
 
@@ -110,8 +111,8 @@ subscriptions rather than Flutter's `AppLifecycleListener.dispose`.
 ## Not implemented
 
 A native-Windows visibility signal (only the winit backend reports occlusion); Windows minimize
-mapped through `(visible, focused)`; a web `visibilitychange` signal; an Android transport that
-separates pause/resume from focus; negotiated exit (`onExitRequested`). Wayland occlusion
+mapped through `(visible, focused)`; a web `visibilitychange` signal; negotiated exit
+(`onExitRequested`). Wayland occlusion
 depends on the compositor sending xdg-shell `suspended`; where it does not, a window counts as
 always visible.
 

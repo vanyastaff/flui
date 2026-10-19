@@ -1,5 +1,5 @@
 use flui_runtime::owner::RuntimeOperation;
-#[cfg(any(test, target_os = "android"))]
+#[cfg(all(test, not(target_os = "android")))]
 use flui_scheduler::AppLifecycleState;
 
 use super::host::APP_RUNTIME;
@@ -12,7 +12,7 @@ pub(in crate::app) struct PresentationDispatcher {
     pub(super) address: flui_foundation::PresentationAddress,
 }
 
-#[cfg(any(test, target_os = "android", target_os = "ios"))]
+#[cfg(any(all(test, not(target_os = "android")), target_os = "ios"))]
 impl PresentationDispatcher {
     pub(super) fn runtime(self) -> RuntimeDispatcher {
         RuntimeDispatcher {
@@ -44,7 +44,7 @@ impl RuntimeDispatcher {
         ))
     }
 
-    #[cfg(any(test, target_os = "android"))]
+    #[cfg(all(test, not(target_os = "android")))]
     pub(super) fn lifecycle(self, state: AppLifecycleState) -> Result<(), DispatchError> {
         dispatch_owner_turn(OwnerTurn::Runtime(self, RuntimeOperation::Lifecycle(state)))
     }
@@ -143,13 +143,6 @@ pub(in crate::app) enum RuntimeEvent {
     /// [`WindowVisibility`](Self::WindowVisibility).
     WindowFocus(bool),
     /// Reversible native execution eligibility for one presentation.
-    #[cfg_attr(
-        target_os = "android",
-        expect(
-            dead_code,
-            reason = "this runner retains its existing host lifecycle transport"
-        )
-    )]
     WindowExecution(flui_platform::WindowExecutionState),
     /// Addressed logical content-view safe area.
     ///
