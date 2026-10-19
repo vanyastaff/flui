@@ -445,16 +445,17 @@ impl ArenaSlot {
 /// failure is still a fact, and nothing else would deliver or wake for it.
 ///
 /// A clock failure stamping a verdict is raised here too, after delivery,
-/// in the order it happened: one stamping a verdict committed before the
-/// operation began precedes the operation's own failure.
+/// in the order it happened. The hub keeps one only while no failure of the
+/// operation preceded it, so a kept clock failure, stamped before the
+/// operation began or inside it, precedes the operation's own failure.
 fn observe_after(observers: &ObserverHub, operation: impl FnOnce()) {
     let earlier = observers.take_clock_failure();
     let hold = observers.hold();
     let outcome = catch_unwind(AssertUnwindSafe(operation));
     drop(hold);
     observers.deliver();
-    let later = observers.take_clock_failure();
-    let mut failures = earlier.into_iter().chain(outcome.err()).chain(later);
+    let during = observers.take_clock_failure();
+    let mut failures = earlier.into_iter().chain(during).chain(outcome.err());
     if let Some(first) = failures.next() {
         failures.for_each(flui_foundation::panic::retain_opaque_payload);
         resume_unwind(first);
@@ -464,6 +465,7 @@ fn observe_after(observers: &ObserverHub, operation: impl FnOnce()) {
 /// Queue a contest's cancellation and the rejections it committed.
 fn record_cancel(
     observers: &ObserverHub,
+    recovery: &ArenaRecovery,
     slot: &ArenaSlot,
     cause: ContestCancel,
     pending: &PendingNotifications,
@@ -472,14 +474,22 @@ fn record_cancel(
         contest: slot.contest(),
         cause,
     });
-    record_verdicts(observers, slot, pending, RejectionReason::Cancelled);
+    record_verdicts(
+        observers,
+        recovery,
+        slot,
+        pending,
+        RejectionReason::Cancelled,
+    );
 }
 
 /// Queue the verdicts a resolution committed, losers and winner in the order
 /// their members are notified. A loser was defeated when the batch has a
-/// winner, and rejected for `unwon` otherwise.
+/// winner, and rejected for `unwon` otherwise. `recovery` says whether the
+/// operation stamping them has already failed.
 fn record_verdicts(
     observers: &ObserverHub,
+    recovery: &ArenaRecovery,
     slot: &ArenaSlot,
     pending: &PendingNotifications,
     unwon: RejectionReason,
@@ -497,7 +507,7 @@ fn record_verdicts(
             GestureObservation::verdict(
                 slot.contest(),
                 ObservedMember::new(member.clone()),
-                observers.now(),
+                observers.now(recovery.preserving()),
                 *disposition,
                 reason,
             )
@@ -1107,7 +1117,7 @@ impl GestureArena {
             GestureObservation::verdict(
                 carried.contest,
                 ObservedMember::new(carried.member.clone()),
-                self.shared.observers.now(),
+                self.shared.observers.now(self.shared.recovery.preserving()),
                 disposition,
                 reason,
             )
@@ -1121,7 +1131,13 @@ impl GestureArena {
         cause: ContestCancel,
         pending: &PendingNotifications,
     ) {
-        record_cancel(&self.shared.observers, slot, cause, pending);
+        record_cancel(
+            &self.shared.observers,
+            &self.shared.recovery,
+            slot,
+            cause,
+            pending,
+        );
     }
 
     /// Queue the verdicts a resolution committed, in delivery order; losers
@@ -1132,7 +1148,13 @@ impl GestureArena {
         pending: &PendingNotifications,
         unwon: RejectionReason,
     ) {
-        record_verdicts(&self.shared.observers, slot, pending, unwon);
+        record_verdicts(
+            &self.shared.observers,
+            &self.shared.recovery,
+            slot,
+            pending,
+            unwon,
+        );
     }
 
     pub(crate) fn with_recovery_context(
@@ -2366,7 +2388,7 @@ impl GestureArena {
                 Self::deliver_with_recovery(&context, batch.carried, scope);
                 for slot in batch.slots {
                     let pending = slot.data.borrow_mut().resolve(None, Resolution::Terminal);
-                    record_cancel(&observers, &slot, cause, &pending);
+                    record_cancel(&observers, &context, &slot, cause, &pending);
                     Self::dispatch_pending_with_recovery(&context, pending, slot.contest(), scope);
                 }
             });

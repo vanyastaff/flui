@@ -417,8 +417,10 @@ impl ObserverHub {
     /// The verdict is already committed when it is stamped, so a failing
     /// clock cannot unwind past it: the failure is kept for
     /// [`Self::take_clock_failure`] and the verdict is stamped as a hub
-    /// without a clock stamps it.
-    pub(crate) fn now(&self) -> EventTime {
+    /// without a clock stamps it. When the stamping operation has already
+    /// failed (`after_failure`), that failure stays the first and the
+    /// clock's is retained instead.
+    pub(crate) fn now(&self, after_failure: bool) -> EventTime {
         let Some(clock) = self.clock.as_deref() else {
             return EventTime::from_nanos(0);
         };
@@ -426,7 +428,7 @@ impl ObserverHub {
             Ok(now) => now,
             Err(payload) => {
                 let mut first = self.clock_failure.borrow_mut();
-                if first.is_none() {
+                if first.is_none() && !after_failure {
                     *first = Some(payload);
                 } else {
                     drop(first);
