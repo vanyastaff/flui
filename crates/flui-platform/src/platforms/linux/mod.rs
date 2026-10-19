@@ -80,6 +80,7 @@
 #[cfg(all(target_os = "linux", feature = "a11y"))]
 mod accessibility;
 pub(crate) mod display;
+mod lifecycle_model;
 mod window_ext;
 
 use std::sync::Arc;
