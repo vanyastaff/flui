@@ -338,10 +338,12 @@ that keeps file and line in a panic; both stay.
    other three old runs fold into the unified one. The `cargo nextest list` comparison was not
    run locally, so the first wide run's log is the measured check. The facade step is covered by `test` now that `test` runs `cargo xtask test`
    (`TEST_SCOPE`); the `signals` step goes with the first reactive step (ADR-0085).
-3. **Rebalanced feature-matrix shards (deferred).** `--partition k/3` gave 3.3, 6.1 and 21.4 min on
-   36203822844. The implementation measures `k/5` (five shards) and keeps it if the slowest shard drops under
-   10 min; `tools/xtask/src/tasks.rs`'s `feature_matrix_stage` owns the shard count. Not adopted
-   yet: the measurement needs CI runs (C8).
+3. **Rebalanced feature-matrix shards.** `--partition k/3` gave 3.3, 6.1 and 21.4 min on
+   36203822844, and 11, 22 and 18 min on 39224963640. `k/5` is adopted: replaying that run's
+   per-command times through five contiguous blocks puts the slowest near 15 min, while `k/4`
+   and `k/6` leave the engine, `flui-sdk` and the facade in one block (about 20 and 18 min).
+   The shard list lives in `ci.yml`'s matrix; the first five-shard run on main is the measured
+   check.
 4. **Cache budget.** One cache per feature resolution, not per job: `clippy`, `fast-lane` and
    `test` share `workspace-tests`; `test-features`, the feature-matrix shards and `doc` keep their
    own. Implemented in part: `fast-lane` and `test` share `workspace-tests-v2` (renamed because
