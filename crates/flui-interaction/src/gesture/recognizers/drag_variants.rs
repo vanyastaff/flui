@@ -3,7 +3,7 @@
 //! The descriptive aliases below are the same Rust type and impose no axis
 //! restriction. Use the corresponding constructor to select the gesture axis.
 use super::drag::{DragGestureRecognizer, DragGestureRecognizerBuilder};
-use crate::gesture::{arena::GestureArena, traits::DragAxis};
+use crate::gesture::{arena::GestureArena, constraints::DragAxis};
 /// Alias for [`DragGestureRecognizer`]; [`vertical_drag`] selects its axis.
 pub type VerticalDragGestureRecognizer = DragGestureRecognizer;
 /// Alias for [`DragGestureRecognizer`]; [`horizontal_drag`] selects its axis.

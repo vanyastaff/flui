@@ -1045,6 +1045,101 @@ pub(crate) fn platform_focus_requests_the_mounted_node_and_rejects_disabled_focu
     assert!(!refused.has_primary_focus());
 }
 
+/// A rebuild that swaps a host's caller-owned node for one of its own while a
+/// focus notification runs is refused, and the next rebuild asking for the
+/// same swap makes it: the caller's node leaves the tree then. `Focus` and
+/// `FocusScope` each host the node under test beside a trigger whose focus
+/// gain rebuilds the tree from inside the notification.
+pub(crate) fn a_refused_node_replacement_is_made_by_the_next_rebuild() {
+    use std::cell::RefCell;
+
+    use crate::common::{LaidOut, lay_out, loose};
+
+    type Host = Rc<dyn Fn() -> BoxedView>;
+    fn field() -> SizedBox {
+        SizedBox::new(10.0, 10.0)
+    }
+    let caller_node = FocusNode::with_debug_label("caller-node");
+    let caller_scope = FocusScopeNode::with_debug_label("caller-scope");
+    let rows: [(&str, Host, Host, Rc<FocusNode>); 2] = [
+        (
+            "Focus",
+            {
+                let node = Rc::clone(&caller_node);
+                Rc::new(move || {
+                    Focus::new(field())
+                        .focus_node(Rc::clone(&node))
+                        .into_view()
+                        .boxed()
+                })
+            },
+            Rc::new(|| Focus::new(field()).into_view().boxed()),
+            Rc::clone(&caller_node),
+        ),
+        (
+            "FocusScope",
+            {
+                let scope = Rc::clone(&caller_scope);
+                Rc::new(move || {
+                    FocusScope::with_external_node(Rc::clone(&scope), field())
+                        .into_view()
+                        .boxed()
+                })
+            },
+            Rc::new(|| FocusScope::new(field()).into_view().boxed()),
+            Rc::clone(caller_scope.as_focus_node()),
+        ),
+    ];
+    for (label, before, after, caller) in rows {
+        let trigger = FocusNode::with_debug_label("trigger");
+        let tree = {
+            let trigger = Rc::clone(&trigger);
+            move |host: &Host| {
+                Stack::new(vec![
+                    host(),
+                    Focus::new(field())
+                        .focus_node(Rc::clone(&trigger))
+                        .into_view()
+                        .boxed(),
+                ])
+            }
+        };
+        let laid: Rc<RefCell<Option<LaidOut>>> =
+            Rc::new(RefCell::new(Some(lay_out(tree(&before), loose(100.0)))));
+        let manager = laid.borrow().as_ref().expect("mounted").focus_manager();
+        assert!(caller.is_attached(), "{label}: the caller's node is hosted");
+
+        let armed = Rc::new(Cell::new(true));
+        let (listener_laid, listener_armed, listener_after, listener_tree) = (
+            Rc::clone(&laid),
+            Rc::clone(&armed),
+            Rc::clone(&after),
+            tree.clone(),
+        );
+        manager.add_listener(Rc::new(move |_, _| {
+            if listener_armed.replace(false) {
+                let mut laid = listener_laid.borrow_mut();
+                let laid = laid.as_mut().expect("mounted");
+                laid.pump_widget(listener_tree(&listener_after));
+            }
+        }));
+        let _ = trigger.request_focus();
+        assert!(!armed.get(), "{label}: the trigger's gain rebuilt the tree");
+        assert!(
+            caller.is_attached(),
+            "{label}: the replacement was refused inside the notification"
+        );
+
+        let mut laid = laid.borrow_mut();
+        let laid = laid.as_mut().expect("mounted");
+        laid.pump_widget(tree(&after));
+        assert!(
+            !caller.is_attached(),
+            "{label}: the next rebuild asking for the swap made it"
+        );
+    }
+}
+
 /// A `Focus` whose external node another owner adopted no longer focuses it
 /// on an assistive request: the request reaches the old element, which no
 /// longer owns the attachment.

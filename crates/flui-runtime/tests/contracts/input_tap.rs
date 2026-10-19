@@ -403,6 +403,101 @@ fn a_tap_that_fails_at_finish_reports_an_incomplete_recording() {
     );
 }
 
+/// A tap that finishes its own recording inside a call ends the pass it is
+/// part of: the rows that pass has not offered yet are lost, and the final
+/// rows say so instead of claiming none were.
+fn finishing_inside_a_tap_call_counts_the_rows_it_skips() {
+    use flui_runtime::owner::WindowObservation;
+
+    let runtime = Rc::new(crate::owner_publication::runtime());
+    let address = PresentationAddress {
+        ui_runtime_id: runtime.id(),
+        presentation_id: runtime.presentation_id(),
+    };
+    let observe = move |runtime: &UiRuntime, observation| {
+        runtime.apply_window_observation(address, observation, &|_, _| {});
+    };
+    let recorded = rows();
+    let handle: Rc<RefCell<Option<InputTapHandle>>> = Rc::new(RefCell::new(None));
+    let calls = Rc::new(Cell::new(0));
+    let tap = {
+        let recorded = Rc::clone(&recorded);
+        let runtime = Rc::downgrade(&runtime);
+        let handle = Rc::clone(&handle);
+        let calls = Rc::clone(&calls);
+        move |record: &InputRecord| {
+            recorded.borrow_mut().push(describe(record));
+            calls.set(calls.get() + 1);
+            let runtime = runtime.upgrade().expect("the runtime outlives its tap");
+            match calls.get() {
+                // Two rows admitted during the first pass wait for the next.
+                1 => {
+                    for visible in [false, true] {
+                        observe(&runtime, WindowObservation::Visibility(visible));
+                    }
+                }
+                // The first row of that next pass stops the recording.
+                2 => {
+                    let handle = handle.borrow_mut().take().expect("registered");
+                    assert_eq!(
+                        handle.finish(),
+                        Ok(()),
+                        "the gap and the end row were delivered"
+                    );
+                }
+                _ => {}
+            }
+        }
+    };
+    *handle.borrow_mut() = Some(runtime.input_taps().install(tap).expect("registration"));
+    observe(&runtime, WindowObservation::Focus(true));
+    // Its pass holds the two waiting rows and this one.
+    observe(&runtime, WindowObservation::Hover(true));
+    let seen = recorded.borrow().clone();
+    assert_eq!(seen.len(), 4, "{seen:?}");
+    assert!(
+        seen[..2].iter().all(|row| row.starts_with("input")),
+        "{seen:?}"
+    );
+    assert_eq!(seen[2..], ["gap 2", "end 2"], "{seen:?}");
+    assert!(
+        !runtime.input_taps().is_recording(),
+        "finishing unregistered it"
+    );
+}
+
+/// An assistive request no handler ran for is recorded as unhandled, as a
+/// key is, so a replay tells a dropped action from one that ran.
+fn an_assistive_request_no_handler_ran_is_recorded_unhandled() {
+    use flui_runtime::owner::InputOutcome;
+
+    let runtime = crate::owner_publication::runtime();
+    let outcomes = Rc::new(RefCell::new(Vec::new()));
+    let tap = {
+        let outcomes = Rc::clone(&outcomes);
+        move |record: &InputRecord| {
+            if let InputRecord::Input(row) = record
+                && matches!(row.input, HostInput::Accessibility(_))
+            {
+                outcomes.borrow_mut().push(row.outcome);
+            }
+        }
+    };
+    let handle = runtime.input_taps().install(tap).expect("registration");
+    let handled = runtime.dispatch_accessibility(
+        runtime.presentation_id(),
+        &accesskit::ActionRequest {
+            action: accesskit::Action::Click,
+            target_tree: accesskit::TreeId::ROOT,
+            target_node: accesskit::NodeId(u64::MAX),
+            data: None,
+        },
+    );
+    assert!(!handled, "no node was ever published");
+    handle.finish().expect("complete recording");
+    assert_eq!(*outcomes.borrow(), [InputOutcome::Unhandled]);
+}
+
 #[test]
 fn input_tap_delivery_contract() {
     crate::table_test::run_table(
@@ -439,6 +534,14 @@ fn input_tap_delivery_contract() {
             (
                 "a_tap_that_fails_at_finish_reports_an_incomplete_recording",
                 a_tap_that_fails_at_finish_reports_an_incomplete_recording,
+            ),
+            (
+                "finishing_inside_a_tap_call_counts_the_rows_it_skips",
+                finishing_inside_a_tap_call_counts_the_rows_it_skips,
+            ),
+            (
+                "an_assistive_request_no_handler_ran_is_recorded_unhandled",
+                an_assistive_request_no_handler_ran_is_recorded_unhandled,
             ),
         ],
     );

@@ -208,8 +208,8 @@ impl GestureSettingsSource {
         let profiles = self.profiles.borrow();
         let settings = profiles.for_kind(kind);
         LatchIdle {
-            phase_less: settings.contactless_latch_idle,
-            phased: settings.phased_latch_idle,
+            phase_less: settings.values.contactless_latch_idle,
+            phased: settings.values.phased_latch_idle,
         }
     }
 
@@ -273,8 +273,8 @@ impl SettingsProfile {
     /// The floors are timings only, so an override's target is its authored one.
     fn min_target(&self, kind: PointerKind) -> f64 {
         match self {
-            Self::Fixed(profiles) => profiles.for_kind(kind).min_target,
-            Self::Live(profiles) => profiles.borrow().for_kind(kind).min_target,
+            Self::Fixed(profiles) => profiles.for_kind(kind).values.min_target,
+            Self::Live(profiles) => profiles.borrow().for_kind(kind).values.min_target,
             Self::Override { authored, .. } => authored.min_target(kind),
         }
     }
@@ -464,64 +464,10 @@ pub const DEFAULT_MAX_FLING_VELOCITY: f64 = 8000.0;
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct GestureSettings {
-    /// Maximum distance for a tap gesture (device-specific).
-    touch_slop: f64,
-
-    /// Maximum distance for starting a pan gesture (free direction).
-    pan_slop: f64,
-
-    /// Maximum vertical-only distance to start a vertical drag.
-    ///
-    /// Per-axis split lets the recogniser use a different tolerance for
-    /// vertical-only drags than for free pans. Defaults to
-    /// [`DEFAULT_PAN_SLOP_VERTICAL`].
-    pan_slop_vertical: f64,
-
-    /// Maximum horizontal-only distance to start a horizontal drag.
-    ///
-    /// See [`Self::pan_slop_vertical`] — same rationale, horizontal axis.
-    pan_slop_horizontal: f64,
-
-    /// Minimum scale factor change to start scaling.
-    scale_slop: f64,
-
-    /// Maximum distance between taps for a double-tap.
-    double_tap_slop: f64,
-
-    /// Maximum time between taps for a double-tap.
-    double_tap_timeout: Duration,
-
-    /// Time to wait before recognizing a long-press.
-    long_press_timeout: Duration,
-
-    /// Minimum velocity to trigger a fling.
-    min_fling_velocity: f64,
-
-    /// Maximum velocity for a fling (clamped).
-    max_fling_velocity: f64,
-
-    /// Release-velocity policy captured when a gesture sequence begins.
-    velocity_estimator: VelocityEstimator,
-    /// Post-recognition smoothing of reported positions, captured with the sequence.
-    position_smoothing: Option<OneEuroTuning>,
+    /// What a preset or an author set.
+    values: GestureValues,
+    /// What the host observes, replacing authored values where it publishes one.
     native: NativeSettings,
-
-    /// Side of the smallest target a pointer of this class can hit reliably.
-    min_target: f64,
-    /// Dwell over a drop target before it opens (spring-loading).
-    spring_loading_delay: Duration,
-    /// Width of the edge strip that starts an edge swipe.
-    swipe_edge_width: f64,
-    /// When a scroll remainder moves to an ancestor (ADR-0209 §6).
-    remainder_handoff: RemainderHandoff,
-    /// Idle time that ends a contactless scroll sequence (ADR-0209 §5).
-    contactless_latch_idle: Duration,
-    /// Idle time that ends a phased contactless sequence (ADR-0209 §5).
-    phased_latch_idle: Duration,
-    /// Ceiling on the summed deadlines of one composition path (ADR-0208).
-    max_resolution_delay: Duration,
-    /// Refresh intervals a frame-queued haptic waits (ADR-0210 §4).
-    haptic_frame_deadline_factor: NonZeroU32,
     /// OS accessibility timings no authored value may shorten.
     floors: TimingFloors,
 }
@@ -536,59 +482,66 @@ pub struct GestureSettings {
 /// the profile is resolved, so a profile restored from these values resolves
 /// against the preferences in effect again.
 #[derive(Debug, Clone, PartialEq)]
-#[expect(
-    missing_docs,
-    reason = "each field is the GestureSettings value of the same name, documented on its getter"
-)]
 pub struct GestureValues {
+    /// Maximum distance for a tap gesture (device-specific).
     pub touch_slop: f64,
+    /// Maximum distance for starting a pan gesture (free direction).
     pub pan_slop: f64,
+    /// Maximum vertical-only distance to start a vertical drag, a tolerance
+    /// apart from a free pan's.
     pub pan_slop_vertical: f64,
+    /// Maximum horizontal-only distance to start a horizontal drag.
     pub pan_slop_horizontal: f64,
+    /// Minimum scale factor change to start scaling.
     pub scale_slop: f64,
+    /// Maximum distance between taps for a double-tap.
     pub double_tap_slop: f64,
+    /// Maximum time between taps for a double-tap.
     pub double_tap_timeout: Duration,
+    /// Time to wait before recognizing a long-press.
     pub long_press_timeout: Duration,
+    /// Minimum velocity to trigger a fling.
     pub min_fling_velocity: f64,
+    /// Maximum velocity for a fling (clamped).
     pub max_fling_velocity: f64,
+    /// Release-velocity policy captured when a gesture sequence begins.
     pub velocity_estimator: VelocityEstimator,
+    /// Post-recognition smoothing of reported positions, captured with the
+    /// sequence.
     pub position_smoothing: Option<OneEuroTuning>,
+    /// Side of the smallest target a pointer of this class can hit reliably.
     pub min_target: f64,
+    /// Dwell over a drop target before it opens (spring-loading).
     pub spring_loading_delay: Duration,
+    /// Width of the edge strip that starts an edge swipe.
     pub swipe_edge_width: f64,
+    /// When a scroll remainder moves to an ancestor (ADR-0209 §6).
     pub remainder_handoff: RemainderHandoff,
+    /// Idle time that ends a contactless scroll sequence (ADR-0209 §5).
     pub contactless_latch_idle: Duration,
+    /// Idle time that ends a phased contactless sequence (ADR-0209 §5).
     pub phased_latch_idle: Duration,
+    /// Ceiling on the summed deadlines of one composition path (ADR-0208).
     pub max_resolution_delay: Duration,
+    /// Refresh intervals a frame-queued haptic waits (ADR-0210 §4).
     pub haptic_frame_deadline_factor: NonZeroU32,
 }
 
 impl GestureSettings {
+    /// Settings holding validated authored `values`, with no host
+    /// observation applied.
+    fn authored(values: GestureValues) -> Self {
+        Self {
+            values,
+            native: NativeSettings::default(),
+            floors: TimingFloors::default(),
+        }
+    }
+
     /// Every authored value of these settings; see [`GestureValues`].
     #[must_use]
     pub fn values(&self) -> GestureValues {
-        GestureValues {
-            touch_slop: self.touch_slop,
-            pan_slop: self.pan_slop,
-            pan_slop_vertical: self.pan_slop_vertical,
-            pan_slop_horizontal: self.pan_slop_horizontal,
-            scale_slop: self.scale_slop,
-            double_tap_slop: self.double_tap_slop,
-            double_tap_timeout: self.double_tap_timeout,
-            long_press_timeout: self.long_press_timeout,
-            min_fling_velocity: self.min_fling_velocity,
-            max_fling_velocity: self.max_fling_velocity,
-            velocity_estimator: self.velocity_estimator,
-            position_smoothing: self.position_smoothing,
-            min_target: self.min_target,
-            spring_loading_delay: self.spring_loading_delay,
-            swipe_edge_width: self.swipe_edge_width,
-            remainder_handoff: self.remainder_handoff,
-            contactless_latch_idle: self.contactless_latch_idle,
-            phased_latch_idle: self.phased_latch_idle,
-            max_resolution_delay: self.max_resolution_delay,
-            haptic_frame_deadline_factor: self.haptic_frame_deadline_factor,
-        }
+        self.values.clone()
     }
 
     /// Settings holding exactly `values`, with no host observation applied.
@@ -601,29 +554,19 @@ impl GestureSettings {
     pub fn try_from_values(values: GestureValues) -> Result<Self, GestureSettingsError> {
         let (min_fling_velocity, max_fling_velocity) =
             checked_fling_range(values.min_fling_velocity, values.max_fling_velocity)?;
-        Ok(Self {
+        Ok(Self::authored(GestureValues {
             touch_slop: checked("touch_slop", values.touch_slop)?,
             pan_slop: checked("pan_slop", values.pan_slop)?,
             pan_slop_vertical: checked("pan_slop_vertical", values.pan_slop_vertical)?,
             pan_slop_horizontal: checked("pan_slop_horizontal", values.pan_slop_horizontal)?,
             scale_slop: checked("scale_slop", values.scale_slop)?,
             double_tap_slop: checked("double_tap_slop", values.double_tap_slop)?,
-            double_tap_timeout: values.double_tap_timeout,
-            long_press_timeout: values.long_press_timeout,
             min_fling_velocity,
             max_fling_velocity,
-            velocity_estimator: values.velocity_estimator,
-            position_smoothing: values.position_smoothing,
             min_target: checked("min_target", values.min_target)?,
-            spring_loading_delay: values.spring_loading_delay,
             swipe_edge_width: checked("swipe_edge_width", values.swipe_edge_width)?,
-            remainder_handoff: values.remainder_handoff,
-            contactless_latch_idle: values.contactless_latch_idle,
-            phased_latch_idle: values.phased_latch_idle,
-            max_resolution_delay: values.max_resolution_delay,
-            haptic_frame_deadline_factor: values.haptic_frame_deadline_factor,
-            ..Self::default()
-        })
+            ..values
+        }))
     }
 }
 
@@ -645,8 +588,7 @@ pub enum RemainderHandoff {
 /// The precision class a preset falls back to when its platform has no row
 /// for a pointer kind (ADR-0212 §4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum PointerClass {
+pub(crate) enum PointerClass {
     /// A finger, or a device the platform did not name.
     Coarse,
     /// A mouse, pen or trackpad.
@@ -658,7 +600,7 @@ impl PointerClass {
     /// (a gamepad cursor or an XR ray aims no better than a finger); mouse,
     /// pen and trackpad are fine.
     #[must_use]
-    pub const fn of(kind: PointerKind) -> Self {
+    pub(crate) const fn of(kind: PointerKind) -> Self {
         match kind {
             PointerKind::Mouse | PointerKind::Pen { .. } | PointerKind::Trackpad => Self::Fine,
             // Touch, Virtual and Unknown; a kind added later is coarse until
@@ -870,7 +812,7 @@ impl GestureSettings {
             double_click: preferences.double_click_interval(),
         };
         if let Some(timeout) = preferences.long_press_timeout() {
-            settings.long_press_timeout = timeout;
+            settings.values.long_press_timeout = timeout;
         }
         if let Some(timeout) = preferences.double_click_interval() {
             settings.native.mouse_interval = Some(timeout);
@@ -950,9 +892,11 @@ impl GestureSettings {
             .then_some(self.native.mouse_double_click)
             .flatten();
         let distance = if kind == PointerKind::Touch {
-            self.native.touch_double_tap.unwrap_or(self.double_tap_slop)
+            self.native
+                .touch_double_tap
+                .unwrap_or(self.values.double_tap_slop)
         } else {
-            self.double_tap_slop
+            self.values.double_tap_slop
         };
         exceeds_tolerance(delta, rectangle, distance)
     }
@@ -975,16 +919,16 @@ impl GestureSettings {
             PointerKind::Mouse => floored(
                 self.native
                     .mouse_interval
-                    .unwrap_or(self.double_tap_timeout),
+                    .unwrap_or(self.values.double_tap_timeout),
                 self.floors.double_click,
             ),
             PointerKind::Touch => floored(
                 self.native
                     .touch_interval
-                    .unwrap_or(self.double_tap_timeout),
+                    .unwrap_or(self.values.double_tap_timeout),
                 self.floors.double_tap,
             ),
-            _ => self.double_tap_timeout,
+            _ => self.values.double_tap_timeout,
         }
     }
 
@@ -999,11 +943,17 @@ impl GestureSettings {
     ) -> crate::Velocity {
         let (min, max) = if kind == PointerKind::Touch {
             self.native.touch_fling.map_or(
-                (self.min_fling_velocity, self.max_fling_velocity),
+                (
+                    self.values.min_fling_velocity,
+                    self.values.max_fling_velocity,
+                ),
                 |speeds| (speeds.min(), speeds.max()),
             )
         } else {
-            (self.min_fling_velocity, self.max_fling_velocity)
+            (
+                self.values.min_fling_velocity,
+                self.values.max_fling_velocity,
+            )
         };
         if velocity.magnitude() < min {
             crate::Velocity::ZERO
@@ -1034,7 +984,7 @@ impl GestureSettings {
         let pan_slop = checked("pan_slop", pan_slop)?;
         let (min_fling_velocity, max_fling_velocity) =
             checked_fling_range(min_fling_velocity, max_fling_velocity)?;
-        Ok(Self {
+        Ok(Self::authored(GestureValues {
             touch_slop: checked("touch_slop", touch_slop)?,
             pan_slop,
             pan_slop_vertical: pan_slop,
@@ -1046,8 +996,8 @@ impl GestureSettings {
             spring_loading_delay: long_press_timeout,
             min_fling_velocity,
             max_fling_velocity,
-            ..Self::default()
-        })
+            ..Self::default().values
+        }))
     }
 
     // ========================================================================
@@ -1068,14 +1018,16 @@ impl GestureSettings {
     /// the framework's existing default and says so.
     #[must_use]
     pub fn preset(platform: TargetPlatform, kind: PointerKind) -> Self {
-        Self::kind_row(platform, kind)
-            .or_else(|| Self::class_row(platform, PointerClass::of(kind)))
-            .unwrap_or_else(|| Self::platform_row(platform))
+        Self::authored(
+            Self::kind_row(platform, kind)
+                .or_else(|| Self::class_row(platform, PointerClass::of(kind)))
+                .unwrap_or_else(|| Self::platform_row(platform)),
+        )
     }
 
     /// Rows for one pointer kind, where a platform treats it apart from its
     /// class.
-    fn kind_row(platform: TargetPlatform, kind: PointerKind) -> Option<Self> {
+    fn kind_row(platform: TargetPlatform, kind: PointerKind) -> Option<GestureValues> {
         match (platform, kind) {
             // Android Views apply `ViewConfiguration.TOUCH_SLOP` to every
             // contact, stylus included: a pen keeps the touch numbers there.
@@ -1093,7 +1045,7 @@ impl GestureSettings {
     }
 
     /// Rows for a precision class. Fuchsia has none.
-    fn class_row(platform: TargetPlatform, class: PointerClass) -> Option<Self> {
+    fn class_row(platform: TargetPlatform, class: PointerClass) -> Option<GestureValues> {
         Some(match (platform, class) {
             (TargetPlatform::Android, PointerClass::Coarse) => Self::android_touch(),
             (TargetPlatform::Android, PointerClass::Fine) => Self::android_fine(),
@@ -1116,7 +1068,7 @@ impl GestureSettings {
     }
 
     /// The last fallback: a platform's values for any kind it has no row for.
-    fn platform_row(platform: TargetPlatform) -> Self {
+    fn platform_row(platform: TargetPlatform) -> GestureValues {
         match platform {
             // Fuchsia keeps the Android-like feel it has always used.
             TargetPlatform::Android | TargetPlatform::Fuchsia => Self::android_touch(),
@@ -1152,8 +1104,8 @@ impl GestureSettings {
     ///   measurement.
     /// - `haptic_frame_deadline_factor` 2: two refresh intervals of the
     ///   window's display, ADR-0210 §4.
-    fn coarse_baseline() -> Self {
-        Self {
+    fn coarse_baseline() -> GestureValues {
+        GestureValues {
             touch_slop: DEFAULT_TOUCH_SLOP,
             pan_slop: DEFAULT_PAN_SLOP,
             pan_slop_vertical: DEFAULT_PAN_SLOP_VERTICAL,
@@ -1166,7 +1118,6 @@ impl GestureSettings {
             max_fling_velocity: DEFAULT_MAX_FLING_VELOCITY,
             velocity_estimator: VelocityEstimator::LeastSquares,
             position_smoothing: None,
-            native: NativeSettings::default(),
             min_target: 44.0,
             spring_loading_delay: DEFAULT_LONG_PRESS_TIMEOUT,
             swipe_edge_width: 20.0,
@@ -1175,7 +1126,6 @@ impl GestureSettings {
             phased_latch_idle: Duration::from_millis(3000),
             max_resolution_delay: Duration::from_millis(1500),
             haptic_frame_deadline_factor: NonZeroU32::new(2).expect("BUG: literal is nonzero"),
-            floors: TimingFloors::default(),
         }
     }
 
@@ -1187,8 +1137,8 @@ impl GestureSettings {
     ///   [`DEFAULT_MOUSE_PAN_SLOP`]), pending measurement.
     /// - `min_target` 24 px: WCAG 2.2 success criterion 2.5.8, Target Size
     ///   (Minimum), 24 × 24 CSS px.
-    fn fine_baseline() -> Self {
-        Self {
+    fn fine_baseline() -> GestureValues {
+        GestureValues {
             touch_slop: DEFAULT_MOUSE_SLOP,
             pan_slop: DEFAULT_MOUSE_PAN_SLOP,
             pan_slop_vertical: DEFAULT_MOUSE_SLOP,
@@ -1201,13 +1151,13 @@ impl GestureSettings {
     /// A pen on a platform that publishes no stylus slop: the fine row with
     /// the existing 8 px pen distances ([`DEFAULT_PEN_SLOP`]), pending
     /// measurement.
-    fn pen_distances(self) -> Self {
-        Self {
+    fn pen_distances(values: GestureValues) -> GestureValues {
+        GestureValues {
             touch_slop: DEFAULT_PEN_SLOP,
             pan_slop: DEFAULT_PEN_SLOP,
             pan_slop_vertical: DEFAULT_PEN_SLOP,
             pan_slop_horizontal: DEFAULT_PEN_SLOP,
-            ..self
+            ..values
         }
     }
 
@@ -1224,9 +1174,9 @@ impl GestureSettings {
     /// - `swipe_edge_width` 20: AndroidX `ViewDragHelper.EDGE_SIZE`, 20 dp.
     /// - Remaining values: [`Self::coarse_baseline`]'s, with the spring-loading
     ///   dwell following this row's long press.
-    fn android_touch() -> Self {
+    fn android_touch() -> GestureValues {
         let long_press = Duration::from_millis(400);
-        Self {
+        GestureValues {
             touch_slop: 8.0,
             pan_slop: 16.0,
             pan_slop_vertical: 16.0,
@@ -1247,9 +1197,9 @@ impl GestureSettings {
     /// AOSP's timings (`DOUBLE_TAP_TIMEOUT` 300 ms,
     /// `DEFAULT_LONG_PRESS_TIMEOUT` 400 ms), which `ViewConfiguration`
     /// applies to every pointer.
-    fn android_fine() -> Self {
+    fn android_fine() -> GestureValues {
         let touch = Self::android_touch();
-        Self {
+        GestureValues {
             double_tap_timeout: touch.double_tap_timeout,
             long_press_timeout: touch.long_press_timeout,
             spring_loading_delay: touch.spring_loading_delay,
@@ -1270,8 +1220,8 @@ impl GestureSettings {
     ///   50–8000 pt/s and the 20 pt edge strip are the framework's existing
     ///   defaults pending an on-device measurement; the remaining values are
     ///   [`Self::coarse_baseline`]'s.
-    fn ios_touch() -> Self {
-        Self {
+    fn ios_touch() -> GestureValues {
+        GestureValues {
             touch_slop: 10.0,
             pan_slop: 20.0,
             pan_slop_vertical: 20.0,
@@ -1285,8 +1235,8 @@ impl GestureSettings {
 
     /// iPadOS pointer: [`Self::fine_baseline`] with UIKit's documented 0.5 s
     /// `minimumPressDuration`, which applies to every touch type.
-    fn ios_fine() -> Self {
-        Self {
+    fn ios_fine() -> GestureValues {
+        GestureValues {
             long_press_timeout: Duration::from_millis(500),
             spring_loading_delay: Duration::from_millis(500),
             ..Self::fine_baseline()
@@ -1296,8 +1246,8 @@ impl GestureSettings {
     /// Windows mouse: [`Self::fine_baseline`] with `GetDoubleClickTime`'s
     /// documented 500 ms default double-click interval. The host's observed
     /// interval and double-click rectangle replace these when it reads them.
-    fn windows_fine() -> Self {
-        Self {
+    fn windows_fine() -> GestureValues {
+        GestureValues {
             double_tap_timeout: Duration::from_millis(500),
             ..Self::fine_baseline()
         }
@@ -1305,8 +1255,8 @@ impl GestureSettings {
 
     /// Linux mouse: [`Self::fine_baseline`] with GTK's documented
     /// `gtk-double-click-time` default, 400 ms.
-    fn linux_fine() -> Self {
-        Self {
+    fn linux_fine() -> GestureValues {
+        GestureValues {
             double_tap_timeout: Duration::from_millis(400),
             ..Self::fine_baseline()
         }
@@ -1320,58 +1270,58 @@ impl GestureSettings {
     /// pointer class can hit reliably.
     #[must_use]
     pub const fn min_target(&self) -> f64 {
-        self.min_target
+        self.values.min_target
     }
 
     /// How long a drag dwells over a drop target before it opens.
     #[must_use]
     pub const fn spring_loading_delay(&self) -> Duration {
-        self.spring_loading_delay
+        self.values.spring_loading_delay
     }
 
     /// Width, in logical pixels, of the edge strip that starts an edge swipe.
     #[must_use]
     pub const fn swipe_edge_width(&self) -> f64 {
-        self.swipe_edge_width
+        self.values.swipe_edge_width
     }
 
     /// Where a scroll remainder goes when the latched leaf reaches its edge.
     #[must_use]
     pub const fn remainder_handoff(&self) -> RemainderHandoff {
-        self.remainder_handoff
+        self.values.remainder_handoff
     }
 
     /// Idle time after which a contactless scroll sequence (wheel, keyboard,
     /// assistive, autoscroll) ends.
     #[must_use]
     pub const fn contactless_latch_idle(&self) -> Duration {
-        self.contactless_latch_idle
+        self.values.contactless_latch_idle
     }
 
     /// Idle time after which a phased contactless sequence ends without its
     /// end phase.
     #[must_use]
     pub const fn phased_latch_idle(&self) -> Duration {
-        self.phased_latch_idle
+        self.values.phased_latch_idle
     }
 
     /// Ceiling on the summed deadlines of any root-to-leaf composition path.
     #[must_use]
     pub const fn max_resolution_delay(&self) -> Duration {
-        self.max_resolution_delay
+        self.values.max_resolution_delay
     }
 
     /// Refresh intervals of the window's display that a frame-queued haptic
     /// request may wait for its frame.
     #[must_use]
     pub const fn haptic_frame_deadline_factor(&self) -> NonZeroU32 {
-        self.haptic_frame_deadline_factor
+        self.values.haptic_frame_deadline_factor
     }
 
     /// Release-velocity algorithm captured by a new gesture sequence.
     #[must_use]
     pub const fn velocity_estimator(&self) -> VelocityEstimator {
-        self.velocity_estimator
+        self.values.velocity_estimator
     }
 
     /// Choose how a new gesture estimates its release velocity.
@@ -1381,7 +1331,7 @@ impl GestureSettings {
     /// algorithm; platform thresholds and algorithm selection are independent.
     #[must_use]
     pub const fn with_velocity_estimator(mut self, estimator: VelocityEstimator) -> Self {
-        self.velocity_estimator = estimator;
+        self.values.velocity_estimator = estimator;
         self
     }
 
@@ -1389,7 +1339,7 @@ impl GestureSettings {
     /// after recognition, or `None` (every preset) for raw positions.
     #[must_use]
     pub const fn position_smoothing(&self) -> Option<OneEuroTuning> {
-        self.position_smoothing
+        self.values.position_smoothing
     }
 
     /// Choose whether a new gesture smooths the positions it reports after
@@ -1410,20 +1360,20 @@ impl GestureSettings {
     /// captured settings.
     #[must_use]
     pub const fn with_position_smoothing(mut self, smoothing: Option<OneEuroTuning>) -> Self {
-        self.position_smoothing = smoothing;
+        self.values.position_smoothing = smoothing;
         self
     }
 
     /// Get the touch slop (maximum movement for a tap).
     #[inline]
     pub fn touch_slop(&self) -> f64 {
-        self.touch_slop
+        self.values.touch_slop
     }
 
     /// Get the pan slop (minimum movement to start panning).
     #[inline]
     pub fn pan_slop(&self) -> f64 {
-        self.pan_slop
+        self.values.pan_slop
     }
 
     /// The hit slop for `kind` — how far a pointer of that kind may drift
@@ -1443,7 +1393,7 @@ impl GestureSettings {
                 .native
                 .touch
                 .as_ref()
-                .map_or(self.touch_slop, |slops| slops.hit),
+                .map_or(self.values.touch_slop, |slops| slops.hit),
             _ => self.touch_slop(),
         }
     }
@@ -1467,7 +1417,7 @@ impl GestureSettings {
                 .native
                 .touch
                 .as_ref()
-                .map_or(self.pan_slop, |slops| slops.pan),
+                .map_or(self.values.pan_slop, |slops| slops.pan),
             _ => self.pan_slop(),
         }
     }
@@ -1479,7 +1429,7 @@ impl GestureSettings {
     /// [`Self::pan_slop`] unless explicitly set via [`Self::try_with_pan_slop_vertical`].
     #[inline]
     pub fn pan_slop_vertical(&self) -> f64 {
-        self.pan_slop_vertical
+        self.values.pan_slop_vertical
     }
 
     /// Vertical pan distance, using the native mouse rectangle's vertical axis.
@@ -1494,8 +1444,8 @@ impl GestureSettings {
                 .native
                 .touch
                 .as_ref()
-                .map_or(self.pan_slop_vertical, |slops| slops.vertical),
-            _ => self.pan_slop_vertical,
+                .map_or(self.values.pan_slop_vertical, |slops| slops.vertical),
+            _ => self.values.pan_slop_vertical,
         }
     }
 
@@ -1504,7 +1454,7 @@ impl GestureSettings {
     /// See [`Self::pan_slop_vertical`] — same rationale, horizontal axis.
     #[inline]
     pub fn pan_slop_horizontal(&self) -> f64 {
-        self.pan_slop_horizontal
+        self.values.pan_slop_horizontal
     }
 
     /// Horizontal pan distance, using the native mouse rectangle's horizontal axis.
@@ -1519,8 +1469,8 @@ impl GestureSettings {
                 .native
                 .touch
                 .as_ref()
-                .map_or(self.pan_slop_horizontal, |slops| slops.horizontal),
-            _ => self.pan_slop_horizontal,
+                .map_or(self.values.pan_slop_horizontal, |slops| slops.horizontal),
+            _ => self.values.pan_slop_horizontal,
         }
     }
 
@@ -1530,7 +1480,7 @@ impl GestureSettings {
     /// [`Self::exceeds_scale_slop`] rather than against a measured distance.
     #[inline]
     pub fn scale_slop(&self) -> f64 {
-        self.scale_slop
+        self.values.scale_slop
     }
 
     /// The span slop for `kind` — how far the mean distance of the contacts from
@@ -1561,20 +1511,20 @@ impl GestureSettings {
     /// Get the double-tap slop (maximum distance between taps).
     #[inline]
     pub fn double_tap_slop(&self) -> f64 {
-        self.double_tap_slop
+        self.values.double_tap_slop
     }
 
     /// Get the double-tap timeout.
     #[inline]
     pub fn double_tap_timeout(&self) -> Duration {
-        self.double_tap_timeout
+        self.values.double_tap_timeout
     }
 
     /// Get the long-press timeout, never below the OS touch-and-hold delay the
     /// host observed (ADR-0212 §3).
     #[inline]
     pub fn long_press_timeout(&self) -> Duration {
-        floored(self.long_press_timeout, self.floors.long_press)
+        floored(self.values.long_press_timeout, self.floors.long_press)
     }
 
     /// The long-press timeout this profile authors, before the OS
@@ -1586,20 +1536,20 @@ impl GestureSettings {
     #[inline]
     #[must_use]
     pub const fn authored_long_press_timeout(&self) -> Duration {
-        self.long_press_timeout
+        self.values.long_press_timeout
     }
 
     /// Get the minimum fling velocity.
     #[inline]
     pub fn min_fling_velocity(&self) -> f64 {
-        self.min_fling_velocity
+        self.values.min_fling_velocity
     }
 
     /// Get the maximum fling velocity. Never below
     /// [`Self::min_fling_velocity`].
     #[inline]
     pub fn max_fling_velocity(&self) -> f64 {
-        self.max_fling_velocity
+        self.values.max_fling_velocity
     }
 
     // ========================================================================
@@ -1614,7 +1564,7 @@ impl GestureSettings {
     /// slop.
     #[inline]
     pub fn try_with_touch_slop(mut self, slop: f64) -> Result<Self, GestureSettingsError> {
-        self.touch_slop = checked("touch_slop", slop)?;
+        self.values.touch_slop = checked("touch_slop", slop)?;
         self.native.touch = None;
         Ok(self)
     }
@@ -1627,7 +1577,7 @@ impl GestureSettings {
     /// slop.
     #[inline]
     pub fn try_with_pan_slop(mut self, slop: f64) -> Result<Self, GestureSettingsError> {
-        self.pan_slop = checked("pan_slop", slop)?;
+        self.values.pan_slop = checked("pan_slop", slop)?;
         self.native.touch = None;
         Ok(self)
     }
@@ -1644,7 +1594,7 @@ impl GestureSettings {
     /// slop.
     #[inline]
     pub fn try_with_pan_slop_vertical(mut self, slop: f64) -> Result<Self, GestureSettingsError> {
-        self.pan_slop_vertical = checked("pan_slop_vertical", slop)?;
+        self.values.pan_slop_vertical = checked("pan_slop_vertical", slop)?;
         self.native.touch = None;
         Ok(self)
     }
@@ -1660,7 +1610,7 @@ impl GestureSettings {
     /// slop.
     #[inline]
     pub fn try_with_pan_slop_horizontal(mut self, slop: f64) -> Result<Self, GestureSettingsError> {
-        self.pan_slop_horizontal = checked("pan_slop_horizontal", slop)?;
+        self.values.pan_slop_horizontal = checked("pan_slop_horizontal", slop)?;
         self.native.touch = None;
         Ok(self)
     }
@@ -1673,7 +1623,7 @@ impl GestureSettings {
     /// slop.
     #[inline]
     pub fn try_with_scale_slop(mut self, slop: f64) -> Result<Self, GestureSettingsError> {
-        self.scale_slop = checked("scale_slop", slop)?;
+        self.values.scale_slop = checked("scale_slop", slop)?;
         Ok(self)
     }
 
@@ -1685,7 +1635,7 @@ impl GestureSettings {
     /// slop.
     #[inline]
     pub fn try_with_double_tap_slop(mut self, slop: f64) -> Result<Self, GestureSettingsError> {
-        self.double_tap_slop = checked("double_tap_slop", slop)?;
+        self.values.double_tap_slop = checked("double_tap_slop", slop)?;
         self.native.mouse_double_click = None;
         self.native.touch_double_tap = None;
         Ok(self)
@@ -1694,7 +1644,7 @@ impl GestureSettings {
     /// Set the double-tap timeout.
     #[inline]
     pub fn with_double_tap_timeout(mut self, timeout: Duration) -> Self {
-        self.double_tap_timeout = timeout;
+        self.values.double_tap_timeout = timeout;
         self.native.mouse_interval = None;
         self.native.touch_interval = None;
         self
@@ -1703,7 +1653,7 @@ impl GestureSettings {
     /// Set the long-press timeout.
     #[inline]
     pub fn with_long_press_timeout(mut self, timeout: Duration) -> Self {
-        self.long_press_timeout = timeout;
+        self.values.long_press_timeout = timeout;
         self
     }
 
@@ -1720,7 +1670,10 @@ impl GestureSettings {
         min: f64,
         max: f64,
     ) -> Result<Self, GestureSettingsError> {
-        (self.min_fling_velocity, self.max_fling_velocity) = checked_fling_range(min, max)?;
+        (
+            self.values.min_fling_velocity,
+            self.values.max_fling_velocity,
+        ) = checked_fling_range(min, max)?;
         self.native.touch_fling = None;
         Ok(self)
     }
@@ -1734,7 +1687,7 @@ impl GestureSettings {
     /// Scale slop is applied symmetrically around 1.0.
     #[inline]
     pub fn exceeds_scale_slop(&self, scale: f64) -> bool {
-        (scale - 1.0).abs() > self.scale_slop
+        (scale - 1.0).abs() > self.values.scale_slop
     }
 
     /// Clamp a signed release velocity (px/s along one axis) to at most

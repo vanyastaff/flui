@@ -75,8 +75,8 @@ static REGISTER_WINDOW_CLASS: std::sync::Once = std::sync::Once::new();
 
 #[path = "platform/wake_deadline.rs"]
 mod wake_deadline;
-pub(super) use wake_deadline::FrameCount;
 use wake_deadline::{DeadlineArm, DeadlineDelivery, DeadlineQuery, WakeDeadlineHook};
+pub(super) use wake_deadline::{FrameCount, ModalDelivery};
 
 #[path = "platform/keystroke_queue.rs"]
 mod keystroke_queue;
@@ -92,6 +92,10 @@ mod preference_retry_tests;
 #[cfg(test)]
 #[path = "platform/display_message_tests.rs"]
 mod display_message_tests;
+
+#[cfg(test)]
+#[path = "platform/modal_frame_tests.rs"]
+mod modal_frame_tests;
 
 /// Identity of one native window's context, minted once per
 /// [`WindowsWindow::new`] and held by both the context and every wrapper
@@ -131,6 +135,43 @@ impl WindowIdentity {
             })
             .expect("BUG: the window identity counter is exhausted");
         Self(std::num::NonZeroU64::new(raw).expect("BUG: an admitted window identity is nonzero"))
+    }
+}
+
+/// One window as an object that outlives its borrow of the window names it:
+/// the handle and the identity of the context created with it. The OS
+/// recycles handles, so a handle alone can name a later window;
+/// [`Self::with_context`] reaches only the context this window was created
+/// with. Plain values, so an `Arc`-shared object can hold one on any thread.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct WindowRef {
+    hwnd: isize,
+    identity: WindowIdentity,
+}
+
+impl WindowRef {
+    pub(super) fn new(hwnd: HWND, identity: WindowIdentity) -> Self {
+        Self {
+            hwnd: hwnd.0 as isize,
+            identity,
+        }
+    }
+
+    pub(super) fn hwnd(self) -> HWND {
+        HWND(self.hwnd as *mut core::ffi::c_void)
+    }
+
+    /// [`with_window_context`] for this window only: `None` off its owner
+    /// thread, after it closed, or when its handle now names another window.
+    pub(super) fn with_context<R>(
+        self,
+        op: &'static str,
+        f: impl FnOnce(&WindowContext) -> R,
+    ) -> Option<R> {
+        with_window_context(self.hwnd(), op, |context| {
+            (context.identity == self.identity).then(|| f(context))
+        })
+        .flatten()
     }
 }
 
@@ -2392,23 +2433,42 @@ impl WindowsPlatform {
         handlers: &RefCell<PlatformHandlers>,
         windows: &Weak<WindowMap>,
         frames: &FrameCount,
-        delivered: &std::cell::Cell<Option<(web_time::Instant, u64)>>,
+        delivered: &ModalDelivery,
     ) -> u32 {
         let hook = handlers.borrow().wake_deadline.clone();
-        let deadline = hook.and_then(|hook| {
+        let queried = hook.map(|hook| {
+            let identity = Arc::downgrade(&hook);
             let custody = DeadlineQuery(Some(hook));
             let deadline = custody.0.as_ref().and_then(|hook| hook());
+            // A replaced hook's final captures may replace the registration
+            // again: retired before the answer is checked against it.
             drop(custody);
-            deadline
+            (deadline, identity)
+        });
+        // The answer of a hook that is no longer installed is not its
+        // replacement's: as in the main loop, the delivery record is keyed by
+        // the hook as well as the instant.
+        let current = queried.and_then(|(deadline, identity)| {
+            let installed = handlers
+                .borrow()
+                .wake_deadline
+                .as_ref()
+                .is_some_and(|hook| Weak::ptr_eq(&identity, &Arc::downgrade(hook)));
+            installed.then_some((deadline?, identity))
         });
         let now = web_time::Instant::now();
-        if let Some(deadline) = deadline
-            && deadline <= now
-            && delivered.get() != Some((deadline, frames.get()))
-            && let Some(windows) = windows.upgrade()
-        {
-            delivered.set(Some((deadline, frames.get())));
-            Self::redraw_deadline_windows(&windows);
+        let deadline = current.as_ref().map(|(deadline, _)| *deadline);
+        match current {
+            Some((deadline, identity))
+                if deadline <= now && delivered.admits(deadline, &identity, frames.get()) =>
+            {
+                if let Some(windows) = windows.upgrade() {
+                    delivered.record(deadline, identity, frames.get());
+                    Self::redraw_deadline_windows(&windows);
+                }
+            }
+            Some(_) => {}
+            None => delivered.clear(),
         }
         // A snapshot: a paint runs user code, which may open or close windows.
         let painted: Vec<HWND> = windows
@@ -2608,15 +2668,12 @@ impl Platform for WindowsPlatform {
             Arc::clone(&self.drag),
         )?;
         let hwnd_value = window.hwnd().0 as isize;
-        let identity = window.identity;
+        let this = WindowRef::new(window.hwnd(), window.identity);
         let wake = crate::shared::owner_signal::OwnerSignal::input_wake(
             &self.owner_control.signal,
             move || {
-                let hwnd = HWND(hwnd_value as *mut core::ffi::c_void);
-                let _ = with_window_context_checked(hwnd, "resume_input_delivery", |context| {
-                    if context.identity == identity {
-                        context.callbacks.resume_input_delivery();
-                    }
+                let _ = this.with_context("resume_input_delivery", |context| {
+                    context.callbacks.resume_input_delivery();
                 });
             },
         );

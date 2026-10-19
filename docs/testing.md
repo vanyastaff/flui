@@ -1092,7 +1092,7 @@ cargo xtask deps --strict --only policy                       # deps job: cargo-
 cargo xtask deps --strict --only advisories                   # same job: RustSec advisories, blocking in the wide and full lanes; advisories.yml runs it daily on main
 cargo xtask doc-strict                                        # doc job
 cargo xtask test --fast                                       # test job: nextest over the test scope, then flui-platform under Xvfb (FLUI_HEADLESS=1)
-cargo xtask build-all-targets                                 # same job: links the examples and benches the test scope's features reach
+cargo xtask build-all-targets                                 # same job: links the examples and benches the test scope reaches
 cargo xtask test --nested --nested-group native               # test-nested: generated projects and facade consumers
 cargo xtask test --nested --nested-group trybuild             # test-trybuild: compile-fail suites
 cargo xtask platform-test                                    # native platform suites, default and all features
@@ -1117,8 +1117,8 @@ runs `checks`, `plan` and the `ci` aggregator:
 |---|---|---|
 | `docs` | a pull request that changes only documentation | nothing |
 | `tooling` | a pull request that changes only repository tooling | `deps` |
-| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `test-trybuild`, `doc`, `wasm-check`, `test-features`, `live-smoke`) over the whole workspace |
-| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `miri`, `doc-test` (all Linux) |
+| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `wasm-check`, `test-features`, `live-smoke`) over the whole workspace |
+| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `miri`, `doc-test`, `test-trybuild` (all Linux) |
 
 - **Wide lane**: every pull request that compiles anything runs every Linux
   job, in parallel, over the whole workspace. One serial job over the
@@ -1182,7 +1182,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `checks` | `cargo xtask checks` + `cargo test -p xtask`, then `actionlint` and `zizmor .` (`ci-full` runs both, skipping one that is not installed) | CI passes `--strict`: a missing typos, taplo or lychee fails there instead of being skipped with a message |
 | `plan` | `cargo xtask affected --worktree` | decides the lane and the affected packages; CI passes `--event` and the PR's base SHA, the local run diffs against `origin/main` (or `--base`) and `--worktree` adds uncommitted files |
 | `clippy` | `cargo xtask lint` (in `gate`) | — |
-| `test` | `cargo xtask test --fast`, then `cargo xtask build-all-targets` | the same commands; the all-targets build uses the test scope's features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-platform leg needs `xvfb-run` (Linux) |
+| `test` | `cargo xtask test --fast`, then `cargo xtask build-all-targets` | the same commands; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-platform leg needs `xvfb-run` (Linux) and also links flui-platform's examples, which the all-targets build leaves out with the rest of flui-platform |
 | `test-nested` | `cargo xtask test --nested --nested-group native` | generated projects and facade consumers, beside `test` and `test-trybuild` |
 | `test-trybuild` | `cargo xtask test --nested --nested-group trybuild` | compile-fail suites; plain `--nested` still runs both groups |
 | `test-features` | the job's `cargo nextest run` lines (`ci-full` runs them) | — |

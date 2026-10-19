@@ -7,7 +7,7 @@ name: CI
 # No label enables native application Windows/macOS or GPU jobs. Platform typechecking
 # uses Linux cross tools and macOS SDK legs; OS runtime checks are local commands.
 # Native host-tool tests live separately in xtask-native.yml.
-# test-nested and test-trybuild run independently, restoring the test cache.
+# test-nested and test-trybuild (main only) run independently, each with its own cache.
 # All jobs except the notification are gated by the ci aggregator.
 
 on:
@@ -311,7 +311,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # test — the workspace suite on Linux (`cargo xtask test --fast`: nextest
   # over TEST_SCOPE, then flui-platform under Xvfb), then the build that
-  # links the examples and benches with the same features, so it compiles
+  # links the examples and benches with the same packages and features, so it compiles
   # nothing twice (a target whose `required-features` the test scope leaves
   # off is compiled per feature by `feature-matrix`, not linked). The nested-cargo group runs beside it in `test-nested`.
   # `cross-typecheck` is the only job touching the AppKit/Win32/Android
@@ -423,10 +423,16 @@ jobs:
       - name: cargo xtask test --nested --nested-group native
         run: cargo xtask test --nested --nested-group native
 
+  # The compile-fail suites run on main, not on pull requests: they are the
+  # longest job (16-21 min) and fail only when a change loosens a type rule
+  # or moves a diagnostic, which the first main run reports through
+  # `notify-main-red`. Locally a changed crate's `cargo nextest run` still
+  # runs its suite, and `cargo xtask test --nested --nested-group trybuild`
+  # runs them all.
   test-trybuild:
     name: test-trybuild
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
@@ -950,6 +956,17 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends clang llvm
 
+      # The driver build the checks job saves; restored before the NDK step,
+      # whose CC_/AR_ variables would change the key. Without it each Linux
+      # leg built the driver from scratch (1.5-3 min).
+      - name: Rust cache (xtask)
+        if: runner.os == 'Linux'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          shared-key: xtask
+          save-if: false
+
       - name: Configure bundled Android NDK
         if: matrix.target == 'aarch64-linux-android'
         run: |
@@ -967,15 +984,37 @@ jobs:
         with:
           tool: cargo-xwin@0.23.1
 
+      # cargo-xwin downloads the MSVC CRT and Windows SDK on first use, 7-13
+      # minutes from Microsoft's servers, then marks the directory DONE. The
+      # splatted result is 1.1 GB on disk, about 260 MB compressed. The key
+      # names the cargo-xwin release, which fixes the default MSVC version;
+      # the cache is saved from main only, after a complete download.
+      - name: Restore MSVC CRT and Windows SDK
+        id: xwin-cache
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cargo-xwin
+          key: cargo-xwin-0.23.1-${{ runner.os }}
+
       - name: Lint source-derived native targets
         run: cargo xtask cross-typecheck --target "$NATIVE_TARGET"
         env:
           NATIVE_TARGET: ${{ matrix.target }}
+          XWIN_CACHE_DIR: ${{ runner.temp }}/cargo-xwin
+
+      - name: Save MSVC CRT and Windows SDK
+        if: matrix.target == 'x86_64-pc-windows-msvc' && github.ref == 'refs/heads/main' && steps.xwin-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cargo-xwin
+          key: ${{ steps.xwin-cache.outputs.cache-primary-key }}
 
       - name: Lint optional native features
         run: cargo xtask cross-typecheck --target "$NATIVE_TARGET" --all-features
         env:
           NATIVE_TARGET: ${{ matrix.target }}
+          XWIN_CACHE_DIR: ${{ runner.temp }}/cargo-xwin
 
   # ─────────────────────────────────────────────────────────────────────────
   # ci — require each planned Linux job and reject unexpected skips.
@@ -1025,10 +1064,10 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           HEAVY_JOBS: >-
-            clippy wasm-check cross-typecheck test test-nested test-trybuild doc
-            test-features live-smoke
+            clippy wasm-check cross-typecheck test test-nested doc test-features
+            live-smoke
           FULL_JOBS: >-
-            feature-matrix doc-test miri
+            feature-matrix doc-test miri test-trybuild
           LANE: ${{ needs.plan.outputs.lane }}
           EVENT: ${{ github.event_name }}
         run: cargo xtask ci-verify

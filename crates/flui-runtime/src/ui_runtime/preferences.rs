@@ -340,17 +340,23 @@ impl UiRuntime {
             GeometryTurn::Owner(Rc::clone(&self.geometry_turn))
         }
     }
-    /// Re-read presentation `id`'s gesture geometry when its display or that
-    /// display's scale changed. Active contacts keep their admitted settings.
-    /// What a host calls when presentation `id`'s window moved and may be on another
-    /// display: gesture geometry is re-read for new contacts when the display changed
-    /// (ADR-0212 §2), and the window is handed its last committed input regions again, so
-    /// its backend re-sends them when the display differs (ADR-0217 §5).
-    pub fn window_moved(&self, id: flui_foundation::PresentationId) {
-        self.refresh_gesture_context_for(id);
-        if let Some(presentation) = self.presentations.get(id) {
-            presentation.republish_input_regions();
-        }
+
+    /// Presentation `id`'s window moved and may be on another display: gesture
+    /// geometry is re-read for new contacts when the display changed (ADR-0212 §2),
+    /// and the window is handed its last committed input regions again, so its
+    /// backend re-sends them when the display differs (ADR-0217 §5).
+    ///
+    /// Each step runs even when the other panics; the first panic resumes
+    /// afterwards.
+    pub(crate) fn window_moved(&self, id: flui_foundation::PresentationId) {
+        let mut first = flui_foundation::panic::FirstPanic::new();
+        first.contain(|| self.refresh_gesture_context_for(id));
+        first.contain(|| {
+            if let Some(presentation) = self.presentations.get(id) {
+                presentation.republish_input_regions();
+            }
+        });
+        first.resume();
     }
 
     /// Replace presentation `id`'s per-kind gesture presets, as a replay
@@ -380,17 +386,8 @@ impl UiRuntime {
         );
     }
 
-    /// The system-preference revision in effect and its values, if a host
-    /// delivered one: what a recording header stores.
-    #[cfg(feature = "testing")]
-    #[must_use]
-    pub fn system_preferences(&self) -> Option<(u64, std::sync::Arc<SystemPreferences>)> {
-        self.preferences
-            .borrow()
-            .as_ref()
-            .map(|snapshot| (snapshot.revision, std::sync::Arc::clone(&snapshot.values)))
-    }
-
+    /// Re-read presentation `id`'s gesture geometry when its display or that
+    /// display's scale changed. Active contacts keep their admitted settings.
     pub(crate) fn refresh_gesture_context_for(&self, id: flui_foundation::PresentationId) {
         let Some(presentation) = self.presentations.get(id) else {
             return;

@@ -59,9 +59,7 @@ use windows::Win32::{
         },
     },
     UI::{
-        Input::KeyboardAndMouse::{
-            GetKeyState, VIRTUAL_KEY, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_XBUTTON1, VK_XBUTTON2,
-        },
+        Input::KeyboardAndMouse::GetKeyState,
         WindowsAndMessaging::{
             MSG, MsgWaitForMultipleObjects, PM_NOREMOVE, PM_QS_SENDMESSAGE, PeekMessageW,
             PostMessageW, QS_SENDMESSAGE, SMTO_NORMAL, SendMessageTimeoutW,
@@ -70,14 +68,14 @@ use windows::Win32::{
 };
 use windows_core::{ComObject, HSTRING};
 
-use super::platform::{WindowIdentity, with_window_context};
+use super::platform::WindowRef;
 
 use crate::shared::ole_drag_drop::{
     HTML_FORMAT_NAME, MODAL_FRAME_PACE_MS, NativeFormat, actions_of, decode, effect_bits,
     offer_representations, os_loop_buttons,
 };
 use crate::shared::owner_slot::OwnerSlot;
-use crate::shared::panic_boundary::contain_owner_callback;
+use crate::shared::panic_boundary::{contain_owner_callback, owner_callback_panicked};
 use flui_platform_api::pointer::PointerKind;
 
 pub(super) use com::WindowDropTarget;
@@ -121,17 +119,41 @@ struct OwnerDrag {
     running: Cell<bool>,
 }
 
+impl OwnerDrag {
+    /// Tell the accepted session whose `DoDragDrop` has not run that it was
+    /// cancelled: the owner window is going, so its start message never
+    /// runs.
+    fn cancel_pending(&self) {
+        let pending = self.pending.borrow_mut().take();
+        if let Some(PendingStart { request, .. }) = pending {
+            cancel_unstarted(request);
+        }
+    }
+}
+
 impl Drop for OwnerDrag {
     fn drop(&mut self) {
-        // An accepted session is told how it ended even when the platform
-        // goes before its start message is handled.
-        if let Some(PendingStart { request, .. }) = self.pending.get_mut().take() {
-            let OsDragRequest {
-                provider, on_end, ..
-            } = request;
-            contain_owner_callback(|| drop(provider));
-            contain_owner_callback(|| on_end(OsDragEnd::Cancelled));
-        }
+        // The owner window cancels its session as it is destroyed; this is
+        // the session's end when that window never was.
+        self.cancel_pending();
+    }
+}
+
+/// End a session that never started: it is told `Cancelled`, then its
+/// provider goes. Both are user code: during an unwind neither runs, and
+/// after `on_end` panics the provider is retained (ADR-0127 §2).
+fn cancel_unstarted(request: OsDragRequest) {
+    if std::thread::panicking() {
+        std::mem::forget(request);
+        return;
+    }
+    let OsDragRequest {
+        provider, on_end, ..
+    } = request;
+    if owner_callback_panicked(|| on_end(OsDragEnd::Cancelled)) {
+        std::mem::forget(provider);
+    } else {
+        contain_owner_callback(|| drop(provider));
     }
 }
 
@@ -169,6 +191,15 @@ impl OleTransfer {
         let shared = Rc::clone(&owner);
         let _ = self.owner.replace(owner);
         Some(shared)
+    }
+
+    /// The owner window is being destroyed: the session it was to start is
+    /// cancelled now, on the owner thread, rather than whenever the last
+    /// holder of this transport lets it go.
+    pub(super) fn cancel_pending(&self) {
+        if let Some(owner) = self.owner() {
+            owner.cancel_pending();
+        }
     }
 
     /// Whether `DoDragDrop` is running on this thread.
@@ -505,28 +536,26 @@ impl DataTransferSource for OleTransfer {
 /// The drag source a Win32 window offers: the platform's one transport.
 pub(super) struct Win32DragSource {
     transfer: Arc<OleTransfer>,
-    /// The window, as its address: read only through `with_window_context`,
-    /// which refuses any thread but the window's owner.
-    hwnd: isize,
+    /// The window, reached only on its owner thread and only while its
+    /// handle still names it.
+    window: WindowRef,
 }
 
 impl Win32DragSource {
-    pub(super) fn new(transfer: Arc<OleTransfer>, hwnd: HWND) -> Arc<Self> {
-        Arc::new(Self {
-            transfer,
-            hwnd: hwnd.0 as isize,
-        })
+    pub(super) fn new(transfer: Arc<OleTransfer>, window: WindowRef) -> Arc<Self> {
+        Arc::new(Self { transfer, window })
     }
 
     /// The kind of the contact whose press began `pointer`'s drag, as the
     /// window's pointer registry read it.
     fn contact_kind(&self, pointer: Option<flui_platform_api::PointerId>) -> Option<PointerKind> {
         let pointer = pointer?;
-        with_window_context(HWND(self.hwnd as *mut _), "drag source", |context| {
-            let registry = context.pointer_registry.try_borrow().ok()?;
-            registry.origin(pointer).map(|origin| origin.kind)
-        })
-        .flatten()
+        self.window
+            .with_context("drag source", |context| {
+                let registry = context.pointer_registry.try_borrow().ok()?;
+                registry.origin(pointer).map(|origin| origin.kind)
+            })
+            .flatten()
     }
 }
 
@@ -541,11 +570,11 @@ impl PlatformDragSource for Win32DragSource {
     }
 }
 
-/// Register the drop target of the window `hwnd`, created as `identity` on
-/// this thread, and keep it in the window's context. A window whose
-/// registration fails takes no drags.
-pub(super) fn register_target(hwnd: HWND, identity: WindowIdentity, transfer: Arc<OleTransfer>) {
-    let target = ComObject::new(WindowDropTarget::new(hwnd.0 as isize, identity, transfer));
+/// Register the drop target of `window`, created on this thread, and keep it
+/// in the window's context. A window whose registration fails takes no drags.
+pub(super) fn register_target(window: WindowRef, transfer: Arc<OleTransfer>) {
+    let hwnd = window.hwnd();
+    let target = ComObject::new(WindowDropTarget::new(window, transfer));
     let interface: IDropTarget = target.to_interface();
     // SAFETY: `hwnd` is the live window this thread just created, in the
     // OLE apartment the platform entered on it; OLE keeps its own reference
@@ -554,7 +583,7 @@ pub(super) fn register_target(hwnd: HWND, identity: WindowIdentity, transfer: Ar
         tracing::warn!(%error, "the window takes no drags: RegisterDragDrop failed");
         return;
     }
-    let kept = with_window_context(hwnd, "drop target", |context| {
+    let kept = window.with_context("drop target", |context| {
         context.drop_target.borrow_mut().replace(target)
     });
     drop(kept);
@@ -578,21 +607,14 @@ pub(super) fn revoke_target(hwnd: HWND, slot: &RefCell<Option<ComObject<WindowDr
 /// The `MK_*` bits of the mouse buttons held now, in this thread's input
 /// state: the buttons whose release drops the session about to start.
 fn mouse_buttons_held() -> u32 {
-    const BUTTONS: [(VIRTUAL_KEY, u32); 5] = [
-        (VK_LBUTTON, 0x01),
-        (VK_RBUTTON, 0x02),
-        (VK_MBUTTON, 0x10),
-        (VK_XBUTTON1, 0x20),
-        (VK_XBUTTON2, 0x40),
-    ];
-    BUTTONS
+    super::events::MOUSE_BUTTONS
         .iter()
-        .filter(|(key, _)| {
+        .filter(|(key, _, _)| {
             // SAFETY: a query of this thread's key state by a constant code.
             let state = unsafe { GetKeyState(i32::from(key.0)) };
             state < 0
         })
-        .fold(0, |held, (_, bit)| held | bit)
+        .fold(0, |held, (_, bit, _)| held | bit)
 }
 
 /// The clipboard format `native` travels as; `None` when registration failed.

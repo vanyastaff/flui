@@ -47,6 +47,47 @@ impl DeadlineDelivery {
     }
 }
 
+/// The last wake deadline the modal drag loop delivered, kept by the owner
+/// window across its frame requests: the main loop's rule, held apart from
+/// the main loop's own record, which is suspended under the modal loop.
+#[derive(Default)]
+pub(in crate::platforms::windows) struct ModalDelivery(
+    std::cell::RefCell<Option<DeadlineDelivery>>,
+);
+
+impl ModalDelivery {
+    /// Whether `deadline` from `hook` is due for delivery after the last one.
+    pub(super) fn admits(
+        &self,
+        deadline: web_time::Instant,
+        hook: &Weak<WakeDeadlineHook>,
+        frames: u64,
+    ) -> bool {
+        self.0
+            .borrow()
+            .as_ref()
+            .is_none_or(|last| last.admits(deadline, hook, frames))
+    }
+
+    /// `deadline` from `hook` was delivered at the frame count `frames`.
+    pub(super) fn record(
+        &self,
+        deadline: web_time::Instant,
+        hook: Weak<WakeDeadlineHook>,
+        frames: u64,
+    ) {
+        *self.0.borrow_mut() = Some(DeadlineDelivery {
+            arm: DeadlineArm { deadline, hook },
+            frames,
+        });
+    }
+
+    /// No deadline is asked for: the next one is new whatever it is.
+    pub(super) fn clear(&self) {
+        *self.0.borrow_mut() = None;
+    }
+}
+
 /// How many frame callbacks this platform's windows have run. The message
 /// loop compares it across a deadline delivery to tell an answer repeated
 /// after a serviced frame from one nothing has serviced yet. Each window's

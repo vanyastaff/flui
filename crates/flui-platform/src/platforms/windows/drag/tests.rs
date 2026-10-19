@@ -719,20 +719,11 @@ fn a_window_closed_by_its_drag_callback_is_left() {
 /// Set the mouse buttons (`MK_*`) this thread's key state holds, which
 /// `GetKeyState` reads; the system's mouse is untouched.
 fn hold_mouse_buttons(buttons: u32) {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetKeyboardState, SetKeyboardState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_XBUTTON1,
-        VK_XBUTTON2,
-    };
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardState, SetKeyboardState};
     let mut keys = [0_u8; 256];
     // SAFETY: `keys` is a live array of the 256 entries both calls take.
     unsafe { GetKeyboardState(&mut keys) }.expect("this thread's key state");
-    for (key, bit) in [
-        (VK_LBUTTON, 0x01),
-        (VK_RBUTTON, 0x02),
-        (VK_MBUTTON, 0x10),
-        (VK_XBUTTON1, 0x20),
-        (VK_XBUTTON2, 0x40),
-    ] {
+    for (key, bit, _) in crate::platforms::windows::events::MOUSE_BUTTONS {
         keys[usize::from(key.0)] = if buttons & bit == 0 { 0 } else { 0x80 };
     }
     // SAFETY: as above.
@@ -745,8 +736,7 @@ fn pen_pressed(hwnd: HWND) -> flui_platform_api::PointerId {
     use flui_platform_api::pointer::{PenTool, PointerButton, PointerEvent, PointerKind};
 
     use crate::shared::pointer_assembly::{
-        NativeContact, NativeDevice, NativeReading, NativeSurface, ReadingAction, ReadingTime,
-        decode,
+        NativeContact, NativeDevice, NativeReading, ReadingAction, ReadingTime, decode,
     };
     let press = NativeReading::new(
         NativeContact(0x4242),
@@ -754,7 +744,7 @@ fn pen_pressed(hwnd: HWND) -> flui_platform_api::PointerId {
         ReadingAction::Press(PointerButton::PRIMARY),
         ReadingTime::epoch(EventTime::from_nanos(1_000_000)),
     )
-    .on(NativeSurface(0))
+    .on(crate::platforms::windows::events::SURFACE)
     .at(10.0, 10.0, 1.0)
     .from_device(NativeDevice(0x51));
     with_window_context(hwnd, "test", |context| {
@@ -1010,6 +1000,160 @@ impl Drop for Released {
     }
 }
 
+/// `request(ended)` whose provider sets `released` as it goes, and whose
+/// end hook panics after recording the end when `end_panics`.
+fn releasing_request(
+    ended: &Rc<Cell<Option<OsDragEnd>>>,
+    released: &Rc<Cell<bool>>,
+    end_panics: bool,
+) -> OsDragRequest {
+    let mut request = request(ended);
+    let mut serve = request.provider;
+    let capture = Released(Rc::clone(released));
+    request.provider = Box::new(move |index| {
+        let _ = &capture;
+        serve(index)
+    });
+    let end = request.on_end;
+    request.on_end = Box::new(move |how| {
+        end(how);
+        assert!(!end_panics, "a session's end hook panicked");
+    });
+    request
+}
+
+/// A provider that panics serving a fetch is retained, not dropped, and is
+/// not called again: later fetches are refused and the data object's
+/// release leaves its captures alone (ADR-0127 §2). Red-check: put the
+/// panicked provider back in its slot.
+fn a_provider_that_panicked_is_retained_and_not_called_again() {
+    use crate::shared::ole_drag_drop::NativeFormat;
+
+    let (ended, released) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(false)));
+    let calls = Rc::new(Cell::new(0_u32));
+    let mut session = request(&ended);
+    let capture = Released(Rc::clone(&released));
+    let counted = Rc::clone(&calls);
+    session.provider = Box::new(move |_| {
+        let _ = &capture;
+        counted.set(counted.get() + 1);
+        panic!("a drag's provider panicked");
+    });
+    let data = data_object(session);
+    for _ in 0..2 {
+        assert!(super::fetch(&data, &NativeFormat::UnicodeText, 1 << 20).is_err());
+    }
+    assert_eq!(calls.get(), 1, "the panicked provider was called again");
+    drop(data);
+    assert!(!released.get(), "the panicked provider was dropped");
+}
+
+/// A platform with a window whose drag source accepted `session`, its
+/// `DoDragDrop` not yet run.
+/// The window's drag source comes back too: holding it keeps the platform's
+/// transport, and the session state in it, alive past the platform.
+fn pending(
+    session: OsDragRequest,
+) -> (
+    WindowsPlatform,
+    Window,
+    Arc<dyn flui_platform_api::drag::PlatformDragSource>,
+) {
+    let platform = WindowsPlatform::new().expect("platform");
+    let source = open(&platform, "flui pending drag", |_| {});
+    let drag = source
+        .host
+        .drag_source()
+        .expect("a Win32 window starts OS drags");
+    hold_mouse_buttons(MK_LBUTTON.0);
+    let started = drag.start(session);
+    hold_mouse_buttons(0);
+    assert_eq!(started, Ok(()));
+    (platform, source, drag)
+}
+
+/// A session accepted but never started is told `Cancelled` as its owner
+/// window goes, and its provider is released after; when that end hook
+/// panics, the provider is retained instead (ADR-0127 §2). Red-check:
+/// release the provider before telling the end, or after a panicking end.
+fn a_pending_session_is_cancelled_with_its_platform() {
+    for end_panics in [false, true] {
+        let (ended, released) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(false)));
+        let (platform, source, drag) = pending(releasing_request(&ended, &released, end_panics));
+        drop(source);
+        drop(platform);
+        // The transport outlives the platform here: the owner window's
+        // destruction told the session, not the transport's last release.
+        assert_eq!(ended.get(), Some(OsDragEnd::Cancelled), "{end_panics}");
+        assert_eq!(released.get(), !end_panics, "{end_panics}");
+        drop(drag);
+    }
+}
+
+/// A platform dropped by an unwind with a session pending runs none of the
+/// session's user code: its end hook and provider are retained, so a
+/// panicking one cannot abort the process. Red-check: drop `OwnerDrag`'s
+/// pending session without checking for an unwind.
+fn a_pending_session_is_retained_when_its_platform_unwinds() {
+    let (ended, released) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(false)));
+    let session = releasing_request(&ended, &released, false);
+    let kept = Rc::new(RefCell::new(None));
+    let keeping = Rc::clone(&kept);
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let (platform, source, drag) = pending(session);
+        *keeping.borrow_mut() = Some(drag);
+        let _unwound_with = (source, platform);
+        std::panic::panic_any("unwinding with a drag session pending");
+    }));
+    assert!(unwound.is_err());
+    assert_eq!(ended.get(), None, "the end hook ran during the unwind");
+    assert!(
+        !released.get(),
+        "the provider was dropped during the unwind"
+    );
+    // The transport outlives the unwind: the session the owner window
+    // retained as it went is not run by the transport's later release.
+    drop(kept.borrow_mut().take());
+    assert_eq!(ended.get(), None, "the end hook ran after the unwind");
+    assert!(!released.get(), "the provider was dropped after the unwind");
+}
+
+/// A drag source reads the contacts of the window it was made for, never of
+/// a window the OS later built behind the same handle. Red-check: read the
+/// context by handle alone in `contact_kind`.
+fn a_drag_source_reads_only_its_own_windows_contacts() {
+    use crate::platforms::windows::platform::WindowRef;
+    use flui_platform_api::pointer::{PenTool, PointerKind};
+
+    let platform = WindowsPlatform::new().expect("platform");
+    let first = open(&platform, "flui drag source a", |_| {});
+    let second = open(&platform, "flui drag source b", |_| {});
+    let identity = |window: &Window| {
+        window
+            .host
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 window")
+            .identity
+    };
+    let pen = pen_pressed(second.hwnd);
+    let own = super::Win32DragSource::new(
+        Arc::clone(&platform.drag),
+        WindowRef::new(second.hwnd, identity(&second)),
+    );
+    assert_eq!(
+        own.contact_kind(Some(pen)),
+        Some(PointerKind::Pen { tool: PenTool::Tip })
+    );
+    // The second window's handle with the first's identity, as for a source
+    // whose window closed and whose handle the OS recycled.
+    let recycled = super::Win32DragSource::new(
+        Arc::clone(&platform.drag),
+        WindowRef::new(second.hwnd, identity(&first)),
+    );
+    assert_eq!(recycled.contact_kind(Some(pen)), None);
+}
+
 /// A dropped offer stays open past its window's close, for the owner to
 /// conclude: the window's going releases nothing, and the owner's conclusion
 /// afterwards releases the drag's data object, with the provider it holds.
@@ -1221,6 +1365,22 @@ fn ole_drag_and_drop_on_real_windows() {
             (
                 "an_endless_format_enumerator_is_read_to_a_bound",
                 an_endless_format_enumerator_is_read_to_a_bound,
+            ),
+            (
+                "a_provider_that_panicked_is_retained_and_not_called_again",
+                a_provider_that_panicked_is_retained_and_not_called_again,
+            ),
+            (
+                "a_pending_session_is_cancelled_with_its_platform",
+                a_pending_session_is_cancelled_with_its_platform,
+            ),
+            (
+                "a_pending_session_is_retained_when_its_platform_unwinds",
+                a_pending_session_is_retained_when_its_platform_unwinds,
+            ),
+            (
+                "a_drag_source_reads_only_its_own_windows_contacts",
+                a_drag_source_reads_only_its_own_windows_contacts,
             ),
         ],
     );

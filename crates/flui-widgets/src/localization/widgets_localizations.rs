@@ -15,6 +15,10 @@ use flui_painting::typography::TextDirection;
 /// [`Locale`](flui_platform_api::Locale); [`Localizations::of`] retrieves
 /// it by (trait-object) type from the ambient scope.
 ///
+/// Every string is required, so a new locale states each of its strings,
+/// delegating to [`DefaultWidgetsLocalizations`] for the ones it keeps in
+/// English, instead of inheriting English silently.
+///
 /// [`LocalizationsDelegate`]: crate::LocalizationsDelegate
 /// [`Localizations::of`]: crate::Localizations::of
 pub trait WidgetsLocalizations: Any + fmt::Debug + Send + Sync {
@@ -36,14 +40,10 @@ pub trait WidgetsLocalizations: Any + fmt::Debug + Send + Sync {
 
     /// Semantics label announced when an autocomplete options list becomes
     /// non-empty.
-    fn search_results_found(&self) -> &'static str {
-        "Search results found"
-    }
+    fn search_results_found(&self) -> &'static str;
     /// Semantics label announced when an autocomplete options list becomes
     /// empty.
-    fn no_results_found(&self) -> &'static str {
-        "No results found"
-    }
+    fn no_results_found(&self) -> &'static str;
 
     /// Label for "copy" edit buttons and menu items.
     fn copy_button_label(&self) -> &'static str;
@@ -66,17 +66,10 @@ pub trait WidgetsLocalizations: Any + fmt::Debug + Send + Sync {
     /// Label of the control that opens an item's context menu, naming the
     /// item when `target` does ("Actions for Alice"), or a generic one
     /// without it.
-    fn context_menu_button_label(&self, target: Option<&str>) -> String {
-        match target {
-            Some(target) => format!("Actions for {target}"),
-            None => "More actions".to_owned(),
-        }
-    }
+    fn context_menu_button_label(&self, target: Option<&str>) -> String;
     /// Semantics label of a page view showing `page` (1-based) of
     /// `page_count`.
-    fn page_label(&self, page: usize, page_count: usize) -> String {
-        format!("Page {page} of {page_count}")
-    }
+    fn page_label(&self, page: usize, page_count: usize) -> String;
 }
 
 /// US English localizations for the widgets library — the only locale FLUI
@@ -136,5 +129,24 @@ impl WidgetsLocalizations for DefaultWidgetsLocalizations {
 
     fn radio_button_unselected_label(&self) -> &'static str {
         "Not selected"
+    }
+
+    fn search_results_found(&self) -> &'static str {
+        "Search results found"
+    }
+
+    fn no_results_found(&self) -> &'static str {
+        "No results found"
+    }
+
+    fn context_menu_button_label(&self, target: Option<&str>) -> String {
+        match target {
+            Some(target) => format!("Actions for {target}"),
+            None => "More actions".to_owned(),
+        }
+    }
+
+    fn page_label(&self, page: usize, page_count: usize) -> String {
+        format!("Page {page} of {page_count}")
     }
 }

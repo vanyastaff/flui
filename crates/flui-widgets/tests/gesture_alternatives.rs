@@ -723,8 +723,50 @@ pub(crate) fn every_preset_opens_the_menu_by_its_pointer_trigger() {
 }
 
 /// Within one row a label names one action, so two commands may not share
-/// one, and an empty label names none.
+/// one, and an empty label names none. A key performs one command too.
 pub(crate) fn labels_name_one_action_each() {
+    let keyed = |label: &str| {
+        GestureCommand::new(label.to_owned(), Delete("Alice"))
+            .key(SingleActivator::character("d").control())
+    };
+    let ctrl_d = SingleActivator::character("d").control();
+    // A later key one press of `ctrl_d` also matches.
+    let overlapping = [
+        ("the same key", ctrl_d.clone()),
+        ("the other case", SingleActivator::character("D").control()),
+        (
+            "Shift ignored",
+            SingleActivator::character_ignoring_shift("d").control(),
+        ),
+        ("repeats refused", ctrl_d.allow_repeats(false)),
+    ];
+    for (label, key) in overlapping {
+        let shared_key = GestureAlternatives::new(Alternative::ContextMenu(
+            MenuSpec::new(keyed("Delete"), |_cx, _request| {})
+                .item(GestureCommand::new("Archive", Delete("Alice")).key(key.clone())),
+        ));
+        assert_eq!(
+            shared_key.err(),
+            Some(GestureAlternativesError::DuplicateKey { key }),
+            "{label}"
+        );
+    }
+    let distinct = GestureAlternatives::new(Alternative::ContextMenu(
+        MenuSpec::new(keyed("Delete"), |_cx, _request| {}).item(
+            GestureCommand::new("Archive", Delete("Alice"))
+                .key(SingleActivator::character("d").control().shift()),
+        ),
+    ));
+    assert!(distinct.is_ok(), "Ctrl+Shift+D is another key press");
+    let repeated_on_one = GestureAlternatives::new(Alternative::ContextMenu(MenuSpec::new(
+        keyed("Delete").key(SingleActivator::character("d").control()),
+        |_cx, _request| {},
+    )));
+    assert!(
+        repeated_on_one.is_ok(),
+        "a key one command lists twice performs only it"
+    );
+
     let control = |label: &str| GestureCommand::new(label.to_owned(), Delete("Alice"));
     let duplicate = GestureAlternatives::new(Alternative::VisibleControl(
         ControlSpec::new(control("Delete"), SizedBox::shrink())
@@ -965,21 +1007,77 @@ pub(crate) fn the_revealed_menu_control_names_its_target() {
     }
 }
 
-/// A command whose intent nothing answers, and a command key the platform
-/// reserves, each leave a `flui::a11y` warning naming the command: a gesture
-/// that silently does nothing is the defect the diagnostic exists for.
-pub(crate) fn an_unanswered_intent_and_a_reserved_key_are_reported() {
-    let alternatives = GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
-        GestureCommand::new("Delete Alice", Delete("Alice"))
-            .key(SingleActivator::named(NamedKey::Escape)),
-        SizedBox::new(16.0, 16.0),
+/// The revealed menu control paints its glyph on a surface of its own, so
+/// the row behind it cannot hide it: under an app's white text (a dark row),
+/// black dots on the glyph's white, not dots in a colour the row chose.
+pub(crate) fn the_revealed_menu_control_draws_its_glyph_on_its_own_surface() {
+    use flui_painting::display_list::DrawOp;
+    use flui_painting::typography::TextStyle;
+    use flui_widgets::DefaultTextStyle;
+
+    let alternatives = GestureAlternatives::new(Alternative::ContextMenu(MenuSpec::new(
+        GestureCommand::new("Delete Alice", Delete("Alice")),
+        |_cx, _request| {},
     )))
     .expect("one labelled command");
-    let ((), log) = flui_testing::log_capture::capture(|| {
-        let mut laid = lay_out(
+    let mut laid = lay_out(
+        DefaultTextStyle::new(
+            TextStyle::default().with_color(Color::WHITE),
             alternatives.child(SizedBox::new(300.0, 50.0)),
-            tight(400.0, 300.0),
-        );
+        ),
+        tight(400.0, 300.0),
+    );
+    laid.pump();
+    let tab = flui_platform_api::keyboard::KeyEvent::new(
+        flui_platform_api::keyboard::KeyState::Down,
+        flui_platform_api::keyboard::Key::Named(NamedKey::Tab),
+        flui_platform_api::keyboard::Code::Unidentified,
+        flui_platform_api::EventTime::from_nanos(0),
+    );
+    let _ = laid.focus_manager().dispatch_key_event(&tab);
+    laid.pump();
+    // Each filled rectangle, in paint order: its size and colour.
+    let rects: Vec<((f64, f64), Color)> = laid
+        .draw_ops()
+        .into_iter()
+        .filter_map(|command| match command.op {
+            DrawOp::Rect { rect, paint } => Some(((rect.width(), rect.height()), paint.color)),
+            _ => None,
+        })
+        .collect();
+    let first_dot = rects
+        .iter()
+        .position(|(size, _)| *size == (3.0, 3.0))
+        .expect("the glyph's dots are painted");
+    let dots: Vec<Color> = rects[first_dot..]
+        .iter()
+        .filter(|(size, _)| *size == (3.0, 3.0))
+        .map(|(_, colour)| *colour)
+        .collect();
+    assert_eq!(dots, [Color::BLACK; 3], "the glyph's three dots");
+    // Three 3 px dots 1.5 px apart on each side, inset 4 px.
+    assert!(
+        rects[..first_dot].contains(&((26.0, 11.0), Color::WHITE)),
+        "the dots sit on the glyph's own white surface: {rects:?}"
+    );
+}
+
+/// A command whose intent nothing answers, and a command key the platform
+/// reserves, each leave a `flui::a11y` warning naming the command: a gesture
+/// that silently does nothing is the defect the diagnostic exists for. The
+/// reserved key is reported once, not again on each rebuild.
+pub(crate) fn an_unanswered_intent_and_a_reserved_key_are_reported() {
+    let row = || {
+        GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+            GestureCommand::new("Delete Alice", Delete("Alice"))
+                .key(SingleActivator::named(NamedKey::Escape)),
+            SizedBox::new(16.0, 16.0),
+        )))
+        .expect("one labelled command")
+        .child(SizedBox::new(300.0, 50.0))
+    };
+    let ((), log) = flui_testing::log_capture::capture(|| {
+        let mut laid = lay_out(row(), tight(400.0, 300.0));
         laid.enable_semantics();
         laid.pump();
         let tree = laid.a11y_tree().expect("semantics enabled");
@@ -995,19 +1093,28 @@ pub(crate) fn an_unanswered_intent_and_a_reserved_key_are_reported() {
         })
         .expect("the control takes a click");
         laid.pump();
+        laid.pump_widget(row());
+        laid.pump_widget(row());
     });
     let warned = |text: &str| {
-        log.records().iter().any(|record| {
-            record.target == "flui::a11y"
-                && record.message.contains(text)
-                && record.field("command") == Some("Delete Alice")
-        })
+        log.records()
+            .iter()
+            .filter(|record| {
+                record.target == "flui::a11y"
+                    && record.message.contains(text)
+                    && record.field("command") == Some("Delete Alice")
+            })
+            .count()
     };
     assert!(
-        warned("has no action"),
+        warned("has no action") > 0,
         "the unanswered intent is reported:\n{log}"
     );
-    assert!(warned("reserved"), "the reserved key is reported:\n{log}");
+    assert_eq!(
+        warned("reserved"),
+        1,
+        "the reserved key is reported once:\n{log}"
+    );
 }
 
 // ============================================================================

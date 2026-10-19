@@ -260,7 +260,7 @@ pub use gesture::{
     DEFAULT_MOUSE_SLOP, DEFAULT_PAN_SLOP, DEFAULT_PAN_SLOP_HORIZONTAL, DEFAULT_PAN_SLOP_VERTICAL,
     DEFAULT_PEN_SLOP, DEFAULT_SCALE_SLOP, DEFAULT_TOUCH_SLOP, GestureProfiles, GestureSettings,
     GestureSettingsError, GestureSettingsProvider, GestureSettingsSource, GestureValues,
-    PointerClass, RemainderHandoff,
+    RemainderHandoff,
 };
 pub use pointer::{
     EventPropagation, GlobalPointerHandler, HitTestBehavior, HitTestEntry, HitTestHandle,

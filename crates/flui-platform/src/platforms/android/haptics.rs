@@ -2,10 +2,12 @@
 //! semantic tier, the `Vibrator` for patterns.
 //!
 //! Semantic feedback goes to the decor view on the Java main thread, which
-//! owns the view hierarchy, so the call is posted and the owner waits a
-//! bounded time for its answer: a declined call reports `Suppressed`, a
-//! played one the degradation table's outcome, and one Java has not reached
-//! in time the table's too, since it still plays (`android_feedback_outcome`).
+//! owns the view hierarchy, so the call is posted and the owner never waits
+//! for it (ADR-0247 §5). One call waits at a time: a request made while it
+//! waits is `Suppressed` rather than queued to play late, and a request
+//! reports `Suppressed` while the view declines (an answer the Java thread
+//! publishes as it makes each call), the degradation table's outcome
+//! otherwise (`AndroidViewAnswers`).
 //! Patterns go to the `Vibrator`, which any thread may
 //! call: one envelope for the whole pattern on API 36 devices that have
 //! them, else a composition of primitives or an amplitude waveform, as
@@ -14,7 +16,7 @@
 //! the first pattern, and kept; an app without the `VIBRATE` permission is
 //! offered nothing, so its patterns fall back to the view's feedback.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use android_activity::AndroidApp;
@@ -22,9 +24,9 @@ use jni::objects::JObject;
 use jni::{JValue, jni_sig, jni_str};
 
 use crate::shared::haptic_degradation::{
-    AndroidFeedbackAnswer, AndroidHapticsApi, AndroidPatternPlan, AndroidPrimitive,
-    AndroidVibrationUsage, AndroidVibrator, ComposedPrimitive, EnvelopeStep, android_feedback,
-    android_feedback_outcome, android_pattern, android_vibration_usage,
+    AndroidFeedbackAnswer, AndroidFeedbackCall, AndroidHapticsApi, AndroidPatternPlan,
+    AndroidPrimitive, AndroidVibrationUsage, AndroidVibrator, AndroidViewAnswers,
+    ComposedPrimitive, EnvelopeStep, android_feedback, android_pattern, android_vibration_usage,
 };
 use crate::shared::os_version::android::{
     AndroidApi, EnvelopeEffects, HapticComposition, RoundPrimitives, SegmentFeedback,
@@ -53,6 +55,8 @@ pub(super) struct AndroidHaptics {
     /// The haptics APIs of the device, from its API level.
     api: AndroidHapticsApi,
     vibrator: OnceLock<AndroidVibrator>,
+    /// What the decor view answered the latest semantic feedback call.
+    view_answers: Arc<AndroidViewAnswers>,
 }
 
 impl std::fmt::Debug for AndroidHaptics {
@@ -60,6 +64,7 @@ impl std::fmt::Debug for AndroidHaptics {
         f.debug_struct("AndroidHaptics")
             .field("api", &self.api)
             .field("vibrator", &self.vibrator.get())
+            .field("view_answers", &self.view_answers)
             .finish_non_exhaustive()
     }
 }
@@ -91,6 +96,7 @@ impl AndroidHaptics {
             app,
             api: haptics_api(api),
             vibrator: OnceLock::new(),
+            view_answers: Arc::new(AndroidViewAnswers::new()),
         }
     }
 
@@ -387,17 +393,33 @@ fn waveform<'local>(
     .l()
 }
 
-/// How long the owner thread waits for the decor view's answer: half a
-/// 60 Hz frame. The Java main thread is normally idle and answers in well
-/// under a millisecond; a busy one (or one waiting on the native thread, as
-/// a lifecycle callback does) must not stall the owner, and a later answer
-/// still plays.
-const VIEW_ANSWER_WAIT: Duration = Duration::from_millis(8);
+/// Publishes the decor view's answer to one posted call; `Failed` when the
+/// call is dropped unrun.
+struct Answering(Option<Arc<AndroidViewAnswers>>);
 
-/// Ask the decor view for `constant` on the Java main thread and wait, at
-/// most [`VIEW_ANSWER_WAIT`], for what `performHapticFeedback` returned.
-fn perform_on_view(app: &AndroidApp, constant: i32) -> AndroidFeedbackAnswer {
-    let (answer_tx, answer_rx) = std::sync::mpsc::sync_channel(1);
+impl Answering {
+    fn answer(mut self, answer: AndroidFeedbackAnswer) {
+        if let Some(answers) = self.0.take() {
+            answers.answer(answer);
+        }
+    }
+}
+
+impl Drop for Answering {
+    fn drop(&mut self) {
+        if let Some(answers) = self.0.take() {
+            answers.answer(AndroidFeedbackAnswer::Failed);
+        }
+    }
+}
+
+/// Post `constant` to the decor view on the Java main thread, which owns it,
+/// without waiting: a busy Java thread, or one blocked on the native thread
+/// in a lifecycle callback, never stalls the owner (ADR-0247 §5). What
+/// `performHapticFeedback` returns is published to `answers`, which the next
+/// request reports from.
+fn perform_on_view(app: &AndroidApp, constant: i32, answers: &Arc<AndroidViewAnswers>) {
+    let answering = Answering(Some(Arc::clone(answers)));
     let app = app.clone();
     app.clone().run_on_java_main_thread(Box::new(move || {
         let result = super::preferences::with_activity(&app, |env, activity| {
@@ -437,20 +459,8 @@ fn perform_on_view(app: &AndroidApp, constant: i32) -> AndroidFeedbackAnswer {
                 AndroidFeedbackAnswer::Failed
             }
         };
-        if answer_tx.send(answer).is_err() && answer != AndroidFeedbackAnswer::Played {
-            tracing::debug!(
-                target: "flui_platform::android",
-                ?answer,
-                "the decor view answered haptic feedback after the owner stopped waiting"
-            );
-        }
+        answering.answer(answer);
     }));
-    match answer_rx.recv_timeout(VIEW_ANSWER_WAIT) {
-        Ok(answer) => answer,
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => AndroidFeedbackAnswer::Late,
-        // The posted call was dropped unrun.
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => AndroidFeedbackAnswer::Failed,
-    }
 }
 
 impl PlatformHaptics for AndroidHaptics {
@@ -460,7 +470,11 @@ impl PlatformHaptics for AndroidHaptics {
 
     fn perform_with(&self, feedback: HapticFeedback, _request: &HapticRequest) -> HapticOutcome {
         let (constant, table) = android_feedback(feedback, self.api);
-        android_feedback_outcome(table, perform_on_view(&self.app, constant.value))
+        let call = self.view_answers.request(table);
+        if let AndroidFeedbackCall::Post(_) = call {
+            perform_on_view(&self.app, constant.value, &self.view_answers);
+        }
+        call.outcome()
     }
 
     fn play(

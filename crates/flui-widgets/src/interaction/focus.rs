@@ -571,6 +571,7 @@ impl StatefulView for Focus {
             observed_was_focused: Rc::new(Cell::new(false)),
             node_revision: Rc::new(Cell::new(0)),
             node,
+            owns_node: matches!(self.node_ownership, FocusNodeOwnership::Internal),
             key_handler_registration,
             traversal_registration,
             focus_manager: None,
@@ -627,6 +628,10 @@ pub struct FocusState {
     /// open their writes from it (ADR-0086).
     writer: WriterSlot,
     node: Rc<FocusNode>,
+    /// Whether `node` is the one this widget made for itself. A refused
+    /// replacement leaves the hosted node behind the view, so a rebuild
+    /// compares the view with this, not with the previous view.
+    owns_node: bool,
     /// Generation-checked ownership of the key handler this host installed.
     ///
     /// External source-of-truth nodes keep caller-owned handlers intact.
@@ -886,17 +891,17 @@ impl ViewState<Focus> for FocusState {
         *self.reveal.target.borrow_mut() = FocusRevealScope::of(ctx);
     }
 
-    fn did_update_view(&mut self, old_view: &Focus, new_view: &Focus) {
+    fn did_update_view(&mut self, _old_view: &Focus, new_view: &Focus) {
         // Install the current callback before any node replacement can emit a
         // focus edge. The node subscription always reads this cell.
         self.on_focus_change
             .borrow_mut()
             .clone_from(&new_view.on_focus_change);
 
+        // Against the hosted node, not the previous view: a replacement
+        // refused earlier left the node behind the view it was asked for.
         let node_changed = match &new_view.node_ownership {
-            FocusNodeOwnership::Internal => {
-                !matches!(&old_view.node_ownership, FocusNodeOwnership::Internal)
-            }
+            FocusNodeOwnership::Internal => !self.owns_node,
             FocusNodeOwnership::ManagedExternal(node)
             | FocusNodeOwnership::ExternalSource(node) => !Rc::ptr_eq(node, &self.node),
         };
@@ -973,6 +978,7 @@ impl ViewState<Focus> for FocusState {
                 .focus_subscription
                 .replace(replacement_focus_subscription);
             self.node = replacement;
+            self.owns_node = matches!(new_view.node_ownership, FocusNodeOwnership::Internal);
             self.key_handler_registration = replacement_key_handler_registration;
             self.traversal_registration = replacement_traversal_registration;
             self.rect_provider_registration = replacement_rect_provider_registration;
@@ -1206,6 +1212,7 @@ impl StatefulView for FocusScope {
         }
         FocusScopeState {
             scope,
+            owns_scope: self.external_scope.is_none(),
             focus_manager: None,
             attachment: None,
             parent: None,
@@ -1231,6 +1238,10 @@ fn widget_owned_scope() -> Rc<FocusScopeNode> {
 /// it; re-exported with the rest of the crate's widget states.
 pub struct FocusScopeState {
     scope: Rc<FocusScopeNode>,
+    /// Whether `scope` is the one this widget made for itself. A refused
+    /// replacement leaves the hosted scope behind the view, so a rebuild
+    /// compares the view with this, not with the previous view.
+    owns_scope: bool,
     /// The presentation-local manager that owns this scope.
     focus_manager: Option<Rc<FocusManager>>,
     /// Generation-checked ownership of this widget's scope attachment.
@@ -1324,13 +1335,11 @@ impl ViewState<FocusScope> for FocusScopeState {
     }
 
     fn did_update_view(&mut self, old_view: &FocusScope, new_view: &FocusScope) {
-        let scope_changed = match (
-            old_view.external_scope.as_ref(),
-            new_view.external_scope.as_ref(),
-        ) {
-            (Some(old), Some(new)) => !Rc::ptr_eq(old, new),
-            (None, None) => false,
-            _ => true,
+        // Against the hosted scope, not the previous view: a replacement
+        // refused earlier left the scope behind the view it was asked for.
+        let scope_changed = match new_view.external_scope.as_ref() {
+            Some(new) => !Rc::ptr_eq(new, &self.scope),
+            None => !self.owns_scope,
         };
         if !scope_changed {
             if let Some(edge) = new_view.edge_behavior {
@@ -1381,6 +1390,7 @@ impl ViewState<FocusScope> for FocusScopeState {
         // the same chain.
         self.context_registration = replacement_context_registration;
         self.scope = replacement;
+        self.owns_scope = new_view.external_scope.is_none();
         drop(previous_subscription);
     }
 

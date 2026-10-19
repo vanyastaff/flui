@@ -55,6 +55,9 @@ mod input_regions;
 mod native_recording;
 #[path = "ole_drag_drop.rs"]
 mod ole_drag_drop;
+#[path = "panic_boundary.rs"]
+#[cfg(not(target_arch = "wasm32"))]
+mod panic_boundary;
 #[path = "pointer_assembly.rs"]
 mod pointer_assembly;
 #[path = "preferences.rs"]
