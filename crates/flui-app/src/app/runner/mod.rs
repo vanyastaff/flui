@@ -26,6 +26,8 @@ mod first_reveal;
 mod fonts;
 mod frame_driver;
 mod frame_pacing;
+#[cfg(any(test, target_arch = "wasm32"))]
+mod gpu_loss;
 mod host;
 mod installed_host;
 #[cfg(target_os = "ios")]

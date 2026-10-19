@@ -15,7 +15,8 @@ pub(crate) const WARN: usize = 0x02;
 pub(crate) const CRITICAL: usize = 0x04;
 
 /// The states a source subscribes to. Pressure ending is subscribed to as well,
-/// so the source is never silent about it.
+/// so the handler runs for it too; it names no level (`level_of` is `None`), so
+/// the host is not told that pressure ended.
 pub(crate) const SUBSCRIBED: [usize; 3] = [NORMAL, WARN, CRITICAL];
 
 /// The level of pressure a source's data names; `None` for pressure ending or a

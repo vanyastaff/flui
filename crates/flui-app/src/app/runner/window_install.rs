@@ -324,6 +324,12 @@ impl WindowInstall {
                 RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
             );
         }));
+        window.on_execution_state_change(Box::new(move |state| {
+            let _ = dispatch_platform_ui_runtime(
+                dispatcher,
+                RuntimeTask::Event(RuntimeEvent::WindowExecution(state)),
+            );
+        }));
         window.on_visibility_status_change(Box::new(move |visible| {
             let _ = dispatch_platform_ui_runtime(
                 dispatcher,

@@ -917,8 +917,9 @@ or existing delegate is rejected before bootstrap or activation mutation. The
 constructor merely acquires the singleton. The run scope retains its delegate,
 sets Regular activation, and restores the previous policy only while its own
 delegate and installed policy are still current. External replacements survive.
-The delegate routes native termination into the same deferred quit path and
-returns TerminateCancel, preventing AppKit from exiting the process itself.
+A terminate request nobody announced goes into the same deferred quit path and
+is answered TerminateCancel, so AppKit does not exit the process itself; a
+session end is answered differently (see the section after this one).
 
 Explicit quit bypasses the last-window veto. `stop(None)` plus an application
 NSEvent wakes the native wait; quit during bootstrap skips `run()` entirely.
@@ -955,6 +956,49 @@ quit, bootstrap failure/unwind and quit panic each have their own case. Unsuppor
 hosts and unknown case names fail explicitly. The older close-path and frame-pump
 probes retain their narrower lifecycle/frame assertions.
 
+### An AppKit window's mode, the host's notices and a session end (ADR-0237)
+
+AppKit has no mode property. `shared::appkit_window_mode` reads a window's mode
+from its flags (full screen outranks miniaturized, which outranks zoomed, and a
+zoom counts only for a resizable window) and plans the toggles that reach
+another mode from those flags. `ModeSequence` orders the commands: a full-screen
+or Dock step animates, AppKit ignores a toggle sent meanwhile, and what the
+window looks like afterwards is known only afterwards, so a command that
+arrives during one, and the rest of a mode whose first step is one, are held
+and planned again from the real flags at the step's `windowDid…` notification.
+The newest command wins. A step whose notification never comes stops holding
+after three seconds. AppKit keeps no rectangle to return to from a zoomed,
+minimized or full-screen window, so the backend records the outer rectangle
+just before the window leaves normal mode.
+
+A position is the outer top-left in global logical points: AppKit measures from
+the bottom-left corner of the primary screen, so `shared::appkit_window_geometry`
+flips through the primary screen's height. The display snapshot is measured the
+same way (device pixels of that screen from the primary screen's top-left
+corner), so a position and a display origin share one space. `Platform::open_window`
+turns a position measured on a display into a global one before the window is
+built.
+
+The notice sources (`NSWorkspace` sleep and wake, the distributed screen lock
+notifications, the memory-pressure dispatch source) start in `run`, after the
+application has installed its hooks, and only forward to `SystemNotices`; a wake
+marks the displays and every window's state stale first. The distributed centre
+is asked to deliver while the application is inactive, and is put back when the
+sources drop. The memory-pressure source's handler holds the source and
+`Drop` cancels it, which ends that cycle.
+
+A session end is two events. `NSWorkspaceWillPowerOffNotification` asks the
+session-end hook and `TerminateGate` remembers the answer; the terminate request
+that follows is answered `NSTerminateNow` (after the hook hears `Ending`), or
+`NSTerminateLater` while the application holds the session end, with the reply
+sent when it releases its blocks or after four seconds. The release reaches the
+gate as a task of its own on the main queue, never from the stack that dropped
+the block. AppKit says nothing when the user calls a log out off, so an
+announcement no terminate request follows within ten seconds is reported
+`Cancelled`; a Cmd-Q inside those ten seconds is taken for the session end,
+which the live checks record. A terminate request with no announcement is an
+ordinary quit. The quit callback is not run for a session end: the process ends
+with the session, and the application was told what to save.
 
 ### Win32 decides the exit policy on an owner-window turn
 
@@ -1114,10 +1158,16 @@ against what it already holds — that statelessness is the point, since a `fals
 can be lost and an "already present, do nothing" rule would then keep a surface
 built from a dead window for the rest of the process's life. The parameter is a
 `bool`, not an enum: a third state of the *surface* belongs in its own callback,
-per ADR-0035's split of this family by signal rather than by arity. Android is the
-only backend that emits it — `Pause` and `TerminateWindow` send `false`, `Resume`
-and `InitWindow` send `true` — and `platforms/android/mod.rs`'s module doc carries
-why that pair, and not `Pause` alone, is the correct mapping.
+per ADR-0035's split of this family by signal rather than by arity. Android and the Web
+emit it. Android's `Pause` and `TerminateWindow` send `false`, `Resume` and `InitWindow`
+send `true` — `platforms/android/mod.rs`'s module doc carries why that pair, and not
+`Pause` alone, is the correct mapping. The Web sends `false` on `webglcontextlost` and
+`true` on `webglcontextrestored`: the canvas stays, the context behind it is gone, and
+whatever was built on it must be rebuilt once the browser gives one back. The loss is
+cancelled with `preventDefault` — without that the browser never restores the context —
+and a browser that never restores it leaves the page without a surface, which is all the
+page can know. A lost WebGPU device is not a surface event, so it does not use this
+signal; the renderer reports it to its owner directly.
 
 **Alternatives considered:**
 

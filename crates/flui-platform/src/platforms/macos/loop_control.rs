@@ -40,7 +40,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Reply {
     /// The terminate request was answered already (`NSTerminateNow`).
-    None,
+    AlreadyAnswered,
     /// It was answered `NSTerminateLater`: reply to AppKit.
     ToAppKit,
 }
@@ -163,7 +163,7 @@ impl LoopControl {
                 NSApplicationTerminateReply::TerminateCancel
             }
             Termination::Now => {
-                self.finish_session_end(Reply::None);
+                self.finish_session_end(Reply::AlreadyAnswered);
                 NSApplicationTerminateReply::TerminateNow
             }
             Termination::Later { epoch } => {
@@ -191,16 +191,12 @@ impl LoopControl {
         });
     }
 
-    /// The session is ending now: tell the application, run the quit callback
-    /// the way iOS does at termination, and let AppKit go on if it is waiting.
+    /// The session is ending now: tell the application, then let AppKit go on if
+    /// it is waiting. The quit callback is not run: the process ends with the
+    /// session, and the application has been told what to save.
     fn finish_session_end(&self, reply: Reply) {
         self.ask_session_end(SessionEndPhase::Ending);
-        let quit = self.handlers.lock().quit.take();
-        if let Some(quit) = quit {
-            cleanup_step(quit);
-        }
         if reply == Reply::ToAppKit {
-            // The tasks that get here run on the main queue.
             let mtm = MainThreadMarker::new()
                 .expect("BUG: a deferred termination is answered from a main-queue task");
             NSApplication::sharedApplication(mtm).replyToApplicationShouldTerminate(true);

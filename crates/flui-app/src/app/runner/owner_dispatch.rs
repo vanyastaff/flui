@@ -144,10 +144,6 @@ pub(in crate::app) enum RuntimeEvent {
     /// [`WindowVisibility`](Self::WindowVisibility).
     WindowFocus(bool),
     /// Reversible native execution eligibility for one presentation.
-    #[cfg_attr(
-        target_arch = "wasm32",
-        expect(dead_code, reason = "the Web runner wires no execution observer")
-    )]
     WindowExecution(flui_platform::WindowExecutionState),
     /// Addressed logical content-view safe area.
     ///
