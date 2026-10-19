@@ -331,6 +331,9 @@ pub(super) struct WindowContext {
     /// Set while a hidden window is restored and hidden again: the show and
     /// the hide are not the window appearing, so no visibility is reported.
     pub visibility_muted: std::cell::Cell<bool>,
+    /// How many times the app asked for the window to be shown; see
+    /// [`Self::note_show_request`].
+    pub show_requests: std::cell::Cell<u32>,
     /// What is still owed of the window's first show. A window opens hidden and
     /// in its mode, so the first sight of it is already maximized or
     /// fullscreen, not a normal window that jumps.

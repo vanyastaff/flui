@@ -690,6 +690,7 @@ impl WindowsWindow {
                 publish_hold: std::cell::Cell::new(0),
                 limits_waived: std::cell::Cell::new(false),
                 visibility_muted: std::cell::Cell::new(false),
+                show_requests: std::cell::Cell::new(0),
                 // A window whose reveal waits for its first frame is visible to
                 // the runtime already: its frames must run to earn the reveal.
                 last_visibility_dispatched: std::cell::Cell::new(
@@ -804,7 +805,11 @@ impl WindowsWindow {
     /// nothing for one that was. This settles a deferred reveal too.
     fn show_first(&self) {
         let mode = super::platform::with_window_context(self.hwnd, "show_first", |ctx| {
-            ctx.first_show.replace(FirstShow::Done).mode()
+            let mode = ctx.first_show.replace(FirstShow::Done).mode();
+            if mode.is_some() {
+                ctx.note_show_request();
+            }
+            mode
         })
         .flatten();
         let Some(mode) = mode else {
@@ -814,13 +819,37 @@ impl WindowsWindow {
             ctx.begin_first_show(mode);
         });
         self.show_native(first_show_command(mode));
+        // The show can have run user callbacks that closed this window and
+        // opened another on the same handle: what follows is for this one only.
+        if !self.owns_handle() {
+            return;
+        }
+        // SAFETY: plain queries and a plain call on this wrapper's live window.
+        let minimized = unsafe { IsIconic(self.hwnd) }.as_bool();
         super::platform::with_window_context(self.hwnd, "show_first", |ctx| {
-            ctx.end_first_show(mode);
+            ctx.end_first_show(minimized);
         });
         // SAFETY: a plain call on this wrapper's window handle.
         if let Err(error) = unsafe { UpdateWindow(self.hwnd) }.ok() {
             tracing::warn!(hwnd = ?self.hwnd, ?error, "UpdateWindow failed after the first show");
         }
+    }
+
+    /// Note that the app asked for the window to be shown.
+    fn note_show_request(&self) {
+        super::platform::with_window_context(self.hwnd, "note_show_request", |ctx| {
+            ctx.note_show_request();
+        });
+    }
+
+    /// Whether the handle still names this wrapper's window: after a call that
+    /// can run user callbacks, the window may have closed and another taken its
+    /// handle.
+    pub(super) fn owns_handle(&self) -> bool {
+        handle_available(super::platform::teardown_route(self.hwnd, self.context))
+            && super::platform::with_window_context(self.hwnd, "owns_handle", |context| {
+                context.identity == self.identity
+            }) == Some(true)
     }
 
     /// Activate TSF for the window just installed, on its owner thread, and
@@ -980,7 +1009,10 @@ impl WindowsWindow {
         }
     }
 
-    fn show_native(&self, command: windows::Win32::UI::WindowsAndMessaging::SHOW_WINDOW_CMD) {
+    pub(super) fn show_native(
+        &self,
+        command: windows::Win32::UI::WindowsAndMessaging::SHOW_WINDOW_CMD,
+    ) {
         // SAFETY: `ShowWindow` takes `self.hwnd` and a command constant by
         // value, no pointer arguments. Its return value is the window's
         // PREVIOUS visibility state, not success/failure, so there is nothing
@@ -1298,8 +1330,12 @@ impl WindowsWindow {
             return Ok(());
         }
         match mode {
-            WindowMode::Minimized => self.show_native(SW_MINIMIZE),
+            WindowMode::Minimized => {
+                self.note_show_request();
+                self.show_native(SW_MINIMIZE);
+            }
             WindowMode::Maximized => {
+                self.note_show_request();
                 // A fullscreen popup is not maximized: it leaves fullscreen first.
                 self.set_fullscreen(false);
                 self.show_native(SW_MAXIMIZE);
@@ -1322,74 +1358,6 @@ impl WindowsWindow {
             }
         });
         Ok(())
-    }
-
-    /// Bring the window back to its normal mode from any other: a minimized or
-    /// maximized window is restored, and a fullscreen one gets its frame and
-    /// bounds back. A hidden window stays hidden.
-    fn restore_normal(&self) {
-        // SAFETY: plain state queries on this wrapper's window handle.
-        let (away, shown) = unsafe {
-            (
-                IsIconic(self.hwnd).as_bool() || IsZoomed(self.hwnd).as_bool(),
-                IsWindowVisible(self.hwnd).as_bool(),
-            )
-        };
-        if away && shown {
-            self.show_native(SW_RESTORE);
-        } else if away {
-            self.restore_hidden();
-        }
-        // A fullscreen window that was minimized comes back fullscreen from the
-        // restore above; leaving fullscreen is the second step.
-        self.set_fullscreen(false);
-    }
-
-    /// Take a hidden maximized or minimized window back to its normal rectangle
-    /// without showing it.
-    ///
-    /// A maximized window loses its state bit and is moved to the rectangle it
-    /// returns to. The system will not drop a minimized window's state bit, so
-    /// that one is restored and hidden again; the show and the hide are not the
-    /// window appearing, and the runtime hears neither.
-    fn restore_hidden(&self) {
-        let iconic = unsafe { IsIconic(self.hwnd) }.as_bool();
-        if iconic {
-            super::platform::with_window_context(self.hwnd, "restore_hidden", |ctx| {
-                let _hold = ctx.hold_publishing();
-                ctx.visibility_muted.set(true);
-                self.show_native(SW_RESTORE);
-                self.show_native(SW_HIDE);
-                ctx.visibility_muted.set(false);
-            });
-            return;
-        }
-        let Some(normal) = restore_rectangle(self.hwnd) else {
-            return;
-        };
-        // The mode it ends in is set first: the `WM_SIZE` the move sends then
-        // sees a window that was not minimized, so it reports no visibility for
-        // a window that stays hidden.
-        super::platform::with_window_context(self.hwnd, "restore_hidden", |ctx| {
-            ctx.mode.set(NativeMode::Normal);
-        });
-        // SAFETY: plain style and position calls on this wrapper's window; a
-        // stale handle only makes them fail.
-        unsafe {
-            let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
-            SetWindowLongPtrW(self.hwnd, GWL_STYLE, (style & !WS_MAXIMIZE.0) as isize);
-            if let Err(error) = SetWindowPos(
-                self.hwnd,
-                None,
-                normal.origin.x,
-                normal.origin.y,
-                normal.size.width,
-                normal.size.height,
-                SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER,
-            ) {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowPos (restore hidden) failed");
-            }
-        }
     }
 
     /// Hide the window. A window whose first show was still to come stays
@@ -2062,7 +2030,7 @@ impl PlatformWindow for WindowsWindow {
             },
             || {
                 super::platform::with_window_context(self.hwnd, "show", |ctx| {
-                    // A window never shown opens in the mode it was given.
+                    ctx.note_show_request();
                     let first = ctx.first_show.replace(FirstShow::Done).mode();
                     // SAFETY: the identity check proves this wrapper's live HWND
                     // on its owner thread. The context guard pins userdata through
@@ -2089,8 +2057,8 @@ impl PlatformWindow for WindowsWindow {
                         };
                         // Return value describes previous visibility, not success.
                         let _ = ShowWindow(self.hwnd, command);
-                        if let Some(mode) = first {
-                            ctx.end_first_show(mode);
+                        if first.is_some() && self.owns_handle() {
+                            ctx.end_first_show(IsIconic(self.hwnd).as_bool());
                         }
                         Ok(())
                     }
