@@ -1095,6 +1095,21 @@ impl HeadlessHost {
         self.observe(window.0, flui_runtime::owner::WindowObservation::State);
     }
 
+    /// Report that `window` gained OS focus, as a backend's focus callback
+    /// does: keyboard input goes to its presentation from now on, whatever
+    /// window it is stamped for, and the window that held focus loses it.
+    ///
+    /// # Panics
+    ///
+    /// If `window` was not opened by this host.
+    pub fn focus_window(&self, window: HeadlessWindowId) {
+        let _ = self.window_of(window);
+        self.observe(
+            window.0,
+            flui_runtime::owner::WindowObservation::Focus(true),
+        );
+    }
+
     /// The accessibility tree `window` last published to its platform
     /// adapter, every incremental update folded in; `None` before
     /// assistive technology attached and a [`pump`](Self::pump) ran.
