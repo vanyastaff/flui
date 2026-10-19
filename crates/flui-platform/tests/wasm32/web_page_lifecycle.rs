@@ -186,10 +186,21 @@ async fn web_pagehide_reports_the_session_ending() {
 }
 
 #[wasm_bindgen_test]
-async fn web_pagehide_without_a_hook_is_harmless() {
+async fn web_pagehide_is_not_replayed_to_a_later_hook() {
     let (_probe, running, _window) = page().await;
     assert_eq!(window_listeners("pagehide"), 1);
     fire_window("pagehide", false);
+    let (seen, log) = recorder();
+    running
+        .owner
+        .borrow()
+        .as_ref()
+        .expect("owner")
+        .on_session_end(Box::new(move |phase| {
+            log.lock().unwrap().push(phase);
+            SessionEndAnswer::Proceed
+        }));
+    assert!(seen.lock().unwrap().is_empty(), "a notice is one-off");
     running.quit();
     settle().await;
 }

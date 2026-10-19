@@ -18,9 +18,10 @@ use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
-use web_sys::{Event, EventTarget, MediaQueryList};
+use web_sys::{Event, MediaQueryList};
 
 use super::display::{WebDisplays, event_target, get};
+use super::listener::{Listener, warn_failure};
 use crate::shared::dppx_query::DppxWatch;
 use crate::shared::owner_signal::OwnerSignal;
 use crate::shared::web_feature::{GetScreenDetails, MatchMedia, PermissionsQuery, WebFeature};
@@ -93,55 +94,6 @@ fn wake(signal: &Weak<OwnerSignal>) {
     }
 }
 
-pub(super) fn log_failure(what: &str, error: &JsValue) {
-    // A tracing subscriber is application code: contain it.
-    crate::shared::panic_boundary::contain_owner_callback(|| {
-        tracing::warn!(?error, "{what}");
-    });
-}
-
-// ==================== One event listener ====================
-
-/// One registered `addEventListener`, removed when dropped.
-pub(super) struct Listener {
-    target: EventTarget,
-    event: &'static str,
-    callback: Option<Closure<dyn FnMut(Event)>>,
-}
-
-impl Listener {
-    pub(super) fn add(
-        target: &EventTarget,
-        event: &'static str,
-        handler: impl FnMut(Event) + 'static,
-    ) -> Result<Self, JsValue> {
-        let callback = Closure::new(handler);
-        target.add_event_listener_with_callback(event, callback.as_ref().unchecked_ref())?;
-        Ok(Self {
-            target: target.clone(),
-            event,
-            callback: Some(callback),
-        })
-    }
-}
-
-impl Drop for Listener {
-    fn drop(&mut self) {
-        let Some(callback) = self.callback.take() else {
-            return;
-        };
-        if let Err(error) = self
-            .target
-            .remove_event_listener_with_callback(self.event, callback.as_ref().unchecked_ref())
-        {
-            // Keep the JS trampoline valid if native removal failed; its
-            // captures are inert once the observers are inactive.
-            callback.forget();
-            log_failure("browser display listener removal failed", &error);
-        }
-    }
-}
-
 // ==================== Visibility ====================
 
 fn visibility_listener(displays: &Arc<WebDisplays>, active: &Rc<Cell<bool>>) -> Option<Listener> {
@@ -162,7 +114,7 @@ fn visibility_listener(displays: &Arc<WebDisplays>, active: &Rc<Cell<bool>>) -> 
     match registered {
         Ok(listener) => Some(listener),
         Err(error) => {
-            log_failure("visibility observation unavailable", &error);
+            warn_failure("visibility observation unavailable", &error);
             None
         }
     }
@@ -200,7 +152,7 @@ fn screen_change_listener(
     }) {
         Ok(listener) => Some(listener),
         Err(error) => {
-            log_failure("screen change observation unavailable", &error);
+            warn_failure("screen change observation unavailable", &error);
             None
         }
     }
@@ -221,7 +173,7 @@ fn resize_listener(
             ratio.arm_if_unarmed();
         }
     })
-    .inspect_err(|error| log_failure("resize observation unavailable", error))
+    .inspect_err(|error| warn_failure("resize observation unavailable", error))
     .ok()
 }
 
@@ -285,7 +237,7 @@ impl PixelRatioShared {
         if let Some(spent) = spent
             && let Err(error) = spent.remove_event_listener_with_callback("change", &function)
         {
-            log_failure("pixel ratio query removal failed", &error);
+            warn_failure("pixel ratio query removal failed", &error);
         }
         let mut changed = false;
         for _ in 0..ARM_ATTEMPTS {
@@ -296,12 +248,12 @@ impl PixelRatioShared {
                 Ok(Some(query)) => query,
                 Ok(None) => break,
                 Err(error) => {
-                    log_failure("pixel ratio query failed", &error);
+                    warn_failure("pixel ratio query failed", &error);
                     break;
                 }
             };
             if let Err(error) = query.add_event_listener_with_callback("change", &function) {
-                log_failure("pixel ratio query registration failed", &error);
+                warn_failure("pixel ratio query registration failed", &error);
                 break;
             }
             if query.matches() {
@@ -313,7 +265,7 @@ impl PixelRatioShared {
             // describes a ratio that is already gone. Read it again.
             changed = true;
             if let Err(error) = query.remove_event_listener_with_callback("change", &function) {
-                log_failure("pixel ratio query removal failed", &error);
+                warn_failure("pixel ratio query removal failed", &error);
             }
         }
         self.retry_on_next_frame(&window);
@@ -339,7 +291,7 @@ impl PixelRatioShared {
         let Some(retry) = retry.as_ref() else { return };
         match window.request_animation_frame(retry.as_ref().unchecked_ref()) {
             Ok(frame) => self.retry_frame.set(Some(frame)),
-            Err(error) => log_failure("pixel ratio retry unavailable", &error),
+            Err(error) => warn_failure("pixel ratio retry unavailable", &error),
         }
     }
 
@@ -442,7 +394,7 @@ impl Drop for PixelRatioWatch {
             && let Err(error) = query.remove_event_listener_with_callback("change", &function)
         {
             callback.forget();
-            log_failure("pixel ratio query removal failed", &error);
+            warn_failure("pixel ratio query removal failed", &error);
         }
     }
 }
@@ -575,7 +527,7 @@ impl ScreenAccess {
         match wasm_bindgen_futures::JsFuture::from(promise).await {
             Ok(details) => Some(details),
             Err(error) => {
-                log_failure("screen details unavailable", &error);
+                warn_failure("screen details unavailable", &error);
                 None
             }
         }
@@ -595,7 +547,7 @@ impl ScreenAccess {
             // Without the listener the state is still readable; a later
             // change is missed.
             listener
-                .inspect_err(|error| log_failure("permission observation unavailable", error))
+                .inspect_err(|error| warn_failure("permission observation unavailable", error))
                 .ok()
         });
         *self.permission.borrow_mut() = Some((status, listener));
@@ -627,7 +579,7 @@ impl ScreenAccess {
             });
             match registered {
                 Ok(listener) => listeners.push(listener),
-                Err(error) => log_failure("screen change observation unavailable", &error),
+                Err(error) => warn_failure("screen change observation unavailable", &error),
             }
         }
         *self.details.borrow_mut() = listeners;
@@ -658,7 +610,7 @@ impl ScreenAccess {
                         wake(&signal);
                     }
                 })
-                .inspect_err(|error| log_failure("screen observation unavailable", error))
+                .inspect_err(|error| warn_failure("screen observation unavailable", error))
                 .ok()
             })
             .collect();

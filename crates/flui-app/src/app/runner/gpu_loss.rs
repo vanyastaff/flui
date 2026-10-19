@@ -37,8 +37,8 @@ struct State {
 
 impl GpuLossLedger {
     /// The WebGL context was lost. Frames stop and no rebuild starts until
-    /// [`context_restored`](Self::context_restored).
-    pub(super) fn context_lost(&self) {
+    /// [`record_context_restore`](Self::record_context_restore).
+    pub(super) fn record_context_loss(&self) {
         let mut state = self.state.lock();
         state.context_lost = true;
         state.rebuild_owed = true;
@@ -46,7 +46,7 @@ impl GpuLossLedger {
 
     /// The WebGL context came back: what was built on the lost one is dead,
     /// so a rebuild is owed now that it can succeed.
-    pub(super) fn context_restored(&self) {
+    pub(super) fn record_context_restore(&self) {
         let mut state = self.state.lock();
         state.context_lost = false;
         state.rebuild_owed = true;
@@ -54,12 +54,12 @@ impl GpuLossLedger {
 
     /// The graphics device is lost (`GPUDevice.lost`, or the renderer says so).
     /// A new one can be asked for at once.
-    pub(super) fn device_lost(&self) {
+    pub(super) fn record_device_loss(&self) {
         self.state.lock().rebuild_owed = true;
     }
 
     /// Whether a frame may draw: not while the WebGL context is lost.
-    pub(super) fn frames_allowed(&self) -> bool {
+    pub(super) fn can_draw(&self) -> bool {
         !self.state.lock().context_lost
     }
 
@@ -77,8 +77,21 @@ impl GpuLossLedger {
         state.rebuilding = true;
         Some(RebuildClaim {
             ledger: Arc::clone(self),
-            rebuilt: false,
+            succeeded: false,
         })
+    }
+
+    /// Claim the first build of the renderer, which no loss owes: the
+    /// ledger holds it like a rebuild, so a loss that arrives while the
+    /// adapter is being asked for does not start a second one beside it.
+    /// Dropped unfinished, it owes the build again.
+    #[must_use]
+    pub(super) fn claim_initialization(self: &Arc<Self>) -> RebuildClaim {
+        self.state.lock().rebuilding = true;
+        RebuildClaim {
+            ledger: Arc::clone(self),
+            succeeded: false,
+        }
     }
 
     /// Whether the presentation owes a full repaint after a rebuild; reading
@@ -91,20 +104,20 @@ impl GpuLossLedger {
 
 /// The right to rebuild the renderer, held until the rebuild ends.
 ///
-/// Dropping it without [`rebuilt`](Self::rebuilt) — the rebuild failed, was
+/// Dropping it without [`complete`](Self::complete) — the rebuild failed, was
 /// abandoned, or its future was dropped unfinished — owes the rebuild again,
 /// to the next wake rather than at once: a driver still resetting would be
 /// asked in a tight loop, and the browser's animation frames pace a visible
 /// tab.
 pub(super) struct RebuildClaim {
     ledger: Arc<GpuLossLedger>,
-    rebuilt: bool,
+    succeeded: bool,
 }
 
 impl RebuildClaim {
     /// The rebuild produced a renderer: the presentation repaints.
-    pub(super) fn rebuilt(mut self) {
-        self.rebuilt = true;
+    pub(super) fn complete(mut self) {
+        self.succeeded = true;
     }
 }
 
@@ -112,7 +125,7 @@ impl Drop for RebuildClaim {
     fn drop(&mut self) {
         let mut state = self.ledger.state.lock();
         state.rebuilding = false;
-        if self.rebuilt {
+        if self.succeeded {
             state.repaint_owed = true;
         } else {
             state.rebuild_owed = true;
@@ -137,14 +150,11 @@ mod tests {
             loss.claim_rebuild().is_none(),
             "nothing is owed before a loss"
         );
-        loss.device_lost();
-        assert!(
-            loss.frames_allowed(),
-            "a lost device has no context to wait for"
-        );
+        loss.record_device_loss();
+        assert!(loss.can_draw(), "a lost device has no context to wait for");
         let claim = loss.claim_rebuild().expect("owed");
         assert!(loss.claim_rebuild().is_none(), "one rebuild at a time");
-        claim.rebuilt();
+        claim.complete();
         assert!(
             loss.claim_rebuild().is_none(),
             "a finished rebuild owes nothing"
@@ -154,14 +164,14 @@ mod tests {
     #[test]
     fn a_lost_context_waits_for_its_restoration() {
         let loss = ledger();
-        loss.context_lost();
-        assert!(!loss.frames_allowed());
+        loss.record_context_loss();
+        assert!(!loss.can_draw());
         assert!(
             loss.claim_rebuild().is_none(),
             "a rebuild now would be made on nothing"
         );
-        loss.context_restored();
-        assert!(loss.frames_allowed());
+        loss.record_context_restore();
+        assert!(loss.can_draw());
         assert!(
             loss.claim_rebuild().is_some(),
             "the restored context is rebuilt on"
@@ -171,7 +181,7 @@ mod tests {
     #[test]
     fn a_restoration_without_a_loss_still_rebuilds() {
         let loss = ledger();
-        loss.context_restored();
+        loss.record_context_restore();
         assert!(
             loss.claim_rebuild().is_some(),
             "what was built on the context is dead"
@@ -181,14 +191,14 @@ mod tests {
     #[test]
     fn a_loss_during_a_rebuild_owes_another() {
         let loss = ledger();
-        loss.device_lost();
+        loss.record_device_loss();
         let claim = loss.claim_rebuild().expect("owed");
-        loss.device_lost();
+        loss.record_device_loss();
         assert!(
             loss.claim_rebuild().is_none(),
             "the running rebuild is not doubled"
         );
-        claim.rebuilt();
+        claim.complete();
         assert!(
             loss.claim_rebuild().is_some(),
             "the loss during it is still owed"
@@ -198,7 +208,7 @@ mod tests {
     #[test]
     fn a_claim_that_is_dropped_owes_the_rebuild_again() {
         let loss = ledger();
-        loss.device_lost();
+        loss.record_device_loss();
         drop(loss.claim_rebuild().expect("owed"));
         assert!(!loss.take_repaint_owed(), "nothing was drawn to repaint");
         assert!(
@@ -208,13 +218,36 @@ mod tests {
     }
 
     #[test]
+    fn a_loss_during_the_first_build_waits_for_it() {
+        let loss = ledger();
+        let first = loss.claim_initialization();
+        loss.record_device_loss();
+        assert!(
+            loss.claim_rebuild().is_none(),
+            "no second build beside the first"
+        );
+        first.complete();
+        assert!(
+            loss.claim_rebuild().is_some(),
+            "the loss during it is still owed"
+        );
+    }
+
+    #[test]
+    fn a_first_build_that_fails_is_owed_again() {
+        let loss = ledger();
+        drop(loss.claim_initialization());
+        assert!(loss.claim_rebuild().is_some(), "the next wake builds again");
+    }
+
+    #[test]
     fn a_rebuild_owes_one_repaint() {
         let loss = ledger();
         assert!(!loss.take_repaint_owed());
-        loss.device_lost();
+        loss.record_device_loss();
         let claim = loss.claim_rebuild().expect("owed");
         assert!(!loss.take_repaint_owed(), "not before it finishes");
-        claim.rebuilt();
+        claim.complete();
         assert!(loss.take_repaint_owed());
         assert!(!loss.take_repaint_owed(), "read once");
     }
@@ -222,13 +255,13 @@ mod tests {
     #[test]
     fn a_context_lost_while_rebuilding_waits_for_the_restoration() {
         let loss = ledger();
-        loss.device_lost();
+        loss.record_device_loss();
         let claim = loss.claim_rebuild().expect("owed");
-        loss.context_lost();
-        claim.rebuilt();
-        assert!(!loss.frames_allowed());
+        loss.record_context_loss();
+        claim.complete();
+        assert!(!loss.can_draw());
         assert!(loss.claim_rebuild().is_none());
-        loss.context_restored();
+        loss.record_context_restore();
         assert!(loss.claim_rebuild().is_some());
     }
 }

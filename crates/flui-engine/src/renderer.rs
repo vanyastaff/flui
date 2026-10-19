@@ -373,13 +373,11 @@ impl GpuCapabilities {
 /// The hook a renderer's devices report a loss to, shared with their
 /// callbacks; see [`Renderer::on_device_lost`].
 #[derive(Default)]
-struct DeviceLostHook {
+struct DeviceLostSlot {
     hook: parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
-type DeviceLostCell = Arc<DeviceLostHook>;
-
-impl DeviceLostHook {
+impl DeviceLostSlot {
     fn replace(&self, hook: Arc<dyn Fn() + Send + Sync>) {
         let previous = self.hook.lock().replace(hook);
         drop(previous);
@@ -479,7 +477,7 @@ pub struct Renderer {
     /// Told when the device-lost callback fires, so the owner can recover
     /// without waiting for a frame. One cell for the renderer's lifetime:
     /// every device `recover` builds reports into it.
-    device_lost_hook: DeviceLostCell,
+    device_lost_hook: Arc<DeviceLostSlot>,
     /// The damage owed, the retained last frame a partial frame repaints
     /// into, and the one-frame promotion to full — the protocol the headless
     /// retained capture runs too (see [`crate::frame_protocol`]).
@@ -616,7 +614,7 @@ impl Renderer {
         // One extra pointer chase per surface creation; documented, not
         // fixed — see issue #1043.
         let (w, h) = (800u32, 600u32); // Will be updated on first resize
-        let device_lost_hook = DeviceLostCell::default();
+        let device_lost_hook = Arc::default();
         let (target, stack) = Self::probe_then_build(Arc::new(target), |target| {
             let device_lost_hook = Arc::clone(&device_lost_hook);
             async move {
@@ -847,7 +845,7 @@ impl Renderer {
         target: &Arc<dyn WindowTarget>,
         width: u32,
         height: u32,
-        device_lost_hook: &DeviceLostCell,
+        device_lost_hook: &Arc<DeviceLostSlot>,
     ) -> EngineResult<WindowedGpuStack> {
         let backends = Self::select_backend();
         tracing::info!("Creating wgpu instance with backends: {:?}", backends);
@@ -1220,7 +1218,7 @@ impl Renderer {
     fn install_device_diagnostics(
         device: &wgpu::Device,
         device_lost_flag: Arc<std::sync::atomic::AtomicBool>,
-        device_lost_hook: DeviceLostCell,
+        device_lost_hook: Arc<DeviceLostSlot>,
     ) {
         device.on_uncaptured_error(Arc::new(|error: wgpu::Error| {
             tracing::error!(
@@ -2538,7 +2536,7 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(false));
         let calls = Arc::new(AtomicUsize::new(0));
         let flag_when_called = Arc::new(AtomicBool::new(false));
-        let cell = DeviceLostCell::default();
+        let cell = Arc::<DeviceLostSlot>::default();
         {
             let (flag, calls, flag_when_called) = (
                 Arc::clone(&flag),
@@ -2632,7 +2630,7 @@ mod tests {
             offscreen,
             supports_copy_src: false,
             device_lost: Arc::clone(&callback_flag),
-            device_lost_hook: DeviceLostCell::default(),
+            device_lost_hook: Arc::default(),
             frame: crate::frame_protocol::FrameProtocol::new(),
             pre_present_hook: None,
             lease: SurfaceLease::released_for_test(Arc::new(ReleasedWindow)),

@@ -57,8 +57,9 @@ pub(super) fn register_event_listeners(
     register_context_menu_block(canvas, registration)?;
     register_layout_events(window, registration)?;
     register_appearance_events(&callbacks, registration)?;
-    register_document_events(window, registration)?;
-    register_graphics_events(window, registration)?;
+    register_page_lifecycle_events(window, registration)?;
+    register_fullscreen_events(window, registration)?;
+    register_context_loss_events(window, registration)?;
     // Host registration calls can change native state before its listeners
     // exist. Reconcile after successful installation, before Created.
     focus.sync();
@@ -105,25 +106,17 @@ fn register_appearance_events(
     })
 }
 
-// ==================== Page lifecycle and fullscreen ====================
+// ==================== Page lifecycle ====================
 
-/// Report what the page does to the window it holds.
-///
-/// - `freeze` and `resume` (Page Lifecycle): a frozen page runs no script at
-///   all, so the window is `Suspended` from the last event it can handle until
-///   `resume`. A browser without the API never raises them and the window stays
-///   `Running`.
-/// - `fullscreenchange`: the browser answers `requestFullscreen`, Escape and
-///   the user's own exit with this one event, so the published state is read
-///   again here and nowhere else.
-fn register_document_events(
+/// `freeze` and `resume` (Page Lifecycle): a frozen page runs no script at
+/// all, so the window is `Suspended` from the last event it can handle until
+/// `resume`. A browser without the API never raises them and the window stays
+/// `Running`.
+fn register_page_lifecycle_events(
     window: &WebWindow,
     registration: &mut Registration,
 ) -> Result<(), crate::OpenWindowError> {
-    let document = window
-        .canvas()
-        .owner_document()
-        .expect("BUG: window construction verified the canvas document");
+    let document = document_of(window);
     let execution = Rc::new(window.execution_sync());
     for (kind, state) in [
         ("freeze", WindowExecutionState::Suspended),
@@ -132,10 +125,33 @@ fn register_document_events(
         let execution = Rc::clone(&execution);
         registration.listen(document.as_ref(), kind, move |_| execution.set(state))?;
     }
+    Ok(())
+}
+
+// ==================== Fullscreen ====================
+
+/// `fullscreenchange`: the browser answers `requestFullscreen`, Escape and the
+/// user's own exit with this one event, so the published state is read again
+/// here and nowhere else.
+fn register_fullscreen_events(
+    window: &WebWindow,
+    registration: &mut Registration,
+) -> Result<(), crate::OpenWindowError> {
     let publisher = window.publisher();
-    registration.listen(document.as_ref(), "fullscreenchange", move |_| {
-        publisher.publish();
-    })
+    registration.listen(
+        document_of(window).as_ref(),
+        "fullscreenchange",
+        move |_| {
+            publisher.publish();
+        },
+    )
+}
+
+fn document_of(window: &WebWindow) -> web_sys::Document {
+    window
+        .canvas()
+        .owner_document()
+        .expect("BUG: window construction verified the canvas document")
 }
 
 // ==================== GPU context ====================
@@ -148,7 +164,7 @@ fn register_document_events(
 /// browser to restore the context later; without it the context is gone for
 /// good. Everything built on the lost context is dead either way, so the
 /// restoration is reported too and the presentation rebuilds on it.
-fn register_graphics_events(
+fn register_context_loss_events(
     window: &WebWindow,
     registration: &mut Registration,
 ) -> Result<(), crate::OpenWindowError> {

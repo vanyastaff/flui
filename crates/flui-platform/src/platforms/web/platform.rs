@@ -42,8 +42,8 @@ pub struct WebPlatform {
     /// The browser listeners that keep `displays` current; present while the
     /// platform runs.
     display_observers: RefCell<Option<DisplayObservers>>,
-    /// The listener that reports the page being hidden; present while the
-    /// platform runs.
+    /// The listeners that report the page being hidden and shown again; present
+    /// while the platform runs.
     page_observers: RefCell<Option<PageObservers>>,
 }
 

@@ -117,15 +117,15 @@ where
         // would notice. The loss wakes the owner, whose next turn rebuilds the
         // renderer; the same ledger takes a lost WebGPU device (the renderer
         // reports it).
-        let loss = Arc::new(GpuLossLedger::default());
+        let gpu_loss = Arc::new(GpuLossLedger::default());
         let wake = ui_runtime.wake_handle();
         {
-            let (loss, wake) = (Arc::clone(&loss), Arc::clone(&wake));
+            let (gpu_loss, wake) = (Arc::clone(&gpu_loss), Arc::clone(&wake));
             window.on_surface_status_change(Box::new(move |available| {
                 if available {
-                    loss.context_restored();
+                    gpu_loss.record_context_restore();
                 } else {
-                    loss.context_lost();
+                    gpu_loss.record_context_loss();
                 }
                 wake();
             }));
@@ -136,7 +136,7 @@ where
                 super::frame_driver::FrameDriver::Web(WebFrameDriver {
                     renderer,
                     window,
-                    loss,
+                    gpu_loss,
                     owner_wake: wake,
                 }),
                 &owner.shared(),
@@ -176,61 +176,23 @@ pub(super) struct WebFrameDriver {
     renderer: std::sync::Arc<parking_lot::Mutex<Option<flui_engine::Renderer>>>,
     window: std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
     /// What the browser or the renderer reported lost, and not yet rebuilt.
-    loss: std::sync::Arc<GpuLossLedger>,
+    gpu_loss: std::sync::Arc<GpuLossLedger>,
     /// Wakes the owner: the next turn rebuilds without waiting for a frame.
     owner_wake: std::sync::Arc<dyn Fn() + Send + Sync>,
 }
 
 impl WebFrameDriver {
     pub(super) fn installed(&mut self, authority: super::frame_driver::FrameLiveness) {
-        use std::sync::Arc;
-        let renderer_slot = Arc::clone(&self.renderer);
-        let window = Arc::clone(&self.window);
-        let (loss, wake) = (Arc::clone(&self.loss), Arc::clone(&self.owner_wake));
-        wasm_bindgen_futures::spawn_local(async move {
-            if !authority.is_live() {
-                return;
-            }
-            let mut renderer = match flui_engine::Renderer::new(Arc::clone(&window)).await {
-                Ok(renderer) => renderer,
-                Err(error) => {
-                    tracing::error!(%error, "GPU initialization failed");
-                    return;
-                }
-            };
-            if !authority.is_live() {
-                return;
-            }
-            // A lost WebGPU device is reported by the browser, not by a canvas
-            // event: the renderer says so, and the owner starts rebuilding at
-            // once. A loss before the hook was installed is not replayed, so
-            // ask once.
-            let (hook_loss, hook_wake) = (Arc::clone(&loss), wake);
-            renderer.on_device_lost(move || {
-                hook_loss.device_lost();
-                hook_wake();
-            });
-            if renderer.is_device_lost() {
-                loss.device_lost();
-            }
-            // Adapter initialization may span many native resizes.
-            let size = window.physical_size();
-            renderer.resize(size.width as u32, size.height as u32);
-            match authority.publish(&renderer_slot, renderer) {
-                Ok(previous) => drop(previous),
-                Err(renderer) => {
-                    drop(renderer);
-                    return;
-                }
-            }
-            window.request_redraw();
-            tracing::info!("WebGPU renderer initialized");
-        });
+        // The first build is held like a rebuild, so a loss while the adapter
+        // is being asked for neither starts a second one nor is forgotten: a
+        // failed first build is owed again and made at the next wake.
+        let claim = self.gpu_loss.claim_initialization();
+        self.spawn_build(None, claim, authority);
     }
     pub(super) fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
         // A lost context cannot be configured; the rebuild reads the window's
         // size when it finishes.
-        if !self.loss.frames_allowed() {
+        if !self.gpu_loss.can_draw() {
             return;
         }
         if let Some(renderer) = self.renderer.lock().as_mut() {
@@ -251,11 +213,11 @@ impl WebFrameDriver {
         // Before the dirty gate: a lost device or context needs no frame to be
         // noticed, and a hidden tab runs none.
         self.start_rebuild_if_owed(&liveness);
-        let loss = &self.loss;
+        let gpu_loss = &self.gpu_loss;
         let renderer_frame = &self.renderer;
         let action = ui_runtime.enter(|ui_runtime| {
             // A rebuilt renderer draws on a canvas that starts empty.
-            if loss.take_repaint_owed() {
+            if gpu_loss.take_repaint_owed() {
                 ui_runtime.mark_primary_needs_full_repaint();
             }
             // Owner-inbox drain: commands and worker results commit
@@ -284,7 +246,7 @@ impl WebFrameDriver {
         // restores it, and the restoration owes a full repaint. The wake still
         // services commands, tasks and input without a frame.
         let action = match action {
-            WakeAction::Render if !loss.frames_allowed() => WakeAction::PumpBackground,
+            WakeAction::Render if !gpu_loss.can_draw() => WakeAction::PumpBackground,
             other => other,
         };
         match action {
@@ -330,88 +292,128 @@ impl WebFrameDriver {
             // A device lost during the frame is rebuilt now rather than at
             // the next wake.
             if r.is_device_lost() {
-                loss.device_lost();
+                gpu_loss.record_device_loss();
             }
         }
         self.start_rebuild_if_owed(&liveness);
     }
 
-    /// Rebuild the renderer on the browser's executor when something was lost
-    /// and the rebuild can succeed.
+    /// Rebuild the renderer when something was lost and the rebuild can
+    /// succeed; build it from scratch when there is none, because its first
+    /// build failed.
     ///
-    /// A failed rebuild is retried by the next wake — the next animation frame
+    /// A failed build is retried by the next wake — the next animation frame
     /// of a visible tab, or the context's restoration — and not at once: the
     /// driver may still be resetting, and an immediate retry would ask it again
     /// in a loop.
     fn start_rebuild_if_owed(&self, liveness: &super::frame_driver::FrameLiveness) {
-        use std::sync::Arc;
         if self
             .renderer
             .lock()
             .as_ref()
             .is_some_and(flui_engine::Renderer::is_device_lost)
         {
-            self.loss.device_lost();
+            self.gpu_loss.record_device_loss();
         }
-        let Some(claim) = self.loss.claim_rebuild() else {
+        let Some(claim) = self.gpu_loss.claim_rebuild() else {
             return;
         };
         // Taken now, not when the future first runs: a frame between the two
         // would draw on the lost renderer, and its own loss report would owe a
-        // second rebuild. A renderer that is not there yet (initialization in
-        // flight) is not rebuilt; dropping the claim owes the rebuild again.
-        let Some(mut renderer) = self.renderer.lock().take() else {
-            return;
-        };
-        let (renderer_slot, window, wake) = (
-            Arc::clone(&self.renderer),
-            Arc::clone(&self.window),
-            Arc::clone(&self.owner_wake),
-        );
-        let authority = liveness.clone();
+        // second rebuild.
+        let lost = self.renderer.lock().take();
+        self.spawn_build(lost, claim, liveness.clone());
+    }
+
+    /// Build the renderer on the browser's executor: `lost` is rebuilt, and
+    /// `None` is built for the first time. Success publishes it and wakes the
+    /// owner; failure puts a rebuilt renderer back and leaves the claim to owe
+    /// the build again.
+    fn spawn_build(
+        &self,
+        lost: Option<flui_engine::Renderer>,
+        claim: super::gpu_loss::RebuildClaim,
+        authority: super::frame_driver::FrameLiveness,
+    ) {
+        use std::sync::Arc;
+        let renderer_slot = Arc::clone(&self.renderer);
+        let window = Arc::clone(&self.window);
+        let (gpu_loss, wake) = (Arc::clone(&self.gpu_loss), Arc::clone(&self.owner_wake));
         wasm_bindgen_futures::spawn_local(async move {
-            let result = renderer.recover().await;
             if !authority.is_live() {
                 return;
             }
-            match result {
-                Ok(()) => {
-                    // The window may have been resized while the adapter and
-                    // device were being asked for.
-                    let size = window.physical_size();
-                    renderer.resize(size.width as u32, size.height as u32);
-                    match authority.publish(&renderer_slot, renderer) {
-                        Ok(previous) => drop(previous),
-                        Err(renderer) => {
-                            drop(renderer);
-                            return;
-                        }
-                    }
-                    tracing::warn!("GPU lost — renderer rebuilt");
-                    claim.rebuilt();
-                    wake();
+            let first_build = lost.is_none();
+            let (renderer, built) = match lost {
+                Some(mut renderer) => {
+                    let built = renderer.recover().await;
+                    (Some(renderer), built)
                 }
-                Err(error) => {
-                    // The renderer goes back either way; the dropped claim owes
-                    // the rebuild again.
-                    if let Ok(previous) = authority.publish(&renderer_slot, renderer) {
-                        drop(previous);
-                    }
-                    if matches!(
-                        error,
-                        flui_engine::EngineError::SurfaceTargetUnavailable { .. }
-                    ) {
-                        // The window owner reports its native handle is gone or
-                        // suspended. A backgrounded tab's canvas can report this
-                        // transiently, so the log is a warning.
-                        tracing::warn!(
-                            ?error,
-                            "GPU rebuild failed — window target unavailable; retried at the next wake"
-                        );
-                    } else {
-                        tracing::error!(?error, "GPU rebuild failed; retried at the next wake");
-                    }
+                None => match flui_engine::Renderer::new(Arc::clone(&window)).await {
+                    Ok(renderer) => (Some(renderer), Ok(())),
+                    Err(error) => (None, Err(error)),
+                },
+            };
+            if !authority.is_live() {
+                return;
+            }
+            let Some(mut renderer) = renderer else {
+                if let Err(error) = built {
+                    tracing::error!(%error, "GPU initialization failed; retried at the next wake");
                 }
+                return;
+            };
+            if let Err(error) = built {
+                // The renderer goes back either way; the dropped claim owes
+                // the rebuild again.
+                if let Ok(previous) = authority.publish(&renderer_slot, renderer) {
+                    drop(previous);
+                }
+                if matches!(
+                    error,
+                    flui_engine::EngineError::SurfaceTargetUnavailable { .. }
+                ) {
+                    // The window owner reports its native handle is gone or
+                    // suspended. A backgrounded tab's canvas can report this
+                    // transiently, so the log is a warning.
+                    tracing::warn!(
+                        ?error,
+                        "GPU rebuild failed — window target unavailable; retried at the next wake"
+                    );
+                } else {
+                    tracing::error!(?error, "GPU rebuild failed; retried at the next wake");
+                }
+                return;
+            }
+            // A lost WebGPU device is reported by the browser, not by a canvas
+            // event: the renderer says so, and the owner starts rebuilding at
+            // once. A loss before the hook was installed is not replayed, so
+            // ask once.
+            let (hook_loss, hook_wake) = (Arc::clone(&gpu_loss), Arc::clone(&wake));
+            renderer.on_device_lost(move || {
+                hook_loss.record_device_loss();
+                hook_wake();
+            });
+            if renderer.is_device_lost() {
+                gpu_loss.record_device_loss();
+            }
+            // The adapter and device may take many native resizes to arrive.
+            let size = window.physical_size();
+            renderer.resize(size.width as u32, size.height as u32);
+            match authority.publish(&renderer_slot, renderer) {
+                Ok(previous) => drop(previous),
+                Err(renderer) => {
+                    drop(renderer);
+                    return;
+                }
+            }
+            claim.complete();
+            if first_build {
+                window.request_redraw();
+                tracing::info!("WebGPU renderer initialized");
+            } else {
+                tracing::warn!("GPU lost — renderer rebuilt");
+                wake();
             }
         });
     }

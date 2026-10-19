@@ -13,7 +13,7 @@ use std::rc::Rc;
 use flui_platform_api::SessionEndPhase;
 use wasm_bindgen::JsValue;
 
-use super::display_events::{Listener, log_failure};
+use super::listener::{Listener, warn_failure};
 
 /// The listeners on the page itself; removed when dropped.
 pub(super) struct PageObservers {
@@ -49,7 +49,7 @@ impl PageObservers {
         let page_show = listen(&window, "pageshow", move |event| {
             // Only a page that was cached and is back; a first load also raises
             // `pageshow`, with `persisted` false.
-            if show_active.get() && persisted(event) {
+            if show_active.get() && persisted(&event) {
                 on_phase(SessionEndPhase::Cancelled);
             }
         });
@@ -67,19 +67,15 @@ impl Drop for PageObservers {
     }
 }
 
+/// One listener on `window`; an unavailable one is logged and left out.
 fn listen(
     window: &web_sys::Window,
     kind: &'static str,
-    handler: impl FnMut(&web_sys::Event) + 'static,
+    handler: impl FnMut(web_sys::Event) + 'static,
 ) -> Option<Listener> {
-    let mut handler = handler;
-    match Listener::add(window.as_ref(), kind, move |event| handler(&event)) {
-        Ok(listener) => Some(listener),
-        Err(error) => {
-            log_failure("page lifecycle observation unavailable", &error);
-            None
-        }
-    }
+    Listener::add(window.as_ref(), kind, handler)
+        .inspect_err(|error| warn_failure("page lifecycle observation unavailable", error))
+        .ok()
 }
 
 /// `PageTransitionEvent.persisted`; absent on any other event.
