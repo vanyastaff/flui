@@ -66,6 +66,19 @@ struct State {
     natives: Vec<NativeIds>,
     /// Why the source cannot answer, until a watcher starts again.
     unavailable: Option<String>,
+    /// The outputs held may be older than the machine's last sleep: the next
+    /// sample reads the compositor again.
+    reread: bool,
+}
+
+/// A wake from sleep marks the snapshot stale and the outputs held old: a
+/// layout change made while the machine slept sent the process no event, so the
+/// next sample reads the compositor again.
+impl crate::shared::system_notice::StaleOnWake for LinuxDisplays {
+    fn mark_stale(&self) {
+        self.state.lock().reread = true;
+        self.source.invalidate();
+    }
 }
 
 impl LinuxDisplays {
@@ -78,6 +91,7 @@ impl LinuxDisplays {
                 fresh: FreshIds::default(),
                 natives: Vec::new(),
                 unavailable: None,
+                reread: false,
             }),
         })
     }
@@ -100,21 +114,30 @@ impl LinuxDisplays {
     }
 
     fn sample(&self) -> Result<(Vec<DisplayInfo>, Vec<NativeIds>), PlatformError> {
-        let known = {
+        let (known, reread) = {
             let state = self.state.lock();
             if let Some(message) = &state.unavailable {
                 return Err(PlatformError::Displays {
                     message: message.clone(),
                 });
             }
-            state.views.is_some()
+            (state.views.is_some(), state.reread)
         };
-        if !known {
+        if !known || reread {
             // The compositor is read with no lock held.
-            if let Err(error) = self.read_once() {
-                let message = error.to_string();
-                self.state.lock().unavailable = Some(message.clone());
-                return Err(PlatformError::Displays { message });
+            match self.read_once() {
+                Ok(()) => {}
+                // After a wake the outputs held are better than none: the
+                // display thread may still correct them.
+                Err(error) if known => {
+                    tracing::warn!(%error, "the outputs could not be read again after a wake");
+                    self.state.lock().reread = false;
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    self.state.lock().unavailable = Some(message.clone());
+                    return Err(PlatformError::Displays { message });
+                }
             }
         }
         let mut state = self.state.lock();
@@ -165,6 +188,7 @@ impl LinuxDisplays {
             }
             state.views = Some(views);
             state.unavailable = None;
+            state.reread = false;
         }
         self.source.invalidate();
     }

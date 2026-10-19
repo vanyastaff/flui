@@ -51,6 +51,10 @@ pub(crate) struct RandrCrtc {
 pub(crate) struct RandrOutput {
     pub id: u32,
     pub crtc: u32,
+    /// The connector, such as `HDMI-1`.
+    pub name: String,
+    /// The panel's EDID base block, when the output has one.
+    pub edid: Option<Vec<u8>>,
 }
 
 /// One `RRGetMonitors` monitor.
@@ -111,6 +115,9 @@ impl RandrState {
             .work_area
             .and_then(|area| intersection(monitor.bounds, area))
             .unwrap_or(monitor.bounds);
+        let first_output = self.outputs.iter().find(|output| output.id == first);
+        let persistent_key =
+            first_output.and_then(|output| persistent_key(&output.name, output.edid.as_deref()));
         Some(OutputView {
             identity: Identity::Keyed(DisplayKey::X11Output(first)),
             natives,
@@ -120,8 +127,56 @@ impl RandrState {
             scale_factor: self.scale_factor.unwrap_or(1.0),
             refresh_period,
             is_primary: monitor.is_primary,
+            persistent_key,
         })
     }
+}
+
+/// What names a monitor again after a restart: its connector, and the panel on
+/// it when the EDID says which (`HDMI-1|DEL4115-0000002A`: manufacturer,
+/// product code and serial number). Two identical panels differ by connector,
+/// and one panel moved to another connector is another display. `None` for an
+/// output with no name.
+pub(crate) fn persistent_key(connector: &str, edid: Option<&[u8]>) -> Option<String> {
+    if connector.is_empty() {
+        return None;
+    }
+    Some(match edid.and_then(panel_identity) {
+        Some(panel) => format!("{connector}|{panel}"),
+        None => connector.to_owned(),
+    })
+}
+
+/// The manufacturer, product code and serial number of an EDID base block, as
+/// `DEL4115-0000002A`. `None` for a block that is too short or lacks the fixed
+/// header, and for a manufacturer code that is not three letters.
+fn panel_identity(edid: &[u8]) -> Option<String> {
+    const HEADER: [u8; 8] = [0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00];
+    let header = edid.get(..8)?;
+    if header != HEADER {
+        return None;
+    }
+    let manufacturer = u16::from_be_bytes([*edid.get(8)?, *edid.get(9)?]);
+    let product = u16::from_le_bytes([*edid.get(10)?, *edid.get(11)?]);
+    let serial = u32::from_le_bytes([
+        *edid.get(12)?,
+        *edid.get(13)?,
+        *edid.get(14)?,
+        *edid.get(15)?,
+    ]);
+    // Three 5-bit letters, 1 for `A` to 26 for `Z`, under a clear top bit.
+    if manufacturer & 0x8000 != 0 {
+        return None;
+    }
+    let mut letters = String::with_capacity(3);
+    for shift in [10, 5, 0] {
+        let code = u8::try_from((manufacturer >> shift) & 0x1F).ok()?;
+        if !(1..=26).contains(&code) {
+            return None;
+        }
+        letters.push(char::from(b'A' + code - 1));
+    }
+    Some(format!("{letters}{product:04X}-{serial:08X}"))
 }
 
 /// The refresh rate of `mode` in millihertz, or `None` when its totals are zero.
@@ -228,7 +283,12 @@ mod tests {
         let outputs = monitors
             .iter()
             .flat_map(|monitor| monitor.outputs.iter().copied())
-            .map(|id| RandrOutput { id, crtc: id + 100 })
+            .map(|id| RandrOutput {
+                id,
+                crtc: id + 100,
+                name: format!("OUT-{id}"),
+                edid: None,
+            })
             .collect::<Vec<_>>();
         let crtcs = outputs
             .iter()
@@ -361,6 +421,87 @@ mod tests {
         assert_ne!(renamed.displays[0].id, renamed.displays[1].id);
     }
 
+    /// An EDID base block for a Dell (`DEL`) panel, product `0x4115`, serial
+    /// `0x2A`.
+    fn edid() -> Vec<u8> {
+        let mut block = vec![0_u8; 128];
+        block[..8].copy_from_slice(&[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00]);
+        block[8..10].copy_from_slice(&[0x10, 0xAC]);
+        block[10..12].copy_from_slice(&[0x15, 0x41]);
+        block[12..16].copy_from_slice(&[0x2A, 0x00, 0x00, 0x00]);
+        block
+    }
+
+    /// A case, the connector, its EDID and the key.
+    type KeyCase = (
+        &'static str,
+        &'static str,
+        Option<Vec<u8>>,
+        Option<&'static str>,
+    );
+
+    fn x11_persistent_key_is_the_connector_and_the_panel() {
+        // (case, connector, EDID, key)
+        let mut wrong_header = edid();
+        wrong_header[1] = 0;
+        let mut zero_letter = edid();
+        zero_letter[8..10].copy_from_slice(&[0x00, 0x00]);
+        let mut past_z = edid();
+        // Letter codes 27 to 31 are not letters.
+        past_z[8..10].copy_from_slice(&[0x04, 0x3B]);
+        let table: &[KeyCase] = &[
+            (
+                "a panel on a connector",
+                "HDMI-1",
+                Some(edid()),
+                Some("HDMI-1|DEL4115-0000002A"),
+            ),
+            ("no EDID", "DP-2", None, Some("DP-2")),
+            (
+                "EDID too short",
+                "DP-2",
+                Some(edid()[..15].to_vec()),
+                Some("DP-2"),
+            ),
+            (
+                "EDID without its header",
+                "DP-2",
+                Some(wrong_header),
+                Some("DP-2"),
+            ),
+            (
+                "manufacturer letter zero",
+                "DP-2",
+                Some(zero_letter),
+                Some("DP-2"),
+            ),
+            (
+                "manufacturer letter past Z",
+                "DP-2",
+                Some(past_z),
+                Some("DP-2"),
+            ),
+            ("no connector name", "", Some(edid()), None),
+        ];
+        for (case, connector, edid, expected) in table {
+            assert_eq!(
+                persistent_key(connector, edid.as_deref()).as_deref(),
+                *expected,
+                "{case}"
+            );
+        }
+
+        // The monitor is keyed by its first output; its key is that output's.
+        let mut state = state(vec![monitor("Clone", &[20, 10], 0)]);
+        state.outputs[0].name = "HDMI-1".into();
+        state.outputs[0].edid = Some(edid());
+        state.outputs[1].name = "DP-1".into();
+        assert_eq!(
+            state.views()[0].persistent_key.as_deref(),
+            Some("HDMI-1|DEL4115-0000002A")
+        );
+    }
+
     fn x11_screen_change_replaces_outputs() {
         let registry = DisplayRegistry::new();
         let mut fresh = FreshIds::default();
@@ -463,6 +604,10 @@ mod tests {
                 (
                     "x11_monitor_is_keyed_by_its_first_output",
                     x11_monitor_is_keyed_by_its_first_output,
+                ),
+                (
+                    "x11_persistent_key_is_the_connector_and_the_panel",
+                    x11_persistent_key_is_the_connector_and_the_panel,
                 ),
                 (
                     "x11_screen_change_replaces_outputs",

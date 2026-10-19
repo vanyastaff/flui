@@ -29,6 +29,8 @@ use super::x11_model::{
 const PROTOCOL: &str = "X11";
 /// `RESOURCE_MANAGER` is read this far (in 4-byte units): 256 KiB.
 const RESOURCES_LENGTH: u32 = 1 << 16;
+/// An output's EDID is read this far (in 4-byte units): the 128-byte base block.
+const EDID_LENGTH: u32 = 32;
 /// `_NET_WORKAREA` is read for this many desktops (four values each).
 const WORK_AREA_DESKTOPS: u32 = 64;
 
@@ -40,6 +42,8 @@ fn error(error: impl std::fmt::Display) -> DisplayError {
 struct Atoms {
     work_area: xproto::Atom,
     current_desktop: xproto::Atom,
+    /// The output property that holds the panel's EDID.
+    edid: xproto::Atom,
 }
 
 /// A connection to the X server and the RandR state last read from it.
@@ -93,6 +97,7 @@ impl X11Session {
         let atoms = Atoms {
             work_area: intern(&connection, b"_NET_WORKAREA")?,
             current_desktop: intern(&connection, b"_NET_CURRENT_DESKTOP")?,
+            edid: intern(&connection, b"EDID")?,
         };
         let state = read_state(&connection, root, &atoms)?
             .ok_or_else(|| error("the RandR configuration kept changing during the first read"))?;
@@ -213,7 +218,12 @@ fn read_state(
             } else {
                 0
             };
-            outputs.push(RandrOutput { id: output, crtc });
+            outputs.push(RandrOutput {
+                id: output,
+                crtc,
+                name: String::from_utf8_lossy(&info.name).into_owned(),
+                edid: output_edid(connection, output, atoms.edid),
+            });
             if crtc != 0 && !crtcs.iter().any(|known| known.id == crtc) {
                 let Some(info) = settle(
                     randr::get_crtc_info(connection, crtc, resources.config_timestamp)
@@ -285,6 +295,30 @@ fn settle<T>(reply: Result<T, ReplyError>) -> Result<Option<T>, DisplayError> {
         }
         Err(ReplyError::ConnectionError(failure)) => Err(error(failure)),
     }
+}
+
+/// The EDID the server holds for `output`, `None` for an output with none (a
+/// virtual one, or a driver that does not publish it).
+fn output_edid(
+    connection: &RustConnection,
+    output: randr::Output,
+    property: xproto::Atom,
+) -> Option<Vec<u8>> {
+    // The base block is 128 bytes; the first 16 hold the identity.
+    let reply = randr::get_output_property(
+        connection,
+        output,
+        property,
+        AtomEnum::INTEGER,
+        0,
+        EDID_LENGTH,
+        false,
+        false,
+    )
+    .ok()?
+    .reply()
+    .ok()?;
+    (reply.format == 8 && !reply.data.is_empty()).then_some(reply.data)
 }
 
 /// The name an atom stands for, or `"Display"` for one the server does not know.

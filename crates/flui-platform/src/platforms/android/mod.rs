@@ -94,9 +94,9 @@ use crate::{
     },
 };
 
-/// The API level assumed when the system will not say: the backend's `minSdk`,
+/// The API level assumed when the system will not say: the floor (ADR-0244),
 /// so nothing newer than it is attempted.
-const FALLBACK_API_LEVEL: u32 = 23;
+const FALLBACK_API_LEVEL: u32 = crate::shared::platform_floor::ANDROID_API;
 
 /// Whether the registered wake-deadline hook's answer means `run`'s loop
 /// should WANT to force a frame dispatch this iteration, even though
