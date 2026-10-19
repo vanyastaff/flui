@@ -237,20 +237,24 @@ impl WinitWindow {
     }
 
     /// The mode the X server and window manager report, if a probe is attached
+    /// The mode the X server and window manager report, if a probe is attached
     /// and can say.
-    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(clippy::unused_self, reason = "only an X11 window has a probe to ask")
+    )]
     fn probed_mode(&self) -> Option<WindowMode> {
-        let (probe, id) = self.x11.get()?;
-        Some(match probe.mode(*id)? {
-            X11WindowMode::Normal => WindowMode::Normal,
-            X11WindowMode::Minimized => WindowMode::Minimized,
-            X11WindowMode::Maximized => WindowMode::Maximized,
-            X11WindowMode::Fullscreen => WindowMode::Fullscreen,
-        })
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn probed_mode(&self) -> Option<WindowMode> {
+        #[cfg(target_os = "linux")]
+        {
+            let (probe, id) = self.x11.get()?;
+            Some(match probe.mode(*id)? {
+                X11WindowMode::Normal => WindowMode::Normal,
+                X11WindowMode::Minimized => WindowMode::Minimized,
+                X11WindowMode::Maximized => WindowMode::Maximized,
+                X11WindowMode::Fullscreen => WindowMode::Fullscreen,
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
         None
     }
 
