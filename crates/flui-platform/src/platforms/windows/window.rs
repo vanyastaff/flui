@@ -835,6 +835,7 @@ impl WindowsWindow {
                 }),
                 publish_hold: std::cell::Cell::new(0),
                 limits_waived: std::cell::Cell::new(false),
+                visibility_muted: std::cell::Cell::new(false),
                 // A window whose reveal waits for its first frame is visible to
                 // the runtime already: its frames must run to earn the reveal.
                 last_visibility_dispatched: std::cell::Cell::new(
@@ -921,7 +922,13 @@ impl WindowsWindow {
         let Some(mode) = mode else {
             return;
         };
+        super::platform::with_window_context(self.hwnd, "show_first", |ctx| {
+            ctx.begin_first_show(mode);
+        });
         self.show_native(first_show_command(mode));
+        super::platform::with_window_context(self.hwnd, "show_first", |ctx| {
+            ctx.end_first_show(mode);
+        });
         // SAFETY: a plain call on this wrapper's window handle.
         if let Err(error) = unsafe { UpdateWindow(self.hwnd) }.ok() {
             tracing::warn!(hwnd = ?self.hwnd, ?error, "UpdateWindow failed after the first show");
@@ -1451,21 +1458,38 @@ impl WindowsWindow {
     }
 
     /// Take a hidden maximized or minimized window back to its normal rectangle
-    /// without showing it: `SW_RESTORE` would show it. The state bits go and the
-    /// window is moved to the rectangle it returns to.
+    /// without showing it.
+    ///
+    /// A maximized window loses its state bit and is moved to the rectangle it
+    /// returns to. The system will not drop a minimized window's state bit, so
+    /// that one is restored and hidden again; the show and the hide are not the
+    /// window appearing, and the runtime hears neither.
     fn restore_hidden(&self) {
+        let iconic = unsafe { IsIconic(self.hwnd) }.as_bool();
+        if iconic {
+            super::platform::with_window_context(self.hwnd, "restore_hidden", |ctx| {
+                let _hold = ctx.hold_publishing();
+                ctx.visibility_muted.set(true);
+                self.show_native(SW_RESTORE);
+                self.show_native(SW_HIDE);
+                ctx.visibility_muted.set(false);
+            });
+            return;
+        }
         let Some(normal) = restore_rectangle(self.hwnd) else {
             return;
         };
+        // The mode it ends in is set first: the `WM_SIZE` the move sends then
+        // sees a window that was not minimized, so it reports no visibility for
+        // a window that stays hidden.
+        super::platform::with_window_context(self.hwnd, "restore_hidden", |ctx| {
+            ctx.mode.set(NativeMode::Normal);
+        });
         // SAFETY: plain style and position calls on this wrapper's window; a
         // stale handle only makes them fail.
         unsafe {
             let style = GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32;
-            SetWindowLongPtrW(
-                self.hwnd,
-                GWL_STYLE,
-                (style & !(WS_MAXIMIZE.0 | WS_MINIMIZE.0)) as isize,
-            );
+            SetWindowLongPtrW(self.hwnd, GWL_STYLE, (style & !WS_MAXIMIZE.0) as isize);
             if let Err(error) = SetWindowPos(
                 self.hwnd,
                 None,
@@ -1478,17 +1502,6 @@ impl WindowsWindow {
                 tracing::warn!(hwnd = ?self.hwnd, ?error, "SetWindowPos (restore hidden) failed");
             }
         }
-        super::platform::with_window_context(self.hwnd, "restore_hidden", |ctx| {
-            // A fullscreen window that was minimized is fullscreen again; any
-            // other mode is the normal one.
-            let mode = ctx.mode.get();
-            ctx.mode.set(
-                mode.fullscreen_bounds()
-                    .map_or(NativeMode::Normal, |restore_bounds| {
-                        NativeMode::Fullscreen { restore_bounds }
-                    }),
-            );
-        });
     }
 
     /// Hide the window. A window whose first show was still to come stays
@@ -2110,6 +2123,9 @@ impl PlatformWindow for WindowsWindow {
                                 message: error.to_string(),
                             }
                         })?;
+                        if let Some(mode) = first {
+                            ctx.begin_first_show(mode);
+                        }
                         let command = if let Some(mode) = first {
                             first_show_command(mode)
                         } else if placement.showCmd == SW_SHOWMINIMIZED.0 as u32 {
@@ -2123,6 +2139,9 @@ impl PlatformWindow for WindowsWindow {
                         };
                         // Return value describes previous visibility, not success.
                         let _ = ShowWindow(self.hwnd, command);
+                        if let Some(mode) = first {
+                            ctx.end_first_show(mode);
+                        }
                         Ok(())
                     }
                 })
