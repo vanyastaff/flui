@@ -100,6 +100,29 @@ pub struct PlatformHandlers {
     pub wake_deadline: Option<Arc<dyn Fn() -> Option<web_time::Instant> + Send + Sync>>,
 }
 
+/// A session-end hook while it runs, back in its slot when the guard drops.
+struct RunningSessionEndHook<'a> {
+    handlers: &'a Mutex<PlatformHandlers>,
+    hook: Option<SessionEndHook>,
+}
+
+impl Drop for RunningSessionEndHook<'_> {
+    fn drop(&mut self) {
+        let Some(hook) = self.hook.take() else { return };
+        let displaced = {
+            let mut handlers = self.handlers.lock();
+            if handlers.session_end.is_none() {
+                handlers.session_end = Some(hook);
+                None
+            } else {
+                Some(hook)
+            }
+        };
+        // Outside the lock: a capture's destructor is user code.
+        drop(displaced);
+    }
+}
+
 impl PlatformHandlers {
     /// Create new empty handler registry
     pub fn new() -> Self {
@@ -113,6 +136,28 @@ impl PlatformHandlers {
             exit_policy: None,
             wake_deadline: None,
         }
+    }
+
+    /// Ask the registered session-end hook about `phase`, answering
+    /// [`SessionEndAnswer::Proceed`] when none is registered.
+    ///
+    /// The hook runs with no lock of `handlers` held, so it may register
+    /// another hook or call back into the platform. It is out of its slot while
+    /// it runs, and is put back afterwards even when it panics, unless a hook
+    /// registered in the meantime took the slot: then the older one is dropped.
+    #[must_use]
+    pub fn run_session_end(handlers: &Mutex<Self>, phase: SessionEndPhase) -> SessionEndAnswer {
+        let Some(hook) = handlers.lock().session_end.take() else {
+            return SessionEndAnswer::Proceed;
+        };
+        let mut running = RunningSessionEndHook {
+            handlers,
+            hook: Some(hook),
+        };
+        running
+            .hook
+            .as_mut()
+            .map_or(SessionEndAnswer::Proceed, |hook| hook(phase))
     }
 
     /// Invoke the quit callback if registered
@@ -1311,6 +1356,83 @@ mod tests {
     use crate::shared::{hwnd_affinity, owner_signal};
 
     use super::*;
+
+    #[test]
+    fn session_end_hook_runs_without_the_lock_and_returns_to_its_slot() {
+        let handlers = Mutex::new(PlatformHandlers::new());
+        assert_eq!(
+            PlatformHandlers::run_session_end(&handlers, SessionEndPhase::Ending),
+            SessionEndAnswer::Proceed,
+            "no hook registered"
+        );
+
+        let phases = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&phases);
+        let handlers = Arc::new(handlers);
+        let locked = Arc::clone(&handlers);
+        handlers.lock().session_end = Some(Box::new(move |phase| {
+            recorded.lock().push(phase);
+            // Not held while the hook runs: this would deadlock otherwise.
+            drop(locked.lock());
+            SessionEndAnswer::Block
+        }));
+
+        for phase in [SessionEndPhase::Query, SessionEndPhase::Ending] {
+            assert_eq!(
+                PlatformHandlers::run_session_end(&handlers, phase),
+                SessionEndAnswer::Block
+            );
+        }
+        assert_eq!(
+            *phases.lock(),
+            [SessionEndPhase::Query, SessionEndPhase::Ending],
+            "the hook came back after each run"
+        );
+    }
+
+    #[test]
+    fn session_end_hook_survives_its_own_panic() {
+        let handlers = Mutex::new(PlatformHandlers::new());
+        let runs = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&runs);
+        handlers.lock().session_end = Some(Box::new(move |_| {
+            assert!(
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0,
+                "the first run fails"
+            );
+            SessionEndAnswer::Proceed
+        }));
+
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            PlatformHandlers::run_session_end(&handlers, SessionEndPhase::Ending)
+        }));
+        assert!(outcome.is_err());
+        assert_eq!(
+            PlatformHandlers::run_session_end(&handlers, SessionEndPhase::Ending),
+            SessionEndAnswer::Proceed
+        );
+        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn session_end_hook_registered_while_running_replaces_the_running_one() {
+        let handlers = Arc::new(Mutex::new(PlatformHandlers::new()));
+        let registering = Arc::clone(&handlers);
+        handlers.lock().session_end = Some(Box::new(move |_| {
+            registering.lock().session_end = Some(Box::new(|_| SessionEndAnswer::Block));
+            SessionEndAnswer::Proceed
+        }));
+
+        assert_eq!(
+            PlatformHandlers::run_session_end(&handlers, SessionEndPhase::Ending),
+            SessionEndAnswer::Proceed
+        );
+        assert_eq!(
+            PlatformHandlers::run_session_end(&handlers, SessionEndPhase::Ending),
+            SessionEndAnswer::Block,
+            "the newer hook kept the slot"
+        );
+    }
 
     fn accepted_focus_observations_survive_dispatch_unwind() {
         accepted_status_observations_survive_dispatch_unwind(false);
