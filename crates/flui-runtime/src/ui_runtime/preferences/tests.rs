@@ -442,3 +442,94 @@ pub(crate) fn haptics_preference_suppresses_both_tiers() {
     // The runtime reaches the window weakly; the test owns it until here.
     drop(window);
 }
+
+/// A frame-aligned request plays only with a frame that reached `present()`
+/// (ADR-0210 §4). `NotShown` never reached the screen; `NoPresent` found no
+/// damage, so the screen kept the previous frame and the change the request
+/// confirms never showed. Both leave the request to its deadline, where it
+/// resolves `Suppressed` without reaching the backend.
+pub(crate) fn frame_aligned_haptics_play_only_with_a_presented_frame() {
+    use crate::{presentation::PresentationWindow, runtime_services::RuntimeHostServices};
+    use crate::{sink::SubmitVerdict, testing::ScriptedSink};
+    use flui_platform_api::HapticFeedback;
+    use flui_platform_api::haptics::{FakeHaptics, HapticOutcome, HapticRequest, HapticTiming};
+    for verdict in [
+        SubmitVerdict::Presented,
+        SubmitVerdict::NotShown,
+        SubmitVerdict::NoPresent,
+    ] {
+        let haptics = Arc::new(FakeHaptics::new());
+        let window = Arc::new(HapticWindow {
+            inner: flui_platform::headless_platform()
+                .open_window(flui_platform::traits::WindowOptions::default())
+                .expect("window"),
+            haptics: haptics.clone(),
+        });
+        let clock = ManualClock::new();
+        let mut runtime = UiRuntime::new(
+            PresentationWindow::new(window.clone(), None),
+            1.0,
+            RuntimeHostServices::new(
+                Arc::new(|| {}),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                &flui_painting::FontCollection::new(),
+                flui_scheduler::ClockSource::Manual(clock.clone()),
+            ),
+        )
+        .expect("runtime");
+        runtime
+            .attach_root_widget_with_size(&flui_widgets::SizedBox::square(20.0), 800.0, 600.0)
+            .expect("root");
+        let handle = runtime.haptics();
+        let delivered = Rc::new(RefCell::new(Vec::new()));
+        let sink_of = Rc::clone(&delivered);
+        let _observer = handle.observe(move |ticket, outcome| {
+            sink_of.borrow_mut().push((ticket, outcome));
+        });
+        // Queued before the first frame, which paints the root.
+        let HapticOutcome::Queued(ticket) = handle.perform(
+            HapticFeedback::DragLift,
+            HapticRequest::new(HapticTiming::FramePresented),
+        ) else {
+            panic!("{verdict:?}: a frame-aligned request queues");
+        };
+        let mut sink = ScriptedSink::new(move |_, _| verdict);
+        let pump = |runtime: &mut UiRuntime, sink: &mut ScriptedSink| {
+            let _ = runtime.pump(
+                &mut crate::pump::SampledClock(MonotonicClock::now(&clock)),
+                sink,
+            );
+        };
+        pump(&mut runtime, &mut sink);
+        assert!(
+            sink.submit_calls > 0,
+            "{verdict:?}: the first frame painted"
+        );
+        let presented = verdict == SubmitVerdict::Presented;
+        assert_eq!(
+            haptics.feedback(),
+            if presented {
+                vec![HapticFeedback::DragLift]
+            } else {
+                Vec::new()
+            },
+            "{verdict:?}: only a presented frame plays the request"
+        );
+        // Past any deadline: the request has resolved and been delivered.
+        clock.advance(Duration::from_secs(1));
+        pump(&mut runtime, &mut sink);
+        pump(&mut runtime, &mut sink);
+        let expected = if presented {
+            HapticOutcome::Submitted
+        } else {
+            HapticOutcome::Suppressed
+        };
+        assert_eq!(*delivered.borrow(), [(ticket, expected)], "{verdict:?}");
+        if !presented {
+            assert_eq!(haptics.calls(), [], "{verdict:?}: never played late");
+        }
+        drop(runtime);
+        drop(window);
+    }
+}

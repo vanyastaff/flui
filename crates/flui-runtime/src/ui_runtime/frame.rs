@@ -479,8 +479,6 @@ impl UiRuntime {
         );
         let committed_revision = presentation.commit_tree_revision();
         presentation.publish_input_regions();
-        // The frame is on screen: frame-aligned haptics play with it.
-        presentation.haptics().frame_presented();
         tracing::trace!(
             target: "flui.frame",
             event = "tree_revision_committed",
@@ -716,6 +714,10 @@ impl UiRuntime {
             match render_verdict {
                 SubmitVerdict::Presented => {
                     self.commit_painted_frame(producer);
+                    // The frame reached `present()`: frame-aligned haptics
+                    // play with it (ADR-0210 §4). Only this arm plays them;
+                    // the others leave the queue to its deadline.
+                    producer.haptics().frame_presented();
                     deliver_overlay_style = true;
                     presented = true;
                     producer.record_frame_rendered();
@@ -738,6 +740,11 @@ impl UiRuntime {
                 }
                 SubmitVerdict::NoPresent => {
                     self.commit_painted_frame(producer);
+                    // No frame-aligned haptics: the backend found no damage,
+                    // so the screen kept the previous frame and the change a
+                    // queued request confirms never showed. A request queued
+                    // before that previous frame already resolved with it; the
+                    // rest resolve `Suppressed` at their deadline.
                     deliver_overlay_style = true;
                     // Nothing was owed and nothing was lost — the surface was
                     // never asked to show anything, so a withheld streak is
@@ -791,6 +798,9 @@ impl UiRuntime {
                 // clears is the common case; the cap is what makes the
                 // pathological one terminate.
                 SubmitVerdict::NotShown => {
+                    // The frame never reached the screen, so frame-aligned
+                    // haptics wait: a retry that presents before their
+                    // deadline plays them, otherwise they resolve `Suppressed`.
                     self.commit_painted_frame(producer);
                     producer.record_frame_dropped();
                     let streak = producer.record_frame_withheld();

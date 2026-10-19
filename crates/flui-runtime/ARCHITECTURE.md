@@ -986,10 +986,12 @@ failures in competition.
 Each presentation owns a `HapticsHost` (ADR-0210 §4) on its gesture clock,
 playing on its window's actuator through a weak reference, with the platform
 row's deadline factor and the window's current refresh period. A frame the sink
-accepts plays the queued requests whose deadline has not passed
-(`commit_painted_frame`); a frame that paints nothing presents nothing, so a
-request with no visible change resolves to `Suppressed` at its deadline, as the
-ADR wants feedback only with the change it confirms. Resolution runs no user
+reports `Presented` plays the queued requests whose deadline has not passed; a
+frame that paints nothing, one the backend found no damage in (`NoPresent`: the
+screen keeps the previous frame) and one it could not show (`NotShown`) present
+nothing, so their requests wait for a later presented frame or resolve to
+`Suppressed` at their deadline, as the ADR wants feedback only with the change it
+confirms. Resolution runs no user
 code: outcomes wait in the mailbox, and the observer runs in the
 `HapticDelivery` sampling stage, under the presentation's failure custody, on
 frame and background owner turns alike. The host's next wake (the first time
@@ -1001,7 +1003,8 @@ its queue the same way; closing runs one final delivery
 pass, or, after a failure, withdraws the observers without running them. Any
 number of observers register through `HapticsHandle::observe`; each outcome
 reaches every one of them once, and leaves the mailbox when all have it. **Tests:** `frame_presented_widget_haptics_follow_the_presentation`,
-`haptics_preference_suppresses_both_tiers`, and the queue's own rows in
+`haptics_preference_suppresses_both_tiers`,
+`frame_aligned_haptics_play_only_with_a_presented_frame`, and the queue's own rows in
 `flui-interaction` (`frame_presented_haptics_play_with_the_frame` and the
 mailbox rows ADR-0210 names, with `several_observers_each_receive_every_outcome_once`
 and `removing_an_observer_releases_the_head_it_held`).
