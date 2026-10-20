@@ -1596,7 +1596,7 @@ impl WindowsPlatform {
                             if ctx.in_size_move.get() {
                                 ctx.request_frame();
                             } else {
-                                WindowsWindow::redraw_native(hwnd);
+                                ctx.redraw_if_still_owned(hwnd);
                             }
                         }
                     }

@@ -182,6 +182,20 @@ fn rescaled(extent: i32, ratio: f64) -> Option<i32> {
 }
 
 impl super::platform::WindowContext {
+    /// Ask for a frame of `hwnd` after a callback ran, unless that callback
+    /// closed the window: the handle may by then name a window opened in its
+    /// place, which this context's slot no longer is.
+    pub(super) fn redraw_if_still_owned(&self, hwnd: HWND) {
+        use windows::Win32::UI::WindowsAndMessaging::{GWLP_USERDATA, GetWindowLongPtrW};
+
+        // SAFETY: a pointer-sized read of the window's userdata slot; nothing
+        // is dereferenced.
+        let slot = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
+        if slot == std::ptr::from_ref(self) as isize {
+            super::window::WindowsWindow::redraw_native(hwnd);
+        }
+    }
+
     /// `WM_DPICHANGED`: the window is now at `dpi`, and the system suggests
     /// the rectangle `suggested` for it.
     pub(super) fn change_dpi(&self, hwnd: HWND, dpi: u16, suggested: Option<RECT>) {
@@ -227,7 +241,7 @@ impl super::platform::WindowContext {
                 });
                 self.publish_window_state(hwnd);
                 self.dispatch_resize(size);
-                super::window::WindowsWindow::redraw_native(hwnd);
+                self.redraw_if_still_owned(hwnd);
             }
         }
         // After the state above is current: the hint wakes the owner, which
