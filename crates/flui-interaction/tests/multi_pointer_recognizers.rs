@@ -1598,6 +1598,10 @@ fn tap_and_drag_resolves_through_the_shared_arena() {
                 double_tap_bounce_yields_no_tap_of_its_own,
             ),
             (
+                "a bounce outliving the first attempt yields no tap",
+                a_bounce_outliving_the_first_attempt_yields_no_tap,
+            ),
+            (
                 "slops in root pixels inside a transform",
                 slops_measure_root_pixels_inside_a_transform,
             ),
@@ -1761,6 +1765,52 @@ fn double_tap_minimum_interval(gap_ms: u64) {
 
 fn double_tap_rejects_39ms_bounce() {
     double_tap_minimum_interval(39);
+}
+
+/// A bounce still down when the first attempt times out keeps its hold until
+/// it lifts: its lift is no tap, though the first tap has fired.
+fn a_bounce_outliving_the_first_attempt_yields_no_tap() {
+    use flui_interaction::DoubleTapGestureRecognizer;
+    for kind in [PointerKind::Mouse, PointerKind::Touch] {
+        let rig = Rig::new();
+        let taps = Rc::new(Cell::new(0));
+        let tapped = taps.clone();
+        let tap = TapGestureRecognizer::builder(rig.binding.arena().clone())
+            .on_tap(move |_| tapped.set(tapped.get() + 1))
+            .build();
+        let double = DoubleTapGestureRecognizer::builder(rig.binding.arena().clone())
+            .on_double_tap(|_| {})
+            .build();
+        rig.attach(&tap, None);
+        rig.attach(&double, None);
+        let at = Offset::new(100.0, 100.0);
+        let send = |lifts: bool| {
+            let event = if lifts {
+                make_up_event_for_id(id(1), at, kind).expect("finite primary Up")
+            } else {
+                make_down_event_for_id(id(1), at, kind).expect("finite primary Down")
+            };
+            rig.send(&event);
+            rig.frame();
+        };
+        send(false);
+        rig.advance(10);
+        send(true);
+        rig.advance(20);
+        send(false);
+        rig.advance(400);
+        rig.binding.arena().poll_deadlines();
+        rig.frame();
+        assert_eq!(
+            taps.get(),
+            1,
+            "{kind:?}: the first tap fires at its timeout"
+        );
+        rig.advance(10);
+        send(true);
+        assert_eq!(taps.get(), 1, "{kind:?}: the bounce's lift is no tap");
+        assert!(rig.binding.arena().is_empty(), "{kind:?}");
+    }
 }
 
 /// The root-space event of a recognizer whose local space is `zoom` times

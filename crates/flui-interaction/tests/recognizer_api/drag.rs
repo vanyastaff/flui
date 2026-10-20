@@ -228,6 +228,83 @@ fn a_successor_starts_the_drag_only_past_its_own_slop() {
 /// root-space fling is that admitted fling carried through the node's
 /// transform, with no perpendicular component the axis dropped.
 fn axial_fling_limits_read_the_drag_axis() {
+    type Transform = fn(f64, f64) -> (f64, f64);
+    let identity: Transform = |x, y| (x, y);
+    // A quarter turn at twice the scale: local x runs along root y.
+    let turned: Transform = |x, y| (-2.0 * y, 2.0 * x);
+    // A horizontal drag, or a free drag the rails lock onto its horizontal
+    // start.
+    let horizontal =
+        |arena: GestureArena| DragGestureRecognizer::builder(arena, DragAxis::Horizontal);
+    let railed = |arena: GestureArena| {
+        DragGestureRecognizer::builder(arena, DragAxis::Free)
+            .axis_lock(flui_interaction::AxisLock::Rails)
+    };
+    type Builder = fn(GestureArena) -> flui_interaction::DragGestureRecognizerBuilder;
+    // The drag, its local release velocity in px/s, the node's local-to-root
+    // transform, and the local and root flings the drag reports for it.
+    type Row = (
+        &'static str,
+        Builder,
+        (f64, f64),
+        Transform,
+        Option<((f64, f64), (f64, f64))>,
+    );
+    let rows: [Row; 5] = [
+        (
+            "off-axis release",
+            horizontal,
+            (40.0, 600.0),
+            identity,
+            None,
+        ),
+        (
+            "diagonal capped on its axis",
+            horizontal,
+            (7000.0, 7000.0),
+            identity,
+            Some(((7000.0, 0.0), (7000.0, 0.0))),
+        ),
+        (
+            "perpendicular dropped in the root",
+            horizontal,
+            (7000.0, 100_000.0),
+            identity,
+            Some(((7000.0, 0.0), (7000.0, 0.0))),
+        ),
+        (
+            "carried through a turned, scaled node",
+            horizontal,
+            (3000.0, 500.0),
+            turned,
+            Some(((3000.0, 0.0), (0.0, 6000.0))),
+        ),
+        (
+            "railed free drag",
+            railed,
+            (7000.0, 100_000.0),
+            identity,
+            Some(((7000.0, 0.0), (7000.0, 0.0))),
+        ),
+    ];
+    // Each row reports on its own, so one failing row cannot hide another.
+    let mut failed = Vec::new();
+    for (name, builder, velocity, to_root, fling) in rows {
+        let row = std::panic::catch_unwind(|| fling_row(builder, velocity, to_root, fling));
+        if row.is_err() {
+            failed.push(name);
+        }
+    }
+    assert!(failed.is_empty(), "fling rows failed: {failed:?}");
+}
+
+/// One row of [`axial_fling_limits_read_the_drag_axis`].
+fn fling_row(
+    builder: fn(GestureArena) -> flui_interaction::DragGestureRecognizerBuilder,
+    (vx, vy): (f64, f64),
+    to_root: fn(f64, f64) -> (f64, f64),
+    fling: Option<((f64, f64), (f64, f64))>,
+) {
     use flui_foundation::geometry::Point;
     use flui_interaction::Velocity;
     use flui_platform_api::{
@@ -237,37 +314,12 @@ fn axial_fling_limits_read_the_drag_axis() {
             PointerRelease, PointerSample,
         },
     };
-    type Transform = fn(f64, f64) -> (f64, f64);
-    let identity: Transform = |x, y| (x, y);
-    // A quarter turn at twice the scale: local x runs along root y.
-    let turned: Transform = |x, y| (-2.0 * y, 2.0 * x);
-    // Local release velocity in px/s, the node's local-to-root transform, and
-    // the local and root flings the drag reports for it.
-    type Row = ((f64, f64), Transform, Option<((f64, f64), (f64, f64))>);
-    let rows: [Row; 4] = [
-        ((40.0, 600.0), identity, None),
-        (
-            (7000.0, 7000.0),
-            identity,
-            Some(((7000.0, 0.0), (7000.0, 0.0))),
-        ),
-        (
-            (7000.0, 100_000.0),
-            identity,
-            Some(((7000.0, 0.0), (7000.0, 0.0))),
-        ),
-        (
-            (3000.0, 500.0),
-            turned,
-            Some(((3000.0, 0.0), (0.0, 6000.0))),
-        ),
-    ];
-    for ((vx, vy), to_root, fling) in rows {
+    {
         let arena =
             GestureArena::binding_driven(std::sync::Arc::new(flui_interaction::ManualClock::new()));
         let ends = Rc::new(RefCell::new(Vec::new()));
         let e = ends.clone();
-        let drag = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal)
+        let drag = builder(arena.clone())
             .on_end(move |details| {
                 e.borrow_mut()
                     .push((details.fling_velocity(), details.global_fling_velocity()));

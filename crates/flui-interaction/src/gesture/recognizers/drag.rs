@@ -794,15 +794,13 @@ impl DragGestureRecognizer {
                 Ok(now) => (now, None),
                 Err(failure) => (active.state.borrow().last_time, Some(failure)),
             };
-        let (velocity, global_velocity, position, global) = {
+        let (velocity, measured, global_velocity, position, global) = {
             let mut state = active.state.borrow_mut();
             let now = state
                 .timeline
                 .instant(dispatch.and_then(|d| event_time(d.local)), clock);
-            let velocity = Velocity::new(on_rail(
-                state.velocity_tracker.velocity_at(now).pixels_per_second,
-                rail,
-            ));
+            let measured = state.velocity_tracker.velocity_at(now).pixels_per_second;
+            let velocity = Velocity::new(on_rail(measured, rail));
             let global_now = state
                 .global_timeline
                 .instant(dispatch.and_then(|d| event_time(d.global)), clock);
@@ -815,7 +813,7 @@ impl DragGestureRecognizer {
                         d.global.position().unwrap_or(state.last_global_position),
                     )
                 });
-            (velocity, global_velocity, position, global)
+            (velocity, measured, global_velocity, position, global)
         };
         // The fling limits apply to the motion the drag follows: an axial
         // drag's threshold and cap read its axis, never the 2D speed.
@@ -827,9 +825,11 @@ impl DragGestureRecognizer {
         } else {
             Velocity::ZERO
         };
+        // The transform is read off the same unprojected motion measured in
+        // both spaces; a rail applied to one side alone would misread it.
         let global_fling_velocity = Velocity::new(to_root(
             fling_velocity.pixels_per_second,
-            velocity.pixels_per_second,
+            measured,
             global_velocity.pixels_per_second,
         ));
         let retire = || {

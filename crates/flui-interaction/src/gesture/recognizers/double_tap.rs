@@ -204,11 +204,6 @@ impl DoubleTapGestureRecognizer {
             let candidate = RoutePanic::capture(|| entry.release());
             RoutePanic::preserve_first(&mut first, candidate, "double tap hold release");
         }
-        RoutePanic::preserve_first(
-            &mut first,
-            RoutePanic::capture(|| self.end_bounce()),
-            "double tap bounce withdrawal",
-        );
         let candidate = RoutePanic::capture(|| {
             invoke_callback(
                 self.callbacks.on_double_tap_cancel.clone(),
@@ -471,12 +466,26 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         }
     }
     fn cancel(&self) -> CancelOutcome {
-        if self.contact.current().is_none()
-            && matches!(*self.gesture.borrow(), DoubleTapState::Ready)
-        {
+        let idle = self.contact.current().is_none()
+            && matches!(*self.gesture.borrow(), DoubleTapState::Ready);
+        let bounced = self.bounce.borrow().is_some();
+        if idle && !bounced {
             return CancelOutcome::Idle;
         }
-        self.retire_attempt(self.details(), true);
+        // Cancellation ends everything this recognizer holds, the hold on a
+        // bounced contact included; an expiring attempt leaves that hold to
+        // the contact's own end.
+        let mut first = if idle {
+            None
+        } else {
+            RoutePanic::capture(|| self.retire_attempt(self.details(), true))
+        };
+        RoutePanic::preserve_first(
+            &mut first,
+            RoutePanic::capture(|| self.end_bounce()),
+            "double tap bounce withdrawal",
+        );
+        finish_containment(first, std::thread::panicking());
         CancelOutcome::Cancelled
     }
 }
@@ -538,12 +547,6 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
                 });
                 arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
                     entry.release_with_recovery(scope);
-                });
-            }
-            let bounce = self.bounce.borrow_mut().take();
-            if let Some(entry) = bounce {
-                arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
-                    entry.reject_without_self_with_recovery(scope);
                 });
             }
             let preserving = recovery.has_failure();
