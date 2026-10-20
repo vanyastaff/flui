@@ -475,6 +475,11 @@ pub(crate) fn a_drag_drops_on_the_target_that_accepted_its_last_move() {
         DropHover::Accepting(TransferActions::MOVE)
     );
     laid.dispatch_pointer_up(inside(DONE).0, inside(DONE).1);
+    assert_eq!(
+        laid.window().haptic_actuator().feedback(),
+        [HapticFeedback::DragLift],
+        "the drop is felt with the frame that shows it, not before"
+    );
     settle(&mut laid);
     assert_eq!(shared.board(), moved_alice());
     assert_eq!(

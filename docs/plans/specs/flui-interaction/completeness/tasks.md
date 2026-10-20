@@ -109,11 +109,11 @@
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
-| T36 | DirectManipulation: `Scroll` с фазами и `PanZoom`, прокачка, свой запрос кадра, модальный цикл размера | P8, S6 | T03, T13, T21 | merged |
-| T37 | OLE DnD: источник и цель, отложенный старт, кадры всем рантаймам, перерисовка второго окна | P8, D5 | T28 | merged |
-| T38 | Haptics Windows: перо; `InputHapticsManager` — `Unavailable` | P8, H1 | T16 | merged |
+| T36 | DirectManipulation: `Scroll` с фазами и `PanZoom`, прокачка, свой запрос кадра, модальный цикл размера | P8, S6 | T03, T13, T21 | merged; на тачпаде не исполнено (V1) |
+| T37 | OLE DnD: источник и цель, отложенный старт, кадры всем рантаймам, перерисовка второго окна | P8, D5 | T28 | merged; без настоящей мыши и другого приложения (V3) |
+| T38 | Haptics Windows: перо; `InputHapticsManager` — `Unavailable` | P8, H1 | T16 | merged; перо не вибрировало (V2) |
 | T38a | Подъём `windows` с `InputHapticsManager` | P8 | внешний релиз | blocked-external |
-| T39 | Golden-записи и `xtask device windows-input` | R8 | T36, T37 | merged |
+| T39 | Golden-записи и `xtask device windows-input` | R8 | T36, T37 | merged; golden DirectManipulation написан вручную, R8 для тачпада не выполнено (V1) |
 
 ## Ярус 10 — остальные ОС (на каждую ОС: ввод, DnD, haptics, IME, инъекция и записи)
 
@@ -121,10 +121,24 @@
 |---|---|---|---|---|
 | T40a–e | macOS: ввод · DnD · haptics · IME-проверка · `CGEvent` и записи | P9, P14, R8 | T12 и ядро функции (T21, T28, T16) | todo |
 | T41a–e | iOS: ввод · DnD · haptics · `UITextInput` · XCUITest и записи | P10, P14, R8 | T12, T09 и ядро функции | todo |
-| T42a–e | Android: ввод · DnD · haptics · `InputConnection` · instrumentation и записи | P11, P14, R8 | T12, T09 и ядро функции | merged |
+| T42a–e | Android: ввод · DnD · haptics · `InputConnection` · `adb shell input`, `uinput` и записи (ADR-0215 §8) | P11, P14, R8 | T12, T09 и ядро функции | merged; часть путей не исполнена (V4), таблица порядка IME не построена (V6) |
 | T43a–c | Linux: `composing` и `Unavailable`-пути · uinput/libei и записи · после T43x — перо, планшет, DnD | P12, R8 | T12 | todo |
 | T43x | Подъём winit до 0.31 | P12 | внешний релиз | blocked-external |
-| T44a–e | Web: ввод и синхронный `preventDefault` · HTML DnD · вибрация · IME (`EditContext`/`<textarea>`) · BiDi и записи | P13, P14, P15, R8, Q4 | T12 и ядро функции; спека web-canvas-input-ownership | merged |
+| T44a–e | Web: ввод и синхронный `preventDefault` · HTML DnD · вибрация · IME (`EditContext`/`<textarea>`) · BiDi и записи | P13, P14, P15, R8, Q4 | T12 и ядро функции; спека web-canvas-input-ownership | merged; исполнено только в headless Chrome (V5), таблица порядка IME не построена (V6) |
+
+## Не исполнено на железе и не построено
+
+Слитые задачи, чей нативный путь собран и проверен синтетически, но не шёл на устройстве, которое его
+сертифицирует. Строка уходит, когда прогон показан в PR и в `docs/platform-parity.md`.
+
+| ID | Задачи | Что не исполнено | Что нужно |
+|---|---|---|---|
+| V1 | T36, T39 | Прокрутка и pinch DirectManipulation не шли на прецизионном тачпаде: окно, прокачка, запрос кадра, пауза размера и teardown исполнены на настоящем окне с синтетическими показаниями viewport. `win32_direct_manipulation.jsonl` написан вручную по документированному порядку колбэков (так и сказано в его `provenance`), а не записан; R8 для тачпада не выполнено | Прогон `native-capture` на Windows с прецизионным тачпадом: записанный golden вместо рукописного и знаки осей из `crates/flui-platform/ARCHITECTURE.md` |
+| V2 | T38 | Ни одно перо не вибрировало: актуатор настоящего окна исполнен на хосте без haptic-пера, каждый запрос `Unavailable` | Прогон с пером, у которого есть `SimpleHapticsController` |
+| V3 | T37 | OLE DnD исполнен в одном процессе с синтетическим вводом (отложенный старт, кадры второго окна, drop в окно FLUI); ни с зажатой настоящей кнопкой мыши, ни с пером или касанием, ни в другое приложение | Ручной прогон перетаскивания мышью в другое приложение и из него |
+| V4 | T42a–e | Envelopes (API 36) и compositions не исполнены (у Galaxy S21 нет primitives); тачпад и стилус — только `uinput` и `input stylus`, без аппаратных; `CursorAnchorInfo`, Gboard и рукописный ввод не исполнены; DnD принят только окном самого probe | Устройство с API 36 и primitives, аппаратные тачпад и стилус, Gboard |
+| V5 | T44a–e | Всё исполнено в headless Chrome: вибрация без мотора, pinch трекпада из сконструированных событий, IME — путь Chrome без IME ОС и экранной клавиатуры; ни Safari, ни Firefox, ни трекпада | Прогоны в Safari и Firefox, с трекпадом, на телефоне с экранной клавиатурой |
+| V6 | T42d, T44d | Таблица порядка событий IME на ОС (P14) — одна строка проверки, `a_key_during_composition_is_the_input_methods` (Esc при композиции, Web и Android); порядок правок `TextStore` по ОС строками проверки не закреплён. Это шаги проверки для композиции и строки на каждый IME-путь (TSF, `InputConnection`, `EditContext`/`<textarea>`, затем T40d, T41d) | Решение владельца: строить здесь или в спеке text-ime |
 
 ## Ярус 11 — завершение
 

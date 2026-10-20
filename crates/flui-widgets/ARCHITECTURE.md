@@ -3272,7 +3272,12 @@ The `nested_scroll_channel` table holds the channel's rows, each scripted for to
 and mouse, and ADR-0169's nested fling and reveal witnesses (both axes, reversal,
 local bounce, nearest willing parent, same-controller rebuild, replacement,
 equal-edge cancellation, custom physics failure and fresh gesture recovery).
-`steady_state_dispatch_allocates_nothing` pins allocation-free steps.
+`steady_state_dispatch_through_several_links_allocates_nothing` pins allocation-free
+steps through a connection, a scrollable and a connection above the leaf, both while the
+leaf takes the step and while its remainder climbs to the outer scrollable. It is a unit
+test because the chain and the scroll owner are private; a mounted tree's pointer path
+allocates for reasons of its own, so a test through the widgets would not isolate the
+channel.
 
 ### `AnchoredDrag` is a `Scrollable` whose pixels are the drag's offset
 

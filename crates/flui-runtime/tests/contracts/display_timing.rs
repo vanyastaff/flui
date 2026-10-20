@@ -1,7 +1,8 @@
 //! What reads the display's refresh period once the host has delivered it
-//! (ADR-0236): the frame budget, the pointer resampler's window and the
-//! refresh-interval metric. Each row delivers a display through the host's own
-//! observation and reads the consequence through the public runtime.
+//! (ADR-0236): the frame budget, the pointer resampler's window, the
+//! refresh-interval metric and the haptic frame deadline. Each row delivers a
+//! display through the host's own observation and reads the consequence
+//! through the public runtime.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -355,6 +356,63 @@ fn unknown_refresh_period_uses_the_60_hz_fallback() {
     assert_eq!(DEFAULT_REFRESH_PERIOD, Duration::from_micros(16_667));
 }
 
+/// A frame-aligned haptic queued on a display gets that display's deadline:
+/// the factor times its period, read again after the window moves. The
+/// runtime's next wake is the earliest of its deadlines, so a request moves
+/// it only when its own deadline is the earliest.
+fn haptic_frame_deadline_follows_the_display() {
+    use flui_platform_api::HapticFeedback;
+    use flui_platform_api::haptics::{HapticOutcome, HapticRequest, HapticTiming};
+
+    // Two periods of a one-second display end after 900 ms, so that request
+    // never wakes the runtime before its other wakes or that bound; two
+    // periods of a 120 Hz display end before 50 ms (as do two 60 Hz frames,
+    // the deadline of a display read as unknown, which the first half tells
+    // apart).
+    const SLOW_US: u64 = 1_000_000;
+    const FAST_US: u64 = 8_333;
+    const SLOW_BOUND: Duration = Duration::from_millis(900);
+    const FAST_BOUND: Duration = Duration::from_millis(50);
+    let rig = rig();
+    // The next wake before and after one request is queued, and when.
+    let queue = |rig: &Rig| {
+        rig.read(|runtime, _| {
+            let before = runtime.next_wake();
+            let handle = runtime
+                .widgets()
+                .with_build_owner(|owner| owner.haptics_handle().cloned())
+                .expect("the presentation installs its haptics");
+            let queued = web_time::Instant::now();
+            let outcome = handle.perform(
+                HapticFeedback::Drop,
+                HapticRequest::new(HapticTiming::FramePresented),
+            );
+            assert!(matches!(outcome, HapticOutcome::Queued(_)), "{outcome:?}");
+            let after = runtime
+                .next_wake()
+                .expect("a queued request wakes the runtime at its deadline");
+            (before, queued, after)
+        })
+    };
+
+    rig.deliver(Some(rig.display(1, Some(SLOW_US))));
+    let (before, queued, after) = queue(&rig);
+    let earliest_other = before.map_or(queued + SLOW_BOUND, |wake| wake.min(queued + SLOW_BOUND));
+    assert!(
+        after >= earliest_other,
+        "a request on a one-second display woke the runtime after {:?}",
+        after.saturating_duration_since(queued)
+    );
+
+    rig.deliver(Some(rig.display(2, Some(FAST_US))));
+    let (_, queued, after) = queue(&rig);
+    assert!(
+        after <= queued + FAST_BOUND,
+        "after a move to a 120 Hz display a request woke the runtime after {:?}",
+        after.saturating_duration_since(queued)
+    );
+}
+
 fn display_change_runs_the_dpi_geometry_barrier() {
     let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let window: Arc<dyn PlatformWindow> = Arc::new(CountingWindow {
@@ -404,6 +462,10 @@ fn display_timing_contract() {
             (
                 "unknown_refresh_period_uses_the_60_hz_fallback",
                 unknown_refresh_period_uses_the_60_hz_fallback as fn(),
+            ),
+            (
+                "haptic_frame_deadline_follows_the_display",
+                haptic_frame_deadline_follows_the_display as fn(),
             ),
             (
                 "display_change_runs_the_dpi_geometry_barrier",
