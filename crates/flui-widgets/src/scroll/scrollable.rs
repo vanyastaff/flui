@@ -82,7 +82,10 @@ use crate::animated::VsyncScope;
 use crate::interaction::focus_reveal::{
     FocusRevealScope, RevealTarget, SharedRevealTarget, reveal_distance,
 };
-use crate::localization::axis_direction_from_axis_reverse_and_directionality;
+use crate::localization::{
+    BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, WidgetsLocalizations,
+    axis_direction_from_axis_reverse_and_directionality,
+};
 use crate::scroll::drag_autoscroll::{DragAutoscroll, DragAutoscrollAnchor};
 use crate::scroll::nested::{
     NestedScrollScope, OverscrollBehavior, ScrollCause, ScrollDevice,
@@ -1348,12 +1351,17 @@ impl ViewState<Scrollable> for ScrollableState {
                     }),
                     ctx,
                 );
+                let position_label = match BoxedWidgetsLocalizations::maybe_of(ctx) {
+                    Some(localizations) => localizations.scroll_position_label(),
+                    None => DefaultWidgetsLocalizations.scroll_position_label(),
+                };
                 let (viewport_semantics, position_semantics) = scroll_semantics(
                     a11y_controller,
                     scroll_direction,
                     axis_direction.is_reversed(),
                     move_to,
                     semantic_label,
+                    position_label,
                     // AccessKit's item: a line when scrolling vertically, a
                     // character when scrolling horizontally.
                     match scroll_direction {
@@ -1756,6 +1764,7 @@ fn scroll_semantics(
     reversed: bool,
     move_to: Rc<dyn Fn(f64, ScrollCause)>,
     label: Option<String>,
+    position_label: &'static str,
     item_step: f64,
 ) -> (Semantics, Semantics) {
     let mut semantics = Semantics::new()
@@ -1770,7 +1779,7 @@ fn scroll_semantics(
         .container(true)
         .explicit_child_nodes(true)
         .role(crate::SemanticsRole::Slider)
-        .label("Scroll position")
+        .label(position_label)
         .scroll_source(controller.position(), axis, reversed);
     let reveal_controller = controller.clone();
     let step: Rc<dyn Fn(bool, SemanticsScrollUnit)> = {
