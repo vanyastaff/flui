@@ -63,17 +63,17 @@ mod measured {
     use flui_sdk::hooks::FrameSnapshot as _;
     use flui_sdk::interaction::{
         ArenaMembership as _, BeginContactError as _, CancelOutcome as _, CompositionBranch as _,
-        CompositionError as _, CompositionKind as _, ContactId as _, ContactSnapshot as _,
-        ContestCancel as _, DragDownDetails as _, EventTime as _, FocusNode as _,
-        FocusSubscription as _, GestureArena as _, GestureArenaEntry as _, GestureArenaMember as _,
-        GestureBranches as _, GestureComposition as _, GestureContest as _,
-        GestureDisposition as _, GestureEndReason as _, GestureObservation as _,
-        GestureObserver as _, GestureProfiles as _, GestureRecognizer as _, GestureSettings as _,
-        GestureSettingsProvider as _, MotionRole as _, ObservedComposition as _,
-        ObservedMember as _, ObserverHandle as _, PanClaim as _, PointerDispatch as _,
-        PointerEvent as _, PointerEventExt as _, PointerId as _, PointerKind as _,
-        PointerKindSet as _, PrimaryContact as _, RejectionReason as _, SequencedBranch as _,
-        cancel_all as _,
+        CompositionError as _, CompositionKind as _, ContactEnd as _, ContactId as _,
+        ContactSnapshot as _, ContestCancel as _, DragDownDetails as _, EventTime as _,
+        FocusNode as _, FocusSubscription as _, GestureArena as _, GestureArenaEntry as _,
+        GestureArenaMember as _, GestureBranches as _, GestureComposition as _,
+        GestureContest as _, GestureDisposition as _, GestureEndReason as _,
+        GestureObservation as _, GestureObserver as _, GestureProfiles as _,
+        GestureRecognizer as _, GestureSettings as _, GestureSettingsProvider as _,
+        MotionRole as _, ObservedComposition as _, ObservedMember as _, ObserverHandle as _,
+        PanClaim as _, PointerDispatch as _, PointerEvent as _, PointerEventExt as _,
+        PointerId as _, PointerKind as _, PointerKindSet as _, PrimaryContact as _,
+        RejectionReason as _, SequencedBranch as _, cancel_all as _,
     };
     // A behavioural widget's gesture alternatives (ADR-0216).
     use flui_sdk::painting::Alignment as _;
@@ -353,6 +353,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::ArenaMembership;",
         "pub use flui_interaction::BeginContactError;",
         "pub use flui_interaction::CancelOutcome;",
+        "pub use flui_interaction::ContactEnd;",
         "pub use flui_interaction::ContactId;",
         "pub use flui_interaction::ContactSnapshot;",
         "pub use flui_interaction::DragDownDetails;",

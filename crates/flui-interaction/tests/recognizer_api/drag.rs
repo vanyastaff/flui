@@ -223,8 +223,10 @@ fn a_successor_starts_the_drag_only_past_its_own_slop() {
 }
 
 /// The fling threshold and cap read an axial drag's own component: a
-/// horizontal drag released mostly vertically does not fling, and a fast
-/// diagonal release is capped on its axis, not by its 2D speed.
+/// horizontal drag released mostly vertically does not fling, a fast
+/// diagonal release is capped on its axis, not by its 2D speed, and the
+/// root-space fling is that admitted fling carried through the node's
+/// transform, with no perpendicular component the axis dropped.
 fn axial_fling_limits_read_the_drag_axis() {
     use flui_foundation::geometry::Point;
     use flui_interaction::Velocity;
@@ -235,16 +237,41 @@ fn axial_fling_limits_read_the_drag_axis() {
             PointerRelease, PointerSample,
         },
     };
-    // Release velocity in px/s, and the fling the drag reports for it.
-    let rows: [((f64, f64), Option<f64>); 2] =
-        [((40.0, 600.0), None), ((7000.0, 7000.0), Some(7000.0))];
-    for ((vx, vy), fling) in rows {
+    type Transform = fn(f64, f64) -> (f64, f64);
+    let identity: Transform = |x, y| (x, y);
+    // A quarter turn at twice the scale: local x runs along root y.
+    let turned: Transform = |x, y| (-2.0 * y, 2.0 * x);
+    // Local release velocity in px/s, the node's local-to-root transform, and
+    // the local and root flings the drag reports for it.
+    type Row = ((f64, f64), Transform, Option<((f64, f64), (f64, f64))>);
+    let rows: [Row; 4] = [
+        ((40.0, 600.0), identity, None),
+        (
+            (7000.0, 7000.0),
+            identity,
+            Some(((7000.0, 0.0), (7000.0, 0.0))),
+        ),
+        (
+            (7000.0, 100_000.0),
+            identity,
+            Some(((7000.0, 0.0), (7000.0, 0.0))),
+        ),
+        (
+            (3000.0, 500.0),
+            turned,
+            Some(((3000.0, 0.0), (0.0, 6000.0))),
+        ),
+    ];
+    for ((vx, vy), to_root, fling) in rows {
         let arena =
             GestureArena::binding_driven(std::sync::Arc::new(flui_interaction::ManualClock::new()));
         let ends = Rc::new(RefCell::new(Vec::new()));
         let e = ends.clone();
         let drag = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal)
-            .on_end(move |details| e.borrow_mut().push(details.fling_velocity()))
+            .on_end(move |details| {
+                e.borrow_mut()
+                    .push((details.fling_velocity(), details.global_fling_velocity()));
+            })
             .build();
         let info = PointerInfo::new(
             PointerId::try_from(2).expect("nonzero contact"),
@@ -257,18 +284,28 @@ fn axial_fling_limits_read_the_drag_axis() {
                 PointerPosition::try_new(Point::new(x, y)).expect("finite sample"),
             )
         };
-        let down = PointerEvent::Down(PointerPress::new(
-            info,
-            PointerButton::PRIMARY,
-            buttons,
-            sample(0, 0.0, 0.0),
-        ));
-        drag.add_pointer(PointerDispatch::at_root(&down));
+        // The event in the node's space and in the root's.
+        let both = |make: &dyn Fn(PointerSample) -> PointerEvent, millis: u64, x: f64, y: f64| {
+            let (rx, ry) = to_root(x, y);
+            (make(sample(millis, x, y)), make(sample(millis, rx, ry)))
+        };
+        let (down, root_down) = both(
+            &|at| PointerEvent::Down(PointerPress::new(info, PointerButton::PRIMARY, buttons, at)),
+            0,
+            0.0,
+            0.0,
+        );
+        drag.add_pointer(PointerDispatch::new(&down, &root_down));
         arena.close(info.id);
         arena.drain_deferred_resolutions();
         let send = |millis: u64, x: f64, y: f64| {
-            let event = PointerEvent::Move(PointerMove::new(info, buttons, sample(millis, x, y)));
-            drag.handle_event(PointerDispatch::at_root(&event));
+            let (event, root) = both(
+                &|at| PointerEvent::Move(PointerMove::new(info, buttons, at)),
+                millis,
+                x,
+                y,
+            );
+            drag.handle_event(PointerDispatch::new(&event, &root));
         };
         // Cross the slop, rest past the stationary gap, then move at the
         // release velocity: only those last samples measure it.
@@ -279,25 +316,37 @@ fn axial_fling_limits_read_the_drag_axis() {
             y = vy * (step as f64) * 0.01;
             send(60 + step * 10, x, y);
         }
-        let up = PointerEvent::Up(PointerRelease::new(
-            info,
-            PointerButton::PRIMARY,
-            PointerButtons::NONE,
-            sample(110, x, y),
-        ));
-        drag.handle_event(PointerDispatch::at_root(&up));
+        let (up, root_up) = both(
+            &|at| {
+                PointerEvent::Up(PointerRelease::new(
+                    info,
+                    PointerButton::PRIMARY,
+                    PointerButtons::NONE,
+                    at,
+                ))
+            },
+            110,
+            x,
+            y,
+        );
+        drag.handle_event(PointerDispatch::new(&up, &root_up));
         arena.sweep(info.id);
         arena.drain_deferred_resolutions();
-        let reported = ends.borrow().first().copied().expect("the drag completes");
+        let (local, root) = ends.borrow().first().copied().expect("the drag completes");
+        let close = |reported: Velocity, (ex, ey): (f64, f64)| {
+            let pps = reported.pixels_per_second;
+            (pps.dx - ex).abs() < 1.0 && (pps.dy - ey).abs() < 1.0
+        };
         match fling {
-            None => assert_eq!(reported, Velocity::ZERO, "({vx}, {vy}) px/s"),
-            Some(along) => {
-                let pps = reported.pixels_per_second;
-                assert!(
-                    (pps.dx - along).abs() < 1.0 && pps.dy == 0.0,
-                    "({vx}, {vy}) px/s flings {pps:?}"
-                );
-            }
+            None => assert_eq!(
+                (local, root),
+                (Velocity::ZERO, Velocity::ZERO),
+                "({vx}, {vy}) px/s"
+            ),
+            Some((along, in_root)) => assert!(
+                close(local, along) && close(root, in_root),
+                "({vx}, {vy}) px/s flings {local:?} locally, {root:?} in the root"
+            ),
         }
         assert!(arena.is_empty());
     }

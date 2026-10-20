@@ -168,8 +168,9 @@ impl DragEndDetails {
         self.fling_velocity
     }
 
-    /// Presentation-space release motion, retaining the receiving node's
-    /// admitted fling threshold and cap. Cancellation gives zero.
+    /// [`Self::fling_velocity`] carried into presentation space through the
+    /// receiving node's transform, so it keeps the drag's axis, threshold and
+    /// cap. Cancellation gives zero.
     #[must_use]
     pub const fn global_fling_velocity(&self) -> Velocity {
         self.global_fling_velocity
@@ -826,15 +827,11 @@ impl DragGestureRecognizer {
         } else {
             Velocity::ZERO
         };
-        let admitted = fling_velocity.pixels_per_second;
-        let ratio = if along.dx.abs() >= along.dy.abs() && along.dx != 0.0 {
-            admitted.dx / along.dx
-        } else if along.dy != 0.0 {
-            admitted.dy / along.dy
-        } else {
-            0.0
-        };
-        let global_fling_velocity = Velocity::new(global_velocity.pixels_per_second * ratio);
+        let global_fling_velocity = Velocity::new(to_root(
+            fling_velocity.pixels_per_second,
+            velocity.pixels_per_second,
+            global_velocity.pixels_per_second,
+        ));
         let retire = || {
             let mut first = clock_failure;
             for contact in outgoing {
@@ -882,6 +879,36 @@ impl DragGestureRecognizer {
         CancelOutcome::Cancelled
     }
 }
+/// `local_vector` carried into root space by the map that took the local
+/// release velocity `local` to its root-space measurement `root`.
+///
+/// The two velocities measure one motion through the hit-test transform, so
+/// their complex quotient `root / local` is that transform's linear part,
+/// exactly for a similarity (zoom, rotation): the admitted fling is mapped
+/// through it rather than the raw root vector rescaled, which would keep a
+/// perpendicular component the drag's axis dropped. A still or unmeasurable
+/// release maps to zero.
+fn to_root(local_vector: Offset<f64>, local: Offset<f64>, root: Offset<f64>) -> Offset<f64> {
+    let length = local.dx.hypot(local.dy);
+    if !(length.is_finite() && length > 0.0) {
+        return Offset::ZERO;
+    }
+    let (ux, uy) = (local.dx / length, local.dy / length);
+    // root / local = (a + ib), divided through by |local| in two steps so
+    // neither the product nor the square of a representable speed overflows.
+    let a = (root.dx * ux + root.dy * uy) / length;
+    let b = (root.dy * ux - root.dx * uy) / length;
+    let mapped = Offset::new(
+        a * local_vector.dx - b * local_vector.dy,
+        b * local_vector.dx + a * local_vector.dy,
+    );
+    if mapped.is_finite() {
+        mapped
+    } else {
+        Offset::ZERO
+    }
+}
+
 impl GestureRecognizer for DragGestureRecognizer {
     fn allowed_devices(&self) -> PointerKindSet {
         self.allowed_devices
