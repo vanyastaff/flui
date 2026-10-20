@@ -300,11 +300,20 @@ fn metadata_boundary_reentry_does_not_restore_a_stale_newer_packet() {
         binding.handle_pointer_event_with_result(&started, &path);
         binding.handle_pointer_event_with_result(&older, &HitTestResult::new());
         binding.handle_pointer_event_with_result(&newer, &HitTestResult::new());
+        // The reentrant Down supersedes the original contact: it hears the
+        // packet it was owed and one cancellation, never the replacement's.
+        let superseded = PointerEvent::Cancel(PointerCancel::new(
+            changed,
+            flui_platform_api::EventTime::from_nanos(30),
+            flui_platform_api::pointer::CancelReason::Superseded,
+        ));
         assert_eq!(
             seen.borrow().as_slice(),
             &[
                 ("original", started.clone()),
                 ("original", older.clone()),
+                ("original", newer.clone()),
+                ("original", superseded.clone()),
                 ("replacement", restarted.clone())
             ]
         );
@@ -320,6 +329,8 @@ fn metadata_boundary_reentry_does_not_restore_a_stale_newer_packet() {
             [
                 ("original", started),
                 ("original", older),
+                ("original", newer),
+                ("original", superseded),
                 ("replacement", restarted),
                 ("replacement", finished)
             ]

@@ -383,6 +383,26 @@ impl TextServices {
         }
     }
 
+    /// The window moved, or its DPI changed: the focused field's text sits
+    /// somewhere else on the screen. The field's store is told, and reports
+    /// `OnLayoutChange` by its own rule, when no lock is held and its gate is
+    /// open, since TSF answers with a synchronous lock request; an input
+    /// method then moves its candidate window with the text. The store and
+    /// the sink are application code and a user-installed `tracing`
+    /// subscriber: from the window procedure a failure there is logged, not
+    /// raised.
+    pub(super) fn window_moved(&self) {
+        let Some(store) = self.focused_state().map(|state| Rc::clone(&state.store)) else {
+            return;
+        };
+        let mut calls = OwnerCalls::new();
+        calls.run(|| store.screen_moved());
+        calls.retire(store);
+        if let Some(payload) = calls.into_failure() {
+            log_failure(payload);
+        }
+    }
+
     /// Log a host operation's diagnostic. The log runs a user-installed
     /// subscriber, so it is contained like the application code around it:
     /// a panic there is kept for the outermost host operation, behind a
