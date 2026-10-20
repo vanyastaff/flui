@@ -617,6 +617,14 @@ fn scroll_physics_and_activity() {
                 "scroll::a_fling_rests_on_the_end_the_measured_rows_give",
                 crate::scroll::a_fling_rests_on_the_end_the_measured_rows_give,
             ),
+            (
+                "scroll::a_snap_rests_on_its_target_when_the_end_clamps_the_offset",
+                crate::scroll::a_snap_rests_on_its_target_when_the_end_clamps_the_offset,
+            ),
+            (
+                "scroll::a_rebuilt_run_keeps_the_mode_its_release_started_in",
+                crate::scroll::a_rebuilt_run_keeps_the_mode_its_release_started_in,
+            ),
         ],
     );
 }

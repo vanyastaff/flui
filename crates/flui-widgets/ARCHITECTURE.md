@@ -3131,10 +3131,15 @@ A release's run records the extents it was built for. When layout commits other 
 under it (a lazy list measuring rows shorter than its estimate, an item resizing), the
 owner rebuilds the run from the shown offset at the run's current velocity under the same
 sequence, at the position notify that follows the layout and, failing that, at the next
-tick, before the run's stale delta would carry the offset past the new end. A snap whose
-target the new extents still hold keeps its run. `ClampingScrollPhysics` returns a
-release from past an edge to it on a critically damped spring, at any velocity, rather
-than refusing a run there (`a_fling_rests_on_the_end_the_measured_rows_give`,
+tick, before the run's stale delta would carry the offset past the new end. The rebuilt
+run keeps the mode its release started in, physics or a snap on the target it chose (now
+clamped to the new extents), whatever snap policy a rebuild installed or removed since; a
+snap is rebuilt even when its target stays in range, since layout may have clamped the
+offset under it. `ClampingScrollPhysics` returns a release from past an edge to it on a
+critically damped spring, at any velocity, rather than refusing a run there
+(`a_fling_rests_on_the_end_the_measured_rows_give`,
+`a_snap_rests_on_its_target_when_the_end_clamps_the_offset`,
+`a_rebuilt_run_keeps_the_mode_its_release_started_in`,
 `clamping_release_past_an_edge_returns_to_it`).
 
 Every owner entry point holds one `PanicRecovery`: a participant that panics is

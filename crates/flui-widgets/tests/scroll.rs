@@ -3007,6 +3007,155 @@ pub(crate) fn a_fling_rests_on_the_end_the_measured_rows_give() {
     }
 }
 
+/// A list of `height` (a viewport of 300) under `snap`, its height read
+/// again whenever `resized` notifies.
+fn resizable_snapping_list(
+    controller: &ScrollController,
+    snap: Option<flui_widgets::SharedSnapPolicy>,
+    height: &Rc<Cell<f64>>,
+    resized: &Rc<flui_foundation::ChangeNotifier>,
+    vsync: &Vsync,
+) -> impl flui_view::View {
+    let height = Rc::clone(height);
+    let listenable = Rc::clone(resized) as Rc<dyn flui_foundation::Listenable>;
+    let content =
+        flui_widgets::AnimatedBuilder::new(listenable, move || SizedBox::new(300.0, height.get()));
+    let list = Scrollable::new()
+        .controller(controller.clone())
+        .child(content);
+    VsyncScope::new(
+        vsync.clone(),
+        match snap {
+            Some(snap) => list.snap_policy(snap),
+            None => list,
+        },
+    )
+}
+
+/// Anchors at 0, 500 and 1000 px.
+fn three_anchors() -> flui_widgets::SharedSnapPolicy {
+    Arc::new(flui_widgets::AnchorSnap::new([0.0, 500.0, 1000.0]).expect("three anchors"))
+}
+
+/// A drag from 800 that comes to rest at 740 and lifts: the snap settles
+/// toward the anchor at 500. Returns the laid-out list one frame into it.
+fn settling_toward_500(
+    controller: &ScrollController,
+    height: &Rc<Cell<f64>>,
+    resized: &Rc<flui_foundation::ChangeNotifier>,
+    vsync: &Vsync,
+) -> LaidOut {
+    use crate::nested_scroll::{Device, at, slow};
+    let mut laid = crate::common::lay_out_animated(
+        resizable_snapping_list(controller, Some(three_anchors()), height, resized, vsync),
+        tight(300.0, 300.0),
+        vsync.clone(),
+    );
+    controller.jump_to(800.0);
+    laid.pump_for(Duration::from_millis(16));
+    laid.replay(&slow(Device::Touch, at(150.0, 100.0), at(150.0, 160.0)));
+    for _ in 0..4 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    let settling = controller.pixels();
+    assert!(
+        settling > 600.0 && settling < 740.0,
+        "the snap settles toward 500, at {settling}"
+    );
+    laid
+}
+
+/// A snap whose target the new extents still hold, while layout clamps the
+/// offset under it: the end moves in from 1000 to 600 while the settle is
+/// above 600, and the settle still rests on its anchor at 500.
+pub(crate) fn a_snap_rests_on_its_target_when_the_end_clamps_the_offset() {
+    let (controller, vsync) = (ScrollController::new(), Vsync::new());
+    let height = Rc::new(Cell::new(1300.0));
+    let resized = Rc::new(flui_foundation::ChangeNotifier::new());
+    let mut laid = settling_toward_500(&controller, &height, &resized, &vsync);
+    height.set(900.0);
+    resized.notify_listeners();
+    for _ in 0..120 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(controller.max_scroll_extent(), 600.0, "the end moved in");
+    assert!(
+        (controller.pixels() - 500.0).abs() <= 0.5,
+        "the settle rests on its anchor, at {}",
+        controller.pixels()
+    );
+}
+
+/// A run rebuilt for new extents keeps the mode its release started in: a
+/// snap whose policy a rebuild removed still settles on its anchor, and a
+/// fling under a policy a rebuild installed still coasts where the physics
+/// takes it.
+pub(crate) fn a_rebuilt_run_keeps_the_mode_its_release_started_in() {
+    use crate::nested_scroll::{Device, at, fling};
+    let resized = Rc::new(flui_foundation::ChangeNotifier::new());
+
+    let (controller, vsync) = (ScrollController::new(), Vsync::new());
+    let height = Rc::new(Cell::new(1300.0));
+    let mut laid = settling_toward_500(&controller, &height, &resized, &vsync);
+    laid.pump_widget(resizable_snapping_list(
+        &controller,
+        None,
+        &height,
+        &resized,
+        &vsync,
+    ));
+    height.set(1200.0);
+    resized.notify_listeners();
+    for _ in 0..120 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert!(
+        (controller.pixels() - 500.0).abs() <= 0.5,
+        "a snap whose policy was removed still rests on its anchor, at {}",
+        controller.pixels()
+    );
+
+    let coast = |install: bool| {
+        let (controller, vsync) = (ScrollController::new(), Vsync::new());
+        let height = Rc::new(Cell::new(5300.0));
+        let mut laid = crate::common::lay_out_animated(
+            resizable_snapping_list(&controller, None, &height, &resized, &vsync),
+            tight(300.0, 300.0),
+            vsync.clone(),
+        );
+        laid.replay(&fling(Device::Touch, at(150.0, 250.0), at(150.0, 100.0)));
+        for _ in 0..3 {
+            laid.pump_for(Duration::from_millis(16));
+        }
+        if install {
+            let snap = Some(three_anchors());
+            laid.pump_widget(resizable_snapping_list(
+                &controller,
+                snap,
+                &height,
+                &resized,
+                &vsync,
+            ));
+        }
+        height.set(4300.0);
+        resized.notify_listeners();
+        for _ in 0..240 {
+            laid.pump_for(Duration::from_millis(16));
+        }
+        controller.pixels()
+    };
+    let coasted = coast(false);
+    assert!(
+        coasted > 500.0,
+        "the fling coasts past the anchors' reach: {coasted}"
+    );
+    assert_eq!(
+        coast(true),
+        coasted,
+        "a policy installed while the fling coasts leaves it to the physics"
+    );
+}
+
 /// A scrollable rebuilt with a fresh physics value every frame, as a build
 /// that writes `.physics(Arc::new(..))` does, keeps its fling: the run goes
 /// on, bounces past the edge and comes back to rest exactly on it, and a

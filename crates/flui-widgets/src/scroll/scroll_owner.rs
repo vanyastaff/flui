@@ -149,9 +149,21 @@ struct RunTag {
 struct Release {
     /// The extents the run was built for.
     extents: Cell<(f64, f64)>,
-    /// Where a snap settles; none for the physics' own simulation.
-    target: Option<f64>,
+    /// How the release came to rest, kept across rebuilds: a snap policy
+    /// installed or removed while the run goes on shapes the next release,
+    /// not this one.
+    mode: ReleaseMode,
     device_pixel_ratio: f64,
+}
+
+/// How a release comes to rest.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ReleaseMode {
+    /// The physics' ballistic simulation.
+    Physics,
+    /// A settle on the snap policy's target as the release chose it,
+    /// clamped to the extents the run is built for.
+    Snap(f64),
 }
 
 impl RunTag {
@@ -1044,10 +1056,11 @@ impl ScrollOwner {
 
     /// Rebuild the release run the owner drives when the content extents
     /// changed under it, from the shown offset at the run's current
-    /// velocity, under the same sequence: a fling that a shrinking list's
-    /// new end cuts short stops on it (or bounces back to it), and one in a
-    /// list that grew coasts on. A snap whose target the new extents still
-    /// hold keeps its run. Returns whether the run was replaced or ended.
+    /// velocity, under the same sequence and in the mode the release
+    /// started in: a fling that a shrinking list's new end cuts short stops
+    /// on it (or bounces back to it), one in a list that grew coasts on, and
+    /// a snap settles on its target, clamped to the new extents. Returns
+    /// whether the run was replaced or ended.
     fn follow_extents(self: &Rc<Self>, recovery: &mut PanicRecovery) -> bool {
         if !self.alive.get() || self.in_pass() {
             return false;
@@ -1074,19 +1087,16 @@ impl ScrollOwner {
             return false;
         }
         release.extents.set(extents);
-        if release
-            .target
-            .is_some_and(|target| extents.0 <= target && target <= extents.1)
-        {
-            return false;
-        }
+        // Even a snap whose target the new extents hold is rebuilt: layout
+        // may have clamped the offset under it, and the old simulation's
+        // remaining motion would land the clamped offset off the target.
         let velocity = self.fling.velocity();
         let started = self.start_release(
             &sequence,
             position,
             velocity,
             release.device_pixel_ratio,
-            release.target,
+            Some(release.mode),
             recovery,
         );
         if started == RunStart::Rest {
@@ -1143,31 +1153,26 @@ impl ScrollOwner {
         Some((Rc::clone(&current.sequence), current.position))
     }
 
-    /// The run a release at `velocity` starts, and the target a snap
-    /// settles on: a snap to `target` (clamped to the extents) or to the
-    /// policy's target without one, or the physics' ballistic simulation
-    /// without a policy.
+    /// The run a release at `velocity` in `mode` starts: the physics'
+    /// ballistic simulation, or a settle on the snap target clamped to the
+    /// extents of `metrics`.
     fn release_simulation(
         &self,
-        snap: Option<&dyn SnapPolicy>,
+        mode: ReleaseMode,
         metrics: &ScrollMetrics,
         velocity: f64,
-        target: Option<f64>,
-    ) -> Option<(Box<dyn Simulation>, Option<f64>)> {
-        let Some(snap) = snap else {
-            return self
+    ) -> Option<Box<dyn Simulation>> {
+        match mode {
+            ReleaseMode::Physics => self
                 .physics()
-                .create_ballistic_simulation(metrics, velocity)
-                .map(|simulation| (simulation, None));
-        };
-        let target = match target {
-            Some(target) => metrics
-                .ordered_extents()
-                .map_or(target, |(min, max)| target.clamp(min, max)),
-            None => snap_target(snap, metrics, velocity),
-        };
-        let spring: Box<dyn Simulation> = Box::new(settle_spring(metrics, target, velocity)?);
-        Some((spring, Some(target)))
+                .create_ballistic_simulation(metrics, velocity),
+            ReleaseMode::Snap(target) => {
+                let target = metrics
+                    .ordered_extents()
+                    .map_or(target, |(min, max)| target.clamp(min, max));
+                Some(Box::new(settle_spring(metrics, target, velocity)?))
+            }
+        }
     }
 
     /// Start the run a release at `velocity` (offset units per second)
@@ -1190,15 +1195,16 @@ impl ScrollOwner {
         )
     }
 
-    /// [`start_run`](Self::start_run), a snap settling on `target` when
-    /// one is given rather than asking its policy again.
+    /// [`start_run`](Self::start_run) in `mode` when one is given (a rebuilt
+    /// run keeps the mode its release started in), else in the one the
+    /// current snap policy, or its absence, chooses.
     fn start_release(
         self: &Rc<Self>,
         sequence: &Rc<ScrollSequence>,
         position: usize,
         velocity: f64,
         device_pixel_ratio: f64,
-        target: Option<f64>,
+        mode: Option<ReleaseMode>,
         recovery: &mut PanicRecovery,
     ) -> RunStart {
         if !self.alive.get() {
@@ -1213,20 +1219,20 @@ impl ScrollOwner {
                 && self.fling.run_generation() == generation
                 && self.controller.pixels() == metrics.pixels
         };
+        let mode = mode.unwrap_or_else(|| match self.snap() {
+            Some(snap) => ReleaseMode::Snap(snap_target(&*snap, &metrics, velocity)),
+            None => ReleaseMode::Physics,
+        });
         // Determine transfer policy before owning a returned simulation. A
         // failing custom callback must not unwind through its arbitrary Drop.
-        let snap = self.snap();
-        let residual = if snap.is_some() {
-            None
-        } else {
-            self.physics().boundary_velocity(&metrics, velocity)
+        let residual = match mode {
+            ReleaseMode::Physics => self.physics().boundary_velocity(&metrics, velocity),
+            ReleaseMode::Snap(_) => None,
         };
         if !is_current() {
             return RunStart::TakenOver;
         }
-        let Some((simulation, target)) =
-            self.release_simulation(snap.as_deref(), &metrics, velocity, target)
-        else {
+        let Some(simulation) = self.release_simulation(mode, &metrics, velocity) else {
             return RunStart::Rest;
         };
         if !is_current() {
@@ -1247,7 +1253,7 @@ impl ScrollOwner {
         }
         let release = Release {
             extents: Cell::new((metrics.min_scroll_extent, metrics.max_scroll_extent)),
-            target,
+            mode,
             device_pixel_ratio,
         };
         let run = self.attach_run(
