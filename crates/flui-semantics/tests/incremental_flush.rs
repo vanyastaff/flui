@@ -2120,3 +2120,30 @@ fn a_disabled_node_takes_no_user_action_from_the_platform() {
         .invoke();
     assert_eq!(*clicks.lock(), 1);
 }
+
+/// A child the root lists but whose own parent link was never set is still
+/// published by the full walk, so an action on it resolves.
+#[test]
+fn a_child_listed_without_a_parent_link_still_resolves() {
+    use flui_semantics::{ActionCall, SemanticsAction, SemanticsActionRequest};
+
+    let (mut owner, _) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let mut button = node(1, "button");
+    let target = button.accessibility_id().expect("render-backed identity");
+    button
+        .config_mut()
+        .add_action(SemanticsAction::Click, Arc::new(|_| {}));
+    let button = owner.insert(button);
+    owner
+        .get_mut(root)
+        .expect("the root is live")
+        .add_child(button);
+    owner.set_root(Some(root));
+    owner.flush();
+
+    owner
+        .resolve_action(SemanticsActionRequest::new(target, ActionCall::Click))
+        .expect("a listed child is published and actionable")
+        .invoke();
+}

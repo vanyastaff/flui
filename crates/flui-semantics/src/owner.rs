@@ -481,6 +481,11 @@ impl Delivered<'_> {
         matches!(self, Self::Node(node, _) if node.is_hidden())
     }
 
+    /// Whether the adapter holds the node as disabled.
+    fn is_disabled(self) -> bool {
+        matches!(self, Self::Node(node, _) if node.is_disabled())
+    }
+
     fn range(self) -> Option<(f64, f64)> {
         match self {
             Self::Unknown => None,
@@ -849,7 +854,8 @@ impl SemanticsOwner {
     ///
     /// One arena entry under the identity is unambiguous, so the lookup
     /// checks only that the entry is rooted: its ancestors up to the root
-    /// are all addressable. Several entries need the whole tree, because an
+    /// are all addressable and list each other. Several entries, or a climb
+    /// that fails, need the whole tree, because an
     /// unrooted one never counts toward ambiguity.
     fn locate(
         &self,
@@ -859,7 +865,11 @@ impl SemanticsOwner {
         let not_found = SemanticsActionError::NodeNotFound { node_id };
         let found = match *self.tree.nodes_with_accessibility_id(node_id) {
             [] => Err(not_found),
-            [only] => self.rooted(root, only).ok_or(not_found),
+            // Links that are not reciprocal fail the climb, and only the walk
+            // knows whether the root still reaches the entry.
+            [only] => self
+                .rooted(root, only)
+                .map_or_else(|| self.locate_by_walk(root, node_id), Ok),
             _ => self.locate_by_walk(root, node_id),
         };
         debug_assert_eq!(
@@ -884,7 +894,13 @@ impl SemanticsOwner {
             if current == root {
                 return Some((id, node));
             }
-            current = ancestor.parent()?;
+            // The walk reaches a node through its parent's child list, so
+            // the climb accepts a link only when that list names the child.
+            let parent = ancestor.parent()?;
+            if !self.tree.get(parent)?.children().contains(&current) {
+                return None;
+            }
+            current = parent;
         }
         None
     }
@@ -992,7 +1008,7 @@ impl SemanticsOwner {
         // A disabled control takes no user action, whoever asks: the agent
         // surface refuses it the same way. Focus, blur and reveal move the
         // cursor or the viewport and stay available.
-        if published.states.enabled == Some(false)
+        if (published.states.enabled == Some(false) || delivered.is_disabled())
             && !matches!(
                 requested,
                 SemanticsAction::Focus | SemanticsAction::Blur | SemanticsAction::ScrollIntoView
