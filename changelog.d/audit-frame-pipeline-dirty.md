@@ -1,6 +1,6 @@
 ### Changed
 
-- **`NodeLinks::set_depth` is crate-private** (`flui-rendering`): a render node's depth is
+- **`RenderNode::set_depth` is removed and `NodeLinks::set_depth` is crate-private** (`flui-rendering`): a render node's depth is
   written by the render tree's edge primitives, so nothing outside can desynchronize it.
 
 ### Fixed
