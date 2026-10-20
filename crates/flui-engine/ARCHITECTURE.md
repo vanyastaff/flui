@@ -236,6 +236,18 @@ deep-but-valid chain; `a_deep_chain_survives_a_small_stack` in
 | `tessellator.rs` | none — the adapter over `lyon` |
 | `glyph_atlas.rs` | `Texture`, `TextureView`, `Sampler`, `BindGroup` for the two pages; `etagere` packs them |
 
+**Surface acquisition escalates.** `Outdated`, `Lost` and `Validation`
+reconfigure and retry once; a surface still `Lost` after that is recreated on
+the same device (`Renderer::recreate_surface`) and retried once more, because
+`Lost` means the surface itself is gone. A recreation that fails leaves the
+renderer without a surface its owner never released, so the next acquire
+recreates again before anything else instead of skipping frames as if released.
+A frame presented through a `Suboptimal` acquisition configures the surface
+before the next acquire, once per episode: a surface still suboptimal after it
+presents as it is until a `Success`. The owner's `release_surface`, a
+successful recreation and device recovery clear both obligations.
+`acquisition_escalates_from_reconfigure_to_recreate` pins the table.
+
 The Cargo features `vulkan`, `metal`, `dx12`, `webgpu`, `gles` are **additive
 pass-throughs to wgpu's own backend features, not selectors**. Nobody
 normally names them: the per-target dependency entries in `Cargo.toml` unify
