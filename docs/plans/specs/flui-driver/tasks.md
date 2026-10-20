@@ -105,7 +105,7 @@ graph LR
 | FD28 | Migration: render objects, layers and the GPU profile onto `Inspect` (derive first), consumers (harness, `render_diagnostics`, layer inspection, `agent_workflow.rs`) onto typed access; `Diagnosticable` and its derive deleted; a `Value::Debug` ratchet | R50, R51 | FD27 | — | L | 6 | — |
 | FD29 | Tracing conventions: `flui.<subsystem>` targets with aliases and an `EnvFilter` test; semantics/commit/submit phase spans; primitive fields and numeric ids; `element_rebuild` at TRACE with reasons; recognizer spans fixed; one capture layer with the `(target, name)` table; `Timeline` over it; `X`-event export | R52, R53 | — | [P] | L, W | 6 | — |
 | FD30 | Creation sites (`CreationSite` to `flui-foundation`, `#[track_caller]` constructors and builders, widget derive, element copy at mount) and `TreeError<E>` context at the pipeline and build owners | R54, R55 | FD27 | — | L | 4 | — |
-| FD31 | Binding phase guard: `build` and `inspect` run inside a phase the `WidgetsBinding` owns; tree entry points answer `TreeBusy` instead of deadlocking; a panicking `View::inspect` is recorded on its node | R15 | FD4 | — | L | 2 | — |
+| FD31 | Phase guard: `build` and `inspect` run inside a phase the `WidgetsBinding` and the pipeline owner own; tree entry points answer `TreeBusy` instead of deadlocking or panicking; a panicking `View::inspect` or render-object description is recorded on its node | R15 | FD4 | — | L | 2 | — |
 
 ## Cards
 
@@ -686,7 +686,7 @@ graph LR
     the wrapper the owner returns.
 
 
-### FD31. Binding phase guard
+### FD31. Phase guard for build and inspection
 
 - **Changes:**
   - `WidgetsBinding` owns a phase (`Idle`, `Building`, `Inspecting`), entered by a guard around a
@@ -696,12 +696,17 @@ graph LR
     `attach_root`, the snapshots) check the phase before taking the lock and answer
     `Err(TreeBusy { phase })`;
   - a snapshot catches a panic in one node's `View::inspect` and records it on that node as the
-    fact `inspect_failed`; the other nodes are still read.
+    fact `inspect_failed`; the other nodes are still read;
+  - the render tree's snapshot takes the same guard: a render object's description that reaches
+    the pipeline through a retained `WeakPipelineCell` gets `TreeBusy` instead of the
+    `PipelineCell` borrow panic.
 - **Done when:**
   - a view whose `build` and whose `inspect` call `with_element_tree` through a handle get
     `TreeBusy`; with the guard reverted the test hangs and nextest times it out;
+  - a render object whose description calls `with_mut` on its pipeline gets `TreeBusy`;
   - a view whose `inspect` panics leaves its siblings in the snapshot and the binding usable for
     the next frame.
+
 ## Notes for whoever implements this
 
 These facts came from surveying the code on 2026-10-17. They matter when the work starts and are
