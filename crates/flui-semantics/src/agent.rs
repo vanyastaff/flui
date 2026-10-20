@@ -651,7 +651,15 @@ impl SemanticsOwner {
                 .filter(|node| common_filter(node) == FilterResult::Include)
                 .ok_or(WireActionError::NotFound { element })?;
             let wire = wire_node(&node, element, root_claims_focus);
-            if wire.disabled {
+            // Focus and reveal move the cursor or the viewport, not the
+            // control, so they stay available on a disabled element, as the
+            // owner's rule has it.
+            if wire.disabled
+                && !matches!(
+                    request.action,
+                    ActionName::Focus | ActionName::ScrollIntoView
+                )
+            {
                 return Err(WireActionError::Disabled { element });
             }
             if !wire.actions.contains(&request.action) {
