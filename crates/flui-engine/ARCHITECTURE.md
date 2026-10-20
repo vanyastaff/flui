@@ -247,8 +247,14 @@ recreates again before anything else instead of skipping frames as if released.
 A frame presented through a `Suboptimal` acquisition configures the surface
 before the next acquire, once per episode: a surface still suboptimal after it
 presents as it is until a `Success`. The owner's `release_surface`, a
-successful recreation and device recovery clear both obligations.
-`acquisition_escalates_from_reconfigure_to_recreate` pins the table.
+successful recreation and device recovery clear both obligations. A
+recreation that fails for good (`SurfaceCreation`, a handle kind the owner
+never supports) returns that error rather than the retryable `SurfaceLost`.
+`render_frame_inner` plans again after the acquisition, because a configure
+during it invalidates the retained target a partial plan would read.
+`acquisition_escalates_from_reconfigure_to_recreate` pins the table and
+`an_owed_surface_recreation_runs_through_the_backend_render_path` the real
+renderer's side.
 
 The Cargo features `vulkan`, `metal`, `dx12`, `webgpu`, `gles` are **additive
 pass-throughs to wgpu's own backend features, not selectors**. Nobody

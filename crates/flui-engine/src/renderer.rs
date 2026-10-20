@@ -164,6 +164,15 @@ trait SurfaceAcquireBackend {
 
 /// Recreate a surface the acquire path found lost, recording the obligation
 /// when the recreation fails so the next acquire retries it.
+///
+/// A transient failure (the window has no handle right now) reports
+/// [`EngineError::SurfaceLost`], which the caller retries. A fatal one
+/// ([`EngineError::SurfaceCreation`], a handle kind the owner never
+/// supports) is returned as it is, so the caller stops retrying instead of
+/// arming a retry loop. The obligation is kept either way: the surface may
+/// already be dropped, and without it the next frame the caller does ask for
+/// would read the renderer as released on purpose and skip in silence rather
+/// than report the failure again.
 fn recreate_lost_surface<B>(backend: &mut B) -> Result<(), EngineError>
 where
     B: SurfaceAcquireBackend,
@@ -175,13 +184,23 @@ where
         }
         Err(error) => {
             backend.recovery().recreate_owed = true;
-            tracing::warn!(
-                target: "flui.gpu",
-                event = "surface_recreate_failed",
-                %error,
-                "lost surface could not be recreated; retrying on the next frame"
-            );
-            Err(EngineError::SurfaceLost)
+            if error.recoverability() == crate::error::Recoverability::Recoverable {
+                tracing::warn!(
+                    target: "flui.gpu",
+                    event = "surface_recreate_failed",
+                    %error,
+                    "lost surface could not be recreated; retrying on the next frame"
+                );
+                Err(EngineError::SurfaceLost)
+            } else {
+                tracing::error!(
+                    target: "flui.gpu",
+                    event = "surface_recreate_failed",
+                    %error,
+                    "lost surface cannot be recreated"
+                );
+                Err(error)
+            }
         }
     }
 }
@@ -317,6 +336,7 @@ mod surface_acquisition_tests {
         Skipped,
         SurfaceLost,
         SurfaceValidation,
+        Fatal,
     }
 
     struct Case {
@@ -402,6 +422,25 @@ mod surface_acquisition_tests {
                 ],
             },
             Case {
+                name: "a fatal recreation failure is reported as it is",
+                outcomes: vec![Lost, Lost],
+                recreations: vec![
+                    Err(EngineError::SurfaceTargetUnavailable {
+                        source: raw_window_handle::HandleError::NotSupported,
+                    }),
+                    Err(EngineError::SurfaceTargetUnavailable {
+                        source: raw_window_handle::HandleError::NotSupported,
+                    }),
+                ],
+                frames: vec![
+                    (
+                        Acquired::Fatal,
+                        &["acquire", "reconfigure", "acquire", "recreate"],
+                    ),
+                    (Acquired::Fatal, &["recreate"]),
+                ],
+            },
+            Case {
                 name: "one reconfigure answers a suboptimal episode",
                 outcomes: vec![
                     Suboptimal(1),
@@ -439,6 +478,9 @@ mod surface_acquisition_tests {
                     Ok(None) => Acquired::Skipped,
                     Err(EngineError::SurfaceLost) => Acquired::SurfaceLost,
                     Err(EngineError::SurfaceValidation) => Acquired::SurfaceValidation,
+                    Err(EngineError::SurfaceTargetUnavailable {
+                        source: raw_window_handle::HandleError::NotSupported,
+                    }) => Acquired::Fatal,
                     Err(other) => panic!("{}: frame {frame} failed with {other:?}", case.name),
                 };
                 assert_eq!(acquired, expected, "{}: frame {frame}", case.name);
@@ -2182,6 +2224,11 @@ impl Renderer {
             // `classify_frame`, which is where that distinction is pinned.
             return Ok(classify_frame(true, false));
         };
+        // Plan again: acquiring may have configured the surface (a pending
+        // reconfigure after a suboptimal frame, or the retry after `Outdated`),
+        // which invalidates the retained target a partial plan reads from and
+        // owes a full repaint. The first plan only decided whether to acquire.
+        let plan = self.frame.plan(self.uses_intermediate_texture());
 
         let view = output
             .texture
@@ -2833,27 +2880,54 @@ mod tests {
         );
     }
 
+    /// A window with no native handle: `Unavailable` (gone for now) or, when
+    /// `supported` is false, `NotSupported` (never answerable).
     #[cfg(not(target_arch = "wasm32"))]
-    fn quarantined_domain_reaches_the_backend_recovery_predicate() {
-        struct ReleasedWindow;
-        impl raw_window_handle::HasWindowHandle for ReleasedWindow {
-            fn window_handle(
-                &self,
-            ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError>
-            {
-                Err(raw_window_handle::HandleError::Unavailable)
+    struct HandlelessWindow {
+        supported: bool,
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl HandlelessWindow {
+        fn error(&self) -> raw_window_handle::HandleError {
+            if self.supported {
+                raw_window_handle::HandleError::Unavailable
+            } else {
+                raw_window_handle::HandleError::NotSupported
             }
         }
-        impl raw_window_handle::HasDisplayHandle for ReleasedWindow {
-            fn display_handle(
-                &self,
-            ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError>
-            {
-                Err(raw_window_handle::HandleError::Unavailable)
-            }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl raw_window_handle::HasWindowHandle for HandlelessWindow {
+        fn window_handle(
+            &self,
+        ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+            Err(self.error())
         }
-        // This tests the actual backend predicate in the released-surface state;
-        // it needs no fabricated native handles and never creates a surface.
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl raw_window_handle::HasDisplayHandle for HandlelessWindow {
+        fn display_handle(
+            &self,
+        ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+            Err(self.error())
+        }
+    }
+
+    /// A real windowed `Renderer` on a real device whose surface is
+    /// released and whose window has no handle, with the domain its painter
+    /// uses and the flag its device-lost callback would set. It needs no
+    /// fabricated native handles and never creates a surface.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn released_renderer(
+        window: HandlelessWindow,
+    ) -> (
+        Renderer,
+        Arc<crate::device_domain::DeviceDomain>,
+        Arc<std::sync::atomic::AtomicBool>,
+    ) {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(
             &crate::adapter::trusted_adapter_options(wgpu::PowerPreference::LowPower, None),
@@ -2877,7 +2951,7 @@ mod tests {
             (16, 16),
         );
         let callback_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let mut renderer = Renderer {
+        let renderer = Renderer {
             instance,
             adapter,
             device,
@@ -2902,13 +2976,71 @@ mod tests {
             frame: crate::frame_protocol::FrameProtocol::new(),
             pre_present_hook: None,
             surface_recovery: SurfaceRecovery::default(),
-            lease: SurfaceLease::released_for_test(Arc::new(ReleasedWindow)),
+            lease: SurfaceLease::released_for_test(Arc::new(window)),
             _single_mutator: PhantomData,
             #[cfg(feature = "gpu-profiler")]
             gpu_profiler: None,
             force_intermediate: false,
             external_frames: std::collections::HashMap::new(),
         };
+        (renderer, domain, callback_flag)
+    }
+
+    /// A recreation the acquire path owes runs through the public
+    /// `RasterBackend::render_scene` of a real renderer: a window without a
+    /// handle for now reports the retryable `SurfaceLost` and keeps the
+    /// obligation, one that can never answer reports its own fatal error,
+    /// and the owner's release supersedes the obligation.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn an_owed_surface_recreation_runs_through_the_backend_render_path() {
+        use crate::RasterBackend;
+
+        let scene = flui_layer::Scene::new(flui_layer::LayerTree::new(flui_layer::LayerNode::new(
+            flui_layer::Layer::from(flui_layer::OffsetLayer::new(
+                flui_foundation::geometry::Offset::new(0.0, 0.0),
+            )),
+        )));
+
+        let (mut renderer, _domain, _flag) =
+            released_renderer(HandlelessWindow { supported: true });
+        renderer.surface_recovery.recreate_owed = true;
+        RasterBackend::mark_full_repaint(&mut renderer);
+        assert!(matches!(
+            RasterBackend::render_scene(&mut renderer, &scene),
+            Err(EngineError::SurfaceLost)
+        ));
+        assert!(
+            renderer.surface_recovery.recreate_owed,
+            "a transient failure keeps the recreation owed"
+        );
+        renderer.release_surface();
+        assert!(matches!(
+            RasterBackend::render_scene(&mut renderer, &scene),
+            Ok(crate::raster::PresentDisposition::NotShown)
+        ));
+
+        let (mut renderer, _domain, _flag) =
+            released_renderer(HandlelessWindow { supported: false });
+        renderer.surface_recovery.recreate_owed = true;
+        RasterBackend::mark_full_repaint(&mut renderer);
+        let result = RasterBackend::render_scene(&mut renderer, &scene);
+        assert!(
+            matches!(
+                result,
+                Err(EngineError::SurfaceTargetUnavailable {
+                    source: raw_window_handle::HandleError::NotSupported
+                })
+            ),
+            "a fatal recreation failure reaches the caller: {result:?}"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn quarantined_domain_reaches_the_backend_recovery_predicate() {
+        // This tests the actual backend predicate in the released-surface state.
+        let (mut renderer, domain, callback_flag) =
+            released_renderer(HandlelessWindow { supported: true });
+        let format = renderer.config.format;
         assert!(!crate::RasterBackend::is_device_lost(&renderer));
         // Domain quarantine can happen without a wgpu device-lost callback.
         domain.mark_lost();
@@ -3421,6 +3553,8 @@ mod tests {
         shader_mask_external_texture_registrations_follow_parent();
         #[cfg(not(target_arch = "wasm32"))]
         quarantined_domain_reaches_the_backend_recovery_predicate();
+        #[cfg(not(target_arch = "wasm32"))]
+        an_owed_surface_recreation_runs_through_the_backend_render_path();
         #[cfg(not(target_arch = "wasm32"))]
         a_lost_device_reaches_the_installed_hook();
         a_refused_texture_frame_keeps_the_accepted_one_for_reupload();
