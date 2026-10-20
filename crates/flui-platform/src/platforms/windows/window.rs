@@ -34,7 +34,9 @@ use windows::{
     core::HSTRING,
 };
 
-use super::util::{USER_DEFAULT_SCREEN_DPI, WINDOW_CLASS_NAME, logical_to_device};
+use super::util::{
+    USER_DEFAULT_SCREEN_DPI, WINDOW_CLASS_NAME, checked_logical_to_device, logical_to_device,
+};
 use super::window_frame::{
     FirstShow, first_show_command, frame_style, restyled, to_screen, to_workspace,
 };
@@ -45,6 +47,9 @@ use super::window_placement::{
 /// Posted to a window nothing paints, so its frame still runs: a hidden window
 /// never receives `WM_PAINT`.
 pub(super) const REQUEST_FRAME: u32 = WM_APP + 1;
+
+/// Posted by the fullscreen hotkey once the app let its key through.
+pub(super) const TOGGLE_FULLSCREEN: u32 = WM_APP + 3;
 use crate::shared::window_state::WindowStateCell;
 use crate::{
     shared::{PlatformHandlers, WindowCallbacks, hwnd_affinity::UserDataRefusal},
@@ -390,6 +395,14 @@ fn backend_error(what: &str, error: windows::core::Error) -> WindowCommandError 
     }
 }
 
+/// A command's logical pair in device pixels, refused as invalid geometry
+/// when either value is beyond what Win32 can represent.
+fn device_pair(x: f64, y: f64, scale: f64) -> Result<(i32, i32), WindowCommandError> {
+    checked_logical_to_device(x, scale)
+        .zip(checked_logical_to_device(y, scale))
+        .ok_or(WindowCommandError::InvalidGeometry)
+}
+
 /// What every Win32 window honours and observes, known before one exists
 /// (`Platform::window_capabilities`).
 pub(crate) const fn window_capabilities() -> WindowCapabilities {
@@ -693,9 +706,13 @@ impl WindowsWindow {
                 show_requests: std::cell::Cell::new(0),
                 // A window whose reveal waits for its first frame is visible to
                 // the runtime already: its frames must run to earn the reveal.
-                last_visibility_dispatched: std::cell::Cell::new(
+                visibility: super::window_visibility::Visibility::new(
                     deferred || crate::shared::visibility::win32_initial_visibility(created_style),
                 ),
+                cloak_watch: super::window_visibility::CloakWatch::start(),
+                in_size_move: std::cell::Cell::new(false),
+                last_resize: std::cell::Cell::new(None),
+                modal_pacing: super::modal_loop::ModalPacing::new(Rc::clone(&frames)),
                 pending_high_surrogate: std::cell::Cell::new(None),
                 text_services: std::cell::RefCell::new(None),
                 drop_target: std::cell::RefCell::new(None),
@@ -1048,13 +1065,12 @@ impl WindowsWindow {
     /// - a fullscreen window takes the size for the bounds it returns to.
     ///
     /// # Errors
-    /// [`WindowCommandError::Backend`] when Win32 refuses or fails the resize.
+    /// [`WindowCommandError::InvalidGeometry`] for a size beyond what Win32
+    /// can represent, before any call; [`WindowCommandError::Backend`] when
+    /// Win32 refuses or fails the resize.
     fn set_inner_size(&self, size: Size<f64>) -> Result<(), WindowCommandError> {
         let scale = self.state.lock().scale_factor;
-        let content = (
-            logical_to_device(size.width, scale),
-            logical_to_device(size.height, scale),
-        );
+        let content = device_pair(size.width, size.height, scale)?;
         let fullscreen = super::platform::with_window_context(self.hwnd, "set_inner_size", |ctx| {
             ctx.mode
                 .get()
@@ -1123,13 +1139,12 @@ impl WindowsWindow {
     /// restored, and a fullscreen window takes it for the bounds it returns to.
     ///
     /// # Errors
-    /// [`WindowCommandError::Backend`] when Win32 refuses or fails the move.
+    /// [`WindowCommandError::InvalidGeometry`] for a position beyond what
+    /// Win32 can represent, before any call; [`WindowCommandError::Backend`]
+    /// when Win32 refuses or fails the move.
     fn set_outer_position(&self, at: Point<f64>) -> Result<(), WindowCommandError> {
         let scale = self.state.lock().scale_factor;
-        let (x, y) = (
-            logical_to_device(at.x, scale),
-            logical_to_device(at.y, scale),
-        );
+        let (x, y) = device_pair(at.x, at.y, scale)?;
         let fullscreen =
             super::platform::with_window_context(self.hwnd, "set_outer_position", |ctx| {
                 let mode = ctx.mode.get();
@@ -1373,9 +1388,7 @@ impl WindowsWindow {
                 .set(ctx.first_show.get().without_frame_wait());
             // A window hidden before it was ever shown sends no `WM_SHOWWINDOW`;
             // the runtime still has to hear that it is no longer visible.
-            if ctx.last_visibility_dispatched.replace(false) {
-                ctx.callbacks.dispatch_visibility_status_change(false);
-            }
+            ctx.report_surface_visibility(false);
         });
     }
 
@@ -1648,18 +1661,22 @@ impl WindowsWindow {
         }
     }
 
-    /// Check if rendering should be skipped for this window
-    ///
-    /// Returns true if the window is minimized, as rendering minimized windows
-    /// wastes CPU/GPU resources without any visible output.
-    pub fn should_skip_render(hwnd: HWND) -> bool {
-        // Every current call site (`platform.rs`'s `WM_PAINT` arm) runs on
-        // the owning thread; the context gate enforces that for any other
-        // caller of this bare-`HWND` function instead of trusting it.
-        super::platform::with_window_context(hwnd, "should_skip_render", |ctx| {
-            ctx.mode.get().is_minimized()
-        })
-        .unwrap_or(false)
+    /// Ask for a frame of `hwnd`, from any thread. A window that is shown and
+    /// not minimized is invalidated and paints. Win32 paints neither a hidden
+    /// window nor a minimized one, whose client area is empty, so those get
+    /// the frame request posted: their frame is what earns a deferred window
+    /// its reveal, and what polls the tasks woken while nobody sees it.
+    pub(super) fn redraw_native(hwnd: HWND) {
+        // SAFETY: plain calls on a window handle with no pointer arguments.
+        // Each may fail for a window that is already gone, which leaves
+        // nothing to draw; a redraw request is best-effort.
+        unsafe {
+            if IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() {
+                let _ = InvalidateRect(Some(hwnd), None, false);
+            } else {
+                let _ = PostMessageW(Some(hwnd), REQUEST_FRAME, WPARAM(0), LPARAM(0));
+            }
+        }
     }
 
     pub(super) fn apply_native_cursor(cursor: CursorIcon) -> Result<(), CursorError> {
@@ -1847,20 +1864,7 @@ impl PlatformWindow for WindowsWindow {
         if !handle_available(super::platform::teardown_route(self.hwnd, self.context)) {
             return;
         }
-        // SAFETY: `InvalidateRect` takes `self.hwnd` and `None` for the
-        // rect (invalidate the whole client area) — no pointer to validate.
-        // Failure just means nothing was invalidated (e.g. the window is
-        // already gone); requesting a redraw is inherently best-effort, so
-        // discarding the result keeps this fire-and-forget by design.
-        unsafe {
-            if IsWindowVisible(self.hwnd).as_bool() {
-                let _ = InvalidateRect(Some(self.hwnd), None, false);
-            } else {
-                // A hidden window is never painted, and its first frame is
-                // what earns it the reveal: post the frame request instead.
-                let _ = PostMessageW(Some(self.hwnd), REQUEST_FRAME, WPARAM(0), LPARAM(0));
-            }
-        }
+        Self::redraw_native(self.hwnd);
     }
 
     fn is_focused(&self) -> bool {

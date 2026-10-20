@@ -169,5 +169,90 @@ pub(super) fn outer_size(
             dpi,
         )?;
     }
-    Ok((rect.right - rect.left, rect.bottom - rect.top))
+    rect.right
+        .checked_sub(rect.left)
+        .zip(rect.bottom.checked_sub(rect.top))
+        .ok_or_else(|| windows::Win32::Foundation::E_INVALIDARG.into())
+}
+
+/// `extent` at a scale `ratio` times the one it was measured at, or `None`
+/// when that is not a device value a window command may name.
+fn rescaled(extent: i32, ratio: f64) -> Option<i32> {
+    super::util::checked_logical_to_device(f64::from(extent), ratio)
+}
+
+impl super::platform::WindowContext {
+    /// Give the window the rectangle its new DPI asks for; `ratio` is the new
+    /// scale over the old.
+    ///
+    /// A window that is not fullscreen takes the rectangle the system
+    /// suggests. A fullscreen window covers its monitor again instead, which
+    /// the suggestion, scaled from its old size, need not do; the rectangle
+    /// it returns to is rescaled with it, as the system would have scaled it.
+    pub(super) fn apply_dpi_rectangle(&self, hwnd: HWND, suggested: Option<RECT>, ratio: f64) {
+        use windows::Win32::{
+            Graphics::Gdi::{
+                GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+            },
+            UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos},
+        };
+
+        let mode = self.mode.get();
+        if let Some(bounds) = mode.fullscreen_bounds()
+            && let (Some(width), Some(height)) = (
+                rescaled(bounds.size.width, ratio),
+                rescaled(bounds.size.height, ratio),
+            )
+        {
+            self.mode.set(mode.with_fullscreen_bounds(Bounds {
+                origin: bounds.origin,
+                size: Size::new(width, height),
+            }));
+        }
+        let target = if mode.is_fullscreen() {
+            let mut monitor = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            // SAFETY: `monitor` is a stack local with `cbSize` set; the
+            // monitor handle comes from the live window.
+            let read = unsafe {
+                GetMonitorInfoW(
+                    MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST),
+                    &raw mut monitor,
+                )
+            };
+            read.as_bool().then_some(monitor.rcMonitor)
+        } else {
+            suggested
+        };
+        let Some(rect) = target else {
+            return;
+        };
+        let (Some(width), Some(height)) = (
+            rect.right.checked_sub(rect.left),
+            rect.bottom.checked_sub(rect.top),
+        ) else {
+            return;
+        };
+        // A fullscreen window covers its monitor whatever its limits say.
+        self.limits_waived.set(mode.is_fullscreen());
+        // SAFETY: plain integer and flag arguments on the live window, with
+        // `None` as the documented no-op z-order handle.
+        let moved = unsafe {
+            SetWindowPos(
+                hwnd,
+                None,
+                rect.left,
+                rect.top,
+                width,
+                height,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+        self.limits_waived.set(false);
+        if let Err(error) = moved {
+            tracing::warn!(?hwnd, ?error, "SetWindowPos (DPI change) failed");
+        }
+    }
 }
