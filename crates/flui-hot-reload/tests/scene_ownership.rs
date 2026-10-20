@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static DROPS: AtomicUsize = AtomicUsize::new(0);
 
+#[derive(Debug)]
 struct Payload;
 impl Drop for Payload {
     fn drop(&mut self) {

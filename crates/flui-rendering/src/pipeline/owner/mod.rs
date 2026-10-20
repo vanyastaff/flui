@@ -234,6 +234,10 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// The layer tree produced by the last paint phase.
     last_layer_tree: Option<LayerTree>,
 
+    /// Paint passes that committed a layer tree, which numbers each tree's scene so a layer id
+    /// from an earlier one is not read as a layer of the next.
+    scenes_painted: u64,
+
     /// Composite-resolved offsets for `Layer::Follower` render nodes,
     /// keyed by `RenderId` (flui-rendering ARCHITECTURE.md, follower hit-testing) — a per-frame byproduct mirroring
     /// `last_layer_tree`. Populated post-paint
@@ -399,6 +403,7 @@ where
         unchecked_semantics_diagnostics: from.unchecked_semantics_diagnostics,
         semantics_update_callback: from.semantics_update_callback,
         last_layer_tree: from.last_layer_tree,
+        scenes_painted: from.scenes_painted,
         last_follower_offsets: from.last_follower_offsets,
         retained_boundaries: from.retained_boundaries,
         root_content: from.root_content,

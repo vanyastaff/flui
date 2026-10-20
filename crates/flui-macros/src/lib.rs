@@ -89,6 +89,19 @@ use syn::{DeriveInput, parse_macro_input};
 /// the derive site rather than as a cascade of unrelated errors deep
 /// inside `StatelessBehavior`'s type machinery.
 ///
+/// # Inspection
+///
+/// `#[view(inspect)]` fills `View::inspect` from the type's own `Inspect`, so a view that also
+/// derives `Inspect` shows its fields in the element tree's snapshot (ADR-0242 §3):
+///
+/// ```rust,ignore
+/// #[derive(Clone, StatelessView, Inspect)]
+/// #[view(inspect)]
+/// struct Greeting { name: String }
+/// ```
+///
+/// `StatefulView` takes the same attribute.
+///
 /// # Keyed widgets
 ///
 /// The default `View::key()` returns `None`. Authors who need a
@@ -110,7 +123,7 @@ use syn::{DeriveInput, parse_macro_input};
 ///
 /// A `#[view(key = "<expr>")]` derive attribute that auto-wires a
 /// field-named key is a deferred ergonomics improvement.
-#[proc_macro_derive(StatelessView)]
+#[proc_macro_derive(StatelessView, attributes(view))]
 pub fn derive_stateless_view(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     derive_stateless::expand(&input)
@@ -182,7 +195,7 @@ pub fn derive_inherited_data(input: TokenStream) -> TokenStream {
 /// See [`macro@StatelessView`] for the generated-code path strategy
 /// (Cargo-resolved runtime paths) and keyed-widget workaround
 /// notes — the same patterns apply.
-#[proc_macro_derive(StatefulView)]
+#[proc_macro_derive(StatefulView, attributes(view))]
 pub fn derive_stateful_view(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     derive_stateful::expand(&input)

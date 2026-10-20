@@ -13,6 +13,7 @@
 //! [`Scene`]: crate::Scene
 
 use std::collections::HashMap;
+use std::num::NonZeroU64;
 
 use flui_foundation::{Diagnosticable, LayerId, RenderId};
 
@@ -141,6 +142,9 @@ pub struct LayerTree {
     /// one link in one frame is a widget-tree error; a debug build trips on
     /// it, a release build keeps the later leader.
     leaders: HashMap<LayerLink, LayerId>,
+    /// Which scene this tree is, counted by its producer; ids are minted per tree, so inspection
+    /// pairs them with it.
+    scene: NonZeroU64,
 }
 
 #[inline]
@@ -177,6 +181,7 @@ impl LayerTree {
         let mut tree = Self {
             nodes: Vec::new(),
             leaders: HashMap::new(),
+            scene: NonZeroU64::MIN,
         };
         let id = tree.push(root.into(), None);
         debug_assert_eq!(id, ROOT);
@@ -187,6 +192,20 @@ impl LayerTree {
     #[inline]
     pub fn root(&self) -> LayerId {
         ROOT
+    }
+
+    /// Which scene this tree is: 1 unless its producer numbered it with [`Self::with_scene`].
+    #[inline]
+    pub fn scene(&self) -> NonZeroU64 {
+        self.scene
+    }
+
+    /// Numbers the tree as its producer's `scene`th, so a layer id kept from an earlier scene
+    /// is told apart from the same slot here.
+    #[must_use]
+    pub fn with_scene(mut self, scene: NonZeroU64) -> Self {
+        self.scene = scene;
+        self
     }
 
     /// Appends `node` as the last child of `parent` and returns its id.

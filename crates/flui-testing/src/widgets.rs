@@ -1393,6 +1393,55 @@ impl LaidOut {
         self.host.ui_runtime().sink().layer_tree()
     }
 
+    /// A typed snapshot of the UI runtime's element tree, its root scopes included: each node
+    /// is an element named by the view that created it, linked to its render object.
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::Gone`](flui_foundation::inspect::SnapshotError::Gone) when the query
+    /// starts at an element that is no longer mounted.
+    pub fn inspect_elements(
+        &self,
+        query: flui_foundation::inspect::SnapshotQuery,
+    ) -> Result<flui_foundation::inspect::SnapshotNode, flui_foundation::inspect::SnapshotError>
+    {
+        self.host
+            .with_tree(|tree| flui_foundation::inspect::snapshot(&*tree, query))
+    }
+
+    /// A typed snapshot of the committed render tree, each node linked to the semantics node
+    /// it contributes while semantics is enabled.
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::Gone`](flui_foundation::inspect::SnapshotError::Gone) when the query
+    /// starts at a render object that is no longer in the tree.
+    pub fn inspect_render(
+        &self,
+        query: flui_foundation::inspect::SnapshotQuery,
+    ) -> Result<flui_foundation::inspect::SnapshotNode, flui_foundation::inspect::SnapshotError>
+    {
+        self.pipeline_owner
+            .with(|owner| flui_foundation::inspect::snapshot(&owner.inspect(), query))
+    }
+
+    /// A typed snapshot of [`layer_tree`](Self::layer_tree), the last submitted scene.
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::Empty`](flui_foundation::inspect::SnapshotError::Empty) before a scene
+    /// was submitted.
+    pub fn inspect_layers(
+        &self,
+        query: flui_foundation::inspect::SnapshotQuery,
+    ) -> Result<flui_foundation::inspect::SnapshotNode, flui_foundation::inspect::SnapshotError>
+    {
+        let tree = self
+            .layer_tree()
+            .ok_or(flui_foundation::inspect::SnapshotError::Empty)?;
+        flui_foundation::inspect::snapshot(tree, query)
+    }
+
     /// Every draw operation in the last submitted scene's picture layers, in
     /// layer order, each with its recorded transform: what a paint test
     /// samples at a virtual time.

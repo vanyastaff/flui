@@ -10,8 +10,9 @@
 //!
 //! From a tree walk come:
 //!
-//! - an owned [`SnapshotNode`] ([`snapshot()`]) that tests read by type
-//!   ([`SnapshotNode::get`], [`SnapshotNode::find_by_link`], [`SnapshotNode::find_by_kind`]);
+//! - an owned [`SnapshotNode`] ([`snapshot()`]) that keeps the tree's facts apart from the
+//!   object's own fields, and that tests read by type ([`SnapshotNode::get`],
+//!   [`SnapshotNode::get_fact`], [`SnapshotNode::find_by_link`], [`SnapshotNode::find_by_kind`]);
 //! - a structural [`diff()`] whose tolerances come from each field's [`Unit`];
 //! - one human outline ([`render()`]), coloured by role only on a terminal without `NO_COLOR`.
 //!
@@ -23,6 +24,7 @@ mod fields;
 mod render;
 mod snapshot;
 mod tree;
+mod type_name;
 mod value;
 
 pub use diff::{Change, DiffOptions, NodePath, diff};
@@ -31,11 +33,12 @@ pub use fields::{
 };
 pub use render::{Ansi, Plain, Role, Style, render, style_for};
 pub use snapshot::{
-    FieldError, FromField, MatchError, Matches, OwnedField, OwnedValue, SnapshotNode,
-    SnapshotQuery, Variant, snapshot,
+    FieldError, FromField, MatchError, Matches, OwnedField, OwnedValue, SnapshotError,
+    SnapshotNode, SnapshotQuery, Variant, snapshot,
 };
-pub use tree::{InspectId, InspectTree, Link, Links, NodeView};
-pub use value::{Rgba, ToValue, Value};
+pub use tree::{InspectId, InspectTree, Link, Links, NodeView, SceneLayer};
+pub use type_name::{kind_args_of, kind_of};
+pub use value::{Rgba, Shared, ToValue, Value};
 
 /// Derives [`Inspect`] for a struct or an enum.
 ///

@@ -190,6 +190,25 @@ pub trait View: Downcast + DynClone + 'static {
     fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
         None
     }
+
+    /// Writes this view's configuration for inspection (ADR-0242): what the element tree's
+    /// snapshot keeps as the node's fields, apart from the element's own facts. Writes nothing by
+    /// default.
+    ///
+    /// It runs while the snapshot holds the element tree, as `build` runs inside the binding's
+    /// build scope, so it describes `self` and must not reach back into the binding: a call to
+    /// `WidgetsBinding::with_element_tree_mut` from here deadlocks.
+    ///
+    /// A view that derives [`Inspect`](flui_foundation::inspect::Inspect) forwards to it:
+    ///
+    /// ```ignore
+    /// fn inspect(&self, out: &mut Fields<'_>) {
+    ///     Inspect::inspect(self, out);
+    /// }
+    /// ```
+    fn inspect(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        let _ = out;
+    }
 }
 
 impl_downcast!(View);
@@ -207,6 +226,23 @@ pub trait ElementBase: Downcast + 'static {
 
     /// Get the TypeId of the View that created this Element.
     fn view_type_id(&self) -> TypeId;
+
+    /// The [`core::any::type_name`] of the View that created this Element, which names the
+    /// element in inspection. The default names the element's own type.
+    fn view_type_name(&self) -> &'static str {
+        core::any::type_name::<Self>()
+    }
+
+    /// The element's kind as inspection and logs name it: `StatelessElement`,
+    /// `RenderObjectElement`.
+    fn debug_kind(&self) -> &'static str {
+        "Element"
+    }
+
+    /// Writes the held view's [`View::inspect`] fields.
+    fn inspect_view(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        let _ = out;
+    }
 
     /// Hash of the `Key` carried by the View this element currently
     /// holds, or `None` if that View is keyless.

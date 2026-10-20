@@ -35,6 +35,8 @@ mod first_frame_deferral;
 mod gesture_alternatives;
 #[path = "headless_host.rs"]
 mod headless_host;
+#[path = "inspect.rs"]
+mod inspect;
 #[path = "layout_builder_seam.rs"]
 mod layout_builder_seam;
 #[path = "lifecycle_panic_containment.rs"]

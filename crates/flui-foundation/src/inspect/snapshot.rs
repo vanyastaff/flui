@@ -1,13 +1,15 @@
 //! The owned snapshot of a tree walk, and typed access to it.
 
 use core::fmt;
+use core::num::NonZeroU32;
 use core::time::Duration;
+use std::collections::HashMap;
 
 use crate::geometry::{EdgeInsets, Matrix4, Offset, Rect, Size};
 
 use super::fields::{Field, Fields, Inspect, Level, Meta, Seq, Sink, Unit};
 use super::tree::{InspectId, InspectTree, Link, Links};
-use super::value::{Rgba, Value};
+use super::value::{Rgba, Shared, Value};
 
 /// A [`Value`] that owns its data, as a snapshot keeps it.
 #[derive(Clone, Debug, PartialEq)]
@@ -46,6 +48,13 @@ pub enum OwnedValue {
     Duration(Duration),
     /// A typed reference to a node of another tree.
     Link(Link),
+    /// An object nodes may share, by its number in the snapshot.
+    Shared {
+        /// The type the object is named by.
+        ty: &'static str,
+        /// Its number among the objects of its type.
+        number: NonZeroU32,
+    },
     /// A type that only has `Debug`, as its `Debug` text.
     Debug(String),
     /// No value.
@@ -55,9 +64,13 @@ pub enum OwnedValue {
 }
 
 impl OwnedValue {
-    /// An owned copy of `value`.
+    /// An owned copy of `value` alone: shared objects in it are numbered within it.
     #[must_use]
     pub fn from_value(value: Value<'_>) -> Self {
+        Self::numbered(value, &mut Numbering::default())
+    }
+
+    fn numbered(value: Value<'_>, numbering: &mut Numbering) -> Self {
         match value {
             Value::Bool(value) => Self::Bool(value),
             Value::Int(value) => Self::Int(value),
@@ -73,6 +86,10 @@ impl OwnedValue {
             Value::Matrix(matrix) => Self::Matrix(Box::new(*matrix)),
             Value::Duration(duration) => Self::Duration(duration),
             Value::Link(link) => Self::Link(link),
+            Value::Shared(shared) => Self::Shared {
+                ty: shared.ty(),
+                number: numbering.number(shared),
+            },
             Value::Debug(value) => Self::Debug(format!("{value:?}")),
             Value::None => Self::None,
         }
@@ -96,6 +113,7 @@ impl OwnedValue {
             Self::Matrix(matrix) => Value::Matrix(matrix),
             Self::Duration(duration) => Value::Duration(*duration),
             Self::Link(link) => Value::Link(*link),
+            Self::Shared { ty, number } => Value::Shared(Shared::numbered(ty, *number)),
             // The text, so it prints as written rather than quoted.
             Self::Debug(text) => Value::Debug(text),
             Self::None => Value::None,
@@ -169,8 +187,9 @@ pub struct SnapshotQuery {
     pub root: Option<InspectId>,
     /// How many levels below the start to descend; `None` for all.
     pub max_depth: Option<u32>,
-    /// How many nodes to take at most; the rest are counted in `omitted_children`.
-    pub max_nodes: Option<u32>,
+    /// How many nodes to take at most, the start node among them, so a snapshot always has one;
+    /// the rest are counted in `omitted_children`.
+    pub max_nodes: Option<NonZeroU32>,
     /// The most detailed fields to keep.
     pub level: Level,
 }
@@ -187,7 +206,6 @@ impl Default for SnapshotQuery {
 }
 
 /// One node of an owned snapshot.
-#[derive(Clone, Debug, PartialEq)]
 pub struct SnapshotNode {
     /// The node's id in its tree.
     pub id: InspectId,
@@ -195,7 +213,14 @@ pub struct SnapshotNode {
     pub kind: &'static str,
     /// Its kind's type arguments, for a generic kind.
     pub kind_args: Vec<&'static str>,
-    /// The tree's facts, then the object's own fields, in the order written.
+    /// What the tree knows about the node ([`InspectTree::facts`]), in the order written:
+    /// [`get_fact`](Self::get_fact) reads these.
+    ///
+    /// They are kept apart from [`fields`](Self::fields), so a fact and an object's field of
+    /// the same name never stand for each other.
+    pub facts: Vec<OwnedField>,
+    /// The object's own fields ([`Inspect::inspect`]), in the order written:
+    /// [`get`](Self::get) reads these.
     pub fields: Vec<OwnedField>,
     /// Its committed bounds in its parent's logical coordinates.
     pub rect: Option<Rect>,
@@ -205,23 +230,78 @@ pub struct SnapshotNode {
     pub children: Vec<SnapshotNode>,
     /// Its children left out by the depth or node limit.
     pub omitted_children: u32,
-    /// How many of its fields are [`Value::Debug`] (untyped).
+    /// How many of its facts and fields are [`Value::Debug`] (untyped).
     pub debug_fields: u32,
 }
 
-/// Takes an owned snapshot of `tree`, or `None` when the start node does not exist.
-pub fn snapshot<T: InspectTree + ?Sized>(tree: &T, query: SnapshotQuery) -> Option<SnapshotNode> {
-    let start = query.root.or_else(|| tree.root())?;
-    let mut budget = query.max_nodes.unwrap_or(u32::MAX);
-    take(tree, start, 0, &query, &mut budget)
+/// Why a snapshot has no node to start from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SnapshotError {
+    /// The tree has no root.
+    #[error("the tree is empty")]
+    Empty,
+    /// The start node is not in the tree: it was removed, or its slot holds a newer node.
+    #[error("{0} is gone")]
+    Gone(InspectId),
 }
 
+/// Takes an owned snapshot of `tree` from the query's start node.
+///
+/// The walk keeps its own stack, so a deep chain costs no Rust stack; so do the snapshot's own
+/// walks ([`iter`](SnapshotNode::iter), [`diff`](super::diff()), [`render`](super::render())) and
+/// its clone, comparison, `Debug` and drop.
+///
+/// # Errors
+///
+/// [`SnapshotError::Empty`] for a tree with no root and no start node asked for, and
+/// [`SnapshotError::Gone`] when the start node asked for is not in the tree.
+pub fn snapshot<T: InspectTree + ?Sized>(
+    tree: &T,
+    query: SnapshotQuery,
+) -> Result<SnapshotNode, SnapshotError> {
+    let start = query
+        .root
+        .or_else(|| tree.root())
+        .ok_or(SnapshotError::Empty)?;
+    let mut budget = query.max_nodes.map_or(u32::MAX, NonZeroU32::get);
+    // One numbering for the whole walk: every node borrowed below stays alive until it ends,
+    // so no two objects numbered here can share an address.
+    let mut numbering = Numbering::default();
+    let mut node =
+        take(tree, start, &query, &mut budget, &mut numbering).ok_or(SnapshotError::Gone(start))?;
+    let mut children = tree.children(start);
+    let mut depth = 0_u32;
+    // The ancestors of `node` being filled, each with its children still to visit.
+    let mut open = Vec::new();
+    loop {
+        if let Some(child) = children.next() {
+            let descend = query.max_depth.is_none_or(|max| depth < max);
+            if descend
+                && budget > 0
+                && let Some(taken) = take(tree, child, &query, &mut budget, &mut numbering)
+            {
+                open.push((node, children, depth));
+                (node, children, depth) = (taken, tree.children(child), depth + 1);
+            } else {
+                node.omitted_children = node.omitted_children.saturating_add(1);
+            }
+            continue;
+        }
+        let Some((mut parent, rest, parent_depth)) = open.pop() else {
+            return Ok(node);
+        };
+        parent.children.push(node);
+        (node, children, depth) = (parent, rest, parent_depth);
+    }
+}
+
+/// The node `id` without its children, or `None` when the tree has no such node.
 fn take<T: InspectTree + ?Sized>(
     tree: &T,
     id: InspectId,
-    depth: u32,
     query: &SnapshotQuery,
     budget: &mut u32,
+    numbering: &mut Numbering,
 ) -> Option<SnapshotNode> {
     let view = tree.node(id)?;
     *budget = budget.saturating_sub(1);
@@ -231,42 +311,62 @@ fn take<T: InspectTree + ?Sized>(
         level: query.level,
         fields: Vec::new(),
         debug_fields: 0,
+        numbering,
     };
     tree.facts(id, &mut Fields::new(&mut sink));
+    let facts = core::mem::take(&mut sink.fields);
     view.object.inspect(&mut Fields::new(&mut sink));
-    let mut node = SnapshotNode {
+    Some(SnapshotNode {
         id,
         kind: view.object.kind(),
         kind_args,
+        facts,
         fields: sink.fields,
         rect: view.rect,
         links: view.links,
         children: Vec::new(),
         omitted_children: 0,
         debug_fields: sink.debug_fields,
-    };
-    let descend = query.max_depth.is_none_or(|max| depth < max);
-    for child in tree.children(id) {
-        if descend
-            && *budget > 0
-            && let Some(child) = take(tree, child, depth + 1, query, budget)
-        {
-            node.children.push(child);
-            continue;
-        }
-        node.omitted_children = node.omitted_children.saturating_add(1);
+    })
+}
+
+/// Numbers shared objects per type, in the order a walk meets them.
+#[derive(Default)]
+struct Numbering {
+    numbers: HashMap<(&'static str, usize), NonZeroU32>,
+    last: HashMap<&'static str, NonZeroU32>,
+}
+
+impl Numbering {
+    fn number(&mut self, shared: Shared<'_>) -> NonZeroU32 {
+        let Some(address) = shared.address() else {
+            return shared
+                .number()
+                .expect("BUG: a shared value is either live or numbered");
+        };
+        *self
+            .numbers
+            .entry((shared.ty(), address))
+            .or_insert_with(|| {
+                let next = self.last.get(shared.ty()).map_or(NonZeroU32::MIN, |last| {
+                    last.checked_add(1)
+                        .expect("BUG: a walk takes at most u32::MAX nodes")
+                });
+                self.last.insert(shared.ty(), next);
+                next
+            })
     }
-    Some(node)
 }
 
 /// Copies fields at or under its level.
-struct OwnedSink {
+struct OwnedSink<'n> {
     level: Level,
     fields: Vec<OwnedField>,
     debug_fields: u32,
+    numbering: &'n mut Numbering,
 }
 
-impl OwnedSink {
+impl OwnedSink<'_> {
     fn push(&mut self, name: &'static str, value: OwnedValue, meta: Meta<'_>) {
         if matches!(value, OwnedValue::Debug(_)) {
             self.debug_fields = self.debug_fields.saturating_add(1);
@@ -276,22 +376,25 @@ impl OwnedSink {
             value,
             level: meta.level,
             unit: meta.unit,
-            default: meta.default.map(OwnedValue::from_value),
+            default: meta
+                .default
+                .map(|value| OwnedValue::numbered(value, self.numbering)),
         });
     }
 }
 
-impl Sink for OwnedSink {
+impl Sink for OwnedSink<'_> {
     fn field(&mut self, field: Field<'_>) {
         if field.meta.level <= self.level {
-            self.push(field.name, OwnedValue::from_value(field.value), field.meta);
+            let value = OwnedValue::numbered(field.value, self.numbering);
+            self.push(field.name, value, field.meta);
         }
     }
 
     fn seq(&mut self, name: &'static str, meta: Meta<'_>, items: &dyn Seq) {
         if meta.level <= self.level {
             let mut values = Vec::new();
-            items.each(&mut |item| values.push(OwnedValue::from_value(item)));
+            items.each(&mut |item| values.push(OwnedValue::numbered(item, self.numbering)));
             self.push(name, OwnedValue::Seq(values), meta);
         }
     }
@@ -364,6 +467,7 @@ from_field! {
     &'a Matrix4 => "matrix", OwnedValue::Matrix(matrix) => matrix.as_ref();
     Duration => "duration", OwnedValue::Duration(duration) => *duration;
     Link => "link", OwnedValue::Link(link) => *link;
+    Shared<'a> => "shared", OwnedValue::Shared { ty, number } => Shared::numbered(ty, *number);
     &'a [OwnedValue] => "seq", OwnedValue::Seq(items) => items.as_slice();
 }
 
@@ -463,20 +567,46 @@ impl<'a> IntoIterator for Matches<'a> {
 }
 
 impl SnapshotNode {
-    /// The field `name`, untyped.
+    /// The object's own field `name`, untyped.
     #[must_use]
     pub fn field(&self, name: &str) -> Option<&OwnedField> {
         self.fields.iter().find(|field| field.name == name)
     }
 
-    /// The field `name` read as `T`: `node.get::<f64>("flex")`.
+    /// The object's own field `name` read as `T`: `node.get::<f64>("flex")`. A fact of the
+    /// same name is not read; [`get_fact`](Self::get_fact) reads that.
     ///
     /// # Errors
     ///
-    /// [`FieldError::Missing`] when the node has no such field, [`FieldError::WrongKind`] when
-    /// it holds another kind of value.
+    /// [`FieldError::Missing`] when the object has no such field, [`FieldError::WrongKind`]
+    /// when it holds another kind of value.
     pub fn get<'a, T: FromField<'a>>(&'a self, name: &str) -> Result<T, FieldError> {
-        let field = self.field(name).ok_or_else(|| FieldError::Missing {
+        self.read(self.field(name), name)
+    }
+
+    /// The tree's fact `name`, untyped.
+    #[must_use]
+    pub fn fact(&self, name: &str) -> Option<&OwnedField> {
+        self.facts.iter().find(|fact| fact.name == name)
+    }
+
+    /// The tree's fact `name` read as `T`: `node.get_fact::<bool>("dirty")`. An object's field
+    /// of the same name is not read; [`get`](Self::get) reads that.
+    ///
+    /// # Errors
+    ///
+    /// [`FieldError::Missing`] when the tree wrote no such fact, [`FieldError::WrongKind`] when
+    /// it holds another kind of value.
+    pub fn get_fact<'a, T: FromField<'a>>(&'a self, name: &str) -> Result<T, FieldError> {
+        self.read(self.fact(name), name)
+    }
+
+    fn read<'a, T: FromField<'a>>(
+        &self,
+        field: Option<&'a OwnedField>,
+        name: &str,
+    ) -> Result<T, FieldError> {
+        let field = field.ok_or_else(|| FieldError::Missing {
             kind: self.kind,
             id: self.id,
             name: name.to_owned(),
@@ -521,5 +651,121 @@ impl SnapshotNode {
     #[must_use]
     pub fn total_debug_fields(&self) -> u64 {
         self.iter().map(|node| u64::from(node.debug_fields)).sum()
+    }
+}
+
+impl SnapshotNode {
+    /// This node with no children, as a deep walk copies it one level at a time.
+    fn shallow(&self) -> Self {
+        Self {
+            id: self.id,
+            kind: self.kind,
+            kind_args: self.kind_args.clone(),
+            facts: self.facts.clone(),
+            fields: self.fields.clone(),
+            rect: self.rect,
+            links: self.links,
+            children: Vec::new(),
+            omitted_children: self.omitted_children,
+            debug_fields: self.debug_fields,
+        }
+    }
+
+    /// Whether the two nodes are equal apart from their children.
+    fn shallow_eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.kind == other.kind
+            && self.kind_args == other.kind_args
+            && self.facts == other.facts
+            && self.fields == other.fields
+            && self.rect == other.rect
+            && self.links == other.links
+            && self.children.len() == other.children.len()
+            && self.omitted_children == other.omitted_children
+            && self.debug_fields == other.debug_fields
+    }
+}
+
+/// Copies one level at a time with its own stack, so a deep snapshot costs no Rust stack.
+impl Clone for SnapshotNode {
+    fn clone(&self) -> Self {
+        let (mut node, mut children) = (self.shallow(), self.children.iter());
+        // The ancestors of `node` being filled, each with its children still to copy.
+        let mut open = Vec::new();
+        loop {
+            if let Some(child) = children.next() {
+                open.push((node, children));
+                (node, children) = (child.shallow(), child.children.iter());
+                continue;
+            }
+            let Some((mut parent, rest)) = open.pop() else {
+                return node;
+            };
+            parent.children.push(node);
+            (node, children) = (parent, rest);
+        }
+    }
+}
+
+/// Compares one level at a time with its own stack, so a deep snapshot costs no Rust stack.
+impl PartialEq for SnapshotNode {
+    fn eq(&self, other: &Self) -> bool {
+        let mut pending = vec![(self, other)];
+        while let Some((a, b)) = pending.pop() {
+            if !a.shallow_eq(b) {
+                return false;
+            }
+            pending.extend(a.children.iter().zip(&b.children));
+        }
+        true
+    }
+}
+
+/// Frees the children with its own stack, so a deep snapshot costs no Rust stack.
+impl Drop for SnapshotNode {
+    fn drop(&mut self) {
+        let mut pending = core::mem::take(&mut self.children);
+        while let Some(mut node) = pending.pop() {
+            pending.append(&mut node.children);
+        }
+    }
+}
+
+/// Lists the subtree in tree order, each node with its depth, its own data and how many
+/// children it has, so a deep snapshot costs no Rust stack.
+impl fmt::Debug for SnapshotNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut stack = vec![(self, 0_usize)];
+        let nodes = core::iter::from_fn(move || {
+            let (node, depth) = stack.pop()?;
+            stack.extend(node.children.iter().rev().map(|child| (child, depth + 1)));
+            Some(Shallow { node, depth })
+        });
+        f.debug_list().entries(nodes).finish()
+    }
+}
+
+/// One node of a snapshot's `Debug` list, without its children.
+struct Shallow<'a> {
+    node: &'a SnapshotNode,
+    depth: usize,
+}
+
+impl fmt::Debug for Shallow<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let node = self.node;
+        f.debug_struct("SnapshotNode")
+            .field("depth", &self.depth)
+            .field("id", &node.id)
+            .field("kind", &node.kind)
+            .field("kind_args", &node.kind_args)
+            .field("facts", &node.facts)
+            .field("fields", &node.fields)
+            .field("rect", &node.rect)
+            .field("links", &node.links)
+            .field("children", &node.children.len())
+            .field("omitted_children", &node.omitted_children)
+            .field("debug_fields", &node.debug_fields)
+            .finish()
     }
 }

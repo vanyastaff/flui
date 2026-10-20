@@ -58,8 +58,8 @@ mod measured {
     // Typed inspection (ADR-0242): the trait, its derive and what a package's tests read.
     use flui_sdk::foundation::inspect::{
         Fields as _, Inspect as _, InspectId as _, InspectTree as _, Level as _, Link as _,
-        SnapshotNode as _, SnapshotQuery as _, ToValue as _, Unit as _, Value as _, diff as _,
-        render as _, snapshot as _,
+        SnapshotError as _, SnapshotNode as _, SnapshotQuery as _, ToValue as _, Unit as _,
+        Value as _, diff as _, render as _, snapshot as _,
     };
     use flui_sdk::foundation::panic::{PanicRecovery as _, RecoveryScope as _};
     use flui_sdk::foundation::{

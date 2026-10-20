@@ -3,7 +3,7 @@
 use crate::geometry::{EdgeInsets, Offset, Rect, Size};
 
 use super::fields::Unit;
-use super::snapshot::{OwnedValue, SnapshotNode};
+use super::snapshot::{OwnedField, OwnedValue, SnapshotNode};
 use super::tree::InspectId;
 
 /// How close two numbers must be to count as equal.
@@ -92,8 +92,30 @@ pub enum Change {
         /// Its size after.
         to: Size,
     },
-    /// A field whose value changed, appeared or disappeared.
+    /// A node whose bounds appeared or disappeared: one snapshot has them and the other does
+    /// not, as a picture's do when it changes between an unbounded fill and a bounded shape.
+    Bounds {
+        /// The node.
+        node: NodePath,
+        /// Its bounds before, `None` when it had none.
+        from: Option<Rect>,
+        /// Its bounds after, `None` when it has none.
+        to: Option<Rect>,
+    },
+    /// An object's own field whose value changed, appeared or disappeared.
     Field {
+        /// The node.
+        node: NodePath,
+        /// The field.
+        name: &'static str,
+        /// Its value before, `None` when it is new.
+        from: Option<OwnedValue>,
+        /// Its value after, `None` when it is gone.
+        to: Option<OwnedValue>,
+    },
+    /// A fact of the tree's whose value changed, appeared or disappeared. It is compared only
+    /// with the facts, so a field of the same name never stands for it.
+    Fact {
         /// The node.
         node: NodePath,
         /// The field.
@@ -126,8 +148,8 @@ impl Change {
 #[must_use]
 pub fn diff(before: &SnapshotNode, after: &SnapshotNode, options: DiffOptions) -> Vec<Change> {
     let mut changes = Vec::new();
-    if before.kind == after.kind {
-        compare(before, after, &mut Vec::new(), &options, &mut changes);
+    if same_kind(before, after) {
+        compare(before, after, &options, &mut changes);
     } else {
         changes.push(Change::Removed(path_of(before, &[])));
         changes.push(Change::Added(path_of(after, &[])));
@@ -143,91 +165,197 @@ fn path_of(node: &SnapshotNode, path: &[usize]) -> NodePath {
     }
 }
 
+/// What the diff walk does next.
+enum Step<'a> {
+    /// Compare a matched pair, the `index`th child of the node at the current path.
+    Enter {
+        before: &'a SnapshotNode,
+        after: &'a SnapshotNode,
+        index: usize,
+    },
+    /// Report a child left unmatched, whose path was taken when its parent was compared.
+    Report(Change),
+    /// Leave the pair entered last.
+    Leave,
+}
+
+/// Compares `before` with `after` and every matched pair below them, with its own stack so a
+/// deep snapshot costs no Rust stack. Changes come in the order a recursive walk gives: a
+/// node's own, then its matched children's subtrees, then its removed and its added children.
 fn compare(
     before: &SnapshotNode,
     after: &SnapshotNode,
-    path: &mut Vec<usize>,
     options: &DiffOptions,
     changes: &mut Vec<Change>,
 ) {
-    if let (Some(from), Some(to)) = (before.rect, after.rect) {
-        let moved = !close(from.left(), to.left(), options.pixels)
-            || !close(from.top(), to.top(), options.pixels);
-        if moved {
-            changes.push(Change::Moved {
-                node: path_of(after, path),
-                from,
-                to,
-            });
-        } else if !size_close(from.size(), to.size(), options.pixels) {
-            changes.push(Change::Resized {
-                node: path_of(after, path),
-                from: from.size(),
-                to: to.size(),
-            });
-        }
-    }
-
-    for field in &before.fields {
-        match after.field(field.name) {
-            Some(other) => {
-                let tolerance = options.tolerance(field.unit.or(other.unit));
-                if !value_close(&field.value, &other.value, tolerance, options.pixels) {
-                    changes.push(Change::Field {
-                        node: path_of(after, path),
-                        name: field.name,
-                        from: Some(field.value.clone()),
-                        to: Some(other.value.clone()),
-                    });
-                }
+    let mut path = Vec::new();
+    compare_node(before, after, &path, options, changes);
+    let mut steps = children_steps(before, after, &path);
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Enter {
+                before,
+                after,
+                index,
+            } => {
+                path.push(index);
+                compare_node(before, after, &path, options, changes);
+                steps.push(Step::Leave);
+                let mut below = children_steps(before, after, &path);
+                steps.append(&mut below);
             }
-            None => changes.push(Change::Field {
-                node: path_of(after, path),
-                name: field.name,
-                from: Some(field.value.clone()),
-                to: None,
-            }),
+            Step::Report(change) => changes.push(change),
+            Step::Leave => {
+                path.pop();
+            }
         }
     }
-    for field in &after.fields {
-        if before.field(field.name).is_none() {
-            changes.push(Change::Field {
-                node: path_of(after, path),
-                name: field.name,
-                from: None,
-                to: Some(field.value.clone()),
-            });
-        }
-    }
+}
 
+/// The steps for the children of the pair at `path`, last to run first.
+fn children_steps<'a>(
+    before: &'a SnapshotNode,
+    after: &'a SnapshotNode,
+    path: &[usize],
+) -> Vec<Step<'a>> {
     let pairs = pair_children(before, after);
     let mut matched_before = vec![false; before.children.len()];
     let mut matched_after = vec![false; after.children.len()];
     for &(old, new) in &pairs {
         matched_before[old] = true;
         matched_after[new] = true;
-        path.push(new);
-        compare(
-            &before.children[old],
-            &after.children[new],
-            path,
-            options,
-            changes,
-        );
-        path.pop();
     }
-    for (index, child) in before.children.iter().enumerate() {
-        if !matched_before[index] {
-            path.push(index);
-            changes.push(Change::Removed(path_of(child, path)));
-            path.pop();
+    let child_path = |index: usize| [path, &[index]].concat();
+    let mut steps = Vec::new();
+    for (index, child) in after.children.iter().enumerate().rev() {
+        if !matched_after[index] {
+            steps.push(Step::Report(Change::Added(path_of(
+                child,
+                &child_path(index),
+            ))));
         }
     }
-    for (index, child) in after.children.iter().enumerate() {
-        if !matched_after[index] {
-            path.push(index);
-            changes.push(Change::Added(path_of(child, path)));
-            path.pop();
+    for (index, child) in before.children.iter().enumerate().rev() {
+        if !matched_before[index] {
+            steps.push(Step::Report(Change::Removed(path_of(
+                child,
+                &child_path(index),
+            ))));
+        }
+    }
+    for &(old, new) in pairs.iter().rev() {
+        steps.push(Step::Enter {
+            before: &before.children[old],
+            after: &after.children[new],
+            index: new,
+        });
+    }
+    steps
+}
+
+/// The changes to the pair at `path` itself: its bounds, facts and fields.
+fn compare_node(
+    before: &SnapshotNode,
+    after: &SnapshotNode,
+    path: &[usize],
+    options: &DiffOptions,
+    changes: &mut Vec<Change>,
+) {
+    match (before.rect, after.rect) {
+        (Some(from), Some(to)) => {
+            let moved = !close(from.left(), to.left(), options.pixels)
+                || !close(from.top(), to.top(), options.pixels);
+            if moved {
+                changes.push(Change::Moved {
+                    node: path_of(after, path),
+                    from,
+                    to,
+                });
+            } else if !size_close(from.size(), to.size(), options.pixels) {
+                changes.push(Change::Resized {
+                    node: path_of(after, path),
+                    from: from.size(),
+                    to: to.size(),
+                });
+            }
+        }
+        (None, None) => {}
+        (from, to) => changes.push(Change::Bounds {
+            node: path_of(after, path),
+            from,
+            to,
+        }),
+    }
+
+    let node = || path_of(after, path);
+    for (part, from, to) in [
+        (Part::Fact, &before.facts, &after.facts),
+        (Part::Field, &before.fields, &after.fields),
+    ] {
+        compare_part(part, from, to, &node, options, changes);
+    }
+}
+
+/// Which of a node's lists a value is in.
+#[derive(Clone, Copy)]
+enum Part {
+    Fact,
+    Field,
+}
+
+impl Part {
+    fn change(
+        self,
+        node: NodePath,
+        name: &'static str,
+        from: Option<OwnedValue>,
+        to: Option<OwnedValue>,
+    ) -> Change {
+        match self {
+            Self::Fact => Change::Fact {
+                node,
+                name,
+                from,
+                to,
+            },
+            Self::Field => Change::Field {
+                node,
+                name,
+                from,
+                to,
+            },
+        }
+    }
+}
+
+/// Compares one list of a node with the same list of its counterpart, matched by name.
+fn compare_part(
+    part: Part,
+    before: &[OwnedField],
+    after: &[OwnedField],
+    node: &dyn Fn() -> NodePath,
+    options: &DiffOptions,
+    changes: &mut Vec<Change>,
+) {
+    for field in before {
+        match after.iter().find(|other| other.name == field.name) {
+            Some(other) => {
+                let tolerance = options.tolerance(field.unit.or(other.unit));
+                if !value_close(&field.value, &other.value, tolerance, options.pixels) {
+                    changes.push(part.change(
+                        node(),
+                        field.name,
+                        Some(field.value.clone()),
+                        Some(other.value.clone()),
+                    ));
+                }
+            }
+            None => changes.push(part.change(node(), field.name, Some(field.value.clone()), None)),
+        }
+    }
+    for field in after {
+        if before.iter().all(|other| other.name != field.name) {
+            changes.push(part.change(node(), field.name, None, Some(field.value.clone())));
         }
     }
 }
@@ -241,7 +369,7 @@ fn pair_children(before: &SnapshotNode, after: &SnapshotNode) -> Vec<(usize, usi
         let found = before
             .children
             .iter()
-            .position(|old| old.id == child.id && old.kind == child.kind);
+            .position(|old| old.id == child.id && same_kind(old, child));
         if let Some(old) = found.filter(|&old| !taken_before[old]) {
             taken_before[old] = true;
             taken_after[new] = true;
@@ -254,7 +382,7 @@ fn pair_children(before: &SnapshotNode, after: &SnapshotNode) -> Vec<(usize, usi
         }
         if let Some(old) = before.children.get(new)
             && !taken_before[new]
-            && old.kind == child.kind
+            && same_kind(old, child)
         {
             taken_before[new] = true;
             taken_after[new] = true;
@@ -263,6 +391,12 @@ fn pair_children(before: &SnapshotNode, after: &SnapshotNode) -> Vec<(usize, usi
     }
     pairs.sort_unstable_by_key(|&(_, new)| new);
     pairs
+}
+
+/// Whether two nodes are of one kind, type arguments included: `Widget<u8>` replaced by
+/// `Widget<String>` is a removal and an addition.
+fn same_kind(a: &SnapshotNode, b: &SnapshotNode) -> bool {
+    a.kind == b.kind && a.kind_args == b.kind_args
 }
 
 fn close(a: f64, b: f64, tolerance: f64) -> bool {

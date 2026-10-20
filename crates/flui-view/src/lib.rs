@@ -92,6 +92,7 @@ pub mod context;
 pub mod dev_agent;
 pub mod dev_reload;
 pub mod element;
+mod inspect;
 pub mod key;
 pub mod macros;
 pub mod owner;

@@ -138,6 +138,10 @@ impl crate::view::ElementBase for RootElementImpl {
         std::any::TypeId::of::<RootElementImpl>()
     }
 
+    fn debug_kind(&self) -> &'static str {
+        "RootElement"
+    }
+
     fn depth(&self) -> usize {
         self.depth
     }

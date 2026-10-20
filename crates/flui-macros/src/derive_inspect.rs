@@ -159,6 +159,16 @@ struct Described<'a> {
     span: Span,
 }
 
+impl Described<'_> {
+    /// The name the field reports under: its `name` attribute, or its own name.
+    fn reported(&self) -> String {
+        self.attrs
+            .name
+            .as_ref()
+            .map_or_else(|| self.name.clone(), LitStr::value)
+    }
+}
+
 /// Expand `#[derive(Inspect)]`.
 pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let foundation = crate::runtime_path::Runtime::Foundation.resolve(input.ident.span())?;
@@ -178,7 +188,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
 
     let body = match &input.data {
         Data::Struct(data) => {
-            let fields = described(&data.fields, |name, _| {
+            let fields = described(&data.fields, None, |name, _| {
                 let member: syn::Member =
                     syn::parse_str(name).expect("BUG: a field name parses as a member");
                 quote!(&self.#member)
@@ -191,7 +201,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             for variant in &data.variants {
                 let variant_ident = &variant.ident;
                 let variant_name = variant_ident.unraw().to_string();
-                let fields = described(&variant.fields, |_, index| {
+                let fields = described(&variant.fields, Some("variant"), |_, index| {
                     let binding = format_ident!("__inspect_{}", index);
                     quote!(#binding)
                 })?;
@@ -238,10 +248,16 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     for bound in bounds {
         where_clause.predicates.push(parse_quote!(#bound));
     }
-    let kind_args = (!type_params.is_empty()).then(|| {
+    // Every argument the concrete type spells, const values included, as `type_name` writes it.
+    let generic_args = input
+        .generics
+        .params
+        .iter()
+        .any(|param| matches!(param, GenericParam::Type(_) | GenericParam::Const(_)));
+    let kind_args = generic_args.then(|| {
         quote! {
             fn kind_args(&self, args: &mut dyn ::core::ops::FnMut(&'static str)) {
-                #( args(::core::any::type_name::<#type_params>()); )*
+                #runtime::kind_args_of(::core::any::type_name::<Self>(), args);
             }
         }
     });
@@ -294,11 +310,15 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
 }
 
 /// The fields to describe, with their attributes; skipped fields are left out.
-fn described(
-    fields: &Fields,
+///
+/// Two fields may not report under one name, nor under one the derive writes itself
+/// (`reserved`): a snapshot reads a field by its name, so the second would be unreachable.
+fn described<'a>(
+    fields: &'a Fields,
+    reserved: Option<&str>,
     access: impl Fn(&str, usize) -> TokenStream,
-) -> syn::Result<Vec<Described<'_>>> {
-    let mut out = Vec::with_capacity(fields.len());
+) -> syn::Result<Vec<Described<'a>>> {
+    let mut out: Vec<Described<'a>> = Vec::with_capacity(fields.len());
     for (index, field) in fields.iter().enumerate() {
         let attrs = FieldAttrs::parse(field)?;
         if attrs.skip {
@@ -312,6 +332,26 @@ fn described(
             .ident
             .as_ref()
             .map_or_else(|| index.to_string(), ToString::to_string);
+        let reported = attrs
+            .name
+            .as_ref()
+            .map_or_else(|| name.clone(), LitStr::value);
+        if reserved == Some(reported.as_str()) {
+            return Err(syn::Error::new(
+                field.span(),
+                format!(
+                    "`{reported}` names the enum's variant in the snapshot; report this field under another name with `#[inspect(name = \"...\")]`"
+                ),
+            ));
+        }
+        if out.iter().any(|other| other.reported() == reported) {
+            return Err(syn::Error::new(
+                field.span(),
+                format!(
+                    "another field already reports as `{reported}`; give one of them another name with `#[inspect(name = \"...\")]`"
+                ),
+            ));
+        }
         out.push(Described {
             access: access(&written, index),
             attrs,
@@ -335,11 +375,7 @@ fn field_calls(
         .map(|(index, field)| {
             let ty = field.ty;
             let access = &field.access;
-            let name = field
-                .attrs
-                .name
-                .as_ref()
-                .map_or_else(|| field.name.clone(), LitStr::value);
+            let name = field.reported();
             let generic = mentions(ty, type_params);
             let start = if let Some(with) = &field.attrs.with {
                 quote_spanned!(field.span=> out.value(#name, #with(#access)))

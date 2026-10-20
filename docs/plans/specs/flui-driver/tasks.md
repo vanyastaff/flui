@@ -15,8 +15,8 @@
 - **Base:** `main` @ `0fdd19f1e`. Tasks marked **IC** need `interaction/completeness` merged (its
   recording module, input taps, native recording codec, BiDi and Android drivers). The rest can
   start on `main` now.
-- **Total:** 30 tasks in 30 PRs, 16 of them `[P]`; ≈ 159 engineer-days; critical path FD27 → FD4 →
-  FD5 → FD6 → FD9 → FD15 → FD26 → FD18 ≈ 49 days
+- **Total:** 31 tasks in 31 PRs, 16 of them `[P]`; ≈ 161 engineer-days; critical path FD27 → FD4 → FD31
+  → FD5 → FD6 → FD9 → FD15 → FD26 → FD18 ≈ 51 days
 - **Revised 2026-10-18 (D21, D22):** the self-contained task FD26, plus the introspection and tracing
   tasks FD27–FD30 (`Inspect` replaces `Diagnosticable`, tracing conventions and one span stream,
   creation sites, tree context on errors). FD4, FD20 and FD23 now build on them.
@@ -52,6 +52,7 @@ graph LR
   FD28 --> FD23
   FD29 --> FD20
   FD2 --> FD3
+  FD4 --> FD31 --> FD5
   FD3 & FD4 --> FD5 --> FD6 & FD7
   FD7 --> FD8
   FD6 & FD7 --> FD9
@@ -78,7 +79,7 @@ graph LR
 | FD2 | Semantics identifier (ADR-0240): configuration, widget builders, AccessKit `author_id`, wire `Node.identifier` | R8 | — | [P] | L, W | 2 | — |
 | FD3 | Locator resolution and actionability facts in `flui-semantics::agent`; render-to-semantics hit mapping | R6, R7, R9, R11 | FD1, FD2 | — | L | 5 | — |
 | FD4 | Inspection: `InspectTree` for the element, render and layer trees with typed links; `View::inspect` | R15, R51 | FD1, FD27 | [P] | L | 4 | — |
-| FD5 | Runtime agent: owner jobs for locate, act, inspect, actionability, batch; snapshot delta; wait conditions with unsettled causes; events; containment and reentrancy | R15, R16, R18–R20, F3–F6 | FD3, FD4 | — | L | 6 | — |
+| FD5 | Runtime agent: owner jobs for locate, act, inspect, actionability, batch; snapshot delta; wait conditions with unsettled causes; events; containment and reentrancy; node refs scoped to their window | R15, R16, R18–R20, F3–F6 | FD3, FD4, FD31 | — | L | 6 | — |
 | FD6 | Synthetic input into the host input path; input journal; recording taps (input and native layers); release on close | R10, R12, R13, R24, R26, F2 | FD5 | [P] | L | 5 | IC |
 | FD7 | Agent server in `flui-app` (ADR-0239): transports for desktop, iOS, Android and web; launch contract; `EXIT_ON_DISCONNECT`; `driver` feature; devtools `agent` removed | R2–R4, F1, F2, F7 | FD5 | [P] | L, W | 6 | — |
 | FD8 | Presented-frame capture in engine and raster lane; `rendered` capture; headless source | R21 | FD7 | — | L, W | 4 | — |
@@ -104,6 +105,7 @@ graph LR
 | FD28 | Migration: render objects, layers and the GPU profile onto `Inspect` (derive first), consumers (harness, `render_diagnostics`, layer inspection, `agent_workflow.rs`) onto typed access; `Diagnosticable` and its derive deleted; a `Value::Debug` ratchet | R50, R51 | FD27 | — | L | 6 | — |
 | FD29 | Tracing conventions: `flui.<subsystem>` targets with aliases and an `EnvFilter` test; semantics/commit/submit phase spans; primitive fields and numeric ids; `element_rebuild` at TRACE with reasons; recognizer spans fixed; one capture layer with the `(target, name)` table; `Timeline` over it; `X`-event export | R52, R53 | — | [P] | L, W | 6 | — |
 | FD30 | Creation sites (`CreationSite` to `flui-foundation`, `#[track_caller]` constructors and builders, widget derive, element copy at mount) and `TreeError<E>` context at the pipeline and build owners | R54, R55 | FD27 | — | L | 4 | — |
+| FD31 | Phase guard: `build` and `inspect` run inside a phase the `WidgetsBinding` and the pipeline owner own; tree entry points answer `TreeBusy` instead of deadlocking or panicking; a panicking `View::inspect` or render-object description is recorded on its node | R15 | FD4 | — | L | 2 | — |
 
 ## Cards
 
@@ -179,6 +181,24 @@ graph LR
   - a counter app's three trees link element → render → semantics;
   - budgets truncate with the `omitted_children` counts;
   - a stale id answers `gone`.
+- **Evidence (2026-10-20):**
+  - `flui-testing`'s `flui_testing_it::inspect`:
+    `a_counters_elements_link_to_render_objects_that_link_to_semantics`,
+    `budgets_truncate_every_tree_with_omitted_children_counts` (elements, render, layers),
+    `an_id_from_before_a_removal_is_gone` (the replacement reuses the slot, so only the
+    generation tells the nodes apart), `a_layer_id_from_an_earlier_frame_is_gone` (layer ids
+    are minted per frame, so the scene number tells them apart), `render_facts_read_back_typed`,
+    `a_views_inspect_fields_follow_the_element_facts`;
+  - `flui-foundation`'s `foundation_it::inspect`:
+    `a_query_from_a_missing_node_is_gone_and_an_empty_tree_is_empty`,
+    `a_type_name_spells_its_kind_and_type_arguments`.
+  - As built: `ElementTree` and `LayerTree` implement `InspectTree` themselves, and the render
+    tree through `PipelineOwner::inspect`, which carries the render-to-semantics links. An
+    element's kind comes from its view's type, which the element knows statically, so nothing is
+    recorded at mount. Views carry no `Diagnosticable` properties; `View::inspect` is their
+    description, filled by `#[view(inspect)]` on the view derives. A render object's
+    `Diagnosticable` lines arrive as one text field, `properties`, until FD28. `snapshot` answers
+    `SnapshotError::Gone` for a stale start node; the protocol's `gone` comes with FD5.
 
 ### FD5. Runtime agent
 
@@ -189,6 +209,9 @@ graph LR
   - a wait-condition registry evaluated after semantics publish and after input delivery, with
     unsettled causes from the runtime's own predicates;
   - an event fan-out with bounded per-subscriber queues (`gap` on overflow).
+  - every node id it answers is a `NodeRef` (`flui-foundation::inspect`): the presentation and
+    the tree-local `Link`, printed `p3/v12.4`. The trees below the presentation keep `Link`; a
+    ref to another or a closed presentation answers `UnknownPresentation`.
 
   `flui_view::dev_agent::AgentWindow` grows the matching methods.
 - **Done when:** headless tests pass through `HeadlessHost::with_dev_agent` for:
@@ -199,6 +222,7 @@ graph LR
   - a timed-out act running at the next drain;
   - two clients serialized;
   - a delta table: appeared, gone, changed name, value and state; a scroll yields no bounds noise.
+  - a node ref read from one window and sent to another answers `UnknownPresentation`.
 
 ### FD6. Synthetic input, journal, recording (IC)
 
@@ -660,6 +684,28 @@ graph LR
   - a planted layout cycle reports its ancestor path and creation site;
   - hot-path errors stay id-only: their variants gain no context field, and the context is only on
     the wrapper the owner returns.
+
+
+### FD31. Phase guard for build and inspection
+
+- **Changes:**
+  - `WidgetsBinding` owns a phase (`Idle`, `Building`, `Inspecting`), entered by a guard around a
+    frame's build and a snapshot and left in its `Drop`, so a panic in user code does not leave it
+    set; no process or thread state;
+  - the tree entry points (`with_element_tree`, `with_element_tree_mut`, `draw_frame`,
+    `attach_root`, the snapshots) check the phase before taking the lock and answer
+    `Err(TreeBusy { phase })`;
+  - a snapshot catches a panic in one node's `View::inspect` and records it on that node as the
+    fact `inspect_failed`; the other nodes are still read;
+  - the render tree's snapshot takes the same guard: a render object's description that reaches
+    the pipeline through a retained `WeakPipelineCell` gets `TreeBusy` instead of the
+    `PipelineCell` borrow panic.
+- **Done when:**
+  - a view whose `build` and whose `inspect` call `with_element_tree` through a handle get
+    `TreeBusy`; with the guard reverted the test hangs and nextest times it out;
+  - a render object whose description calls `with_mut` on its pipeline gets `TreeBusy`;
+  - a view whose `inspect` panics leaves its siblings in the snapshot and the binding usable for
+    the next frame.
 
 ## Notes for whoever implements this
 

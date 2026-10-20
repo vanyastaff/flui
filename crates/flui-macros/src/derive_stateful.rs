@@ -53,6 +53,8 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         .predicates
         .push(parse_quote!(Self: #runtime::StatefulView));
 
+    let inspect = crate::derive_stateless::inspect_method(input)?;
+
     Ok(quote! {
         #[automatically_derived]
         impl #impl_generics #runtime::View for #ident #ty_generics
@@ -61,6 +63,8 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             fn create_element(&self) -> #runtime::element::ElementKind {
                 #runtime::element::ElementKind::stateful(self)
             }
+
+            #inspect
         }
     })
 }

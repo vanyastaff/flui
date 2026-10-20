@@ -3,6 +3,7 @@
 use std::{fmt, hash, sync::Arc};
 
 use flui_foundation::geometry::Rect;
+use flui_foundation::inspect::Shared;
 use flui_painting::paint::{BlendMode, ImageFilter};
 
 #[derive(Debug)]
@@ -31,6 +32,11 @@ impl BackdropGroupKey {
     #[must_use]
     pub fn new() -> Self {
         Self(Arc::new(BackdropGroupMarker))
+    }
+
+    /// The group as a description names it: the same for clones of this key.
+    pub(crate) fn shared(&self) -> Shared<'_> {
+        Shared::arc("BackdropGroup", &self.0)
     }
 }
 

@@ -51,7 +51,7 @@ impl LayerTree {
         }
         if let Layer::AnnotatedRegion(region) = layer
             && (region.is_sized_by_parent() || region.bounds().contains(local))
-            && let Ok(value) = Arc::clone(region.value()).downcast::<T>()
+            && let Some(value) = region.value().downcast::<T>()
         {
             found.push(value);
         }

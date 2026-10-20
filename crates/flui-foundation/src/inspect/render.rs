@@ -90,9 +90,9 @@ pub fn style_for(is_terminal: bool) -> &'static dyn Style {
 ///   … 2 more
 /// ```
 ///
-/// The kind and id come first, then the fields at or under `level` (at [`Level::Summary`] a
-/// field equal to its default is left out), then the bounds. Values use their compact,
-/// pinned [`Display`](core::fmt::Display).
+/// The kind and id come first, then the tree's facts and the object's own fields at or under
+/// `level` (at [`Level::Summary`] one equal to its default is left out), then the bounds.
+/// Values use their compact, pinned [`Display`](core::fmt::Display).
 ///
 /// # Errors
 ///
@@ -103,7 +103,38 @@ pub fn render(
     style: &dyn Style,
     out: &mut dyn Write,
 ) -> fmt::Result {
-    line(root, 0, level, style, out)
+    // Lines still to write, the next one last, so a deep snapshot costs no Rust stack.
+    let mut pending = vec![Line::Node(root, 0)];
+    while let Some(next) = pending.pop() {
+        match next {
+            Line::Node(node, depth) => {
+                line(node, depth, level, style, out)?;
+                if node.omitted_children > 0 {
+                    pending.push(Line::More(node.omitted_children, depth + 1));
+                }
+                pending.extend(
+                    node.children
+                        .iter()
+                        .rev()
+                        .map(|child| Line::Node(child, depth + 1)),
+                );
+            }
+            Line::More(count, depth) => {
+                indent(depth, out)?;
+                piece(style, Role::Dim, out, format_args!("… {count} more"))?;
+                out.write_str("\n")?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One line of the outline.
+enum Line<'a> {
+    /// A node at a depth.
+    Node(&'a SnapshotNode, usize),
+    /// How many children a node left out, at its children's depth.
+    More(u32, usize),
 }
 
 fn piece(
@@ -117,6 +148,19 @@ fn piece(
     style.end(role, out)
 }
 
+/// Two spaces per level, written in pieces: a format width tops out at `u16::MAX`.
+fn indent(depth: usize, out: &mut dyn Write) -> fmt::Result {
+    const SPACES: &str = "                                                                ";
+    let mut width = depth.saturating_mul(2);
+    while width > 0 {
+        let piece = width.min(SPACES.len());
+        out.write_str(&SPACES[..piece])?;
+        width -= piece;
+    }
+    Ok(())
+}
+
+/// The node's own line: kind, id, facts and fields, bounds.
 fn line(
     node: &SnapshotNode,
     depth: usize,
@@ -124,7 +168,7 @@ fn line(
     style: &dyn Style,
     out: &mut dyn Write,
 ) -> fmt::Result {
-    write!(out, "{:width$}", "", width = depth * 2)?;
+    indent(depth, out)?;
     style.begin(Role::Kind, out)?;
     out.write_str(node.kind)?;
     if !node.kind_args.is_empty() {
@@ -140,7 +184,7 @@ fn line(
     style.end(Role::Kind, out)?;
     out.write_str(" ")?;
     piece(style, Role::Id, out, format_args!("{}", node.id))?;
-    for field in &node.fields {
+    for field in node.facts.iter().chain(&node.fields) {
         let hidden = field.level > level || (level == Level::Summary && field.is_default());
         if hidden {
             continue;
@@ -154,19 +198,6 @@ fn line(
         piece(style, Role::Dim, out, format_args!("{rect}"))?;
     }
     out.write_str("\n")?;
-    for child in &node.children {
-        line(child, depth + 1, level, style, out)?;
-    }
-    if node.omitted_children > 0 {
-        write!(out, "{:width$}", "", width = (depth + 1) * 2)?;
-        piece(
-            style,
-            Role::Dim,
-            out,
-            format_args!("… {} more", node.omitted_children),
-        )?;
-        out.write_str("\n")?;
-    }
     Ok(())
 }
 

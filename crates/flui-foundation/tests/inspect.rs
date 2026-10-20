@@ -6,14 +6,15 @@
 //! installs a counting allocator.
 
 use std::collections::BTreeMap;
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::time::Duration;
 
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Rect, Size};
 use flui_foundation::inspect::{
     Change, DiffOptions, Field, FieldError, Fields, Inspect, InspectId, InspectTree, Level, Link,
-    Links, MatchError, Meta, NodeView, OwnedValue, Plain, Rgba, Seq, Sink, SnapshotNode,
-    SnapshotQuery, ToValue, Unit, Value, Variant, diff, render, snapshot,
+    Links, MatchError, Meta, NodePath, NodeView, OwnedValue, Plain, Rgba, SceneLayer, Seq, Shared,
+    Sink, SnapshotError, SnapshotNode, SnapshotQuery, ToValue, Unit, Value, Variant, diff,
+    kind_args_of, kind_of, render, snapshot,
 };
 use flui_foundation::{ElementId, LayerId, RenderId, SemanticsId};
 
@@ -171,7 +172,26 @@ fn each_field_type_maps_to_its_value_and_compact_text() {
             "link",
             "v3.2",
         ),
-        ("layer link", LayerId::new(4).into_boxed(), "link", "l4"),
+        (
+            "layer link",
+            SceneLayer {
+                scene: NonZeroU64::MIN,
+                id: LayerId::new(4),
+            }
+            .into_boxed(),
+            "link",
+            "l4",
+        ),
+        (
+            "layer link, later scene",
+            SceneLayer {
+                scene: NonZeroU64::new(37).expect("37 is nonzero"),
+                id: LayerId::new(4),
+            }
+            .into_boxed(),
+            "link",
+            "l4.37",
+        ),
         (
             "semantics link",
             SemanticsId::new(7).into_boxed(),
@@ -693,7 +713,7 @@ RenderFlex r1  0,0 360x48
         &sample(8.0),
         SnapshotQuery {
             max_depth: Some(1),
-            max_nodes: Some(3),
+            max_nodes: NonZeroU32::new(3),
             level: Level::Summary,
             ..SnapshotQuery::default()
         },
@@ -710,9 +730,9 @@ RenderFlex r1  0,0 360x48
 "
     );
     assert_eq!(
-        capped.field("attached"),
+        capped.fact("attached"),
         None,
-        "a summary query keeps no debug field"
+        "a summary query keeps no debug fact"
     );
 }
 
@@ -742,7 +762,16 @@ fn a_snapshot_reads_fields_by_type_and_finds_nodes_by_link_and_kind() {
             name: "right".to_owned(),
         })
     );
-    assert_eq!(padding.get::<bool>("attached"), Ok(true));
+    assert_eq!(padding.get_fact::<bool>("attached"), Ok(true));
+    assert_eq!(
+        padding.get::<bool>("attached"),
+        Err(FieldError::Missing {
+            kind: "RenderPadding",
+            id: render_id(2).into(),
+            name: "attached".to_owned(),
+        }),
+        "a fact is not one of the object's fields"
+    );
 
     let help = root
         .find_by_link(Link::Semantics(SemanticsId::new(5)))
@@ -752,7 +781,13 @@ fn a_snapshot_reads_fields_by_type_and_finds_nodes_by_link_and_kind() {
         .find_by_link(Link::Render(render_id(4)))
         .expect("the node r4");
     assert_eq!(by_id.get::<&str>("text"), Ok("Cancel"));
-    assert!(root.find_by_link(Link::Layer(LayerId::new(1))).is_none());
+    assert!(
+        root.find_by_link(Link::Layer(SceneLayer {
+            scene: NonZeroU64::MIN,
+            id: LayerId::new(1),
+        }))
+        .is_none()
+    );
     let flex = root
         .find_by_link(Link::Element(ElementId::new(10)))
         .expect("the element link");
@@ -832,18 +867,24 @@ fn a_snapshot_counts_untyped_fields_and_keeps_sequences() {
 }
 
 #[test]
-fn a_query_from_a_missing_node_yields_nothing() {
+fn a_query_from_a_missing_node_is_gone_and_an_empty_tree_is_empty() {
     let tree = sample(8.0);
     let missing = SnapshotQuery {
         root: Some(render_id(99).into()),
         ..SnapshotQuery::default()
     };
-    assert!(snapshot(&tree, missing).is_none());
+    assert_eq!(
+        snapshot(&tree, missing),
+        Err(SnapshotError::Gone(render_id(99).into()))
+    );
     let empty = Tree {
         root: None,
         nodes: BTreeMap::new(),
     };
-    assert!(snapshot(&empty, SnapshotQuery::default()).is_none());
+    assert_eq!(
+        snapshot(&empty, SnapshotQuery::default()),
+        Err(SnapshotError::Empty)
+    );
 }
 
 #[test]
@@ -885,6 +926,159 @@ fn the_diff_reports_a_moved_node_with_its_delta_and_ignores_a_sub_tolerance_chan
         2,
         "an exact diff sees the same nudge"
     );
+}
+
+/// The sample with the padding also describing a field named as the tree's fact.
+/// Bounds that appear or disappear are a change, though neither side has a rect to move from.
+///
+/// Fails when the diff compares bounds only where both snapshots have them.
+#[test]
+fn the_diff_reports_bounds_that_appear_or_disappear() {
+    let bounded = whole(&sample(8.0));
+    let mut unbounded = bounded.clone();
+    unbounded.rect = None;
+    let rect = bounded.rect;
+    for (before, after, from, to) in [
+        (&bounded, &unbounded, rect, None),
+        (&unbounded, &bounded, None, rect),
+    ] {
+        assert_eq!(
+            diff(before, after, DiffOptions::default()),
+            vec![Change::Bounds {
+                node: NodePath {
+                    id: bounded.id,
+                    kind: bounded.kind,
+                    path: Vec::new(),
+                },
+                from,
+                to,
+            }]
+        );
+    }
+}
+
+/// A node replaced by one of the same kind and other type arguments is a removal and an
+/// addition, not the same node.
+///
+/// Fails when the diff pairs nodes by kind alone.
+#[test]
+fn the_diff_tells_kinds_apart_by_their_type_arguments() {
+    let mut before = whole(&sample(8.0));
+    before.kind_args = vec!["u8"];
+    let mut after = before.clone();
+    after.kind_args = vec!["String"];
+    let changes = diff(&before, &after, DiffOptions::default());
+    assert!(
+        matches!(changes.as_slice(), [Change::Removed(_), Change::Added(_)]),
+        "{changes:#?}"
+    );
+}
+
+fn with_attached_field(value: f64) -> Tree {
+    let mut tree = sample(8.0);
+    tree.nodes
+        .get_mut(&render_id(2))
+        .expect("the padding")
+        .0
+        .fields
+        .push(("attached", value, None, None));
+    tree
+}
+
+/// A fact and an object's field of the same name read and diff apart: each accessor reads its
+/// own list, and the diff pairs facts with facts and fields with fields.
+///
+/// Fails when the snapshot puts both in one list, where the first of the two answers for both
+/// and an unchanged field diffs against the fact.
+#[test]
+fn a_fact_and_a_field_of_the_same_name_stay_apart() {
+    let before = whole(&with_attached_field(1.0));
+    let padding = before
+        .find_by_kind("RenderPadding")
+        .unique()
+        .expect("one padding");
+    assert_eq!(padding.get::<f64>("attached"), Ok(1.0));
+    assert_eq!(padding.get_fact::<bool>("attached"), Ok(true));
+    assert_eq!(padding.debug_fields, 0);
+
+    let mut debug = String::new();
+    render(padding, Level::Debug, &Plain, &mut debug).expect("a String accepts writes");
+    assert!(
+        debug.starts_with("RenderPadding r2  attached=true  left=8  attached=1  "),
+        "facts, then fields: {debug}"
+    );
+
+    assert_eq!(
+        diff(
+            &before,
+            &whole(&with_attached_field(1.0)),
+            DiffOptions::exact()
+        ),
+        vec![],
+        "an unchanged field is no change, whatever the fact of its name holds"
+    );
+    let changes = diff(
+        &before,
+        &whole(&with_attached_field(2.0)),
+        DiffOptions::exact(),
+    );
+    assert!(
+        matches!(
+            changes.as_slice(),
+            [Change::Field {
+                name: "attached",
+                from: Some(OwnedValue::Float(1.0)),
+                to: Some(OwnedValue::Float(2.0)),
+                ..
+            }]
+        ),
+        "the field changed and the fact did not: {changes:#?}"
+    );
+
+    // A summary read leaves out the debug-level fact and keeps the field of its name.
+    let summary = snapshot(
+        &with_attached_field(1.0),
+        SnapshotQuery {
+            level: Level::Summary,
+            ..SnapshotQuery::default()
+        },
+    )
+    .expect("the sample has a root");
+    let gone: Vec<_> = diff(&before, &summary, DiffOptions::exact())
+        .into_iter()
+        .filter(|change| {
+            matches!(
+                change,
+                Change::Field {
+                    name: "attached",
+                    ..
+                } | Change::Fact {
+                    name: "attached",
+                    ..
+                }
+            ) && change_path(change) == [0]
+        })
+        .collect();
+    assert!(
+        matches!(
+            gone.as_slice(),
+            [Change::Fact {
+                name: "attached",
+                from: Some(OwnedValue::Bool(true)),
+                to: None,
+                ..
+            }]
+        ),
+        "the fact is gone, the field is not: {gone:#?}"
+    );
+}
+
+/// The path of a field or fact change.
+fn change_path(change: &Change) -> &[usize] {
+    match change {
+        Change::Field { node, .. } | Change::Fact { node, .. } => &node.path,
+        _ => &[],
+    }
 }
 
 #[test]
@@ -957,4 +1151,105 @@ fn a_variant_field_reads_as_its_names() {
             name: "Cover"
         })
     );
+}
+
+/// Erased nodes name their kind from the type name: the last path segment, with its type
+/// arguments reported apart.
+#[test]
+fn a_type_name_spells_its_kind_and_type_arguments() {
+    let cases: [(&'static str, &str, &[&str]); 5] = [
+        ("Padding", "Padding", &[]),
+        ("flui_widgets::basic::Padding", "Padding", &[]),
+        ("a::Builder<b::C>", "Builder", &["b::C"]),
+        (
+            "a::Map<b::K, c::V<d::W, e::X>>",
+            "Map",
+            &["b::K", "c::V<d::W, e::X>"],
+        ),
+        ("a::F<fn(u8) -> u8, b::T>", "F", &["fn(u8) -> u8", "b::T"]),
+    ];
+    for (type_name, kind, args) in cases {
+        assert_eq!(kind_of(type_name), kind, "{type_name}");
+        let mut seen = Vec::new();
+        kind_args_of(type_name, &mut |arg| seen.push(arg));
+        assert_eq!(seen, args, "{type_name}");
+    }
+}
+
+/// A one-node tree whose node holds two shared objects of one type, the second also its
+/// field's default.
+struct Holders {
+    first: std::sync::Arc<u8>,
+    second: std::sync::Arc<u8>,
+}
+
+impl Inspect for Holders {
+    fn kind(&self) -> &'static str {
+        "Holders"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.value("first", Value::Shared(Shared::arc("Slot", &self.first)));
+        out.value("second", Value::Shared(Shared::arc("Slot", &self.second)))
+            .default_value(Value::Shared(Shared::arc("Slot", &self.second)));
+    }
+}
+
+impl InspectTree for Holders {
+    type Node = Self;
+
+    fn root(&self) -> Option<InspectId> {
+        Some(InspectId::from(render_id(1)))
+    }
+
+    fn node(&self, id: InspectId) -> Option<NodeView<'_, Self>> {
+        (id == InspectId::from(render_id(1))).then_some(NodeView {
+            object: self,
+            rect: None,
+            links: Links::default(),
+        })
+    }
+
+    fn children(&self, _: InspectId) -> impl Iterator<Item = InspectId> + '_ {
+        core::iter::empty()
+    }
+}
+
+/// A shared field's default is numbered with the rest of the snapshot, so a field that holds
+/// its default reads as default even when an earlier object of its type took `#1`.
+///
+/// Fails when the default is numbered on its own, which makes it `Slot#1` against the
+/// field's `Slot#2`.
+#[test]
+fn a_shared_default_is_numbered_with_the_snapshot() {
+    let holders = Holders {
+        first: std::sync::Arc::new(1),
+        second: std::sync::Arc::new(2),
+    };
+    let root = snapshot(&holders, SnapshotQuery::default()).expect("one root");
+    let second = root.field("second").expect("reported");
+    assert_eq!(second.value.to_string(), "Slot#2");
+    assert!(second.is_default(), "{second:?}");
+    assert!(!root.field("first").expect("reported").is_default());
+}
+
+#[derive(Inspect)]
+struct Columns<const N: usize> {
+    gap: f64,
+}
+
+/// A kind with a const parameter reports its value, so `Columns<2>` and `Columns<3>` are
+/// different kinds to `diff`.
+///
+/// Fails when only type parameters are reported, which leaves a const-generic kind with no
+/// arguments.
+#[test]
+fn a_const_generic_kind_reports_its_value() {
+    let args = |object: &dyn Inspect| {
+        let mut args = Vec::new();
+        object.kind_args(&mut |arg| args.push(arg));
+        args
+    };
+    assert_eq!(args(&Columns::<2> { gap: 8.0 }), ["2"]);
+    assert_eq!(args(&Columns::<3> { gap: 8.0 }), ["3"]);
 }
