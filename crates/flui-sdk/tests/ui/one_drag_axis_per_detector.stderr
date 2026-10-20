@@ -1,0 +1,24 @@
+error[E0599]: no method named `horizontal` found for struct `DragSlot` in the current scope
+ --> tests/ui/one_drag_axis_per_detector.rs:7:34
+  |
+7 |     let _ = DragSlot::vertical().horizontal();
+  |                                  ^^^^^^^^^^ this is an associated function, not a method
+  |
+  = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+  = note: the candidate is defined in an impl for the type `DragSlot`
+help: use associated function syntax instead
+  |
+7 -     let _ = DragSlot::vertical().horizontal();
+7 +     let _ = DragSlot::horizontal();
+  |
+
+error[E0599]: no method named `on_vertical_drag_update` found for struct `GestureDetector` in the current scope
+  --> tests/ui/one_drag_axis_per_detector.rs:10:10
+   |
+ 8 |       let _ = GestureDetector::new()
+   |  _____________-
+ 9 | |         .drag(DragSlot::pan())
+10 | |         .on_vertical_drag_update(|_| {});
+   | |         -^^^^^^^^^^^^^^^^^^^^^^^ method not found in `GestureDetector`
+   | |_________|
+   |

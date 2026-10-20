@@ -950,6 +950,74 @@ pub(crate) fn viewer_pinch_past_the_scale_bounds_stretches_and_snaps_back() {
     }
 }
 
+/// Two fingers turning a quarter about the viewport's centre at a fixed
+/// spread, in `steps` samples.
+fn twist(steps: u32) -> PointerScript {
+    let (center, radius) = (at(150.0, 150.0), 60.0);
+    let pair = |angle: f64| {
+        let (sin, cos) = angle.sin_cos();
+        let arm = Offset::new(radius * cos, radius * sin);
+        (center - arm, center + arm)
+    };
+    let sample = Duration::from_millis(8);
+    let (first, second) = pair(0.0);
+    let mut script = TouchScript::new("twist")
+        .down(1, first)
+        .wait(sample)
+        .down(2, second);
+    for step in 1..=steps {
+        let (first, second) =
+            pair(std::f64::consts::FRAC_PI_2 * f64::from(step) / f64::from(steps));
+        script = script.wait(sample).move_to(1, first).move_to(2, second);
+    }
+    script
+        .wait(sample)
+        .up(1)
+        .up(2)
+        .build()
+        .expect("BUG: the twist pairs its contacts")
+}
+
+/// The angle the published transform turns the plane by.
+fn rotation_of(controller: &TransformationController) -> f64 {
+    let m = controller.value().to_col_major_array();
+    m[1].atan2(m[0])
+}
+
+/// A two-finger twist turns the scene about the fingers when rotation is
+/// enabled, and leaves it upright, at the same scale, when it is not (the
+/// default).
+pub(crate) fn viewer_touch_twist_rotates_only_when_rotation_is_enabled() {
+    for enabled in [true, false] {
+        let (transform, vsync) = (TransformationController::new(), Vsync::new());
+        let viewer = InteractiveViewer::new(viewer_alternatives())
+            .controller(transform.clone())
+            .double_tap_zoom(false)
+            .rotation_enabled(enabled)
+            .boundary_margin(EdgeInsets::all(f64::INFINITY))
+            .child(SizedBox::new(300.0, 300.0));
+        let mut laid = mounted(VsyncScope::new(vsync.clone(), viewer).boxed(), vsync);
+        laid.replay(&twist(12));
+        settle(&mut laid);
+        let turned = rotation_of(&transform).abs();
+        if enabled {
+            assert!(
+                turned > std::f64::consts::FRAC_PI_4 && turned < std::f64::consts::FRAC_PI_2 + 1e-6,
+                "a quarter twist turns the scene by most of a quarter, by {turned}"
+            );
+        } else {
+            assert_eq!(turned, 0.0, "rotation disabled: the scene stays upright");
+        }
+        assert!(
+            (scale_of(&transform) - 1.0).abs() < 1e-9,
+            "rotation enabled {enabled}: a twist at a fixed spread does not zoom, at {}",
+            scale_of(&transform)
+        );
+        assert_planar(&transform, &format!("twist, rotation enabled {enabled}"));
+        assert_finite(&transform, &format!("twist, rotation enabled {enabled}"));
+    }
+}
+
 /// A fling the boundary stops overshoots past it and settles on it, as the
 /// last motion of the releasing sequence.
 pub(crate) fn viewer_fling_into_its_boundary_overshoots_and_settles() {

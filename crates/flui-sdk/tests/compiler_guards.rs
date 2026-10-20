@@ -14,5 +14,6 @@ mod trybuild_ui {
         cases.pass("tests/ui/inspect_through_sdk.rs");
         cases.compile_fail("tests/ui/inspect_unmapped_field.rs");
         cases.compile_fail("tests/ui/inspect_unsupported_shape.rs");
+        cases.compile_fail("tests/ui/one_drag_axis_per_detector.rs");
     }
 }
