@@ -373,24 +373,13 @@ impl RSuperellipse {
     /// radii whose sum would overflow still fit.
     #[must_use]
     pub fn normalized(&self) -> Self {
-        let fitting = |a: f64, b: f64, extent: f64| {
-            let maximum = a.max(b);
-            if maximum <= 0.0 {
-                1.0
-            } else {
-                ((extent / maximum) / (a / maximum + b / maximum)).min(1.0)
-            }
-        };
         let (tl, tr, br, bl) = (
             self.tl_radius,
             self.tr_radius,
             self.br_radius,
             self.bl_radius,
         );
-        let factor = fitting(tl.x, tr.x, self.width())
-            .min(fitting(bl.x, br.x, self.width()))
-            .min(fitting(tl.y, bl.y, self.height()))
-            .min(fitting(tr.y, br.y, self.height()));
+        let factor = super::rrect::radii_fit_factor([tl, tr, br, bl], self.width(), self.height());
         Self {
             rect: self.rect,
             tl_radius: tl.scale(factor),

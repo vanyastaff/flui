@@ -404,11 +404,6 @@ pub struct RenderAnimatedTransform {
     source: Source,
     kind: Kind,
     cell: Rc<SampleCell>,
-    /// The sample `hit_test_transform` chose for the current hit-test visit,
-    /// consumed by the `hit_test` that follows it, so a tick between the two
-    /// hooks cannot pair one matrix on the hit entry with another for the
-    /// child's position.
-    hit_sample: Cell<Option<(f64, f64)>>,
     transform_hit_tests: bool,
     has_child: bool,
     listener_id: Option<RenderSubscription>,
@@ -443,7 +438,6 @@ impl RenderAnimatedTransform {
             source,
             kind,
             cell: Rc::new(SampleCell::new(seed)),
-            hit_sample: Cell::new(None),
             transform_hit_tests: true,
             has_child: false,
             listener_id: None,
@@ -482,19 +476,6 @@ impl RenderAnimatedTransform {
     fn class_and_matrix(kind: Kind, sample: (f64, f64), size: Size) -> (Class, Matrix4) {
         let m = matrix(kind, sample, size);
         (classify_matrix(&m), m)
-    }
-
-    /// Records the sample this hit-test visit uses; see `hit_sample`.
-    fn arm_hit_sample(&self) -> (f64, f64) {
-        let sample = self.cell.sample();
-        self.hit_sample.set(Some(sample));
-        sample
-    }
-
-    /// The sample `hit_test_transform` recorded for this visit, or a fresh
-    /// read when `hit_test` runs alone.
-    fn take_hit_sample(&self) -> (f64, f64) {
-        self.hit_sample.take().unwrap_or_else(|| self.cell.sample())
     }
 }
 
@@ -558,27 +539,12 @@ impl RenderBox for RenderAnimatedTransform {
         if !self.has_child {
             return false;
         }
-        // The flag comes first: an untransformed hit does not depend on the
-        // matrix, degenerate or not.
-        if !self.transform_hit_tests {
-            return ctx.hit_test_child(0, *ctx.position());
-        }
-        let size = ctx.own_size();
-        let (class, matrix) = Self::class_and_matrix(self.kind, self.take_hit_sample(), size);
-        match class {
-            Class::Degenerate => false,
-            Class::Identity => ctx.hit_test_child(0, *ctx.position()),
-            Class::Layered => {
-                let Some(inverse) = matrix.try_inverse() else {
-                    return false;
-                };
-                let position = ctx.position();
-                let Some((x, y)) = inverse.unproject_to_plane(position.dx, position.dy) else {
-                    return false;
-                };
-                ctx.hit_test_child(0, Offset::new(x, y))
-            }
-        }
+        //
+        // The one sample this visit uses was read by `hit_test_transform`; the
+        // walk mapped the position through that matrix's inverse, or refused
+        // a degenerate one before this call. An untransformed hit, or an
+        // identity sample, leaves the position as it was.
+        self.has_child && ctx.hit_test_child(0, *ctx.position())
     }
 
     fn skip_paint(&self) -> bool {
@@ -621,14 +587,19 @@ impl RenderBox for RenderAnimatedTransform {
     }
 
     fn hit_test_transform(&self, size: Size) -> Option<Matrix4> {
-        // Must agree with `hit_test`: an untransformed hit gets no matrix on
-        // its entry, or the delivered position would be mapped through a
-        // transform the hit did not use.
+        // The visit's only read of the sample: the walk maps the position and
+        // the entries through this one matrix, so a tick cannot pair one
+        // sample on the entry with another for the child's position. An
+        // untransformed hit gets no matrix, or the delivered position would
+        // be mapped through a transform the hit did not use. A degenerate
+        // matrix is reported so the walk refuses it: nothing is visible.
         if !self.transform_hit_tests {
             return None;
         }
-        let (class, matrix) = Self::class_and_matrix(self.kind, self.arm_hit_sample(), size);
-        (class == Class::Layered).then_some(matrix)
+        match self.current(size) {
+            (Class::Identity, _) => None,
+            (Class::Layered | Class::Degenerate, matrix) => Some(matrix),
+        }
     }
 
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
@@ -817,56 +788,6 @@ mod tests {
         let (class, m) = node.current(size);
         assert_ne!(class, Class::Degenerate, "{m:?}");
         assert!(is_finite(&m));
-    }
-
-    // A tick between `hit_test_transform` and `hit_test` must not change the
-    // matrix `hit_test` positions the child with: both use the visit's one
-    // sample.
-    #[test]
-    fn one_sample_per_hit_test_visit() {
-        let controller = AnimationController::builder(Duration::from_millis(1))
-            .unbounded()
-            .build();
-        controller.set_value(0.25);
-        let node = RenderAnimatedTransform::new(TransformMotion::Rotation {
-            turns: ProxyAnimation::new(
-                std::rc::Rc::new(controller.clone()) as std::rc::Rc<dyn Animation<f64>>
-            ),
-        });
-        let (_owner, handle) = owner_with_handle(|| {});
-        let mut node = node;
-        node.attach(handle);
-        let size = Size::new(40.0, 40.0);
-        let entry = node
-            .hit_test_transform(size)
-            .expect("a quarter turn is layered");
-        controller.set_value(0.125);
-        assert_eq!(
-            node.cell.sample(),
-            (0.125, 0.0),
-            "the tick reached the cache"
-        );
-        node.has_child = true;
-        let observed = std::cell::Cell::new(None);
-        let mut hit_child = |index, position, _transform| {
-            assert_eq!(index, 0);
-            observed.set(position);
-            true
-        };
-        let inner =
-            flui_rendering::protocol::BoxHitTestCtx::<Single, BoxParentData>::with_child_callback(
-                Offset::new(30.0, 20.0),
-                &mut hit_child,
-            );
-        let mut ctx = BoxHitTestContext::new(inner, size);
-        assert!(node.hit_test(&mut ctx));
-        let position = observed.get().expect("child was hit");
-        assert!((position.dx - 20.0).abs() < 1e-10);
-        assert!(
-            (position.dy - 10.0).abs() < 1e-10,
-            "the child must use the quarter-turn entry, not the later eighth turn: {position:?}; {entry:?}"
-        );
-        node.detach();
     }
 
     #[derive(Debug)]

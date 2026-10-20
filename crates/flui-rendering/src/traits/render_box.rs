@@ -138,9 +138,10 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
 
     /// Hit tests this render object.
     ///
-    /// The default implementation checks if the hit position is within the
-    /// render object's size bounds. Implementors can override to add children
-    /// testing or special hit behavior.
+    /// The default depends on the arity: a leaf is hit inside its own size;
+    /// an object that can have children hands the position to them, topmost
+    /// (last) first, and is hit only through a child. Implementors override
+    /// to add their own target area, transforms or special hit behavior.
     ///
     /// The context provides:
     /// - Position via `ctx.position()` or `ctx.x()`, `ctx.y()`
@@ -151,9 +152,11 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     ///
     /// # Default behavior
     ///
-    /// Returns true iff the hit position is within this object's bounds
-    /// (size.contains check). Override this method to add child testing,
-    /// transform recording, or special hit behaviors.
+    /// Outside its own size nothing is hit. Inside it, a leaf (an arity
+    /// that admits no child) claims the hit; any other object returns
+    /// whether a child, tested at its layout offset in reverse order, was
+    /// hit — so a parent that forgets to override this neither swallows its
+    /// children's hits nor claims empty space of its own.
     ///
     /// # Example
     ///
@@ -173,7 +176,15 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     /// }
     /// ```
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Self::Arity, Self::ParentData>) -> bool {
-        ctx.is_within_own_size()
+        if !ctx.is_within_own_size() {
+            return false;
+        }
+        if !<Self::Arity as Arity>::validate_count(1) {
+            return true;
+        }
+        (0..ctx.child_count())
+            .rev()
+            .any(|index| ctx.hit_test_child_at_layout_offset(index))
     }
 
     // ========================================================================
@@ -744,7 +755,7 @@ where
     fn hit_test_raw(
         &self,
         position: crate::protocol::ProtocolPosition<BoxProtocol>,
-        _child_count: usize,
+        child_count: usize,
         size: flui_foundation::geometry::Size,
         hit_child: &mut dyn FnMut(
             usize,
@@ -773,7 +784,8 @@ where
         let inner = crate::protocol::BoxHitTestCtx::<T::Arity, T::ParentData>::with_child_callback(
             position, hit_child,
         );
-        let mut ctx = crate::context::BoxHitTestContext::new(inner, size);
+        let mut ctx =
+            crate::context::BoxHitTestContext::new(inner, size).with_child_count(child_count);
         let blocks_below = T::hit_test(self, &mut ctx);
         HitTestOutcome::new(
             ctx.self_hit_entry_registered() || blocks_below,
