@@ -978,6 +978,11 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     struct ExitObserver {
         inner: WinitApp,
         exiting: Arc<AtomicBool>,
+        /// Set just before the close: the wake that carries it is preceded,
+        /// in the same loop turn, by a pointer move the translation holds.
+        move_before_close: Arc<AtomicBool>,
+        /// Whether the window's input callback saw a pointer move.
+        moved: Arc<AtomicBool>,
     }
 
     impl ApplicationHandler for ExitObserver {
@@ -995,6 +1000,44 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
         }
 
         fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
+            if self.move_before_close.swap(false, Ordering::SeqCst) {
+                let (window, host) = self.inner.platform.with_state(|state| {
+                    (
+                        state.window_id_map.keys().next().copied(),
+                        state.windows.values().next().cloned(),
+                    )
+                });
+                // Registered on the owner thread, as an application does,
+                // so its capability snapshot is delivered and input is not
+                // held behind it.
+                if let Some(host) = host {
+                    let moved = Arc::clone(&self.moved);
+                    crate::traits::PlatformWindow::on_input(
+                        &*host,
+                        Box::new(move |input| {
+                            if matches!(
+                                input,
+                                crate::traits::PlatformInput::Pointer(
+                                    flui_platform_api::pointer::PointerEvent::Move(_)
+                                )
+                            ) {
+                                moved.store(true, Ordering::SeqCst);
+                            }
+                            crate::DispatchEventResult::resolved(false, true)
+                        }),
+                    );
+                }
+                if let Some(window) = window {
+                    self.inner.window_event(
+                        event_loop,
+                        window,
+                        WinitWindowEvent::CursorMoved {
+                            device_id: winit::event::DeviceId::dummy(),
+                            position: winit::dpi::PhysicalPosition::new(12.0, 8.0),
+                        },
+                    );
+                }
+            }
             self.inner.user_event(event_loop, ());
         }
 
@@ -1032,6 +1075,8 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
         .expect("first install succeeds");
 
     let exiting = Arc::new(AtomicBool::new(false));
+    let move_before_close = Arc::new(AtomicBool::new(false));
+    let moved = Arc::new(AtomicBool::new(false));
     let callback_dropped = Arc::new(AtomicBool::new(false));
     let close_thread: Arc<Mutex<Option<thread::ThreadId>>> = Arc::new(Mutex::new(None));
     // Parked here so the drop flag cannot be this Arc's own drop.
@@ -1044,6 +1089,7 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     let callback_dropped_for_worker = Arc::clone(&callback_dropped);
     let close_thread_for_worker = Arc::clone(&close_thread);
     let kept_window_for_worker = Arc::clone(&kept_window);
+    let move_before_close_for_worker = Arc::clone(&move_before_close);
     let worker = thread::spawn(move || {
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             wait_for_running(&platform_for_worker);
@@ -1072,6 +1118,8 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
 
             // The programmatic close, from a thread that is NOT the
             // owner — the hardest case for the teardown's thread rules.
+            // The loop turn that runs it has a pointer move held first.
+            move_before_close_for_worker.store(true, Ordering::SeqCst);
             window.close();
 
             wait_for_map_len(&platform_for_worker, 0, "programmatic close map removal");
@@ -1120,11 +1168,19 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
             self_close_route: SelfCloseRoute::default(),
         },
         exiting,
+        move_before_close,
+        moved: Arc::clone(&moved),
     };
     event_loop
         .run_app(&mut app)
         .expect("event loop runs to completion");
     worker.join().expect("worker thread does not panic");
+
+    assert!(
+        moved.load(Ordering::SeqCst),
+        "a pointer move held when a control request closes its window reaches the \
+         window first"
+    );
 
     assert_eq!(
         *close_thread.lock(),

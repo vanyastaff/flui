@@ -2356,12 +2356,15 @@ its focal point, which every `Update` refreshes (ADR-0217 §4;
   none. `DeviceEvent::Removed` retires every label of the id.
 - winit 0.30 drops the protocol's event time, so every reading is stamped at
   dispatch. A move is held until the next event: a move of the same contact
-  replaces it, anything else (and the end of the loop turn, `about_to_wait`)
-  delivers it first. The moves a late turn dispatches back to back are then
+  replaces it, anything else (another window event, an owner wake that may
+  close its window, the end of the loop turn at `about_to_wait`) delivers it
+  first (`programmatic_close_runs_the_full_teardown_and_exits_the_loop` holds a
+  move across a close request). The moves a late turn dispatches back to back are then
   one move, and velocity never sees their microsecond spacing.
 - On X11, winit reports a `CursorMoved` on the master device at the first
-  touch's position before each of its events; a held move that the touch at
-  that position follows is dropped, so nothing hovers under the finger. A
+  touch's position before its press and moves; a held move that any event of
+  a touch at that position follows (its lift and cancel included) is dropped,
+  so nothing hovers under the finger. A
   fractional `LineDelta` is a touchpad's smooth scrolling and is precise; it
   carries no phases.
 - On Wayland, a leave with a button held cancels the mouse's sequence: the

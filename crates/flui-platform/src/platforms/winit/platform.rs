@@ -1686,6 +1686,9 @@ impl ApplicationHandler for WinitApp {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
+        // A held pointer move reaches its window before a control request
+        // can close it.
+        self.flush_native_pointer();
         self.process_control(event_loop);
     }
 

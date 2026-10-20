@@ -19,8 +19,9 @@
 //!   replaces it, anything else (or the end of the turn, [`NativePointerState::flush`])
 //!   delivers it first.
 //! - **X11's first touch is not the mouse.** winit reports a `CursorMoved`
-//!   at the first touch's position before each of its events; a held move
-//!   that the touch at its position follows is dropped. A fractional
+//!   at the first touch's position before its events (0.30 before its press
+//!   and moves, not its lift); a held move that any event of a touch at its
+//!   position follows is dropped, its lift and cancel included. A fractional
 //!   `LineDelta` is a touchpad's smooth scrolling, reported precise.
 //! - **A Wayland leave ends a press.** The compositor that takes the pointer
 //!   mid-press (a grab, a drag) sends no release, so the mouse's sequence is
@@ -292,7 +293,6 @@ impl NativePointerState {
                 WindowEvent::Touch(touch)
                     if held.reading.contact == MOUSE
                         && self.session == Some(WinitSession::X11)
-                        && matches!(touch.phase, TouchPhase::Started | TouchPhase::Moved)
                         && held_raw == Some((touch.location.x, touch.location.y)) =>
                 {
                     Some(false)
@@ -840,7 +840,7 @@ mod pointer_translation_tests {
             Vec<WindowEvent>,
             Vec<&'static str>,
         );
-        let rows: [Row; 7] = [
+        let rows: [Row; 8] = [
             (
                 "a run of moves is its last",
                 None,
@@ -878,6 +878,17 @@ mod pointer_translation_tests {
                     "Touch move (42, 30)",
                     "Touch up",
                 ],
+            ),
+            (
+                "nor is one X11 moves at the touch's lift",
+                Some(WinitSession::X11),
+                vec![
+                    moved(id, 40.0, 30.0),
+                    touched(id, 0, TouchPhase::Started, 40.0, 30.0),
+                    moved(id, 42.0, 30.0),
+                    touched(id, 0, TouchPhase::Ended, 42.0, 30.0),
+                ],
+                vec!["Touch down", "Touch up"],
             ),
             (
                 "elsewhere a cursor move is the mouse wherever it lands",
