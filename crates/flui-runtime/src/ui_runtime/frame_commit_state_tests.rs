@@ -50,7 +50,7 @@ fn arm_one_shot_build_panic(ui_runtime: &UiRuntime) {
     let probe_is_armed = Rc::clone(&is_armed);
     ui_runtime.presentations.primary().set_segment_probe(
         SegmentPhase::Build,
-        Some(Box::new(move || {
+        Some(Box::new(move |_| {
             assert!(
                 !probe_is_armed.replace(false),
                 "build probe — intentional one-shot panic"

@@ -25,7 +25,7 @@ pub use hit_test::{
     CursorRequest, EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, RenderId,
     TransformGuard,
 };
-pub(crate) use hit_test::{PanZoomRoute, ScrollRoute};
+pub(crate) use hit_test::{PanZoomRoute, ScrollRoute, localize_point};
 pub(crate) use interaction_lane::OwnerLatch;
 pub(crate) use interaction_lane::active_dispatch_handle;
 pub use interaction_lane::{

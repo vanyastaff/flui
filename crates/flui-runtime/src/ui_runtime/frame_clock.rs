@@ -137,6 +137,14 @@ impl UiRuntime {
     /// that was never its own (the platform-window half of this same
     /// requirement is each presentation's own `on_need_visual_update`
     /// wiring, `presentation.rs`).
+    /// [`Self::request_redraw_for`] for presentation `id`; nothing when this
+    /// UI runtime no longer hosts it (its close was delivered first).
+    pub(crate) fn request_redraw_of(&self, id: PresentationId) {
+        if let Some(presentation) = self.presentations.get(id) {
+            self.request_redraw_for(presentation);
+        }
+    }
+
     pub(super) fn request_redraw_for(&self, presentation: &PresentationState) {
         self.needs_redraw.store(true, Ordering::Relaxed);
         presentation.mark_redraw_pending();
@@ -547,5 +555,16 @@ impl UiRuntime {
                     .unwrap_or(epoch)
             }))
             .min()
+    }
+}
+
+#[cfg(test)]
+impl UiRuntime {
+    /// Read and clear presentation `id`'s redraw bit, for tests of addressed
+    /// redraw routing; `None` when this UI runtime does not host `id`.
+    pub(crate) fn take_redraw_pending_for_test(&self, id: PresentationId) -> Option<bool> {
+        self.presentations
+            .get(id)
+            .map(PresentationState::take_redraw_pending)
     }
 }

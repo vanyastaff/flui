@@ -459,6 +459,11 @@ impl OwnerFrame {
         self.post_frame.queue.borrow_mut().extend(entries);
     }
 
+    /// Whether any post-frame callback waits for a later frame.
+    pub(crate) fn has_queued_post_frame(&self) -> bool {
+        !self.post_frame.queue.borrow().is_empty()
+    }
+
     pub(crate) fn take_active_post_frame(&self, id: CallbackId) -> Option<PostFrameEntry> {
         let mut active = self.post_frame.active.borrow_mut();
         let index = active.iter().position(|entry| entry.id == id)?;

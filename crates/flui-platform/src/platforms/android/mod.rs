@@ -82,7 +82,7 @@ use crate::{
     redraw_poll::RedrawPoll,
     shared::{
         PlatformHandlers,
-        android_display::idle_wait_until,
+        android_display::{LoopTurn, poll_timeout},
         android_lifecycle::{ActivityEvent, ActivityLifecycle, ActivityTarget, Reaction},
         android_ndk::{LoadedLibraries, SymbolSource},
         os_version::android::{AndroidApi, StylusHandwriting},
@@ -617,13 +617,14 @@ impl Platform for AndroidPlatform {
             }
 
             // Public ViewConfiguration getters have no complete public change
-            // notification. Bound refresh to 500ms, independently of a surface.
+            // notification. Bound refresh to 500ms while resumed, independently
+            // of a surface; a paused Activity reads them again on `Resume`.
             let now = web_time::Instant::now();
             let window = platform.window.lock().clone();
             if let Some(window) = window.as_ref() {
                 window.settle_safe_area();
             }
-            if now >= next_preference_sample {
+            if platform.activity.resumed.load(Ordering::SeqCst) && now >= next_preference_sample {
                 if let Some(window) = window.as_ref() {
                     window.request_safe_area();
                 }
@@ -660,10 +661,11 @@ impl Platform for AndroidPlatform {
             }
 
             // Check if we should render before polling. Pending sources are
-            // gated on `resumed`; otherwise a due deadline would force a 0ms
-            // busy loop while the backgrounded app cannot consume it. The redraw is observed
-            // without consumption because `poll_events` may suspend execution
-            // before the callback can be delivered.
+            // gated on `resumed`, and so is a deadline that is already behind
+            // (`poll_timeout`): the backgrounded app cannot consume it, and
+            // either would turn the poll into a 0ms busy loop. The redraw is
+            // observed without consumption because `poll_events` may suspend
+            // execution before the callback can be delivered.
             let redraw_requested = platform
                 .window
                 .lock()
@@ -673,16 +675,16 @@ impl Platform for AndroidPlatform {
             let mut should_call_ready = false;
             let ((), redraw_after_poll) =
                 RedrawPoll::new(deadline_due, redraw_requested).poll(resumed, |should_render| {
-                    let timeout = if should_render {
-                        Duration::ZERO
-                    } else {
-                        idle_wait_until(
-                            platform.displays.activity_period(),
-                            wake_deadline
-                                .map(|deadline| deadline.saturating_duration_since(web_time::Instant::now())),
-                        )
-                    };
-                    platform.app.poll_events(Some(timeout), |event| {
+                    let timeout = poll_timeout(
+                        LoopTurn {
+                            should_render,
+                            resumed,
+                            wake_deadline,
+                            next_preference_sample,
+                        },
+                        web_time::Instant::now(),
+                    );
+                    platform.app.poll_events(timeout, |event| {
                 if let PollEvent::Main(main_event) = event {
                     // What the Activity callback means (`shared::android_lifecycle`).
                     // An arm that must act around its signal takes and delivers it
@@ -711,6 +713,9 @@ impl Platform for AndroidPlatform {
                             );
                             // The Activity may have come back on another display.
                             platform.displays.invalidate();
+                            // Nothing was sampled while paused: read the
+                            // preferences and insets again on the next turn.
+                            next_preference_sample = web_time::Instant::now();
 
                             // The execution state first, then the surface: a
                             // presentation rebuilt on `true` below already runs.
@@ -775,6 +780,15 @@ impl Platform for AndroidPlatform {
                             let window = platform.window.lock().clone();
                             if let Some(w) = window {
                                 w.invalidate_text_sizing();
+                                // The new native window may have a size the
+                                // old one never had (rotated while in the
+                                // background), and no `WindowResized` has to
+                                // follow it. Published before the surface is
+                                // asked for, so the recreated surface is
+                                // configured at this size, not the old one.
+                                w.publish_state();
+                                w.callbacks().dispatch_resize(w.logical_size(), w.scale_factor());
+                                w.request_safe_area();
                                 // The request rode on the window that is gone. The
                                 // host sends its demand again on
                                 // `PrimarySurfaceRestored` as well: this one covers
@@ -830,11 +844,14 @@ impl Platform for AndroidPlatform {
                         }
                         MainEvent::WindowResized { .. } => {
                             tracing::info!("Android: Window resized");
-                            if let Some(ref w) = *platform.window.lock() {
-                                let size = w.logical_size();
-                                let scale = w.scale_factor();
+                            // Cloned out of its lock: the resize observer runs
+                            // embedder code that may call back into the platform.
+                            let window = platform.window.lock().clone();
+                            if let Some(w) = window {
                                 w.publish_state();
-                                w.callbacks().dispatch_resize(size, scale);
+                                w.callbacks().dispatch_resize(w.logical_size(), w.scale_factor());
+                                // The insets of the old size no longer apply.
+                                w.request_safe_area();
                                 w.request_redraw();
                             }
                         }
@@ -859,6 +876,7 @@ impl Platform for AndroidPlatform {
                             if let Some(window) = window {
                                 window.publish_state();
                                 window.callbacks().dispatch_resize(window.logical_size(), window.scale_factor());
+                                window.request_safe_area();
                             }
                         }
                         MainEvent::LowMemory => {
@@ -917,8 +935,11 @@ impl Platform for AndroidPlatform {
 
             // Consume the redraw only after polling confirms this turn can
             // deliver it. A queued Pause therefore preserves the request for
-            // Resume rather than stranding an acknowledged continuation.
-            if let Some(ref w) = *platform.window.lock()
+            // Resume rather than stranding an acknowledged continuation. The
+            // window is cloned out of its lock: the frame runs embedder code
+            // that may call back into the platform.
+            let window = platform.window.lock().clone();
+            if let Some(ref w) = window
                 && redraw_after_poll
                     .take_if_deliverable(resumed, || w.take_deliverable_redraw_request())
             {

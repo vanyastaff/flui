@@ -62,6 +62,7 @@ enum Notice {
     Text(TextChange),
     Selection,
     Status,
+    Layout,
 }
 
 impl std::fmt::Debug for InMemoryTextStore {
@@ -246,6 +247,7 @@ impl InMemoryTextStore {
                 Notice::Text(change) => observer.text_changed(change),
                 Notice::Selection => observer.selection_changed(),
                 Notice::Status => observer.status_changed(),
+                Notice::Layout => observer.layout_changed(),
             });
         }
         calls.retire(observer);
@@ -356,6 +358,10 @@ impl TextStore for InMemoryTextStore {
         let mut calls = OwnerCalls::new();
         calls.retire(previous);
         calls.resume();
+    }
+
+    fn screen_moved(&self) {
+        self.report(Notice::Layout);
     }
 }
 

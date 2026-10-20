@@ -22,7 +22,9 @@ use crate::{
 /// Per-pointer state (hit tests, resamplers, arena entries, recogniser maps)
 /// grows with active pointers; an untrusted event source could open unbounded
 /// pointers to exhaust memory. Real hardware tops out around 10–16 touches, so
-/// this generous cap never rejects a legitimate gesture.
+/// a Down at the cap means an earlier contact lost its terminal (a backend
+/// that never reuses pointer ids leaves one behind per lost Up): the oldest
+/// contact is cancelled to admit it.
 pub(super) const MAX_SIMULTANEOUS_POINTERS: usize = 32;
 
 /// Contact admission identity, independent of a reusable platform pointer ID:
@@ -144,10 +146,6 @@ impl RefusedContacts {
         {
             *slot = None;
         }
-    }
-
-    fn refuses_down(&self, pointer: PointerId) -> bool {
-        matches!(self, Self::Tracking(ids) if ids.iter().flatten().any(|entry| entry.pointer == pointer && entry.policy == RefusalPolicy::NativeTerminal))
     }
 }
 
@@ -287,6 +285,17 @@ impl PointerSequences {
             .collect();
         contacts.sort_unstable_by_key(|contact| contact.pointer.id);
         contacts
+    }
+
+    /// The contact admitted first, excluding those already retiring.
+    pub(super) fn oldest(&self) -> Option<ContactSnapshot> {
+        let retiring = self.retiring.borrow();
+        self.routes
+            .borrow()
+            .values()
+            .filter(|cached| !retiring.contains(&cached.pointer.id))
+            .min_by_key(|cached| cached.sequence.0)
+            .map(Self::snapshot)
     }
 
     /// Contacts an arena hand-off left owing `Cancel(Claimed)` to the rest of
@@ -445,15 +454,11 @@ impl PointerSequences {
         !self.contains(pointer) && self.refused.borrow().contains(pointer, device)
     }
 
-    pub(super) fn refuses_down(&self, pointer: PointerId) -> bool {
-        self.refused.borrow().refuses_down(pointer)
-    }
-
     pub(super) fn finish_refusal(&self, pointer: PointerId) {
         self.refused.borrow_mut().finish(pointer);
     }
 
-    /// A Down over the admission limit: its native tail stays refused.
+    /// A Down the binding could not admit: its native tail stays refused.
     pub(super) fn refuse(&self, pointer: PointerId) {
         self.refused
             .borrow_mut()

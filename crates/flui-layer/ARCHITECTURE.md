@@ -112,8 +112,8 @@ that the type is nameable without an engine dependency — not its field set.
 `flui-engine/src/damage.rs`; the seam message `DamageRegion` and its producer, `LayerDiffer`
 (decision 8), are defined here. Its
 three-rect merge was removed with the move: the one consumer reads `damage_rect()`, the bounding
-union, through which the merge was unobservable. `PerformanceStats` (a clock-bearing frame-time
-window) lives in `flui-runtime`, beside the presentation that knows when a frame was
+union, through which the merge was unobservable. The overlay's numbers (a frame-clock reading of the
+presentation's frame history) are computed in `flui-runtime`, beside the presentation that knows when a frame was
 composited; `PerformanceOverlayLayer::record` composes the numbers it is handed through the
 caller's `TextContext` into the display list the layer carries, so the engine replays shaped
 labels and shapes nothing (ADR-0092). `record` stays here, beside the layer, because it is the

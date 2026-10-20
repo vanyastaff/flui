@@ -98,7 +98,7 @@ API, a CLI and MCP.
    handle state.
    - Each method has a tier. MCP lists a core set of at most 13 tools by default: launch, close,
      list windows, read, locate, act, tap, type, keys, scroll into view, wait, capture, audit a screen. The rest
-     sit behind `--caps` groups (`input`, `inspect`, `pixels`, `record`, `perf`, `audit`,
+     sit behind `--caps` groups (`session`, `input`, `inspect`, `pixels`, `record`, `perf`, `audit`,
      `explore`, `layout`, `vision`, the last holding coordinate targets).
    - After an action, the reading is a snapshot delta by default (appeared, gone, changed against
      the action's starting revision). The full outline and none are options.
