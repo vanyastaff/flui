@@ -272,3 +272,78 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
         ["field made required: /Node/required/name"]
     );
 }
+
+/// An inspected tree in its wire spelling: values tagged by kind, defaults of the node
+/// (no kind arguments, summary level, nothing omitted) left out, and the JSON read back to
+/// the same snapshot. Not yet in a published schema: it joins the next version's golden.
+#[test]
+fn an_inspect_snapshot_keeps_its_wire_spelling() {
+    use flui_protocol::{
+        InspectField, InspectLevel, InspectNode, InspectRect, InspectUnit, InspectValue,
+    };
+
+    let mut padding = InspectField::new(
+        "padding",
+        InspectValue::EdgeInsets {
+            top: 8.0,
+            right: 8.0,
+            bottom: 8.0,
+            left: 8.0,
+        },
+    );
+    padding.unit = Some(InspectUnit::LogicalPx);
+    let mut attached = InspectField::new("attached", InspectValue::Bool(true));
+    attached.level = InspectLevel::Debug;
+    let mut text = InspectNode::new("r19", "RenderParagraph");
+    text.fields
+        .push(InspectField::new("text", InspectValue::Str("Save".into())));
+    text.links.push("s4".into());
+    let mut root = InspectNode::new("r12", "RenderPadding");
+    root.fields = vec![attached, padding];
+    root.rect = Some(InspectRect {
+        x: 8.0,
+        y: 8.0,
+        width: 344.0,
+        height: 32.0,
+    });
+    root.children.push(text);
+    root.omitted_children = 2;
+
+    let json = serde_json::to_value(&root).expect("a snapshot serializes");
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "id": "r12",
+            "kind": "RenderPadding",
+            "fields": [
+                {"name": "attached", "value": {"type": "bool", "value": true}, "level": "debug"},
+                {
+                    "name": "padding",
+                    "value": {
+                        "type": "edge_insets",
+                        "value": {"top": 8.0, "right": 8.0, "bottom": 8.0, "left": 8.0}
+                    },
+                    "unit": "logical_px"
+                }
+            ],
+            "rect": {"x": 8.0, "y": 8.0, "width": 344.0, "height": 32.0},
+            "children": [{
+                "id": "r19",
+                "kind": "RenderParagraph",
+                "fields": [{"name": "text", "value": {"type": "str", "value": "Save"}}],
+                "links": ["s4"]
+            }],
+            "omitted_children": 2
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<InspectNode>(json).expect("the spelling reads back"),
+        root
+    );
+    let schema = serde_json::to_value(schemars::schema_for!(InspectNode))
+        .expect("the snapshot has a JSON schema");
+    assert!(
+        schema.to_string().contains("\"edge_insets\""),
+        "the schema names every value kind"
+    );
+}

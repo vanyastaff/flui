@@ -14,6 +14,8 @@
 //! the theme-free context menu the design systems style, and the collapsing
 //! header the scroll channel moves.
 //! Animation prelude imports also pin the shared package-author entry point.
+//! The typed inspection model the flui-driver spec places in the SDK (ADR-0242 §4) follows:
+//! the trait with its derive, the snapshot a package's tests read, the diff and the renderer.
 //! `custom_recognizer` proves the extension surface with a recognizer written
 //! against the SDK alone, and `behavioural_widget` a gesture widget whose
 //! gesture and alternatives perform one intent, checked by
@@ -52,6 +54,12 @@ mod measured {
     use flui_sdk::foundation::observe::{
         ElementMounted as _, ElementMoved as _, ElementRebuilt as _, ElementUnmounted as _,
         TreeObserver as _,
+    };
+    // Typed inspection (ADR-0242): the trait, its derive and what a package's tests read.
+    use flui_sdk::foundation::inspect::{
+        Fields as _, Inspect as _, InspectId as _, InspectTree as _, Level as _, Link as _,
+        SnapshotNode as _, SnapshotQuery as _, ToValue as _, Unit as _, Value as _, diff as _,
+        render as _, snapshot as _,
     };
     use flui_sdk::foundation::panic::{PanicRecovery as _, RecoveryScope as _};
     use flui_sdk::foundation::{

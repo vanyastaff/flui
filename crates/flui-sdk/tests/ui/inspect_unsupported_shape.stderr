@@ -1,0 +1,23 @@
+error: `#[derive(Inspect)]` does not support unions: which field is live is unknown; implement `Inspect` by hand
+ --> tests/ui/inspect_unsupported_shape.rs:4:1
+  |
+4 | union Bits {
+  | ^^^^^
+
+error: a skipped field takes no other inspect attribute
+  --> tests/ui/inspect_unsupported_shape.rs:11:5
+   |
+11 |     #[inspect(skip, unit = logical_px)]
+   |     ^
+
+error: a `debug` field has no typed value to compare a default with; map it with `with` instead
+  --> tests/ui/inspect_unsupported_shape.rs:17:5
+   |
+17 |     #[inspect(debug, default)]
+   |     ^
+
+error: expected `logical_px`, `device_px`, `seconds`, `degrees`, `radians` or `fraction`
+  --> tests/ui/inspect_unsupported_shape.rs:23:22
+   |
+23 |     #[inspect(unit = inches)]
+   |                      ^^^^^^

@@ -11,5 +11,8 @@ mod trybuild_ui {
         cases.compile_fail("tests/ui/non_motion_field.rs");
         cases.compile_fail("tests/ui/generic_motion_width.rs");
         cases.compile_fail("tests/ui/gesture_command_needs_an_intent.rs");
+        cases.pass("tests/ui/inspect_through_sdk.rs");
+        cases.compile_fail("tests/ui/inspect_unmapped_field.rs");
+        cases.compile_fail("tests/ui/inspect_unsupported_shape.rs");
     }
 }
