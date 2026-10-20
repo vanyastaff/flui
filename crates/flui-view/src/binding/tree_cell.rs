@@ -75,7 +75,9 @@ impl<T> TreeCell<T> {
         }
     }
 
-    /// Shared access, or the busy phase while an exclusive borrow is live.
+    /// Shared access, or the busy phase while an exclusive borrow is live. It nests inside a
+    /// named phase, as the `GlobalKey` registry needs; every other read goes through
+    /// [`Self::read`] or [`Self::try_read_in`].
     pub(super) fn try_read(&self) -> Result<Ref<'_, T>, TreeBusy> {
         self.value
             .try_borrow()
@@ -94,9 +96,15 @@ impl<T> TreeCell<T> {
         })
     }
 
-    /// [`Self::try_read`] for calls with no error path, which a busy tree makes a caller error.
+    /// Shared access for calls with no error path, which a busy tree makes a caller error. Unlike
+    /// [`Self::try_read`] it also refuses while a phase is named: shared borrows nest, so a
+    /// view's `inspect` could otherwise read the tree it is being inspected from and walk it
+    /// again.
     #[track_caller]
     pub(super) fn read(&self) -> Ref<'_, T> {
+        if let Some(phase) = self.phase.get() {
+            panic!("{}", TreeBusy { phase });
+        }
         self.try_read().unwrap_or_else(|busy| panic!("{busy}"))
     }
 

@@ -16,10 +16,12 @@ use flui_view::{BuildContext, IntoView, RenderView, StatelessView, View, Widgets
 type Answer = Result<SnapshotNode, SnapshotError>;
 
 /// What the view does when it is built or inspected.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Reach {
     /// Asks its binding for a snapshot and keeps the answer.
     Snapshot,
+    /// Snapshots its binding's tree directly, through a shared borrow.
+    Read,
     /// Borrows its binding's tree for writing.
     Write,
 }
@@ -64,6 +66,14 @@ impl View for Reentrant {
             Reach::Snapshot => {
                 let answer = self.0.binding().inspect_elements(SnapshotQuery::default());
                 *self.0.from_inspect.borrow_mut() = Some(answer);
+            }
+            Reach::Read => {
+                self.0.binding().with_element_tree(|tree| {
+                    drop(flui_foundation::inspect::snapshot(
+                        tree,
+                        SnapshotQuery::default(),
+                    ));
+                });
             }
             Reach::Write => self.0.binding().with_element_tree_mut(|_| ()),
         }
@@ -152,21 +162,30 @@ fn a_snapshot_asked_for_from_build_or_inspect_answers_busy() {
     );
 }
 
-/// A view's `inspect` that borrows the tree for writing is refused at once, and the refusal is
-/// recorded on that view's node while the rest of the snapshot is taken.
+/// A view's `inspect` that reaches for its binding's tree, to read it or to write it, is
+/// refused at once, and the refusal is recorded on that view's node while the rest of the
+/// snapshot is taken.
 ///
-/// Fails without the containment: the refusal escapes and no snapshot is taken.
+/// Fails without the phase check on reads: the direct snapshot from `inspect` walks the tree
+/// again from inside its own walk, without end; and without the containment the refusal escapes
+/// and no snapshot is taken.
 #[test]
 fn an_inspect_that_reaches_for_the_tree_is_recorded_on_its_node() {
-    let (binding, _probe) = mounted(Reach::Write);
-    let root = binding
-        .inspect_elements(SnapshotQuery::default())
-        .expect("the snapshot is taken");
-    let node = reentrant(&root);
-    let failure = node
-        .get_fact::<&str>(INSPECT_FAILED)
-        .expect("the refusal is recorded");
-    assert!(failure.contains("busy inspecting"), "{failure}");
-    assert_eq!(node.get::<bool>("before"), Ok(true));
-    assert_eq!(node.children.len(), 1, "the leaf below is still taken");
+    for reach in [Reach::Read, Reach::Write] {
+        let (binding, _hook) = mounted(reach);
+        let root = binding
+            .inspect_elements(SnapshotQuery::default())
+            .expect("the snapshot is taken");
+        let node = reentrant(&root);
+        let failure = node
+            .get_fact::<&str>(INSPECT_FAILED)
+            .expect("the refusal is recorded");
+        assert!(failure.contains("busy inspecting"), "{reach:?}: {failure}");
+        assert_eq!(node.get::<bool>("before"), Ok(true), "{reach:?}");
+        assert_eq!(
+            node.children.len(),
+            1,
+            "{reach:?}: the leaf below is still taken"
+        );
+    }
 }

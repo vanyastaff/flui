@@ -723,7 +723,8 @@ impl WidgetsBinding {
     ///
     /// # Panics
     ///
-    /// When the tree is being built or lent for writing further up this thread's stack.
+    /// When the tree is being built, inspected or lent for writing further up this thread's
+    /// stack.
     #[track_caller]
     pub fn with_element_tree<R>(&self, f: impl FnOnce(&ElementTree) -> R) -> R {
         f(&self.inner.read().element_tree)
