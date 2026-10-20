@@ -622,7 +622,7 @@ mod background_pace_tests {
             "the hook reports the pace"
         );
         assert!(
-            !pace.admit(deadline - BACKGROUNDED_PUMP_PACE / 2),
+            !pace.admit(start + BACKGROUNDED_PUMP_PACE / 2),
             "a wake before the pace does not pump"
         );
         assert_eq!(
