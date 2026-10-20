@@ -1305,14 +1305,17 @@ impl ScaleGestureRecognizer {
         for entry in entries {
             RoutePanic::preserve_first(
                 &mut first,
-                RoutePanic::capture(|| {
-                    entry.reject_without_self();
-                    if self_driven {
-                        entry.sweep();
-                    }
-                }),
+                RoutePanic::capture(|| entry.reject_without_self()),
                 "scale arena withdrawal",
             );
+            // A failing withdrawal still leaves the contest ended.
+            if self_driven {
+                RoutePanic::preserve_first(
+                    &mut first,
+                    RoutePanic::capture(|| entry.sweep()),
+                    "scale arena sweep",
+                );
+            }
         }
         RoutePanic::preserve_first(
             &mut first,

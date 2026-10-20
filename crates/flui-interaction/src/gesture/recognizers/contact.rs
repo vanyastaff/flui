@@ -438,23 +438,30 @@ impl PrimaryContact {
     /// recognized nothing cannot win the sweep by its place in the route.
     pub fn finish(&self, end: ContactEnd) -> Option<ContactSnapshot> {
         if end == ContactEnd::Withdrawn {
+            let snapshot = self.current()?;
             let entry = self.entry();
-            let snapshot = self.withdraw()?;
+            // The withdrawal commits before it runs user code (other members,
+            // diagnostics); a failure there is held until the contest ended.
+            let mut first = RoutePanic::capture(|| {
+                let _ = self.withdraw();
+            });
             // No binding sweeps a self-driven arena on Up: the contest this
             // member left still ends here, among the members that remain.
-            let failure = RoutePanic::capture(|| {
-                if self.membership.arena.sweep_model() == SweepModel::SelfDriven
-                    && let Some(entry) = entry
-                {
-                    entry.sweep();
-                }
-            });
+            RoutePanic::preserve_first(
+                &mut first,
+                RoutePanic::capture(|| {
+                    if self.membership.arena.sweep_model() == SweepModel::SelfDriven
+                        && let Some(entry) = entry
+                    {
+                        entry.sweep();
+                    }
+                }),
+                "withdrawn contact sweep",
+            );
             tracing::debug!(name: "recognizer.stop_tracking", pointer = ?snapshot.pointer,
                 event = %crate::gesture::observability::GestureEvent::StoppedTracking,
                 "recognizer stopped tracking");
-            if let Some(failure) = failure {
-                failure.resume();
-            }
+            super::callback_containment::finish_containment(first, std::thread::panicking());
             return Some(snapshot);
         }
         let snapshot = self.current()?;

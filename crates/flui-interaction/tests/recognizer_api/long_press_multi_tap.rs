@@ -520,6 +520,84 @@ fn an_early_release_in_a_standalone_arena_ends_its_contest() {
     recognizer.cancel();
 }
 
+/// A tracing subscriber that fails on the first arena rejection the
+/// recognizers report: user code running inside a withdrawal.
+struct FailingOnRejection(std::sync::atomic::AtomicBool);
+
+impl tracing::Subscriber for FailingOnRejection {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata
+            .target()
+            .starts_with("flui_interaction::gesture::recognizers")
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Kind(bool);
+        impl tracing::field::Visit for Kind {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                self.0 |= field.name() == "event" && format!("{value:?}") == "arena_rejected";
+            }
+        }
+        let mut kind = Kind(false);
+        event.record(&mut kind);
+        if kind.0 && self.0.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            std::panic::panic_any("withdrawal delivery failure");
+        }
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A failure inside an early release's withdrawal still lets that
+/// standalone contest end: the members left are swept, the failure resumes
+/// afterwards, and the next press is a fresh contest.
+fn a_failing_withdrawal_still_ends_the_standalone_contest() {
+    use flui_interaction::gesture::GestureContest;
+    struct Rival;
+    impl GestureArenaMember for Rival {
+        fn accept_gesture(&self, _: GestureContest) {}
+        fn reject_gesture(&self, _: GestureContest) {}
+    }
+    let clock = ManualClock::new();
+    let arena = GestureArena::with_clock(Arc::new(clock.clone()));
+    let pressed = Rc::new(Cell::new(0));
+    let p = Rc::clone(&pressed);
+    let recognizer = LongPressGestureRecognizer::builder(arena.clone())
+        .on_long_press(move || p.set(p.get() + 1))
+        .build();
+    let (first, second) = (Rc::new(Rival), Rc::new(Rival));
+    let down = press_event(1, Offset::ZERO, 0, false);
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    let _first = arena.add(pointer(1), &first);
+    let _second = arena.add(pointer(1), &second);
+    clock.advance(Duration::from_millis(100));
+    let up = press_event(1, Offset::ZERO, 100_000_000, true);
+    let failing = FailingOnRejection(std::sync::atomic::AtomicBool::new(true));
+    let released = tracing::subscriber::with_default(failing, || {
+        catch_unwind(AssertUnwindSafe(|| {
+            recognizer.handle_event(PointerDispatch::at_root(&up));
+        }))
+    });
+    let payload = released.expect_err("the withdrawal's failure resumes");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"withdrawal delivery failure")
+    );
+    assert!(
+        arena.is_empty(),
+        "the contest was swept despite the failure"
+    );
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    clock.advance(Duration::from_millis(600));
+    arena.poll_deadlines();
+    assert_eq!(pressed.get(), 1, "the next press recognizes");
+    recognizer.cancel();
+}
+
 /// A multi-contact tap is a group of contacts down together: two that
 /// never overlap are two taps, not one two-contact tap.
 fn multi_tap_needs_its_contacts_down_together() {
@@ -611,6 +689,10 @@ fn held_press_and_multi_tap_owner_contracts() {
         (
             "early release in a standalone arena",
             an_early_release_in_a_standalone_arena_ends_its_contest,
+        ),
+        (
+            "failing withdrawal in a standalone arena",
+            a_failing_withdrawal_still_ends_the_standalone_contest,
         ),
         (
             "contacts that never overlap",

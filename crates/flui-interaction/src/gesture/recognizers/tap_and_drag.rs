@@ -526,12 +526,20 @@ impl TapAndDragGestureRecognizer {
             ArenaStep::Claim(entry, displacement) => {
                 RoutePanic::capture(|| entry.claim_motion(displacement))
             }
-            ArenaStep::Withdraw(entry) => RoutePanic::capture(|| {
-                entry.resolve(GestureDisposition::Rejected);
+            ArenaStep::Withdraw(entry) => {
+                let mut first = RoutePanic::capture(|| {
+                    entry.resolve(GestureDisposition::Rejected);
+                });
+                // A failing withdrawal still leaves the contest ended.
                 if self_driven {
-                    entry.sweep();
+                    RoutePanic::preserve_first(
+                        &mut first,
+                        RoutePanic::capture(|| entry.sweep()),
+                        "tap and drag sweep",
+                    );
                 }
-            }),
+                first
+            }
             ArenaStep::Sweep(entry) => RoutePanic::capture(|| {
                 if self_driven {
                     entry.sweep();
