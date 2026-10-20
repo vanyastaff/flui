@@ -1388,9 +1388,17 @@ mod x11_window {
             }));
             // Every visibility report, after the one the window opened with:
             // an unmapped window has had no visibility event yet.
+            // Each report also checks that the snapshot already says the same.
             let visibility = Arc::new(Mutex::new(vec![true]));
             let reported = Arc::clone(&visibility);
+            let observed = Arc::downgrade(&window);
             window.on_visibility_status_change(Box::new(move |visible| {
+                let published = observed.upgrade().map(|window| window.state().visible);
+                assert_eq!(
+                    published,
+                    Some(visible),
+                    "the snapshot runs behind a report"
+                );
                 reported.lock().push(visible);
             }));
 

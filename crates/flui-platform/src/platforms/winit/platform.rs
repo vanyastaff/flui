@@ -1723,6 +1723,9 @@ impl WinitApp {
             self.platform.resample_displays(event_loop);
         }
         if window.take_display_change() || forced {
+            // The snapshot names the display too: publish it before the hint,
+            // so a move no other event reported still reaches `on_state_changed`.
+            window.refresh_state();
             window.callbacks().dispatch_display_changed();
         }
     }

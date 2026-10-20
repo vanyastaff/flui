@@ -573,6 +573,8 @@ impl WinitWindow {
             self.occluded.store(false, Ordering::Release);
             *self.is_visible.lock() = true;
         }
+        // The snapshot first, so the report never runs ahead of `state()`.
+        self.refresh_state();
         self.report_visibility();
     }
 
@@ -596,6 +598,7 @@ impl WinitWindow {
             self.window.set_visible(false);
             *self.is_visible.lock() = false;
         }
+        self.refresh_state();
         self.report_visibility();
     }
 }
