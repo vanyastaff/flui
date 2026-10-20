@@ -41,9 +41,9 @@ impl Hook {
 }
 
 #[derive(Clone)]
-struct Reacher(Rc<Hook>);
+struct Reentrant(Rc<Hook>);
 
-impl StatelessView for Reacher {
+impl StatelessView for Reentrant {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         if matches!(self.0.reach, Reach::Snapshot) {
             let answer = self.0.binding().inspect_elements(SnapshotQuery::default());
@@ -53,7 +53,7 @@ impl StatelessView for Reacher {
     }
 }
 
-impl View for Reacher {
+impl View for Reentrant {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
     }
@@ -112,16 +112,16 @@ fn mounted(reach: Reach) -> (Rc<WidgetsBinding>, Rc<Hook>) {
     });
     hook.binding.set(Rc::downgrade(&binding)).expect("set once");
     binding
-        .attach_root_widget(&Reacher(Rc::clone(&hook)))
+        .attach_root_widget(&Reentrant(Rc::clone(&hook)))
         .expect("a fresh binding attaches");
     binding.draw_frame();
     (binding, hook)
 }
 
-fn reacher(root: &SnapshotNode) -> &SnapshotNode {
-    root.find_by_kind("Reacher")
+fn reentrant(root: &SnapshotNode) -> &SnapshotNode {
+    root.find_by_kind("Reentrant")
         .unique()
-        .expect("one reacher is mounted")
+        .expect("one reentrant view is mounted")
 }
 
 /// A snapshot asked for from a `build` answers that the tree is building, and one asked for
@@ -144,8 +144,8 @@ fn a_snapshot_asked_for_from_build_or_inspect_answers_busy() {
         hook.from_inspect.borrow_mut().take().map(Result::err),
         Some(Some(SnapshotError::Busy("inspecting")))
     );
-    assert_eq!(reacher(&root).get::<bool>("before"), Ok(true));
-    assert_eq!(reacher(&root).fact(INSPECT_FAILED), None);
+    assert_eq!(reentrant(&root).get::<bool>("before"), Ok(true));
+    assert_eq!(reentrant(&root).fact(INSPECT_FAILED), None);
     assert!(
         binding.inspect_elements(SnapshotQuery::default()).is_ok(),
         "the phase ends with the snapshot"
@@ -162,7 +162,7 @@ fn an_inspect_that_reaches_for_the_tree_is_recorded_on_its_node() {
     let root = binding
         .inspect_elements(SnapshotQuery::default())
         .expect("the snapshot is taken");
-    let node = reacher(&root);
+    let node = reentrant(&root);
     let failure = node
         .get_fact::<&str>(INSPECT_FAILED)
         .expect("the refusal is recorded");
