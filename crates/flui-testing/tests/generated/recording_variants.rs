@@ -72,6 +72,7 @@ pub(crate) const VARIANTS: &[(&str, &str)] = &[
     ("CancelReason", "DeviceRemoved"),
     ("CancelReason", "InvalidInput"),
     ("CancelReason", "Claimed"),
+    ("CancelReason", "Superseded"),
     ("PenSqueezePhase", "Began"),
     ("PenSqueezePhase", "Changed"),
     ("PenSqueezePhase", "Ended"),

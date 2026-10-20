@@ -4,43 +4,58 @@
 //! ```text
 //! VSync → BeginFrame → Build → Layout → Paint → EndFrame → Present
 //! ```
-//!
-//! ## Type-Safe Frame IDs
-//!
-//! Frame IDs use `flui_foundation::Id<Frame>` for type safety:
-//! ```rust
-//! use flui_scheduler::id::IdGenerator;
-//! use flui_foundation::markers;
-//!
-//! let id_gen = IdGenerator::<markers::Frame>::new();
-//! let frame1 = id_gen.next();
-//! let frame2 = id_gen.next();
-//! assert_ne!(frame1, frame2);
-//! ```
 
-use std::{
-    fmt,
-    rc::Rc,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::{fmt, num::NonZeroU64, rc::Rc};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use web_time::Instant;
 
-use crate::duration::{BudgetPercentage, FrameDuration, Milliseconds, Seconds};
+use crate::duration::{BudgetPercentage, FrameDuration, Milliseconds};
 
-/// Unique frame identifier using type-safe ID from `flui_foundation`.
+/// A frame's number within the sequence that minted it: one scheduler's
+/// frames, or one presentation's produced frames.
 ///
-/// Uses `NonZeroUsize` internally for niche optimization -
-/// `Option<FrameId>` is the same size as `FrameId`.
-pub use flui_foundation::FrameId;
+/// 64 bits on every target, so a 32-bit host (wasm32) does not run out
+/// within a session; `Option<FrameId>` is the size of a `u64`. Each sequence
+/// starts at 1 and refuses to continue past `u64::MAX`, so a number is never
+/// reused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FrameId(NonZeroU64);
 
-/// Generate the next unique frame ID using a global atomic counter.
-fn next_frame_id() -> FrameId {
-    static COUNTER: AtomicUsize = AtomicUsize::new(1);
-    let value = COUNTER.fetch_add(1, Ordering::Relaxed);
-    FrameId::zip(value)
+impl FrameId {
+    /// The first frame of a sequence.
+    pub const FIRST: Self = Self(NonZeroU64::MIN);
+
+    /// The frame numbered `count` in its sequence, or `None` for zero.
+    #[must_use]
+    pub const fn from_count(count: u64) -> Option<Self> {
+        match NonZeroU64::new(count) {
+            Some(count) => Some(Self(count)),
+            None => None,
+        }
+    }
+
+    /// This frame's number in its sequence, counting from 1.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+
+    /// The frame after this one, or `None` once the sequence is exhausted.
+    #[must_use]
+    pub const fn next(self) -> Option<Self> {
+        match self.0.checked_add(1) {
+            Some(next) => Some(Self(next)),
+            None => None,
+        }
+    }
+}
+
+impl fmt::Display for FrameId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
 }
 
 /// UpdateScheduler phase - which part of the frame lifecycle is executing
@@ -512,77 +527,43 @@ impl fmt::Display for FramePhase {
     }
 }
 
-/// Frame timing information with type-safe durations
+/// One frame's timing as its scheduler sees it: which frame, when it began,
+/// and the target it is judged against.
+///
+/// Issued by the scheduler and handed to persistent and post-frame callbacks.
+/// Elapsed time is measured against an instant the caller supplies, read from
+/// the clock that stamped [`Self::start_time`] — the scheduler's own clock
+/// source, which a headless driver replaces with a virtual one. Measuring
+/// against the wall clock instead would mix two timelines.
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_scheduler::{
-///     duration::FrameDuration,
-///     frame::{FramePhase, FrameTiming},
-/// };
+/// use flui_scheduler::UpdateScheduler;
 ///
-/// let timing = FrameTiming::new(60);
-/// assert_eq!(timing.phase, FramePhase::Idle);
-///
-/// // Check budget
-/// assert!(!timing.is_over_budget());
-/// let remaining = timing.remaining();
-/// assert!(remaining.value() > 0.0);
-///
-/// // Using builder
-/// use flui_scheduler::frame::FrameTimingBuilder;
-/// let timing = FrameTimingBuilder::new()
-///     .target_fps(120)
-///     .initial_phase(FramePhase::Build)
-///     .build();
+/// let scheduler = UpdateScheduler::new();
+/// assert!(scheduler.current_frame().is_none(), "no frame is open");
 /// ```
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct FrameTiming {
-    /// Frame identifier
+    /// Frame identifier, unique within its scheduler.
     pub id: FrameId,
 
-    /// When the frame started (vsync time)
+    /// When the frame started (its vsync or frame time).
     pub start_time: Instant,
 
-    /// Frame duration configuration
+    /// The target the frame is judged against.
     pub frame_duration: FrameDuration,
-
-    /// Current phase
-    pub phase: FramePhase,
-
-    /// Per-phase elapsed durations recorded by the pipeline driver.
-    ///
-    /// Indexed by [`FramePhase::as_index`]. Entries default to
-    /// [`Milliseconds::ZERO`] and are populated by
-    /// [`Self::record_phase_duration`] as each phase completes.
-    phase_durations: [Milliseconds; FRAME_PHASE_COUNT],
 }
 
-/// Number of [`FramePhase`] variants; derived from [`FramePhase::ALL`] so it
-/// stays in sync if a phase is ever added or reordered.
-const FRAME_PHASE_COUNT: usize = FramePhase::ALL.len();
-
 impl FrameTiming {
-    /// Create a new frame timing
-    pub fn new(target_fps: u32) -> Self {
+    /// The timing of frame `id`, begun at `start_time`.
+    pub(crate) fn begun(id: FrameId, start_time: Instant, frame_duration: FrameDuration) -> Self {
         Self {
-            id: next_frame_id(),
-            start_time: Instant::now(),
-            frame_duration: FrameDuration::try_from_fps(target_fps).expect("fps > 0"),
-            phase: FramePhase::Idle,
-            phase_durations: [Milliseconds::ZERO; FRAME_PHASE_COUNT],
-        }
-    }
-
-    /// Create with a specific frame duration
-    pub fn with_duration(frame_duration: FrameDuration) -> Self {
-        Self {
-            id: next_frame_id(),
-            start_time: Instant::now(),
+            id,
+            start_time,
             frame_duration,
-            phase: FramePhase::Idle,
-            phase_durations: [Milliseconds::ZERO; FRAME_PHASE_COUNT],
         }
     }
 
@@ -592,113 +573,46 @@ impl FrameTiming {
         self.frame_duration.as_ms().value()
     }
 
-    /// Get elapsed time since frame start as type-safe Milliseconds
+    /// Time from the frame's start to `now`, zero when `now` precedes it.
     #[inline]
-    pub fn elapsed(&self) -> Milliseconds {
-        Milliseconds::new(self.start_time.elapsed().as_secs_f64() * 1000.0)
+    pub fn elapsed_at(&self, now: Instant) -> Milliseconds {
+        Milliseconds::new(now.saturating_duration_since(self.start_time).as_secs_f64() * 1000.0)
     }
 
-    /// Get elapsed time since frame start in milliseconds (raw f64)
+    /// Whether the frame has used its whole budget by `now`.
     #[inline]
-    pub fn elapsed_ms(&self) -> f64 {
-        self.start_time.elapsed().as_secs_f64() * 1000.0
+    pub fn is_over_budget_at(&self, now: Instant) -> bool {
+        self.frame_duration.is_over_budget(self.elapsed_at(now))
     }
 
-    /// Get elapsed time since frame start as type-safe Seconds
+    /// Budget left at `now`.
     #[inline]
-    pub fn elapsed_as_seconds(&self) -> Seconds {
-        Seconds::new(self.start_time.elapsed().as_secs_f64())
+    pub fn remaining_at(&self, now: Instant) -> Milliseconds {
+        self.frame_duration.remaining(self.elapsed_at(now))
     }
 
-    /// Get elapsed time since frame start in seconds (raw f64)
+    /// Budget used by `now`, as a percentage.
     #[inline]
-    pub fn elapsed_secs(&self) -> f64 {
-        self.start_time.elapsed().as_secs_f64()
+    pub fn utilization_at(&self, now: Instant) -> BudgetPercentage {
+        BudgetPercentage::from_ratio(self.elapsed_at(now).value() / self.target_duration_ms())
     }
 
-    /// Check if frame is over budget
+    /// Whether more than 80% of the budget is used by `now`.
     #[inline]
-    pub fn is_over_budget(&self) -> bool {
-        self.frame_duration.is_over_budget(self.elapsed())
+    pub fn is_deadline_near_at(&self, now: Instant) -> bool {
+        self.frame_duration.is_deadline_near(self.elapsed_at(now))
     }
 
-    /// Get remaining budget as type-safe Milliseconds
+    /// Whether more than 150% of the budget is used by `now`.
     #[inline]
-    pub fn remaining(&self) -> Milliseconds {
-        self.frame_duration.remaining(self.elapsed())
-    }
-
-    /// Get remaining budget in milliseconds (raw f64)
-    #[inline]
-    pub fn remaining_budget_ms(&self) -> f64 {
-        self.remaining().value()
-    }
-
-    /// Calculate how much over/under budget (negative = over budget)
-    #[inline]
-    pub fn budget_delta_ms(&self) -> f64 {
-        self.target_duration_ms() - self.elapsed_ms()
-    }
-
-    /// Get budget utilization as percentage
-    #[inline]
-    pub fn utilization(&self) -> BudgetPercentage {
-        BudgetPercentage::from_ratio(self.elapsed_ms() / self.target_duration_ms())
-    }
-
-    /// Check if deadline is near (>80% budget used)
-    #[inline]
-    pub fn is_deadline_near(&self) -> bool {
-        self.frame_duration.is_deadline_near(self.elapsed())
-    }
-
-    /// Check if frame is janky (>150% budget used)
-    #[inline]
-    pub fn is_janky(&self) -> bool {
-        self.frame_duration.is_janky(self.elapsed())
-    }
-
-    /// Advance to the next phase
-    #[inline]
-    pub fn advance_phase(&mut self) -> bool {
-        if let Some(next) = self.phase.next() {
-            self.phase = next;
-            true
-        } else {
-            false
-        }
+    pub fn is_janky_at(&self, now: Instant) -> bool {
+        self.frame_duration.is_janky(self.elapsed_at(now))
     }
 
     /// Get target FPS
     #[inline]
     pub fn target_fps(&self) -> u32 {
         self.frame_duration.fps() as u32
-    }
-
-    /// Return the recorded duration for `phase`.
-    ///
-    /// Returns [`Milliseconds::ZERO`] for phases that have not yet been
-    /// recorded this frame (i.e. before [`Self::record_phase_duration`] is
-    /// called for that phase).
-    #[inline]
-    pub fn phase_duration(&self, phase: FramePhase) -> Milliseconds {
-        self.phase_durations[phase.as_index()]
-    }
-
-    /// Record how long `phase` took to complete.
-    ///
-    /// Calling this more than once for the same phase overwrites the previous
-    /// value; the pipeline driver is responsible for calling it exactly once
-    /// per phase per frame.
-    #[inline]
-    pub fn record_phase_duration(&mut self, phase: FramePhase, duration: Milliseconds) {
-        self.phase_durations[phase.as_index()] = duration;
-    }
-}
-
-impl Default for FrameTiming {
-    fn default() -> Self {
-        Self::new(60)
     }
 }
 
@@ -722,67 +636,3 @@ pub type RecurringFrameCallback = Rc<dyn Fn(&FrameTiming)>;
 /// These run during the PostFrameCallbacks phase, after rendering is complete.
 /// Use for cleanup, analytics, or scheduling the next frame.
 pub type PostFrameCallback = Box<dyn FnOnce(&FrameTiming)>;
-
-/// Builder for creating frame timing with custom configuration
-#[derive(Debug, Clone)]
-pub struct FrameTimingBuilder {
-    target_fps: Option<u32>,
-    frame_duration: Option<FrameDuration>,
-    initial_phase: FramePhase,
-}
-
-impl FrameTimingBuilder {
-    /// Create a new builder
-    pub fn new() -> Self {
-        Self {
-            target_fps: None,
-            frame_duration: None,
-            initial_phase: FramePhase::Idle,
-        }
-    }
-
-    /// Set target FPS
-    pub fn target_fps(mut self, fps: u32) -> Self {
-        self.target_fps = Some(fps);
-        self
-    }
-
-    /// Set frame duration directly
-    pub fn frame_duration(mut self, duration: FrameDuration) -> Self {
-        self.frame_duration = Some(duration);
-        self
-    }
-
-    /// Set initial phase
-    pub fn initial_phase(mut self, phase: FramePhase) -> Self {
-        self.initial_phase = phase;
-        self
-    }
-
-    /// Build the frame timing
-    ///
-    /// A caller that specifies neither [`Self::target_fps`] nor
-    /// [`Self::frame_duration`] gets a 60fps fallback — an ordinary builder
-    /// default, not a scheduler-wide assumption.
-    pub fn build(self) -> FrameTiming {
-        let frame_duration = self
-            .frame_duration
-            .or_else(|| {
-                self.target_fps
-                    .map(|fps| FrameDuration::try_from_fps(fps).expect("fps > 0"))
-            })
-            .unwrap_or_else(|| {
-                FrameDuration::try_from_fps(60).expect("BUG: 60 fps is always valid")
-            });
-
-        let mut timing = FrameTiming::with_duration(frame_duration);
-        timing.phase = self.initial_phase;
-        timing
-    }
-}
-
-impl Default for FrameTimingBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}

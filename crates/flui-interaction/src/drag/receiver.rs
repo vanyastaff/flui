@@ -12,7 +12,7 @@ use flui_platform_api::data_transfer::{DropFeedback, TransferActions};
 use super::view::DragView;
 use crate::pointer::{
     HitTestEntry, InteractionDispatchError, InteractionDispatchHandle, LocalPayloadTarget,
-    active_dispatch_handle,
+    active_dispatch_handle, localize_point,
 };
 
 /// Where a drag is, as one receiver sees it.
@@ -200,20 +200,25 @@ pub(crate) fn receivers_on_path(
         let Ok(slot) = payload.downcast::<DropReceiverSlot>() else {
             continue;
         };
+        // A receiver whose plane the drag cannot reach (behind the camera,
+        // edge-on) is not under it, as a pointer target would not be.
+        let Some(local) = localize(global, entry.transform.as_ref()) else {
+            continue;
+        };
         found.push(ResolvedReceiver {
             key,
             receiver: Rc::clone(&slot.0),
-            local: localize(global, entry.transform.as_ref()),
+            local,
             lane: lane.clone(),
         });
     }
     Ok(found)
 }
 
-fn localize(global: Offset<f64>, transform: Option<&Matrix4>) -> Offset<f64> {
-    let Some(transform) = transform else {
-        return global;
-    };
-    let (x, y) = transform.transform_point(global.dx, global.dy);
-    Offset::new(x, y)
+/// The receiver's own point for `global`, as pointer delivery localizes it.
+fn localize(global: Offset<f64>, transform: Option<&Matrix4>) -> Option<Offset<f64>> {
+    match transform {
+        None => Some(global),
+        Some(transform) => localize_point(global, transform),
+    }
 }
