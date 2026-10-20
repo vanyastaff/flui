@@ -573,7 +573,7 @@ mod tests {
 
     /// A higher-priority task that re-queues itself waits for the next drain
     /// instead of taking every turn from older, lower-priority work.
-    fn a_requeueing_input_task_does_not_starve_older_builds() {
+    fn a_requeuing_input_task_does_not_starve_older_builds() {
         fn requeue(queue: TaskQueue, runs: Rc<Cell<u32>>) {
             let next = queue.clone();
             queue.add(Priority::UserInput, move || {
@@ -611,8 +611,8 @@ mod tests {
                     exhausted_task_ids_preserve_priority_fifo as fn(),
                 ),
                 (
-                    "a_requeueing_input_task_does_not_starve_older_builds",
-                    a_requeueing_input_task_does_not_starve_older_builds as fn(),
+                    "a_requeuing_input_task_does_not_starve_older_builds",
+                    a_requeuing_input_task_does_not_starve_older_builds as fn(),
                 ),
             ],
         );
