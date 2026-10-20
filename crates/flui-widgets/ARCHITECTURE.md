@@ -2971,11 +2971,21 @@ the input-path matrix row `refresh_indicator_with_a_visible_control` in
 overscrolled position, or from the boundary when first crossing it. It does not
 reapply resistance to accumulated overscroll: zero input preserves the position,
 and movement toward the valid range is unrestricted. Crossing the whole range
-uses the newly crossed edge. Public rows `bouncing_lower_edge_preserves_outward_direction`,
+uses the newly crossed edge. The resistance stiffens with the overscroll: each outward
+pixel moves the content by `coefficient · (1 − overscroll / viewport)²`, integrated over
+the pull, so the overscroll nears the viewport's length and never reaches it, and a pull
+split over many events lands where one event would. Public rows `bouncing_lower_edge_preserves_outward_direction`,
 `bouncing_upper_edge_preserves_outward_direction`,
-`bouncing_stationary_input_preserves_overscroll` and
-`bouncing_inward_motion_and_crossing_respect_the_new_edge` pin these decisions in
+`bouncing_stationary_input_preserves_overscroll`,
+`bouncing_inward_motion_and_crossing_respect_the_new_edge` and
+`bouncing_resistance_stiffens_toward_the_viewport_length` pin these decisions in
 `scroll_physics_and_activity`.
+
+Extents are validated where they enter: `ScrollController::update_dimensions` refuses
+values that are not finite, a negative viewport or `min > max` with `InvalidExtents`, and
+`ScrollPosition` refuses unordered or NaN content extents from layout, keeping the
+committed range. Physics handed such metrics directly clamp nothing
+(`unordered_extents_are_refused_and_bound_nothing`).
 
 Changing a `Scrollable` controller's position identity stops the old trajectory
 before changing its value/status listeners, then detaches the old command
@@ -3119,7 +3129,35 @@ leaf also stops the run a scrollable above drives for the fling the leaf handed 
 remainder reaches that scrollable: the fling's sequence ends `Preempted` before the new
 one starts (`new_wheel_or_assistive_scroll_preempts_handed_off_fling`). A press on a moving scrollable begins the contact's
 sequence at the hold; when another scrollable's drag takes the contact the sequence
-ends `ArenaLost`.
+ends `ArenaLost`. A press catches a release's run (a fling, a snap, a settle) and a
+programmatic animation (`ScrollOwner::catchable`; a pager turning to a page,
+`a_refused_device_does_not_stop_a_pager_in_motion`), but not a notched wheel's easing:
+that goes on under a click, which reaches the content as a tap
+(`a_click_during_wheel_easing_taps_and_a_press_on_a_fling_catches_it`). A release whose
+run reentrant code takes over (an activity listener that jumps, a physics that moves the
+offset) starts no run and ends its sequence at once, not at the next contact
+(`a_release_taken_over_by_reentrant_code_still_ends_its_sequence`).
+
+A release's run records the extents it was built for. When layout commits other extents
+under it (a lazy list measuring rows shorter than its estimate, an item resizing), the
+owner rebuilds the run from the shown offset at the run's current velocity under the same
+sequence, at the position notify that follows the layout and, failing that, at the next
+tick, before the run's stale delta would carry the offset past the new end. The run's
+release record (the extents, the mode and the physics it started with) is the one source
+the rebuild reads: the rebuilt run keeps the physics, or the snap target (now clamped to
+the new extents), whatever physics or snap policy a rebuild of the scrollable installed
+since; a snap is rebuilt even when its target stays in range, since layout may have
+clamped the offset under it. User code the rebuild calls that moves the offset takes the
+run over: the obsolete run stops where it is, and a run that code started goes on; a
+position notify from inside the rebuild starts no second one, and a physics that panics
+ends the run, its failure resuming after the owner's bookkeeping. `ClampingScrollPhysics` returns a release from past an edge to it on a
+critically damped spring, at any velocity, rather than refusing a run there
+(`a_fling_rests_on_the_end_the_measured_rows_give`,
+`a_snap_rests_on_its_target_when_the_end_clamps_the_offset`,
+`a_rebuilt_run_keeps_the_mode_its_release_started_in`,
+`a_rebuilt_run_keeps_the_physics_its_release_started_with`,
+`a_rebuild_taken_over_by_its_physics_stops_the_obsolete_run`,
+`clamping_release_past_an_edge_returns_to_it`).
 
 Every owner entry point holds one `PanicRecovery`: a participant that panics is
 closed, told `sequence_ended(Cancelled)`, and the first failure resumes only after

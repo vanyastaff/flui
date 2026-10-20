@@ -89,7 +89,6 @@ fn headless_frame_driver_matrix() {
             ("controller_restart::widget_registry_adoption_preserves_its_driver_on_refusal", controller_restart::widget_registry_adoption_preserves_its_driver_on_refusal as fn()),
             ("runtime_driver::a_signal_probe_reads_and_writes_its_current_mount_after_remount", runtime_driver::a_signal_probe_reads_and_writes_its_current_mount_after_remount as fn()),
             ("first_frame_deferral::unmatched_first_frame_release_preserves_the_next_deferral", first_frame_deferral::unmatched_first_frame_release_preserves_the_next_deferral as fn()),
-            ("runtime_driver::a_zero_capacity_performance_window_retains_no_frame_samples", runtime_driver::a_zero_capacity_performance_window_retains_no_frame_samples as fn()),
             ("runtime_driver::logical_render_root_tracks_replacement_and_build_recovery", runtime_driver::logical_render_root_tracks_replacement_and_build_recovery as fn()),
             ("a11y_query::a_button_in_the_render_tree_is_findable_by_role", a11y_query::a_button_in_the_render_tree_is_findable_by_role as fn()),
             ("a11y_query::a_headless_frame_fails_on_an_attribute_its_role_does_not_support", a11y_query::a_headless_frame_fails_on_an_attribute_its_role_does_not_support as fn()),

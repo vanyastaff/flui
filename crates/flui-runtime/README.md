@@ -30,8 +30,6 @@ the Stable promise (ADR-0089 §1). Applications depend on `flui`, and hosts on
   this crate, so no other workspace crate can reach the pools.
 - `held_input`: the bounded pointer input a presentation retains while it has
   no committed tree, and the replay that delivers it once one exists.
-- `performance_stats`: the rolling frame-time window a presentation's
-  performance overlay draws.
 - `semantics_host`: per-presentation semantics enablement and platform
   accessibility delivery.
 - `sink`: the `FrameSink` a host implements and a frame is submitted through,

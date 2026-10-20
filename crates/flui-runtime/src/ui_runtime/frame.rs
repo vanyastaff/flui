@@ -11,7 +11,9 @@ use flui_layer::Scene;
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
-use flui_scheduler::{DemandKind, FrameSnapshot, Instant, PresentOutcome};
+use flui_scheduler::{
+    DemandKind, FramePhase, FramePhaseDurations, FrameSnapshot, FrameTimes, Instant, PresentOutcome,
+};
 use flui_view::__runtime::BindingRuntime as _;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
@@ -60,11 +62,11 @@ impl UiRuntime {
     /// and sink do not provide simultaneous multi-surface submission.
     pub(crate) fn draw_frame_entered(
         &self,
-        constraints: BoxConstraints,
+        primary_constraints: BoxConstraints,
     ) -> (PresentationId, FramePaintOutcome, bool) {
         // Sampling may dirty any presentation. Finish every operation and
         // establish recovery before the build walk.
-        let mut sampling = self.sample_presentations(constraints);
+        let mut sampling = self.sample_presentations(primary_constraints);
 
         // OwnerFrame's complete frame operation polls async work once in
         // the mid-frame slot, before this persistent pipeline. The pipeline
@@ -88,6 +90,7 @@ impl UiRuntime {
         // failure needs).
         for operation in &mut sampling {
             let presentation = operation.presentation();
+            let constraints = self.root_constraints(presentation, primary_constraints);
             // Another presentation's animation/input callback may have changed
             // this retained attempt after its earlier pre-phase reconciliation.
             // Do not publish obsolete geometry or combine a retained old tick
@@ -310,6 +313,29 @@ impl UiRuntime {
         (producer, last_outcome, any_retry_needed)
     }
 
+    /// The constraints `presentation`'s root is laid out with this frame: the
+    /// frame's surface for the primary, and each other presentation's own
+    /// window, in logical pixels, falling back to `primary` for a window that
+    /// is gone or reports no area.
+    pub(super) fn root_constraints(
+        &self,
+        presentation: &PresentationState,
+        primary: BoxConstraints,
+    ) -> BoxConstraints {
+        if presentation.id() == self.presentations.primary().id() {
+            return primary;
+        }
+        presentation
+            .with_window(|window| window.logical_size())
+            .filter(|size| {
+                size.width.is_finite()
+                    && size.height.is_finite()
+                    && size.width > 0.0
+                    && size.height > 0.0
+            })
+            .map_or(primary, BoxConstraints::tight)
+    }
+
     /// Drive one frame on this UI runtime's scheduler — begin frame, persistent
     /// callbacks with `pipeline`, post-frame callbacks — as its
     /// presentations' text-store transaction (ADR-0027 §3), then run the
@@ -391,6 +417,7 @@ impl UiRuntime {
         fresh: bool,
     ) -> Result<FramePaintOutcome, flui_rendering::RenderError> {
         presentation.enter_segment_phase(SegmentPhase::Build);
+        let mut phases = PhaseStopwatch::start(presentation);
 
         #[cfg(test)]
         presentation.record_flush();
@@ -409,6 +436,8 @@ impl UiRuntime {
             );
         }
 
+        phases.lap(FramePhase::Build);
+
         // Phase 2 & 3: Layout, Compositing, Paint, Semantics through the
         // typestate-driven orchestrator.
         presentation.enter_segment_phase(SegmentPhase::Pipeline);
@@ -418,15 +447,19 @@ impl UiRuntime {
             .with_mut(|owner| owner.set_root_constraints(Some(constraints)));
         let widgets = presentation.widgets();
         widgets.settle_layout_with_builders(presentation.pipeline())?;
+        phases.lap(FramePhase::Layout);
         // Focus leaves a node the build or layout removed now, with the tree
         // settled and no tree borrow held: the move runs focus listeners. What
         // the move dirties is rebuilt and laid out once more before paint;
-        // anything it dirties beyond that waits for the next frame.
+        // anything it dirties beyond that waits for the next frame, which the
+        // frame tail requests.
         if Self::settle_orphaned_focus(presentation) {
             presentation.enter_segment_phase(SegmentPhase::Build);
             widgets.rebuild_within_frame();
+            phases.lap(FramePhase::Build);
             presentation.enter_segment_phase(SegmentPhase::Pipeline);
             widgets.settle_layout_with_builders(presentation.pipeline())?;
+            phases.lap(FramePhase::Layout);
         }
         // Paint commits the layer tree (which carries its own leader index)
         // before semantics runs; a semantics error retains it for the retry.
@@ -455,8 +488,11 @@ impl UiRuntime {
 
             // By value, not `Arc<Scene>` — see `FramePaintOutcome::Painted`'s
             // own doc for why.
-            Ok(FramePaintOutcome::Painted(Scene::new(layer_tree)))
+            let scene = Scene::new(layer_tree);
+            phases.lap(FramePhase::Paint);
+            Ok(FramePaintOutcome::Painted(scene))
         } else {
+            phases.lap(FramePhase::Paint);
             Ok(FramePaintOutcome::Idle)
         }
     }
@@ -574,6 +610,9 @@ impl UiRuntime {
             .frame_time
             .get()
             .unwrap_or_else(|| flui_foundation::MonotonicClock::now(&self.clock));
+        for presentation in self.presentations.iter() {
+            presentation.watch_redraw_requests();
+        }
         for presentation in self.presentations.iter() {
             let deferred = catch_unwind(AssertUnwindSafe(|| {
                 presentation.gestures().drain_deferred_arena_resolutions();
@@ -728,6 +767,7 @@ impl UiRuntime {
                     // retry budget again.
                     producer.clear_not_shown_streak();
                     Self::record_submit_telemetry(
+                        frame_time,
                         producer,
                         submit_at,
                         PresentOutcome::Presented,
@@ -847,6 +887,7 @@ impl UiRuntime {
                 SubmitVerdict::Retry | SubmitVerdict::SurfaceStale => {
                     producer.record_frame_dropped();
                     Self::record_submit_telemetry(
+                        frame_time,
                         producer,
                         submit_at,
                         PresentOutcome::Errored,
@@ -870,6 +911,7 @@ impl UiRuntime {
                     // that arrived before this failure — see
                     // `record_submit_telemetry`'s own doc.
                     Self::record_submit_telemetry(
+                        frame_time,
                         producer,
                         submit_at,
                         PresentOutcome::Errored,
@@ -900,6 +942,7 @@ impl UiRuntime {
                 SubmitVerdict::Failed => {
                     producer.record_frame_dropped();
                     Self::record_submit_telemetry(
+                        frame_time,
                         producer,
                         submit_at,
                         PresentOutcome::Errored,
@@ -1095,6 +1138,7 @@ impl UiRuntime {
             None
         };
         let wake_panic = self.wake_pending_pointer_samples();
+        self.wake_for_late_demand(retry_needed);
         match (delivery_panic, wake_panic) {
             (Some(first), later) => {
                 if let Some(later) = later {
@@ -1106,6 +1150,31 @@ impl UiRuntime {
             (None, None) => {}
         }
         presented
+    }
+
+    /// Ask for the next frame when this one raised demand its pipeline will
+    /// not serve.
+    ///
+    /// Two kinds arrive after a presentation's segment has consumed its dirt
+    /// and so reach no host gate on their own: a redraw request made after the
+    /// segment took the presentation's redraw bit (an orphaned focus, a
+    /// semantics subscriber that panicked), which [`Self::mark_rendered`]
+    /// would otherwise clear; and a visual update the scheduler declined
+    /// because the frame was still in its pipeline slot (a hover callback's
+    /// state change, a paint-time mark), which leaves the tree dirty with no
+    /// frame scheduled. A frame that already armed its retry needs neither.
+    fn wake_for_late_demand(&self, retry_needed: bool) {
+        let late_visual_update = self.scheduler.take_late_visual_update();
+        if retry_needed {
+            return;
+        }
+        let late = self.presentations.iter().any(|presentation| {
+            presentation.redraw_requested_since_watch()
+                || (late_visual_update && presentation.has_pending_work_snapshot())
+        });
+        if late {
+            self.wake_frame();
+        }
     }
 
     fn wake_pending_pointer_samples(&self) -> Option<Box<dyn std::any::Any + Send>> {
@@ -1163,28 +1232,33 @@ impl UiRuntime {
     /// failed attempt would leave the eventual retry's own real submit with
     /// nothing pending to attribute to the frame that actually reaches the
     /// screen.
+    ///
+    /// `frame_time` is the pump's frame time, recorded as the snapshot's
+    /// `clock_timestamp` so a late segment start shows against it.
     pub(super) fn record_submit_telemetry(
+        frame_time: Instant,
         presentation: &PresentationState,
         submit_at: Instant,
         present_outcome: PresentOutcome,
         epochs: EpochDisposition,
     ) {
-        if let Some((segment_start, segment_end)) = presentation.take_last_segment_span() {
+        if let Some((segment_start, segment_end, phases)) = presentation.take_last_segment_span() {
+            let times = FrameTimes {
+                clock_timestamp: frame_time,
+                segment_start,
+                segment_end,
+                submit_at,
+                phases,
+            };
             let snapshot = match epochs {
-                EpochDisposition::Drain => presentation.clock().record_frame(
-                    presentation.id(),
-                    segment_start,
-                    segment_start,
-                    segment_end,
-                    submit_at,
-                    present_outcome,
-                ),
+                EpochDisposition::Drain => {
+                    presentation
+                        .clock()
+                        .record_frame(presentation.id(), times, present_outcome)
+                }
                 EpochDisposition::Retain => presentation.clock().record_frame_retaining_epochs(
                     presentation.id(),
-                    segment_start,
-                    segment_start,
-                    segment_end,
-                    submit_at,
+                    times,
                     present_outcome,
                 ),
             };
@@ -1215,6 +1289,12 @@ impl UiRuntime {
             frame_id = %snapshot.frame_id,
             present_outcome = outcome,
             segment_us = Self::duration_micros_saturated(snapshot.segment_span()),
+            build_us = Self::duration_micros_saturated(snapshot.phase_duration(FramePhase::Build)),
+            layout_us =
+                Self::duration_micros_saturated(snapshot.phase_duration(FramePhase::Layout)),
+            paint_us = Self::duration_micros_saturated(snapshot.phase_duration(FramePhase::Paint)),
+            composite_us =
+                Self::duration_micros_saturated(snapshot.phase_duration(FramePhase::Composite)),
             produce_to_present_us = Self::duration_micros_saturated(
                 snapshot.submit_at.saturating_duration_since(snapshot.clock_timestamp)
             ),
@@ -1282,5 +1362,41 @@ impl Drop for TextCommitsClosed<'_> {
                 .text_input()
                 .set_transaction_open(*open || retained);
         }
+    }
+}
+
+/// Splits one segment's time into build, layout and paint on the
+/// presentation's frame clock, recording the split after every stage so a
+/// segment that fails part-way still reports what it spent.
+struct PhaseStopwatch<'a> {
+    presentation: &'a PresentationState,
+    last: Instant,
+    phases: FramePhaseDurations,
+}
+
+impl<'a> PhaseStopwatch<'a> {
+    fn start(presentation: &'a PresentationState) -> Self {
+        let phases = FramePhaseDurations::default();
+        presentation.record_segment_phases(phases);
+        Self {
+            presentation,
+            last: presentation.clock().now(),
+            phases,
+        }
+    }
+
+    /// Charge the time since the previous lap to `phase`.
+    fn lap(&mut self, phase: FramePhase) {
+        let now = self.presentation.clock().now();
+        let spent = now.saturating_duration_since(self.last);
+        self.last = now;
+        let slot = match phase {
+            FramePhase::Build => &mut self.phases.build,
+            FramePhase::Layout => &mut self.phases.layout,
+            FramePhase::Paint => &mut self.phases.paint,
+            _ => return,
+        };
+        *slot = slot.saturating_add(spent);
+        self.presentation.record_segment_phases(self.phases);
     }
 }

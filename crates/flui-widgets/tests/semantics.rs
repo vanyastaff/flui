@@ -1643,7 +1643,9 @@ pub(crate) fn assistive_scroll_actions_move_a_scrollable() {
     use flui_widgets::{ScrollController, Scrollable};
 
     let scroll = ScrollController::new();
-    scroll.update_dimensions(100.0, 0.0, 900.0);
+    scroll
+        .update_dimensions(100.0, 0.0, 900.0)
+        .expect("ordered extents");
     let (mut laid, tree, _host) = pump_labelled(
         host().child(
             Scrollable::new()
