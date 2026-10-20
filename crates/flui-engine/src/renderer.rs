@@ -113,13 +113,16 @@ impl From<wgpu::CurrentSurfaceTexture> for SurfaceAcquireOutcome<wgpu::SurfaceTe
 /// Two obligations outlive the acquisition that raised them, so they live on
 /// the renderer rather than in a local of [`acquire_surface_texture_with`]:
 ///
-/// - a frame presented through a `Suboptimal` acquisition leaves the surface
-///   presentable but mismatched (a rotation or scale change with the same
-///   extent), and only a `Surface::configure` matches it again. The next
-///   acquire configures first. One configure answers an episode: if the
-///   surface stays suboptimal after it, frames present as they are until a
-///   `Success` ends the episode, so a surface the configuration cannot satisfy
-///   never costs a configure per frame.
+/// - a frame acquired `Suboptimal` leaves the surface presentable but
+///   mismatched (a rotation or scale change with the same extent), and only a
+///   `Surface::configure` matches it again. The surface is configured right
+///   after that frame is presented, not before the next acquire: the frame
+///   may be the last one with damage, and a clean frame never reaches the
+///   acquire, so a configure left for it could wait indefinitely. One
+///   configure answers an episode: if the surface stays suboptimal after it,
+///   frames present as they are until a `Success` ends the episode, so a
+///   surface the configuration cannot satisfy never costs a configure per
+///   frame.
 /// - a recreation after `Lost` drops the old surface before building the new
 ///   one ([`Renderer::recreate_surface`]), so a failed one leaves the renderer
 ///   holding no surface. Its owner never released it, so the acquire that
@@ -131,7 +134,7 @@ impl From<wgpu::CurrentSurfaceTexture> for SurfaceAcquireOutcome<wgpu::SurfaceTe
 /// discharges the configure.
 #[derive(Debug, Default)]
 struct SurfaceRecovery {
-    reconfigure_before_acquire: bool,
+    reconfigure_after_present: bool,
     suboptimal_answered: bool,
     recreate_owed: bool,
 }
@@ -139,7 +142,7 @@ struct SurfaceRecovery {
 impl SurfaceRecovery {
     /// The surface was configured from the current configuration.
     fn configured(&mut self) {
-        self.reconfigure_before_acquire = false;
+        self.reconfigure_after_present = false;
     }
 
     /// The owner released or rebuilt the surface; nothing earlier is owed.
@@ -222,12 +225,6 @@ where
         recreate_lost_surface(backend)?;
         return Ok(None);
     }
-    if backend.recovery().reconfigure_before_acquire {
-        backend.reconfigure()?;
-        let recovery = backend.recovery();
-        recovery.configured();
-        recovery.suboptimal_answered = true;
-    }
     let mut may_reconfigure = true;
     loop {
         match backend.acquire()? {
@@ -238,8 +235,8 @@ where
             SurfaceAcquireOutcome::Suboptimal(frame) => {
                 let recovery = backend.recovery();
                 if !recovery.suboptimal_answered {
-                    tracing::debug!("Surface suboptimal; reconfiguring before the next acquire");
-                    recovery.reconfigure_before_acquire = true;
+                    tracing::debug!("Surface suboptimal; reconfiguring after this frame presents");
+                    recovery.reconfigure_after_present = true;
                 }
                 return Ok(Some(frame));
             }
@@ -286,10 +283,28 @@ where
     }
 }
 
+/// Configure a surface whose presented frame was acquired `Suboptimal`, and
+/// mark its episode answered. Runs after the present, where the configure
+/// cannot wait on a later frame that may never come (see [`SurfaceRecovery`]).
+fn reconfigure_after_suboptimal_present<B>(backend: &mut B) -> Result<(), EngineError>
+where
+    B: SurfaceAcquireBackend,
+{
+    if !backend.recovery().reconfigure_after_present {
+        return Ok(());
+    }
+    backend.reconfigure()?;
+    let recovery = backend.recovery();
+    recovery.configured();
+    recovery.suboptimal_answered = true;
+    Ok(())
+}
+
 #[cfg(test)]
 mod surface_acquisition_tests {
     use super::{
-        SurfaceAcquireBackend, SurfaceAcquireOutcome, SurfaceRecovery, acquire_surface_texture_with,
+        SurfaceAcquireBackend, SurfaceAcquireOutcome, SurfaceRecovery,
+        acquire_surface_texture_with, reconfigure_after_suboptimal_present,
     };
     use crate::error::EngineError;
 
@@ -452,12 +467,12 @@ mod surface_acquisition_tests {
                 ],
                 recreations: vec![],
                 frames: vec![
-                    (Acquired::Frame(1), &["acquire"]),
-                    (Acquired::Frame(2), &["reconfigure", "acquire"]),
+                    (Acquired::Frame(1), &["acquire", "reconfigure"]),
+                    (Acquired::Frame(2), &["acquire"]),
                     (Acquired::Frame(3), &["acquire"]),
                     (Acquired::Frame(4), &["acquire"]),
-                    (Acquired::Frame(5), &["acquire"]),
-                    (Acquired::Frame(6), &["reconfigure", "acquire"]),
+                    (Acquired::Frame(5), &["acquire", "reconfigure"]),
+                    (Acquired::Frame(6), &["acquire"]),
                 ],
             },
         ]
@@ -474,7 +489,13 @@ mod surface_acquisition_tests {
             for (frame, (expected, calls)) in case.frames.into_iter().enumerate() {
                 surface.calls.clear();
                 let acquired = match acquire_surface_texture_with(&mut surface) {
-                    Ok(Some(frame)) => Acquired::Frame(frame),
+                    Ok(Some(frame)) => {
+                        // The frame presents; the renderer then settles a
+                        // suboptimal acquisition, as `render_frame_inner` does.
+                        reconfigure_after_suboptimal_present(&mut surface)
+                            .expect("the fake reconfigure succeeds");
+                        Acquired::Frame(frame)
+                    }
                     Ok(None) => Acquired::Skipped,
                     Err(EngineError::SurfaceLost) => Acquired::SurfaceLost,
                     Err(EngineError::SurfaceValidation) => Acquired::SurfaceValidation,
@@ -2224,9 +2245,8 @@ impl Renderer {
             // `classify_frame`, which is where that distinction is pinned.
             return Ok(classify_frame(true, false));
         };
-        // Plan again: acquiring may have configured the surface (a pending
-        // reconfigure after a suboptimal frame, or the retry after `Outdated`),
-        // which invalidates the retained target a partial plan reads from and
+        // Plan again: acquiring may have configured the surface (the retry
+        // after `Outdated` or `Validation`), which invalidates the retained target a partial plan reads from and
         // owes a full repaint. The first plan only decided whether to acquire.
         let plan = self.frame.plan(self.uses_intermediate_texture());
 
@@ -2315,6 +2335,13 @@ impl Renderer {
 
         // The damage this frame covered is paid.
         self.frame.presented();
+        // After `presented`, so the full repaint the configure owes survives
+        // into the next frame instead of being paid off by this one. A failure
+        // is logged, not returned: this frame did present, and the obligation
+        // stays set for the next one.
+        if let Err(error) = reconfigure_after_suboptimal_present(self) {
+            tracing::warn!(target: "flui.gpu", %error, "reconfigure after a suboptimal frame failed");
+        }
 
         Ok(classify_frame(true, true))
     }

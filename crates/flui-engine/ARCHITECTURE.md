@@ -244,10 +244,12 @@ the caller retries: it was planned against the old surface, and the new one
 may differ in format or `COPY_SRC` support. A recreation that fails leaves the
 renderer without a surface its owner never released, so the next acquire
 recreates again before anything else instead of skipping frames as if released.
-A frame presented through a `Suboptimal` acquisition configures the surface
-before the next acquire, once per episode: a surface still suboptimal after it
-presents as it is until a `Success`. The owner's `release_surface`, a
-successful recreation and device recovery clear both obligations. A
+A frame acquired `Suboptimal` configures the surface right after it presents,
+not before the next acquire, because it may be the last frame with damage and
+a clean frame never acquires. That is once per episode: a surface still
+suboptimal after it presents as it is until a `Success`. The owner's
+`release_surface`, a successful recreation and device recovery clear both
+obligations. A
 recreation that fails for good (`SurfaceCreation`, a handle kind the owner
 never supports) returns that error rather than the retryable `SurfaceLost`.
 `render_frame_inner` plans again after the acquisition, because a configure
