@@ -557,6 +557,58 @@ pub(crate) fn viewer_keys_pan_and_zoom_from_the_focused_row() {
     assert_eq!(scale_of(&transform), 1.0, "Ctrl+- zooms back out");
 }
 
+/// A text field inside the viewer keeps the keys it types and moves its caret
+/// with: `+`, `=`, `-` and the caret's arrows pressed in it neither zoom nor
+/// pan the viewer, whose own bindings for them answer only what bubbles past
+/// a field (a single-line field's ArrowDown does, as it does to a list).
+pub(crate) fn keys_typed_in_a_field_inside_the_viewer_stay_in_the_field() {
+    use flui_interaction::focus::FocusNode;
+    use flui_widgets::{EditableText, TextEditingController};
+
+    let transform = TransformationController::new();
+    let field = FocusNode::with_debug_label("field");
+    let harness = crate::common::harness::mount_with_ime(
+        InteractiveViewer::new(viewer_alternatives())
+            .controller(transform.clone())
+            .boundary_margin(EdgeInsets::all(100.0))
+            .child(SizedBox::new(300.0, 50.0).child(EditableText::new(
+                TextEditingController::new(),
+                Rc::clone(&field),
+            ))),
+    );
+    let _ = field.request_focus();
+    assert!(field.has_primary_focus(), "the field has the focus");
+    let before = transform.value();
+    let manager = harness.focus_manager();
+    for (key, code, modifiers) in [
+        (Key::character("+"), Code::Equal, Modifiers::SHIFT),
+        (Key::character("="), Code::Equal, Modifiers::NONE),
+        (Key::character("-"), Code::Minus, Modifiers::NONE),
+        (
+            Key::Named(NamedKey::ArrowLeft),
+            Code::ArrowLeft,
+            Modifiers::NONE,
+        ),
+        (
+            Key::Named(NamedKey::ArrowRight),
+            Code::ArrowRight,
+            Modifiers::NONE,
+        ),
+    ] {
+        for state in [KeyState::Down, KeyState::Up] {
+            let event = KeyEvent::new(state, key.clone(), code, EventTime::from_nanos(0))
+                .with_modifiers(modifiers);
+            let _ = manager.dispatch_key_event(&event);
+        }
+        assert_eq!(
+            transform.value(),
+            before,
+            "{key:?} typed in the field leaves the viewer as it was"
+        );
+    }
+    assert!(field.has_primary_focus(), "and the field keeps the focus");
+}
+
 fn viewer_node(laid: &LaidOut) -> flui_testing::a11y::NodeId {
     let tree = laid.a11y_tree().expect("semantics are on");
     tree.nodes()
