@@ -17,6 +17,8 @@
 //!   and the one-line [`outline`];
 //! - [`act`]: the [`ActionRequest`] an agent sends;
 //! - [`error`]: the fixed [`ErrorCode`]s and [`Retry`];
+//! - [`inspect`]: the owned snapshot of an inspected tree, [`InspectNode`], with typed
+//!   [`InspectValue`] fields (ADR-0242);
 //! - [`version`]: the [`PROTOCOL_VERSION`] the schema is published under,
 //!   versioned apart from this crate, and the rule for changing it.
 //!
@@ -36,6 +38,7 @@ mod vocabulary;
 
 pub mod act;
 pub mod error;
+pub mod inspect;
 pub mod motion;
 pub mod semantics;
 pub mod tree;
@@ -44,6 +47,9 @@ pub mod wire;
 
 pub use act::ActionRequest;
 pub use error::{ErrorCode, Retry};
+pub use inspect::{
+    InspectField, InspectLevel, InspectNode, InspectRect, InspectUnit, InspectValue,
+};
 pub use motion::{MotionRequest, MotionState};
 pub use semantics::{SemanticsAction, SemanticsRole};
 pub use tree::{ElementId, Node, ReadQuery, Rect, Tree, WindowId, outline};

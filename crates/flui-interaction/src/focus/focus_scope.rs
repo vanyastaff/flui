@@ -459,25 +459,25 @@ impl FocusNodeRegistration {
                 !node.is_closed()
                     && match self.kind {
                         FocusNodeRegistrationKind::KeyHandler => {
-                            node.on_key_event_generation.get() == self.generation
+                            node.on_key_event.is_current(self.generation)
                         }
                         FocusNodeRegistrationKind::KeyCancelHandler => {
-                            node.on_key_cancel_generation.get() == self.generation
+                            node.on_key_cancel.is_current(self.generation)
                         }
                         FocusNodeRegistrationKind::RectProvider => {
-                            node.rect_provider_generation.get() == self.generation
+                            node.rect_provider.is_current(self.generation)
                         }
                         FocusNodeRegistrationKind::Context => {
-                            node.context_generation.get() == self.generation
+                            node.context.is_current(self.generation)
                         }
                         FocusNodeRegistrationKind::TraversalGroup => {
-                            node.traversal_group_generation.get() == self.generation
+                            node.traversal_group.is_current(self.generation)
                         }
                         FocusNodeRegistrationKind::TraversalOverrides => {
                             node.traversal_overrides_generation.get() == self.generation
                         }
                         FocusNodeRegistrationKind::TraversalEntry => {
-                            node.traversal_entry_generation.get() == self.generation
+                            node.traversal_entry.is_current(self.generation)
                         }
                     }
             })
@@ -502,19 +502,19 @@ impl FocusNodeRegistration {
         };
         match self.kind {
             FocusNodeRegistrationKind::KeyHandler => {
-                node.clear_on_key_event_generation(self.generation);
+                node.on_key_event.clear(self.generation, &node);
             }
             FocusNodeRegistrationKind::KeyCancelHandler => {
-                node.clear_on_key_cancel_generation(self.generation);
+                node.on_key_cancel.clear(self.generation, &node);
             }
             FocusNodeRegistrationKind::RectProvider => {
-                node.clear_rect_provider_generation(self.generation);
+                node.rect_provider.clear(self.generation, &node);
             }
             FocusNodeRegistrationKind::Context => {
-                node.clear_context_generation(self.generation);
+                node.context.clear(self.generation, &node);
             }
             FocusNodeRegistrationKind::TraversalGroup => {
-                node.clear_traversal_group_generation(self.generation);
+                node.traversal_group.clear(self.generation, &node);
             }
             FocusNodeRegistrationKind::TraversalOverrides => {
                 if node.traversal_overrides_generation.get() == self.generation {
@@ -522,7 +522,7 @@ impl FocusNodeRegistration {
                 }
             }
             FocusNodeRegistrationKind::TraversalEntry => {
-                node.clear_traversal_entry_generation(self.generation);
+                node.traversal_entry.clear(self.generation, &node);
             }
         }
     }
@@ -555,16 +555,13 @@ pub struct FocusNode {
     skip_traversal: Cell<bool>,
     descendants_are_focusable: Cell<bool>,
     scope_owner: RefCell<Option<Weak<FocusScopeNode>>>,
-    on_key_event: RefCell<Option<KeyEventHandler>>,
-    on_key_cancel: RefCell<Option<KeyCancelHandler>>,
-    on_key_cancel_generation: Cell<u64>,
+    on_key_event: Registered<KeyEventHandler>,
+    on_key_cancel: Registered<KeyCancelHandler>,
     listeners: RefCell<Vec<(ListenerId, FocusNodeChangeCallback)>>,
     next_listener_id: Cell<usize>,
     rect: Cell<Rect<f64>>,
-    rect_provider: RefCell<Option<RectProvider>>,
-    rect_provider_generation: Cell<u64>,
-    context: RefCell<Option<NodeContext>>,
-    context_generation: Cell<u64>,
+    rect_provider: Registered<RectProvider>,
+    context: Registered<NodeContext>,
     manager_binding: RefCell<ManagerBinding>,
     attached: Cell<bool>,
     /// The cause of a request made while unbound, fulfilled on attachment.
@@ -573,14 +570,80 @@ pub struct FocusNode {
     widget_owned: Cell<bool>,
     /// A widget-owned node its widget let go: requests answer `Stale`.
     retired: Cell<bool>,
-    traversal_entry: RefCell<Option<TraversalEntry>>,
-    traversal_entry_generation: Cell<u64>,
+    traversal_entry: Registered<TraversalEntry>,
     attachment_generation: Cell<u64>,
-    on_key_event_generation: Cell<u64>,
-    traversal_group: RefCell<Option<GroupConfig>>,
-    traversal_group_generation: Cell<u64>,
+    traversal_group: Registered<GroupConfig>,
     traversal_overrides: RefCell<FocusTraversalOverrides>,
     traversal_overrides_generation: Cell<u64>,
+}
+
+/// A node property that registrations install: the value, and the generation
+/// of the write that installed it, so a registration dropped after a later
+/// write leaves that write's value alone.
+struct Registered<T> {
+    value: RefCell<Option<T>>,
+    generation: Cell<u64>,
+}
+
+impl<T> Registered<T> {
+    const fn new() -> Self {
+        Self {
+            value: RefCell::new(None),
+            generation: Cell::new(0),
+        }
+    }
+
+    fn is_current(&self, generation: u64) -> bool {
+        self.generation.get() == generation
+    }
+
+    /// Take the value, for a closing node.
+    fn take(&self) -> Option<T> {
+        self.value.borrow_mut().take()
+    }
+}
+
+impl<T: Clone> Registered<T> {
+    /// The installed value, cloned out of the borrow so the code it runs may
+    /// replace it.
+    fn get(&self) -> Option<T> {
+        self.value.borrow().clone()
+    }
+}
+
+impl<T: crate::retain::Retain> Registered<T> {
+    /// Write `value` (`None` clears) and return the write's generation. The
+    /// value it replaces is retired with no borrow held; on a closed `node`,
+    /// `value` itself is.
+    fn write(&self, value: Option<T>, node: &FocusNode) -> u64 {
+        let generation = self
+            .generation
+            .get()
+            .checked_add(1)
+            .expect("BUG: focus-node property generation exhausted");
+        self.generation.set(generation);
+        let mut failure = FocusClosePanic::for_rejection(node.close_mode());
+        if node.is_closed() {
+            failure.retire(value);
+        } else {
+            let previous = std::mem::replace(&mut *self.value.borrow_mut(), value);
+            failure.retire(previous);
+        }
+        failure.finish();
+        generation
+    }
+
+    /// Clear the value the write `generation` installed, unless a later write
+    /// replaced it.
+    fn clear(&self, generation: u64, node: &FocusNode) {
+        if !self.is_current(generation) {
+            return;
+        }
+        let previous = self.take();
+        let mut failure = FocusClosePanic::for_rejection(node.close_mode());
+        failure.retire(previous);
+        failure.finish();
+    }
 }
 
 pub(super) struct ClosedFocusNode {
@@ -654,27 +717,21 @@ impl FocusNode {
             skip_traversal: Cell::new(false),
             descendants_are_focusable: Cell::new(true),
             scope_owner: RefCell::new(scope_owner),
-            on_key_event: RefCell::new(None),
-            on_key_cancel: RefCell::new(None),
-            on_key_cancel_generation: Cell::new(0),
+            on_key_event: Registered::new(),
+            on_key_cancel: Registered::new(),
             listeners: RefCell::new(Vec::new()),
             next_listener_id: Cell::new(1),
             rect: Cell::new(Rect::ZERO),
-            rect_provider: RefCell::new(None),
-            rect_provider_generation: Cell::new(0),
-            context: RefCell::new(None),
-            context_generation: Cell::new(0),
+            rect_provider: Registered::new(),
+            context: Registered::new(),
             manager_binding: RefCell::new(ManagerBinding::Unbound),
             attached: Cell::new(false),
             pending_focus_request: Cell::new(None),
             widget_owned: Cell::new(false),
             retired: Cell::new(false),
-            traversal_entry: RefCell::new(None),
-            traversal_entry_generation: Cell::new(0),
+            traversal_entry: Registered::new(),
             attachment_generation: Cell::new(1),
-            on_key_event_generation: Cell::new(0),
-            traversal_group: RefCell::new(None),
-            traversal_group_generation: Cell::new(0),
+            traversal_group: Registered::new(),
             traversal_overrides: RefCell::new(FocusTraversalOverrides::default()),
             traversal_overrides_generation: Cell::new(0),
         })
@@ -793,7 +850,7 @@ impl FocusNode {
     /// Providers may replace themselves reentrantly. Snapshot retirement runs
     /// outside the provider borrow and preserves the first provider failure.
     pub fn rect(&self) -> Rect<f64> {
-        let provider = self.rect_provider.borrow().clone();
+        let provider = self.rect_provider.get();
         let mut failure = FocusClosePanic::for_rejection(self.close_mode());
         let rect = provider.as_ref().and_then(|provider| {
             if failure.preserving() {
@@ -814,12 +871,12 @@ impl FocusNode {
 
     /// Install a live traversal-geometry source.
     pub fn set_rect_provider(&self, provider: RectProvider) {
-        self.replace_rect_provider(Some(provider));
+        self.rect_provider.write(Some(provider), self);
     }
 
     /// Remove the live traversal-geometry source.
     pub fn clear_rect_provider(&self) {
-        self.replace_rect_provider(None);
+        self.rect_provider.write(None, self);
     }
 
     /// Install a live traversal-geometry source with generation-checked
@@ -831,7 +888,7 @@ impl FocusNode {
         self: &Rc<Self>,
         provider: RectProvider,
     ) -> FocusNodeRegistration {
-        let generation = self.replace_rect_provider(Some(provider));
+        let generation = self.rect_provider.write(Some(provider), self);
         FocusNodeRegistration::new(self, generation, FocusNodeRegistrationKind::RectProvider)
     }
 
@@ -839,7 +896,7 @@ impl FocusNode {
     /// anything ([`NodeContext`]).
     #[must_use]
     pub fn context(&self) -> Option<NodeContext> {
-        self.context.borrow().clone()
+        self.context.get()
     }
 
     /// Record the widget layer's [`NodeContext`] with generation-checked
@@ -848,18 +905,18 @@ impl FocusNode {
     /// Dropping the returned registration clears `context` only if no later
     /// writer has replaced it.
     pub fn register_context(self: &Rc<Self>, context: NodeContext) -> FocusNodeRegistration {
-        let generation = self.replace_context(Some(context));
+        let generation = self.context.write(Some(context), self);
         FocusNodeRegistration::new(self, generation, FocusNodeRegistrationKind::Context)
     }
 
     /// Install this node's key handler.
     pub fn set_on_key_event(&self, handler: KeyEventHandler) {
-        self.replace_on_key_event(Some(handler));
+        self.on_key_event.write(Some(handler), self);
     }
 
     /// Clear this node's key handler.
     pub fn clear_on_key_event(&self) {
-        self.replace_on_key_event(None);
+        self.on_key_event.write(None, self);
     }
 
     /// Install this node's key handler with generation-checked cleanup
@@ -871,7 +928,7 @@ impl FocusNode {
         self: &Rc<Self>,
         handler: KeyEventHandler,
     ) -> FocusNodeRegistration {
-        let generation = self.replace_on_key_event(Some(handler));
+        let generation = self.on_key_event.write(Some(handler), self);
         FocusNodeRegistration::new(self, generation, FocusNodeRegistrationKind::KeyHandler)
     }
 
@@ -886,84 +943,12 @@ impl FocusNode {
         self: &Rc<Self>,
         handler: KeyCancelHandler,
     ) -> FocusNodeRegistration {
-        let generation = self.replace_on_key_cancel(Some(handler));
+        let generation = self.on_key_cancel.write(Some(handler), self);
         FocusNodeRegistration::new(
             self,
             generation,
             FocusNodeRegistrationKind::KeyCancelHandler,
         )
-    }
-
-    fn replace_on_key_cancel(&self, handler: Option<KeyCancelHandler>) -> u64 {
-        if self.is_closed() {
-            let mut failure = FocusClosePanic::for_rejection(self.close_mode());
-            failure.retire(handler);
-            failure.finish();
-            return self.on_key_cancel_generation.get();
-        }
-        let generation = Self::next_property_generation(&self.on_key_cancel_generation);
-        let _prev = std::mem::replace(&mut *self.on_key_cancel.borrow_mut(), handler);
-        generation
-    }
-
-    fn clear_on_key_cancel_generation(&self, generation: u64) {
-        if self.on_key_cancel_generation.get() == generation {
-            self.replace_on_key_cancel(None);
-        }
-    }
-
-    fn replace_rect_provider(&self, provider: Option<RectProvider>) -> u64 {
-        if self.is_closed() {
-            let mut failure = FocusClosePanic::for_rejection(self.close_mode());
-            failure.retire(provider);
-            failure.finish();
-            return self.rect_provider_generation.get();
-        }
-        let generation = Self::next_property_generation(&self.rect_provider_generation);
-        let _prev = std::mem::replace(&mut *self.rect_provider.borrow_mut(), provider);
-        generation
-    }
-
-    fn clear_rect_provider_generation(&self, generation: u64) {
-        if self.rect_provider_generation.get() == generation {
-            self.replace_rect_provider(None);
-        }
-    }
-
-    fn replace_context(&self, context: Option<NodeContext>) -> u64 {
-        if self.is_closed() {
-            let mut failure = FocusClosePanic::for_rejection(self.close_mode());
-            failure.retire(context);
-            failure.finish();
-            return self.context_generation.get();
-        }
-        let generation = Self::next_property_generation(&self.context_generation);
-        let _prev = std::mem::replace(&mut *self.context.borrow_mut(), context);
-        generation
-    }
-
-    fn clear_context_generation(&self, generation: u64) {
-        if self.context_generation.get() == generation {
-            self.replace_context(None);
-        }
-    }
-
-    fn replace_on_key_event(&self, handler: Option<KeyEventHandler>) -> u64 {
-        if self.is_closed() {
-            let mut failure = FocusClosePanic::for_rejection(self.close_mode());
-            failure.retire(handler);
-            failure.finish();
-            return self.on_key_event_generation.get();
-        }
-        let generation = Self::next_property_generation(&self.on_key_event_generation);
-        let _prev = std::mem::replace(&mut *self.on_key_event.borrow_mut(), handler);
-        generation
-    }
-
-    fn clear_on_key_event_generation(&self, generation: u64) {
-        if self.on_key_event_generation.get() == generation {
-            self.replace_on_key_event(None);
-        }
     }
 
     fn next_property_generation(generation: &Cell<u64>) -> u64 {
@@ -998,41 +983,21 @@ impl FocusNode {
         direction: TextDirection,
         edge: TraversalEdgeBehavior,
     ) -> FocusNodeRegistration {
-        let generation = Self::next_property_generation(&self.traversal_group_generation);
-        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
-        if self.is_closed() {
-            failure.retire(policy);
-        } else {
-            let previous = self.traversal_group.borrow_mut().replace(GroupConfig {
-                policy,
-                direction,
-                edge,
-            });
-            if let Some(previous) = previous {
-                failure.retire(previous.policy);
-            }
-        }
-        failure.finish();
+        let group = GroupConfig {
+            policy,
+            direction,
+            edge,
+        };
+        let generation = self.traversal_group.write(Some(group), self);
         FocusNodeRegistration::new(self, generation, FocusNodeRegistrationKind::TraversalGroup)
     }
 
-    fn clear_traversal_group_generation(&self, generation: u64) {
-        if self.traversal_group_generation.get() != generation {
-            return;
-        }
-        let previous = self.traversal_group.borrow_mut().take();
-        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
-        if let Some(previous) = previous {
-            failure.retire(previous.policy);
-        }
-        failure.finish();
-    }
-
     pub(super) fn traversal_group_snapshot(&self) -> Option<GroupConfig> {
-        self.traversal_group.borrow().clone()
+        self.traversal_group.get()
     }
     pub(super) fn traversal_group_edge(&self) -> Option<TraversalEdgeBehavior> {
         self.traversal_group
+            .value
             .borrow()
             .as_ref()
             .map(|group| group.edge)
@@ -1047,7 +1012,7 @@ impl FocusNode {
         self.close_mode()
     }
     pub(super) fn traversal_geometry_snapshot(&self) -> (Option<RectProvider>, Rect<f64>) {
-        (self.rect_provider.borrow().clone(), self.rect.get())
+        (self.rect_provider.get(), self.rect.get())
     }
 
     /// Register a listener for focus or focusability changes on this node.
@@ -1300,30 +1265,12 @@ impl FocusNode {
         self: &Rc<Self>,
         entry: TraversalEntry,
     ) -> FocusNodeRegistration {
-        let generation = Self::next_property_generation(&self.traversal_entry_generation);
-        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
-        if self.is_closed() {
-            failure.retire(entry);
-        } else {
-            let previous = self.traversal_entry.borrow_mut().replace(entry);
-            failure.retire(previous);
-        }
-        failure.finish();
+        let generation = self.traversal_entry.write(Some(entry), self);
         FocusNodeRegistration::new(self, generation, FocusNodeRegistrationKind::TraversalEntry)
     }
 
-    fn clear_traversal_entry_generation(&self, generation: u64) {
-        if self.traversal_entry_generation.get() != generation {
-            return;
-        }
-        let previous = self.traversal_entry.borrow_mut().take();
-        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
-        failure.retire(previous);
-        failure.finish();
-    }
-
     pub(super) fn is_traversal_unit(&self) -> bool {
-        self.traversal_entry.borrow().is_some()
+        self.traversal_entry.value.borrow().is_some()
     }
 
     /// The outermost traversal unit containing this node (itself included)
@@ -1346,7 +1293,7 @@ impl FocusNode {
     /// otherwise this node. The entry is user code: it runs with no borrow
     /// held, and a panic in it lands on this node before propagating.
     pub(crate) fn entry_target(self: &Rc<Self>, failure: &mut FocusClosePanic) -> Rc<FocusNode> {
-        let entry = self.traversal_entry.borrow().clone();
+        let entry = self.traversal_entry.get();
         let Some(entry) = entry else {
             return Rc::clone(self);
         };
@@ -1400,7 +1347,7 @@ impl FocusNode {
 
     /// Invoke this node's key handler.
     pub fn handle_key_event(&self, event: &KeyEvent) -> KeyEventResult {
-        let handler = self.on_key_event.borrow().clone();
+        let handler = self.on_key_event.get();
         let Some(handler) = handler else {
             return KeyEventResult::Ignored;
         };
@@ -1416,7 +1363,7 @@ impl FocusNode {
     /// Tell this node's [`KeyCancelHandler`] that the key `press` took was
     /// cancelled. A panic propagates after the handler is retired.
     pub(super) fn handle_key_cancel(&self, press: &KeyEvent) {
-        let handler = self.on_key_cancel.borrow().clone();
+        let handler = self.on_key_cancel.get();
         let Some(handler) = handler else {
             return;
         };
@@ -1814,17 +1761,13 @@ impl FocusNode {
             // All child nodes are retained by the snapshot until their own
             // terminal state and outgoing ownership have been committed.
             node.children.borrow_mut().clear();
-            let key_handler = node.on_key_event.borrow_mut().take();
-            let key_cancel = node.on_key_cancel.borrow_mut().take();
-            let rect_provider = node.rect_provider.borrow_mut().take();
-            let context = node.context.borrow_mut().take();
-            let group_policy = node
-                .traversal_group
-                .borrow_mut()
-                .take()
-                .map(|group| group.policy);
+            let key_handler = node.on_key_event.take();
+            let key_cancel = node.on_key_cancel.take();
+            let rect_provider = node.rect_provider.take();
+            let context = node.context.take();
+            let group_policy = node.traversal_group.take().map(|group| group.policy);
             *node.traversal_overrides.borrow_mut() = FocusTraversalOverrides::default();
-            let entry = node.traversal_entry.borrow_mut().take();
+            let entry = node.traversal_entry.take();
             let policy = node.as_scope().map(|scope| {
                 scope.pending_first_focus.set(false);
                 scope.focus_history.borrow_mut().clear();

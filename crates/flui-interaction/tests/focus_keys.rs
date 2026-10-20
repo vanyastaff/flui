@@ -603,6 +603,22 @@ fn keyboard_focus_contracts() {
             a_release_after_focus_moved_only_cancels_its_press,
         ),
         (
+            "a_press_again_without_its_release_cancels_the_first",
+            a_press_again_without_its_release_cancels_the_first,
+        ),
+        (
+            "a_cancellation_that_moves_focus_takes_the_new_press_along",
+            a_cancellation_that_moves_focus_takes_the_new_press_along,
+        ),
+        (
+            "a_cancellation_that_forgets_held_keys_keeps_the_new_press",
+            a_cancellation_that_forgets_held_keys_keeps_the_new_press,
+        ),
+        (
+            "a_failing_cancellation_stays_the_first_failure",
+            a_failing_cancellation_stays_the_first_failure,
+        ),
+        (
             "traversal hands repeats to the new focus",
             traversal_hands_repeats_to_the_new_focus,
         ),
@@ -774,6 +790,126 @@ fn a_release_after_focus_moved_only_cancels_its_press() {
         [KeyState::Down, KeyState::Down],
         "the next press is delivered"
     );
+}
+
+/// A key pressed again while its release never arrived, after focus moved to
+/// another unit: the new press belongs to the new focus, and the first
+/// press's path is told its key was cancelled, since no release will reach
+/// it now.
+fn a_press_again_without_its_release_cancels_the_first() {
+    let (manager, nodes, _attachments) = manager_with_nodes(2);
+    let _ = nodes[0].request_focus();
+    let (first_cancels, _first) = record_cancels(&nodes[0]);
+    let (second_cancels, _second) = record_cancels(&nodes[1]);
+    let second = count_keys(&nodes[1]);
+    let arrow = |state| key(state, Key::Named(NamedKey::ArrowDown), Code::ArrowDown);
+
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    assert!(manager.focus_next(), "focus moves to another unit");
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    assert_eq!(
+        *first_cancels.borrow(),
+        [Code::ArrowDown],
+        "the press whose release was lost is cancelled"
+    );
+    assert_eq!(second.get(), 1, "the new press reaches the new focus");
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Up));
+    assert_eq!(second.get(), 2, "and so does its release");
+    assert!(second_cancels.borrow().is_empty());
+    assert_eq!(first_cancels.borrow().len(), 1, "told once");
+
+    // Pressed again in the same unit, the next release still reaches the
+    // press's path: nothing is cancelled.
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Up));
+    assert!(second_cancels.borrow().is_empty());
+}
+
+/// The cancelled press's handler moves focus: the new press is delivered to
+/// that focus, and so is its release.
+fn a_cancellation_that_moves_focus_takes_the_new_press_along() {
+    let (manager, nodes, _attachments) = manager_with_nodes(3);
+    let _ = nodes[0].request_focus();
+    let mover = Rc::downgrade(&nodes[2]);
+    let _cancel = nodes[0].register_on_key_cancel(Rc::new(move |_: &KeyEvent| {
+        if let Some(node) = mover.upgrade() {
+            let _ = node.request_focus();
+        }
+    }));
+    let (moved_cancels, _moved) = record_cancels(&nodes[2]);
+    let moved = count_keys(&nodes[2]);
+    let arrow = |state| key(state, Key::Named(NamedKey::ArrowDown), Code::ArrowDown);
+
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = nodes[1].request_focus();
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    assert!(nodes[2].has_primary_focus(), "the cancellation moved focus");
+    assert_eq!(
+        moved.get(),
+        1,
+        "the new press reaches the focus it moved to"
+    );
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Up));
+    assert_eq!(moved.get(), 2, "and so does its release");
+    assert!(moved_cancels.borrow().is_empty(), "nothing cancels it");
+}
+
+/// The cancelled press's handler forgets every held key: the new press is
+/// admitted after it, so its release still reaches the focus.
+fn a_cancellation_that_forgets_held_keys_keeps_the_new_press() {
+    let (manager, nodes, _attachments) = manager_with_nodes(2);
+    let _ = nodes[0].request_focus();
+    let forgetter = Rc::downgrade(&manager);
+    let _cancel = nodes[0].register_on_key_cancel(Rc::new(move |_: &KeyEvent| {
+        if let Some(manager) = forgetter.upgrade() {
+            manager.forget_pressed_keys();
+        }
+    }));
+    let (second_cancels, _second) = record_cancels(&nodes[1]);
+    let second = count_keys(&nodes[1]);
+    let arrow = |state| key(state, Key::Named(NamedKey::ArrowDown), Code::ArrowDown);
+
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = nodes[1].request_focus();
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Up));
+    assert_eq!(
+        second.get(),
+        2,
+        "the new press and its release reach the focus"
+    );
+    assert!(
+        second_cancels.borrow().is_empty(),
+        "the new press was not forgotten"
+    );
+}
+
+/// The cancelled press's handler fails, and so does a listener hearing the
+/// new press show focus: the cancellation's failure is the one that
+/// propagates, and the new press is still delivered.
+fn a_failing_cancellation_stays_the_first_failure() {
+    let (manager, nodes, _attachments) = manager_with_nodes(2);
+    let _ = nodes[0].request_focus();
+    let _cancel = nodes[0].register_on_key_cancel(Rc::new(|_: &KeyEvent| {
+        panic!("cancel failure");
+    }));
+    let second = count_keys(&nodes[1]);
+    let arrow = |state| key(state, Key::Named(NamedKey::ArrowDown), Code::ArrowDown);
+
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = nodes[1].request_focus();
+    manager.note_pointer_input();
+    let _subscription = nodes[1].subscribe(Rc::new(|| panic!("modality failure")));
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        manager.dispatch_key_event(&arrow(KeyState::Down))
+    }))
+    .expect_err("the failures propagate");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("cancel failure")
+    );
+    assert_eq!(second.get(), 1, "the new press was delivered");
 }
 
 /// Tab moves focus by traversal; its repeats keep moving it.

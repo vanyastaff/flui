@@ -9,21 +9,25 @@
   to live in `flui-semantics`; from §3 the UI runtime half of the in-process backend (a
   `SemanticsAgent` that reads and acts through the UI runtime's owner inbox), and the in-process
   server in `flui-devtools` with its local endpoint (a named pipe or Unix socket, a launch
-  token, debug builds only), amended below. Still Proposed: §1's finder criteria, handle kinds
+  token, debug builds only), amended below; the CLI half of §3 (`flui run --agent`, `flui mcp`). Still Proposed: §1's finder criteria, handle kinds
   beyond elements and windows, `effect` as a schema type, widget catalog and event-log shapes;
-  the `flui-mcp` library; `flui-testing`'s query types; §3's `flui mcp` and the handle table
+  the `flui-mcp` library; `flui-testing`'s query types; the handle table
   across windows; and §§4–5.
 - **Date:** 2026-09-25
 - **Amended:** 2026-10-11 — the FLUI schema was 0.2 under ADR-0176; negotiated MCP versions are a separate protocol.
 - **Amended:** 2026-10-12 — schema 0.3 adds the `heading` wire role (ADR-0203).
 - **Amended:** 2026-10-13 — the current FLUI schema is 0.4, which adds a node's optional `description`.
 - **Amended:** 2026-10-18 — the Android runner drives the hook as the desktop and iOS runners do.
+- **Amended:** 2026-10-19 — `flui run --agent` and `flui mcp` are built in `flui-cli` (see "The CLI half" in §3): `flui mcp` is a stdio proxy written in the CLI over the endpoint's framing, with no `flui-mcp` library and no cross-window handle table.
 - **Amends:** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) (settles its "Not
   decided here" in-process transport; the wire contract is unchanged)
 - **Superseded in part by:** [ADR-0124](ADR-0124-controlled-numeric-and-disclosure-actions.md):
   `expand` and `collapse` reach FLUI's discrete `Expand`/`Collapse` actions rather than the tap
   handler, and a numeric `set_value` keeps its number; the double-toggle race stated below
   remains only for a node that registers neither discrete action
+- **Superseded in part by (Proposed):** [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md)
+  for §3 (the server moves to `flui-app` and every host drives it);
+  [ADR-0238](ADR-0238-flui-driver-protocol.md) settles the still-Proposed items of §§1, 3 and 5
 - **Related:** [ADR-0040](ADR-0040-tree-observation-seam.md),
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md),
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),
@@ -164,6 +168,27 @@ This settles ADR-0080's open item:
 - *Builds.* The server is compiled only with the package's `agent` feature, which an
   application enables behind its own development feature, and it stays inert outside
   `debug_assertions`.
+
+**Amended on acceptance (the CLI half).**
+
+- *`flui run --agent`.* Admitted on this desktop in a debug profile, for an application whose
+  package declares a `dev-agent` feature (the `flui create` templates do: it enables the facade's
+  `dev-agent` feature, which re-exports `flui-devtools` as `flui::devtools`, and `AgentServer::from_env()` is installed
+  behind it). It starts the app with that feature and with `FLUI_AGENT_ENDPOINT` and
+  `FLUI_AGENT_TOKEN` set, writes the same two values (and its pid) to `target/flui-agent.json`
+  with mode `0600`, and emits `run.agent.ready {endpoint, session}` on `--json`; the token never
+  enters the event stream. The file goes with the run.
+- *`flui mcp`.* An MCP server over stdio, written in the CLI with no MCP SDK, so the CLI links no
+  FLUI crate and no `flui-mcp` library is needed. Its tools map one to one onto the endpoint's
+  operations: `flui_windows` (`windows`), `flui_read` (`read`), `flui_act` (`act`) and
+  `flui_motion` (`motion`). A tool that needs a window and is given none uses the app's only
+  one, and is refused with `invalid_argument` naming the windows when there are several. It
+  finds the session from `--session`, the environment, or the nearest `target/flui-agent.json`,
+  connects on the first call and again once per call after a broken connection. Replies carry
+  the endpoint's JSON as text; a failure carries ADR-0080's error object whole.
+- *Not built.* The handle table across windows (handles stay window-scoped and a call names its
+  window), the Android, web and iOS runtime check, the lazy vend on the first client, and the
+  live-smoke run of `agent_counter` under Xvfb.
 
 ### 4. A normalized outline projection is the cross-backend contract
 
@@ -308,6 +333,16 @@ For the accepted part:
   `the_desktop_node_is_a_protocol_node` (the desktop server's node JSON reads as
   `flui_protocol::Node`, writes back unchanged, and outlines the same) and
   `every_code_is_a_protocol_error_code`.
+- **The CLI half of §3.** `cargo nextest run -p flui-cli`: `agent::mcp` tests
+  (`a_read_forwards_its_bounds_as_the_endpoints_query`,
+  `an_act_wraps_the_action_request_the_endpoint_reads`,
+  `a_missing_window_is_the_only_one_and_ambiguity_is_an_error_naming_them`,
+  `the_apps_error_object_reaches_the_agent_whole`), `agent::tests` (the session's token, private
+  directory and file, and its removal) and, in `cli_it`, `cli_agent`:
+  `agent_is_refused_in_release_and_without_the_apps_feature`,
+  `mcp_without_a_running_app_says_how_to_start_one` and
+  `an_agent_reads_and_taps_the_app_run_with_agent_through_mcp` (`flui run --agent`, `flui mcp`
+  and a fixture app on a Unix socket; the Windows pipe is not run by the CLI's tests).
 
 Not yet built:
 

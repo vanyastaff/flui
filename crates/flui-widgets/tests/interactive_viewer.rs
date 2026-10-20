@@ -557,6 +557,58 @@ pub(crate) fn viewer_keys_pan_and_zoom_from_the_focused_row() {
     assert_eq!(scale_of(&transform), 1.0, "Ctrl+- zooms back out");
 }
 
+/// A text field inside the viewer keeps the keys it types and moves its caret
+/// with: `+`, `=`, `-` and the caret's arrows pressed in it neither zoom nor
+/// pan the viewer, whose own bindings for them answer only what bubbles past
+/// a field (a single-line field's ArrowDown does, as it does to a list).
+pub(crate) fn keys_typed_in_a_field_inside_the_viewer_stay_in_the_field() {
+    use flui_interaction::focus::FocusNode;
+    use flui_widgets::{EditableText, TextEditingController};
+
+    let transform = TransformationController::new();
+    let field = FocusNode::with_debug_label("field");
+    let harness = crate::common::harness::mount_with_ime(
+        InteractiveViewer::new(viewer_alternatives())
+            .controller(transform.clone())
+            .boundary_margin(EdgeInsets::all(100.0))
+            .child(SizedBox::new(300.0, 50.0).child(EditableText::new(
+                TextEditingController::new(),
+                Rc::clone(&field),
+            ))),
+    );
+    let _ = field.request_focus();
+    assert!(field.has_primary_focus(), "the field has the focus");
+    let before = transform.value();
+    let manager = harness.focus_manager();
+    for (key, code, modifiers) in [
+        (Key::character("+"), Code::Equal, Modifiers::SHIFT),
+        (Key::character("="), Code::Equal, Modifiers::NONE),
+        (Key::character("-"), Code::Minus, Modifiers::NONE),
+        (
+            Key::Named(NamedKey::ArrowLeft),
+            Code::ArrowLeft,
+            Modifiers::NONE,
+        ),
+        (
+            Key::Named(NamedKey::ArrowRight),
+            Code::ArrowRight,
+            Modifiers::NONE,
+        ),
+    ] {
+        for state in [KeyState::Down, KeyState::Up] {
+            let event = KeyEvent::new(state, key.clone(), code, EventTime::from_nanos(0))
+                .with_modifiers(modifiers);
+            let _ = manager.dispatch_key_event(&event);
+        }
+        assert_eq!(
+            transform.value(),
+            before,
+            "{key:?} typed in the field leaves the viewer as it was"
+        );
+    }
+    assert!(field.has_primary_focus(), "and the field keeps the focus");
+}
+
 fn viewer_node(laid: &LaidOut) -> flui_testing::a11y::NodeId {
     let tree = laid.a11y_tree().expect("semantics are on");
     tree.nodes()
@@ -947,6 +999,74 @@ pub(crate) fn viewer_pinch_past_the_scale_bounds_stretches_and_snaps_back() {
             scale_of(&transform)
         );
         assert_planar(&transform, &format!("pinch to {to}"));
+    }
+}
+
+/// Two fingers turning a quarter about the viewport's centre at a fixed
+/// spread, in `steps` samples.
+fn twist(steps: u32) -> PointerScript {
+    let (center, radius) = (at(150.0, 150.0), 60.0);
+    let pair = |angle: f64| {
+        let (sin, cos) = angle.sin_cos();
+        let arm = Offset::new(radius * cos, radius * sin);
+        (center - arm, center + arm)
+    };
+    let sample = Duration::from_millis(8);
+    let (first, second) = pair(0.0);
+    let mut script = TouchScript::new("twist")
+        .down(1, first)
+        .wait(sample)
+        .down(2, second);
+    for step in 1..=steps {
+        let (first, second) =
+            pair(std::f64::consts::FRAC_PI_2 * f64::from(step) / f64::from(steps));
+        script = script.wait(sample).move_to(1, first).move_to(2, second);
+    }
+    script
+        .wait(sample)
+        .up(1)
+        .up(2)
+        .build()
+        .expect("BUG: the twist pairs its contacts")
+}
+
+/// The angle the published transform turns the plane by.
+fn rotation_of(controller: &TransformationController) -> f64 {
+    let m = controller.value().to_col_major_array();
+    m[1].atan2(m[0])
+}
+
+/// A two-finger twist turns the scene about the fingers when rotation is
+/// enabled, and leaves it upright, at the same scale, when it is not (the
+/// default).
+pub(crate) fn viewer_touch_twist_rotates_only_when_rotation_is_enabled() {
+    for enabled in [true, false] {
+        let (transform, vsync) = (TransformationController::new(), Vsync::new());
+        let viewer = InteractiveViewer::new(viewer_alternatives())
+            .controller(transform.clone())
+            .double_tap_zoom(false)
+            .rotation_enabled(enabled)
+            .boundary_margin(EdgeInsets::all(f64::INFINITY))
+            .child(SizedBox::new(300.0, 300.0));
+        let mut laid = mounted(VsyncScope::new(vsync.clone(), viewer).boxed(), vsync);
+        laid.replay(&twist(12));
+        settle(&mut laid);
+        let turned = rotation_of(&transform).abs();
+        if enabled {
+            assert!(
+                turned > std::f64::consts::FRAC_PI_4 && turned < std::f64::consts::FRAC_PI_2 + 1e-6,
+                "a quarter twist turns the scene by most of a quarter, by {turned}"
+            );
+        } else {
+            assert_eq!(turned, 0.0, "rotation disabled: the scene stays upright");
+        }
+        assert!(
+            (scale_of(&transform) - 1.0).abs() < 1e-9,
+            "rotation enabled {enabled}: a twist at a fixed spread does not zoom, at {}",
+            scale_of(&transform)
+        );
+        assert_planar(&transform, &format!("twist, rotation enabled {enabled}"));
+        assert_finite(&transform, &format!("twist, rotation enabled {enabled}"));
     }
 }
 

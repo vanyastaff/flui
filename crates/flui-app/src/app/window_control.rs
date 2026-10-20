@@ -15,6 +15,7 @@ use std::rc::{Rc, Weak as RcWeak};
 use std::sync::{Arc, Weak};
 
 use flui_foundation::PresentationAddress;
+use flui_foundation::panic::FirstPanic;
 use flui_platform::traits::PlatformWindow;
 use flui_platform::{
     WindowCapabilities, WindowCommand, WindowCommandError, WindowControl, WindowState,
@@ -38,12 +39,34 @@ pub(crate) struct WindowQueue {
     pending: RefCell<VecDeque<Queued>>,
     address: PresentationAddress,
     router: Arc<CloseRequestRouter>,
+    /// Asks the owner for a turn; `false` when it cannot be woken.
+    wake: Rc<dyn Fn() -> bool>,
 }
 
 impl WindowQueue {
+    /// Ask the owner for the turn that applies this queue.
+    fn ask_for_turn(&self, window: &dyn PlatformWindow) {
+        if !(self.wake)() {
+            // No owner wake path: a redraw guarantees a turn on every backend.
+            window.request_redraw();
+        }
+    }
+
+    /// Ask for a turn again if work is still waiting: the turn that should have
+    /// applied it did not.
+    fn rearm(&self) {
+        if self.pending.borrow().is_empty() {
+            return;
+        }
+        if let Some(window) = self.window.upgrade() {
+            self.ask_for_turn(&*window);
+        }
+    }
+
     /// Apply what was queued before this call, in order. What the applied work
     /// queues goes to the next turn. A failure of one command is reported and
-    /// the rest of the queue still applies.
+    /// the rest of the queue still applies. A close that goes ahead ends the
+    /// batch: what was queued after it is dropped with the window.
     fn apply_pending(&self) {
         let batch = std::mem::take(&mut *self.pending.borrow_mut());
         if batch.is_empty() {
@@ -80,17 +103,25 @@ impl WindowQueue {
                         );
                     }
                 },
-                Queued::Close => self.close_with_veto(),
+                Queued::Close => {
+                    if self.close_with_veto() {
+                        batch.rest.clear();
+                    }
+                }
             }
         }
     }
 
-    fn close_with_veto(&self) {
-        if self.router.consult(self.address, CloseReason::Program) == CloseResponse::Close
-            && let Err(error) = self.router.request_close(self.address)
-        {
+    /// Close the window unless the application's close-request handler vetoes.
+    /// `true` when the window is closed or was already gone.
+    fn close_with_veto(&self) -> bool {
+        if self.router.consult(self.address, CloseReason::Program) != CloseResponse::Close {
+            return false;
+        }
+        if let Err(error) = self.router.request_close(self.address) {
             tracing::debug!(%error, "a queued window close found the window already gone");
         }
+        true
     }
 }
 
@@ -147,22 +178,40 @@ impl WindowCommandQueues {
         })
     }
 
+    fn live(&self) -> Vec<Rc<WindowQueue>> {
+        self.queues
+            .borrow()
+            .iter()
+            .filter_map(|(queue, _)| queue.upgrade())
+            .collect()
+    }
+
     /// Apply every window's pending work. Call on the owner thread, outside any
     /// owner callback: applying may re-enter the window's procedure. A nested
     /// call returns at once and leaves what it finds for the next turn.
+    ///
+    /// A window whose command panics keeps the rest of its batch and asks for
+    /// another turn; the other windows still apply theirs, and the first panic
+    /// is raised once every window has had its turn.
     pub(crate) fn apply_pending(&self) {
         if self.applying.replace(true) {
             return;
         }
         let _applying = Applying(&self.applying);
-        let queues: Vec<_> = self
-            .queues
-            .borrow()
-            .iter()
-            .filter_map(|(queue, _)| queue.upgrade())
-            .collect();
-        for queue in queues {
-            queue.apply_pending();
+        let mut first = FirstPanic::new();
+        for queue in self.live() {
+            if first.contain(|| queue.apply_pending()).is_none() {
+                queue.rearm();
+            }
+        }
+        first.resume();
+    }
+
+    /// Leave every window's pending work to a later turn, and ask for it: the
+    /// current turn cannot apply it.
+    pub(crate) fn defer(&self) {
+        for queue in self.live() {
+            queue.rearm();
         }
     }
 }
@@ -170,8 +219,6 @@ impl WindowCommandQueues {
 /// [`WindowControl`] over one platform window, backed by its queue.
 struct HostWindowControl {
     queue: Rc<WindowQueue>,
-    /// Asks the owner for a turn; `false` when it cannot be woken.
-    wake: Rc<dyn Fn() -> bool>,
     /// The last state read while the window was alive.
     last_state: RefCell<WindowState>,
 }
@@ -184,10 +231,7 @@ impl HostWindowControl {
             .upgrade()
             .ok_or(WindowCommandError::Closed)?;
         self.queue.pending.borrow_mut().push_back(work);
-        if !(self.wake)() {
-            // No owner wake path: a redraw guarantees a turn on every backend.
-            window.request_redraw();
-        }
+        self.queue.ask_for_turn(&*window);
         Ok(())
     }
 }
@@ -241,11 +285,11 @@ pub(crate) fn window_source(
         pending: RefCell::new(VecDeque::new()),
         address,
         router,
+        wake,
     });
     let source = WindowSource::new(HostWindowControl {
         last_state: RefCell::new(window.state()),
         queue: Rc::clone(&queue),
-        wake,
     });
     queues.register(&queue, source.handle());
     source

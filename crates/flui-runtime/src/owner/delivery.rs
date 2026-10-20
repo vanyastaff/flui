@@ -513,16 +513,7 @@ impl OwnerCore {
                     continue;
                 }
             };
-            let mut refused = Vec::new();
-            for entry in entries {
-                match catch_unwind(AssertUnwindSafe(|| entry.start())) {
-                    Ok(Some(refusal)) => refused.push(refusal),
-                    Ok(None) => {}
-                    Err(failure) => {
-                        preserve_first_lifecycle_panic(first, Some(failure), "OS drag start");
-                    }
-                }
-            }
+            let refused = crate::ui_runtime::start_os_drags(entries, first);
             if refused.is_empty() {
                 continue;
             }

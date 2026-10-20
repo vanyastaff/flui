@@ -11,6 +11,12 @@
 //! visual position indicator.
 
 mod anchored_drag;
+#[cfg(test)]
+pub(crate) use anchored_drag::anchor_keys;
+#[cfg(test)]
+pub(crate) use interactive_viewer::zoom_keys;
+#[cfg(test)]
+pub(crate) use refresh_indicator::refresh_keys;
 mod animated_list;
 mod collapsing_header;
 mod custom_scroll_view;
@@ -67,8 +73,8 @@ pub use nested::{
 };
 pub use page_view::{PageController, PageIntent, PageView, PageViewState};
 pub use refresh_indicator::{
-    RefreshController, RefreshIndicator, RefreshIndicatorBuilder, RefreshIndicatorPhase,
-    RefreshIndicatorState, RefreshIndicatorStyle, RefreshIntent,
+    RefreshController, RefreshIndicator, RefreshIndicatorPhase, RefreshIndicatorState,
+    RefreshIndicatorStyle, RefreshIntent,
 };
 pub use scroll_controller::ScrollController;
 pub use scroll_owner::SharedSnapPolicy;

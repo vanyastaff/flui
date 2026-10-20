@@ -42,7 +42,20 @@ struct Rig {
 }
 
 fn rig(window: &Arc<dyn PlatformWindow>, n: usize) -> Rig {
-    let queues = WindowCommandQueues::default();
+    rig_with(
+        window,
+        n,
+        WindowCommandQueues::default(),
+        CloseRequestRouter::new(),
+    )
+}
+
+fn rig_with(
+    window: &Arc<dyn PlatformWindow>,
+    n: usize,
+    queues: WindowCommandQueues,
+    router: CloseRequestRouter,
+) -> Rig {
     let wakes = Rc::new(Cell::new(0));
     let counted = Rc::clone(&wakes);
     let source = window_source(
@@ -53,7 +66,7 @@ fn rig(window: &Arc<dyn PlatformWindow>, n: usize) -> Rig {
             counted.set(counted.get() + 1);
             true
         }),
-        Arc::new(CloseRequestRouter::new()),
+        Arc::new(router),
     );
     let handle = source.handle();
     Rig {
@@ -62,6 +75,22 @@ fn rig(window: &Arc<dyn PlatformWindow>, n: usize) -> Rig {
         handle,
         wakes,
     }
+}
+
+/// A router that knows the window at `address(n)`, answering with `handler`.
+fn router_for(
+    window: &Arc<dyn PlatformWindow>,
+    n: usize,
+    handler: Option<crate::app::CloseRequestHandler>,
+) -> CloseRequestRouter {
+    let router = CloseRequestRouter::new();
+    let prepared =
+        crate::app::close_request::PreparedCloseRequest::new(address(n), window, handler);
+    router
+        .publication(&prepared)
+        .expect("a fresh router")
+        .publish(prepared);
+    router
 }
 
 fn commands_wait_for_the_next_turn_and_apply_in_order() {
@@ -432,6 +461,129 @@ fn closing_is_queued_with_the_commands_and_never_applied_inline() {
     );
 }
 
+fn a_panic_in_one_window_still_applies_the_others_and_asks_for_a_turn() {
+    thread_local! {
+        static ARMED: Cell<bool> = const { Cell::new(true) };
+    }
+    fn explode_once() {
+        assert!(!ARMED.replace(false), "a command panics");
+    }
+    ARMED.set(true);
+    let failing = recording(false, Some(explode_once));
+    let healthy = recording(false, None);
+    let queues = WindowCommandQueues::default();
+    let wakes = Rc::new(Cell::new(0));
+    let source = |window: &Arc<dyn PlatformWindow>, n| {
+        let counted = Rc::clone(&wakes);
+        window_source(
+            window,
+            address(n),
+            &queues,
+            Rc::new(move || {
+                counted.set(counted.get() + 1);
+                true
+            }),
+            Arc::new(CloseRequestRouter::new()),
+        )
+    };
+    let (failing_platform, healthy_platform): (Arc<dyn PlatformWindow>, Arc<dyn PlatformWindow>) =
+        (failing.clone(), healthy.clone());
+    let (a, b) = (source(&failing_platform, 15), source(&healthy_platform, 16));
+    a.handle().set_resizable(false).expect("accepted");
+    a.handle().set_title("cut off").expect("accepted");
+    b.handle().set_decorated(false).expect("accepted");
+    b.handle().set_title("other").expect("accepted");
+    let submitted = wakes.get();
+
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        queues.apply_pending();
+    }));
+    assert!(
+        outcome.is_err(),
+        "the panic is raised once the walk is done"
+    );
+    assert_eq!(
+        applied(&healthy),
+        [
+            WindowCommand::SetDecorated(false),
+            WindowCommand::SetTitle("other".into())
+        ],
+        "the window after the one that panicked still applies its batch"
+    );
+    assert_eq!(
+        wakes.get(),
+        submitted + 1,
+        "the window left with work asks for the turn that applies it"
+    );
+
+    queues.apply_pending();
+    assert_eq!(
+        applied(&failing),
+        [
+            WindowCommand::SetResizable(false),
+            WindowCommand::SetTitle("cut off".into())
+        ]
+    );
+}
+
+fn a_turn_that_cannot_apply_asks_for_another() {
+    let window = recording(false, None);
+    let as_platform: Arc<dyn PlatformWindow> = window.clone();
+    let rig = rig(&as_platform, 17);
+    rig.queues.defer();
+    assert_eq!(rig.wakes.get(), 0, "nothing waits, nothing is asked");
+    rig.handle.set_title("waits").expect("accepted");
+    rig.queues.defer();
+    assert_eq!(rig.wakes.get(), 2, "the deferred work asks again");
+    assert!(applied(&window).is_empty(), "deferring applies nothing");
+    rig.queues.apply_pending();
+    assert_eq!(applied(&window), [WindowCommand::SetTitle("waits".into())]);
+}
+
+fn commands_after_a_close_that_goes_ahead_are_dropped_and_after_a_veto_apply() {
+    let closing = recording(false, None);
+    let as_platform: Arc<dyn PlatformWindow> = closing.clone();
+    let rig = rig_with(
+        &as_platform,
+        18,
+        WindowCommandQueues::default(),
+        router_for(&as_platform, 18, None),
+    );
+    rig.handle.set_title("before").expect("accepted");
+    rig.handle.request_close().expect("accepted");
+    rig.handle.set_resizable(false).expect("accepted");
+    rig.queues.apply_pending();
+    assert_eq!(
+        applied(&closing),
+        [WindowCommand::SetTitle("before".into())],
+        "nothing is applied to a window that was just closed"
+    );
+    rig.queues.apply_pending();
+    assert_eq!(
+        applied(&closing).len(),
+        1,
+        "nor given back for a later turn"
+    );
+
+    let kept = recording(false, None);
+    let as_platform: Arc<dyn PlatformWindow> = kept.clone();
+    let veto = crate::app::CloseRequestHandler::new(|_| CloseResponse::KeepOpen);
+    let rig = rig_with(
+        &as_platform,
+        19,
+        WindowCommandQueues::default(),
+        router_for(&as_platform, 19, Some(veto)),
+    );
+    rig.handle.request_close().expect("accepted");
+    rig.handle.set_resizable(false).expect("accepted");
+    rig.queues.apply_pending();
+    assert_eq!(
+        applied(&kept),
+        [WindowCommand::SetResizable(false)],
+        "a vetoed close leaves the window and the rest of the batch"
+    );
+}
+
 #[test]
 fn window_handle_contract() {
     crate::table_test::run_table(
@@ -484,6 +636,18 @@ fn window_handle_contract() {
             (
                 "closing_is_queued_with_the_commands_and_never_applied_inline",
                 closing_is_queued_with_the_commands_and_never_applied_inline as fn(),
+            ),
+            (
+                "a_panic_in_one_window_still_applies_the_others_and_asks_for_a_turn",
+                a_panic_in_one_window_still_applies_the_others_and_asks_for_a_turn as fn(),
+            ),
+            (
+                "a_turn_that_cannot_apply_asks_for_another",
+                a_turn_that_cannot_apply_asks_for_another as fn(),
+            ),
+            (
+                "commands_after_a_close_that_goes_ahead_are_dropped_and_after_a_veto_apply",
+                commands_after_a_close_that_goes_ahead_are_dropped_and_after_a_veto_apply as fn(),
             ),
         ],
     );

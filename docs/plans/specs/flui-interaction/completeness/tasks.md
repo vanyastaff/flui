@@ -97,7 +97,7 @@
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
-| T29 | DnD: `Draggable`/`DragTarget` на сессиях, `DragTrigger` через `Sequenced`, Esc и Cut/Copy/Paste, курсор | D3, D4 | T28, T19, T16 | merged |
+| T29 | DnD: `Draggable`/`DragTarget` на сессиях, `DragTrigger` через `Sequenced`, Esc и Cut/Copy/Paste, курсор | D3, D4 | T28, T19, T16 | merged; строка матрицы `draggable_and_drop_target_by_every_path` — перенос из двух команд на двух виджетах (Cut у источника, Paste у цели), поэтому не `assert_gesture_alternatives`: она сама проходит мышь, палец и виртуальный указатель, минимальную цель и reduced motion |
 | T30 | DnD: spring-loading, автопрокрутка, несколько сессий, drop последней принявшей цели | D3, D4 | T28 | merged |
 | T31 | `Dismissible` на `AnchoredDrag`, `SwipeActions`, системные края | W4 | T27, T09, T19, T32 | merged |
 | T32 | `ContextMenuArea` на `Sequenced` | W7 | T14, T19 | merged |
