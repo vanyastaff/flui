@@ -278,8 +278,12 @@ timestamp. Sent messages inheriting an older retrieved timestamp cannot move
 the window's clock backwards. The sample timestamp is committed before hover
 callbacks or native capture changes can dispatch another message.
 
+Keys are stamped from the same clock, read before the keydown drains its
+characters, so a key and a click queued behind a long frame keep their order.
+
 `queued_mouse_samples_keep_native_message_time` drives the public native window
-with delayed queued mouse samples. The private arithmetic row
+with delayed queued mouse samples, `queued_key_events_keep_native_message_time`
+with a key down, a mouse move and the key up. The private arithmetic row
 `message_clock_preserves_wrapping_samples_and_window_epochs` covers rollover,
 older sent timestamps, epoch rebasing and saturation: there is no public API
 that advances the OS uptime by 49.7 days. These checks do not establish physical
@@ -299,6 +303,24 @@ against the golden when a `WM_POINTER` mouse id is its own contact. A wheel turn
 goes through the window's registry (`ContactRegistry::wheel`) only so the native
 capture journals it; it belongs to no contact sequence.
 
+The window's hover (`is_hovered`, `on_hover_status_change`, the immediate cursor
+apply) follows the mouse on either route through one `WindowContext::set_hovered`,
+which raises a change only when the hover changed: `WM_MOUSEMOVE`/`WM_MOUSELEAVE`
+on the legacy route, and on the `WM_POINTER` route every mouse message but a
+capture change enters and `WM_POINTERLEAVE` leaves. Entering is raised before
+the input of its message, leaving after it. The system captures a mouse press on
+the `WM_POINTER` route itself, so a drag released outside the client area still
+delivers its release. `a_pointer_routed_mouse_hovers_the_window` drives both with
+`SendInput` moves (never `SetCursorPos`, which arrives as `WM_MOUSEMOVE`).
+
+Losing focus (`WM_KILLFOCUS`) or being minimised (`SIZE_MINIMIZED`) ends every
+open contact on the window as `FocusLost` and cancels an open touchpad
+manipulation without pausing the viewport, since an inactive window scrolls
+under the cursor; the releases may go elsewhere, and what still arrives for an
+ended contact is an orphan. `focus_loss_and_minimising_end_the_held_press`,
+`focus_loss_ends_a_touch_and_silences_its_tail` and the viewport row
+`focus_loss_cancels_without_pausing` pin it.
+
 ### Win32 pointer readings keep counter resolution
 
 `POINTER_INFO.dwTime` advances with the ~15.6 ms system tick, so a coalesced
@@ -312,6 +334,17 @@ saturates at the epoch range.
 
 The current reading is the newest history entry and is decoded with it, so the
 event and its last coalesced sample carry one time.
+
+A pen is placed from `ptHimetricLocationRaw` through its device's
+`GetPointerDeviceRects`, read once per message, so a stroke keeps the fraction
+of a pixel the integer `ptPixelLocationRaw` drops. A mapping that is missing,
+empty, or more than a pixel from the reported pixel (a rotated display maps the
+axes otherwise) leaves the pixel (`native_pen_position_keeps_himetric_precision`).
+
+Each pointer of a multi-touch frame is still decoded from its own message, so a
+two-finger frame reaches a recognizer as two steps; one step per frame
+(`GetPointerFrameInfoHistory`, `SkipPointerFrameMessages`) needs a frame unit in
+the shared pointer vocabulary first.
 
 The private `native_pointer_decoding_contracts` rows
 `coalesced_burst_is_ordered_by_performance_count` and
@@ -885,6 +918,11 @@ arrives inside a TSF call into a store waits for that call. Its application-code
 logged, contained: the window procedure aborts on a panic. Test:
 `a_window_offers_its_text_services_as_its_host`, and the `window destroyed inside a TSF call`
 row of `the_text_services_answer_a_completion_for_its_store`.
+
+A field's screen rectangles move with its window, so `WM_MOVE`, `WM_EXITSIZEMOVE` and
+`WM_DPICHANGED` send the focused document's sink `OnLayoutChange`, and an input method
+moves its candidate window with the text; the notification's failures are logged, contained
+(`a_moved_window_tells_tsf_its_layout_changed`).
 
 ### AppKit reopen signals use a loop-owned serialized callback pump
 

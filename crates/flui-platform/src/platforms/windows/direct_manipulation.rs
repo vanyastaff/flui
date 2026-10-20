@@ -601,6 +601,14 @@ impl WindowContext {
         self.abandon_touchpad(hwnd, true);
     }
 
+    /// The window lost focus or was minimised: end what is open as cancelled
+    /// and return the content to the origin. Contacts are still accepted, so
+    /// an inactive window scrolls under the cursor as Windows' do; a paused
+    /// viewport stays paused.
+    pub(super) fn cancel_touchpad(&self, hwnd: HWND) {
+        self.abandon_touchpad(hwnd, false);
+    }
+
     /// `WM_EXITSIZEMOVE`: accept contacts again.
     pub(super) fn resume_touchpad(&self) {
         if let Some(host) = self.touchpad.host.borrow_mut().as_mut() {
@@ -634,11 +642,13 @@ impl WindowContext {
         }
     }
 
+    /// End what is open; `pause` also declines contacts until
+    /// [`Self::resume_touchpad`]. Without it a paused viewport stays paused.
     fn abandon_touchpad(&self, hwnd: HWND, pause: bool) {
         let Some(mut host) = self.touchpad.host.borrow_mut().take() else {
             return;
         };
-        host.paused = pause;
+        host.paused |= pause;
         // The host is out of its slot while COM runs: a reentrant message
         // finds no viewport rather than a borrowed one.
         let inputs = self.abandon_host(hwnd, &mut host);

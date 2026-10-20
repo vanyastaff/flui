@@ -772,6 +772,137 @@ fn a_window_offers_its_text_services_as_its_host() {
     );
 }
 
+/// Records which sink notifications the text services sent.
+struct SinkNotifications(Arc<std::sync::Mutex<Vec<String>>>);
+
+impl tracing::Subscriber for SinkNotifications {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        #[derive(Default)]
+        struct Notification {
+            message: Option<String>,
+            what: Option<String>,
+        }
+        impl tracing::field::Visit for Notification {
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if field.name() == "what" {
+                    self.what = Some(value.to_owned());
+                }
+            }
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                match field.name() {
+                    "message" => self.message = Some(format!("{value:?}")),
+                    "what" => self.what = Some(format!("{value:?}").trim_matches('"').to_owned()),
+                    _ => {}
+                }
+            }
+        }
+        let mut notification = Notification::default();
+        event.record(&mut notification);
+        if notification.message.as_deref() == Some("sink notification")
+            && let Some(what) = notification.what
+        {
+            self.0.lock().expect("notification log").push(what);
+        }
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// Moving a window, ending a size-and-move loop and a DPI change tell TSF
+/// the focused field's layout changed, so an input method's candidate
+/// window follows the text; with no field focused nothing is sent.
+#[test]
+fn a_moved_window_tells_tsf_its_layout_changed() {
+    use crate::traits::{HostWindow as _, OwnerThreadToken};
+    use windows::Win32::Foundation::{LPARAM, RECT, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowRect, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowPos,
+        WM_DPICHANGED, WM_EXITSIZEMOVE,
+    };
+
+    let platform = super::super::WindowsPlatform::new().expect("platform");
+    let window = platform
+        .open_window(
+            WindowOptions::default()
+                .with_title("flui moved field")
+                .with_size(Size::new(200.0, 80.0))
+                .with_visible(false),
+        )
+        .expect("window");
+    let win32 = window
+        .as_any()
+        .downcast_ref::<super::super::WindowsWindow>()
+        .expect("Win32 window");
+    let hwnd = win32.hwnd();
+    let host = win32
+        .text_store_host(OwnerThreadToken::new())
+        .expect("a real window offers its host");
+    let notifications = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let layout_changes = || {
+        notifications
+            .lock()
+            .expect("notification log")
+            .iter()
+            .filter(|what| *what == "OnLayoutChange")
+            .count()
+    };
+    let move_by = |dx: i32| {
+        let mut rect = RECT::default();
+        // SAFETY: the case's own window on its owner thread; `rect` is a
+        // live local.
+        unsafe {
+            GetWindowRect(hwnd, &raw mut rect).expect("window rectangle");
+            SetWindowPos(
+                hwnd,
+                None,
+                rect.left + dx,
+                rect.top,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+            .expect("move the window");
+        }
+    };
+    tracing::subscriber::with_default(SinkNotifications(Arc::clone(&notifications)), || {
+        move_by(10);
+        assert_eq!(layout_changes(), 0, "no field is focused");
+
+        let store = composing_store();
+        host.focus_store(Some(erased(&store)));
+        notifications.lock().expect("notification log").clear();
+        move_by(10);
+        assert_eq!(layout_changes(), 1, "a move changes the field's layout");
+        // SAFETY: the case's own window; the message carries no pointer.
+        unsafe { SendMessageW(hwnd, WM_EXITSIZEMOVE, None, None) };
+        assert_eq!(layout_changes(), 2, "the end of a size-and-move loop does");
+        let mut rect = RECT::default();
+        // SAFETY: the case's own window; `WM_DPICHANGED` carries the address
+        // of the suggested rectangle, a live local here, at the DPI it has.
+        unsafe {
+            GetWindowRect(hwnd, &raw mut rect).expect("window rectangle");
+            let dpi = (window.scale_factor() * 96.0).round() as usize;
+            SendMessageW(
+                hwnd,
+                WM_DPICHANGED,
+                Some(WPARAM((dpi << 16) | dpi)),
+                Some(LPARAM(&raw const rect as isize)),
+            );
+        }
+        assert!(layout_changes() >= 3, "a DPI change does");
+        host.focus_store(None);
+    });
+    window.close();
+}
+
 /// One row: its name, and the case run against the shared window.
 type Row = (&'static str, fn(HWND));
 

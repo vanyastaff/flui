@@ -383,6 +383,22 @@ impl TextServices {
         }
     }
 
+    /// The window moved, or its DPI changed: the focused field's text sits
+    /// somewhere else on the screen, so TSF is told its layout changed and an
+    /// input method moves its candidate window with it. A notification
+    /// reaches TSF and a user-installed `tracing` subscriber; from the window
+    /// procedure a failure there is logged, not raised.
+    pub(super) fn window_moved(&self) {
+        let Some(state) = self.focused_state() else {
+            return;
+        };
+        let mut calls = OwnerCalls::new();
+        calls.run(|| document::notify_layout_changed(&state));
+        if let Some(payload) = calls.into_failure() {
+            log_failure(payload);
+        }
+    }
+
     /// Log a host operation's diagnostic. The log runs a user-installed
     /// subscriber, so it is contained like the application code around it:
     /// a panic there is kept for the outermost host operation, behind a
