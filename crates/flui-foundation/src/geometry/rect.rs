@@ -838,7 +838,7 @@ where
     fn format_display(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Rect({}, {} - {}×{})",
+            "{},{} {}x{}",
             self.min.x,
             self.min.y,
             self.max.x - self.min.x,
@@ -847,6 +847,7 @@ where
     }
 }
 
+/// `8,8 344x32`: the origin, then the size, each number in Rust's shortest round-trip form.
 impl fmt::Display for Rect<f64> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

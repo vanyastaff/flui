@@ -20,6 +20,7 @@ fn cargo_toml(name: &str, source: &DependencySource) -> String {
     let version = env!("CARGO_PKG_VERSION");
 
     let deps = format!("flui = {}", source.dependency("flui", &[]));
+    let agent_features = super::AGENT_FEATURES;
     let mode_comment = if matches!(source, DependencySource::Local(_)) {
         " (local development)"
     } else {
@@ -43,6 +44,8 @@ rust-version = "1.99"
 {lib_table}
 [dependencies]
 {deps}
+
+{agent_features}
 
 [profile.release]
 opt-level = 3

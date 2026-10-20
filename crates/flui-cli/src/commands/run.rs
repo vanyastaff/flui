@@ -14,6 +14,7 @@
 //! line by line as `run.app.log` so a tool driving `flui run` sees everything
 //! on one machine-readable stream.
 
+use crate::agent::{self, Session};
 use crate::build::{BuilderContextBuilder, Platform, Profile, WebBuilder};
 use crate::config::{FluiConfig, HotReloadConfig};
 use crate::error::{CliError, CliResult, ResultExt};
@@ -39,8 +40,9 @@ pub(crate) fn execute(
     hot_reload: bool,
     profile: Option<String>,
     verbose: bool,
-    web: WebOptions,
+    options: RunOptions,
 ) -> CliResult<()> {
+    let RunOptions { web, agent } = options;
     let mode = if release { "release" } else { "debug" };
     ui::intro(style(" flui run ").on_green().black())?;
     ui::info(format!("Mode: {}", style(mode).cyan()))?;
@@ -49,6 +51,11 @@ pub(crate) fn execute(
 
     let target = resolve_target(device.as_deref())?;
     ui::info(format!("Target device: {}", style(target.label()).cyan()))?;
+    let agent = if agent {
+        Some(start_agent_session(&project, &target, profile.as_deref())?)
+    } else {
+        None
+    };
     ui::emit(
         "run.start",
         &serde_json::json!({ "device": target.id(), "mode": mode, "hot_reload": hot_reload && !release }),
@@ -65,7 +72,7 @@ pub(crate) fn execute(
         release,
         profile,
         verbose,
-        web,
+        SessionExtras { web, agent },
     );
     // `run.stop` closes `run.start` on every outcome; the `error` event that
     // follows a failure carries the exit code.
@@ -78,6 +85,21 @@ pub(crate) fn execute(
     Ok(())
 }
 
+/// The `flui run` flags that only some targets read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RunOptions {
+    /// The browser target's server.
+    pub(crate) web: WebOptions,
+    /// `--agent`: serve the app to an AI agent.
+    pub(crate) agent: bool,
+}
+
+/// [`RunOptions`] once `--agent` has become a session.
+struct SessionExtras {
+    web: WebOptions,
+    agent: Option<Session>,
+}
+
 /// The part of `execute` whose outcome `run.stop` reports.
 fn run_session(
     project: Project,
@@ -86,8 +108,9 @@ fn run_session(
     release: bool,
     profile: Option<String>,
     verbose: bool,
-    web: WebOptions,
+    extras: SessionExtras,
 ) -> CliResult<()> {
+    let SessionExtras { web, agent } = extras;
     if let Target::Android(device) = target {
         if matches!(project, Project::Worker(_)) {
             return Err(CliError::Unsupported {
@@ -125,16 +148,84 @@ fn run_session(
                 };
                 dev_loop(&mut strategy)?;
             }
-            Project::Application => {
+            Project::Application { .. } => {
                 ui::success("Hot reload enabled (process restart)")?;
-                let mut strategy = ProcessRestart { profile, verbose };
+                let mut strategy = ProcessRestart {
+                    profile,
+                    verbose,
+                    agent,
+                };
                 dev_loop(&mut strategy)?;
             }
         }
     } else {
-        run_once(release, profile, verbose)?;
+        run_once(release, profile, verbose, agent.as_ref())?;
     }
     Ok(())
+}
+
+/// What `--agent` needs before anything is built: a desktop target running a
+/// debug profile of an application that hosts the agent server. Then the
+/// session (endpoint, token, session file) it will launch the app with.
+fn start_agent_session(
+    project: &Project,
+    target: &Target,
+    profile: Option<&str>,
+) -> CliResult<Session> {
+    if !matches!(target, Target::Host) {
+        return Err(CliError::Unsupported {
+            what: format!("`flui run --agent` on {}", target.label()),
+            reason: "the agent endpoint is a local socket or pipe; run it on this desktop".into(),
+        });
+    }
+    if matches!(profile, Some("release" | "bench")) {
+        return Err(CliError::Usage(
+            "the development agent serves debug builds only; drop `--profile release`".into(),
+        ));
+    }
+    match project {
+        Project::Worker(_) => {
+            return Err(CliError::Unsupported {
+                what: "`flui run --agent` on a worker hot-reload project".into(),
+                reason: "run the application project instead".into(),
+            });
+        }
+        Project::Application { dev_agent: false } => {
+            return Err(CliError::Unsupported {
+                what: "`flui run --agent` without the application's `dev-agent` feature".into(),
+                reason: format!(
+                    "declare it in Cargo.toml: `[features] {feature} = [\"flui/dev-agent\"]`, and \
+                     install `flui::devtools::agent::AgentServer::from_env()` with \
+                     `AppConfig::with_dev_agent` behind it; `flui create` projects have it",
+                    feature = agent::APP_FEATURE
+                ),
+            });
+        }
+        Project::Application { dev_agent: true } => {}
+    }
+    let start = std::env::current_dir().context("could not read current directory")?;
+    let workspace = find_workspace_root(&start);
+    let session = Session::create(&start, workspace.as_deref())?;
+    ui::success(format!(
+        "Agent session: {} (connect with `flui mcp`)",
+        style(session.file().display()).cyan()
+    ))?;
+    ui::emit(
+        "run.agent.ready",
+        &serde_json::json!({
+            "endpoint": session.credentials().endpoint,
+            "session": session.file(),
+        }),
+    );
+    Ok(session)
+}
+
+/// Adds the agent's feature and credentials to a `cargo` command.
+fn with_agent(cmd: &mut Command, agent: Option<&Session>) {
+    if let Some(session) = agent {
+        cmd.args(["--features", agent::APP_FEATURE]);
+        session.apply(cmd);
+    }
 }
 
 // ============================================================================
@@ -311,7 +402,12 @@ fn match_target(device: &super::devices::Device) -> CliResult<Target> {
 ///
 /// Goes through the same child policy as the dev loop, so `--json` gets the
 /// `run.app.*` events and Ctrl-C stops the app before the CLI returns.
-fn run_once(release: bool, profile: Option<String>, verbose: bool) -> CliResult<()> {
+fn run_once(
+    release: bool,
+    profile: Option<String>,
+    verbose: bool,
+    agent: Option<&Session>,
+) -> CliResult<()> {
     let mut cmd = Command::new("cargo");
     cmd.arg("run");
     if release {
@@ -322,6 +418,7 @@ fn run_once(release: bool, profile: Option<String>, verbose: bool) -> CliResult<
     if verbose {
         cmd.arg("--verbose");
     }
+    with_agent(&mut cmd, agent);
 
     ui::step("Building and running...")?;
     let interrupted = install_interrupt_flag();
@@ -981,6 +1078,9 @@ fn log_changed_paths(paths: &[PathBuf]) {
 struct ProcessRestart {
     profile: Option<String>,
     verbose: bool,
+    /// `--agent`: the app is built with its `dev-agent` feature and started
+    /// with the session's endpoint and token.
+    agent: Option<Session>,
 }
 
 impl ReloadStrategy for ProcessRestart {
@@ -992,10 +1092,15 @@ impl ReloadStrategy for ProcessRestart {
     }
 
     fn build_and_spawn(&mut self, child: &mut Option<AppChild>) -> CliResult<()> {
-        if !timed_build(|| run_cargo_build(self.profile.as_deref(), self.verbose)) {
+        if !timed_build(|| {
+            run_cargo_build(self.profile.as_deref(), self.verbose, self.agent.as_ref())
+        }) {
             return Ok(());
         }
-        let spawned = spawn_app(self.profile.as_deref(), self.verbose)?;
+        if let Some(session) = &self.agent {
+            session.clear_endpoint();
+        }
+        let spawned = spawn_app(self.profile.as_deref(), self.verbose, self.agent.as_ref())?;
         announce_started(&spawned, "Application started");
         *child = Some(spawned);
         Ok(())
@@ -1484,7 +1589,7 @@ impl ReloadStrategy for AndroidSession {
 }
 
 /// Run `cargo build` and return whether it succeeded.
-fn run_cargo_build(profile: Option<&str>, verbose: bool) -> bool {
+fn run_cargo_build(profile: Option<&str>, verbose: bool, agent: Option<&Session>) -> bool {
     let mut cmd = Command::new("cargo");
     cmd.arg("build");
 
@@ -1496,6 +1601,9 @@ fn run_cargo_build(profile: Option<&str>, verbose: bool) -> bool {
         cmd.arg("--verbose");
     }
 
+    // The same features as the run that follows, or cargo builds twice.
+    with_agent(&mut cmd, agent);
+
     match cmd.status() {
         Ok(status) => status.success(),
         Err(e) => {
@@ -1506,7 +1614,7 @@ fn run_cargo_build(profile: Option<&str>, verbose: bool) -> bool {
 }
 
 /// Spawn the application as a child process.
-fn spawn_app(profile: Option<&str>, verbose: bool) -> CliResult<AppChild> {
+fn spawn_app(profile: Option<&str>, verbose: bool, agent: Option<&Session>) -> CliResult<AppChild> {
     let mut cmd = Command::new("cargo");
     cmd.arg("run");
 
@@ -1517,6 +1625,8 @@ fn spawn_app(profile: Option<&str>, verbose: bool) -> CliResult<AppChild> {
     if verbose {
         cmd.arg("--verbose");
     }
+
+    with_agent(&mut cmd, agent);
 
     cmd.env(env::HOT_RELOAD, "1");
     spawn_child(cmd, "Failed to spawn application")
@@ -2007,6 +2117,8 @@ struct ProjectPackage {
     dependencies: Vec<ProjectDependency>,
     #[serde(default)]
     targets: Vec<ProjectTarget>,
+    #[serde(default)]
+    features: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -2017,7 +2129,11 @@ struct ProjectTarget {
 /// What `flui run` found in the working directory.
 enum Project {
     /// A single application package (`cargo run` is the entry point).
-    Application,
+    Application {
+        /// Whether the package declares the `dev-agent` feature `--agent`
+        /// builds with.
+        dev_agent: bool,
+    },
     /// A host/worker workspace declared by `flui.toml`'s `[hot_reload]`.
     Worker(WorkerHotReloadProject),
 }
@@ -2040,7 +2156,9 @@ fn has_flui_dependency(dependencies: &[ProjectDependency]) -> bool {
     })
 }
 
-fn metadata_identifies_project(bytes: &[u8], manifest: &Path) -> CliResult<bool> {
+/// `Some(dev_agent)` for the application at `manifest` (whether it declares
+/// the `dev-agent` feature), `None` when the package is not a FLUI app.
+fn metadata_identifies_project(bytes: &[u8], manifest: &Path) -> CliResult<Option<bool>> {
     let metadata: ProjectMetadata = serde_json::from_slice(bytes)
         .context("could not decode Cargo metadata; expected --format-version 1 JSON")?;
     let manifest = manifest
@@ -2053,7 +2171,7 @@ fn metadata_identifies_project(bytes: &[u8], manifest: &Path) -> CliResult<bool>
             .context("could not resolve a package manifest reported by Cargo")?;
         if package_manifest == manifest {
             if !has_flui_dependency(&package.dependencies) {
-                return Ok(false);
+                return Ok(None);
             }
             let has_bin = package
                 .targets
@@ -2064,7 +2182,7 @@ fn metadata_identifies_project(bytes: &[u8], manifest: &Path) -> CliResult<bool>
                     reason: "this package is a library (no binary target); `flui run` needs an application — run its tests with `flui test`, or use it from an app crate".into(),
                 });
             }
-            return Ok(true);
+            return Ok(Some(package.features.contains_key(agent::APP_FEATURE)));
         }
     }
     Err(CliError::NotFluiProject {
@@ -2105,13 +2223,13 @@ fn ensure_flui_project() -> CliResult<Project> {
             ),
         });
     }
-    if !metadata_identifies_project(&output.stdout, cargo_toml)? {
+    let Some(dev_agent) = metadata_identifies_project(&output.stdout, cargo_toml)? else {
         return Err(CliError::NotFluiProject {
             reason: "normal dependency on flui (or legacy flui-app/flui-widgets) not found in this package".into(),
         });
-    }
+    };
 
-    Ok(Project::Application)
+    Ok(Project::Application { dev_agent })
 }
 
 /// Execute scene-only hot-reload mode for Android.

@@ -69,6 +69,21 @@ Owner unit tests cover expansion inside libraries; the consumer integration test
 covers facade-only and renamed-facade manifests. SDK-only manifests and the SDK beside a facade
 dev-dependency are **Unasserted:** no test pins this.
 
+### Inspect derive: the field type is the mapping
+
+`#[derive(Inspect)]` (ADR-0242 §4) writes one `Fields` call per field and leaves the value
+mapping to the runtime's `FieldValue`/`ToValue` traits instead of matching type names, so a
+type alias, a re-export or a user's own `ToValue` impl all work, and an unmapped type fails at
+the derive through the trait's `#[diagnostic::on_unimplemented]` hint (`skip`, `with`, `debug`,
+or an impl). Where-bounds are added only for fields that mention a type parameter; a concrete
+field is checked at its call. The kind is the identifier (`r#` stripped), with no
+`type_name` scanning; a generic type adds `kind_args`, one `core::any::type_name` per type
+parameter. A fieldless enum also gets `ToValue` (a `Value::Variant`), which is what lets it be
+another type's field. A union is refused: which field is live is unknown. The diagnostics are
+pinned by `inspect_unmapped_field` and `inspect_unsupported_shape` in
+`crates/flui-sdk/tests/compiler_guards.rs`; behaviour by `the_derive_describes_every_shape_with_its_attributes`
+in `flui-foundation`.
+
 ### Routable derive: specificity order, compile-time pattern validation, hidden helpers
 
 **Oracle:** The shape follows Dioxus's `#[derive(Routable)]` with `#[route("…")]`

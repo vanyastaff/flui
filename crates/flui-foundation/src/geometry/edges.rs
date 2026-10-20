@@ -33,6 +33,27 @@ pub const fn edges<T>(top: T, right: T, bottom: T, left: T) -> Edges<T> {
     }
 }
 
+/// `8` when the four edges are equal, `top,right,bottom,left` otherwise (`8,4,8,4`), each in
+/// Rust's shortest round-trip form.
+impl std::fmt::Display for Edges<f64> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            top,
+            right,
+            bottom,
+            left,
+        } = *self;
+        let uniform = [right, bottom, left]
+            .iter()
+            .all(|edge| edge.to_bits() == top.to_bits());
+        if uniform {
+            write!(f, "{top}")
+        } else {
+            write!(f, "{top},{right},{bottom},{left}")
+        }
+    }
+}
+
 impl<T> Edges<T> {
     /// Creates new edge values with explicit values for each edge.
     #[inline]

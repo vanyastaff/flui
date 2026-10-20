@@ -718,6 +718,7 @@ where
 // Debug & Display
 // ============================================================================
 
+/// `@8,8`, each component in Rust's shortest round-trip form.
 impl<T: NumericUnit> Display for Offset<T>
 where
     T: Into<f64>,
@@ -726,7 +727,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let dx: f64 = self.dx.into();
         let dy: f64 = self.dy.into();
-        write!(f, "Offset({dx}, {dy})")
+        write!(f, "@{dx},{dy}")
     }
 }
 

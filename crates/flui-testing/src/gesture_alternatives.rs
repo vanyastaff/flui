@@ -6,7 +6,8 @@
 //! subject's [`GestureAlternatives`] declare:
 //!
 //! - the gesture itself, from the [`PointerScript`] the check is given, for
-//!   the first command;
+//!   the first command, and again with keyboard focus in the row, so the
+//!   focus ring and the revealed control leave its contacts alone;
 //! - assistive technology's custom action, found by the command's label, and
 //!   again under reduced motion, both the user's setting and an animator
 //!   duration scale of 0, where it must reach the same end state within two
@@ -16,10 +17,13 @@
 //! - one pointer: a [`VisibleControl`](Alternative::VisibleControl) pressed
 //!   with a mouse, a finger and a virtual (dwell or switch) pointer, and once
 //!   just outside its drawn bounds but inside the minimum target; a
-//!   [`ContextMenu`](Alternative::ContextMenu) opened by a secondary click, a
-//!   long press, each of the platform's menu keys, assistive technology's
-//!   `ShowContextMenu` and the control focus reveals, and its item chosen by
-//!   assistive technology and by a click; a
+//!   [`ContextMenu`](Alternative::ContextMenu) opened by a secondary click of
+//!   a mouse and of a virtual pointer, a long press, each of the platform's
+//!   menu keys, assistive technology's `ShowContextMenu` and the control focus
+//!   reveals (clicked by assistive technology, and pressed with a mouse, a
+//!   finger and a virtual pointer at its centre, where nothing may cover it),
+//!   and its item chosen by assistive technology and pressed with a mouse and
+//!   a virtual pointer; a
 //!   [`Companion`](Alternative::Companion) through the node the registered
 //!   companion publishes for the command, activated by assistive technology
 //!   and pressed with a mouse, a finger and a virtual pointer. That node must
@@ -207,7 +211,18 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
             let reference = if index == 0 {
                 let mut mounted = self.mount();
                 mounted.laid.replay(&self.check.gesture);
-                Some(("gesture", Self::settle(&mut mounted)))
+                let reference = ("gesture", Self::settle(&mut mounted));
+                // What keyboard focus draws over the row must not catch the
+                // gesture's contacts.
+                let path = "the gesture, with keyboard focus in the row";
+                if let Some(outcome) = self.path(label, path, |run, mounted| {
+                    Self::focus_row(mounted, label)?;
+                    mounted.laid.replay(&run.check.gesture);
+                    Some(())
+                }) {
+                    self.compare(label, &reference, (path, outcome), &initial);
+                }
+                Some(reference)
             } else {
                 None
             };
@@ -510,14 +525,27 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
 
     fn menu_paths(&mut self, label: &str, reference: &(&str, Outcome<M>), initial: &M) {
         let mut openers: Vec<(String, Opener)> = vec![
-            ("a secondary click".to_owned(), Opener::SecondaryClick),
+            (
+                "a secondary click".to_owned(),
+                Opener::SecondaryClick(Device::Mouse),
+            ),
+            (
+                "a virtual pointer's secondary press".to_owned(),
+                Opener::SecondaryClick(Device::Virtual),
+            ),
             ("a long press".to_owned(), Opener::LongPress),
             ("ShowContextMenu".to_owned(), Opener::Assistive),
             (
                 "the control focus reveals".to_owned(),
-                Opener::RevealedControl,
+                Opener::RevealedControl(None),
             ),
         ];
+        for device in [Device::Mouse, Device::Touch, Device::Virtual] {
+            openers.push((
+                format!("the control focus reveals, pressed with {device:?}"),
+                Opener::RevealedControl(Some(device)),
+            ));
+        }
         for key in ShowContextMenuIntent::default_keys(TargetPlatform::current()) {
             openers.push((format!("the menu key {key:?}"), Opener::Key(key)));
         }
@@ -534,34 +562,31 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
                 self.compare(label, reference, (&path, outcome), initial);
             }
         }
-        let path = "its menu, opened by a secondary click, item clicked";
-        if let Some(outcome) = self.path(label, path, |run, mounted| {
-            run.open_menu(mounted, label, &Opener::SecondaryClick)?;
-            let center = {
-                let tree = tree(mounted)?;
-                let node = tree
-                    .nodes()
-                    .find(|node| is_menu_item(node.role()) && node.label() == Some(label))?;
-                center_of(tree.window_bounds(&node)?)
-            };
-            mounted.laid.replay(&Device::Mouse.tap(center));
-            Some(())
-        }) {
-            self.compare(label, reference, (path, outcome), initial);
+        for device in [Device::Mouse, Device::Virtual] {
+            let path =
+                format!("its menu, opened by a secondary press, item pressed with {device:?}");
+            if let Some(outcome) = self.path(label, &path, |run, mounted| {
+                run.open_menu(mounted, label, &Opener::SecondaryClick(device))?;
+                let center = {
+                    let tree = tree(mounted)?;
+                    let node = tree
+                        .nodes()
+                        .find(|node| is_menu_item(node.role()) && node.label() == Some(label))?;
+                    center_of(tree.window_bounds(&node)?)
+                };
+                mounted.laid.replay(&device.tap(center));
+                Some(())
+            }) {
+                self.compare(label, reference, (&path, outcome), initial);
+            }
         }
     }
 
     fn open_menu(&mut self, mounted: &mut Mounted<M>, label: &str, opener: &Opener) -> Option<()> {
         match opener {
-            Opener::SecondaryClick => {
+            Opener::SecondaryClick(device) => {
                 let center = row_center(mounted, label)?;
-                let click = MouseScript::new("secondary click")
-                    .press_button(center, PointerButton::SECONDARY)
-                    .wait(Duration::from_millis(16))
-                    .release()
-                    .build()
-                    .expect("BUG: the secondary click releases its button");
-                mounted.laid.replay(&click);
+                mounted.laid.replay(&device.secondary_press(center)?);
             }
             Opener::LongPress => {
                 let center = row_center(mounted, label)?;
@@ -589,7 +614,7 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
                 Self::focus_row(mounted, label)?;
                 press(mounted, key);
             }
-            Opener::RevealedControl => {
+            Opener::RevealedControl(device) => {
                 let before: Vec<String> = buttons(mounted);
                 Self::focus_row(mounted, label)?;
                 let (revealed, bounds) = {
@@ -610,10 +635,15 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
                         bounds.y1 - bounds.y0
                     ));
                 }
-                mounted
-                    .laid
-                    .invoke_semantics_action(request(Action::Click, revealed, None))
-                    .ok()?;
+                match device {
+                    // Pressed at its centre, which is where nothing else may
+                    // cover it (WCAG 2.2, 2.4.11).
+                    Some(device) => mounted.laid.replay(&device.tap(center_of(bounds))),
+                    None => mounted
+                        .laid
+                        .invoke_semantics_action(request(Action::Click, revealed, None))
+                        .ok()?,
+                }
             }
         }
         mounted.laid.pump_for(Duration::from_millis(16));
@@ -649,11 +679,14 @@ enum PointerPath {
 
 /// How a menu path opens the menu.
 enum Opener {
-    SecondaryClick,
+    /// The secondary button of a mouse or a virtual pointer, on the row.
+    SecondaryClick(Device),
     LongPress,
     Assistive,
     Key(SingleActivator),
-    RevealedControl,
+    /// The control keyboard focus in the row reveals, clicked by assistive
+    /// technology, or pressed with a pointer.
+    RevealedControl(Option<Device>),
 }
 
 /// The pointer a single-pointer path uses.
@@ -679,17 +712,39 @@ impl Device {
                 .wait(wait)
                 .up(1)
                 .build(),
-            Self::Virtual => VirtualScript::new(
-                "virtual press",
-                DeviceId::try_from(7_u64).expect("BUG: a nonzero device id"),
-            )
-            .press(at)
-            .wait(wait)
-            .release()
-            .build(),
+            Self::Virtual => VirtualScript::new("virtual press", virtual_device())
+                .press(at)
+                .wait(wait)
+                .release()
+                .build(),
         }
         .expect("BUG: a press releases its contact")
     }
+
+    /// A press of the secondary button at `at`; `None` for a finger, which
+    /// has no buttons.
+    fn secondary_press(self, at: Offset<f64>) -> Option<PointerScript> {
+        let wait = Duration::from_millis(16);
+        let script = match self {
+            Self::Mouse => MouseScript::new("secondary click")
+                .press_button(at, PointerButton::SECONDARY)
+                .wait(wait)
+                .release()
+                .build(),
+            Self::Virtual => VirtualScript::new("virtual secondary press", virtual_device())
+                .press_button(at, PointerButton::SECONDARY)
+                .wait(wait)
+                .release()
+                .build(),
+            Self::Touch => return None,
+        };
+        Some(script.expect("BUG: a press releases its button"))
+    }
+}
+
+/// The device of the virtual pointer the paths press with.
+fn virtual_device() -> DeviceId {
+    DeviceId::try_from(7_u64).expect("BUG: a nonzero device id")
 }
 
 fn tree<M>(mounted: &Mounted<M>) -> Option<A11yTree> {
