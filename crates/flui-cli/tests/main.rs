@@ -12,6 +12,8 @@
 //! (flui-cli currently has none; see flui-view's error_view_recovery
 //! for the reference case.)
 
+#[path = "cli_agent.rs"]
+mod cli_agent;
 #[path = "cli_build.rs"]
 mod cli_build;
 #[path = "cli_completions.rs"]

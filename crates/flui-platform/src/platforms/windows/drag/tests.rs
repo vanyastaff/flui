@@ -7,6 +7,14 @@
 //! sends a no-op message to wake it, so the loop asks its drop source again.
 //! The move names a point over one of the case's own windows, raised above
 //! the others; the system pointer is never moved.
+//!
+//! The cases live in the crate, not in `tests/`: they reach the drop target a
+//! window registered, the data object a session hands OLE and a session run
+//! with a scripted drop source, none of which is public. Through the public
+//! API a session runs with FLUI's own drop source, which answers OLE from the
+//! button state OLE passes it, so a case could not choose when and where it
+//! drops. The decidable rules behind these cases (`continue_drag`, the format
+//! and effect mapping, the modal frame pace) run from `tests/ole_drag_drop.rs`.
 
 use std::cell::{Cell, RefCell};
 use std::num::{NonZeroU32, NonZeroU64};

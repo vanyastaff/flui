@@ -1231,11 +1231,7 @@ impl<K: Copy + Eq + 'static> ViewState<AnchoredDrag<K>> for AnchoredDragState<K>
         // The row of the alternatives is the drag's stop of focus traversal:
         // there the arrow keys move to the next anchor the way they point,
         // as they do once a drag has focused the drag itself.
-        let (next, previous) = match (axis, rtl) {
-            (Axis::Vertical, _) => (NamedKey::ArrowDown, NamedKey::ArrowUp),
-            (Axis::Horizontal, false) => (NamedKey::ArrowRight, NamedKey::ArrowLeft),
-            (Axis::Horizontal, true) => (NamedKey::ArrowLeft, NamedKey::ArrowRight),
-        };
+        let (next, previous) = anchor_keys(axis, rtl);
         let keys = Shortcuts::new(alternatives.clone().child(drag))
             .shortcut(SingleActivator::named(next), AnchorIntent::Next)
             .shortcut(SingleActivator::named(previous), AnchorIntent::Previous);
@@ -1268,5 +1264,16 @@ impl<K: Copy + Eq + 'static> ViewState<AnchoredDrag<K>> for AnchoredDragState<K>
     fn dispose(&mut self) {
         self.haptics.borrow_mut().take();
         self.controller.rest_on_nearest();
+    }
+}
+
+/// The keys that move a drag along `axis` to its next and previous anchor:
+/// the arrows the way they point, mirrored right-to-left. The collision table
+/// checks them on every platform.
+pub(crate) fn anchor_keys(axis: Axis, rtl: bool) -> (NamedKey, NamedKey) {
+    match (axis, rtl) {
+        (Axis::Vertical, _) => (NamedKey::ArrowDown, NamedKey::ArrowUp),
+        (Axis::Horizontal, false) => (NamedKey::ArrowRight, NamedKey::ArrowLeft),
+        (Axis::Horizontal, true) => (NamedKey::ArrowLeft, NamedKey::ArrowRight),
     }
 }

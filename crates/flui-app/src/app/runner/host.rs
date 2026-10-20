@@ -495,8 +495,16 @@ pub(crate) fn install_owner_platform(
                 .with(|slot| Arc::ptr_eq(&slot.borrow().loop_identity, &installed_identity))
             {
                 // The owner's turn starts with the commands application code
-                // queued for its windows, before anything of this turn runs.
-                super::owner_dispatch::apply_queued_window_commands(std::thread::current().id());
+                // queued for its windows, before anything of this turn runs. A
+                // command that panics does not cost the turn the rest of its
+                // work: its panic is held apart, so the frame still runs, and
+                // is raised when the turn ends.
+                let mut commands = None;
+                super::installed_host::contain(&mut commands, || {
+                    super::owner_dispatch::apply_queued_window_commands(
+                        std::thread::current().id(),
+                    );
+                });
                 let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
                 super::owner_dispatch::with_owner_callback(|_| {
                     let current = || {
@@ -507,6 +515,7 @@ pub(crate) fn install_owner_platform(
                         })
                     };
                     if !current() {
+                        super::installed_host::finish(commands);
                         return;
                     }
                     let mut first = None;
@@ -543,7 +552,8 @@ pub(crate) fn install_owner_platform(
                             );
                         }
                     }
-                    super::installed_host::finish(first);
+                    flui_foundation::panic::FirstPanic::fold(&mut commands, first);
+                    super::installed_host::finish(commands);
                 });
             }
         }))?;

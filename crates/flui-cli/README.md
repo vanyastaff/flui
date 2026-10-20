@@ -88,6 +88,7 @@ it. Inside the FLUI checkout, generate against the local source instead:
 |---------|--------------|
 | `flui create [NAME]` | Scaffold a project from a template. Prompts when `NAME` is omitted and a terminal is attached. |
 | `flui run` | Build and run with hot reload; hot-keys while running. |
+| `flui mcp` | MCP server over stdio that lets an AI agent read and drive an app started with `flui run --agent`. See [Driving an app from an agent](#driving-an-app-from-an-agent). |
 | `flui build <platform>` | Build for `desktop`, `macos`, `windows`, `linux`, `ios`, `android` or `web`; prints every artifact with its size. |
 | `flui test` | `cargo test` with `--unit`, `--integration`, `--release`, and harness args after `--`. |
 | `flui analyze` | `cargo clippy --workspace --all-targets -D warnings` (`--pedantic`, `--fix`). |
@@ -192,6 +193,43 @@ Ctrl-C.
 Android scene hot reload (rebuild and push a scene plugin without restarting
 the app): `flui run --scene --scene-crate <crate> --package <android.package>`.
 
+## Driving an app from an agent
+
+```bash
+flui run --agent                  # debug build with the `dev-agent` feature, on this desktop
+```
+
+`flui run --agent` builds the app with its `dev-agent` feature (`flui create`
+projects have it), gives it a private local endpoint (a Unix socket in a
+`0700` directory, or a named pipe on Windows) and a random launch token, and
+writes both to `target/flui-agent.json`. It refuses `--release`, a device
+other than this desktop and a project without the feature. With `--json` it
+emits `run.agent.ready {endpoint, session}`; the token stays out of the stream.
+
+The agent's client launches `flui mcp` in the same project, for example in an
+MCP client's configuration:
+
+```json
+{ "mcpServers": { "flui": { "command": "flui", "args": ["mcp"] } } }
+```
+
+`flui mcp` finds the session from the nearest `target/flui-agent.json`
+(`CARGO_TARGET_DIR` is honoured), from `--session <file>`, or from
+`FLUI_AGENT_ENDPOINT` and `FLUI_AGENT_TOKEN`. It connects on the first tool
+call and again if the app restarted, so it can be registered before the app
+runs. Tools:
+
+| Tool | Does |
+|------|------|
+| `flui_windows` | List the windows that have content. |
+| `flui_read` | Read a window's semantics tree (`root`, `max_depth`, `max_nodes`). |
+| `flui_act` | Perform an action a node advertises (`invoke`, `toggle`, `set_value`, …). |
+| `flui_motion` | Read, pause or step the animation clock. |
+
+`window` may be left out when the app has one. Failures carry the wire's
+error object (`code`, `message`, `retry`, `effect`). The token keeps out other
+users and remote callers, not other processes of the same user.
+
 ## Building
 
 ```bash
@@ -269,6 +307,7 @@ object with an `event` field; human text, if any, goes to stderr.
 | `create.start`, `create.file`, `create.done` | `create` (also with `--dry-run`) |
 | `run.start`, `run.build.start`, `run.build.done`, `run.app.start`, `run.app.log`, `run.app.exit`, `run.change`, `run.reload`, `run.app.stop`, `run.stop` | `run` |
 | `run.web.serve {url, dir}`, `run.web.open {browser, url}`, `run.reload {kind: "page"}` | `run --device browser:…` |
+| `run.agent.ready {endpoint, session}` | `run --agent` |
 | `build.start`, `build.phase`, `build.done` | `build` |
 | `test.start`, `test.done`, `analyze.done`, `format.done` | `test`, `analyze`, `format` |
 | `clean.removed`, `clean.done` | `clean` |

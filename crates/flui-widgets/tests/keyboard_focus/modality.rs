@@ -2,10 +2,13 @@
 //! technology show it, a pointer hides it, and a stray modifier release left
 //! over from switching windows changes nothing.
 
+use std::time::Duration;
+
+use flui_foundation::geometry::Offset;
 use flui_painting::display_list::DrawOp;
 use flui_painting::styling::Color;
 use flui_platform_api::keyboard::{Key, KeyRepeat, KeyState, NamedKey};
-use flui_testing::{Action, ActionRequest, TreeId};
+use flui_testing::{Action, ActionRequest, MouseScript, TreeId};
 use flui_widgets::{DefaultFocusRingStyle, FocusRingStyle, RawButton, Text};
 
 use super::{key, press, tab};
@@ -98,15 +101,41 @@ fn assistive_focus_shows_the_ring() {
     );
 }
 
+/// A mouse click at `(x, y)`, through the UI runtime's input path.
+fn click(app: &mut LaidOut, x: f64, y: f64) {
+    let click = MouseScript::new("click")
+        .press(Offset::new(x, y))
+        .wait(Duration::from_millis(16))
+        .release()
+        .build()
+        .expect("the click releases its button");
+    app.replay(&click);
+    app.pump();
+}
+
+/// A click on the button presses it without showing the ring, focused or
+/// not.
+fn a_click_shows_no_ring() {
+    let mut app = app();
+    click(&mut app, 4.0, 4.0);
+    assert!(!ring_painted(&app), "a click alone shows no ring");
+    tab_in(&mut app);
+    assert!(ring_painted(&app));
+    click(&mut app, 4.0, 4.0);
+    assert!(
+        !ring_painted(&app),
+        "a click on the focused button hides its ring"
+    );
+}
+
 /// A pointer press hides the ring of a button that keeps the focus.
 fn pointer_input_hides_the_ring() {
     let mut app = app();
     tab_in(&mut app);
     let manager = app.focus_manager();
     let focused = manager.primary_focus();
-    // What the runtime does on every pointer-down.
-    manager.note_pointer_input();
-    app.pump();
+    // Beside the button: the press reaches the runtime, not the button.
+    click(&mut app, 390.0, 390.0);
     assert!(
         !ring_painted(&app),
         "focus is not shown once the pointer is in use"
@@ -124,8 +153,7 @@ fn a_stray_modifier_does_not_show_the_ring() {
     let mut app = app();
     tab_in(&mut app);
     let manager = app.focus_manager();
-    manager.note_pointer_input();
-    app.pump();
+    click(&mut app, 390.0, 390.0);
     let alt = Key::Named(NamedKey::Alt);
     app.enter_owner_scope(|| {
         let _ = manager.dispatch_key_event(&key(KeyState::Up, alt.clone(), KeyRepeat::First));
@@ -143,6 +171,7 @@ fn a_stray_modifier_does_not_show_the_ring() {
 pub(crate) fn focus_indicator_follows_input_modality() {
     tab_shows_the_ring();
     assistive_focus_shows_the_ring();
+    a_click_shows_no_ring();
     pointer_input_hides_the_ring();
     a_stray_modifier_does_not_show_the_ring();
 }

@@ -148,6 +148,10 @@ pub use flui_interaction::{
     TapUpDetails, Velocity, VelocityEstimate,
 };
 pub use flui_interaction::{GestureSettingsProvider, PointerKindSet};
+// A drag's rail and a transform's locked components (ADR-0208 §4), which
+// `widgets::DragSlot` and `widgets::TransformSlot` take, and the swipe.
+pub use flui_interaction::{AxisLock, TransformLock};
+pub use flui_interaction::{PhysicalEdge, SwipeDetails, SwipeGestureRecognizer, SwipeStart};
 
 /// Drag-and-drop (ADR-0211): what a `Draggable` carries and a `DropTarget`
 /// sees, and the sessions a custom drag source starts through the

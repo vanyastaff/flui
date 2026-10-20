@@ -24,9 +24,31 @@ use std::path::Path;
 /// mounting the root view the library exports. Everything else, including
 /// the Android entry, lives in `src/lib.rs`, which `cargo ndk` builds as a
 /// `cdylib` and the binary and the tests link as an rlib.
+///
+/// With the `dev-agent` feature, which `flui run --agent` turns on, the app
+/// also serves its semantics tree to an AI agent (`flui mcp`) on the endpoint
+/// that command put in the environment.
 pub(super) fn main_rs(lib_name: &str, root: &str) -> String {
-    format!("fn main() {{\n    flui::run_app({lib_name}::{root});\n}}\n")
+    format!(
+        "fn main() {{\n\
+         \x20   #[cfg(feature = \"dev-agent\")]\n\
+         \x20   flui::run_app_with_config(\n\
+         \x20       {lib_name}::{root},\n\
+         \x20       flui::AppConfig::new()\n\
+         \x20           .with_dev_agent(flui::devtools::agent::AgentServer::from_env()),\n\
+         \x20   );\n\
+         \x20   #[cfg(not(feature = \"dev-agent\"))]\n\
+         \x20   flui::run_app({lib_name}::{root});\n\
+         }}\n"
+    )
 }
+
+/// The `[features]` table of a single-crate template.
+pub(super) const AGENT_FEATURES: &str = r#"[features]
+# `flui run --agent` builds with this: the app serves its semantics tree to an
+# AI agent over a local endpoint (`flui mcp`), in debug builds only.
+dev-agent = ["flui/dev-agent"]
+"#;
 
 /// The `[lib]` table every single-crate template writes.
 pub(super) const LIB_TABLE: &str = r#"# The rlib feeds the binary and the tests; the cdylib is what `cargo ndk`
