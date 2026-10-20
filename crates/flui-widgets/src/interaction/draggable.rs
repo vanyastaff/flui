@@ -360,8 +360,10 @@ impl Source {
             drop(released);
         }
         self.rebuild();
+        // The drop is felt with the frame that shows it: the feedback gone
+        // and the target's new contents (ADR-0210 §4).
         if matches!(outcome, DragOutcome::Dropped { .. }) {
-            self.haptic(HapticFeedback::Drop, HapticTiming::Immediate);
+            self.haptic(HapticFeedback::Drop, HapticTiming::FramePresented);
         }
         if let Some(callback) = callback {
             self.write(|cx| callback(cx, outcome));

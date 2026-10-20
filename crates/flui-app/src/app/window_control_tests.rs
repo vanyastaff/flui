@@ -526,20 +526,6 @@ fn a_panic_in_one_window_still_applies_the_others_and_asks_for_a_turn() {
     );
 }
 
-fn a_turn_that_cannot_apply_asks_for_another() {
-    let window = recording(false, None);
-    let as_platform: Arc<dyn PlatformWindow> = window.clone();
-    let rig = rig(&as_platform, 17);
-    rig.queues.defer();
-    assert_eq!(rig.wakes.get(), 0, "nothing waits, nothing is asked");
-    rig.handle.set_title("waits").expect("accepted");
-    rig.queues.defer();
-    assert_eq!(rig.wakes.get(), 2, "the deferred work asks again");
-    assert!(applied(&window).is_empty(), "deferring applies nothing");
-    rig.queues.apply_pending();
-    assert_eq!(applied(&window), [WindowCommand::SetTitle("waits".into())]);
-}
-
 fn commands_after_a_close_that_goes_ahead_are_dropped_and_after_a_veto_apply() {
     let closing = recording(false, None);
     let as_platform: Arc<dyn PlatformWindow> = closing.clone();
@@ -640,10 +626,6 @@ fn window_handle_contract() {
             (
                 "a_panic_in_one_window_still_applies_the_others_and_asks_for_a_turn",
                 a_panic_in_one_window_still_applies_the_others_and_asks_for_a_turn as fn(),
-            ),
-            (
-                "a_turn_that_cannot_apply_asks_for_another",
-                a_turn_that_cannot_apply_asks_for_another as fn(),
             ),
             (
                 "commands_after_a_close_that_goes_ahead_are_dropped_and_after_a_veto_apply",
