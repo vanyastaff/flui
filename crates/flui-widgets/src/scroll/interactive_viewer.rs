@@ -1477,20 +1477,35 @@ impl std::fmt::Debug for AlternativesMount {
 
 impl View for AlternativesMount {
     fn create_element(&self) -> ElementKind {
-        ElementKind::stateless(self)
+        ElementKind::stateful(self)
     }
 }
 
-impl StatelessView for AlternativesMount {
-    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let outgoing = self
+/// Keeps nothing between builds; its state holds the view-to-slot write out
+/// of `build`.
+struct AlternativesMountState;
+
+impl StatefulView for AlternativesMount {
+    type State = AlternativesMountState;
+
+    fn create_state(&self) -> Self::State {
+        AlternativesMountState
+    }
+}
+
+impl ViewState<AlternativesMount> for AlternativesMountState {
+    fn apply_view(&mut self, view: &AlternativesMount, ctx: &dyn LifecycleContext) {
+        let outgoing = view
             .core
             .command
-            .replace(Some(self.alternatives.handle(ctx)));
+            .replace(Some(view.alternatives.handle(ctx)));
         drop(outgoing);
-        self.alternatives.clone().child(RowFocusProbe {
-            core: Rc::clone(&self.core),
-            child: self.content.clone(),
+    }
+
+    fn build(&self, view: &AlternativesMount, _ctx: &dyn BuildContext) -> impl IntoView {
+        view.alternatives.clone().child(RowFocusProbe {
+            core: Rc::clone(&view.core),
+            child: view.content.clone(),
         })
     }
 }
@@ -1510,15 +1525,30 @@ impl std::fmt::Debug for RowFocusProbe {
 
 impl View for RowFocusProbe {
     fn create_element(&self) -> ElementKind {
-        ElementKind::stateless(self)
+        ElementKind::stateful(self)
     }
 }
 
-impl StatelessView for RowFocusProbe {
-    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let outgoing = self.core.row_focus.replace(Focus::maybe_of(ctx));
+/// Keeps nothing between builds; its state holds the focus-node write out of
+/// `build`.
+struct RowFocusProbeState;
+
+impl StatefulView for RowFocusProbe {
+    type State = RowFocusProbeState;
+
+    fn create_state(&self) -> Self::State {
+        RowFocusProbeState
+    }
+}
+
+impl ViewState<RowFocusProbe> for RowFocusProbeState {
+    fn apply_view(&mut self, view: &RowFocusProbe, ctx: &dyn LifecycleContext) {
+        let outgoing = view.core.row_focus.replace(Focus::maybe_of(ctx));
         drop(outgoing);
-        self.child.clone()
+    }
+
+    fn build(&self, view: &RowFocusProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        view.child.clone()
     }
 }
 

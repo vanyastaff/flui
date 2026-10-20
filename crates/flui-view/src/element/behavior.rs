@@ -672,6 +672,9 @@ pub struct StatefulBehavior<V: StatefulView> {
     /// `init_state`, so a state never observes an update before its
     /// initialization and still learns of every configuration change.
     pending_update: Option<V>,
+    /// The view or the dependencies changed since `ViewState::apply_view`
+    /// last ran; the next build calls it first.
+    apply_pending: bool,
 }
 
 impl<V: StatefulView> StatefulBehavior<V> {
@@ -681,6 +684,7 @@ impl<V: StatefulView> StatefulBehavior<V> {
             state: view.create_state(),
             initialized: false,
             pending_update: None,
+            apply_pending: true,
         }
     }
 
@@ -767,6 +771,25 @@ where
 
         if !super::behavior_commons::should_build_with_trace(core, "StatefulBehavior") {
             return Vec::new();
+        }
+        if self.apply_pending {
+            let sink_start = lifecycle_sink_len(owner);
+            let applied = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                self.state
+                    .apply_view(core.view(), ctx_choice.as_lifecycle_ctx());
+            }));
+            mark_lifecycle_records(owner, sink_start);
+            if let Err(payload) = applied {
+                owner.record_armed_lifecycle_panic(
+                    core.self_id(),
+                    TypeId::of::<V>(),
+                    LifecycleHook::ApplyView,
+                    payload.as_ref(),
+                    "applying the view to StatefulElement",
+                );
+                std::panic::resume_unwind(payload);
+            }
+            self.apply_pending = false;
         }
         // The user `ViewState::build` is wrapped in `catch_unwind`: a
         // panicking build is caught and substituted with the registered
@@ -922,6 +945,7 @@ where
         // A parent can rebuild this element between its mount and its first
         // build (`init_state` runs in the build drain, not at mount). Keep the
         // view the state was created from; the first build delivers the update.
+        self.apply_pending = true;
         if !self.initialized {
             if self.pending_update.is_none() {
                 self.pending_update = Some(old_view.clone());
@@ -954,6 +978,7 @@ where
         // drain — so a user `did_change_dependencies` that re-reads the
         // changed inherited value via `depend_on` resolves against the real
         // ancestor chain.
+        self.apply_pending = true;
         let ctx_choice = make_build_ctx(core, owner);
         let sink_start = lifecycle_sink_len(owner);
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {

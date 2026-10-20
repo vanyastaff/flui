@@ -596,6 +596,10 @@ fn scroll_physics_and_activity() {
                 crate::scroll::scroll_activity_tracks_the_whole_gesture_lifecycle,
             ),
             (
+                "scroll::a_command_queued_before_mount_is_serviced_outside_build",
+                crate::scroll::a_command_queued_before_mount_is_serviced_outside_build,
+            ),
+            (
                 "scroll::scrollable_drag_up_increases_scroll_offset",
                 crate::scroll::scrollable_drag_up_increases_scroll_offset,
             ),

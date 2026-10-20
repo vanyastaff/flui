@@ -293,6 +293,7 @@ fn element_lifecycle_and_dependency_matrix() {
         &[
             ("lifecycle_tests::test_stateful_element_multiple_deactivate_activate_cycles", lifecycle_tests::test_stateful_element_multiple_deactivate_activate_cycles as fn()),
             ("stateless_stateful_tests::an_update_before_the_first_build_follows_init_state", stateless_stateful_tests::an_update_before_the_first_build_follows_init_state as fn()),
+            ("stateless_stateful_tests::apply_view_runs_once_per_changed_configuration_before_the_build", stateless_stateful_tests::apply_view_runs_once_per_changed_configuration_before_the_build as fn()),
             ("stateless_stateful_tests::stateful_activate_and_deactivate_require_completed_init_state", stateless_stateful_tests::stateful_activate_and_deactivate_require_completed_init_state as fn()),
             ("notifications::dispatch_notification_calls_handler_and_stops_on_true", notifications::dispatch_notification_calls_handler_and_stops_on_true as fn()),
             ("ancestor_finders::find_ancestor_view_returns_nearest_match", ancestor_finders::find_ancestor_view_returns_nearest_match as fn()),
