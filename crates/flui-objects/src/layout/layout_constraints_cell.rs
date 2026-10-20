@@ -3,7 +3,7 @@
 //!
 //! # What this is
 //!
-//! A one-slot mailbox shared (via `Arc`) between a build-during-layout render
+//! A one-slot mailbox shared (via `Rc`) between a build-during-layout render
 //! object and the element that owns it. The render object *publishes* the
 //! constraints it was laid out with; the element layer later *reads* them,
 //! rebuilds, and *commits*.
@@ -33,7 +33,7 @@
 //! not exported from any prelude.
 
 use flui_rendering::constraints::BoxConstraints;
-use parking_lot::Mutex;
+use std::cell::Cell;
 
 /// Interior state of a [`LayoutConstraintsCell`].
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -58,7 +58,7 @@ struct CellState {
 /// build-during-layout node share the registry. `LayoutBuilder` publishes
 /// `BoxConstraints`; a sliver persistent header would publish its shrink offset
 /// and overlap flag. Both need identical servicing and nothing else in common.
-pub trait BuildDuringLayoutCell: std::fmt::Debug + Send + Sync + std::any::Any {
+pub trait BuildDuringLayoutCell: std::fmt::Debug + std::any::Any {
     /// Whether the owning element must rebuild before the next layout pass.
     fn needs_build(&self) -> bool;
 
@@ -83,14 +83,14 @@ pub trait BuildDuringLayoutCell: std::fmt::Debug + Send + Sync + std::any::Any {
 
 /// Shared constraints mailbox between a render object and its element.
 ///
-/// Cloneable only behind an `Arc` — the render object and the
+/// Shared behind an `Rc` — the render object and the
 /// `layout_builder_registry` entry hold the same cell.
 ///
-/// The `Mutex` is private and no guard is ever returned across the API
-/// boundary.
+/// Owner-thread only: the state is a plain [`Cell`], so publishing from
+/// `perform_layout` takes no lock, and the type is `!Sync`.
 #[derive(Debug, Default)]
 pub struct LayoutConstraintsCell {
-    inner: Mutex<CellState>,
+    state: Cell<CellState>,
 }
 
 impl LayoutConstraintsCell {
@@ -108,17 +108,18 @@ impl LayoutConstraintsCell {
     ///
     /// Called from `perform_layout`; must not allocate or rebuild.
     pub fn publish(&self, constraints: BoxConstraints) {
-        let mut state = self.inner.lock();
+        let mut state = self.state.get();
         if state.last_built != Some(constraints) {
             state.needs_build = true;
         }
         state.published = Some(constraints);
+        self.state.set(state);
     }
 
     /// Whether the element must rebuild before the next layout pass.
     #[must_use]
     pub fn needs_build(&self) -> bool {
-        self.inner.lock().needs_build
+        self.state.get().needs_build
     }
 
     /// The most recently published constraints, or `None` before first layout.
@@ -127,7 +128,7 @@ impl LayoutConstraintsCell {
     /// a placeholder.
     #[must_use]
     pub fn constraints(&self) -> Option<BoxConstraints> {
-        self.inner.lock().published
+        self.state.get().published
     }
 
     /// Marks the published constraints as built, clearing `needs_build`.
@@ -135,9 +136,10 @@ impl LayoutConstraintsCell {
     /// Called by `service_layout_builders` after `build_scope` has run the
     /// builder against [`constraints`](Self::constraints).
     pub fn commit(&self) {
-        let mut state = self.inner.lock();
+        let mut state = self.state.get();
         state.last_built = state.published;
         state.needs_build = false;
+        self.state.set(state);
     }
 }
 

@@ -3,7 +3,7 @@
 
 // Bench harness, not public API; Criterion generates the entry function.
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::{ElementId, RenderId};
@@ -72,7 +72,7 @@ fn register_ready_scope(
     owner: &mut BuildOwner,
     pipeline: &PipelineCell,
     scope: ElementId,
-) -> Arc<LayoutConstraintsCell> {
+) -> Rc<LayoutConstraintsCell> {
     let cell = owner.register_layout_builder_for_test(insert_render_node(pipeline), scope);
     cell.publish(constraints());
     cell.commit();

@@ -190,14 +190,18 @@ fn frame_dt() -> impl Strategy<Value = f64> {
     prop_oneof![Just(0.0), (30.0..240.0_f64).prop_map(|hz| 1.0 / hz)]
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig {
-        cases: 256,
+fn config(cases: u32) -> ProptestConfig {
+    ProptestConfig {
+        cases,
         failure_persistence: Some(Box::new(FileFailurePersistence::Direct(
             "tests/contracts/retarget.proptest-regressions",
         ))),
         ..ProptestConfig::default()
-    })]
+    }
+}
+
+proptest! {
+    #![proptest_config(config(256))]
 
     #[test]
     fn curved_run_velocity_is_the_curve_slope(
@@ -293,42 +297,6 @@ proptest! {
             "reported seam velocity {v0} differs from value derivative {derivative}, tolerance {tolerance}");
     }
 
-    /// Retargeting every frame for 120 frames keeps value and velocity
-    /// continuous at every seam, publishes only finite values, and the last
-    /// segment still comes to rest at its target.
-    #[test]
-    fn repeated_interruption_keeps_position_and_velocity_continuous(
-        mode in mode(),
-        dt in frame_dt(),
-        targets in prop::collection::vec((-1.0..1.0_f64, -1.0..1.0_f64), 120),
-    ) {
-        let mut scalar = AnimatedValue::with_motion(0.0_f64, mode.spec()).expect("finite motion");
-        let mut planar = AnimatedValue::with_motion(Offset::new(0.0, 0.0), mode.spec()).expect("finite motion");
-        for &(x, y) in &targets {
-            scalar.advance(Duration::from_secs_f64(dt));
-            planar.advance(Duration::from_secs_f64(dt));
-            seam(&mut scalar, x * 100.0, &mode, 200.0);
-            seam(&mut planar, Offset::new(x * 100.0, y * 100.0), &mode, 200.0);
-        }
-        let last = targets[targets.len() - 1];
-        // The slowest generated spring decays as e^(-0.1 t) (omega = 1 at
-        // zeta = 0.1, or the overdamped slow root at zeta = 4): a 200-unit
-        // swing takes about 125 s to reach the 1e-3 tolerance, so the budget
-        // is 600 s of 10 ms steps.
-        for _ in 0..60_000 {
-            if scalar.is_settled() && planar.is_settled() {
-                break;
-            }
-            scalar.advance(Duration::from_secs_f64(1e-2));
-            planar.advance(Duration::from_secs_f64(1e-2));
-            prop_assert!(scalar.value().is_finite());
-        }
-        prop_assert!(scalar.is_settled() && planar.is_settled(), "never settled");
-        prop_assert!(close(scalar.value(), last.0 * 100.0, 1e-3));
-        let resting = planar.value();
-        prop_assert!(close(resting.dx, last.0 * 100.0, 1e-3) && close(resting.dy, last.1 * 100.0, 1e-3));
-    }
-
     /// A curve segment that inherits a velocity starts with it, lands on its
     /// target exactly after its duration, and strays from the plain curve by
     /// at most `(|r|·D + |a|)·4/27`, `r = v0 − Δ·c'(0)/D`, `a = Δ·c'(1)`.
@@ -384,6 +352,49 @@ proptest! {
         prop_assert!(close(value.value(), x, 1e-12));
         prop_assert!(close(value.velocity()[0], v, 1e-9));
         assert_velocity_is_the_derivative(&value, 0, &to, 100.0);
+    }
+}
+
+// Each case forks the `motion_trace` fixture 12 times at each of its 120
+// seams, and a fork replays the whole trace, so a case costs far more than
+// any other property here and it runs 64 cases rather than 256.
+proptest! {
+    #![proptest_config(config(64))]
+
+    /// Retargeting every frame for 120 frames keeps value and velocity
+    /// continuous at every seam, publishes only finite values, and the last
+    /// segment still comes to rest at its target.
+    #[test]
+    fn repeated_interruption_keeps_position_and_velocity_continuous(
+        mode in mode(),
+        dt in frame_dt(),
+        targets in prop::collection::vec((-1.0..1.0_f64, -1.0..1.0_f64), 120),
+    ) {
+        let mut scalar = AnimatedValue::with_motion(0.0_f64, mode.spec()).expect("finite motion");
+        let mut planar = AnimatedValue::with_motion(Offset::new(0.0, 0.0), mode.spec()).expect("finite motion");
+        for &(x, y) in &targets {
+            scalar.advance(Duration::from_secs_f64(dt));
+            planar.advance(Duration::from_secs_f64(dt));
+            seam(&mut scalar, x * 100.0, &mode, 200.0);
+            seam(&mut planar, Offset::new(x * 100.0, y * 100.0), &mode, 200.0);
+        }
+        let last = targets[targets.len() - 1];
+        // The slowest generated spring decays as e^(-0.1 t) (omega = 1 at
+        // zeta = 0.1, or the overdamped slow root at zeta = 4): a 200-unit
+        // swing takes about 125 s to reach the 1e-3 tolerance, so the budget
+        // is 600 s of 10 ms steps.
+        for _ in 0..60_000 {
+            if scalar.is_settled() && planar.is_settled() {
+                break;
+            }
+            scalar.advance(Duration::from_secs_f64(1e-2));
+            planar.advance(Duration::from_secs_f64(1e-2));
+            prop_assert!(scalar.value().is_finite());
+        }
+        prop_assert!(scalar.is_settled() && planar.is_settled(), "never settled");
+        prop_assert!(close(scalar.value(), last.0 * 100.0, 1e-3));
+        let resting = planar.value();
+        prop_assert!(close(resting.dx, last.0 * 100.0, 1e-3) && close(resting.dy, last.1 * 100.0, 1e-3));
     }
 }
 

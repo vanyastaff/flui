@@ -556,7 +556,7 @@ impl RouteHistory {
     /// Whether any route has raised a command that has not been applied.
     ///
     pub(crate) fn has_pending_commands(&self) -> bool {
-        !self.commands.lock().is_empty()
+        !self.commands.borrow().is_empty()
     }
 
     /// How many passes the last `flush` ran.
@@ -576,7 +576,7 @@ impl RouteHistory {
             "BUG: route commands must be applied between flush passes, never during one"
         );
 
-        let drained: Vec<RouteCommand> = self.commands.lock().drain(..).collect();
+        let drained: Vec<RouteCommand> = self.commands.borrow_mut().drain(..).collect();
         let mut changed = false;
 
         for command in drained {

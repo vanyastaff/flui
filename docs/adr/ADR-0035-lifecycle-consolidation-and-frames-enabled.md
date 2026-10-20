@@ -63,7 +63,8 @@ state. A UI runtime derives the scheduler state from its live presentations: any
 
 - Local steps follow `lifecycle_ladder(old, new)`, a port of Flutter's
   `ServicesBinding._generateStateTransitions` walking `dart:ui`'s declaration order (`detached,
-  resumed, inactive, hidden, paused`) — `Detached` is first, so leaving it is one forward step.
+  resumed, inactive, hidden, paused`). Leaving `Detached` enters from the `Paused` side instead
+  (**Amended by** [ADR-0248](ADR-0248-leaving-detached-enters-from-paused.md)).
   An unobserved presentation is `None`, and its first notification goes straight to the target,
   as in Flutter's nullable-previous-state branch.
 - Scheduler listeners see the UI runtime aggregate, not the local ladder. A paused or hidden host

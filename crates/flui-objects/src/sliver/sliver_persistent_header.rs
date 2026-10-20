@@ -273,7 +273,7 @@ struct PersistentHeaderCore {
     /// Build-during-layout mailbox (ADR-0017), when an element is driving a
     /// delegate. `None` for a header with a static child — including every
     /// render-harness test, which is why publishing is not unconditional.
-    shrink_cell: Option<std::sync::Arc<crate::layout::HeaderShrinkCell>>,
+    shrink_cell: Option<std::rc::Rc<crate::layout::HeaderShrinkCell>>,
 }
 
 impl PersistentHeaderCore {
@@ -363,7 +363,7 @@ impl PersistentHeaderCore {
         }
     }
 
-    fn set_shrink_cell(&mut self, cell: std::sync::Arc<crate::layout::HeaderShrinkCell>) {
+    fn set_shrink_cell(&mut self, cell: std::rc::Rc<crate::layout::HeaderShrinkCell>) {
         self.shrink_cell = Some(cell);
         // The delegate has never been built against this header, so the next
         // layout must publish regardless of how the offsets compare.
@@ -522,7 +522,7 @@ macro_rules! header_core_accessors {
             /// nothing.
             pub fn set_shrink_cell(
                 &mut self,
-                cell: std::sync::Arc<crate::layout::HeaderShrinkCell>,
+                cell: std::rc::Rc<crate::layout::HeaderShrinkCell>,
             ) {
                 self.core.set_shrink_cell(cell);
             }

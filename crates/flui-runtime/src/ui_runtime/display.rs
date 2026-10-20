@@ -63,13 +63,15 @@ impl UiRuntime {
         interval_of(self.window_display(id))
     }
 
-    /// The shortest refresh interval among this runtime's presentations: the
-    /// strictest cadence any window being produced for runs at. A window on a
-    /// slower display beside a faster one is judged against the faster, so its
-    /// jank statistics are pessimistic, never optimistic.
+    /// The shortest refresh interval among this runtime's shown presentations:
+    /// the strictest cadence any window being produced for runs at. A window on
+    /// a slower display beside a faster one is judged against the faster, so its
+    /// jank statistics are pessimistic, never optimistic. A hidden or closing
+    /// window is not produced for and does not count.
     fn shortest_refresh_interval(&self) -> Duration {
         self.presentations
             .iter()
+            .filter(|presentation| presentation.is_shown())
             .map(|presentation| interval_of(presentation.window_display.get()))
             .min()
             .unwrap_or(DEFAULT_REFRESH_PERIOD)

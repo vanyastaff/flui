@@ -33,7 +33,7 @@ fn find_by_size(laid: &LaidOut, width: f64, height: f64) -> RenderId {
 /// `44.0` instead of `64.0`).
 pub fn content_is_padded_below_the_nav_bar_plus_the_top_inset() {
     let media = MediaQueryData {
-        padding: EdgeInsets::new(20.0, 0.0, 0.0, 0.0),
+        view_padding: EdgeInsets::new(20.0, 0.0, 0.0, 0.0),
         ..MediaQueryData::default()
     };
     let laid = lay_out(

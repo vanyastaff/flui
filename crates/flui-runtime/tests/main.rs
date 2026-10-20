@@ -114,6 +114,8 @@ mod owner_publication;
 mod owner_registry;
 #[path = "contracts/owner_sampling.rs"]
 mod owner_sampling;
+#[path = "contracts/render_view_lending.rs"]
+mod render_view_lending;
 #[path = "../src/table_test.rs"]
 mod table_test;
 #[path = "contracts/text_frame.rs"]
