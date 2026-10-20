@@ -13,6 +13,12 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// response.
 pub const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long [`NetworkLoader::new`]'s client lets a whole request take, body
+/// included. The read timeout alone restarts with every byte, so a server
+/// that drips one byte per read timeout would otherwise hold the request open
+/// indefinitely.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// The largest response body [`NetworkLoader::load_url`] accepts: 256 MiB.
 /// A larger one fails instead of growing without bound.
 pub const MAX_BODY_BYTES: usize = 256 * 1024 * 1024;
@@ -48,9 +54,10 @@ impl NetworkLoader {
     ///
     /// Reuse this loader or its clones to share HTTP connections. The default
     /// client gives up on a connection attempt after [`CONNECT_TIMEOUT`] and on
-    /// a response that sends nothing for [`READ_TIMEOUT`], so a stalled server
-    /// cannot hold a request open forever; use [`Self::with_client`] to
-    /// configure other deadlines.
+    /// a response that sends nothing for [`READ_TIMEOUT`], and on any request
+    /// still unfinished after [`REQUEST_TIMEOUT`], so neither a stalled nor a
+    /// trickling server can hold a request open forever; use
+    /// [`Self::with_client`] to configure other deadlines.
     ///
     /// # Errors
     ///
@@ -59,6 +66,7 @@ impl NetworkLoader {
         reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .read_timeout(READ_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
             .build()
             .map(Self::with_client)
     }

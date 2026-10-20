@@ -521,13 +521,13 @@ async fn read_in_chunks(path: Arc<str>) -> Result<Vec<u8>> {
     }
     file.set_max_buf_size(FILE_READ_CHUNK);
     // The metadata length is a hint, not a bound: the file can grow while it
-    // is read, so the read itself stops one byte past the cap.
+    // is read. The buffer takes at most the cap; one more byte, read into a
+    // probe of its own, tells a file that grew past it.
     let mut bytes = Vec::with_capacity(usize::try_from(length).unwrap_or(0));
-    file.take(MAX_ENCODED_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .await
-        .map_err(failed)?;
-    if bytes.len() as u64 > MAX_ENCODED_FILE_BYTES {
+    let mut capped = file.take(MAX_ENCODED_FILE_BYTES);
+    capped.read_to_end(&mut bytes).await.map_err(failed)?;
+    let mut probe = [0_u8; 1];
+    if capped.into_inner().read(&mut probe).await.map_err(failed)? > 0 {
         return Err(too_large());
     }
     Ok(bytes)

@@ -13,7 +13,8 @@
 - **`flui-assets`**: `load_image_bridged` and `load_network_image_bridged` return `ImageLoad`,
   share in-flight loads and serve decoded images from the registry's cache; a second load of a
   decoded source is a hit, not a new read or request.
-- **`flui-assets`**: `NetworkLoader::new` gives up after `CONNECT_TIMEOUT` and `READ_TIMEOUT`,
+- **`flui-assets`**: `NetworkLoader::new` gives up after `CONNECT_TIMEOUT`, `READ_TIMEOUT` and
+  `REQUEST_TIMEOUT`,
   and `load_url` refuses a body over `MAX_BODY_BYTES` (256 MiB); `load_image_bridged` refuses
   an image file over the same size before reading it.
 - **`flui-widgets`**: `ImageCacheKey` is opaque. Asset and network images are keyed by their
@@ -26,6 +27,8 @@
 
 ### Fixed
 
+- **`flui-assets`**: an image whose decoded RGBA8 pixels would pass 256 MiB (128 MiB on Android,
+  iOS and the web) fails with a typed error before the decoder allocates them.
 - **`flui-assets`**: dropping the last waiter of a bridged image load aborts it: the HTTP request
   stops, the file read stops at its next chunk and the decode never runs, so abandoned loads no
   longer delay visible ones. At most four loads per decode thread read or wait to decode at

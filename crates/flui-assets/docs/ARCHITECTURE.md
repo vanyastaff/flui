@@ -524,9 +524,19 @@ and `loads_past_admission_are_bounded_by_count` (one decode thread: while a
 decode holds its slot only three more requests go out, and the next starts
 when it returns).
 
-`NetworkLoader::new` gives up on a connection after `CONNECT_TIMEOUT` and on a
-silent response after `READ_TIMEOUT`; `load_url` refuses a body over
+`NetworkLoader::new` gives up on a connection after `CONNECT_TIMEOUT`, on a
+silent response after `READ_TIMEOUT`, and on any request after
+`REQUEST_TIMEOUT` (a server that drips one byte per read timeout would
+otherwise hold a load slot forever); `load_url` refuses a body over
 `MAX_BODY_BYTES`.
+
+Every image decode, typed or bridged, reads the header first and refuses an
+image whose RGBA8 pixels would pass 256 MiB (128 MiB on Android, iOS and the
+web), which is also the decoder's allocation limit: an image that compresses
+small but decodes huge fails with a typed error instead of allocating. With at
+most four decodes at once, their transient memory stays a few times that.
+`decoded_pixels_are_bounded_before_decoding` decodes a header that declares
+too many pixels.
 
 ### Observation and invalidation have distinct effects
 
