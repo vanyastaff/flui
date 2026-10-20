@@ -497,9 +497,13 @@ fn register_pointer_events(
 
 /// Deliver assembled pointer input while the registration still accepts it:
 /// a callback can close the window between two events of one reading. A
-/// pinch whose deadline `event` passed ends first. Returns whether the
-/// application prevented the default of a press among them.
-fn dispatch(pinch: &Pinch, event: &web_sys::Event, inputs: Assembled) -> Option<bool> {
+/// pinch whose deadline `event` passed ends first. Returns how the
+/// application answered a press among them.
+fn dispatch(
+    pinch: &Pinch,
+    event: &web_sys::Event,
+    inputs: Assembled,
+) -> Option<DispatchEventResult> {
     pinch.flush(event_time(event.time_stamp()));
     let mut pressed = None;
     for input in inputs {
@@ -514,7 +518,7 @@ fn dispatch(pinch: &Pinch, event: &web_sys::Event, inputs: Assembled) -> Option<
         );
         let result = pinch.callbacks.dispatch_input(input);
         if press {
-            pressed = Some(result.default_prevented);
+            pressed = Some(result);
         }
     }
     pressed
@@ -525,19 +529,19 @@ const SECONDARY_BUTTON: i16 = 2;
 
 /// How the browser's context menu is answered: as the application answered
 /// the secondary press that opened it (`contextmenu` follows the press, or
-/// on Windows its release). A menu no secondary press opened (the keyboard's
-/// menu key) stays the application's, its default prevented.
+/// on Windows its release), its propagation and its default alike. A menu no
+/// secondary press opened (the keyboard's menu key) stays the application's,
+/// its default prevented.
 #[derive(Default)]
 struct MenuAnswer {
-    /// Whether the last secondary press had its default prevented, until a
-    /// menu takes it.
-    prevented: Cell<Option<bool>>,
+    /// The answer to the last secondary press, until a menu takes it.
+    answer: Cell<Option<DispatchEventResult>>,
 }
 
 impl MenuAnswer {
-    fn record(&self, secondary: bool, prevented: Option<bool>) {
-        if secondary && prevented.is_some() {
-            self.prevented.set(prevented);
+    fn record(&self, secondary: bool, answer: Option<DispatchEventResult>) {
+        if secondary && answer.is_some() {
+            self.answer.set(answer);
         }
     }
 }
@@ -983,13 +987,10 @@ fn register_context_menu(
         let secondary = e
             .dyn_ref::<web_sys::MouseEvent>()
             .is_some_and(|mouse| mouse.button() == SECONDARY_BUTTON);
-        let answered = if secondary {
-            menu.prevented.take()
-        } else {
-            None
-        };
-        if answered.unwrap_or(true) {
-            e.prevent_default();
+        let answered = if secondary { menu.answer.take() } else { None };
+        match answered {
+            Some(result) => answer(&e, result),
+            None => e.prevent_default(),
         }
     })
 }

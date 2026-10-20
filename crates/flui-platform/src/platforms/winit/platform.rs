@@ -1265,6 +1265,14 @@ impl ApplicationHandler for WinitApp {
         device_id: winit::event::DeviceId,
         event: winit::event::DeviceEvent,
     ) {
+        // A held move is delivered, after the presence its reading reveals,
+        // before a device arrives or leaves; raw motion keeps it held.
+        if matches!(
+            event,
+            winit::event::DeviceEvent::Added | winit::event::DeviceEvent::Removed
+        ) {
+            self.flush_native_pointer();
+        }
         let inputs = self.platform.with_state(|state| {
             let mut windows: Vec<_> = state.windows.keys().copied().collect();
             windows.sort_by_key(|window| window.0);

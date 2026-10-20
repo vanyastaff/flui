@@ -788,14 +788,15 @@ fn a_touch_pinch_is_delivered_once() {
 #[wasm_bindgen_test]
 fn the_context_menu_is_answered_as_its_secondary_press() {
     let window = CanvasWindow::open();
-    for prevent in [false, true] {
-        window.answer(true, prevent);
+    for (propagate, prevent) in [(true, false), (true, true), (false, false), (false, true)] {
+        window.answer(propagate, prevent);
         pointer_at("pointerdown", 1, "mouse", 2, 2, 40.0, 30.0);
         let menu = dispatched(&context_menu(2));
         pointer_at("pointerup", 1, "mouse", 2, 0, 40.0, 30.0);
         assert_eq!(
-            menu.prevented, prevent,
-            "a press answered prevent={prevent}"
+            (menu.prevented, menu.reached_ancestor),
+            (prevent, propagate),
+            "a press answered propagate={propagate} prevent={prevent}"
         );
     }
     window.answer(true, false);

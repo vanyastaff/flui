@@ -595,7 +595,13 @@ impl NativePointerState {
     ) -> Vec<(crate::traits::WindowId, PlatformInput)> {
         use winit::event::DeviceEvent;
         let time = EventTime::from_nanos(event_timestamp_ns());
-        let (mut events, changes) = match event {
+        if !matches!(event, DeviceEvent::Added | DeviceEvent::Removed) {
+            return Vec::new();
+        }
+        // The platform delivers a held move first, after the presence it
+        // reveals; one still held is decoded before the device changes.
+        let mut events = self.flush();
+        let changes = match event {
             DeviceEvent::Added => {
                 // Before any reading says which kind it carries, the first
                 // kind that reports takes this label.
@@ -609,19 +615,15 @@ impl NativePointerState {
                 let added = self
                     .contacts
                     .add_device(device, owned::PointerKind::Unknown, time);
-                (
-                    self.flush(),
-                    added
-                        .map(owned::PointerEvent::DeviceAdded)
-                        .into_iter()
-                        .collect::<Vec<_>>(),
-                )
+                added
+                    .map(owned::PointerEvent::DeviceAdded)
+                    .into_iter()
+                    .collect::<Vec<_>>()
             }
             DeviceEvent::Removed => {
                 let Some(labels) = self.labels.remove(&native) else {
-                    return Vec::new();
+                    return events;
                 };
-                let mut events = self.flush();
                 let mut changes = Vec::new();
                 for device in labels.all() {
                     self.scrolling.remove_device(device);
@@ -633,9 +635,9 @@ impl NativePointerState {
                     );
                     changes.extend(removed.map(owned::PointerEvent::DeviceRemoved));
                 }
-                (events, changes)
+                changes
             }
-            _ => return Vec::new(),
+            _ => Vec::new(),
         };
         for change in changes {
             events.extend(

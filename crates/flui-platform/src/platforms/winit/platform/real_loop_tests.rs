@@ -981,8 +981,9 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
         /// Set just before the close: the wake that carries it is preceded,
         /// in the same loop turn, by a pointer move the translation holds.
         move_before_close: Arc<AtomicBool>,
-        /// Whether the window's input callback saw a pointer move.
-        moved: Arc<AtomicBool>,
+        /// What the window's input callback saw: its moves, and each
+        /// capability snapshot by whether it reports a mouse present.
+        seen: Arc<Mutex<Vec<&'static str>>>,
     }
 
     impl ApplicationHandler for ExitObserver {
@@ -1011,17 +1012,25 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
                 // so its capability snapshot is delivered and input is not
                 // held behind it.
                 if let Some(host) = host {
-                    let moved = Arc::clone(&self.moved);
+                    let seen = Arc::clone(&self.seen);
                     crate::traits::PlatformWindow::on_input(
                         &*host,
                         Box::new(move |input| {
-                            if matches!(
-                                input,
+                            use flui_platform_api::input_capabilities::PointerKindSet;
+                            match input {
                                 crate::traits::PlatformInput::Pointer(
-                                    flui_platform_api::pointer::PointerEvent::Move(_)
-                                )
-                            ) {
-                                moved.store(true, Ordering::SeqCst);
+                                    flui_platform_api::pointer::PointerEvent::Move(_),
+                                ) => seen.lock().push("move"),
+                                crate::traits::PlatformInput::Capabilities(capabilities) => {
+                                    seen.lock().push(
+                                        if capabilities.present().contains(PointerKindSet::MOUSE) {
+                                            "mouse present"
+                                        } else {
+                                            "no mouse"
+                                        },
+                                    );
+                                }
+                                _ => {}
                             }
                             crate::DispatchEventResult::resolved(false, true)
                         }),
@@ -1035,6 +1044,13 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
                             device_id: winit::event::DeviceId::dummy(),
                             position: winit::dpi::PhysicalPosition::new(12.0, 8.0),
                         },
+                    );
+                    // The device that move came from is announced in the
+                    // same turn, while the move is still held.
+                    self.inner.device_event(
+                        event_loop,
+                        winit::event::DeviceId::dummy(),
+                        winit::event::DeviceEvent::Added,
                     );
                 }
             }
@@ -1076,7 +1092,7 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
 
     let exiting = Arc::new(AtomicBool::new(false));
     let move_before_close = Arc::new(AtomicBool::new(false));
-    let moved = Arc::new(AtomicBool::new(false));
+    let seen = Arc::new(Mutex::new(Vec::new()));
     let callback_dropped = Arc::new(AtomicBool::new(false));
     let close_thread: Arc<Mutex<Option<thread::ThreadId>>> = Arc::new(Mutex::new(None));
     // Parked here so the drop flag cannot be this Arc's own drop.
@@ -1169,17 +1185,25 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
         },
         exiting,
         move_before_close,
-        moved: Arc::clone(&moved),
+        seen: Arc::clone(&seen),
     };
     event_loop
         .run_app(&mut app)
         .expect("event loop runs to completion");
     worker.join().expect("worker thread does not panic");
 
+    let seen = seen.lock().clone();
+    let first_move = seen.iter().position(|seen| *seen == "move");
     assert!(
-        moved.load(Ordering::SeqCst),
+        first_move.is_some(),
         "a pointer move held when a control request closes its window reaches the \
-         window first"
+         window first: {seen:?}"
+    );
+    assert_eq!(
+        first_move.and_then(|at| seen[..at].last().copied()),
+        Some("mouse present"),
+        "the mouse a held move reveals is present before the move, even when its \
+         device is announced while the move is held: {seen:?}"
     );
 
     assert_eq!(
