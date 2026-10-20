@@ -11,8 +11,9 @@
   keeps the rest from running either.
 - **Closing a dialog returns the focus to its opener under a nested navigator**
   (`flui-interaction`, `flui-widgets`): a nested navigator whose top changed while a dialog
-  covered its page no longer takes the focus when the dialog closes. Reopening a scope's
-  descendants to focus drops the first-focus intents recorded inside it while they were barred.
+  covered its page no longer takes the focus when the dialog closes. The uncovered route
+  supersedes the first-focus intents waiting inside it
+  (`FocusScopeNode::supersede_inner_first_focus`) before it restores its own focus.
 - **A panicking key-cancel handler no longer leaves window focus half updated**
   (`flui-runtime`): every window's focus flag and lifecycle (with its pointer cancellation) are
   updated before the panic propagates.
