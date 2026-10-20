@@ -446,17 +446,20 @@ fn a_queued_request_keeps_its_snapshot_across_a_display_change() {
     let delivered = f.observe();
     let ticket = f.queue();
     f.period.set(Some(PERIOD * 4));
-    assert_eq!(
-        f.host.frame_deadline(),
-        DEADLINE * 4,
-        "new requests use the new display"
-    );
+    let later = f.queue();
     f.clock.advance(DEADLINE + Duration::from_nanos(1));
     f.service();
     assert_eq!(
         *delivered.borrow(),
         [(ticket, HapticOutcome::Suppressed)],
         "the queued request kept the deadline it was enqueued with"
+    );
+    f.clock.advance(DEADLINE * 3);
+    f.service();
+    assert_eq!(
+        delivered.borrow().last(),
+        Some(&(later, HapticOutcome::Suppressed)),
+        "a request queued after the change waits four periods of the new display"
     );
 }
 
@@ -744,6 +747,212 @@ fn sustained_requests_with_no_observer_degrade_to_immediate_when_the_mailbox_is_
     assert!(
         matches!(f.handle.perform(HapticFeedback::LightImpact, FRAME), HapticOutcome::Queued(t) if t.get().get() == MAILBOX_CAPACITY as u64 + 1),
         "once drained, requests queue again and the refused one took no ticket"
+    );
+}
+
+/// Reaching the actuator for a queued request hides the window: the request
+/// resolves once, suppressed, and does not play.
+#[test]
+fn hiding_the_window_while_a_frame_plays_suppresses_the_request_once() {
+    let clock = ManualClock::new();
+    let binding = GestureBinding::with_clock(Arc::new(clock));
+    let fake = Arc::new(FakeHaptics::new());
+    let host_slot: Rc<std::cell::OnceCell<std::rc::Weak<HapticsHost>>> = Rc::default();
+    let hide = Rc::new(Cell::new(false));
+    let host = {
+        let (fake, host_slot, hide) = (Arc::clone(&fake), Rc::clone(&host_slot), Rc::clone(&hide));
+        Rc::new(
+            HapticsHost::builder(&binding, move || {
+                if hide.replace(false)
+                    && let Some(host) = host_slot.get().and_then(std::rc::Weak::upgrade)
+                {
+                    host.set_visible(false);
+                }
+                Some(Arc::clone(&fake) as Arc<dyn PlatformHaptics>)
+            })
+            .refresh_period(|| Some(PERIOD))
+            .build(),
+        )
+    };
+    let _ = host_slot.set(Rc::downgrade(&host));
+    let handle = host.handle();
+    let delivered: Delivered = Rc::default();
+    let sink = Rc::clone(&delivered);
+    let _registration = handle.observe(move |ticket, outcome| {
+        sink.borrow_mut().push((ticket, outcome));
+    });
+    let tickets: Vec<_> = (0..2)
+        .map(
+            |_| match handle.perform(HapticFeedback::LightImpact, FRAME) {
+                HapticOutcome::Queued(ticket) => ticket,
+                outcome => panic!("expected a queued request, got {outcome:?}"),
+            },
+        )
+        .collect();
+    hide.set(true);
+    host.frame_presented();
+    RecoveryScope::boundary(|recovery| host.service(recovery));
+    assert_eq!(
+        *delivered.borrow(),
+        [
+            (tickets[0], HapticOutcome::Suppressed),
+            (tickets[1], HapticOutcome::Suppressed)
+        ],
+        "each resolves once, in ticket order"
+    );
+    assert!(fake.calls().is_empty(), "a suppressed request never plays");
+}
+
+/// Reaching the actuator for a queued request closes the presentation: the
+/// request being played and the one queued behind it are both reported with
+/// their tickets, as a close reports what it could not deliver.
+#[test]
+fn closing_while_a_frame_plays_reports_every_outcome() {
+    let clock = ManualClock::new();
+    let binding = GestureBinding::with_clock(Arc::new(clock));
+    let fake = Arc::new(FakeHaptics::new());
+    let host_slot: Rc<std::cell::OnceCell<std::rc::Weak<HapticsHost>>> = Rc::default();
+    let close = Rc::new(Cell::new(false));
+    let host = {
+        let (fake, host_slot, close) =
+            (Arc::clone(&fake), Rc::clone(&host_slot), Rc::clone(&close));
+        Rc::new(
+            HapticsHost::builder(&binding, move || {
+                if close.replace(false)
+                    && let Some(host) = host_slot.get().and_then(std::rc::Weak::upgrade)
+                {
+                    RecoveryScope::boundary(|recovery| host.close(recovery));
+                }
+                Some(Arc::clone(&fake) as Arc<dyn PlatformHaptics>)
+            })
+            .refresh_period(|| Some(PERIOD))
+            .build(),
+        )
+    };
+    let _ = host_slot.set(Rc::downgrade(&host));
+    let handle = host.handle();
+    for _ in 0..2 {
+        assert!(matches!(
+            handle.perform(HapticFeedback::LightImpact, FRAME),
+            HapticOutcome::Queued(_)
+        ));
+    }
+    close.set(true);
+    let ((), log) = flui_testing::log_capture::capture(|| host.frame_presented());
+    assert_eq!(
+        log.count_containing("not delivered before its presentation closed"),
+        2,
+        "both outcomes are reported: {log}"
+    );
+    assert!(fake.calls().is_empty(), "nothing plays once closed");
+}
+
+/// Notes that it was dropped.
+struct DropFlag(Rc<Cell<bool>>);
+impl Drop for DropFlag {
+    fn drop(&mut self) {
+        self.0.set(true);
+    }
+}
+
+/// Withdrawn after a failure, the host runs none of its observers' code: a
+/// pending outcome is not delivered, and the observer is retained, so its
+/// captures are never dropped, not even with the host.
+#[test]
+fn withdrawing_runs_no_observer_code() {
+    let f = fixture();
+    let dropped = Rc::new(Cell::new(false));
+    let calls = Rc::new(Cell::new(0));
+    let capture = DropFlag(Rc::clone(&dropped));
+    let counted = Rc::clone(&calls);
+    let registration = f.handle.observe(move |_, _| {
+        let _ = &capture;
+        counted.set(counted.get() + 1);
+    });
+    let _ = resolved(&f, 1);
+    let _ = f.queue();
+    f.host.withdraw();
+    assert_eq!(calls.get(), 0, "no outcome is delivered");
+    assert!(!dropped.get(), "the observer is retained");
+    assert!(!f.host.has_pending_delivery());
+    assert_eq!(f.host.next_wake(), None, "the queue was resolved");
+    assert_eq!(
+        f.handle.perform(HapticFeedback::LightImpact, FRAME),
+        HapticOutcome::Suppressed,
+        "a withdrawn presentation plays nothing"
+    );
+    drop(registration);
+    let Fixture { host, handle, .. } = f;
+    drop(handle);
+    drop(host);
+    assert!(!dropped.get(), "not even with the host");
+    assert_eq!(calls.get(), 0);
+}
+
+/// A backend whose `failing`th call panics.
+struct FailsOnCall {
+    calls: std::sync::atomic::AtomicUsize,
+    failing: usize,
+}
+
+impl PlatformHaptics for FailsOnCall {
+    fn perform(&self, _: HapticFeedback) {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        assert!(call != self.failing, "backend failed");
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// The backend panics on the second of three requests a frame plays: the
+/// first's outcome is already in the mailbox, and the other two stay queued
+/// for the next frame within their deadline.
+#[test]
+fn a_backend_panic_in_a_frame_keeps_every_other_request() {
+    let clock = ManualClock::new();
+    let binding = GestureBinding::with_clock(Arc::new(clock));
+    let backend: Arc<dyn PlatformHaptics> = Arc::new(FailsOnCall {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        failing: 2,
+    });
+    let host = HapticsHost::builder(&binding, move || Some(Arc::clone(&backend)))
+        .refresh_period(|| Some(PERIOD))
+        .build();
+    let handle = host.handle();
+    let delivered: Delivered = Rc::default();
+    let sink = Rc::clone(&delivered);
+    let _registration = handle.observe(move |ticket, outcome| {
+        sink.borrow_mut().push((ticket, outcome));
+    });
+    let tickets: Vec<_> = (0..3)
+        .map(
+            |_| match handle.perform(HapticFeedback::LightImpact, FRAME) {
+                HapticOutcome::Queued(ticket) => ticket,
+                outcome => panic!("expected a queued request, got {outcome:?}"),
+            },
+        )
+        .collect();
+    let failure = catch_unwind(AssertUnwindSafe(|| host.frame_presented()))
+        .expect_err("the backend's panic propagates");
+    assert_eq!(panic_text(failure.as_ref()), "backend failed");
+    RecoveryScope::boundary(|recovery| host.service(recovery));
+    assert_eq!(
+        *delivered.borrow(),
+        [(tickets[0], HapticOutcome::Submitted)],
+        "the outcome resolved before the panic was kept"
+    );
+    host.frame_presented();
+    RecoveryScope::boundary(|recovery| host.service(recovery));
+    let expected: Vec<_> = tickets
+        .into_iter()
+        .map(|ticket| (ticket, HapticOutcome::Submitted))
+        .collect();
+    assert_eq!(
+        *delivered.borrow(),
+        expected,
+        "the failed request and the one behind it play with the next frame"
     );
 }
 

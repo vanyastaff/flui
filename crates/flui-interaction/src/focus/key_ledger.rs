@@ -90,6 +90,14 @@ pub(super) enum Admission {
     Withheld,
 }
 
+/// A first key-down of a key whose earlier press, another unit's walk took,
+/// never had its release. The earlier press is forgotten and nothing is
+/// recorded for the new one: the earlier press's path is told the key was
+/// cancelled, since no release reaches it now, and the key-down is then
+/// admitted again against the focus that leaves.
+#[derive(Debug)]
+pub(super) struct Superseded(pub(super) HeldPress);
+
 #[derive(Debug, Default)]
 pub(super) struct KeyLedger {
     pressed: HashMap<KeyId, KeyOrigin>,
@@ -100,15 +108,26 @@ impl KeyLedger {
     /// against its key-down. `unit` is the traversal unit holding primary
     /// focus now, and `leaf` the node a walk would start at. A release clears
     /// the key's record whatever it admits.
+    ///
+    /// # Errors
+    ///
+    /// [`Superseded`] for a first key-down that replaces an unreleased press
+    /// of another unit: nothing is admitted until that press is cancelled.
     pub(super) fn admit(
         &mut self,
         id: KeyId,
         event: &KeyEvent,
         unit: Option<FocusNodeId>,
         leaf: Option<&Rc<FocusNode>>,
-    ) -> Admission {
-        match (event.state(), event.repeat()) {
+    ) -> Result<Admission, Superseded> {
+        let admission = match (event.state(), event.repeat()) {
             (KeyState::Down, KeyRepeat::First) => {
+                if let Some(KeyOrigin::Focus { unit: pressed, .. }) = self.pressed.get(&id)
+                    && *pressed != unit
+                    && let Some(KeyOrigin::Focus { press, .. }) = self.pressed.remove(&id)
+                {
+                    return Err(Superseded(press));
+                }
                 let ime = event.composition == ImeComposition::Active
                     || event.key == Key::Named(NamedKey::Process);
                 let origin = if ime {
@@ -142,7 +161,8 @@ impl KeyLedger {
                 Some(KeyOrigin::Focus { press, .. }) => Admission::Cancelled(press),
                 _ => Admission::Withheld,
             },
-        }
+        };
+        Ok(admission)
     }
 
     /// The key-down or repeat `event` moved focus by traversal: the key's

@@ -23,7 +23,7 @@ use flui_testing::{
 use flui_view::prelude::*;
 use flui_widgets::{
     Alternative, ControlSpec, GestureAlternatives, RefreshController, RefreshIndicator,
-    RefreshIndicatorPhase, RefreshIndicatorStyle, RefreshIntent, ScrollController, Scrollable,
+    RefreshIndicatorPhase, RefreshIndicatorStyle, RefreshIntent, Row, ScrollController, Scrollable,
     SingleActivator, SizedBox, VsyncScope,
 };
 
@@ -133,11 +133,14 @@ struct Inbox {
     refresh: RefreshController,
     refreshes: Rc<Refreshes>,
     builds: Rc<Cell<u32>>,
+    /// The horizontal pager of [`mount_on_a_pager`](Self::mount_on_a_pager).
+    pager: ScrollController,
 }
 
 impl Inbox {
     fn new() -> Self {
         Self {
+            pager: ScrollController::new(),
             list: ScrollController::new(),
             refresh: RefreshController::new(),
             refreshes: Refreshes::new(),
@@ -196,6 +199,23 @@ impl Inbox {
             child: self.view(Axis::Vertical).boxed(),
         };
         mounted(VsyncScope::new(vsync.clone(), tree).boxed(), vsync)
+    }
+
+    /// Mounted on the first of three pages of a horizontal pager.
+    fn mount_on_a_pager(&self) -> LaidOut {
+        let vsync = Vsync::new();
+        let pages = Row::new(vec![
+            SizedBox::new(300.0, 300.0)
+                .child(self.view(Axis::Vertical))
+                .boxed(),
+            SizedBox::new(300.0, 300.0).boxed(),
+            SizedBox::new(300.0, 300.0).boxed(),
+        ]);
+        let pager = Scrollable::new()
+            .controller(self.pager.clone())
+            .scroll_direction(Axis::Horizontal)
+            .child(pages);
+        mounted(VsyncScope::new(vsync.clone(), pager).boxed(), vsync)
     }
 
     fn started(&self) -> u32 {
@@ -371,7 +391,8 @@ pub(crate) fn pull_released_short_settles_back() {
 
 /// A wheel, a trackpad pan and its momentum, and a fling into the top
 /// never pull; a cancelled contact past the threshold settles back without
-/// refreshing.
+/// refreshing, and a press the arena gives to a pager pulls nothing and
+/// leaves the next pull its refresh.
 pub(crate) fn pull_to_refresh_ignores_wheel_and_momentum_and_resets_on_loss() {
     let inbox = Inbox::new();
     let mut laid = inbox.mount(Axis::Vertical);
@@ -471,6 +492,46 @@ pub(crate) fn pull_to_refresh_ignores_wheel_and_momentum_and_resets_on_loss() {
         "a cancelled pull settles back"
     );
     assert_eq!(inbox.started(), 0, "nothing refreshed");
+
+    // Lost to another gesture: a press that stops the list flinging toward
+    // its top, whose contact a pager's drag then takes, pulls nothing and
+    // refreshes nothing, and the next pull refreshes as usual.
+    for device in DEVICES {
+        let inbox = Inbox::new();
+        let mut laid = inbox.mount_on_a_pager();
+        inbox.list.jump_to(400.0);
+        laid.tick();
+        laid.replay(&fling(device, at(100.0, 40.0), at(100.0, 200.0)));
+        laid.pump_for(FRAME);
+        laid.pump_for(FRAME);
+        let moving = inbox.list.pixels();
+        laid.pump_for(FRAME);
+        assert!(
+            inbox.list.pixels() < moving,
+            "{device:?}: the list flings toward its top"
+        );
+        let swipe = slow(device, at(250.0, 150.0), at(60.0, 150.0));
+        let most = replay_watching(&mut laid, &inbox, &swipe);
+        settle(&mut laid);
+        assert!(
+            inbox.pager.pixels() > 100.0,
+            "{device:?}: the pager took the contact, at {}",
+            inbox.pager.pixels()
+        );
+        assert_eq!(most, 0.0, "{device:?}: the lost press pulled nothing");
+        assert_eq!(inbox.started(), 0, "{device:?}: and refreshed nothing");
+
+        inbox.pager.jump_to(0.0);
+        inbox.list.jump_to(0.0);
+        laid.tick();
+        replay_watching(&mut laid, &inbox, &pull(device, 180.0));
+        laid.pump_for(FRAME);
+        assert_eq!(
+            inbox.started(),
+            1,
+            "{device:?}: the next pull past the threshold refreshes"
+        );
+    }
 }
 
 /// While a refresh runs, a pull reveals nothing and refreshes nothing, and
@@ -645,6 +706,7 @@ pub(crate) fn a_replaced_configuration_takes_over_the_refresh() {
         refresh: RefreshController::new(),
         refreshes: Refreshes::new(),
         builds: Rc::clone(&first.builds),
+        pager: first.pager.clone(),
     };
     let vsync = Vsync::new();
     let mut laid = mounted(

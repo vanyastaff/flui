@@ -956,6 +956,17 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends clang llvm
 
+      # The driver build the checks job saves; restored before the NDK step,
+      # whose CC_/AR_ variables would change the key. Without it each Linux
+      # leg built the driver from scratch (1.5-3 min).
+      - name: Rust cache (xtask)
+        if: runner.os == 'Linux'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          shared-key: xtask
+          save-if: false
+
       - name: Configure bundled Android NDK
         if: matrix.target == 'aarch64-linux-android'
         run: |
@@ -973,15 +984,37 @@ jobs:
         with:
           tool: cargo-xwin@0.23.1
 
+      # cargo-xwin downloads the MSVC CRT and Windows SDK on first use, 7-13
+      # minutes from Microsoft's servers, then marks the directory DONE. The
+      # splatted result is 1.1 GB on disk, about 260 MB compressed. The key
+      # names the cargo-xwin release, which fixes the default MSVC version;
+      # the cache is saved from main only, after a complete download.
+      - name: Restore MSVC CRT and Windows SDK
+        id: xwin-cache
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cargo-xwin
+          key: cargo-xwin-0.23.1-${{ runner.os }}
+
       - name: Lint source-derived native targets
         run: cargo xtask cross-typecheck --target "$NATIVE_TARGET"
         env:
           NATIVE_TARGET: ${{ matrix.target }}
+          XWIN_CACHE_DIR: ${{ runner.temp }}/cargo-xwin
+
+      - name: Save MSVC CRT and Windows SDK
+        if: matrix.target == 'x86_64-pc-windows-msvc' && github.ref == 'refs/heads/main' && steps.xwin-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cargo-xwin
+          key: ${{ steps.xwin-cache.outputs.cache-primary-key }}
 
       - name: Lint optional native features
         run: cargo xtask cross-typecheck --target "$NATIVE_TARGET" --all-features
         env:
           NATIVE_TARGET: ${{ matrix.target }}
+          XWIN_CACHE_DIR: ${{ runner.temp }}/cargo-xwin
 
   # ─────────────────────────────────────────────────────────────────────────
   # ci — require each planned Linux job and reject unexpected skips.
