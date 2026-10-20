@@ -660,6 +660,9 @@ fn a_resize_that_finds_the_driver_leased_reaches_it_at_the_next_checkout() {
             prelude: None,
             resize: Some(Box::new(move |size, scale| {
                 seen.borrow_mut().push((size, scale));
+                if seen.borrow().len() == 1 {
+                    std::panic::panic_any("deferred resize failure");
+                }
             })),
         }))
         .expect("prepare resize driver");
@@ -686,12 +689,23 @@ fn a_resize_that_finds_the_driver_leased_reaches_it_at_the_next_checkout() {
     );
     drop(lease);
 
-    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding))
-        .expect("deliver frame");
+    let frame_now = || dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding));
+    let failure = catch_unwind(AssertUnwindSafe(frame_now)).expect_err("the resize panics");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"deferred resize failure")
+    );
     assert_eq!(
         *sizes.borrow(),
         [(size(320.0), 2.0)],
         "the latest resize reaches the driver before its next frame"
+    );
+    frame_now().expect("deliver frame");
+    frame_now().expect("deliver frame");
+    assert_eq!(
+        *sizes.borrow(),
+        [(size(320.0), 2.0), (size(320.0), 2.0)],
+        "a resize that panicked is tried again once, and is gone once applied"
     );
     teardown_platform_ui_runtime();
 }
