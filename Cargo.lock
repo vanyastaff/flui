@@ -2263,6 +2263,7 @@ dependencies = [
  "insta",
  "parking_lot",
  "serde",
+ "static_assertions",
  "thiserror 2.0.20",
  "tracing",
 ]

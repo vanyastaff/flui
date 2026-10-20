@@ -40,7 +40,7 @@
 //!   child was built for *different* constraints, so the answer would be
 //!   confidently wrong.
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_foundation::Single;
 use flui_foundation::geometry::Size;
@@ -57,13 +57,13 @@ use super::layout_constraints_cell::LayoutConstraintsCell;
 /// Single-child box that publishes its incoming constraints for the element
 /// layer to build against.
 ///
-/// Holds the `Arc<LayoutConstraintsCell>` its element registered under the same
+/// Holds the `Rc<LayoutConstraintsCell>` its element registered under the same
 /// `RenderId` (`BuildOwner::layout_builder_registry`). The cell is the only
 /// channel between them; this object never touches the element tree.
 #[derive(Debug, Clone)]
 pub struct RenderLayoutBuilder {
     /// Shared with the element registered under this node's `RenderId`.
-    cell: Arc<LayoutConstraintsCell>,
+    cell: Rc<LayoutConstraintsCell>,
     /// Tracked in `perform_layout` because `BoxHitTestContext` exposes no
     /// child count — the same reason `RenderOpacity` carries this flag.
     has_child: bool,
@@ -72,11 +72,11 @@ pub struct RenderLayoutBuilder {
 impl RenderLayoutBuilder {
     /// Creates a render object publishing into `cell`.
     ///
-    /// The caller (the element owning this render object) must hold the same `Arc` and register
+    /// The caller (the element owning this render object) must hold the same `Rc` and register
     /// it against this node's `RenderId`, or nothing will ever read what this
     /// object publishes.
     #[must_use]
-    pub fn new(cell: Arc<LayoutConstraintsCell>) -> Self {
+    pub fn new(cell: Rc<LayoutConstraintsCell>) -> Self {
         Self {
             cell,
             has_child: false,
@@ -85,10 +85,10 @@ impl RenderLayoutBuilder {
 
     /// The cell this object publishes into.
     ///
-    /// Exposed so the element can assert it registered the same `Arc`, and so
+    /// Exposed so the element can assert it registered the same `Rc`, and so
     /// harness tests can observe what a layout pass published.
     #[must_use]
-    pub fn cell(&self) -> &Arc<LayoutConstraintsCell> {
+    pub fn cell(&self) -> &Rc<LayoutConstraintsCell> {
         &self.cell
     }
 }

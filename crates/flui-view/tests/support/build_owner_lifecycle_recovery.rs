@@ -183,7 +183,7 @@ fn production_layout_builder_contains_a_stateful_descendant_init_panic() {
     assert_eq!(owner.layout_builder_count(), 1);
     let (scope, cell) = owner.layout_builder_registry.with_entries(|entries| {
         let entry = entries.values().next().expect("live LayoutBuilder entry");
-        (entry.element, Arc::clone(&entry.cell))
+        (entry.element, Rc::clone(&entry.cell))
     });
     cell.as_any()
         .downcast_ref::<flui_objects::LayoutConstraintsCell>()

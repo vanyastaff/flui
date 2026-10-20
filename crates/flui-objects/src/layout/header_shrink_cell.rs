@@ -22,7 +22,7 @@
 //! divider. Publishing only the offset would leave those rebuilds unscheduled,
 //! and the bug would look like "the shadow appears one scroll late".
 
-use parking_lot::Mutex;
+use std::cell::Cell;
 
 use super::BuildDuringLayoutCell;
 
@@ -49,10 +49,11 @@ struct CellState {
 /// Shared shrink-state mailbox between a persistent header's render object and
 /// its element.
 ///
-/// The `Mutex` is private and no guard crosses the API boundary.
+/// Owner-thread only: the state is a plain [`Cell`], so publishing from
+/// `perform_layout` takes no lock, and the type is `!Sync`.
 #[derive(Debug, Default)]
 pub struct HeaderShrinkCell {
-    inner: Mutex<CellState>,
+    state: Cell<CellState>,
 }
 
 impl HeaderShrinkCell {
@@ -69,11 +70,12 @@ impl HeaderShrinkCell {
     ///
     /// Called from `perform_layout`; must not allocate or rebuild.
     pub fn publish(&self, shrink: HeaderShrink) {
-        let mut state = self.inner.lock();
+        let mut state = self.state.get();
         if state.last_built != Some(shrink) {
             state.needs_build = true;
         }
         state.published = Some(shrink);
+        self.state.set(state);
     }
 
     /// Records shrink state and schedules a rebuild **regardless** of whether
@@ -85,31 +87,33 @@ impl HeaderShrinkCell {
     /// would compare an unchanged pair, leave `needs_build` false, and drop
     /// the very rebuild the extent change demanded.
     pub fn publish_forced(&self, shrink: HeaderShrink) {
-        let mut state = self.inner.lock();
+        let mut state = self.state.get();
         state.published = Some(shrink);
         state.needs_build = true;
+        self.state.set(state);
     }
 
     /// The most recently published shrink state, or `None` before first layout.
     #[must_use]
     pub fn shrink(&self) -> Option<HeaderShrink> {
-        self.inner.lock().published
+        self.state.get().published
     }
 }
 
 impl BuildDuringLayoutCell for HeaderShrinkCell {
     fn needs_build(&self) -> bool {
-        self.inner.lock().needs_build
+        self.state.get().needs_build
     }
 
     fn has_published(&self) -> bool {
-        self.inner.lock().published.is_some()
+        self.state.get().published.is_some()
     }
 
     fn commit(&self) {
-        let mut state = self.inner.lock();
+        let mut state = self.state.get();
         state.last_built = state.published;
         state.needs_build = false;
+        self.state.set(state);
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
