@@ -11,7 +11,6 @@ use std::cell::Cell;
 use windows::Win32::{
     Foundation::HWND,
     Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
-    System::Threading::{GetCurrentProcessId, GetCurrentThreadId},
     UI::{
         Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
         WindowsAndMessaging::{
@@ -130,17 +129,21 @@ impl CloakWatch {
     /// Subscribe on the calling thread, the window's owner. Without a
     /// subscription the window is never seen as cloaked.
     pub(super) fn start() -> Self {
+        // Every source, not this thread's: the shell cloaks the windows of a
+        // virtual desktop it switches away from, so the event comes from its
+        // thread. `cloak_changed` keeps only this thread's FLUI windows.
+        //
         // SAFETY: `cloak_changed` has the `WINEVENTPROC` signature and stays
-        // valid for the process; an out-of-context hook for this process and
-        // thread runs it on this thread while it takes messages.
+        // valid for the process; an out-of-context hook runs it on the thread
+        // that installed it, this one, while it takes messages.
         let hook = unsafe {
             SetWinEventHook(
                 EVENT_OBJECT_CLOAKED,
                 EVENT_OBJECT_UNCLOAKED,
                 None,
                 Some(cloak_changed),
-                GetCurrentProcessId(),
-                GetCurrentThreadId(),
+                0,
+                0,
                 WINEVENT_OUTOFCONTEXT,
             )
         };
@@ -167,7 +170,8 @@ impl Drop for CloakWatch {
 }
 
 /// Every window of the thread has its own hook, and each event reaches all of
-/// them: a window takes only the events of its own hook about itself.
+/// them: a window takes only the events of its own hook about itself. The
+/// context gate refuses another thread's or process's window.
 unsafe extern "system" fn cloak_changed(
     hook: HWINEVENTHOOK,
     _event: u32,
@@ -180,9 +184,24 @@ unsafe extern "system" fn cloak_changed(
     if object != OBJID_WINDOW.0 || child != CHILDID_SELF as i32 {
         return;
     }
-    let _ = super::platform::with_window_context(hwnd, "cloak change", |ctx| {
-        if ctx.cloak_watch.is(hook) {
-            ctx.refresh_cloaked(hwnd);
-        }
-    });
+    // The visibility callback is user code. As in `window_proc`, a panic must
+    // not unwind across the `extern "system"` boundary: it is logged, then the
+    // process aborts. `AssertUnwindSafe` is sound because nothing observes
+    // the state the unwind tore.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = super::platform::with_window_context(hwnd, "cloak change", |ctx| {
+            if ctx.cloak_watch.is(hook) {
+                ctx.refresh_cloaked(hwnd);
+            }
+        });
+    }));
+    if let Err(payload) = outcome {
+        tracing::error!(
+            hwnd = ?hwnd,
+            panic = crate::shared::panic_boundary::panic_payload_message(&*payload),
+            "panic in a cloak-change callback; aborting — it must not unwind across \
+             the extern \"system\" boundary"
+        );
+        std::process::abort();
+    }
 }
