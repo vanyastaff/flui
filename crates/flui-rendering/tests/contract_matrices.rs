@@ -116,6 +116,8 @@ fn paint_matrix() {
 fn layout_protocol_matrix() {
     let cases: &[(&str, fn())] = &[
         ("layout_dirty_root::adopted_nodes_lay_out_parents_before_children", crate::layout_dirty_root::adopted_nodes_lay_out_parents_before_children),
+        ("layout_dirty_root::sibling_layout_marks_share_one_ancestor_walk", crate::layout_dirty_root::sibling_layout_marks_share_one_ancestor_walk),
+        ("layout_dirty_root::a_moved_node_marks_its_new_ancestors", crate::layout_dirty_root::a_moved_node_marks_its_new_ancestors),
         ("intrinsics_cache::intrinsic_walk_memoizes_every_level", crate::intrinsics_cache::intrinsic_walk_memoizes_every_level),
         ("render_viewport::viewport_lays_out_forward_slivers_and_applies_content_dimensions", crate::render_viewport::viewport_lays_out_forward_slivers_and_applies_content_dimensions),
         ("render_viewport::viewport_positions_first_sliver_for_axis_and_growth_matrix", crate::render_viewport::viewport_positions_first_sliver_for_axis_and_growth_matrix),

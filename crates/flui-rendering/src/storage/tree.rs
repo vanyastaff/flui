@@ -112,6 +112,19 @@ fn child_depth(parent_depth: u16) -> u16 {
         .expect("BUG: render tree depth exceeds u16::MAX (or a parent cycle)")
 }
 
+/// What [`RenderTree::set_children`] changed.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[must_use]
+pub struct ChildrenUpdate {
+    /// The parent's child list differs from before, in order or membership.
+    pub changed: bool,
+    /// A child arrived from elsewhere or left the parent.
+    pub membership_changed: bool,
+    /// The former parents of the children that arrived, one entry per
+    /// arrival.
+    pub donors: Vec<RenderId>,
+}
+
 impl Default for RenderTree {
     fn default() -> Self {
         Self::new()
@@ -555,6 +568,93 @@ impl RenderTree {
         self.redepth_subtree(child_id, 0);
     }
 
+    /// Makes `children`, in that order, the whole child list of `parent_id`,
+    /// writing both directions of every edge it adds or removes.
+    ///
+    /// A listed child held by another parent moves here: it leaves that
+    /// donor's child list, which the result reports. A current child left
+    /// out of `children` becomes a root. Every moved subtree takes the depth
+    /// of its new position. Stale ids in `children` are skipped; a stale
+    /// `parent_id` makes the call a no-op.
+    ///
+    /// Callers syncing many parents call this top-down, so a child never
+    /// moves under a node that is still its own descendant.
+    ///
+    /// # Panics (debug only)
+    ///
+    /// If `children` repeats an id, or names `parent_id` or one of its
+    /// ancestors — either would close a cycle.
+    pub fn set_children(&mut self, parent_id: RenderId, children: &[RenderId]) -> ChildrenUpdate {
+        let mut update = ChildrenUpdate::default();
+        let Some(parent) = self.get(parent_id) else {
+            return update;
+        };
+        if parent.children() == children {
+            return update;
+        }
+        update.changed = true;
+        let parent_depth = parent.depth();
+        let current = parent.children().to_vec();
+        let listed: rustc_hash::FxHashSet<RenderId> = children.iter().copied().collect();
+        debug_assert_eq!(
+            listed.len(),
+            children.len(),
+            "set_children: {parent_id:?}'s new child list repeats an id"
+        );
+
+        for child_id in current {
+            if listed.contains(&child_id) {
+                continue;
+            }
+            let Some(child) = self.get_mut(child_id) else {
+                continue;
+            };
+            if child.parent() == Some(parent_id) {
+                child.set_parent(None);
+                self.redepth_subtree(child_id, 0);
+                update.membership_changed = true;
+            }
+        }
+
+        let mut list = Vec::with_capacity(children.len());
+        for &child_id in children {
+            let Some(child) = self.get(child_id) else {
+                continue;
+            };
+            list.push(child_id);
+            let donor = child.parent();
+            if donor == Some(parent_id) {
+                continue;
+            }
+            debug_assert!(
+                child_id != parent_id && !self.is_ancestor(child_id, parent_id),
+                "set_children: {child_id:?} is {parent_id:?} or one of its ancestors — moving \
+                 it under {parent_id:?} would close a cycle"
+            );
+            if let Some(donor) = donor
+                && let Some(donor_node) = self.get_mut(donor)
+            {
+                donor_node.remove_child(child_id);
+                update.donors.push(donor);
+            }
+            if let Some(child) = self.get_mut(child_id) {
+                child.set_parent(Some(parent_id));
+            }
+            self.redepth_subtree(child_id, child_depth(parent_depth));
+            update.membership_changed = true;
+        }
+
+        let links = self
+            .get_mut(parent_id)
+            .expect("BUG: the parent resolved above and no node was removed since")
+            .links_mut();
+        links.clear_children();
+        for child_id in list {
+            links.add_child(child_id);
+        }
+        update
+    }
+
     /// Re-derives the depths of `root`'s subtree from its parent, for a
     /// subtree whose parent link was written outside the edge primitives
     /// (a relocation's destination edge synchronization).
@@ -567,9 +667,10 @@ impl RenderTree {
     }
 
     /// Writes `root_depth` to `root` and parent depth + 1 to every
-    /// descendant. The two edge primitives above are the only writers of
-    /// depth after insertion, so the dirty queues' depth sorts see the
-    /// position a node holds now, including every node of a moved subtree.
+    /// descendant. The edge primitives above are the only writers of depth
+    /// after insertion, so the dirty queues' depth sorts see the position a
+    /// node holds now, including every node of a moved subtree, and the
+    /// layout-mark walk forgets every path that ran through the old edge.
     fn redepth_subtree(&mut self, root: RenderId, root_depth: u16) {
         let Some(node) = self.get_mut(root) else {
             return;

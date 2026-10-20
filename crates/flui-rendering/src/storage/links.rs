@@ -29,6 +29,11 @@ pub struct NodeLinks {
 
     /// Depth in the tree (root = 0).
     depth: u16,
+
+    /// The layout-mark walk epoch in which a walk last passed this node on
+    /// its way to a queued relayout boundary; 0 when none has. Derived from
+    /// ancestry like `depth`, so the edge primitives reset both together.
+    layout_walk: u64,
 }
 
 impl Default for NodeLinks {
@@ -45,6 +50,7 @@ impl NodeLinks {
             parent: None,
             children: Vec::new(),
             depth: 0,
+            layout_walk: 0,
         }
     }
 
@@ -55,6 +61,7 @@ impl NodeLinks {
             parent: Some(parent),
             children: Vec::new(),
             depth,
+            layout_walk: 0,
         }
     }
 
@@ -146,9 +153,23 @@ impl NodeLinks {
         self.depth
     }
 
-    /// Sets the depth. Only the render tree's edge primitives write it.
+    /// Sets the depth. Only the render tree's edge primitives write it, and
+    /// a node whose ancestry changed forgets its layout-walk epoch with it.
     #[inline]
     pub(crate) fn set_depth(&mut self, depth: u16) {
         self.depth = depth;
+        self.layout_walk = 0;
+    }
+
+    /// The layout-mark walk epoch this node was last passed in.
+    #[inline]
+    pub(crate) fn layout_walk(&self) -> u64 {
+        self.layout_walk
+    }
+
+    /// Records that a layout-mark walk in `epoch` passed this node.
+    #[inline]
+    pub(crate) fn set_layout_walk(&mut self, epoch: u64) {
+        self.layout_walk = epoch;
     }
 }

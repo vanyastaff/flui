@@ -78,4 +78,4 @@ pub use state::RenderState;
 pub use state::{BoxLayoutCache, IntrinsicDimension, ProtocolLayoutCache};
 // Type aliases for convenience
 pub use state::{BoxRenderState, SliverRenderState};
-pub use tree::RenderTree;
+pub use tree::{ChildrenUpdate, RenderTree};

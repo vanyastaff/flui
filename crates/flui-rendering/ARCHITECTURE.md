@@ -1542,6 +1542,7 @@ The forwarding wrappers left over from the previous lock-based API are deleted; 
 |---|---|---|
 | `layout_passes` | `run_layout`, after `take_layout_batch_shallow_first` | non-empty layout batches; a pass with no dirty entry adds nothing |
 | `layout_roots` | the scheduler's `layout_drained_total` | dirty layout entries drained, including ones skipped as already clean |
+| `layout_mark_steps` | `DirtyTracker::commit_needs_layout`, per node it marks | nodes the layout-invalidation walks marked; a walk stops where an earlier one settled the path, so N sibling marks cost N + depth (`sibling_layout_marks_share_one_ancestor_walk`, `tests/layout_dirty_root.rs`) |
 | `nodes_laid_out` | `SubtreeArena`'s box and sliver record sites, drained in `layout_dirty_root` | nodes past the clean-child short-circuit; a cache hit and an intrinsic query do not count |
 | `nodes_painted` | `FragmentComposer`, next to `paint_raw` | nodes whose `paint_raw` ran; a grafted boundary is not a paint |
 | `layers_produced` | `FragmentComposer::seal_picture`, `push_layer_node`, and `graft`'s patched indices | layers created fresh this pass, including a layer a composited-layer update patches into a grafted boundary |

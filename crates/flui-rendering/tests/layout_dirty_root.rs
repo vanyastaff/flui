@@ -276,3 +276,164 @@ pub(crate) fn adopted_nodes_lay_out_parents_before_children() {
         .map(|entry| entry.state().size());
     assert_eq!(leaf_size, Some(Size::new(90.0, 90.0)));
 }
+
+/// Lays every child out loose and takes the biggest size, so below a loose
+/// root neither it nor its children are relayout boundaries: a mark walks to
+/// the root.
+#[derive(Debug)]
+struct LooseColumn;
+
+impl flui_foundation::Diagnosticable for LooseColumn {}
+
+impl flui_rendering::traits::RenderBox for LooseColumn {
+    type Arity = flui_foundation::Variable;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        let loose = ctx.constraints().loosen();
+        for index in 0..ctx.child_count() {
+            ctx.layout_child(index, loose)?;
+        }
+        Ok(ctx.constraints().biggest())
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<'_, Self::Arity, Self::ParentData>,
+    ) -> bool {
+        false
+    }
+}
+
+/// A chain of `LooseColumn`s `depth` deep from `root`, returning the last.
+fn loose_chain(
+    owner: &mut flui_rendering::pipeline::PipelineOwner,
+    root: flui_foundation::RenderId,
+    depth: usize,
+) -> flui_foundation::RenderId {
+    use crate::common::BoxedRenderObject;
+
+    (0..depth).fold(root, |parent, _| {
+        let column = owner.insert(Box::new(LooseColumn) as BoxedRenderObject);
+        owner.adopt_render_child(parent, column);
+        column
+    })
+}
+
+/// Sibling marks share one ancestor walk: after the first leaf's walk reaches
+/// the root, every later sibling stops at their common parent. The shared
+/// walk loses no work, and a layout pass makes the next marks walk again.
+pub(crate) fn sibling_layout_marks_share_one_ancestor_walk() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::common::BoxedRenderObject;
+
+    const CHAIN: usize = 6;
+    const SIBLINGS: usize = 16;
+    let leaf_layouts = Arc::new(AtomicUsize::new(0));
+    let mut owner = flui_rendering::pipeline::PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    );
+    let root = owner.insert(Box::new(LooseColumn) as BoxedRenderObject);
+    let host = loose_chain(&mut owner, root, CHAIN);
+    let leaves: Vec<_> = (0..SIBLINGS)
+        .map(|_| {
+            let leaf = owner
+                .insert(Box::new(CountingLeaf(Arc::clone(&leaf_layouts))) as BoxedRenderObject);
+            owner.adopt_render_child(host, leaf);
+            leaf
+        })
+        .collect();
+    owner.set_root_id(Some(root));
+    owner.set_root_constraints(Some(BoxConstraints::loose(Size::new(100.0, 100.0))));
+    let mut owner = owner.into_layout();
+    owner.run_layout().expect("first layout");
+    assert_eq!(leaf_layouts.load(Ordering::Relaxed), SIBLINGS);
+
+    // The first walk marks the leaf, the chain and the root; each later
+    // sibling marks only itself.
+    let walk = CHAIN + 2;
+    for round in 1..=2 {
+        let before = owner.counters();
+        for &leaf in &leaves {
+            owner.mark_needs_layout(leaf);
+        }
+        assert_eq!(
+            owner.counters().since(before).layout_mark_steps,
+            (walk + SIBLINGS - 1) as u64,
+            "round {round}: sibling marks walk the shared ancestors once"
+        );
+        assert_eq!(
+            owner
+                .nodes_needing_layout()
+                .iter()
+                .map(|dirty| dirty.id)
+                .collect::<Vec<_>>(),
+            [root]
+        );
+        owner.run_layout().expect("relayout");
+        assert_eq!(
+            leaf_layouts.load(Ordering::Relaxed),
+            SIBLINGS * (round + 1),
+            "round {round}: every marked sibling lays out again"
+        );
+    }
+}
+
+/// A node moved under a new parent forgets the walk that marked its old
+/// ancestors: its next mark reaches the new parent, which would otherwise
+/// serve its cached layout and never lay the moved node out. The moved
+/// subtree also takes the depth of its new position.
+pub(crate) fn a_moved_node_marks_its_new_ancestors() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::common::BoxedRenderObject;
+
+    let leaf_layouts = Arc::new(AtomicUsize::new(0));
+    let mut owner = flui_rendering::pipeline::PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    );
+    let root = owner.insert(Box::new(LooseColumn) as BoxedRenderObject);
+    let donor = loose_chain(&mut owner, root, 1);
+    let destination = loose_chain(&mut owner, root, 2);
+    let moved = loose_chain(&mut owner, donor, 1);
+    let leaf = owner.insert(Box::new(CountingLeaf(Arc::clone(&leaf_layouts))) as BoxedRenderObject);
+    owner.adopt_render_child(moved, leaf);
+    owner.set_root_id(Some(root));
+    owner.set_root_constraints(Some(BoxConstraints::loose(Size::new(100.0, 100.0))));
+    let mut owner = owner.into_layout();
+    owner.run_layout().expect("first layout");
+    assert_eq!(leaf_layouts.load(Ordering::Relaxed), 1);
+
+    // Settles the path leaf → moved → donor → root.
+    owner.mark_needs_layout(leaf);
+    let update = owner.render_tree_mut().set_children(destination, &[moved]);
+    assert!(update.membership_changed);
+    assert_eq!(update.donors, [donor]);
+    assert_eq!(owner.render_tree().children(donor), &[]);
+    assert_eq!(
+        [destination, moved, leaf].map(|id| owner.render_tree().depth(id)),
+        [Some(2), Some(3), Some(4)],
+        "the moved subtree takes the depth of its new position"
+    );
+
+    owner.mark_needs_layout(leaf);
+    assert!(
+        owner
+            .render_tree()
+            .get(destination)
+            .is_some_and(flui_rendering::storage::RenderNode::needs_layout),
+        "the moved node's mark reaches its new parent"
+    );
+    owner.run_layout().expect("relayout");
+    assert_eq!(
+        leaf_layouts.load(Ordering::Relaxed),
+        2,
+        "the moved leaf lays out under its new parent"
+    );
+}

@@ -483,6 +483,8 @@ impl PipelineOwner<Layout> {
         id: RenderId,
         constraints: BoxConstraints,
     ) -> crate::error::RenderResult<Size> {
+        // Layout clears flags and fills caches under any stamped walk path.
+        self.scheduler.forget_layout_walks();
         // Steps 1–3: collect subtree ids, pre-acquire disjoint &mut borrows,
         // and wrap them in a SubtreeArena for O(1) by-id lookup during the
         // recursive walk.  The unsafe aliasing machinery lives entirely inside

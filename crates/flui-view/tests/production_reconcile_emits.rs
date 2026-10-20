@@ -80,18 +80,21 @@ impl<K: ViewKey + Clone + 'static> View for KeyedLeafBox<K> {
     }
 }
 
+/// A GlobalKey-keyed box carrying a subtree, so a move relocates more than
+/// one render node.
 #[derive(Clone)]
-struct GlobalLeafBox {
+struct GlobalBox {
     key: GlobalKey<()>,
+    children: Vec<BoxedView>,
 }
 
-impl GlobalLeafBox {
-    fn new(key: GlobalKey<()>) -> Self {
-        Self { key }
+impl GlobalBox {
+    fn new(key: GlobalKey<()>, children: Vec<BoxedView>) -> Self {
+        Self { key, children }
     }
 }
 
-impl RenderView for GlobalLeafBox {
+impl RenderView for GlobalBox {
     type Protocol = BoxProtocol;
     type RenderObject = RenderSizedBox;
 
@@ -109,9 +112,19 @@ impl RenderView for GlobalLeafBox {
     ) -> flui_rendering::RenderUpdateImpact {
         flui_rendering::RenderUpdateImpact::NONE
     }
+
+    fn has_children(&self) -> bool {
+        !self.children.is_empty()
+    }
+
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+        for child in &self.children {
+            visitor(child);
+        }
+    }
 }
 
-impl View for GlobalLeafBox {
+impl View for GlobalBox {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)
     }
@@ -198,8 +211,15 @@ pub(crate) fn active_global_key_move_through_build_scope_updates_render_parent_l
     let root_v1 = MultiBox::host(
         0,
         vec![
-            MultiBox::host(1, vec![GlobalLeafBox::new(global.clone()).boxed()]).boxed(),
-            MultiBox::host(2, Vec::new()).boxed(),
+            MultiBox::host(
+                1,
+                vec![
+                    GlobalBox::new(global.clone(), vec![MultiBox::host(9, Vec::new()).boxed()])
+                        .boxed(),
+                ],
+            )
+            .boxed(),
+            MultiBox::host(2, vec![MultiBox::host(3, Vec::new()).boxed()]).boxed(),
         ],
     );
     let root_id = tree.mount_root_with_pipeline_owner(
@@ -217,23 +237,19 @@ pub(crate) fn active_global_key_move_through_build_scope_updates_render_parent_l
     let moved_before = direct_children_in_slot_order(&tree, parent_a);
     assert_eq!(moved_before.len(), 1);
     let moved_id = moved_before[0];
+    let destination = direct_children_in_slot_order(&tree, parent_b)[0];
+    let render_of = |id: ElementId| {
+        tree.get(id)
+            .and_then(|node| node.element().render_id())
+            .expect("every element here has a render object")
+    };
 
-    let parent_a_render = tree
-        .get(parent_a)
-        .and_then(|node| node.element().render_id())
-        .expect("parent A has a render object");
-    let parent_b_render = tree
-        .get(parent_b)
-        .and_then(|node| node.element().render_id())
-        .expect("parent B has a render object");
-    let moved_render = tree
-        .get(moved_id)
-        .and_then(|node| node.element().render_id())
-        .expect("moved child has a render object");
-    let root_render = tree
-        .get(root_id)
-        .and_then(|node| node.element().render_id())
-        .expect("root has a render object");
+    let parent_a_render = render_of(parent_a);
+    let parent_b_render = render_of(parent_b);
+    let destination_render = render_of(destination);
+    let moved_render = render_of(moved_id);
+    let moved_child_render = render_of(direct_children_in_slot_order(&tree, moved_id)[0]);
+    let root_render = render_of(root_id);
 
     pipeline_owner.with(|pipeline| {
         let render_tree = pipeline.render_tree();
@@ -242,12 +258,24 @@ pub(crate) fn active_global_key_move_through_build_scope_updates_render_parent_l
             &[moved_render],
             "precondition: parent A owns the moved render child before reparent",
         );
+        assert_eq!(
+            [moved_render, moved_child_render].map(|id| render_tree.depth(id)),
+            [Some(2), Some(3)],
+            "precondition: the moved subtree starts one level shallower than its destination",
+        );
     });
 
     pipeline_owner.with_mut(|pipeline| {
         pipeline.set_semantics_enabled(true);
         pipeline.clear_all_dirty_nodes();
-        for render_id in [root_render, parent_a_render, parent_b_render, moved_render] {
+        for render_id in [
+            root_render,
+            parent_a_render,
+            parent_b_render,
+            destination_render,
+            moved_render,
+            moved_child_render,
+        ] {
             let node = pipeline
                 .render_tree()
                 .get(render_id)
@@ -258,7 +286,16 @@ pub(crate) fn active_global_key_move_through_build_scope_updates_render_parent_l
         }
     });
 
-    let parent_b_v2 = MultiBox::host(2, vec![GlobalLeafBox::new(global).boxed()]);
+    let parent_b_v2 = MultiBox::host(
+        2,
+        vec![
+            MultiBox::host(
+                3,
+                vec![GlobalBox::new(global, vec![MultiBox::host(9, Vec::new()).boxed()]).boxed()],
+            )
+            .boxed(),
+        ],
+    );
     tree.update(parent_b, &parent_b_v2, &mut owner.element_owner_mut());
     owner.schedule_build_for(
         parent_b,
@@ -275,7 +312,7 @@ pub(crate) fn active_global_key_move_through_build_scope_updates_render_parent_l
         "old parent must forget the moved active GlobalKey child",
     );
     assert_eq!(
-        direct_children_in_slot_order(&tree, parent_b),
+        direct_children_in_slot_order(&tree, destination),
         vec![moved_id],
         "new parent must own the moved GlobalKey child",
     );
@@ -289,7 +326,7 @@ pub(crate) fn active_global_key_move_through_build_scope_updates_render_parent_l
         1,
         "exactly one active Reparent event expected; got {events:?}",
     );
-    assert_eq!(reparent_events[0].parent, parent_b.as_u64());
+    assert_eq!(reparent_events[0].parent, destination.as_u64());
     assert_eq!(reparent_events[0].from_parent, Some(parent_a.as_u64()));
 
     pipeline_owner.with(|pipeline| {
@@ -303,18 +340,23 @@ pub(crate) fn active_global_key_move_through_build_scope_updates_render_parent_l
             "old render parent must no longer list the moved render child",
         );
         assert_eq!(
-            render_tree.get(parent_b_render).unwrap().children(),
+            render_tree.get(destination_render).unwrap().children(),
             &[moved_render],
             "new render parent must list the moved render child",
         );
         assert_eq!(
             render_tree.get(moved_render).unwrap().parent(),
-            Some(parent_b_render),
+            Some(destination_render),
             "moved render child parent pointer must follow the element reparent",
+        );
+        assert_eq!(
+            [moved_render, moved_child_render].map(|id| render_tree.depth(id)),
+            [Some(3), Some(4)],
+            "the moved render subtree takes the depth of its new position",
         );
 
         assert!(render_tree.get(parent_a_render).unwrap().needs_layout());
-        assert!(render_tree.get(parent_b_render).unwrap().needs_layout());
+        assert!(render_tree.get(destination_render).unwrap().needs_layout());
         assert!(
             render_tree
                 .get(parent_a_render)
@@ -323,7 +365,7 @@ pub(crate) fn active_global_key_move_through_build_scope_updates_render_parent_l
         );
         assert!(
             render_tree
-                .get(parent_b_render)
+                .get(destination_render)
                 .unwrap()
                 .needs_compositing_bits_update()
         );
@@ -352,7 +394,7 @@ pub(crate) fn active_global_key_move_through_build_scope_updates_render_parent_l
             .collect::<Vec<_>>();
         assert_eq!(semantics_ids.len(), 3, "{semantics_ids:?}");
         assert!(semantics_ids.contains(&parent_a_render));
-        assert!(semantics_ids.contains(&parent_b_render));
+        assert!(semantics_ids.contains(&destination_render));
         assert!(semantics_ids.contains(&moved_render));
         assert_eq!(
             pipeline
