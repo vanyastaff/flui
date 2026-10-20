@@ -30,7 +30,7 @@ type Row = (
 
 fn a_report_that_is_not_a_drawable_area_names_its_cause() {
     let size = DeviceSize::new;
-    let rows: [Row; 11] = [
+    let rows: [Row; 12] = [
         ("zero width", WindowMetrics::new(size(0, 10), 1.0), |e| {
             matches!(
                 e,
@@ -80,6 +80,11 @@ fn a_report_that_is_not_a_drawable_area_names_its_cause() {
             "logical beyond device pixels",
             WindowMetrics::from_logical(Size::new(3.0e9, 10.0), 1.0),
             |e| matches!(e, InvalidMetrics::Overflow { .. }),
+        ),
+        (
+            "scale too small for a logical size",
+            WindowMetrics::new(size(1, 1), f64::from_bits(1)),
+            |e| matches!(e, InvalidMetrics::LogicalOverflow { .. }),
         ),
         (
             "scale beyond device pixels",

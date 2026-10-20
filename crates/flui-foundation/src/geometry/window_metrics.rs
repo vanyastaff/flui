@@ -35,6 +35,18 @@ pub enum InvalidMetrics {
         /// The ratio it was scaled by.
         scale: f64,
     },
+    /// The ratio is so small that the logical size is not finite.
+    #[error(
+        "device pixel ratio {scale} makes the logical size of {width}x{height} device pixels not finite"
+    )]
+    LogicalOverflow {
+        /// Device width in pixels.
+        width: i32,
+        /// Device height in pixels.
+        height: i32,
+        /// The ratio.
+        scale: f64,
+    },
 }
 
 /// A window's drawable area: its size in device pixels and the ratio to logical pixels.
@@ -56,7 +68,9 @@ impl WindowMetrics {
     ///
     /// # Errors
     ///
-    /// [`InvalidMetrics::InvalidScale`] when `scale` is not finite and positive, and
+    /// [`InvalidMetrics::InvalidScale`] when `scale` is not finite and positive,
+    /// [`InvalidMetrics::LogicalOverflow`] when it is so small that the logical size is not
+    /// finite, and
     /// [`InvalidMetrics::EmptyExtent`] when a side is below one pixel.
     pub fn new(physical: DeviceSize, scale: f64) -> Result<Self, InvalidMetrics> {
         let scale = DevicePixelRatio::new(scale).ok_or(InvalidMetrics::InvalidScale(scale))?;
@@ -66,7 +80,16 @@ impl WindowMetrics {
                 height: physical.height,
             });
         }
-        Ok(Self { physical, scale })
+        let metrics = Self { physical, scale };
+        let logical = metrics.logical();
+        if !(logical.width.is_finite() && logical.height.is_finite()) {
+            return Err(InvalidMetrics::LogicalOverflow {
+                width: physical.width,
+                height: physical.height,
+                scale: scale.get(),
+            });
+        }
+        Ok(metrics)
     }
 
     /// The metrics of a platform that reports a logical size: its device size is the
@@ -76,7 +99,8 @@ impl WindowMetrics {
     ///
     /// [`InvalidMetrics::InvalidScale`] for a ratio that is not finite and positive,
     /// [`InvalidMetrics::NonFiniteSize`] for a size that is not finite,
-    /// [`InvalidMetrics::Overflow`] when a side does not fit in device pixels, and
+    /// [`InvalidMetrics::Overflow`] when a side does not fit in device pixels,
+    /// [`InvalidMetrics::LogicalOverflow`] when the ratio is too small to keep the size finite, and
     /// [`InvalidMetrics::EmptyExtent`] when a side rounds to less than a pixel.
     pub fn from_logical(logical: Size<f64>, scale: f64) -> Result<Self, InvalidMetrics> {
         let ratio = DevicePixelRatio::new(scale).ok_or(InvalidMetrics::InvalidScale(scale))?;
