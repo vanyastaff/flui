@@ -1418,26 +1418,31 @@ mod x11_window {
                 .expect("a title is set");
             assert_eq!(window.state().title.as_deref(), Some("renamed"));
 
-            window
-                .apply(WindowCommand::Hide)
-                .expect("a desktop window hides");
-            until_map_state(server, id, MapState::UNMAPPED);
-            assert!(!window.state().visible);
-            window
-                .apply(WindowCommand::Show)
-                .expect("a desktop window shows");
-            until_map_state(server, id, MapState::VIEWABLE);
-            assert!(window.state().visible);
-
-            // The window manager minimizes the window: winit reports no
-            // event, the probe hears of it, and the snapshot follows with
-            // a notification. X sends no visibility event for it either, so
-            // the window reports itself hidden from the mode.
+            // Hiding and showing are reported, so a late `Occluded` from
+            // either cannot leave the last report behind what the window
+            // answers.
             let visibility = Arc::new(Mutex::new(Vec::new()));
             let reported = Arc::clone(&visibility);
             window.on_visibility_status_change(Box::new(move |visible| {
                 reported.lock().push(visible);
             }));
+            window
+                .apply(WindowCommand::Hide)
+                .expect("a desktop window hides");
+            until_map_state(server, id, MapState::UNMAPPED);
+            assert!(!window.state().visible);
+            until_reported(&window, &visibility, Some(false), "a report of the hide");
+            window
+                .apply(WindowCommand::Show)
+                .expect("a desktop window shows");
+            until_map_state(server, id, MapState::VIEWABLE);
+            assert!(window.state().visible);
+            until_reported(&window, &visibility, None, "a report of the show");
+
+            // The window manager minimizes the window: winit reports no
+            // event, the probe hears of it, and the snapshot follows with
+            // a notification. X sends no visibility event for it either, so
+            // the window reports itself hidden from the mode.
             let before = changes.load(Ordering::SeqCst);
             set_window_manager_state(server, id, 3, &["_NET_WM_STATE_HIDDEN"]);
             until_state(&window, "the minimized mode", |state| {
