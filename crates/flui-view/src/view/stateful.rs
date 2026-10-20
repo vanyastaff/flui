@@ -102,14 +102,15 @@ pub trait ViewState<V: StatefulView>: 'static {
     /// `build` takes `&self`, so a state that has to derive something from
     /// its view (a controller serving it, a slot the child reads) cannot do
     /// it there. `apply_view` is the place: it receives the view and a
-    /// [`LifecycleContext`], and runs before the first build, and before
+    /// [`BuildContext`] (not a [`LifecycleContext`]: the presentation
+    /// capabilities stay in `init_state` and `did_change_dependencies`, ADR-0078), and runs before the first build, and before
     /// every build that follows a [`did_update_view`](Self::did_update_view)
     /// or a [`did_change_dependencies`](Self::did_change_dependencies). A
     /// rebuild that changed neither (a `set_state`) does not call it.
     ///
     /// Keep it idempotent: the same view and dependencies may reach it again
     /// after a rebuild another path requested.
-    fn apply_view(&mut self, _view: &V, _ctx: &dyn LifecycleContext) {}
+    fn apply_view(&mut self, _view: &V, _ctx: &dyn BuildContext) {}
 
     /// Build the child View tree.
     ///

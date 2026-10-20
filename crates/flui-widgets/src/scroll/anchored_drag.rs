@@ -1175,7 +1175,7 @@ impl<K: Copy + Eq + 'static> ViewState<AnchoredDrag<K>> for AnchoredDragState<K>
         self.acquire(ctx);
     }
 
-    fn apply_view(&mut self, view: &AnchoredDrag<K>, ctx: &dyn LifecycleContext) {
+    fn apply_view(&mut self, view: &AnchoredDrag<K>, ctx: &dyn BuildContext) {
         let controller = &view.controller;
         let axis = view.axis;
         let rtl =

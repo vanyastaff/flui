@@ -902,7 +902,7 @@ impl StatefulView for RefreshBody {
 }
 
 impl ViewState<RefreshBody> for RefreshBodyState {
-    fn apply_view(&mut self, view: &RefreshBody, ctx: &dyn LifecycleContext) {
+    fn apply_view(&mut self, view: &RefreshBody, ctx: &dyn BuildContext) {
         if view
             .alternatives
             .commands()

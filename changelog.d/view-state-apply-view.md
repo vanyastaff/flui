@@ -1,6 +1,6 @@
 ### Added
 
-- **`ViewState::apply_view`**: a hook that receives the current view and a `LifecycleContext` right
+- **`ViewState::apply_view`**: a hook that receives the current view and a `BuildContext` right
   before a build that follows a first mount, a new view configuration or a dependency change, for
   state that derives something from its view and so cannot do it in `build(&self)`.
   Panics in it are contained and reported as `LifecycleHook::ApplyView`.

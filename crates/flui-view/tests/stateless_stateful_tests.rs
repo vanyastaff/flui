@@ -115,7 +115,7 @@ impl ViewState<HookOrderView> for HookOrderState {
             .push("init".to_owned());
     }
 
-    fn apply_view(&mut self, view: &HookOrderView, _ctx: &dyn LifecycleContext) {
+    fn apply_view(&mut self, view: &HookOrderView, _ctx: &dyn BuildContext) {
         self.log
             .lock()
             .expect("the hook log is never poisoned")

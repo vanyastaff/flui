@@ -906,7 +906,7 @@ impl ViewState<Scrollable> for ScrollableState {
         self.hold = Some(self.hold_recognizer(arena));
     }
 
-    fn apply_view(&mut self, view: &Scrollable, ctx: &dyn LifecycleContext) {
+    fn apply_view(&mut self, view: &Scrollable, ctx: &dyn BuildContext) {
         let physics = view
             .physics
             .as_ref()

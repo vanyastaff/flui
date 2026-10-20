@@ -775,8 +775,7 @@ where
         if self.apply_pending {
             let sink_start = lifecycle_sink_len(owner);
             let applied = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                self.state
-                    .apply_view(core.view(), ctx_choice.as_lifecycle_ctx());
+                self.state.apply_view(core.view(), ctx_choice.as_ctx());
             }));
             mark_lifecycle_records(owner, sink_start);
             if let Err(payload) = applied {

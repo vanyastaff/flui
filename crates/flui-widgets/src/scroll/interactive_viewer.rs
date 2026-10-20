@@ -1494,7 +1494,7 @@ impl StatefulView for AlternativesMount {
 }
 
 impl ViewState<AlternativesMount> for AlternativesMountState {
-    fn apply_view(&mut self, view: &AlternativesMount, ctx: &dyn LifecycleContext) {
+    fn apply_view(&mut self, view: &AlternativesMount, ctx: &dyn BuildContext) {
         let outgoing = view
             .core
             .command
@@ -1542,7 +1542,7 @@ impl StatefulView for RowFocusProbe {
 }
 
 impl ViewState<RowFocusProbe> for RowFocusProbeState {
-    fn apply_view(&mut self, view: &RowFocusProbe, ctx: &dyn LifecycleContext) {
+    fn apply_view(&mut self, view: &RowFocusProbe, ctx: &dyn BuildContext) {
         let outgoing = view.core.row_focus.replace(Focus::maybe_of(ctx));
         drop(outgoing);
     }
