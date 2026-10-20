@@ -38,7 +38,7 @@ use wasm_bindgen::{JsCast, prelude::*};
 
 use crate::shared::ime_text::{document_text, scalar_spans};
 use crate::shared::panic_boundary::contain_owner_callback;
-use crate::shared::web_text::diff;
+use crate::shared::web_text::{diff, input_mode};
 
 use super::events::{KeyRoute, is_focus_handoff};
 use super::registration::{EditorSlot, Listener};
@@ -428,6 +428,11 @@ impl WebTextInput {
     ) -> Result<Attached, JsValue> {
         let selected = selection.range();
         let context = create_edit_context(text, as_u32(selected.start()), as_u32(selected.end()))?;
+        js_sys::Reflect::set(
+            context.as_ref(),
+            &JsValue::from_str("inputMode"),
+            &JsValue::from_str(input_mode(store.status().purpose)),
+        )?;
         let target: &web_sys::EventTarget = context.as_ref();
         let mut listeners = Vec::new();
         let listen = |kind: &'static str, body: Box<dyn Fn(web_sys::Event)>| {
@@ -539,6 +544,12 @@ impl WebTextInput {
             ("tabindex", "-1"),
         ] {
             element.set_attribute(name, value)?;
+        }
+        let status = store.status();
+        element.set_attribute("inputmode", input_mode(status.purpose))?;
+        if status.protected {
+            // A password manager must not treat the editor as a login field.
+            element.set_attribute("autocomplete", "new-password")?;
         }
         let style = element.style();
         for (property, value) in [

@@ -8,15 +8,17 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::shared::android_ime::{
-    EditorState, IME_ACTION_DONE, IME_ACTION_NEXT, IME_ACTION_PREVIOUS, IME_FLAG_NO_ENTER_ACTION,
-    ImeEdit, Mirror, PROTECTED_UNIT, Replayed, Snapshot, TYPE_CLASS_TEXT,
-    TYPE_TEXT_FLAG_MULTI_LINE, TYPE_TEXT_VARIATION_PASSWORD, cursor_anchor, editor_action_key,
-    editor_info, key_composition, replay_current, starts_handwriting,
+    EditorState, IME_ACTION_DONE, IME_ACTION_NEXT, IME_ACTION_PREVIOUS, IME_ACTION_SEARCH,
+    IME_FLAG_NO_ENTER_ACTION, ImeEdit, Mirror, PROTECTED_UNIT, Replayed, Snapshot,
+    TYPE_CLASS_NUMBER, TYPE_CLASS_PHONE, TYPE_CLASS_TEXT, TYPE_TEXT_FLAG_MULTI_LINE,
+    TYPE_TEXT_VARIATION_EMAIL_ADDRESS, TYPE_TEXT_VARIATION_PASSWORD, TYPE_TEXT_VARIATION_URI,
+    cursor_anchor, editor_action_key, editor_info, key_composition, replay_current,
+    starts_handwriting,
 };
 use flui_platform_api::keyboard::{ImeComposition, NamedKey};
 use flui_platform_api::text_store::{
-    CommitGate, InMemoryTextStore, LockGrant, LockTiming, Selection, TextStore, TextStoreStatus,
-    Utf16Offset, Utf16Range,
+    CommitGate, InMemoryTextStore, LockGrant, LockTiming, Selection, TextInputPurpose, TextStore,
+    TextStoreStatus, Utf16Offset, Utf16Range,
 };
 
 fn offset(units: usize) -> Utf16Offset {
@@ -280,6 +282,56 @@ fn the_editor_info_follows_the_store_status() {
     );
 }
 
+/// The purpose a field was built with picks the keyboard; a protected field
+/// stays a password field whatever its purpose, and a number or phone field
+/// has no multi-line flag, which belongs to the text class.
+fn the_purpose_picks_the_keyboard() {
+    let single = TextStoreStatus::EDITABLE_SINGLE_LINE;
+    let with = |purpose| editor_info(single.with_purpose(purpose));
+    assert_eq!(
+        with(TextInputPurpose::Email),
+        (
+            TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+            IME_ACTION_DONE
+        )
+    );
+    assert_eq!(
+        with(TextInputPurpose::Url),
+        (TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_URI, IME_ACTION_DONE)
+    );
+    assert_eq!(
+        with(TextInputPurpose::Number),
+        (TYPE_CLASS_NUMBER, IME_ACTION_DONE)
+    );
+    assert_eq!(
+        with(TextInputPurpose::Phone),
+        (TYPE_CLASS_PHONE, IME_ACTION_DONE)
+    );
+    assert_eq!(
+        with(TextInputPurpose::Search),
+        (TYPE_CLASS_TEXT, IME_ACTION_SEARCH)
+    );
+    assert_eq!(with(TextInputPurpose::Text), editor_info(single));
+    let (protected, _) = editor_info(
+        single
+            .with_purpose(TextInputPurpose::Email)
+            .with_protected(true),
+    );
+    assert_eq!(
+        protected,
+        TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_PASSWORD,
+        "protection wins over the purpose"
+    );
+    let mut multi_line_number = single.with_purpose(TextInputPurpose::Number);
+    multi_line_number.single_line = false;
+    let (input_type, options) = editor_info(multi_line_number);
+    assert_eq!(
+        input_type, TYPE_CLASS_NUMBER,
+        "no multi-line flag outside the text class"
+    );
+    assert_eq!(options & IME_FLAG_NO_ENTER_ACTION, 0);
+}
+
 fn editor_actions_arrive_as_keys() {
     assert_eq!(editor_action_key(IME_ACTION_DONE), (NamedKey::Enter, false));
     assert_eq!(editor_action_key(IME_ACTION_NEXT), (NamedKey::Tab, false));
@@ -366,6 +418,10 @@ fn android_ime_adapter() {
             (
                 "a_key_during_composition_is_the_input_methods",
                 a_key_during_composition_is_the_input_methods,
+            ),
+            (
+                "the_purpose_picks_the_keyboard",
+                the_purpose_picks_the_keyboard,
             ),
             (
                 "the_editor_info_follows_the_store_status",

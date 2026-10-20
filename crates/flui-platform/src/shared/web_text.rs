@@ -4,6 +4,7 @@
 //! `platforms::web::text_input` reads the DOM.
 
 use flui_platform_api::keyboard::ImeComposition;
+use flui_platform_api::text_store::TextInputPurpose;
 
 /// `KeyboardEvent.keyCode` of a key an input method processes: every
 /// browser reports 229 for it, including WebKit for the key that commits a
@@ -86,4 +87,19 @@ const fn is_high_surrogate(unit: u16) -> bool {
 
 const fn is_low_surrogate(unit: u16) -> bool {
     matches!(unit, 0xDC00..=0xDFFF)
+}
+
+/// The `inputmode` (and `EditContext.inputMode`) a field of `purpose` asks the
+/// browser's virtual keyboard for.
+#[must_use]
+pub const fn input_mode(purpose: TextInputPurpose) -> &'static str {
+    match purpose {
+        TextInputPurpose::Email => "email",
+        TextInputPurpose::Url => "url",
+        TextInputPurpose::Phone => "tel",
+        TextInputPurpose::Number => "numeric",
+        TextInputPurpose::Search => "search",
+        // Free text, and any purpose added later that has no keyboard here.
+        _ => "text",
+    }
 }
