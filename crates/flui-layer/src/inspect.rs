@@ -4,8 +4,10 @@
 //! are minted per frame, so a layer of the next frame's tree is a different node even when it
 //! paints the same thing, and an id kept from an earlier scene is gone here. A layer that a
 //! repaint boundary originated links to that boundary's render object. Its rect is the rectangle
-//! the layer defines in its own coordinates, for the variants that define one; a clip layer adds
-//! how it rasterises the edge.
+//! the layer defines in its own coordinates, for the variants that define one. A clip layer adds
+//! how it rasterises the edge and, when its shape is not a rectangle, the exact shape as its
+//! `Debug` text, since the inspect model has no value for a rounded rectangle, path or
+//! superellipse.
 
 use flui_foundation::LayerId;
 use flui_foundation::inspect::{
@@ -38,12 +40,15 @@ impl Inspect for Layer {
                 out.value("clip_behavior", clip_value(layer.clip_behavior()));
             }
             Layer::ClipRRect(layer) => {
+                out.value("clip_rrect", Value::Debug(layer.clip_rrect()));
                 out.value("clip_behavior", clip_value(layer.clip_behavior()));
             }
             Layer::ClipPath(layer) => {
+                out.value("clip_path", Value::Debug(layer.clip_path()));
                 out.value("clip_behavior", clip_value(layer.clip_behavior()));
             }
             Layer::ClipSuperellipse(layer) => {
+                out.value("clip_superellipse", Value::Debug(layer.clip_superellipse()));
                 out.value("clip_behavior", clip_value(layer.clip_behavior()));
             }
             Layer::Picture(layer) => {
