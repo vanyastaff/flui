@@ -112,9 +112,12 @@ System-bar and display-cutout insets are sampled from the Activity decor view.
 Packaged applications require API 23, where `View.getRootWindowInsets` becomes
 available; both SDK-tools packaging and generated Gradle configuration enforce it.
 The owner accepts a reply only while its window remains live and the sampled
-physical size matches the current native window. Stable insets exclude keyboard
-occlusion. One query may be outstanding; accepted changes dispatch callbacks
-after cache guards are released. `android_safe_area_native_metrics` pins density
+physical size matches the current native window; a reply taken at an older size
+is asked for once more. The window asks on every resize, configuration change and
+new native window, and every 500 ms while resumed. From API 30 the insets are the
+visible bars (`getInsets`), so hidden bars reserve no space; below it the stable
+insets are the only reading without keyboard occlusion. One query may be
+outstanding; accepted changes dispatch callbacks after cache guards are released. `android_safe_area_native_metrics` pins density
 conversion, stale orientation rejection and invalid conversion inputs; native
 rotation and resume additionally require a device run.
 
@@ -2832,12 +2835,12 @@ the app thread's own `poll_events`, invalidates the source and wakes the owner; 
 (`AChoreographer_unregisterRefreshRateCallback`) on that thread when the loop
 exits, before the data it points at is freed, and a registration dropped on any
 other thread leaks that data instead of freeing what a late call could reach.
-The idle `poll_events` timeout is the display's period, cut short by the time
-left to the next wake deadline (`idle_wait_until`), and 16 ms while the period is
-unknown. The loop does not block until the deadline even though `OwnerSignal`
-wakes the looper: the same iteration samples preferences every 500 ms, settles
-the safe area and consumes redraw requests that set a flag without waking the
-looper, so each of those would wait for the deadline.
+The loop has no timer of its own (ADR-0249): every producer wakes the looper
+(`request_redraw` on the request that sets its flag, `OwnerSignal`, the Java
+view's queue, the inset reply, this callback), and `poll_timeout` blocks until
+the next wake deadline or 500 ms preference sample while resumed, and while
+paused until a deadline still ahead or a wake. A deadline already behind while
+paused waits for a frame, so it does not cut the wait to zero.
 
 `shared/android_ndk.rs` reads the API level once, when the platform is
 built, and keeps it in the platform (no `static`): `android_get_device_api_level`
@@ -2875,8 +2878,8 @@ skipped while that rate was unknown). The host also sends its demand on
 change goes unnoticed until the next one or a resume. The JNI path, the
 choreographer registration and the frame-rate request run only on a device; the
 host tests cover the level lookup (`os_capability_table`), the value
-classification (`android_display_table`) and the idle wait
-(`idle_wait_follows_the_real_period`), and CI type-checks the rest for
+classification (`android_display_table`) and the poll timeout
+(`a_paused_loop_blocks_until_it_is_woken`), and CI type-checks the rest for
 `aarch64-linux-android`.
 
 ### A Win32 window opens hidden, in its mode, and is shown by its first frame

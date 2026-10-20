@@ -13,6 +13,11 @@ pub(super) struct Sample {
 }
 
 impl Sample {
+    /// Whether this sample was taken at `size`.
+    pub(super) fn is_for(self, size: Size<i32>) -> bool {
+        self.size == size
+    }
+
     pub(super) fn logical(self, size: Size<i32>, scale: f64) -> Option<EdgeInsets> {
         if self.size != size
             || size.width <= 0
@@ -46,6 +51,8 @@ pub(super) enum Query {
 pub(super) struct Capture {
     pub(super) accepted: EdgeInsets,
     pub(super) query: Query,
+    /// A reply taken at a size the window no longer has is asked for again.
+    pub(super) retry_stale: bool,
 }
 
 impl Default for Capture {
@@ -53,12 +60,16 @@ impl Default for Capture {
         Self {
             accepted: EdgeInsets::ZERO,
             query: Query::Idle,
+            retry_stale: false,
         }
     }
 }
 
-/// Must run on Android's Java main thread. Stable insets exclude keyboard
-/// occlusion; the display cutout is included where [`DisplayCutout`] exists.
+/// Must run on Android's Java main thread. The insets are the system bars and
+/// the display cutout; keyboard occlusion is not included. From API 30 they
+/// are the bars as they are now, so a hidden bar (immersive or fullscreen
+/// content) reserves no space. Below it the only reading without the keyboard
+/// is the stable one, which keeps a hidden bar's space.
 pub(super) fn sample(app: &AndroidApp, api: AndroidApi) -> Option<Sample> {
     super::preferences::with_activity(app, |env, activity| {
         let window = env
@@ -115,7 +126,7 @@ pub(super) fn sample(app: &AndroidApp, api: AndroidApi) -> Option<Sample> {
             let system = env
                 .call_method(
                     &insets,
-                    jni_str!("getInsetsIgnoringVisibility"),
+                    jni_str!("getInsets"),
                     jni_sig!("(I)Landroid/graphics/Insets;"),
                     &[JValue::Int(bars | cutout)],
                 )?
