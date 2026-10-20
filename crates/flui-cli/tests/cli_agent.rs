@@ -6,7 +6,9 @@
 //! pinned by `flui-devtools`' `agent_endpoint` tests; what is pinned here is
 //! the CLI's half: the feature and environment it launches the app with, the
 //! session file it writes, and the MCP calls that reach the endpoint.
-use std::io::{BufRead as _, BufReader, Write as _};
+use std::io::Write as _;
+#[cfg(unix)]
+use std::io::{BufRead as _, BufReader};
 use std::path::Path;
 use std::process::{Command, Stdio};
 

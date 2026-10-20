@@ -178,6 +178,10 @@ impl Session {
 
     /// Clears what a previous run of the app left at the endpoint: a socket
     /// file a killed app could not remove would fail the next bind.
+    #[cfg_attr(
+        windows,
+        expect(clippy::unused_self, reason = "a named pipe leaves no file behind")
+    )]
     pub(crate) fn clear_endpoint(&self) {
         #[cfg(unix)]
         let _ = fs::remove_file(&self.credentials.endpoint);
@@ -222,6 +226,10 @@ fn endpoint_in(dir: &Path, _unique: &str) -> CliResult<String> {
 }
 
 #[cfg(windows)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "same signature as the Unix endpoint, which can fail on a long path"
+)]
 fn endpoint_in(_dir: &Path, unique: &str) -> CliResult<String> {
     Ok(format!("flui-agent-{}-{unique}", std::process::id()))
 }
