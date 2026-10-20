@@ -1,6 +1,6 @@
 # flui-driver: tasks
 
-- **Status:** approved by the owner (2026-10-20). FD27 is in review (the `Inspect` core, see its
+- **Status:** approved by the owner (2026-10-20). FD27 is in review in #1773 (the `Inspect` core, see its
   card's evidence); no other task started. `interaction/completeness`
   has merged (#1733), so the IC tasks are unblocked. `flui run --agent` and `flui mcp` exist on
   the ADR-0095 endpoint (#1769); the tasks that replace that endpoint and `flui mcp` start from
