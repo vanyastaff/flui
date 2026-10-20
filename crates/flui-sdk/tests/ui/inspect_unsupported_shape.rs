@@ -24,4 +24,16 @@ struct UnknownUnit {
     depth: f64,
 }
 
+#[derive(Inspect)]
+enum Shape {
+    Circle { variant: f64 },
+}
+
+#[derive(Inspect)]
+struct Renamed {
+    width: f64,
+    #[inspect(name = "width")]
+    height: f64,
+}
+
 fn main() {}

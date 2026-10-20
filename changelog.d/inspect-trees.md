@@ -41,3 +41,5 @@
   number of children, instead of nesting them.
 - `diff` treats a node whose type arguments changed (`Widget<u8>` to `Widget<String>`) as removed
   and added.
+- `#[derive(Inspect)]` rejects two fields that report under one name, and an enum field that
+  reports as `variant`, which names the enum's variant.

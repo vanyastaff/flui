@@ -21,3 +21,15 @@ error: expected `logical_px`, `device_px`, `seconds`, `degrees`, `radians` or `f
    |
 23 |     #[inspect(unit = inches)]
    |                      ^^^^^^
+
+error: `variant` names the enum's variant in the snapshot; report this field under another name with `#[inspect(name = "...")]`
+  --> tests/ui/inspect_unsupported_shape.rs:29:14
+   |
+29 |     Circle { variant: f64 },
+   |              ^^^^^^^
+
+error: another field already reports as `width`; give one of them another name with `#[inspect(name = "...")]`
+  --> tests/ui/inspect_unsupported_shape.rs:35:5
+   |
+35 |     #[inspect(name = "width")]
+   |     ^
