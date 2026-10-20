@@ -822,12 +822,8 @@ impl FocusNode {
         }
         self.notify_listeners();
         if focusable {
-            // A first-focus intent a scope inside recorded while this node
-            // forbade it focus (a nested navigator's route, pushed while a
-            // dialog covered this route) is not fulfilled: the scope that
-            // opens restores the focus it remembers instead.
             for child in self.children() {
-                Self::forget_pending_first_focus_subtree(&child);
+                Self::fulfill_pending_first_focus_subtree(&child);
             }
             self.fulfill_pending_first_focus_ancestors();
         }
@@ -2163,6 +2159,21 @@ impl FocusScopeNode {
             }
         }
         None
+    }
+
+    /// Drop the first-focus intents still waiting in the scopes inside this
+    /// one, which [`set_first_focus`](Self::set_first_focus) on this scope is
+    /// about to supersede.
+    ///
+    /// A route a closing one uncovers restores the focus it remembers; a
+    /// nested navigator's route pushed while it was covered asked for the
+    /// first focus too, and would otherwise take it the moment the route
+    /// becomes focusable again. Intents left in place are fulfilled when an
+    /// enclosing node allows its descendants focus again.
+    pub fn supersede_inner_first_focus(&self) {
+        for child in self.inner.children() {
+            FocusNode::forget_pending_first_focus_subtree(&child);
+        }
     }
 
     /// Attach an unbound subtree below this scope.

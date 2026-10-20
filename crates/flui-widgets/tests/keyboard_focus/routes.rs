@@ -380,6 +380,43 @@ pub(crate) fn a_panicking_restored_focus_listener_still_closes_the_route() {
     }
 }
 
+/// An observer that panics at a removal does not keep the removed route's
+/// overlay entry and page from being retired: their captures, whose
+/// destructors panic too, are retained instead of replacing the observer's
+/// failure, which reaches the caller.
+pub(crate) fn a_panicking_observer_keeps_the_removal_failure_first() {
+    struct Bomb;
+    impl Drop for Bomb {
+        fn drop(&mut self) {
+            assert!(std::thread::panicking(), "route capture destructor");
+        }
+    }
+    struct PanicsOnRemove;
+    impl NavigatorObserver for PanicsOnRemove {
+        fn did_remove(&self, _route: RouteId, _previous: Option<RouteId>) {
+            panic!("remove observer");
+        }
+    }
+    let counts = Rc::new(Cell::new(0));
+    let (navigator, mut harness) = home(&counts);
+    harness.tick();
+    let bomb = Rc::new(Bomb);
+    drop(navigator.push(PageRoute::<i32>::new(move |_, _, _| {
+        let _held = &bomb;
+        SizedBox::new(40.0, 40.0).into_view().boxed()
+    })));
+    settle(&mut harness);
+    let page = *navigator.route_ids().last().expect("the page is on top");
+    navigator.add_observer(Arc::new(PanicsOnRemove));
+    harness.swap_root(SizedBox::new(1.0, 1.0));
+    settle(&mut harness);
+
+    let payload = catch_unwind(AssertUnwindSafe(|| navigator.remove_route(page)))
+        .expect_err("the observer's panic reaches the caller");
+    assert_eq!(payload.downcast_ref::<&str>(), Some(&"remove observer"));
+    assert_eq!(navigator.route_ids().len(), 1, "the page is gone");
+}
+
 /// A nested navigator whose top changed while a dialog covered its page does
 /// not take the focus when the dialog closes: it returns to the control that
 /// opened the dialog.

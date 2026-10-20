@@ -526,6 +526,9 @@ impl NavigatorShared {
             // where the leaving route is the only one that can hold a key.
             let modals = self.registries.modals.lock().clone();
             if let Some(modal) = modals.get(&top) {
+                if replaces_a_route {
+                    recovery.run(|| modal.supersede_inner_first_focus());
+                }
                 recovery.run(|| modal.set_focusable(true));
                 // The first route of a navigator takes no focus: the first Tab
                 // enters it.
@@ -547,16 +550,23 @@ impl NavigatorShared {
         deliver(&outcome.notifications, &observers, &mut recovery);
         recovery.retire(observers);
 
-        // 2. Each disposed route's overlay entries, then the route itself.
-        {
+        // 2. Each disposed route's overlay entries, then the route itself. The
+        //    entries leave the registry first and are removed and released
+        //    with its lock dropped: an entry's builder may own captures whose
+        //    `Drop` is user code.
+        let removed: Vec<OverlayEntry> = {
             let mut entries = self.registries.entries.lock();
-            for id in &outcome.disposed {
-                if let Some(entry) = entries.remove(id)
-                    && entry.is_attached()
-                {
-                    entry.remove();
-                }
+            outcome
+                .disposed
+                .iter()
+                .filter_map(|id| entries.remove(id))
+                .collect()
+        };
+        for entry in removed {
+            if entry.is_attached() {
+                recovery.run(|| entry.remove());
             }
+            recovery.retire(entry);
         }
         outcome.dispose_routes(&mut recovery);
 

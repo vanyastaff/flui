@@ -461,6 +461,10 @@ fn keyboard_focus_contracts() {
                 crate::keyboard_focus::routes::a_panicking_restored_focus_listener_still_closes_the_route,
             ),
             (
+                "keyboard_focus::routes::a_panicking_observer_keeps_the_removal_failure_first",
+                crate::keyboard_focus::routes::a_panicking_observer_keeps_the_removal_failure_first,
+            ),
+            (
                 "keyboard_focus::routes::a_covered_nested_navigator_does_not_take_the_restored_focus",
                 crate::keyboard_focus::routes::a_covered_nested_navigator_does_not_take_the_restored_focus,
             ),

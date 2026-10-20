@@ -903,6 +903,14 @@ impl ModalHandle {
         self.inner.activate_focus_scope(take_focus);
     }
 
+    /// Drop the first-focus intents of scopes inside this route (a nested
+    /// navigator's route pushed while this one was covered), which the
+    /// route's own [`activate_focus_scope`](Self::activate_focus_scope)
+    /// supersedes. Called before the route becomes focusable again.
+    pub(crate) fn supersede_inner_first_focus(&self) {
+        self.inner.focus_scope.supersede_inner_first_focus();
+    }
+
     /// Whether the keyboard focus may sit inside this route. Only the current
     /// route is focusable; turning it off for a route that holds the focus
     /// releases it, so the navigator enables the new top first.
