@@ -1208,6 +1208,19 @@ mod x11_window {
         }
     }
 
+    /// Poll (bounded, 5 s) until the visibility reports are `expected`.
+    fn until_reports(reports: &Mutex<Vec<bool>>, expected: &[bool], what: &str) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while reports.lock().as_slice() != expected {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {what}; reports {:?}",
+                reports.lock()
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     fn map_state(connection: &RustConnection, id: u32) -> MapState {
         connection
             .get_window_attributes(id)
@@ -1400,13 +1413,23 @@ mod x11_window {
 
             // The window manager minimizes the window: winit reports no
             // event, the probe hears of it, and the snapshot follows with
-            // a notification.
+            // a notification. X sends no visibility event for it either, so
+            // the window reports itself hidden from the mode.
+            let visibility = Arc::new(Mutex::new(Vec::new()));
+            let reported = Arc::clone(&visibility);
+            window.on_visibility_status_change(Box::new(move |visible| {
+                reported.lock().push(visible);
+            }));
             let before = changes.load(Ordering::SeqCst);
             set_window_manager_state(server, id, 3, &["_NET_WM_STATE_HIDDEN"]);
             until_state(&window, "the minimized mode", |state| {
                 state.mode == WindowMode::Minimized
             });
             assert!(changes.load(Ordering::SeqCst) > before, "a notification");
+            assert!(!window.state().visible, "a minimized window is not visible");
+            // The report follows the publication on whichever thread made it.
+            until_reports(&visibility, &[false], "one report of the hiding");
+            assert!(!window.is_visible());
             assert_eq!(
                 window.state().normal_geometry.map(|geometry| geometry.size),
                 Some(Size::new(400.0, 300.0)),
@@ -1431,6 +1454,9 @@ mod x11_window {
                 Some(Size::new(400.0, 300.0)),
                 "it returns to the size it had in normal mode"
             );
+            assert!(window.state().visible);
+            until_reports(&visibility, &[false, true], "a report of the return");
+            assert!(window.is_visible());
         });
     }
 

@@ -38,6 +38,7 @@ use wasm_bindgen::prelude::*;
 use crate::{WindowExecutionState, shared::WindowCallbacks, traits::PlatformInput};
 
 use super::{
+    display_events::PixelRatioWatch,
     registration::{Registration, effective_focus},
     window::WebWindow,
 };
@@ -148,11 +149,13 @@ impl KeyRoute {
 /// Keep the canvas's backing store and the window's tracked size in step
 /// with its CSS box — see `WebWindow::new`'s "Size" section. A
 /// `ResizeObserver` on the canvas sees every layout change (a viewport
-/// resize under `100vw`, a container reflow, a style change); the window's
-/// `resize` event is registered too because a browser-zoom change moves
-/// the device pixel ratio without necessarily moving the box, and the
-/// observer reports boxes, not ratios. `LayoutSync::sync` is a no-op when
-/// nothing changed, so the two overlapping sources cost nothing.
+/// resize under `100vw`, a container reflow, a style change), but it reports
+/// boxes, not ratios. A window dragged to a display of another scale moves the
+/// device pixel ratio and keeps its box, and the window's `resize` event does
+/// not fire for that either, so a pixel-ratio watch of the window's own
+/// reports it; `resize` is kept for page zoom, which also arms a watch the
+/// browser refused. `LayoutSync::sync` is a no-op when nothing changed, so the
+/// overlapping sources cost nothing.
 fn register_layout_events(
     window: &WebWindow,
     registration: &mut Registration,
@@ -160,8 +163,17 @@ fn register_layout_events(
     let sync = Rc::new(window.layout_sync());
     let observer_sync = Rc::clone(&sync);
     registration.observe(move || observer_sync.sync())?;
+    let ratio_sync = Rc::clone(&sync);
+    // Owned by the `resize` listener, so the registration's teardown removes
+    // the query with it.
+    let ratio = PixelRatioWatch::for_layout(&registration.accepting, move || ratio_sync.sync());
     let browser = web_sys::window().expect("BUG: window construction verified browser environment");
-    registration.listen(browser.as_ref(), "resize", move |_| sync.sync())
+    registration.listen(browser.as_ref(), "resize", move |_| {
+        if let Some(ratio) = &ratio {
+            ratio.arm_if_unarmed();
+        }
+        sync.sync();
+    })
 }
 
 // ==================== Appearance ====================

@@ -1090,3 +1090,47 @@ async fn web_screen_change_keeps_the_period_while_the_current_screen_is_known() 
     running.quit();
     settle().await;
 }
+
+#[wasm_bindgen_test]
+async fn web_window_backing_store_follows_a_pixel_ratio_change_without_a_resize() {
+    install_probe("none");
+    let _probe = Probe;
+    let running = Running::start();
+    settle().await;
+    let window = {
+        let owner = running.owner.borrow();
+        match owner
+            .as_ref()
+            .expect("owner")
+            .open_window(WindowOptions::default())
+            .expect("window")
+        {
+            WindowOpen::Ready(window) => window,
+            WindowOpen::Pending(_) => panic!("a Web window opens at once"),
+        }
+    };
+    let resized = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = Arc::clone(&resized);
+    window.on_resize(Box::new(move |_, scale| {
+        seen.lock().expect("resizes").push(scale);
+    }));
+    assert_eq!(window.scale_factor(), 1.0);
+    assert_eq!(
+        pixel_ratio_listeners(),
+        2,
+        "the display source's and the window's"
+    );
+
+    // The window is dragged to a display of twice the density: its CSS box
+    // stays, so no `ResizeObserver` entry and no `resize` event arrive.
+    set_pixel_ratio(2.0);
+    settle().await;
+    assert_eq!(window.scale_factor(), 2.0, "the window follows the ratio");
+    assert_eq!(*resized.lock().expect("resizes"), [2.0]);
+    assert_eq!(pixel_ratio_listeners(), 2, "both queries were armed again");
+
+    drop(window);
+    running.quit();
+    settle().await;
+    assert_eq!(pixel_ratio_listeners(), 0, "quit removes both queries");
+}

@@ -118,6 +118,12 @@ pub struct WinitWindow {
     /// minimization then goes unseen until some other event samples it.
     #[cfg(target_os = "linux")]
     minimize_unobserved: AtomicBool,
+    /// Whether the last published snapshot of this X11 window was minimized.
+    /// A window manager minimizes by unmapping, and X sends no visibility
+    /// event for a window that becomes unviewable, so winit raises no
+    /// `Occluded`: the window is hidden from the published mode instead.
+    #[cfg(target_os = "linux")]
+    wm_minimized: AtomicBool,
 }
 
 /// What the window system lets a program do to `window`: a Wayland surface
@@ -232,6 +238,8 @@ impl WinitWindow {
             x11: std::sync::OnceLock::new(),
             #[cfg(target_os = "linux")]
             minimize_unobserved: AtomicBool::new(false),
+            #[cfg(target_os = "linux")]
+            wm_minimized: AtomicBool::new(false),
             window,
             is_focused: parking_lot::Mutex::new(true),
             is_visible: parking_lot::Mutex::new(options.visible),
@@ -419,7 +427,28 @@ impl WinitWindow {
             }
             _ => {}
         }
+        #[cfg(target_os = "linux")]
+        if self.x11.get().is_some() && state.mode == WindowMode::Minimized {
+            state.visible = false;
+        }
         state
+    }
+
+    /// Raise `on_visibility_status_change` when a published snapshot of an
+    /// X11 window enters or leaves the minimized mode (see `wm_minimized`).
+    /// A window the program hid reports nothing: it was not visible either
+    /// way.
+    #[cfg(target_os = "linux")]
+    fn follow_wm_minimized(&self, state: &WindowState) {
+        if self.x11.get().is_none() {
+            return;
+        }
+        let minimized = state.mode == WindowMode::Minimized;
+        if self.wm_minimized.swap(minimized, Ordering::AcqRel) != minimized
+            && *self.is_visible.lock()
+        {
+            self.callbacks.dispatch_visibility_status_change(!minimized);
+        }
     }
 
     /// Enter `mode`. Leaving fullscreen and minimized first keeps entering a
@@ -662,12 +691,18 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn is_visible(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        if self.wm_minimized.load(Ordering::Acquire) {
+            return false;
+        }
         *self.is_visible.lock()
     }
 
     fn state(&self) -> WindowState {
         let published = self.window_state.state_with(|| self.sample());
         if published.changed {
+            #[cfg(target_os = "linux")]
+            self.follow_wm_minimized(&published.state);
             self.callbacks.dispatch_state_changed();
         }
         published.state
