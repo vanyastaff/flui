@@ -120,6 +120,7 @@ pub mod interaction {
     pub use flui_interaction::ArenaMembership;
     pub use flui_interaction::BeginContactError;
     pub use flui_interaction::CancelOutcome;
+    pub use flui_interaction::ContactEnd;
     pub use flui_interaction::ContactId;
     pub use flui_interaction::ContactSnapshot;
     pub use flui_interaction::DragDownDetails;

@@ -2,8 +2,8 @@
 
 use super::{
     callback_containment::{finish_containment, invoke_callback},
-    contact::{ArenaMembership, PrimaryContact},
-    recognizer::{CancelOutcome, GestureRecognizer, is_primary_down, measured_positions},
+    contact::{ArenaMembership, ContactEnd, PrimaryContact},
+    recognizer::{CancelOutcome, GestureRecognizer, is_primary_down, slop_travel},
 };
 use crate::gesture::observer::GestureContest;
 use crate::{
@@ -101,9 +101,12 @@ impl DoubleTapGestureRecognizerBuilder {
         Rc::new_cyclic(|this: &Weak<DoubleTapGestureRecognizer>| {
             let member: Weak<dyn GestureArenaMember> = this.clone();
             DoubleTapGestureRecognizer {
+                bounce_membership: ArenaMembership::new(self.arena.clone(), member.clone())
+                    .holding_contact(),
                 contact: PrimaryContact::new(ArenaMembership::new(self.arena, member)),
                 gesture: RefCell::new(DoubleTapState::Ready),
                 first_entry: RefCell::new(None),
+                bounce: RefCell::new(None),
                 settings: self.settings,
                 allowed_devices: self.allowed_devices,
                 callbacks: self.callbacks,
@@ -133,6 +136,11 @@ pub struct DoubleTapGestureRecognizer {
     contact: PrimaryContact,
     gesture: RefCell<DoubleTapState>,
     first_entry: RefCell<Option<GestureArenaEntry>>,
+    /// Joins a bounced second Down's contest as a hold (ADR-0208 rule 4):
+    /// a bounce is not a second tap, and no tap on it wins that contact.
+    bounce_membership: ArenaMembership,
+    /// The bounced contact's hold, until that contact ends.
+    bounce: RefCell<Option<GestureArenaEntry>>,
     settings: GestureSettingsProvider,
     allowed_devices: PointerKindSet,
     callbacks: DoubleTapCallbacks,
@@ -196,6 +204,11 @@ impl DoubleTapGestureRecognizer {
             let candidate = RoutePanic::capture(|| entry.release());
             RoutePanic::preserve_first(&mut first, candidate, "double tap hold release");
         }
+        RoutePanic::preserve_first(
+            &mut first,
+            RoutePanic::capture(|| self.end_bounce()),
+            "double tap bounce withdrawal",
+        );
         let candidate = RoutePanic::capture(|| {
             invoke_callback(
                 self.callbacks.on_double_tap_cancel.clone(),
@@ -205,6 +218,27 @@ impl DoubleTapGestureRecognizer {
         });
         RoutePanic::preserve_first(&mut first, candidate, "double tap cancellation");
         finish_containment(first, incoming);
+    }
+    /// Withdraw the hold a bounced contact keeps on its contest.
+    fn end_bounce(&self) {
+        let bounce = self.bounce.borrow_mut().take();
+        if let Some(entry) = bounce {
+            entry.reject_without_self();
+        }
+    }
+    /// A bounced contact's own events: its Up or Cancel ends its hold. For a
+    /// mouse it reuses the waiting contact's pointer, which already lifted.
+    fn bounce_event(&self, event: &PointerEvent) -> bool {
+        let tracks = event.pointer_id().is_some_and(|pointer| {
+            self.bounce
+                .borrow()
+                .as_ref()
+                .is_some_and(|entry| entry.pointer() == pointer)
+        });
+        if tracks && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_)) {
+            self.end_bounce();
+        }
+        tracks
     }
     fn expire(&self, now: EventTime) -> bool {
         let waiting = self.gesture.borrow().clone();
@@ -251,7 +285,7 @@ impl DoubleTapGestureRecognizer {
         }
         if self.contact.is_current(snapshot.id) {
             let candidate = RoutePanic::capture(|| {
-                self.contact.finish();
+                self.contact.finish(ContactEnd::Contending);
             });
             RoutePanic::preserve_first(&mut first, candidate, "double tap contact retirement");
         }
@@ -292,21 +326,46 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                 if !self.contact.is_current(waiting_contact.id) {
                     return;
                 }
+                let global = dispatch
+                    .global
+                    .position()
+                    .unwrap_or(details.global_position);
                 if details.kind != data.pointer.kind
                     || device != data.pointer.device
                     || deadline.is_some_and(|deadline| now >= deadline)
-                    || settings
-                        .exceeds_double_tap_slop(details.kind, position - details.local_position)
+                    || settings.exceeds_double_tap_slop(
+                        details.kind,
+                        slop_travel(
+                            position - details.local_position,
+                            global - details.global_position,
+                        ),
+                    )
                 {
                     failure = RoutePanic::capture(|| self.retire_attempt(details, false));
                 } else if now.saturating_duration_since(first_up) < Duration::from_millis(40) {
                     // Contact bounce is not a second tap. Keep the held first
-                    // verdict and its timeout; a later Up cannot admit this Down.
+                    // verdict and its timeout; a later Up cannot admit this
+                    // Down. The bounce holds its own contest, so no tap on it
+                    // wins that contact either: the first tap stays the only
+                    // one, and arrives when its verdict does.
+                    let idle = self.bounce.borrow().is_none();
+                    // The hold's beaten members hear they lost inside the
+                    // join, with no borrow of this recognizer held.
+                    if idle
+                        && let Some(entry) = self
+                            .bounce_membership
+                            .join_from(data.pointer.id, dispatch.feeder())
+                    {
+                        let outgoing = self.bounce.borrow_mut().replace(entry);
+                        if let Some(outgoing) = outgoing {
+                            outgoing.reject_without_self();
+                        }
+                    }
                     return;
                 } else {
                     // The held first generation survives retiring its contact.
                     failure = RoutePanic::capture(|| {
-                        self.contact.finish();
+                        self.contact.finish(ContactEnd::Contending);
                     });
                     second = true;
                     admitted_settings = *settings;
@@ -342,6 +401,9 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         finish_containment(failure, std::thread::panicking());
     }
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+        if self.bounce_event(dispatch.local) {
+            return;
+        }
         let Some(contact) = self.contact.current() else {
             return;
         };
@@ -363,10 +425,10 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                 if matches!(
                     state,
                     DoubleTapState::FirstDown { .. } | DoubleTapState::SecondDown
-                ) && measured_positions(dispatch.local).any(|position| {
-                    let delta = position - contact.local;
-                    contact.settings.exceeds_hit_slop(contact.kind, delta)
-                }) {
+                ) && contact
+                    .measured_travel(dispatch)
+                    .any(|travel| contact.settings.exceeds_hit_slop(contact.kind, travel))
+                {
                     self.retire_attempt(details, true);
                 }
             }
@@ -420,7 +482,17 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
 }
 impl GestureArenaMember for DoubleTapGestureRecognizer {
     fn accept_gesture(&self, _: GestureContest) {}
-    fn reject_gesture(&self, _: GestureContest) {
+    fn reject_gesture(&self, contest: GestureContest) {
+        // A moving member that takes a bounced contact ends only its hold.
+        let bounce = self
+            .bounce
+            .borrow()
+            .as_ref()
+            .is_some_and(|entry| entry.contest() == contest);
+        if bounce {
+            self.bounce.borrow_mut().take();
+            return;
+        }
         if self.contact.current().is_some() {
             self.retire_attempt(self.details(), false);
         }
@@ -468,6 +540,12 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
                     entry.release_with_recovery(scope);
                 });
             }
+            let bounce = self.bounce.borrow_mut().take();
+            if let Some(entry) = bounce {
+                arena.invoke_with_recovery(FailureClass::Unknown, recovery, |scope| {
+                    entry.reject_without_self_with_recovery(scope);
+                });
+            }
             let preserving = recovery.has_failure();
             arena.invoke_with_recovery(FailureClass::Delivery, recovery, |_| {
                 let mut notices =
@@ -488,6 +566,9 @@ impl Drop for DoubleTapGestureRecognizer {
         }
         if let Some(entry) = self.first_entry.get_mut().take() {
             entry.release_deferred();
+            entry.withdraw_deferred();
+        }
+        if let Some(entry) = self.bounce.get_mut().take() {
             entry.withdraw_deferred();
         }
         // Fields then drop in declaration order: contact first, callbacks last.

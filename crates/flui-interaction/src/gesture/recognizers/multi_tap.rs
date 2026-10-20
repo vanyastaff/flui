@@ -6,7 +6,7 @@ use super::{
         CallbackSequence, finish_containment, retire_callbacks, withdraw_cancelled,
         withdraw_cancelled_with_recovery,
     },
-    recognizer::{GestureRecognizer, measured_positions},
+    recognizer::{GestureRecognizer, measured_travel},
 };
 use crate::gesture::observer::GestureContest;
 use crate::{
@@ -58,6 +58,7 @@ impl Drop for MultiTapCallbacks {
 }
 struct PointerContact {
     initial: Offset<f64>,
+    initial_global: Offset<f64>,
     kind: PointerKind,
     down: bool,
     entry: GestureArenaEntry,
@@ -403,6 +404,7 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
                 pointer,
                 PointerContact {
                     initial: local,
+                    initial_global: global,
                     kind: data.pointer.kind,
                     down: true,
                     entry,
@@ -445,17 +447,20 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
                     };
                     !position.dx.is_finite()
                         || !position.dy.is_finite()
-                        || measured_positions(dispatch.local).any(|position| {
-                            let delta = position - contact.initial;
-                            sequence.settings.exceeds_hit_slop(contact.kind, delta)
-                        })
+                        || measured_travel(dispatch, contact.initial, contact.initial_global)
+                            .any(|travel| sequence.settings.exceeds_hit_slop(contact.kind, travel))
                 };
                 if exceeded {
                     self.cancel();
                 }
             }
             PointerEvent::Up(_) => {
-                let completed = {
+                enum Release {
+                    Pending,
+                    Complete(MultiTapSequence),
+                    Apart,
+                }
+                let release = {
                     let mut state = self.sequence.borrow_mut();
                     let Some(sequence) = state.as_mut() else {
                         return;
@@ -464,16 +469,22 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
                         return;
                     };
                     contact.down = false;
-                    if sequence.contacts.len() == self.required_pointer_count
-                        && sequence.contacts.values().all(|contact| !contact.down)
-                    {
-                        state.take()
+                    if sequence.contacts.len() < self.required_pointer_count {
+                        // A contact lifted before the group was complete: the
+                        // fingers were never all down together.
+                        Release::Apart
+                    } else if sequence.contacts.values().all(|contact| !contact.down) {
+                        Release::Complete(state.take().expect("BUG: released sequence exists"))
                     } else {
-                        None
+                        Release::Pending
                     }
                 };
-                if let Some(sequence) = completed {
-                    self.complete(sequence);
+                match release {
+                    Release::Complete(sequence) => self.complete(sequence),
+                    Release::Apart => {
+                        self.cancel();
+                    }
+                    Release::Pending => {}
                 }
             }
             PointerEvent::Cancel(_) => {

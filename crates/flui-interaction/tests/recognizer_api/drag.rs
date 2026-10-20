@@ -167,11 +167,139 @@ fn drag_lifecycle_contracts() {
             "cancelling_drag_from_start_drops_the_stale_update_and_recovers",
             cancelling_drag_from_start_drops_the_stale_update_and_recovers,
         ),
+        (
+            "a_successor_starts_the_drag_only_past_its_own_slop",
+            a_successor_starts_the_drag_only_past_its_own_slop,
+        ),
+        (
+            "axial_fling_limits_read_the_drag_axis",
+            axial_fling_limits_read_the_drag_axis,
+        ),
     ] {
         if let Err(payload) = std::panic::catch_unwind(case) {
             eprintln!("drag contract {name} failed");
             std::panic::resume_unwind(payload);
         }
+    }
+}
+
+/// Two still fingers on a lone drag win their contacts by default; lifting
+/// the first hands the drag to the second, which starts it only once it
+/// crosses its own slop, never from the lift.
+fn a_successor_starts_the_drag_only_past_its_own_slop() {
+    use flui_interaction::gesture::DragPointerStrategy;
+    let arena =
+        GestureArena::binding_driven(std::sync::Arc::new(flui_interaction::ManualClock::new()));
+    let starts = Rc::new(Cell::new(0));
+    let s = starts.clone();
+    let drag = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal)
+        .pointer_strategy(DragPointerStrategy::ContinueWithRemaining)
+        .on_start(move |_| s.set(s.get() + 1))
+        .build();
+    let contact = |id: u64| PointerId::try_from(id).expect("nonzero contact");
+    for id in [2_u64, 3] {
+        let down = make_down_event_for_id(contact(id), Offset::new(0.0, 0.0), PointerKind::Touch)
+            .expect("finite touch");
+        drag.add_pointer(PointerDispatch::at_root(&down));
+        arena.close(contact(id));
+        arena.drain_deferred_resolutions();
+    }
+    let lift =
+        make_up_event_for_id(contact(2), Offset::ZERO, PointerKind::Touch).expect("finite release");
+    drag.handle_event(PointerDispatch::at_root(&lift));
+    arena.sweep(contact(2));
+    arena.drain_deferred_resolutions();
+    assert_eq!(starts.get(), 0, "a still successor starts nothing");
+    let crossing = make_move_event_for_id(contact(3), Offset::new(40.0, 0.0), PointerKind::Touch)
+        .expect("finite move");
+    drag.handle_event(PointerDispatch::at_root(&crossing));
+    assert_eq!(starts.get(), 1, "the successor's own crossing starts it");
+    let up = make_up_event_for_id(contact(3), Offset::new(40.0, 0.0), PointerKind::Touch)
+        .expect("finite release");
+    drag.handle_event(PointerDispatch::at_root(&up));
+    arena.sweep(contact(3));
+    arena.drain_deferred_resolutions();
+    assert!(arena.is_empty());
+}
+
+/// The fling threshold and cap read an axial drag's own component: a
+/// horizontal drag released mostly vertically does not fling, and a fast
+/// diagonal release is capped on its axis, not by its 2D speed.
+fn axial_fling_limits_read_the_drag_axis() {
+    use flui_foundation::geometry::Point;
+    use flui_interaction::Velocity;
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            PointerButton, PointerButtons, PointerInfo, PointerMove, PointerPosition, PointerPress,
+            PointerRelease, PointerSample,
+        },
+    };
+    // Release velocity in px/s, and the fling the drag reports for it.
+    let rows: [((f64, f64), Option<f64>); 2] =
+        [((40.0, 600.0), None), ((7000.0, 7000.0), Some(7000.0))];
+    for ((vx, vy), fling) in rows {
+        let arena =
+            GestureArena::binding_driven(std::sync::Arc::new(flui_interaction::ManualClock::new()));
+        let ends = Rc::new(RefCell::new(Vec::new()));
+        let e = ends.clone();
+        let drag = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal)
+            .on_end(move |details| e.borrow_mut().push(details.fling_velocity()))
+            .build();
+        let info = PointerInfo::new(
+            PointerId::try_from(2).expect("nonzero contact"),
+            PointerKind::Touch,
+        );
+        let buttons = PointerButtons::NONE.with(PointerButton::PRIMARY);
+        let sample = |millis: u64, x: f64, y: f64| {
+            PointerSample::new(
+                EventTime::from_nanos(millis * 1_000_000),
+                PointerPosition::try_new(Point::new(x, y)).expect("finite sample"),
+            )
+        };
+        let down = PointerEvent::Down(PointerPress::new(
+            info,
+            PointerButton::PRIMARY,
+            buttons,
+            sample(0, 0.0, 0.0),
+        ));
+        drag.add_pointer(PointerDispatch::at_root(&down));
+        arena.close(info.id);
+        arena.drain_deferred_resolutions();
+        let mut send = |millis: u64, x: f64, y: f64| {
+            let event = PointerEvent::Move(PointerMove::new(info, buttons, sample(millis, x, y)));
+            drag.handle_event(PointerDispatch::at_root(&event));
+        };
+        // Cross the slop, rest past the stationary gap, then move at the
+        // release velocity: only those last samples measure it.
+        send(10, 40.0, 0.0);
+        let (mut x, mut y) = (40.0, 0.0);
+        for step in 0..=5_u64 {
+            x = 40.0 + vx * (step as f64) * 0.01;
+            y = vy * (step as f64) * 0.01;
+            send(60 + step * 10, x, y);
+        }
+        let up = PointerEvent::Up(PointerRelease::new(
+            info,
+            PointerButton::PRIMARY,
+            PointerButtons::NONE,
+            sample(110, x, y),
+        ));
+        drag.handle_event(PointerDispatch::at_root(&up));
+        arena.sweep(info.id);
+        arena.drain_deferred_resolutions();
+        let reported = ends.borrow().first().copied().expect("the drag completes");
+        match fling {
+            None => assert_eq!(reported, Velocity::ZERO, "({vx}, {vy}) px/s"),
+            Some(along) => {
+                let pps = reported.pixels_per_second;
+                assert!(
+                    (pps.dx - along).abs() < 1.0 && pps.dy == 0.0,
+                    "({vx}, {vy}) px/s flings {pps:?}"
+                );
+            }
+        }
+        assert!(arena.is_empty());
     }
 }
 

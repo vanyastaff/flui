@@ -64,7 +64,9 @@ pub(crate) mod swipe;
 pub(crate) mod tap;
 pub(crate) mod tap_and_drag;
 
-pub use contact::{ArenaMembership, BeginContactError, ContactId, ContactSnapshot, PrimaryContact};
+pub use contact::{
+    ArenaMembership, BeginContactError, ContactEnd, ContactId, ContactSnapshot, PrimaryContact,
+};
 pub use double_tap::{
     DoubleTapCallback, DoubleTapDetails, DoubleTapGestureRecognizer,
     DoubleTapGestureRecognizerBuilder,

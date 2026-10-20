@@ -468,6 +468,78 @@ fn multi_tap_center_stays_finite_at_admitted_coordinate_extremes() {
     }
 }
 
+/// A frame stall or an Up queued before the deadline's poll: a press held
+/// past its timeout still ends as a long press, its start and release in the
+/// one dispatch; one released before the timeout recognizes nothing.
+fn a_press_released_past_its_timeout_before_the_poll_is_a_long_press() {
+    let rows: [(u64, &[&str]); 2] = [(600, &["long press", "up"]), (400, &[])];
+    for (held, heard) in rows {
+        let clock = ManualClock::new();
+        let arena = GestureArena::binding_driven(Arc::new(clock.clone()));
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let (pressed, released) = (Rc::clone(&log), Rc::clone(&log));
+        let recognizer = LongPressGestureRecognizer::builder(arena.clone())
+            .on_long_press(move || pressed.borrow_mut().push("long press"))
+            .on_long_press_up(move |_| released.borrow_mut().push("up"))
+            .build();
+        let down = press_event(1, Offset::ZERO, 0, false);
+        recognizer.add_pointer(PointerDispatch::at_root(&down));
+        arena.close(pointer(1));
+        arena.drain_deferred_resolutions();
+        clock.advance(Duration::from_millis(held));
+        let up = press_event(1, Offset::ZERO, held * 1_000_000, true);
+        recognizer.handle_event(PointerDispatch::at_root(&up));
+        arena.sweep(pointer(1));
+        arena.drain_deferred_resolutions();
+        assert_eq!(&*log.borrow(), heard, "held {held} ms, no poll");
+        assert!(arena.is_empty());
+    }
+}
+
+/// A multi-contact tap is a group of contacts down together: two that
+/// never overlap are two taps, not one two-contact tap.
+fn multi_tap_needs_its_contacts_down_together() {
+    // Each step is (contact, lifts, elapsed ms since the previous step).
+    type Script = &'static [(u64, bool, u64)];
+    let rows: [(Script, (usize, usize)); 2] = [
+        // Each lone contact's release ends its own attempt.
+        (
+            &[(1, false, 0), (1, true, 40), (2, false, 50), (2, true, 40)],
+            (0, 2),
+        ),
+        (
+            &[(1, false, 0), (2, false, 40), (1, true, 50), (2, true, 40)],
+            (1, 0),
+        ),
+    ];
+    for (script, expected) in rows {
+        let clock = ManualClock::new();
+        let arena = GestureArena::binding_driven(Arc::new(clock.clone()));
+        let (taps, cancels) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+        let (t, c) = (Rc::clone(&taps), Rc::clone(&cancels));
+        let recognizer =
+            MultiTapGestureRecognizer::builder(arena.clone(), flui_interaction::MultiTapCount::TWO)
+                .on_multi_tap(move |_| t.set(t.get() + 1))
+                .on_multi_tap_cancel(move |_| c.set(c.get() + 1))
+                .build();
+        for &(contact, lifts, elapsed) in script {
+            clock.advance(Duration::from_millis(elapsed));
+            let at = Offset::new(100.0 * contact as f64, 0.0);
+            let event = press_event(contact, at, 0, lifts);
+            if lifts {
+                recognizer.handle_event(PointerDispatch::at_root(&event));
+                arena.sweep(pointer(contact));
+            } else {
+                recognizer.add_pointer(PointerDispatch::at_root(&event));
+                arena.close(pointer(contact));
+            }
+            arena.drain_deferred_resolutions();
+        }
+        assert_eq!((taps.get(), cancels.get()), expected, "{script:?}");
+        assert!(arena.is_empty());
+    }
+}
+
 #[test]
 fn held_press_and_multi_tap_owner_contracts() {
     let cases: &[(&str, fn())] = &[
@@ -507,6 +579,14 @@ fn held_press_and_multi_tap_owner_contracts() {
         (
             "owner-frame multi tap timeout",
             incomplete_multi_tap_times_out_on_the_owner_frame,
+        ),
+        (
+            "release past the timeout before its poll",
+            a_press_released_past_its_timeout_before_the_poll_is_a_long_press,
+        ),
+        (
+            "contacts that never overlap",
+            multi_tap_needs_its_contacts_down_together,
         ),
     ];
     let mut failed = Vec::new();

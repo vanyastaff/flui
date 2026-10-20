@@ -585,8 +585,8 @@ pub(crate) fn a_revision_reaches_listeners_and_never_recognizers() {
 
 pub(crate) fn custom_recognizer_competes_through_a_listener() {
     use flui_interaction::{
-        ArenaMembership, CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer,
-        GestureSettings, PrimaryContact, TapGestureRecognizer,
+        ArenaMembership, CancelOutcome, ContactEnd, GestureArenaMember, GestureContest,
+        GestureRecognizer, GestureSettings, PrimaryContact, TapGestureRecognizer,
     };
     use flui_rendering::hit_testing::PointerEvent;
     use flui_view::prelude::*;
@@ -602,7 +602,7 @@ pub(crate) fn custom_recognizer_competes_through_a_listener() {
             self.events.borrow_mut().push("custom won");
         }
         fn reject_gesture(&self, _: GestureContest) {
-            self.contact.finish();
+            self.contact.finish(ContactEnd::Contending);
         }
     }
     impl GestureRecognizer for ExternalRecognizer {
@@ -615,7 +615,7 @@ pub(crate) fn custom_recognizer_competes_through_a_listener() {
             match dispatch.local {
                 PointerEvent::Move(_) => self.contact.accept(),
                 PointerEvent::Up(_) | PointerEvent::Cancel(_) => {
-                    self.contact.finish();
+                    self.contact.finish(ContactEnd::Contending);
                 }
                 _ => {}
             }

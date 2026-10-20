@@ -148,6 +148,27 @@ fn two_distinct_timestamps_still_measure_motion() {
     assert_eq!(velocity.dy(), 0.0);
 }
 
+/// Moves drained in one frame share a timestamp. The weighted estimators take
+/// their intervals between distinct instants, so a steady 1 px/ms batched in
+/// pairs reads 1000 px/s, not the fraction a zero-length interval leaves.
+fn weighted_estimators_collapse_batched_timestamps() {
+    for estimator in [VelocityEstimator::Ios, VelocityEstimator::Macos] {
+        let t0 = origin();
+        let mut tracker = VelocityTracker::with_estimator(PointerKind::Touch, estimator);
+        for frame in 0..4_u32 {
+            let at = t0 + ms(16.0 * f64::from(frame));
+            for _ in 0..2 {
+                tracker.add_position(at, Offset::new(16.0 * f64::from(frame), 0.0));
+            }
+        }
+        let velocity = tracker.velocity_at(t0 + ms(48.0));
+        assert!(
+            (velocity.dx() - 1000.0).abs() < 1e-6,
+            "{estimator:?}: batched moves read {velocity:?}"
+        );
+    }
+}
+
 /// The stop gate measures the gap between the last sample and the query on
 /// the samples' own clock, so a virtual pause stops the fling and a virtual
 /// release right after the last move does not, whatever the wall clock did.
@@ -353,6 +374,10 @@ fn velocity_estimates_are_finite_bounded_and_on_the_sample_clock() {
             (
                 "two distinct timestamps",
                 two_distinct_timestamps_still_measure_motion,
+            ),
+            (
+                "weighted estimators collapse batched timestamps",
+                weighted_estimators_collapse_batched_timestamps,
             ),
             (
                 "stop gate on the sample clock",

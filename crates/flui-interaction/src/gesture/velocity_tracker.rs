@@ -591,10 +591,23 @@ impl VelocityTracker {
     /// makes no claim about fit quality); `duration` and `offset` are
     /// computed from the newest and oldest eligible samples.
     fn compute_weighted(&self, weights: [f64; 3]) -> Option<VelocityEstimate> {
-        let (newest, oldest, eligible_samples) = self.walk_window(|_, _| {})?;
+        // The intervals run between the four newest distinct instants of the
+        // window. Moves drained in one frame share a timestamp; the newest
+        // position at an instant stands for it, so a batched pair is one
+        // sample rather than an interval of zero velocity.
+        let mut distinct: [Option<PointAtTime>; 4] = [None; 4];
+        let mut count = 0usize;
+        let (newest, oldest, _) = self.walk_window(|sample, _| {
+            let repeated =
+                count > 0 && distinct[count - 1].is_some_and(|newer| newer.time == sample.time);
+            if count < distinct.len() && !repeated {
+                distinct[count] = Some(sample);
+                count += 1;
+            }
+        })?;
         let estimated_velocity = self
             .output
-            .publish(self.estimated_weighted_velocity(weights, eligible_samples));
+            .publish(self.estimated_weighted_velocity(weights, &distinct));
 
         Some(VelocityEstimate::new(
             finite_offset(newest.position, oldest.position),
@@ -609,22 +622,25 @@ impl VelocityTracker {
     /// representable components without overflowing the sum. Default output
     /// bounds each interval first; measurement output refuses an unrepresentable
     /// interval instead of substituting a saturated measurement.
+    /// `distinct` holds the newest samples of distinct times, newest first.
     fn estimated_weighted_velocity(
         &self,
         weights: [f64; 3],
-        eligible_samples: usize,
+        distinct: &[Option<PointAtTime>],
     ) -> Offset<f64> {
-        let v = |offset: isize, required_samples| {
-            if eligible_samples < required_samples {
+        // The interval ending `age` instants before the newest.
+        let v = |age: usize| {
+            let sample = |age: usize| distinct.get(age).copied().flatten();
+            let (Some(end), Some(start)) = (sample(age), sample(age + 1)) else {
                 return Offset::ZERO;
-            }
-            let (dx, dy) = self.two_sample_velocity_at_f64(offset);
+            };
+            let (dx, dy) = two_sample_velocity(start, end);
             match self.output {
                 VelocityOutput::DefaultBounded => bounded(Offset::new(dx, dy)),
                 VelocityOutput::Measurement => Offset::new(dx, dy),
             }
         };
-        let (a, b, c) = (v(-2, 4), v(-1, 3), v(0, 2));
+        let (a, b, c) = (v(2), v(1), v(0));
         let average = |values: [f64; 3]| {
             let scale = values.into_iter().map(f64::abs).fold(0.0_f64, f64::max);
             if scale == 0.0 {
@@ -639,30 +655,24 @@ impl VelocityTracker {
         let dy = average([a.dy, b.dy, c.dy]);
         Offset::new(dx, dy)
     }
+}
 
-    /// The 2-point velocity at the given offset from the newest sample,
-    /// returned in `(dx, dy)` f64 form for precision arithmetic.
-    /// `offset = 0` is the most recent pair, `-1` is the one before, etc.
-    fn two_sample_velocity_at_f64(&self, offset: isize) -> (f64, f64) {
-        let end_idx = (self.index as isize + offset).rem_euclid(HISTORY_SIZE as isize) as usize;
-        let start_idx = (end_idx as isize - 1).rem_euclid(HISTORY_SIZE as isize) as usize;
-        let (Some(end), Some(start)) = (self.samples[end_idx], self.samples[start_idx]) else {
-            return (0.0, 0.0);
-        };
-        // dt is in microseconds; convert to milliseconds for the divisor so
-        // we preserve precision.
-        let dt_us = end.time.saturating_duration_since(start.time).as_micros();
-        if dt_us == 0 {
-            return (0.0, 0.0);
-        }
-        let dt_ms = dt_us as f64 / 1000.0;
-        // Divide by seconds before scaling the displacement: multiplying a large
-        // representable displacement by 1000 first could overflow unnecessarily.
-        let seconds = dt_ms / 1000.0;
-        let dx_px_s = (end.position.dx - start.position.dx) / seconds;
-        let dy_px_s = (end.position.dy - start.position.dy) / seconds;
-        (dx_px_s, dy_px_s)
+/// The 2-point velocity from `start` to `end`, returned in `(dx, dy)` f64
+/// form for precision arithmetic; zero for samples of one instant.
+fn two_sample_velocity(start: PointAtTime, end: PointAtTime) -> (f64, f64) {
+    // dt is in microseconds; convert to milliseconds for the divisor so
+    // we preserve precision.
+    let dt_us = end.time.saturating_duration_since(start.time).as_micros();
+    if dt_us == 0 {
+        return (0.0, 0.0);
     }
+    let dt_ms = dt_us as f64 / 1000.0;
+    // Divide by seconds before scaling the displacement: multiplying a large
+    // representable displacement by 1000 first could overflow unnecessarily.
+    let seconds = dt_ms / 1000.0;
+    let dx_px_s = (end.position.dx - start.position.dx) / seconds;
+    let dy_px_s = (end.position.dy - start.position.dy) / seconds;
+    (dx_px_s, dy_px_s)
 }
 
 impl VelocityTracker {

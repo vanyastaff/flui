@@ -12,11 +12,11 @@ use flui_foundation::geometry::Point;
 use flui_platform_api::EventTime;
 
 use flui_interaction::{
-    ArenaMembership, CancelOutcome, GestureArenaMember, GestureBinding, GestureRecognizer,
-    GestureSettings, HitTestEntry, HitTestResult, InteractionLane, LongPressGestureRecognizer,
-    ManualClock, PointerButton, PointerButtons, PointerDispatch, PointerEventExt, PointerId,
-    PointerInfo, PointerPosition, PointerPress, PointerRelease, PointerSample, PrimaryContact,
-    RecognizerSet, RenderId,
+    ArenaMembership, CancelOutcome, ContactEnd, GestureArenaMember, GestureBinding,
+    GestureRecognizer, GestureSettings, HitTestEntry, HitTestResult, InteractionLane,
+    LongPressGestureRecognizer, ManualClock, PointerButton, PointerButtons, PointerDispatch,
+    PointerEventExt, PointerId, PointerInfo, PointerPosition, PointerPress, PointerRelease,
+    PointerSample, PrimaryContact, RecognizerSet, RenderId,
     events::{PointerEvent, PointerKind},
     gesture::GestureArena,
 };
@@ -77,7 +77,7 @@ impl GestureRecognizer for LoggingRecognizer {
         match dispatch.local {
             PointerEvent::Up(_) if self.claims_release => {
                 self.contact.accept();
-                self.contact.finish();
+                self.contact.finish(ContactEnd::Contending);
             }
             PointerEvent::Up(_) | PointerEvent::Cancel(_) => {
                 self.contact.withdraw();

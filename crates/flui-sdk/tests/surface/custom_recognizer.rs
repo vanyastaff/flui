@@ -10,9 +10,9 @@ use std::{
 use flui_sdk::foundation::ValueKey;
 use flui_sdk::geometry::Size;
 use flui_sdk::interaction::{
-    ArenaMembership, CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer,
-    MotionRole, PointerDispatch, PointerEvent, PointerEventExt, PointerKind, PointerKindSet,
-    PrimaryContact,
+    ArenaMembership, CancelOutcome, ContactEnd, GestureArenaMember, GestureContest,
+    GestureRecognizer, MotionRole, PointerDispatch, PointerEvent, PointerEventExt, PointerKind,
+    PointerKindSet, PrimaryContact,
 };
 use flui_sdk::painting::Color;
 use flui_sdk::rendering::BoxConstraints;
@@ -109,7 +109,7 @@ impl GestureRecognizer for ThresholdDrag {
                 if self.dragging.replace(false) {
                     self.report("end");
                 }
-                self.contact.finish();
+                self.contact.finish(ContactEnd::Contending);
             }
             PointerEvent::Cancel(_) => {
                 self.cancel();

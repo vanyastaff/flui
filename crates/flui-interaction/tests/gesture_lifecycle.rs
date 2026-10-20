@@ -1710,6 +1710,10 @@ fn gesture_lifecycle_matrix() {
             "a_hold_tracks_its_contact_before_beaten_members_hear",
             arena_ownership::a_hold_tracks_its_contact_before_beaten_members_hear,
         ),
+        (
+            "an_unrecognized_inner_gesture_leaves_the_outer_tap_its_contact",
+            arena_ownership::an_unrecognized_inner_gesture_leaves_the_outer_tap_its_contact,
+        ),
     ];
     let mut failures = Vec::new();
     for &(name, case) in cases {

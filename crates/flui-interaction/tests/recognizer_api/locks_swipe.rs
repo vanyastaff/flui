@@ -193,6 +193,43 @@ fn rails_keep_a_near_axial_trackpad_pan_on_its_axis() {
     }
 }
 
+/// A trackpad pan picks its rail once its travel crosses the pan slop, as a
+/// touch does: a first stray pixel up cannot rail a horizontal pan
+/// vertically, and the travel held below the slop arrives whole on the rail.
+fn a_trackpad_rail_waits_for_the_pan_slop() {
+    use flui_foundation::geometry::Point;
+    use flui_interaction::pointer::PanZoomDispatch;
+    use flui_platform_api::pointer::{
+        PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo, PointerPosition,
+    };
+    let published = Rc::new(RefCell::new(Offset::ZERO));
+    let p = Rc::clone(&published);
+    let scale = ScaleGestureRecognizer::builder(GestureArena::new())
+        .axis_lock(AxisLock::Rails)
+        .on_update(move |update| *p.borrow_mut() += update.focal_point_delta)
+        .build();
+    let info = PointerInfo::new(pointer(31), PointerKind::Trackpad);
+    let deliver = |ms: u64, phase, at: Offset<f64>| {
+        let event = PanZoomEvent::new(
+            info,
+            EventTime::from_nanos(ms * 1_000_000),
+            PointerPosition::try_new(Point::new(at.dx, at.dy)).expect("finite focal"),
+            phase,
+        );
+        let _ = scale.handle_pan_zoom(PanZoomDispatch::at_root(&event));
+    };
+    let origin = Offset::new(100.0, 100.0);
+    deliver(0, PanZoomPhase::Start, origin);
+    for (ms, at) in [
+        (16, Offset::new(100.0, 99.0)),
+        (32, Offset::new(140.0, 94.0)),
+    ] {
+        deliver(ms, PanZoomPhase::Update(PanZoomTransform::IDENTITY), at);
+    }
+    deliver(48, PanZoomPhase::End, Offset::new(140.0, 94.0));
+    assert_eq!(*published.borrow(), Offset::new(40.0, 0.0));
+}
+
 /// Two fingers 200 px apart: `first` moves them, then `second` does; the
 /// rotation the scale reports at the end.
 fn turn(lock: TransformLock, pan_first: bool) -> f64 {
@@ -263,6 +300,10 @@ fn axis_and_transform_locks() {
         (
             "rails_keep_a_near_axial_trackpad_pan_on_its_axis",
             rails_keep_a_near_axial_trackpad_pan_on_its_axis,
+        ),
+        (
+            "a_trackpad_rail_waits_for_the_pan_slop",
+            a_trackpad_rail_waits_for_the_pan_slop,
         ),
         (
             "a_scale_begun_as_a_pan_keeps_its_rotation_locked",

@@ -3,7 +3,7 @@ use super::{
     callback_containment::{
         finish_containment, invoke_callback, retire_callback, retire_callbacks,
     },
-    contact::{ArenaMembership, ContactId, PrimaryContact},
+    contact::{ArenaMembership, ContactEnd, ContactId, PrimaryContact},
     recognizer::{
         CancelOutcome, EventTimeline, GestureRecognizer, event_time, is_primary_down,
         motion_history,
@@ -157,8 +157,10 @@ pub struct DragEndDetails {
 impl DragEndDetails {
     /// Release velocity resolved with the gesture's admitted minimum and maximum.
     ///
-    /// Cancellation and releases below the minimum give zero. The maximum caps
-    /// vector magnitude while preserving direction. [`Self::velocity`] remains
+    /// The limits read the motion the drag follows: an axial drag's
+    /// component on its axis, a railed free drag's on its rail, a free drag's
+    /// vector. Cancellation and releases below the minimum give zero. The
+    /// maximum caps that magnitude while preserving direction. [`Self::velocity`] remains
     /// the raw finite-component measurement, independent of fling policy. A
     /// component estimate outside the representable range is refused as zero.
     #[must_use]
@@ -445,10 +447,14 @@ impl DragGestureRecognizer {
         Some(contacts.remove(index))
     }
     fn project_delta(&self, delta: Offset<f64>) -> Offset<f64> {
+        self.project(delta, self.rail.get())
+    }
+    /// `delta` on this drag's axis, or on `rail` for a railed free drag.
+    fn project(&self, delta: Offset<f64>, rail: Option<Axis>) -> Offset<f64> {
         match self.axis {
             DragAxis::Vertical => Offset::new(0.0, delta.dy),
             DragAxis::Horizontal => Offset::new(delta.dx, 0.0),
-            DragAxis::Free => on_rail(delta.to_delta(), self.rail.get()),
+            DragAxis::Free => on_rail(delta.to_delta(), rail),
         }
     }
     fn primary_delta(&self, delta: Offset<f64>) -> f64 {
@@ -561,9 +567,9 @@ impl DragGestureRecognizer {
                 primary_delta: self.primary_delta(delta),
                 kind: snapshot.kind,
             });
-            let crossed = super::recognizer::measured_positions(dispatch.local).any(|position| {
-                self.exceeds_slop(snapshot.kind, &snapshot.settings, position - snapshot.local)
-            });
+            let crossed = snapshot
+                .measured_travel(dispatch)
+                .any(|travel| self.exceeds_slop(snapshot.kind, &snapshot.settings, travel));
             state.past_slop |= crossed;
             // The ownership table decides on the displacement accumulated
             // since Down, in root space so every competitor measures alike.
@@ -737,12 +743,21 @@ impl DragGestureRecognizer {
         }
         // The successor's own latest position and tracker already establish the
         // baseline. No synthetic move or inter-finger velocity sample is added.
-        tracked.contact.finish();
+        // A contact the arena never gave this drag leaves its contest.
+        let end = if tracked.state.borrow().accepted {
+            ContactEnd::Contending
+        } else {
+            ContactEnd::Withdrawn
+        };
+        tracked.contact.finish(end);
         drop(outgoing);
-        if let Some(next) = next
-            && !self.started.get()
-            && self.is_current(&next)
-        {
+        // The successor starts the drag only past its own slop; until then it
+        // holds, as a lone default win does, and its crossing begins it.
+        let Some(next) = next else {
+            return;
+        };
+        let crossed = next.state.borrow().past_slop;
+        if crossed && !self.started.get() && self.is_current(&next) {
             self.begin_accepted_drag(&next, self.start_behavior);
         }
     }
@@ -801,19 +816,21 @@ impl DragGestureRecognizer {
                 });
             (velocity, global_velocity, position, global)
         };
+        // The fling limits apply to the motion the drag follows: an axial
+        // drag's threshold and cap read its axis, never the 2D speed.
+        let along = self.project(velocity.pixels_per_second, rail);
         let fling_velocity = if reason == GestureEndReason::Completed {
             snapshot
                 .settings
-                .resolve_fling_velocity(snapshot.kind, velocity)
+                .resolve_fling_velocity(snapshot.kind, Velocity::new(along))
         } else {
             Velocity::ZERO
         };
-        let raw = velocity.pixels_per_second;
         let admitted = fling_velocity.pixels_per_second;
-        let ratio = if raw.dx.abs() >= raw.dy.abs() && raw.dx != 0.0 {
-            admitted.dx / raw.dx
-        } else if raw.dy != 0.0 {
-            admitted.dy / raw.dy
+        let ratio = if along.dx.abs() >= along.dy.abs() && along.dx != 0.0 {
+            admitted.dx / along.dx
+        } else if along.dy != 0.0 {
+            admitted.dy / along.dy
         } else {
             0.0
         };
@@ -826,7 +843,7 @@ impl DragGestureRecognizer {
                     // the remaining competition; it must not win by order.
                     if accepted && reason == GestureEndReason::Completed && contact.id == active.id
                     {
-                        contact.contact.finish();
+                        contact.contact.finish(ContactEnd::Contending);
                     } else if accepted {
                         contact.contact.cancel();
                     } else {

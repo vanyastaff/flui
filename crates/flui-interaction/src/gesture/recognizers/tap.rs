@@ -2,8 +2,8 @@
 
 use super::{
     callback_containment::{CallbackSequence, finish_containment, invoke_callback},
-    contact::{ArenaMembership, ContactId, PrimaryContact},
-    recognizer::{CancelOutcome, GestureRecognizer, measured_positions},
+    contact::{ArenaMembership, ContactEnd, ContactId, PrimaryContact},
+    recognizer::{CancelOutcome, GestureRecognizer},
 };
 use crate::events::PointerButton;
 use crate::gesture::details::{TapDownDetails, TapUpDetails};
@@ -16,7 +16,9 @@ use crate::{
     gesture::settings::GestureSettingsProvider,
     pointer::PointerDispatch,
 };
+use core::time::Duration;
 use flui_foundation::geometry::Offset;
+use flui_platform_api::EventTime;
 use flui_platform_api::input_capabilities::PointerKindSet;
 use smallvec::SmallVec;
 use std::{
@@ -266,7 +268,17 @@ impl TapGestureRecognizerBuilder {
     }
 }
 
+/// How long a press waits for its arena before it shows as pressed: the
+/// down callback then runs although a drag may still take the contact, and a
+/// cancellation follows it if one does.
+const PRESS_TIMEOUT: Duration = Duration::from_millis(100);
+
 /// Recognizes primary, secondary and tertiary taps after their arena verdict.
+///
+/// The down callback runs when the arena gives the press to the tap, or
+/// 100 ms after the Down while it is still undecided, whichever
+/// comes first; the up and the tap wait for the win. A contact that stops
+/// being a tap hears a cancellation, whether or not its down showed.
 pub struct TapGestureRecognizer {
     arena: GestureArena,
     this: Weak<Self>,
@@ -293,6 +305,8 @@ struct TapSequence {
     button: TapButton,
     up: Option<TapUpDetails>,
     accepted: bool,
+    /// The down callback ran, at the win or at the press timeout.
+    down_sent: bool,
     delivering: bool,
 }
 #[derive(Default)]
@@ -328,6 +342,19 @@ impl GestureArenaMember for TapArenaMember {
     fn reject_gesture(&self, _: GestureContest) {
         if let Some(recognizer) = self.recognizer.upgrade() {
             recognizer.reject_sequence(self.sequence);
+        }
+    }
+    fn deadline(&self) -> Option<EventTime> {
+        self.contact.deadline()
+    }
+    fn poll_deadline(&self, now: EventTime) {
+        if self
+            .contact
+            .deadline()
+            .is_some_and(|deadline| now >= deadline)
+            && let Some(recognizer) = self.recognizer.upgrade()
+        {
+            recognizer.deliver_pressed(self.sequence);
         }
     }
 }
@@ -388,6 +415,33 @@ impl TapGestureRecognizer {
             );
         }
     }
+    /// The press timeout elapsed with the arena undecided: the press shows
+    /// as pressed now; the release and the tap still wait for the win.
+    fn deliver_pressed(&self, id: ContactId) {
+        let pressed = {
+            let mut sequences = self.sequences.borrow_mut();
+            let Some(index) = sequences.index(id) else {
+                return;
+            };
+            let sequence = &mut sequences.live[index];
+            if sequence.down_sent {
+                return;
+            }
+            sequence.down_sent = true;
+            (sequence.down, sequence.button, Rc::clone(&sequence.member))
+        };
+        let (down, button, member) = pressed;
+        member.contact.disarm_deadline();
+        if self.is_live(id) {
+            invoke_callback(
+                self.callbacks.down(button),
+                || {},
+                |callback| callback(down),
+            );
+        }
+    }
+    /// Deliver what the win owes: the down, unless the press timeout already
+    /// sent it, and once released, the up and the tap.
     fn deliver_if_won(&self, id: ContactId) {
         let delivery = {
             let mut sequences = self.sequences.borrow_mut();
@@ -398,23 +452,39 @@ impl TapGestureRecognizer {
             if !sequence.accepted || sequence.delivering {
                 return;
             }
-            let Some(up) = sequence.up else {
-                return;
-            };
-            sequence.delivering = true;
-            (sequence.down, up, sequence.button)
+            let down = (!sequence.down_sent).then_some(sequence.down);
+            sequence.down_sent = true;
+            if sequence.up.is_some() {
+                sequence.delivering = true;
+            }
+            (
+                down,
+                sequence.up,
+                sequence.button,
+                Rc::clone(&sequence.member),
+            )
         };
-        let (down, up, button) = delivery;
+        let (down, up, button, member) = delivery;
+        if down.is_some() && up.is_none() {
+            member.contact.disarm_deadline();
+        }
         let mut run = CallbackSequence::new();
-        run.call(self.callbacks.down(button), |callback| callback(down));
-        if self.is_live(id) {
-            run.call(self.callbacks.up(button), |callback| callback(up));
+        if let Some(down) = down
+            && self.is_live(id)
+        {
+            run.call(self.callbacks.down(button), |callback| callback(down));
         }
-        if self.is_live(id) {
-            run.call(self.callbacks.tap(button), |callback| callback(up));
+        if let Some(up) = up {
+            if self.is_live(id) {
+                run.call(self.callbacks.up(button), |callback| callback(up));
+            }
+            if self.is_live(id) {
+                run.call(self.callbacks.tap(button), |callback| callback(up));
+            }
+            let retired = self.sequences.borrow_mut().remove(id);
+            drop(retired);
         }
-        let retired = self.sequences.borrow_mut().remove(id);
-        drop(retired);
+        drop(member);
         run.finish();
     }
     fn cancel_sequence(&self, id: ContactId, details: TapDetails) {
@@ -491,18 +561,26 @@ impl GestureRecognizer for TapGestureRecognizer {
             local_position: snapshot.local,
             kind: snapshot.kind,
         };
-        let mut sequences = self.sequences.borrow_mut();
-        sequences.current = Some(id);
-        sequences.live.push(TapSequence {
-            member,
-            id,
-            down,
-            pointer: snapshot.pointer,
-            button,
-            up: None,
-            accepted: false,
-            delivering: false,
-        });
+        {
+            let mut sequences = self.sequences.borrow_mut();
+            sequences.current = Some(id);
+            sequences.live.push(TapSequence {
+                member: Rc::clone(&member),
+                id,
+                down,
+                pointer: snapshot.pointer,
+                button,
+                up: None,
+                accepted: false,
+                down_sent: false,
+                delivering: false,
+            });
+        }
+        // A press still undecided after the press timeout shows as pressed;
+        // one the arena gives it sooner hears its down at the win.
+        if self.is_live(id) {
+            let _ = member.contact.arm_deadline(PRESS_TIMEOUT);
+        }
     }
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
         let _span = tracing::info_span!(
@@ -531,10 +609,10 @@ impl GestureRecognizer for TapGestureRecognizer {
         };
         match dispatch.local {
             PointerEvent::Move(_) => {
-                if measured_positions(dispatch.local).any(|position| {
-                    let delta = position - snapshot.local;
-                    snapshot.settings.exceeds_hit_slop(snapshot.kind, delta)
-                }) {
+                if snapshot
+                    .measured_travel(dispatch)
+                    .any(|travel| snapshot.settings.exceeds_hit_slop(snapshot.kind, travel))
+                {
                     self.cancel_sequence(member.sequence, details);
                 } else {
                     invoke_callback(
@@ -569,7 +647,7 @@ impl GestureRecognizer for TapGestureRecognizer {
                 if mismatch {
                     self.cancel_sequence(member.sequence, details);
                 } else {
-                    member.contact.finish();
+                    member.contact.finish(ContactEnd::Contending);
                     self.deliver_if_won(member.sequence);
                 }
             }

@@ -826,3 +826,94 @@ pub(crate) fn a_hold_tracks_its_contact_before_beaten_members_hear() {
         assert_eq!(*log.borrow(), heard, "{name}");
     }
 }
+
+/// A recognizer that recognized nothing by its release leaves the contest:
+/// an inner long press released early, a force press on a device without
+/// pressure or a swipe that never crossed its slop cannot win the Up sweep by
+/// its place on the route, so the outer tap still fires.
+pub(crate) fn an_unrecognized_inner_gesture_leaves_the_outer_tap_its_contact() {
+    use flui_foundation::geometry::Axis;
+    use flui_interaction::{
+        ForcePressGestureRecognizer, LongPressGestureRecognizer, SwipeGestureRecognizer,
+        SwipeStart, TapGestureRecognizer,
+    };
+    /// Builds the inner recognizer into the leaf's set; the result keeps it alive.
+    type Inner = fn(&GestureArena, Events, &mut RecognizerSet) -> Rc<dyn std::any::Any>;
+    let inners: [(&str, Inner); 3] = [
+        ("long press", |arena, log, set| {
+            let recognizer = LongPressGestureRecognizer::builder(arena.clone())
+                .on_long_press(move || log.borrow_mut().push("inner"))
+                .build();
+            set.attach(&recognizer);
+            recognizer
+        }),
+        ("force press", |arena, log, set| {
+            let recognizer = ForcePressGestureRecognizer::builder(arena.clone())
+                .on_start(move |_| log.borrow_mut().push("inner"))
+                .build();
+            set.attach(&recognizer);
+            recognizer
+        }),
+        ("swipe", |arena, log, set| {
+            let recognizer = SwipeGestureRecognizer::builder(
+                arena.clone(),
+                SwipeStart::Anywhere(Axis::Horizontal),
+            )
+            .on_swipe(move |_| log.borrow_mut().push("inner"))
+            .build();
+            set.attach(&recognizer);
+            recognizer
+        }),
+    ];
+    for (name, inner) in inners {
+        let lane = InteractionLane::try_new().expect("owner lane");
+        let clock = ManualClock::new();
+        let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
+        let arena = binding.arena().clone();
+        let log = Events::default();
+        let tapped = Rc::clone(&log);
+        let tap = TapGestureRecognizer::builder(arena.clone())
+            .on_tap(move |_| tapped.borrow_mut().push("outer tap"))
+            .build();
+        let mut leaf = RecognizerSet::default();
+        let _inner = inner(&arena, Rc::clone(&log), &mut leaf);
+        let mut outer = RecognizerSet::default();
+        outer.attach(&tap);
+        let route = lane.enter(|| {
+            let handle = lane.dispatch_handle();
+            let mut route = HitTestResult::new();
+            for (index, set) in [leaf, outer].into_iter().enumerate() {
+                let target = handle
+                    .register_pointer(move |dispatch| set.dispatch(dispatch))
+                    .expect("register target");
+                route.add(HitTestEntry::new(RenderId::new(index + 1)).pointer_target(target));
+            }
+            route
+        });
+        let send = |event: PointerEvent| {
+            lane.enter(|| {
+                binding.handle_pointer_event(&event, |_| route.clone());
+                binding.flush_pending_moves();
+                binding.drain_deferred_arena_resolutions();
+            });
+        };
+        let pointer = id(30);
+        send(down(pointer, at(0.0, 0.0), PointerKind::Touch));
+        clock.advance(Duration::from_millis(100));
+        lane.enter(|| {
+            binding.tick_deadlines();
+            binding.drain_deferred_arena_resolutions();
+        });
+        send(
+            make_up_event_for_id_with_button(
+                pointer,
+                at(0.0, 0.0),
+                PointerKind::Touch,
+                PointerButton::PRIMARY,
+            )
+            .expect("finite up"),
+        );
+        assert_eq!(*log.borrow(), ["outer tap"], "inner {name}");
+        assert!(arena.is_empty(), "inner {name}: the contest settled");
+    }
+}

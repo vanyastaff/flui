@@ -20,7 +20,8 @@ use flui_foundation::{geometry::Offset, panic::FailureClass};
 use flui_platform_api::input_capabilities::PointerKindSet;
 
 use super::{
-    ArenaMembership, CancelOutcome, ContactId, ContactSnapshot, GestureRecognizer, PrimaryContact,
+    ArenaMembership, CancelOutcome, ContactEnd, ContactId, ContactSnapshot, GestureRecognizer,
+    PrimaryContact,
     callback_containment::{CallbackSequence, invoke_callback, retire_callbacks},
     recognizer::{admission_kind, is_primary_down},
 };
@@ -226,7 +227,7 @@ impl GestureRecognizer for HoldGestureRecognizer {
         }
         match dispatch.local {
             PointerEvent::Up(_) => {
-                if let Some(ended) = self.contact.finish() {
+                if let Some(ended) = self.contact.finish(ContactEnd::Contending) {
                     self.release(&ended, HoldEnd::Lifted);
                 }
             }
