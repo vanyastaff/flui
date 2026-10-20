@@ -586,6 +586,9 @@ impl RenderTree {
                 continue;
             };
             node.links_mut().set_depth(depth);
+            if node.children().is_empty() {
+                continue;
+            }
             let next = child_depth(depth);
             stack.extend(node.children().iter().map(|&child| (child, next)));
         }
@@ -1076,5 +1079,28 @@ mod tests {
         // `root` is already `child`'s ancestor; adopting `root` under
         // `child` would close a cycle.
         tree.adopt_child(child, root);
+    }
+
+    /// Re-adopting a subtree whose deepest leaf sits at the last representable
+    /// depth succeeds: only a node with children derives a child depth.
+    #[test]
+    fn readopting_a_subtree_down_to_the_last_depth_does_not_overflow() {
+        let mut tree = RenderTree::new();
+        let root = tree.insert_box(make_leaf());
+        let top = tree
+            .insert_box_child(root, make_leaf())
+            .expect("live parent");
+        let mut leaf = top;
+        while tree.depth(leaf) != Some(u16::MAX) {
+            leaf = tree
+                .insert_box_child(leaf, make_leaf())
+                .expect("live parent");
+        }
+
+        tree.drop_child(root, top);
+        tree.adopt_child(root, top);
+
+        assert_eq!(tree.depth(top), Some(1));
+        assert_eq!(tree.depth(leaf), Some(u16::MAX));
     }
 }
