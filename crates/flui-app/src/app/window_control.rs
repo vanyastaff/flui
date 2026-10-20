@@ -206,14 +206,6 @@ impl WindowCommandQueues {
         }
         first.resume();
     }
-
-    /// Leave every window's pending work to a later turn, and ask for it: the
-    /// current turn cannot apply it.
-    pub(crate) fn defer(&self) {
-        for queue in self.live() {
-            queue.rearm();
-        }
-    }
 }
 
 /// [`WindowControl`] over one platform window, backed by its queue.

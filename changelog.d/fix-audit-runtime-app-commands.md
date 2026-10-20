@@ -8,8 +8,9 @@
 ### Fixed
 
 - **`flui-app`**: a window command that panics no longer stops the other windows' queued
-  commands, and the window it interrupted asks for the turn that applies the rest; a turn that
-  cannot apply the queue asks for another instead of leaving it until unrelated input.
+  commands, and the window it interrupted asks for the turn that applies the rest. On Android
+  and iOS the turn a command's wake brings now applies it, instead of leaving it until
+  unrelated input.
 - **`flui-app`**: commands queued after a window close that goes ahead are dropped, not applied
   to the destroyed window; after a vetoed close they still apply.
 - **`flui-app`**: a surface resize that arrives while the window's frame driver is out on a frame
