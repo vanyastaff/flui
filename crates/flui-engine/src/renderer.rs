@@ -188,19 +188,22 @@ where
 
 /// Acquire the next surface texture, escalating on failure: `Outdated`,
 /// `Lost` and `Validation` reconfigure and retry once; a `Lost` that survives
-/// the reconfigure recreates the surface and retries once more, because
-/// `Lost` says the surface itself is gone and no configuration of it can
-/// return a texture.
+/// the reconfigure recreates the surface, because `Lost` says the surface
+/// itself is gone and no configuration of it can return a texture.
+///
+/// A recreation skips the frame (`Ok(None)`, which the caller retries) rather
+/// than acquiring from the new surface: the frame was planned against the old
+/// one, and the new one may differ in format or `COPY_SRC` support, which
+/// decide where the frame renders.
 fn acquire_surface_texture_with<B>(backend: &mut B) -> Result<Option<B::Frame>, EngineError>
 where
     B: SurfaceAcquireBackend,
 {
-    // A recreation owed from an earlier frame counts as this call's one.
-    let mut may_recreate = true;
     if backend.recovery().recreate_owed {
         recreate_lost_surface(backend)?;
-        may_recreate = false;
-    } else if backend.recovery().reconfigure_before_acquire {
+        return Ok(None);
+    }
+    if backend.recovery().reconfigure_before_acquire {
         backend.reconfigure()?;
         let recovery = backend.recovery();
         recovery.configured();
@@ -246,18 +249,16 @@ where
                 backend.recovery().configured();
                 may_reconfigure = false;
             }
-            SurfaceAcquireOutcome::Lost if may_recreate => {
+            SurfaceAcquireOutcome::Lost => {
                 tracing::warn!(
                     target: "flui.gpu",
                     event = "surface_lost_after_reconfigure",
                     "surface still lost after a reconfigure; recreating it"
                 );
                 recreate_lost_surface(backend)?;
-                may_recreate = false;
+                return Ok(None);
             }
-            SurfaceAcquireOutcome::Outdated | SurfaceAcquireOutcome::Lost => {
-                return Err(EngineError::SurfaceLost);
-            }
+            SurfaceAcquireOutcome::Outdated => return Err(EngineError::SurfaceLost),
             SurfaceAcquireOutcome::Validation => {
                 tracing::error!("Surface texture validation error after reconfigure");
                 return Err(EngineError::SurfaceValidation);
@@ -313,6 +314,7 @@ mod surface_acquisition_tests {
     #[derive(Debug, PartialEq)]
     enum Acquired {
         Frame(u8),
+        Skipped,
         SurfaceLost,
         SurfaceValidation,
     }
@@ -346,35 +348,47 @@ mod surface_acquisition_tests {
                 )],
             },
             Case {
-                name: "lost after a reconfigure recreates exactly once",
+                name: "lost after a reconfigure recreates once and skips the frame",
                 outcomes: vec![Lost, Lost, Success(1)],
                 recreations: vec![],
-                frames: vec![(
-                    Acquired::Frame(1),
-                    &["acquire", "reconfigure", "acquire", "recreate", "acquire"],
-                )],
+                frames: vec![
+                    (
+                        Acquired::Skipped,
+                        &["acquire", "reconfigure", "acquire", "recreate"],
+                    ),
+                    (Acquired::Frame(1), &["acquire"]),
+                ],
             },
             Case {
                 name: "outdated then lost recreates",
                 outcomes: vec![Outdated, Lost, Success(1)],
                 recreations: vec![],
-                frames: vec![(
-                    Acquired::Frame(1),
-                    &["acquire", "reconfigure", "acquire", "recreate", "acquire"],
-                )],
+                frames: vec![
+                    (
+                        Acquired::Skipped,
+                        &["acquire", "reconfigure", "acquire", "recreate"],
+                    ),
+                    (Acquired::Frame(1), &["acquire"]),
+                ],
             },
             Case {
-                name: "lost after the recreation reports the loss",
-                outcomes: vec![Lost, Lost, Lost],
+                name: "a surface lost on every frame recreates once per frame",
+                outcomes: vec![Lost, Lost, Lost, Lost],
                 recreations: vec![],
-                frames: vec![(
-                    Acquired::SurfaceLost,
-                    &["acquire", "reconfigure", "acquire", "recreate", "acquire"],
-                )],
+                frames: vec![
+                    (
+                        Acquired::Skipped,
+                        &["acquire", "reconfigure", "acquire", "recreate"],
+                    ),
+                    (
+                        Acquired::Skipped,
+                        &["acquire", "reconfigure", "acquire", "recreate"],
+                    ),
+                ],
             },
             Case {
                 name: "a failed recreation is retried before the next acquire",
-                outcomes: vec![Lost, Lost, Success(2), Success(3)],
+                outcomes: vec![Lost, Lost, Success(2)],
                 recreations: vec![Err(EngineError::SurfaceTargetUnavailable {
                     source: raw_window_handle::HandleError::Unavailable,
                 })],
@@ -383,8 +397,8 @@ mod surface_acquisition_tests {
                         Acquired::SurfaceLost,
                         &["acquire", "reconfigure", "acquire", "recreate"],
                     ),
-                    (Acquired::Frame(2), &["recreate", "acquire"]),
-                    (Acquired::Frame(3), &["acquire"]),
+                    (Acquired::Skipped, &["recreate"]),
+                    (Acquired::Frame(2), &["acquire"]),
                 ],
             },
             Case {
@@ -422,7 +436,7 @@ mod surface_acquisition_tests {
                 surface.calls.clear();
                 let acquired = match acquire_surface_texture_with(&mut surface) {
                     Ok(Some(frame)) => Acquired::Frame(frame),
-                    Ok(None) => panic!("{}: frame {frame} skipped", case.name),
+                    Ok(None) => Acquired::Skipped,
                     Err(EngineError::SurfaceLost) => Acquired::SurfaceLost,
                     Err(EngineError::SurfaceValidation) => Acquired::SurfaceValidation,
                     Err(other) => panic!("{}: frame {frame} failed with {other:?}", case.name),
@@ -2079,8 +2093,9 @@ impl Renderer {
     /// (ADR-0058's per-backend facts).
     /// [`PresentDisposition::NotShown`] skips presentation without error and
     /// so carries no vsync signal: this backend owed content it could not put
-    /// on screen (the surface reporting `Occluded`, or released by its owner
-    /// via [`Renderer::release_surface`]) and the caller should come back for
+    /// on screen (the surface reporting `Occluded`, released by its owner
+    /// via [`Renderer::release_surface`], or just recreated after it was
+    /// lost, so the frame planned for the old one) and the caller should come back for
     /// it rather than counting the frame finished.
     pub fn render_scene(
         &mut self,
@@ -2156,7 +2171,8 @@ impl Renderer {
         }
 
         // Acquire the swapchain texture; returns None when the frame should be
-        // skipped (Occluded, or the surface is released), or Err for
+        // skipped (Occluded, the surface is released, or it was just
+        // recreated after a loss), or Err for
         // unrecoverable surface states. All the `None` causes are the same
         // answer to the caller — content was owed and there is nothing to
         // present it into — so they collapse here on purpose, at the one place
@@ -2262,8 +2278,8 @@ impl Renderer {
     /// Lost (see [`acquire_surface_texture_with`] and [`SurfaceRecovery`]).
     ///
     /// Returns `Ok(None)` when the frame should be skipped rather than
-    /// presented — the surface reports itself `Occluded`, or its owner has
-    /// released it. Both mean the same thing to `render_scene` (content was
+    /// presented — the surface reports itself `Occluded`, its owner has
+    /// released it, or it was just recreated after a loss. Both mean the same thing to `render_scene` (content was
     /// owed and there is nowhere to put it), which classifies them together;
     /// the distinction is only ever useful in a trace, where each cause logs
     /// its own line.

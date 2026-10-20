@@ -238,8 +238,10 @@ deep-but-valid chain; `a_deep_chain_survives_a_small_stack` in
 
 **Surface acquisition escalates.** `Outdated`, `Lost` and `Validation`
 reconfigure and retry once; a surface still `Lost` after that is recreated on
-the same device (`Renderer::recreate_surface`) and retried once more, because
-`Lost` means the surface itself is gone. A recreation that fails leaves the
+the same device (`Renderer::recreate_surface`), because `Lost` means the
+surface itself is gone. The recreating frame is skipped as `NotShown`, which
+the caller retries: it was planned against the old surface, and the new one
+may differ in format or `COPY_SRC` support. A recreation that fails leaves the
 renderer without a surface its owner never released, so the next acquire
 recreates again before anything else instead of skipping frames as if released.
 A frame presented through a `Suboptimal` acquisition configures the surface
