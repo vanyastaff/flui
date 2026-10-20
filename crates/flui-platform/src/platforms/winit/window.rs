@@ -568,6 +568,9 @@ impl WinitWindow {
             let mut pending = self.reveal_pending.lock();
             *pending = false;
             self.map_window();
+            // An occlusion belongs to the mapping that ended; X reports the
+            // new one's.
+            self.occluded.store(false, Ordering::Release);
             *self.is_visible.lock() = true;
         }
         self.report_visibility();
