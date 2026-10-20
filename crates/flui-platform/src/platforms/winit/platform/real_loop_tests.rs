@@ -1438,8 +1438,9 @@ mod x11_window {
                 .apply(WindowCommand::Show)
                 .expect("a desktop window shows");
             until_map_state(server, id, MapState::VIEWABLE);
-            assert!(window.state().visible);
+            // Visible, unless another test's window now covers it.
             until_reported(&window, &visibility, None, "a report of the show");
+            assert_eq!(window.state().visible, window.is_visible());
 
             // The window manager minimizes the window: winit reports no
             // event, the probe hears of it, and the snapshot follows with
