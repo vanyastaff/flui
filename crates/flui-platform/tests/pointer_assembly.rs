@@ -505,6 +505,19 @@ fn an_entered_touch_leaves_when_it_ends() {
         .flat_map(|(action, ms)| decode(&mut contacts, &touch(9, action, ms)).expect("valid"))
         .collect();
     assert_eq!(verbs(&events), ["down", "up"], "a touch that never entered");
+
+    // A mouse that left on its own has no leave to pair when it is retired.
+    let mut contacts = registry();
+    let mut events = Vec::new();
+    for (action, ms) in [(ReadingAction::Enter, 1), (ReadingAction::Leave, 2)] {
+        events.extend(decode(&mut contacts, &mouse(action, ms)).expect("valid"));
+    }
+    events.extend(contacts.cancel_surface(
+        flui_platform::shared::pointer_assembly::NativeSurface(0),
+        EventTime::from_nanos(3_000_000),
+        flui_platform::shared::pointer_assembly::NativeCancel::FocusLost,
+    ));
+    assert_eq!(verbs(&events), ["enter", "leave"], "one leave per enter");
 }
 
 fn the_originating_reading_lives_for_its_sequence() {

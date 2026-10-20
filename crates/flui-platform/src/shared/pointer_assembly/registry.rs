@@ -959,6 +959,8 @@ impl ContactRegistry {
                     contact.entered = true;
                     output.push(PlatformInput::Pointer(PointerEvent::Enter(signal)));
                 } else {
+                    // Its leave is delivered: a later removal has none to pair.
+                    contact.entered = false;
                     if !contact.persists() {
                         if contact.buttons.in_sequence() {
                             output.push(PlatformInput::Pointer(PointerEvent::Cancel(

@@ -771,6 +771,12 @@ fn a_hovering_pen_ends_where_it_leaves() {
     );
     assert_ne!(verbs[0], verbs[3], "a new pen is a new contact: {verbs:?}");
     assert_eq!(&verbs[4..], ["enter Mouse 1", "leave Mouse 1"]);
+    // The page losing focus ends what is still over the canvas, the second
+    // pen, and not the mouse that already left: one leave per enter.
+    page_blur();
+    let after = pointer_verbs(&window.pointer_events());
+    assert_eq!(after.len(), 1, "{after:?}");
+    assert!(after[0].starts_with("leave Pen"), "{after:?}");
 }
 
 /// WebKit on a touch screen reports a two-finger pinch as gesture events

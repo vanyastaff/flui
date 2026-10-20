@@ -1123,6 +1123,8 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     let close_thread_for_worker = Arc::clone(&close_thread);
     let kept_window_for_worker = Arc::clone(&kept_window);
     let move_before_close_for_worker = Arc::clone(&move_before_close);
+    let injected_for_worker = Arc::clone(&injected);
+    let poke = event_loop.create_proxy();
     let worker = thread::spawn(move || {
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             wait_for_running(&platform_for_worker);
@@ -1149,10 +1151,19 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
             }));
             let _prev = kept_window_for_worker.lock().replace(Arc::clone(&window));
 
+            // Every owner wake from here on holds a pointer move first; one
+            // armed wake has run before the close is posted, so the wake
+            // that runs the close is an armed one by construction.
+            move_before_close_for_worker.store(true, Ordering::SeqCst);
+            let _ = poke.send_event(());
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while injected_for_worker.load(Ordering::SeqCst) == 0 {
+                assert!(Instant::now() < deadline, "an armed wake ran");
+                thread::sleep(Duration::from_millis(1));
+            }
+
             // The programmatic close, from a thread that is NOT the
             // owner — the hardest case for the teardown's thread rules.
-            // The loop turn that runs it has a pointer move held first.
-            move_before_close_for_worker.store(true, Ordering::SeqCst);
             window.close();
 
             wait_for_map_len(&platform_for_worker, 0, "programmatic close map removal");
