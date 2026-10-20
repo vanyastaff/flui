@@ -536,6 +536,8 @@ impl WindowContext {
         } else {
             Self::stop_pumping(hwnd);
         }
+        // A key after this step is not stamped before it.
+        self.message_clock.observe(&inputs);
         let delivering = !inputs.is_empty();
         self.deliver_touchpad(inputs);
         if delivering && animating {

@@ -75,6 +75,10 @@ use crate::shared::pointer_assembly::{
 /// The owner snapshots a sample before callback-capable native or user calls.
 pub(super) struct MessageClock {
     native: NativeClock,
+    /// The latest stamp the window delivered, coarse or precise: a message
+    /// stamp never precedes it. A key in the same system tick as a
+    /// `WM_POINTER` sample before it reads an earlier millisecond tick than
+    /// that sample's performance count.
     last_ns: std::cell::Cell<u64>,
 }
 
@@ -141,6 +145,46 @@ impl MessageClock {
         self.last_ns.set(stamp);
         stamp
     }
+
+    /// Raise the floor to the latest stamp `inputs` carry: pointer readings
+    /// stamped from their performance count, which a later message's coarse
+    /// stamp must not precede.
+    pub(super) fn observe(&self, inputs: &[PlatformInput]) {
+        let latest = inputs
+            .iter()
+            .filter_map(PlatformInput::as_pointer)
+            .filter_map(pointer_time)
+            .map(EventTime::as_nanos)
+            .max();
+        if let Some(latest) = latest {
+            self.last_ns.set(self.last_ns.get().max(latest));
+        }
+    }
+}
+
+/// When `event` happened; `None` for a revision, whose time names the
+/// reading it replaces.
+fn pointer_time(event: &flui_platform_api::pointer::PointerEvent) -> Option<EventTime> {
+    use flui_platform_api::pointer::{ButtonChange, PointerEvent};
+    Some(match event {
+        PointerEvent::Down(press) | PointerEvent::ButtonChange(ButtonChange::Pressed(press)) => {
+            press.sample.time
+        }
+        PointerEvent::Up(release) | PointerEvent::ButtonChange(ButtonChange::Released(release)) => {
+            release.sample.time
+        }
+        PointerEvent::Move(movement) => movement.current().time,
+        PointerEvent::Cancel(cancel) => cancel.time,
+        PointerEvent::Enter(signal)
+        | PointerEvent::Leave(signal)
+        | PointerEvent::ScrollInertiaCancel(signal) => signal.time,
+        PointerEvent::Scroll(scroll) => scroll.time,
+        PointerEvent::PanZoom(pan_zoom) => pan_zoom.time,
+        PointerEvent::PenSqueeze(squeeze) => squeeze.time,
+        PointerEvent::DeviceAdded(change) | PointerEvent::DeviceRemoved(change) => change.time,
+        // A revision names the reading it replaces; the vocabulary may grow.
+        _ => return None,
+    })
 }
 
 // Native queue clocks cannot be advanced through a consumer API. These rows
@@ -216,6 +260,32 @@ mod message_clock_contract {
             first.stamp_at(150, 200),
             second.stamp_at(150, 200),
             "independent windows share the process epoch"
+        );
+    }
+
+    /// A message stamped from its millisecond tick after a pointer reading
+    /// stamped from its performance count, in the same system tick, is not
+    /// placed before that reading.
+    #[test]
+    fn a_coarse_stamp_never_precedes_a_delivered_precise_one() {
+        use flui_platform_api::EventTime;
+        use flui_platform_api::pointer::{
+            CancelReason, PointerCancel, PointerEvent, PointerId, PointerInfo, PointerKind,
+        };
+        let clock = MessageClock::anchored(100, None, 1_000_000);
+        let precise = PointerEvent::Cancel(PointerCancel::new(
+            PointerInfo::new(
+                PointerId::new(std::num::NonZeroU64::MIN),
+                PointerKind::Touch,
+            ),
+            EventTime::from_nanos(25_400_000),
+            CancelReason::Platform,
+        ));
+        clock.observe(&[crate::traits::PlatformInput::Pointer(precise)]);
+        assert_eq!(
+            [clock.stamp_at(110, 200), clock.stamp_at(130, 200)],
+            [25_400_000, 31_000_000],
+            "floored to the reading, then the tick again once it is later"
         );
     }
 }
@@ -658,7 +728,7 @@ pub(super) fn native_pointer_input(
         GetTickCount64()
     };
     let modifiers = message_modifiers();
-    assemble_history(
+    let assembled = assemble_history(
         &mut registry.borrow_mut(),
         &packets,
         message,
@@ -666,7 +736,9 @@ pub(super) fn native_pointer_input(
         scale,
         now,
         modifiers,
-    )
+    );
+    clock.observe(&assembled);
+    assembled
 }
 
 pub(super) fn native_device_kind(

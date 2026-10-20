@@ -845,16 +845,15 @@ fn a_moved_window_tells_tsf_its_layout_changed() {
     let host = win32
         .text_store_host(OwnerThreadToken::new())
         .expect("a real window offers its host");
-    let notifications = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let layout_changes = || {
+    fn count(notifications: &std::sync::Mutex<Vec<String>>) -> usize {
         notifications
             .lock()
             .expect("notification log")
             .iter()
             .filter(|what| *what == "OnLayoutChange")
             .count()
-    };
-    let move_by = |dx: i32| {
+    }
+    fn move_window(hwnd: HWND, dx: i32) {
         let mut rect = RECT::default();
         // SAFETY: the case's own window on its owner thread; `rect` is a
         // live local.
@@ -871,7 +870,10 @@ fn a_moved_window_tells_tsf_its_layout_changed() {
             )
             .expect("move the window");
         }
-    };
+    }
+    let notifications = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let layout_changes = || count(&notifications);
+    let move_by = |dx: i32| move_window(hwnd, dx);
     tracing::subscriber::with_default(SinkNotifications(Arc::clone(&notifications)), || {
         move_by(10);
         assert_eq!(layout_changes(), 0, "no field is focused");
@@ -898,6 +900,35 @@ fn a_moved_window_tells_tsf_its_layout_changed() {
             );
         }
         assert!(layout_changes() >= 3, "a DPI change does");
+
+        // Moved while a lock is held (a listener of an edit TSF's grant made),
+        // the field reports it once the lock is released: TSF answers with a
+        // synchronous lock request, which a held lock would refuse.
+        let before = layout_changes();
+        let during = Rc::new(Cell::new(None));
+        let (seen, log, raw) = (
+            Rc::clone(&during),
+            Arc::clone(&notifications),
+            hwnd.0 as isize,
+        );
+        let outcome = store.request_lock(
+            LockGrant::read(move |_| {
+                move_window(HWND(raw as *mut _), 10);
+                seen.set(Some(count(&log)));
+            }),
+            LockTiming::Sync,
+        );
+        assert_eq!(
+            outcome,
+            Ok(LockOutcome::Granted),
+            "the read lock is granted"
+        );
+        assert_eq!(during.get(), Some(before), "nothing is sent under the lock");
+        assert_eq!(
+            layout_changes(),
+            before + 1,
+            "the move is reported once the lock is released"
+        );
         host.focus_store(None);
     });
     window.close();

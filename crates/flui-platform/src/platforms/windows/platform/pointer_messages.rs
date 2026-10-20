@@ -30,8 +30,10 @@ impl WindowContext {
     pub(super) fn pointer_message(&self, hwnd: HWND, message: u32, wparam: WPARAM) {
         let raw = (wparam.0 & 0xffff) as u32;
         let mouse = events::is_mouse_pointer(raw);
-        // The mouse's hover follows the messages that carry it; a capture
-        // change says nothing about where it is.
+        // The mouse's hover follows the messages that carry it. A capture
+        // change says nothing about where it is, and no message follows it
+        // (a press dragged outside sends no leave while it is held), so the
+        // hover is read from the cursor once its input is delivered.
         let hover =
             (mouse && message != WM_POINTERCAPTURECHANGED).then_some(message != WM_POINTERLEAVE);
         let inputs = events::native_pointer_input(
@@ -55,6 +57,15 @@ impl WindowContext {
         if hover == Some(false) {
             self.set_hovered(false);
         }
+        if mouse && message == WM_POINTERCAPTURECHANGED {
+            self.reconcile_hover(hwnd);
+        }
+    }
+
+    /// The window lost the mouse capture: no message may say where the
+    /// cursor went, so the hover is what the cursor is over now.
+    fn reconcile_hover(&self, hwnd: HWND) {
+        self.set_hovered(cursor_over_client(hwnd));
     }
 
     /// `WM_POINTERDEVICECHANGE`: a removed device ends its contacts and
@@ -105,5 +116,30 @@ impl WindowContext {
         for cancel in cancels {
             self.callbacks.dispatch_input(cancel);
         }
+    }
+}
+
+/// Whether the cursor is over `hwnd`'s client area, the window on top there;
+/// `false` when the cursor cannot be read.
+fn cursor_over_client(hwnd: HWND) -> bool {
+    use windows::Win32::{
+        Foundation::{POINT, RECT},
+        Graphics::Gdi::ScreenToClient,
+        UI::WindowsAndMessaging::{GetClientRect, GetCursorPos, WindowFromPoint},
+    };
+    let mut cursor = POINT::default();
+    let mut client = RECT::default();
+    // SAFETY: every out pointer addresses a live local; `hwnd` is the window
+    // whose procedure is running.
+    unsafe {
+        if GetCursorPos(&raw mut cursor).is_err() || WindowFromPoint(cursor) != hwnd {
+            return false;
+        }
+        ScreenToClient(hwnd, &raw mut cursor).as_bool()
+            && GetClientRect(hwnd, &raw mut client).is_ok()
+            && cursor.x >= client.left
+            && cursor.x < client.right
+            && cursor.y >= client.top
+            && cursor.y < client.bottom
     }
 }

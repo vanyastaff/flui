@@ -280,6 +280,11 @@ callbacks or native capture changes can dispatch another message.
 
 Keys are stamped from the same clock, read before the keydown drains its
 characters, so a key and a click queued behind a long frame keep their order.
+The clock keeps one floor for every stamp the window delivered: a `WM_POINTER`
+reading stamped from its performance count raises it, so a key in the same
+system tick, whose millisecond tick reads earlier, is not placed before the
+reading delivered ahead of it (`a_coarse_stamp_never_precedes_a_delivered_precise_one`,
+and the key rounds of `focus_loss_ends_a_touch_and_silences_its_tail`).
 
 `queued_mouse_samples_keep_native_message_time` drives the public native window
 with delayed queued mouse samples, `queued_key_events_keep_native_message_time`
@@ -310,7 +315,10 @@ on the legacy route, and on the `WM_POINTER` route every mouse message but a
 capture change enters and `WM_POINTERLEAVE` leaves. Entering is raised before
 the input of its message, leaving after it. The system captures a mouse press on
 the `WM_POINTER` route itself, so a drag released outside the client area still
-delivers its release. `a_pointer_routed_mouse_hovers_the_window` drives both with
+delivers its release. A press dragged outside sends no leave while it is held,
+and no pointer message follows a `WM_POINTERCAPTURECHANGED`, so on a capture
+change the hover is read from the cursor (on the client area of this window,
+the window on top there). `a_pointer_routed_mouse_hovers_the_window` drives both with
 `SendInput` moves (never `SetCursorPos`, which arrives as `WM_MOUSEMOVE`).
 
 Losing focus (`WM_KILLFOCUS`) or being minimised (`SIZE_MINIMIZED`) ends every
@@ -339,7 +347,9 @@ A pen is placed from `ptHimetricLocationRaw` through its device's
 `GetPointerDeviceRects`, read once per message, so a stroke keeps the fraction
 of a pixel the integer `ptPixelLocationRaw` drops. A mapping that is missing,
 empty, or more than a pixel from the reported pixel (a rotated display maps the
-axes otherwise) leaves the pixel (`native_pen_position_keeps_himetric_precision`).
+axes otherwise) leaves the pixel (`native_pen_position_keeps_himetric_precision`;
+`synthetic_touch_and_pen_reach_native_pointer_dispatch` holds each injected pen press
+against its own himetric reading and device rectangles within 1e-6).
 
 Each pointer of a multi-touch frame is still decoded from its own message, so a
 two-finger frame reaches a recognizer as two steps; one step per frame
@@ -920,9 +930,11 @@ logged, contained: the window procedure aborts on a panic. Test:
 row of `the_text_services_answer_a_completion_for_its_store`.
 
 A field's screen rectangles move with its window, so `WM_MOVE`, `WM_EXITSIZEMOVE` and
-`WM_DPICHANGED` send the focused document's sink `OnLayoutChange`, and an input method
-moves its candidate window with the text; the notification's failures are logged, contained
-(`a_moved_window_tells_tsf_its_layout_changed`).
+`WM_DPICHANGED` tell the focused field's store (`TextStore::screen_moved`), which reports
+`OnLayoutChange` by its own notification rule: not while a lock is held or its gate is shut,
+since TSF answers with a synchronous lock request. An input method then moves its candidate
+window with the text; failures are logged, contained
+(`a_moved_window_tells_tsf_its_layout_changed`, a move under a held lock included).
 
 ### AppKit reopen signals use a loop-owned serialized callback pump
 
@@ -2319,8 +2331,9 @@ label and contact label; mints pointer and device identities in order and refuse
 permanently after the last; keeps a mouse's contact for the life of its device on
 the surface; returns a lifted pen to hovering on the same identity until the
 platform's leave, so its `Enter` and `Leave` pair up (a touch ends at `Up` or a
-cancel and then delivers the `Leave` for an `Enter` it delivered, after which the
-platform's own leave is a silent orphan; a hovering pen whose label returns as
+cancel, and any contact a cancel or a retirement removes, a hovering pen at a
+window's focus loss among them, delivers the `Leave` for an `Enter` it delivered,
+after which the platform's own leave is a silent orphan; a hovering pen whose label returns as
 another kind leaves first); drives touch and pen sequences by their contact (a barrel button
 changes within it, or while the pen hovers) and mouse sequences by any held
 button; counts clicks only from OS settings a backend supplies (Win32 today, AppKit

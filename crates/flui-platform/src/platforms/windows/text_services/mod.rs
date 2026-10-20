@@ -384,16 +384,20 @@ impl TextServices {
     }
 
     /// The window moved, or its DPI changed: the focused field's text sits
-    /// somewhere else on the screen, so TSF is told its layout changed and an
-    /// input method moves its candidate window with it. A notification
-    /// reaches TSF and a user-installed `tracing` subscriber; from the window
-    /// procedure a failure there is logged, not raised.
+    /// somewhere else on the screen. The field's store is told, and reports
+    /// `OnLayoutChange` by its own rule, when no lock is held and its gate is
+    /// open, since TSF answers with a synchronous lock request; an input
+    /// method then moves its candidate window with the text. The store and
+    /// the sink are application code and a user-installed `tracing`
+    /// subscriber: from the window procedure a failure there is logged, not
+    /// raised.
     pub(super) fn window_moved(&self) {
-        let Some(state) = self.focused_state() else {
+        let Some(store) = self.focused_state().map(|state| Rc::clone(&state.store)) else {
             return;
         };
         let mut calls = OwnerCalls::new();
-        calls.run(|| document::notify_layout_changed(&state));
+        calls.run(|| store.screen_moved());
+        calls.retire(store);
         if let Some(payload) = calls.into_failure() {
             log_failure(payload);
         }

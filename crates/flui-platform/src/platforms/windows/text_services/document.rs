@@ -1017,15 +1017,6 @@ fn wide_text(text: &PCWSTR, cch: u32) -> windows_core::Result<String> {
     String::from_utf16(units).map_err(|_| E_INVALIDARG.into())
 }
 
-/// Tell `state`'s advised sink that its layout changed, as the store does
-/// when its text moves (the window moved it).
-pub(super) fn notify_layout_changed(state: &Rc<DocumentState>) {
-    SinkObserver {
-        state: Rc::downgrade(state),
-    }
-    .layout_changed();
-}
-
 /// The store's notifications forwarded to the advised `ITextStoreACPSink`.
 struct SinkObserver {
     state: Weak<DocumentState>,
