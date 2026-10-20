@@ -1091,22 +1091,16 @@ impl Renderer {
             // is global to every wgpu backend, where 2 is wgpu's own default
             // and the other backends are unmeasured either way.
             //
-            // Pinned independently of the clock-side produce-capacity threshold
-            // (`flui_scheduler::FrameClock::set_max_in_flight`, issue #556): that
-            // number is never threaded into this field, and this field is never
-            // derived from it.
-            // Re-coupling the two is a separate decision that needs its own
-            // evidence, not something to slip in by widening this literal. Two
+            // This field is the only in-flight bound FLUI sets: the frame clock
+            // throttles produces by interval, never by frames in flight. Two
             // implementer notes worth having in one place: (a)
             // wgpu ignores `desired_maximum_frame_latency` entirely on the GL
             // backend (live here — `Backends::GL` is selectable via the `gles`
-            // feature). The clock-side counter is no bound there either:
-            // nothing in production calls `record_submit`, so it stays at 0.
-            // What bounds the frames in flight on every backend is the
-            // driver's present queue, which `get_current_texture` blocks on;
-            // the raster lane runs inline on the owner thread and holds one
-            // frame in its mailbox, so the owner cannot run further ahead
-            // than that queue lets it; (b) this field only takes effect at
+            // feature), so on GL nothing bounds frames in flight beyond the
+            // driver's own queue, which `get_current_texture` blocks on; the
+            // raster lane runs inline on the owner thread and holds one frame
+            // in its mailbox, so the owner cannot run further ahead than that
+            // queue lets it; (b) this field only takes effect at
             // `Surface::configure` — every reconfigure must resupply it. `resize`
             // and `reconfigure_surface` below both mutate and re-`configure` THIS
             // SAME `SurfaceConfiguration` value (so it never needs resupplying —

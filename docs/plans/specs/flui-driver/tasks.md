@@ -1,7 +1,7 @@
 # flui-driver: tasks
 
-- **Status:** approved by the owner (2026-10-20). FD27 is in review in #1773 (the `Inspect` core, see its
-  card's evidence); no other task started. `interaction/completeness`
+- **Status:** approved by the owner (2026-10-20). FD27 has merged (#1773). FD1 is in review (protocol
+  0.5, see its card's evidence); no other task started. `interaction/completeness`
   has merged (#1733), so the IC tasks are unblocked. `flui run --agent` and `flui mcp` exist on
   the ADR-0095 endpoint (#1769); the tasks that replace that endpoint and `flui mcp` start from
   them.
@@ -121,6 +121,31 @@ graph LR
     tier per method and at most 13 `Core` methods;
   - a wire spelling table covers every new enum;
   - nothing upstream appears in a signature (ADR-0089 gate).
+- **Evidence (2026-10-20):**
+  - `METHODS` has 40 methods, 13 of them `Core`. The rest of the design's table joins with the
+    task that brings its types: the OS lanes (`os.*`, `input.os`, `capture.os`), baselines,
+    recording and traces, layout, the other audits, reports, devices and exploration.
+  - Every tier but `core` is a `--caps` group. `session` was added for session control beyond
+    the core (attach, capabilities, window placement, frame and settle waits, `motion.set`), and
+    ADR-0238 §9, R28a and the front-end list name it.
+  - The table reaches consumers through `for_each_method!` with concrete types, so no serde or
+    schemars bound sits in a signature (ADR-0089 §2).
+  - The ADR-0095 endpoint in `flui-devtools` still answers `windows`, `read`, `act` and `motion`
+    and says protocol 0.4 until the driver agent (FD5) replaces it. Its read replies already
+    carry the 0.5 `Tree`, which only adds to the 0.4 one.
+  - Tests, in `flui-protocol`'s `protocol_it`:
+    - `wire_schema::the_wire_schema_is_the_one_its_version_published` over
+      `tests/schema/protocol-0.5.json`;
+    - `wire_schema::every_published_schema_is_additive_to_the_next`, with the four renames
+      listed in `version::BREAKING`;
+    - `wire_schema::the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_required_one`,
+      now also for a removed method, a listed rename and a new definition;
+    - `method_table::every_method_is_named_group_dot_verb_once_and_listed_in_order`,
+      `the_core_set_is_the_thirteen_tools_mcp_lists_by_default`,
+      `the_ops_protocol_0_5_renamed_are_methods_now`;
+    - `wire_spelling::every_vocabulary_enum_is_spelled_as_it_is_named` and one round-trip table
+      per group (locator, element ref, targets, input, outcomes, waits, events, captures, perf,
+      audits, errors, hello).
 - **Not here:** front-end coverage tests (FD17).
 
 ### FD2. Semantics identifier

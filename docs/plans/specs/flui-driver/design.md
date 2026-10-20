@@ -816,7 +816,7 @@ becomes a cannot-verify check, never a failure.
     `semantics_read`, `semantics_locate`, `semantics_act`, `element_tap`, `element_type_text`,
     `element_press_keys`, `element_scroll_into_view`, `wait_until`, `capture_presented`, `audit_screen`. Acting
     tools answer a snapshot delta by default.
-  - **Groups (`--caps a,b`):** `input` (`input_perform`, `input_inject`, `input_os`, the other
+  - **Groups (`--caps a,b`):** `session` (`session_attach`, `session_capabilities`, `window_placement`, `wait_frames`, `wait_settled`, `motion_set`), `input` (`input_perform`, `input_inject`, `input_os`, the other
     gestures), `inspect`, `pixels`, `record` (with `trace_*`), `perf`, `audit`, `explore`, and
     `layout` (assertions, snapshots, annotated captures), `vision` (coordinate targets and `capture_os`, as Playwright MCP gates coordinate tools).
 

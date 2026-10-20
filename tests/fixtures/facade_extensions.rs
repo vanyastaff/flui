@@ -487,7 +487,7 @@ fn downstream_custom_recognizer_competes_in_the_arena() {
 }
 
 use flui::view::{
-    AsyncDriver, BoxedTask, BudgetPercentage, FrameDuration, FramePhase, FrameTiming, Instant,
+    AsyncDriver, BoxedTask, BudgetPercentage, FrameDuration, FrameId, FrameTiming, Instant,
     InvalidDurationConfig, Microseconds, Milliseconds, PostFrameHandle, PostFrameScheduleError,
     Seconds, TaskToken,
 };
@@ -521,16 +521,14 @@ impl StatefulView for CapabilityView {
 }
 
 fn inspect_timing(timing: &FrameTiming) {
-    let _: flui::foundation::FrameId = timing.id;
-    let _: Instant = timing.start_time;
-    let phase: FramePhase = timing.phase;
+    let _: FrameId = timing.id;
+    let start: Instant = timing.start_time;
     let duration: FrameDuration = timing.frame_duration;
-    let elapsed: Milliseconds = timing.elapsed();
+    let elapsed: Milliseconds = timing.elapsed_at(start);
     let _: Seconds = elapsed.to_seconds();
     let _: Microseconds = elapsed.to_micros();
-    let _: BudgetPercentage = timing.utilization();
+    let _: BudgetPercentage = timing.utilization_at(start);
     assert!(duration.as_ms().value() > 0.0);
-    let _: Milliseconds = timing.phase_duration(phase);
 }
 
 struct PendingCapabilityTask {

@@ -35,7 +35,8 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
 use flui_scheduler::{
-    ClockSource, DemandKind, FrameClock, PollDecision, PresentOutcome, PresentationId,
+    ClockSource, DemandKind, FrameClock, FramePhaseDurations, FrameTimes, PollDecision,
+    PresentOutcome, PresentationId,
 };
 
 // Per-thread, not process-global: a `GlobalAlloc` sees every thread's
@@ -117,10 +118,7 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
     assert_eq!(clock.poll(now), PollDecision::Produce, "warmup produce");
     let _ = clock.record_frame(
         PresentationId::new(1),
-        now,
-        now,
-        now,
-        now,
+        frame_times(now),
         PresentOutcome::Presented,
     );
 
@@ -142,10 +140,7 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
         assert_eq!(decision, PollDecision::Produce, "every cycle must produce");
         let _snapshot = clock.record_frame(
             PresentationId::new(1),
-            now,
-            now,
-            now,
-            now,
+            frame_times(now),
             PresentOutcome::Presented,
         );
 
@@ -186,4 +181,15 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
         "frames_since must allocate its returned Vec — if it didn't, the frame-path \
          zero-allocation claim above would be proving nothing"
     );
+}
+
+/// Every stage of a frame at one instant.
+fn frame_times(now: flui_scheduler::Instant) -> FrameTimes {
+    FrameTimes {
+        clock_timestamp: now,
+        segment_start: now,
+        segment_end: now,
+        submit_at: now,
+        phases: FramePhaseDurations::default(),
+    }
 }

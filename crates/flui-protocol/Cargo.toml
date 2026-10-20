@@ -1,4 +1,5 @@
 [package]
+autotests = false
 publish = ["crates-io"]
 name = "flui-protocol"
 version.workspace = true
@@ -27,6 +28,10 @@ schemars = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+
+[[test]]
+name = "protocol_it"
+path = "tests/main.rs"
 
 [lints]
 workspace = true

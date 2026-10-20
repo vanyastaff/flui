@@ -34,15 +34,15 @@ fn main() {
 
 fn demo_basic_budget() {
     // Create a budget targeting 60 FPS
-    let budget = FrameBudget::new(60);
+    let budget = FrameBudget::new(fps(60));
 
     println!("Frame Budget for 60 FPS:");
     println!("  Target duration: {:.2} ms", budget.target_duration_ms());
     println!("  Target FPS: {}", budget.target_fps());
 
     // Create budgets for different frame rates
-    let budget_30 = FrameBudget::new(30);
-    let budget_120 = FrameBudget::new(120);
+    let budget_30 = FrameBudget::new(fps(30));
+    let budget_120 = FrameBudget::new(fps(120));
 
     println!("\nComparison of frame budgets:");
     println!(
@@ -57,7 +57,7 @@ fn demo_basic_budget() {
 }
 
 fn demo_phase_timing() {
-    let mut budget = FrameBudget::new(60);
+    let mut budget = FrameBudget::new(fps(60));
 
     println!("Simulating frame phases:\n");
 
@@ -106,7 +106,7 @@ fn demo_phase_timing() {
 }
 
 fn demo_jank_detection() {
-    let mut budget = FrameBudget::new(60);
+    let mut budget = FrameBudget::new(fps(60));
 
     println!("Simulating frames with varying durations:\n");
 
@@ -138,7 +138,7 @@ fn demo_budget_builder() {
     println!("Using FrameBudgetBuilder:\n");
 
     // Build a custom budget
-    let budget = FrameBudgetBuilder::new().target_fps(90).build();
+    let budget = FrameBudgetBuilder::new().target_fps(fps(90)).build();
 
     println!("Custom 90 FPS budget:");
     println!("  Target FPS: {}", budget.target_fps());
@@ -187,4 +187,9 @@ fn demo_budget_builder() {
         duration.utilization(elapsed_over) * 100.0
     );
     println!("  Is janky: {}", duration.is_janky(elapsed_over));
+}
+
+/// A frame rate known to be non-zero.
+fn fps(rate: u32) -> std::num::NonZeroU32 {
+    std::num::NonZeroU32::new(rate).expect("example frame rates are non-zero")
 }
