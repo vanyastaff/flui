@@ -266,7 +266,7 @@ fn axial_fling_limits_read_the_drag_axis() {
         drag.add_pointer(PointerDispatch::at_root(&down));
         arena.close(info.id);
         arena.drain_deferred_resolutions();
-        let mut send = |millis: u64, x: f64, y: f64| {
+        let send = |millis: u64, x: f64, y: f64| {
             let event = PointerEvent::Move(PointerMove::new(info, buttons, sample(millis, x, y)));
             drag.handle_event(PointerDispatch::at_root(&event));
         };

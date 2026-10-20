@@ -109,6 +109,8 @@ fn an_undecided_press_shows_before_its_release() {
         );
         clock.advance(std::time::Duration::from_millis(wait));
         arena.poll_deadlines();
+        let shown: &[&str] = if wait >= 100 { &["down"] } else { &[] };
+        assert_eq!(&*log.borrow(), shown, "{wait} ms undecided, still held");
         match then {
             Then::Taken => {
                 let erased: Rc<dyn GestureArenaMember> = rival.clone();

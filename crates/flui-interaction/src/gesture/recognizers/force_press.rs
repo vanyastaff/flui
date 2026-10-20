@@ -523,7 +523,7 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
                 finish_containment(first, std::thread::panicking());
             }
             PointerEvent::Up(_) => {
-                self.end(Some(dispatch), ArenaStep::Finish(ContactEnd::Contending))
+                self.end(Some(dispatch), ArenaStep::Finish(ContactEnd::Contending));
             }
             PointerEvent::Cancel(_) => {
                 self.cancel();

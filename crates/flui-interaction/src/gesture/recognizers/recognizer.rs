@@ -128,11 +128,11 @@ pub(crate) fn slop_travel(local: Offset<f64>, global: Offset<f64>) -> Offset<f64
 
 /// [`slop_travel`] for each measured sample of `dispatch` from the Down at
 /// `local_origin` and `global_origin`, in packet order.
-pub(crate) fn measured_travel<'a>(
-    dispatch: crate::pointer::PointerDispatch<'a>,
+pub(crate) fn measured_travel(
+    dispatch: crate::pointer::PointerDispatch<'_>,
     local_origin: Offset<f64>,
     global_origin: Offset<f64>,
-) -> impl Iterator<Item = Offset<f64>> + 'a {
+) -> impl Iterator<Item = Offset<f64>> {
     measured_positions(dispatch.local)
         .zip(measured_positions(dispatch.global))
         .map(move |(local, global)| slop_travel(local - local_origin, global - global_origin))

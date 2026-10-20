@@ -455,12 +455,7 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
                 }
             }
             PointerEvent::Up(_) => {
-                enum Release {
-                    Pending,
-                    Complete(MultiTapSequence),
-                    Apart,
-                }
-                let release = {
+                let (completed, apart) = {
                     let mut state = self.sequence.borrow_mut();
                     let Some(sequence) = state.as_mut() else {
                         return;
@@ -472,19 +467,17 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
                     if sequence.contacts.len() < self.required_pointer_count {
                         // A contact lifted before the group was complete: the
                         // fingers were never all down together.
-                        Release::Apart
+                        (None, true)
                     } else if sequence.contacts.values().all(|contact| !contact.down) {
-                        Release::Complete(state.take().expect("BUG: released sequence exists"))
+                        (state.take(), false)
                     } else {
-                        Release::Pending
+                        (None, false)
                     }
                 };
-                match release {
-                    Release::Complete(sequence) => self.complete(sequence),
-                    Release::Apart => {
-                        self.cancel();
-                    }
-                    Release::Pending => {}
+                if let Some(sequence) = completed {
+                    self.complete(sequence);
+                } else if apart {
+                    self.cancel();
                 }
             }
             PointerEvent::Cancel(_) => {
