@@ -151,24 +151,30 @@ impl KeyRoute {
 /// Keep the canvas's backing store and the window's tracked size in step
 /// with its CSS box — see `WebWindow::new`'s "Size" section. A
 /// `ResizeObserver` on the canvas sees every layout change (a viewport
-/// resize under `100vw`, a container reflow, a style change), but it reports
-/// boxes, not ratios. A window dragged to a display of another scale moves the
-/// device pixel ratio and keeps its box, and the window's `resize` event does
-/// not fire for that either, so a pixel-ratio watch of the window's own
-/// reports it; `resize` is kept for page zoom, which also arms a watch the
-/// browser refused. `LayoutSync::sync` is a no-op when nothing changed, so the
-/// overlapping sources cost nothing.
+/// resize under `100vw`, a container reflow, a style change). Where the
+/// browser observes the device-pixel content box (Chrome, Firefox), each
+/// report carries the exact backing size, and a device pixel ratio change
+/// moves that box, so it is reported too. Safari observes only the CSS box: a
+/// window dragged to a display of another scale moves the ratio and keeps its
+/// box, and the window's `resize` event does not fire for that either, so
+/// there a pixel-ratio watch of the window's own reports it. `resize` is kept
+/// for page zoom, which also arms a watch the browser refused.
+/// `LayoutSync::sync` is a no-op when nothing changed, so the overlapping
+/// sources cost nothing.
 fn register_layout_events(
     window: &WebWindow,
     registration: &mut Registration,
 ) -> Result<(), crate::OpenWindowError> {
     let sync = Rc::new(window.layout_sync());
     let observer_sync = Rc::clone(&sync);
-    registration.observe(move || observer_sync.sync())?;
+    let observes_device_pixels =
+        registration.observe(move |device| observer_sync.observe(device))?;
     let ratio_sync = Rc::clone(&sync);
     // Owned by the `resize` listener, so the registration's teardown removes
     // the query with it.
-    let ratio = PixelRatioWatch::for_layout(&registration.accepting, move || ratio_sync.sync());
+    let ratio = (!observes_device_pixels)
+        .then(|| PixelRatioWatch::for_layout(&registration.accepting, move || ratio_sync.sync()))
+        .flatten();
     let browser = web_sys::window().expect("BUG: window construction verified browser environment");
     registration.listen(browser.as_ref(), "resize", move |_| {
         if let Some(ratio) = &ratio {

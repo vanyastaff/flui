@@ -8,6 +8,7 @@ use std::{
 
 use wasm_bindgen::{JsCast, prelude::*};
 
+use super::window::DeviceSize;
 use crate::traits::OpenWindowError;
 
 #[wasm_bindgen(inline_js = "
@@ -34,7 +35,32 @@ export function isOwnedFocus(canvas, node) {
 export function setCanvasEditor(canvas, token, editor) {
     if (canvas[ownerKey] === token) token.editor = editor;
 }
-export function observeCanvas(observer, canvas) { observer.observe(canvas); }
+// The device-pixel content box where the browser has it (Chrome, Firefox),
+// which also reports a device pixel ratio change. Safari rejects the box; its
+// content box is observed instead. True when the device-pixel box is.
+export function observeCanvas(observer, canvas) {
+    try {
+        observer.observe(canvas, { box: 'device-pixel-content-box' });
+        return true;
+    } catch {
+        observer.observe(canvas);
+        return false;
+    }
+}
+// The last entry's device-pixel content box as [width, height]; [] when the
+// entry has none. The box sizes are logical: a vertical writing mode puts the
+// width in blockSize.
+export function devicePixelSize(entries) {
+    const entry = entries[entries.length - 1];
+    const box = entry?.devicePixelContentBoxSize?.[0];
+    if (!box) return [];
+    const mode = globalThis.getComputedStyle?.(entry.target)?.writingMode ?? '';
+    const vertical = /^(vertical|sideways)/.test(mode);
+    const width = vertical ? box.blockSize : box.inlineSize;
+    const height = vertical ? box.inlineSize : box.blockSize;
+    const valid = size => Number.isInteger(size) && size > 0;
+    return valid(width) && valid(height) ? [width, height] : [];
+}
 export function disconnectObserver(observer) { observer.disconnect(); }
 export function admitPointerCapture(canvas, token, id) {
     if (canvas[ownerKey] !== token) return false;
@@ -68,7 +94,9 @@ extern "C" {
     fn observe_canvas(
         observer: &web_sys::ResizeObserver,
         canvas: &web_sys::HtmlCanvasElement,
-    ) -> Result<(), JsValue>;
+    ) -> Result<bool, JsValue>;
+    #[wasm_bindgen(js_name = devicePixelSize)]
+    fn device_pixel_size(entries: &JsValue) -> Vec<u32>;
     #[wasm_bindgen(catch, js_name = disconnectObserver)]
     fn disconnect_observer(observer: &web_sys::ResizeObserver) -> Result<(), JsValue>;
     #[wasm_bindgen(catch, js_name = releasePointerCapture)]
@@ -227,8 +255,8 @@ impl Drop for Listener {
 
 struct ResizeSubscription {
     observer: web_sys::ResizeObserver,
-    closure: Option<Closure<dyn Fn()>>,
-    _body: Rc<dyn Fn()>,
+    closure: Option<Closure<dyn Fn(JsValue)>>,
+    _body: Rc<dyn Fn(Option<DeviceSize>)>,
 }
 
 impl Drop for ResizeSubscription {
@@ -346,15 +374,26 @@ impl Registration {
         Ok(())
     }
 
-    pub(super) fn observe(&mut self, body: impl Fn() + 'static) -> Result<(), OpenWindowError> {
-        let body: Rc<dyn Fn()> = Rc::new(body);
+    /// Observe the canvas's size; `body` gets each report's device-pixel
+    /// size where the browser gives one. `true` when the browser observes
+    /// the device-pixel box, which reports a device pixel ratio change too;
+    /// `false` when it observes the CSS box or has no `ResizeObserver`.
+    pub(super) fn observe(
+        &mut self,
+        body: impl Fn(Option<DeviceSize>) + 'static,
+    ) -> Result<bool, OpenWindowError> {
+        let body: Rc<dyn Fn(Option<DeviceSize>)> = Rc::new(body);
         let weak = Rc::downgrade(&body);
         let accepting = Rc::clone(&self.accepting);
-        let closure = Closure::<dyn Fn()>::new(move || {
+        let closure = Closure::<dyn Fn(JsValue)>::new(move |entries: JsValue| {
             if accepting.get()
                 && let Some(body) = weak.upgrade()
             {
-                body();
+                let device = match device_pixel_size(&entries)[..] {
+                    [width, height] => Some(DeviceSize { width, height }),
+                    _ => None,
+                };
+                body(device);
             }
         });
         let observer = match web_sys::ResizeObserver::new(closure.as_ref().unchecked_ref()) {
@@ -366,7 +405,7 @@ impl Registration {
                         "ResizeObserver unavailable; using window resize subscription"
                     );
                 });
-                return Ok(());
+                return Ok(false);
             }
         };
         self.observer = Some(ResizeSubscription {

@@ -117,6 +117,8 @@ struct WebWindowState {
     width: f64,
     height: f64,
     scale_factor: f64,
+    /// The canvas's backing store, which is the surface's physical size.
+    backing: DeviceSize,
     focused: bool,
     visible: bool,
     /// What the Page Lifecycle API last said: a frozen page runs no script.
@@ -147,17 +149,34 @@ pub(super) fn dark_scheme_query() -> Option<web_sys::MediaQueryList> {
         .flatten()
 }
 
-/// Set the canvas's backing store to `logical × scale`, rounded, so the
-/// surface renders one texel per device pixel. Skipped when unchanged:
-/// assigning `width`/`height` clears a canvas even to the same value.
-fn apply_backing_size(canvas: &web_sys::HtmlCanvasElement, width: f64, height: f64, scale: f64) {
-    let phys_width = (width * scale).round() as u32;
-    let phys_height = (height * scale).round() as u32;
-    if canvas.width() != phys_width {
-        canvas.set_width(phys_width);
+/// A canvas size in device pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DeviceSize {
+    pub(super) width: u32,
+    pub(super) height: u32,
+}
+
+impl DeviceSize {
+    /// `logical × scale`, rounded: the device pixels a box probably covers.
+    /// The browser snaps a box to device pixels from its position too, so
+    /// this can be a pixel off the size it really laid out.
+    fn estimate(width: f64, height: f64, scale: f64) -> Self {
+        Self {
+            width: (width * scale).round() as u32,
+            height: (height * scale).round() as u32,
+        }
     }
-    if canvas.height() != phys_height {
-        canvas.set_height(phys_height);
+}
+
+/// Size the canvas's backing store so the surface renders one texel per
+/// device pixel. Skipped when unchanged: assigning `width`/`height` clears a
+/// canvas even to the same value.
+fn apply_backing_size(canvas: &web_sys::HtmlCanvasElement, size: DeviceSize) {
+    if canvas.width() != size.width {
+        canvas.set_width(size.width);
+    }
+    if canvas.height() != size.height {
+        canvas.set_height(size.height);
     }
 }
 
@@ -248,7 +267,8 @@ impl WebWindow {
             let _ = style.set_property("height", &format!("{height}px"));
             (width, height, window.device_pixel_ratio())
         });
-        apply_backing_size(&canvas, width, height, scale_factor);
+        let backing = DeviceSize::estimate(width, height, scale_factor);
+        apply_backing_size(&canvas, backing);
 
         // Make canvas focusable for keyboard events
         canvas.set_tab_index(0);
@@ -268,6 +288,7 @@ impl WebWindow {
             width,
             height,
             scale_factor,
+            backing,
             focused: effective_focus(&canvas),
             visible: !document.hidden(),
             execution: WindowExecutionState::Running,
@@ -302,16 +323,18 @@ impl WebWindow {
 
     /// A handle for the layout-tracking listeners `super::events` registers:
     /// re-reads the canvas's CSS box and the device pixel ratio, and, when
-    /// either changed, resizes the backing store, updates the tracked size
-    /// and dispatches a resize followed by a frame request. A no-op when
-    /// nothing changed (a `ResizeObserver` reports once on registration,
-    /// and a `resize` event fires for scrolls on some mobile browsers).
+    /// either or the backing size changed, resizes the backing store, updates
+    /// the tracked size and dispatches a resize followed by a frame request.
+    /// A no-op when nothing changed (a `ResizeObserver` reports once on
+    /// registration, and a `resize` event fires for scrolls on some mobile
+    /// browsers).
     pub(super) fn layout_sync(&self) -> LayoutSync {
         LayoutSync {
             canvas: self.canvas.clone(),
             state: Arc::clone(&self.state),
             callbacks: Arc::clone(&self.callbacks),
             publisher: self.publisher(),
+            observed: Cell::new(None),
         }
     }
 
@@ -504,30 +527,66 @@ pub(super) struct LayoutSync {
     state: Arc<Mutex<WebWindowState>>,
     callbacks: Arc<WindowCallbacks>,
     publisher: StatePublisher,
+    /// The device-pixel size the `ResizeObserver` last reported, with the
+    /// layout it was reported for.
+    observed: Cell<Option<ObservedSize>>,
+}
+
+/// A `ResizeObserverEntry`'s `devicePixelContentBoxSize`: the device pixels
+/// the browser laid the box out at, exact where the estimate can be a pixel
+/// off. It holds only while the layout it was reported for does.
+#[derive(Clone, Copy)]
+struct ObservedSize {
+    layout: (f64, f64, f64),
+    device: DeviceSize,
 }
 
 impl LayoutSync {
+    /// The `ResizeObserver` reported the canvas, with its device-pixel size
+    /// where the browser gives one: record it for the current layout and
+    /// sync.
+    pub(super) fn observe(&self, device: Option<DeviceSize>) {
+        let observed = device
+            .zip(layout_size(&self.canvas))
+            .map(|(device, layout)| ObservedSize { layout, device });
+        self.observed.set(observed);
+        self.sync();
+    }
+
     /// Bring the backing store and the tracked size up to the layout; see
-    /// [`WebWindow::layout_sync`]. The state lock is released before the
+    /// [`WebWindow::layout_sync`]. The backing store is the observed device
+    /// size while the layout is the one it was observed for, and the
+    /// estimate otherwise: a `resize` event can run before the observer
+    /// reports the new layout. The state lock is released before the
     /// dispatch, which runs embedder callbacks.
     pub(super) fn sync(&self) {
-        let Some((width, height, scale_factor)) = layout_size(&self.canvas) else {
+        let Some(layout @ (width, height, scale_factor)) = layout_size(&self.canvas) else {
             return;
         };
+        let backing = self
+            .observed
+            .get()
+            .filter(|observed| observed.layout == layout)
+            .map_or_else(
+                || DeviceSize::estimate(width, height, scale_factor),
+                |observed| observed.device,
+            );
         let changed = {
             let mut state = self.state.lock();
             let changed = state.width != width
                 || state.height != height
-                || state.scale_factor != scale_factor;
+                || state.scale_factor != scale_factor
+                || state.backing != backing;
             state.width = width;
             state.height = height;
             state.scale_factor = scale_factor;
+            state.backing = backing;
             changed
         };
         if !changed {
             return;
         }
-        apply_backing_size(&self.canvas, width, height, scale_factor);
+        apply_backing_size(&self.canvas, backing);
         self.publisher.publish();
         self.callbacks
             .dispatch_resize(Size::new(width, height), scale_factor);
@@ -564,14 +623,12 @@ impl PlatformWindow for WebWindow {
     }
 
     fn physical_size(&self) -> Size<i32> {
-        // Rounded, exactly as `apply_backing_size` sizes the canvas's
-        // backing store, so the surface the embedder configures from this
-        // answer and the store it renders into agree at fractional device
-        // pixel ratios (981 CSS px at 1.5 is 1472, not 1471).
-        let state = self.state.lock();
+        // The canvas's backing store, so the surface the embedder configures
+        // from this answer and the store it renders into agree.
+        let backing = self.state.lock().backing;
         Size::new(
-            (state.width * state.scale_factor).round() as i32,
-            (state.height * state.scale_factor).round() as i32,
+            i32::try_from(backing.width).unwrap_or(i32::MAX),
+            i32::try_from(backing.height).unwrap_or(i32::MAX),
         )
     }
 
