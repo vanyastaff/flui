@@ -77,10 +77,11 @@ slow-timeout = { period = "300s", terminate-after = 4 }
 priority = 100
 test-group = 'nested-cargo'
 
-# The slowest in-process test, 100-135 s on a 32-thread host: 256 proptest
-# cases of 120 seams, each seam forking the `motion_trace` fixture 12 times,
-# and a fork replays the whole command log (quadratic in the trace). It sets
-# the warm run's floor, so it starts with the nested builds.
+# The slowest in-process test: 64 proptest cases of 120 seams, each seam
+# forking the `motion_trace` fixture 12 times, and a fork replays the whole
+# command log (quadratic in the trace). Measured on 4 cores: 37 s at
+# opt-level 1, 130 s at the opt-level 0 CI's `test` job builds with. It sets
+# the run's floor, so it starts with the nested builds.
 [[profile.default.overrides]]
 filter = 'binary_id(flui-animation::animation_it) & test(=retarget::repeated_interruption_keeps_position_and_velocity_continuous)'
 slow-timeout = { period = "180s", terminate-after = 4 }

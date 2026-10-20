@@ -14,6 +14,8 @@
 //! the theme-free context menu the design systems style, and the collapsing
 //! header the scroll channel moves.
 //! Animation prelude imports also pin the shared package-author entry point.
+//! The typed inspection model the flui-driver spec places in the SDK (ADR-0242 §4) follows:
+//! the trait with its derive, the snapshot a package's tests read, the diff and the renderer.
 //! `custom_recognizer` proves the extension surface with a recognizer written
 //! against the SDK alone, and `behavioural_widget` a gesture widget whose
 //! gesture and alternatives perform one intent, checked by
@@ -53,6 +55,12 @@ mod measured {
         ElementMounted as _, ElementMoved as _, ElementRebuilt as _, ElementUnmounted as _,
         TreeObserver as _,
     };
+    // Typed inspection (ADR-0242): the trait, its derive and what a package's tests read.
+    use flui_sdk::foundation::inspect::{
+        Fields as _, Inspect as _, InspectId as _, InspectTree as _, Level as _, Link as _,
+        SnapshotNode as _, SnapshotQuery as _, ToValue as _, Unit as _, Value as _, diff as _,
+        render as _, snapshot as _,
+    };
     use flui_sdk::foundation::panic::{PanicRecovery as _, RecoveryScope as _};
     use flui_sdk::foundation::{
         ChangeNotifier as _, ElementId as _, Listenable as _, ListenerCallback as _,
@@ -75,6 +83,14 @@ mod measured {
         PointerKindSet as _, PrimaryContact as _, RejectionReason as _, SequencedBranch as _,
         cancel_all as _,
     };
+    // The slot locks and the swipe the placement table puts in the SDK.
+    use flui_sdk::interaction::{
+        AxisLock as _, PhysicalEdge as _, SwipeDetails as _, SwipeGestureRecognizer as _,
+        SwipeStart as _, TransformLock as _,
+    };
+    // The identity the input pipeline gives each contact, wheel, key and
+    // assistive sequence, which drag sessions and haptic requests carry.
+    use flui_sdk::foundation::InputSequenceId as _;
     // A behavioural widget's gesture alternatives (ADR-0216).
     use flui_sdk::painting::Alignment as _;
     use flui_sdk::painting::{
@@ -292,6 +308,12 @@ fn the_re_exports_are_the_facades_types() {
         Box<dyn flui::interaction::GestureObserver>,
     ) -> Box<dyn flui_sdk::interaction::GestureObserver> = |x| x;
     let _: fn(flui::interaction::EventTime) -> flui_sdk::interaction::EventTime = |x| x;
+    let _: fn(flui::interaction::AxisLock) -> flui_sdk::interaction::AxisLock = |x| x;
+    let _: fn(flui::interaction::TransformLock) -> flui_sdk::interaction::TransformLock = |x| x;
+    let _: fn(flui::interaction::SwipeStart) -> flui_sdk::interaction::SwipeStart = |x| x;
+    let _: fn(
+        flui::interaction::SwipeGestureRecognizer,
+    ) -> flui_sdk::interaction::SwipeGestureRecognizer = |x| x;
     let _: fn(
         Box<dyn flui::interaction::GestureRecognizer>,
     ) -> Box<dyn flui_sdk::interaction::GestureRecognizer> = |x| x;
@@ -314,6 +336,54 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::rendering::BoxConstraints) -> flui_sdk::rendering::BoxConstraints = |x| x;
     let _: fn(flui::rendering::HitTestBehavior) -> flui_sdk::rendering::HitTestBehavior = |x| x;
     let _: fn(flui::rendering::BoxProtocol) -> flui_sdk::rendering::BoxProtocol = |x| x;
+}
+
+/// The unstable input surface a package opts into with `unstable-input`:
+/// each item resolves and is the owning crate's own. Compared with the owning
+/// crates rather than the facade, whose dev edge here stays without the
+/// feature so the workspace's doctests keep checking that the facade hides
+/// these modules by default. CI's per-feature test pass builds this.
+#[cfg(feature = "unstable-input")]
+#[expect(
+    unused_imports,
+    reason = "each import only has to resolve; nothing here is used"
+)]
+mod measured_unstable {
+    use flui_sdk::interaction::{HapticObserver as _, HapticsHandle as _};
+    use flui_sdk::platform::haptics::{
+        ControlPoint as _, HapticCapabilities as _, HapticEvent as _, HapticOutcome as _,
+        HapticPattern as _, HapticPatternBuilder as _, HapticPatternError as _, HapticRequest as _,
+        HapticTicket as _, HapticTiming as _, Intensity as _, ParameterCurve as _,
+        PatternPlayback as _, Sharpness as _, UnitRangeError as _,
+    };
+    use flui_sdk::platform::input_capabilities::{
+        Availability as _, InputCapabilities as _, PointerKindSet as _,
+    };
+}
+
+#[cfg(feature = "unstable-input")]
+#[test]
+fn the_unstable_input_re_exports_are_the_owning_crates_types() {
+    let _: fn(
+        flui_platform_api::input_capabilities::InputCapabilities,
+    ) -> flui_sdk::platform::input_capabilities::InputCapabilities = |x| x;
+    let _: fn(
+        flui_platform_api::input_capabilities::Availability,
+    ) -> flui_sdk::platform::input_capabilities::Availability = |x| x;
+    let _: fn(
+        flui_platform_api::input_capabilities::PointerKindSet,
+    ) -> flui_sdk::platform::input_capabilities::PointerKindSet = |x| x;
+    let _: fn(
+        flui_platform_api::haptics::HapticPattern,
+    ) -> flui_sdk::platform::haptics::HapticPattern = |x| x;
+    let _: fn(
+        flui_platform_api::haptics::HapticRequest,
+    ) -> flui_sdk::platform::haptics::HapticRequest = |x| x;
+    let _: fn(
+        flui_platform_api::haptics::HapticOutcome,
+    ) -> flui_sdk::platform::haptics::HapticOutcome = |x| x;
+    let _: fn(flui_interaction::HapticsHandle) -> flui_sdk::interaction::HapticsHandle = |x| x;
+    let _: fn(flui_interaction::HapticObserver) -> flui_sdk::interaction::HapticObserver = |x| x;
 }
 
 /// Every line of `src/lib.rs` that declares public surface, trimmed and sorted.
@@ -351,6 +421,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_foundation as foundation;",
         "pub use flui_foundation::geometry;",
         "pub use flui_interaction::ArenaMembership;",
+        "pub use flui_interaction::AxisLock;",
         "pub use flui_interaction::BeginContactError;",
         "pub use flui_interaction::CancelOutcome;",
         "pub use flui_interaction::ContactId;",
@@ -370,6 +441,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::HapticObserver;",
         "pub use flui_interaction::HapticsHandle;",
         "pub use flui_interaction::ObserverHandle;",
+        "pub use flui_interaction::PhysicalEdge;",
         "pub use flui_interaction::PointerDispatch;",
         "pub use flui_interaction::PointerEvent;",
         "pub use flui_interaction::PointerEventExt;",
@@ -377,6 +449,10 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::PointerKind;",
         "pub use flui_interaction::PointerKindSet;",
         "pub use flui_interaction::PrimaryContact;",
+        "pub use flui_interaction::SwipeDetails;",
+        "pub use flui_interaction::SwipeGestureRecognizer;",
+        "pub use flui_interaction::SwipeStart;",
+        "pub use flui_interaction::TransformLock;",
         "pub use flui_interaction::cancel_all;",
         "pub use flui_interaction::drag::AllowedActions;",
         "pub use flui_interaction::drag::Autoscroll;",
