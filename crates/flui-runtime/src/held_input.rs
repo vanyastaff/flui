@@ -220,9 +220,14 @@ impl HeldPointerQueue {
             && let Some(index) = self.coalescible_motion_index(pointer_id, class)
             && self.events[index].surface == held.surface
             && let PointerEvent::Move(newer) = &mut held.event
-            && let PointerEvent::Move(older) = &self.events[index].event
-            && newer.try_coalesce(older).is_ok()
+            && let PointerEvent::Move(older) = &mut self.events[index].event
+            && newer.try_coalesce_from(older).is_ok()
         {
+            // The older packet retires here: its history moves into the newer
+            // one, bounded however long the hold lasts.
+            newer.retain_latest_coalesced(
+                flui_interaction::events::PointerMove::COALESCED_HISTORY_LIMIT,
+            );
             let _ = self.events.remove(index);
             self.events.push_back(held);
             self.counters.coalesced_events = self.counters.coalesced_events.saturating_add(1);

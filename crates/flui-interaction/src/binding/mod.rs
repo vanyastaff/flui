@@ -19,12 +19,17 @@
 //! with the surface that admitted its Down; its tail is delivered there
 //! wherever the platform reports it.
 //!
-//! A refused Down admits no route. Its Move/Up/Cancel tail stays refused until
-//! that contact terminates. Refusals occupy a fixed array bounded by the same
-//! limit as admitted contacts. If it fills, the binding suppresses every
-//! untracked Move/Up/Cancel until a lifecycle reset, while admitted contacts and
-//! fresh valid Downs continue. This conservative fallback prevents a hostile
-//! stream of distinct refused identities from growing owner state indefinitely.
+//! A Down at the 32-contact limit first cancels the oldest contact
+//! (`Cancel(Superseded)`), as a Down for a pointer whose contact never ended
+//! cancels that one. A refused Down (identities exhausted) admits no route; its
+//! Move/Up/Cancel tail stays refused until that contact terminates, or until
+//! the mouse or pen moves with every button up, which is hover. Refusals occupy
+//! a fixed array bounded by the same limit as admitted contacts. If it fills,
+//! the binding suppresses every untracked pressed Move/Up/Cancel until a
+//! lifecycle reset, while admitted contacts, hover and fresh valid Downs
+//! continue. This conservative fallback prevents a hostile stream of distinct
+//! refused identities from growing owner state indefinitely. A pressed Move
+//! with no contact reaches the pointer router only: no target heard its Down.
 //!
 //! # Closing
 //!
@@ -525,6 +530,7 @@ impl GestureBinding {
         // the decisions it committed are still facts.
         let observers = std::rc::Rc::clone(self.arena.arena().observers());
         let hold = observers.hold();
+        let frozen = self.is_hover_frozen();
         self.close.enter();
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             let value = body();
@@ -534,17 +540,44 @@ impl GestureBinding {
             }
             value
         }));
-        let retirement_failure = self.leave_dispatch(outcome.is_err());
+        let mut later_failure = self.leave_dispatch(outcome.is_err());
+        // Hover held still while a moving member owned a contact; once it
+        // lets go, the next frame's refresh hit-tests where each source went.
+        // Ending a latch schedules no frame of its own, so ask for one, also
+        // when the dispatch that ended it failed.
+        if frozen && !self.is_hover_frozen() {
+            let woken = catch_unwind(AssertUnwindSafe(|| self.request_hover_refresh()));
+            if let Err(payload) = woken {
+                if outcome.is_err() || later_failure.is_some() {
+                    flui_foundation::panic::retain_opaque_payload(payload);
+                } else {
+                    later_failure = Some(payload);
+                }
+            }
+        }
         drop(hold);
         observers.deliver();
         match outcome {
             Ok(value) => {
-                if let Some(payload) = retirement_failure {
+                if let Some(payload) = later_failure {
                     resume_unwind(payload);
                 }
                 value
             }
             Err(payload) => resume_unwind(payload),
+        }
+    }
+
+    /// Ask the window for a frame, whose ambient refresh brings hover up to
+    /// date. Without a window there is no frame driver to ask.
+    fn request_hover_refresh(&self) {
+        let window = self
+            .capture_wake
+            .borrow()
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        if let Some(window) = window {
+            window.request_redraw();
         }
     }
 
@@ -1629,10 +1662,18 @@ impl GestureBinding {
             self.publish_contact_sequence(pointer_id, sequence);
         }
         match event {
-            PointerEvent::Down(_) => {
-                if self.contacts.refuses_down(pointer_id) {
-                    return;
-                }
+            // A fresh Down ends whatever refusal its pointer carried.
+            PointerEvent::Down(_) => self.contacts.finish_refusal(pointer_id),
+            // A mouse or pen with every button up is hovering, whatever
+            // contact of it was refused: its refusal ends and the move is hover.
+            PointerEvent::Move(motion)
+                if refused_tail
+                    && motion.buttons.is_empty()
+                    && matches!(
+                        motion.pointer.kind,
+                        PointerKind::Mouse | PointerKind::Pen { .. }
+                    ) =>
+            {
                 self.contacts.finish_refusal(pointer_id);
             }
             PointerEvent::Move(_) | PointerEvent::Up(_) | PointerEvent::Cancel(_)
@@ -1653,32 +1694,12 @@ impl GestureBinding {
                     || self.moves.contains_pointer(pointer_id)
                     || self.arena.arena().has_active(pointer_id);
                 if has_superseded_sequence {
-                    let guard = self
-                        .contacts
-                        .try_retire(pointer_id)
-                        .expect("BUG: pointer teardown was checked before superseding Down");
-                    let detached = self.detach_pointer_sequence(pointer_id);
-                    let cleanup = Self::abandon_detached_sequence(detached);
+                    let cleanup = self.supersede(pointer_id);
                     RoutePanic::preserve_first(
                         &mut first_panic,
                         cleanup,
                         "superseded pointer teardown",
                     );
-                    drop(guard);
-                }
-
-                let active = self.contacts.len();
-                if active >= MAX_SIMULTANEOUS_POINTERS {
-                    self.contacts.refuse(pointer_id);
-                    tracing::warn!(
-                        ?pointer_id,
-                        active,
-                        "dropping Down: simultaneous-pointer cap reached"
-                    );
-                    if let Some(panic) = first_panic {
-                        panic.resume();
-                    }
-                    return;
                 }
                 // Minted before hit testing: an exhausted binding refuses the
                 // contact before any target sees it, and never reissues an id.
@@ -1693,6 +1714,39 @@ impl GestureBinding {
                     }
                     return;
                 };
+                // A backend that never reuses pointer ids leaves a contact
+                // behind for every Up it lost: at the cap, the oldest is one
+                // of those, and gives way to the contact pressed now.
+                if self.contacts.len() >= MAX_SIMULTANEOUS_POINTERS
+                    && let Some(oldest) = self.contacts.oldest()
+                {
+                    tracing::warn!(
+                        pointer_id = ?oldest.pointer.id,
+                        "simultaneous-pointer cap reached: cancelling the oldest contact"
+                    );
+                    let cleanup = self.supersede(oldest.pointer.id);
+                    RoutePanic::preserve_first(
+                        &mut first_panic,
+                        cleanup,
+                        "oldest contact at the pointer cap",
+                    );
+                }
+
+                // The cancellation's callbacks may have admitted contacts of
+                // their own; then this Down finds no room.
+                let active = self.contacts.len();
+                if active >= MAX_SIMULTANEOUS_POINTERS {
+                    self.contacts.refuse(pointer_id);
+                    tracing::warn!(
+                        ?pointer_id,
+                        active,
+                        "dropping Down: simultaneous-pointer cap reached"
+                    );
+                    if let Some(panic) = first_panic {
+                        panic.resume();
+                    }
+                    return;
+                }
                 self.publish_contact_sequence(pointer_id, sequence.0);
 
                 let position = event
@@ -1784,10 +1838,7 @@ impl GestureBinding {
 
                     if self.is_hover_frozen() {
                         self.mouse_tracker.follow_frozen_on(surface, event);
-                    } else if matches!(
-                        pointer_move.pointer.kind,
-                        PointerKind::Mouse | PointerKind::Pen { .. }
-                    ) {
+                    } else if MouseTracker::tracks(event) {
                         // Hover follows the surface under the pointer.
                         let fresh_hit_test = hit_test_fn(position);
                         self.mouse_tracker.update_with_motion_on(
@@ -1798,23 +1849,50 @@ impl GestureBinding {
                         );
                     }
                 } else {
-                    let fresh_hit_test = hit_test_fn(position);
+                    // A pressed pointer with no contact had its Down admitted
+                    // nowhere here (a drag begun outside the window, a Down the
+                    // lifecycle dropped or whose hit test failed): no target
+                    // heard a Down, so none hears this as a drag. The router
+                    // still observes it, and hover follows it.
+                    let pressed = !pointer_move.buttons.is_empty()
+                        || pointer_move.pointer.kind == PointerKind::Touch;
+                    let tracked = MouseTracker::tracks(event);
+                    let fresh_hit_test = if pressed && !tracked {
+                        HitTestResult::default()
+                    } else {
+                        hit_test_fn(position)
+                    };
+                    // Resolve what the path means to hover while it is
+                    // borrowed, then queue the path itself: the tracker's
+                    // callbacks may queue a newer move, which this one must
+                    // not replace.
+                    let hover = tracked.then(|| MouseTracker::resolve_motion(&fresh_hit_test));
+                    let mut retired = None;
+                    let (hit_test, kind) = if pressed {
+                        fresh_hit_test.retire_metadata(&mut retired);
+                        (HitTestResult::default(), PointerMotionKind::Contact)
+                    } else {
+                        (fresh_hit_test, PointerMotionKind::Hover)
+                    };
                     self.queue_pending_move(
                         (surface, pointer_id),
                         PendingMove::Hover {
                             event: event.clone(),
-                            hit_test: fresh_hit_test.clone(),
+                            hit_test,
                         },
                     );
                     if self.is_hover_frozen() {
+                        drop(hover);
                         self.mouse_tracker.follow_frozen_on(surface, event);
-                    } else {
-                        self.mouse_tracker.update_with_motion_on(
-                            surface,
-                            event,
-                            PointerMotionKind::Hover,
-                            &fresh_hit_test,
-                        );
+                    } else if let Some(hover) = hover {
+                        let delivered = RoutePanic::capture(|| {
+                            self.mouse_tracker
+                                .apply_motion_on(surface, event, kind, hover);
+                        });
+                        RoutePanic::preserve_first(&mut retired, delivered, "hover tracking");
+                    }
+                    if let Some(failure) = retired {
+                        failure.resume();
                     }
                 }
             }
@@ -1867,6 +1945,18 @@ impl GestureBinding {
                     self.dispatch_ephemeral(event, &result)
                 };
                 RoutePanic::preserve_first(&mut first_panic, panic, "pointer boundary dispatch");
+                // A hovering source that leaves (a pen lifted out of range, a
+                // mouse's own leave) exits what it hovered and gives the cursor
+                // back. A contact keeps its hover until it ends.
+                if let PointerEvent::Leave(signal) = event
+                    && !self.contacts.contains(pointer_id)
+                {
+                    let left = RoutePanic::capture(|| {
+                        self.mouse_tracker
+                            .dispatch_source_left(surface, &signal.pointer);
+                    });
+                    RoutePanic::preserve_first(&mut first_panic, left, "pointer leave hover");
+                }
                 if let Some(panic) = first_panic {
                     panic.resume();
                 }
@@ -2389,6 +2479,26 @@ impl GestureBinding {
         }
     }
 
+    /// Fold the queued `older` move into `newer`, taking its history storage
+    /// and keeping the latest [`PointerMove::COALESCED_HISTORY_LIMIT`]
+    /// readings, so a stalled frame neither grows the queue nor copies it.
+    /// Returns whether the pointer identities matched; a refusal changes
+    /// neither move.
+    ///
+    /// [`PointerMove::COALESCED_HISTORY_LIMIT`]: flui_platform_api::pointer::PointerMove::COALESCED_HISTORY_LIMIT
+    fn fold_history(
+        newer: &mut flui_platform_api::pointer::PointerMove,
+        older: &mut flui_platform_api::pointer::PointerMove,
+    ) -> bool {
+        if newer.try_coalesce_from(older).is_err() {
+            return false;
+        }
+        newer.retain_latest_coalesced(
+            flui_platform_api::pointer::PointerMove::COALESCED_HISTORY_LIMIT,
+        );
+        true
+    }
+
     fn queue_pending_move(&self, key: MoveKey, mut pending: PendingMove) {
         let pointer_id = key.1;
         let generation = self.moves.allocate_generation();
@@ -2409,7 +2519,7 @@ impl GestureBinding {
                 },
             ) if old == new => match (previous, latest) {
                 (PointerEvent::Move(older), PointerEvent::Move(newer)) => {
-                    newer.try_coalesce(older).is_err()
+                    !Self::fold_history(newer, older)
                 }
                 _ => false,
             },
@@ -2424,7 +2534,7 @@ impl GestureBinding {
                 PendingMove::Hover { event: latest, .. },
             ) => match (previous, latest) {
                 (PointerEvent::Move(older), PointerEvent::Move(newer)) => {
-                    newer.try_coalesce(older).is_err()
+                    !Self::fold_history(newer, older)
                 }
                 _ => false,
             },
@@ -2482,6 +2592,33 @@ impl GestureBinding {
         // and never retire a route or payload while holding a map guard.
         drop(previous);
         drop(replaced);
+    }
+
+    /// End `pointer_id`'s sequence because a newer contact takes its place.
+    /// A contact whose Down was admitted hears one `Cancel(Superseded)` on
+    /// its route, after the motion it was owed, as any terminal is delivered;
+    /// what remains without a contact (a queued move, an open arena) is
+    /// abandoned.
+    fn supersede(&self, pointer_id: PointerId) -> Option<RoutePanic> {
+        let guard = self.contacts.try_retire(pointer_id)?;
+        let detached = self.detach_pointer_sequence(pointer_id);
+        let cleanup = match detached.cached.as_ref() {
+            Some(cached) => {
+                let cancel = PointerEvent::Cancel(PointerCancel::new(
+                    cached.pointer,
+                    cached.time,
+                    CancelReason::Superseded,
+                ));
+                // The cancellation belongs to the old contact's sequence.
+                self.publish_contact_sequence(pointer_id, cached.sequence.0);
+                let delivered = self.finish_terminal_sequence(&cancel, detached);
+                self.arena.arena().release_motion_latch(pointer_id);
+                delivered
+            }
+            None => Self::abandon_detached_sequence(detached),
+        };
+        drop(guard);
+        cleanup
     }
 
     fn abandon_detached_sequence(detached: DetachedPointerSequence) -> Option<RoutePanic> {
