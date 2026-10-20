@@ -301,7 +301,7 @@ fn binding_for(
     super::binding::RouteVsync,
 ) {
     let registries = Rc::new(super::binding::RouteRegistries::new());
-    let vsync = Rc::new(Mutex::new(None));
+    let vsync = Rc::new(std::cell::RefCell::new(None));
     let binding = RouteBinding::new(
         id,
         history.command_queue(),

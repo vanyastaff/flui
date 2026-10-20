@@ -360,7 +360,7 @@ impl fmt::Display for KeyRef {
 /// let key2 = ValueKey::new(42);
 /// assert!(key1.key_eq(&key2));
 /// ```
-pub trait ViewKey: Send + Sync + 'static {
+pub trait ViewKey: 'static {
     /// Get the key as a trait object for downcasting.
     fn as_any(&self) -> &dyn Any;
 
@@ -449,11 +449,11 @@ impl Hash for dyn ViewKey {
 /// assert!(!key1.key_eq(&key3));
 /// ```
 #[derive(Clone)]
-pub struct ValueKey<T: Clone + Hash + Eq + Send + Sync + 'static> {
+pub struct ValueKey<T: Clone + Hash + Eq + 'static> {
     value: T,
 }
 
-impl<T: Clone + Hash + Eq + Send + Sync + 'static> ValueKey<T> {
+impl<T: Clone + Hash + Eq + 'static> ValueKey<T> {
     /// Create a new value key.
     pub const fn new(value: T) -> Self {
         Self { value }
@@ -465,7 +465,7 @@ impl<T: Clone + Hash + Eq + Send + Sync + 'static> ValueKey<T> {
     }
 }
 
-impl<T: Clone + Hash + Eq + Send + Sync + 'static> fmt::Debug for ValueKey<T>
+impl<T: Clone + Hash + Eq + 'static> fmt::Debug for ValueKey<T>
 where
     T: fmt::Debug,
 {
@@ -476,7 +476,7 @@ where
     }
 }
 
-impl<T: Clone + Hash + Eq + Send + Sync + fmt::Debug + 'static> ViewKey for ValueKey<T> {
+impl<T: Clone + Hash + Eq + fmt::Debug + 'static> ViewKey for ValueKey<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -844,7 +844,7 @@ pub trait WithKey: Sized {
     /// ```
     fn with_value_key<T>(self, value: T) -> Keyed<Self>
     where
-        T: Clone + Hash + Eq + Send + Sync + fmt::Debug + 'static,
+        T: Clone + Hash + Eq + fmt::Debug + 'static,
     {
         Keyed::new(self, ValueKey::new(value))
     }

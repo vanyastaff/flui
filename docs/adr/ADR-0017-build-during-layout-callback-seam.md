@@ -54,7 +54,7 @@ bounded number of layout passes over dirty subtrees instead of one pass with a r
 
 ### 1. No `invoke_layout_callback`: the render object publishes, the binding services
 
-`RenderLayoutBuilder` (`flui-objects`) is a single-child box holding an `Arc<LayoutConstraintsCell>`.
+`RenderLayoutBuilder` (`flui-objects`) is a single-child box holding an `Rc<LayoutConstraintsCell>`.
 `perform_layout` calls `cell.publish(constraints)`, lays the existing child out with those
 constraints, and sizes to `constraints.constrain(child_size)` (or `constraints.smallest()` with no
 child). It performs no build and touches no tree. `publish` raises `needs_build` iff the constraints
@@ -113,8 +113,8 @@ before the render object is disposed.
 ### 5. How constraints reach the builder
 
 Through the shared `LayoutConstraintsCell`. The builder is
-`Rc<dyn Fn(&dyn BuildContext, BoxConstraints) -> BoxedView>`. The constraints cell's `Mutex` is
-private; no lock appears in the public API.
+`Rc<dyn Fn(&dyn BuildContext, BoxConstraints) -> BoxedView>`. The constraints cell's state is a
+private `Cell`: the owner thread publishes and reads it with no lock.
 
 ### 6. Same-frame child replacement
 

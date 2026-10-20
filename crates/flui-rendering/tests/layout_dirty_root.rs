@@ -163,3 +163,116 @@ pub(crate) fn descendant_err_preserves_parent_needs_layout() {
 // 4-level deep recursion (verifies pre-acquired subtree borrows
 // scale to deeper trees than the original thread-affinity tests covered)
 // ============================================================================
+
+// ============================================================================
+// Dirty-root order — element-mounted nodes lay out parents first
+// ============================================================================
+
+/// Lays its child out tight at its own size less a shared inset, so a new
+/// inset hands the child new constraints.
+#[derive(Debug)]
+struct InsetParent(std::sync::Arc<std::sync::atomic::AtomicU64>);
+
+impl flui_foundation::Diagnosticable for InsetParent {}
+
+impl flui_rendering::traits::RenderBox for InsetParent {
+    type Arity = flui_foundation::Single;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        let size = ctx.constraints().biggest();
+        let inset = f64::from_bits(self.0.load(std::sync::atomic::Ordering::Relaxed));
+        let child = Size::new(size.width - inset, size.height - inset);
+        ctx.layout_child(0, BoxConstraints::tight(child))?;
+        Ok(size)
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<'_, Self::Arity, Self::ParentData>,
+    ) -> bool {
+        false
+    }
+}
+
+/// Counts its layouts.
+#[derive(Debug)]
+struct CountingLeaf(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl flui_foundation::Diagnosticable for CountingLeaf {}
+
+impl flui_rendering::traits::RenderBox for CountingLeaf {
+    type Arity = flui_foundation::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(ctx.constraints().biggest())
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<'_, Self::Arity, Self::ParentData>,
+    ) -> bool {
+        false
+    }
+}
+
+/// Nodes mounted the way elements mount them (inserted parentless, then
+/// adopted) carry their tree depth, so a relayout boundary marked before its
+/// ancestor still lays out after it, once, against the ancestor's new
+/// constraints.
+pub(crate) fn adopted_nodes_lay_out_parents_before_children() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+    use crate::common::BoxedRenderObject;
+
+    let no_inset = || Arc::new(AtomicU64::new(0.0_f64.to_bits()));
+    let inset = no_inset();
+    let leaf_layouts = Arc::new(AtomicUsize::new(0));
+    let mut owner = flui_rendering::pipeline::PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    );
+    let root = owner.insert(Box::new(InsetParent(no_inset())) as BoxedRenderObject);
+    let a = owner.insert(Box::new(InsetParent(Arc::clone(&inset))) as BoxedRenderObject);
+    let b = owner.insert(Box::new(InsetParent(no_inset())) as BoxedRenderObject);
+    let c = owner.insert(Box::new(CountingLeaf(Arc::clone(&leaf_layouts))) as BoxedRenderObject);
+    owner.adopt_render_child(root, a);
+    owner.adopt_render_child(a, b);
+    owner.adopt_render_child(b, c);
+    let depths: Vec<_> = [root, a, b, c]
+        .iter()
+        .map(|&id| owner.render_tree().depth(id))
+        .collect();
+    assert_eq!(depths, [Some(0), Some(1), Some(2), Some(3)]);
+
+    owner.set_root_id(Some(root));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
+    let mut owner = owner.into_layout();
+    owner.run_layout().expect("first layout");
+    assert_eq!(leaf_layouts.load(Ordering::Relaxed), 1);
+
+    owner.mark_needs_layout(c);
+    inset.store(10.0_f64.to_bits(), Ordering::Relaxed);
+    owner.mark_needs_layout(a);
+    owner.run_layout().expect("relayout");
+
+    assert_eq!(
+        leaf_layouts.load(Ordering::Relaxed),
+        2,
+        "the leaf lays out once, under its ancestor's new constraints"
+    );
+    let leaf_size = owner
+        .render_tree()
+        .get(c)
+        .and_then(|node| node.as_box())
+        .map(|entry| entry.state().size());
+    assert_eq!(leaf_size, Some(Size::new(90.0, 90.0)));
+}

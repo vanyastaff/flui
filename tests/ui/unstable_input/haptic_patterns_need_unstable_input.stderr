@@ -1,0 +1,19 @@
+error[E0432]: unresolved import `flui::platform::haptics::HapticPattern`
+ --> tests/ui/unstable_input/haptic_patterns_need_unstable_input.rs:3:5
+  |
+3 | use flui::platform::haptics::HapticPattern;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^-------------
+  |                              |
+  |                              no `HapticPattern` in `platform::haptics`
+
+error[E0603]: module `haptics` is private
+ --> tests/ui/unstable_input/haptic_patterns_need_unstable_input.rs:3:21
+  |
+3 | use flui::platform::haptics::HapticPattern;
+  |                     ^^^^^^^ private module
+  |
+note: the module `haptics` is defined here
+ --> src/lib.rs
+  |
+  |     mod haptics {}
+  |     ^^^^^^^^^^^
