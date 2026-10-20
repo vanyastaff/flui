@@ -47,7 +47,7 @@ export function observeCanvas(observer, canvas) {
         return false;
     }
 }
-export function observeContentBox(observer, canvas) { observer.observe(canvas); }
+export function observeBox(observer, canvas, box) { observer.observe(canvas, { box }); }
 // The last entry's device-pixel content box as [width, height]; [] when the
 // entry has none, or when the canvas has any padding, a fraction of a pixel
 // included: the window's size is the padding box (`clientWidth`), which the
@@ -101,10 +101,11 @@ extern "C" {
         observer: &web_sys::ResizeObserver,
         canvas: &web_sys::HtmlCanvasElement,
     ) -> Result<bool, JsValue>;
-    #[wasm_bindgen(catch, js_name = observeContentBox)]
-    fn observe_content_box(
+    #[wasm_bindgen(catch, js_name = observeBox)]
+    fn observe_box(
         observer: &web_sys::ResizeObserver,
         canvas: &web_sys::HtmlCanvasElement,
+        r#box: &str,
     ) -> Result<(), JsValue>;
     #[wasm_bindgen(js_name = devicePixelSize)]
     fn device_pixel_size(entries: &JsValue) -> Vec<u32>;
@@ -386,14 +387,17 @@ impl Registration {
     }
 
     /// Observe the canvas's size; `body` gets each report's device-pixel
-    /// size where the browser gives one and it can be used. Where the browser
-    /// observes the device-pixel box (Chrome, Firefox), a second observer
-    /// watches the CSS content box: each observer reports only a change of
-    /// its own box, and a reflow or a change of padding can move the CSS box
-    /// while the rounded device-pixel box stays. Its entries carry the
-    /// device-pixel size as well, so either report replaces the last. A
-    /// browser without `ResizeObserver` is left to the window's `resize`
-    /// subscription.
+    /// size where the browser gives one and it can be used. Each observer
+    /// reports only a change of its own box, so three watch the canvas: the
+    /// device-pixel content box where the browser has it (Chrome, Firefox),
+    /// else the CSS content box (Safari); the CSS content box beside a
+    /// device-pixel one, as padding inside a `border-box` canvas or a reflow
+    /// can move it while the rounded device box stays; and the border box,
+    /// as padding around a `content-box` canvas grows the window's padding
+    /// box (`clientWidth`) and neither content box. Every entry carries the
+    /// device-pixel size where the browser has it, so any report replaces the
+    /// last. A browser without `ResizeObserver` is left to the window's
+    /// `resize` subscription.
     pub(super) fn observe(
         &mut self,
         body: impl Fn(Option<DeviceSize>) + 'static,
@@ -402,13 +406,17 @@ impl Registration {
         let Some(device) = self.subscribe(&body) else {
             return Ok(());
         };
-        if !observe_canvas(&device, &self.canvas).map_err(backend)? {
-            return Ok(());
+        let css_boxes: &[&str] = if observe_canvas(&device, &self.canvas).map_err(backend)? {
+            &["content-box", "border-box"]
+        } else {
+            &["border-box"]
+        };
+        for &css_box in css_boxes {
+            if let Some(observer) = self.subscribe(&body) {
+                observe_box(&observer, &self.canvas, css_box).map_err(backend)?;
+            }
         }
-        match self.subscribe(&body) {
-            Some(layout) => observe_content_box(&layout, &self.canvas).map_err(backend),
-            None => Ok(()),
-        }
+        Ok(())
     }
 
     /// A `ResizeObserver` that calls `body` with each report's device-pixel

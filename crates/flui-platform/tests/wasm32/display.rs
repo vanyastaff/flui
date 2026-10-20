@@ -261,14 +261,14 @@ function layOut(width, height, deviceWidth, deviceHeight, padding, boxes) {
         if (observer.targets.some(watched)) observer.callback([entry], observer);
     }
 }
-// Both boxes changed.
+// Every box changed.
 export function layOutCanvas(width, height, deviceWidth, deviceHeight, padding = 0) {
-    layOut(width, height, deviceWidth, deviceHeight, padding, ['content-box', 'device-pixel-content-box']);
+    layOut(width, height, deviceWidth, deviceHeight, padding, ['content-box', 'device-pixel-content-box', 'border-box']);
 }
-// A reflow, or a change of padding, that moves the CSS content box and leaves
-// the rounded device-pixel box as it was: only content-box observers report it.
-export function reflowCanvas(width, height, deviceWidth, deviceHeight, padding = 0) {
-    layOut(width, height, deviceWidth, deviceHeight, padding, ['content-box']);
+// A layout in which only the boxes `changed` names, space-separated, moved:
+// the observers of the others do not report it.
+export function changeCanvasBoxes(width, height, deviceWidth, deviceHeight, padding, changed) {
+    layOut(width, height, deviceWidth, deviceHeight, padding, changed.split(' '));
 }
 export function windowResizeListeners() { return windowListeners.filter(entry => entry.name === 'resize').length; }
 export function pixelRatioListeners() { return ratioQueries.reduce((sum, query) => sum + query.listenerCount(), 0); }
@@ -347,8 +347,15 @@ extern "C" {
     fn install_resize_observer(device_pixels: bool);
     #[wasm_bindgen(js_name = layOutCanvas)]
     fn lay_out_canvas(width: u32, height: u32, device_width: u32, device_height: u32);
-    #[wasm_bindgen(js_name = reflowCanvas)]
-    fn reflow_canvas(width: u32, height: u32, device_width: u32, device_height: u32, padding: f64);
+    #[wasm_bindgen(js_name = changeCanvasBoxes)]
+    fn change_canvas_boxes(
+        width: u32,
+        height: u32,
+        device_width: u32,
+        device_height: u32,
+        padding: f64,
+        changed: &str,
+    );
     #[wasm_bindgen(js_name = pixelRatioListeners)]
     fn pixel_ratio_listeners() -> i32;
     #[wasm_bindgen(js_name = setHidden)]
@@ -1285,9 +1292,9 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
     settle().await;
 
     // A reflow to 302 CSS pixels that leaves the rounded device-pixel box as
-    // it was is reported only by the CSS-box observer, whose entry carries
+    // it was is reported only by the CSS-box observers, whose entries carry
     // the device size too.
-    reflow_canvas(302, 150, 452, 225, 0.0);
+    change_canvas_boxes(302, 150, 452, 225, 0.0, "content-box border-box");
     settle().await;
     assert_eq!(
         window.logical_size().width,
@@ -1300,9 +1307,10 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
         "the reported size, not round(302 × 1.5)"
     );
 
-    // 0.2px of padding moves the content box and not the rounded device box:
-    // the window is the padding box, which the device box does not measure.
-    reflow_canvas(302, 150, 452, 225, 0.2);
+    // 0.2px of padding inside a `border-box` canvas moves only its content
+    // box: the window is the padding box, which the device box does not
+    // measure.
+    change_canvas_boxes(302, 150, 452, 225, 0.2, "content-box");
     settle().await;
     assert_eq!(
         canvas_backing_size(),
@@ -1310,6 +1318,17 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
         "the padding box's estimate, not the content box"
     );
     assert_eq!(physical_size(&window), [453, 225]);
+
+    // 10px of padding around a `content-box` canvas grows its padding box,
+    // the window, to 322×170 and moves neither content box.
+    change_canvas_boxes(322, 170, 452, 225, 10.0, "border-box");
+    settle().await;
+    assert_eq!(
+        window.logical_size().width,
+        322.0,
+        "the window follows the padding"
+    );
+    assert_eq!(canvas_backing_size(), [483, 255]);
 
     drop(window);
     running.quit();
@@ -1348,6 +1367,16 @@ async fn web_window_backing_store_is_estimated_where_the_browser_reports_css_pix
     );
     assert_eq!(physical_size(&window), [452, 225]);
     assert_eq!(*resized.lock().expect("resizes"), [1.5, 1.5]);
+
+    // Padding around a `content-box` canvas moves only its border box.
+    change_canvas_boxes(321, 170, 0, 0, 10.0, "border-box");
+    settle().await;
+    assert_eq!(
+        window.logical_size().width,
+        321.0,
+        "the window follows the padding"
+    );
+    assert_eq!(canvas_backing_size(), [482, 255]);
 
     drop(window);
     running.quit();
