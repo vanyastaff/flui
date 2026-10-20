@@ -7,6 +7,9 @@
   behavioural widgets and scroll views whose motion operates nothing as not behavioural.
 - **Amended:** 2026-10-18 — §1 and §4: the single-pointer path may be drawn by a companion widget
   linked through `CompanionLink`, and `assert_gesture_alternatives` certifies it.
+- **Amended:** 2026-10-19 — §4: a virtual pointer's secondary click opens the menu; the revealed
+  menu control stays until focus leaves the row or a pointer presses the row elsewhere, and the
+  focus ring takes no pointer input.
 - **Related:** [ADR-0023](ADR-0023-actions-shortcuts-seam.md),
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md),
   [ADR-0172](ADR-0172-host-owned-system-preferences.md),
@@ -160,7 +163,8 @@ GestureAlternatives::handle(&self, &dyn BuildContext) -> CommandHandle   // the 
   with a warning. `ShowContextMenuIntent` is the menu's intent; its defaults
   (`ShowContextMenuIntent::default_keys`: Menu and Shift+F10, Menu alone on Android, none on
   Apple platforms) are root bindings of `DefaultFocusTraversal`.
-- **The menu's pointer triggers.** Secondary click for a mouse, pen or trackpad; a long press,
+- **The menu's pointer triggers.** Secondary click for a mouse, pen, trackpad or virtual pointer
+  (a dwell device's right click); a long press,
   the hold of a `Sequenced` composition, for touch and pen. A mouse, a dwell or a switch device
   has no long press, so a mouse drag on the row meets no competitor. The long-press drags
   beneath the row are that hold's successors, not holds of their own: a finger that opened the
@@ -181,7 +185,11 @@ GestureAlternatives::handle(&self, &dyn BuildContext) -> CommandHandle   // the 
 - **Controls** are focusable buttons labelled by their command, drawn at least the touch minimum
   target square, after the content in reading order by default and mirrored in a right-to-left
   locale. The control a menu row reveals on keyboard or assistive-technology focus is labelled
-  `WidgetsLocalizations::context_menu_button_label(target)` ("Actions for Alice").
+  `WidgetsLocalizations::context_menu_button_label(target)` ("Actions for Alice"); once
+  revealed it stays until focus leaves the row or a pointer presses the row off it, since the
+  pointer press that would use it ends the visible focus first, and a control left over the row
+  would hide its trailing edge from the row's gesture. The focus ring is painted behind the
+  control and takes no pointer input, so the row's gesture and its controls work under it.
 - **Announcements** are live-region nodes until the owner's announcer exists.
 - **A closure is not an intent.** `Intent` carries `#[diagnostic::on_unimplemented]`, so a
   callback passed where the gesture's intent belongs fails to compile with the reason.
@@ -189,8 +197,10 @@ GestureAlternatives::handle(&self, &dyn BuildContext) -> CommandHandle   // the 
 ## Consequences and verification
 
 - `assert_gesture_alternatives` (`flui-testing`) drives, for each declared `Intent`, the gesture
-  through `PointerScript`, the semantics action through an AT request, the key through the
-  platform's keys, and the single-pointer path with a mouse, a finger and a virtual pointer. It
+  through `PointerScript` (again with keyboard focus in the row), the semantics action through an
+  AT request, the key through the platform's keys, and the single-pointer path with a mouse, a
+  finger and a virtual pointer; a menu also opens by a virtual pointer's secondary click and by
+  each pointer pressing the revealed control at its centre, where nothing may cover it. It
   asserts one identical model effect and announcement per path, Esc non-destructive, the
   controls' target size, and reachability without hover. A companion path is driven by activating
   the node the registered companion published for the command (resolved through its anchor in
