@@ -228,6 +228,10 @@ fn hit_test_matrix() {
             crate::hit_test_pipeline::a_contained_hit_panic_retains_the_discarded_entries,
         ),
         (
+            "hit_test_pipeline::a_contained_hit_panic_rolls_back_the_barrier_its_subtree_hit",
+            crate::hit_test_pipeline::a_contained_hit_panic_rolls_back_the_barrier_its_subtree_hit,
+        ),
+        (
             "hit_test_pipeline::default_parent_hit_test_reaches_its_children",
             crate::hit_test_pipeline::default_parent_hit_test_reaches_its_children,
         ),

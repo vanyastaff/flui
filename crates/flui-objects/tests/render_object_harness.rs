@@ -9919,6 +9919,74 @@ fn harness_flow_hits_where_it_painted_until_it_repaints() {
     assert!(run.hit(25.0, 20.0).contains(&first));
 }
 
+/// Paints child `i` at `(20 * i, 0)`, or panics while `fail` is set.
+#[derive(Debug)]
+struct FailingFlowDelegate {
+    fail: Rc<Cell<bool>>,
+}
+
+impl FlowDelegate for FailingFlowDelegate {
+    fn get_size(&self, constraints: BoxConstraints) -> Size {
+        constraints.biggest()
+    }
+
+    fn get_constraints_for_child(
+        &self,
+        _index: usize,
+        constraints: BoxConstraints,
+    ) -> BoxConstraints {
+        BoxConstraints::loose(constraints.biggest())
+    }
+
+    fn paint_children(&self, context: &mut FlowPaintingContext<'_, '_>) {
+        assert!(!self.fail.get(), "flow delegate paint failed");
+        for i in 0..context.child_count() {
+            context.paint_child(i, Matrix4::translation(i as f64 * 20.0, 0.0, 0.0));
+        }
+    }
+
+    fn should_relayout(&self, _old_delegate: &dyn FlowDelegate) -> bool {
+        false
+    }
+
+    fn should_repaint(&self, _old_delegate: &dyn FlowDelegate) -> bool {
+        true
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// A repaint whose delegate panics keeps the last presentation: the failed
+/// frame is discarded, so its pixels stay on screen, and hits keep reaching
+/// the children they show.
+fn harness_flow_keeps_hitting_its_last_presentation_after_a_failed_repaint() {
+    let fail = Rc::new(Cell::new(false));
+    let mut run = RenderTester::mount(
+        box_node(RenderFlow::new(Rc::new(FailingFlowDelegate {
+            fail: Rc::clone(&fail),
+        })))
+        .child(box_node(RenderColoredBox::red(20.0, 40.0)).label("first"))
+        .child(box_node(RenderColoredBox::blue(20.0, 40.0)).label("second")),
+    )
+    .with_size(Size::new(40.0, 40.0))
+    .run_frame();
+    let second = run.id("second");
+    assert!(run.hit(25.0, 20.0).contains(&second), "painted at x = 20");
+
+    fail.set(true);
+    let root = run.root();
+    run.mark_needs_paint(root);
+    let (owner, frame) = run.owner_mut().take_idle().run_frame();
+    *run.owner_mut() = owner;
+    assert!(frame.is_err(), "the repaint fails");
+    assert!(
+        run.hit(25.0, 20.0).contains(&second),
+        "the child still on screen is still hit"
+    );
+}
+
 fn harness_flow_only_announces_presented_children_after_repaint_and_replacement() {
     use flui_rendering::semantics::{ActionCall, SemanticsActionRequest};
     let delegate = SemanticFlowDelegate {
@@ -13075,6 +13143,10 @@ fn family_wrap_flow_table() {
             (
                 "flow_hits_where_it_painted_until_it_repaints",
                 harness_flow_hits_where_it_painted_until_it_repaints,
+            ),
+            (
+                "flow_keeps_hitting_its_last_presentation_after_a_failed_repaint",
+                harness_flow_keeps_hitting_its_last_presentation_after_a_failed_repaint,
             ),
             (
                 "table_grid_lays_out_each_cell_at_its_exact_offset_and_size",

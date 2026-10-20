@@ -2212,6 +2212,7 @@ fn contain_node(
     visit: impl FnOnce(&mut crate::hit_testing::HitTestResult, &mut HitWalk) -> bool,
 ) -> bool {
     let mark = result.len();
+    let slop = walk.mark();
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| visit(result, walk))) {
         Ok(hit) => hit,
         Err(payload) => {
@@ -2221,6 +2222,9 @@ fn contain_node(
             // false here, so a drop would replace the failure being reported.
             walk.contain_panic(payload);
             std::mem::forget(result.path_mut().split_off(mark));
+            // Nor does the failed subtree keep a say in expanded areas: a
+            // barrier it hit, or a candidate it recorded, is no longer there.
+            walk.roll_back(slop);
             false
         }
     }

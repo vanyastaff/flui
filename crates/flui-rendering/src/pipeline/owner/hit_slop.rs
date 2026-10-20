@@ -63,6 +63,13 @@ struct SlopCandidate {
     distance: f64,
 }
 
+/// Where a walk's slop state stood before a node visit.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SlopMark {
+    candidates: usize,
+    hit_barrier: bool,
+}
+
 /// Per-walk state, threaded through the box and sliver walks: the expanded
 /// areas the walk passed and the first panic a render object raised.
 #[derive(Debug)]
@@ -97,6 +104,22 @@ impl HitWalk {
             kind,
             first_panic: FirstPanic::new(),
         }
+    }
+
+    /// The slop state a node visit starts from, for [`Self::roll_back`].
+    pub(super) fn mark(&self) -> SlopMark {
+        SlopMark {
+            candidates: self.candidates.len(),
+            hit_barrier: self.hit_barrier,
+        }
+    }
+
+    /// Forgets what a failed node visit recorded: the candidates and the
+    /// barrier its subtree reported describe hits that are no longer on the
+    /// path.
+    pub(super) fn roll_back(&mut self, mark: SlopMark) {
+        self.candidates.truncate(mark.candidates);
+        self.hit_barrier = mark.hit_barrier;
     }
 
     /// Holds a render object's panic for [`Self::finish`]; the node that

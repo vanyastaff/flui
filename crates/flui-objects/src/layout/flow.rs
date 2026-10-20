@@ -109,8 +109,11 @@ pub struct RenderFlow {
     /// (layout-only) child-layout context again.
     child_sizes: Vec<Size>,
     /// What the last completed [`RenderBox::paint`] presented, read by
-    /// [`RenderBox::hit_test`]. Its storage is reused paint after paint.
+    /// [`RenderBox::hit_test`].
     painted: RefCell<FlowPresentation>,
+    /// The buffer the next paint records into; it and `painted` trade
+    /// places after every completed paint, so their storage is reused.
+    spare: RefCell<FlowPresentation>,
     /// Self-dirty handle, held between [`RenderBox::attach`] and
     /// [`RenderBox::detach`] so the delegate's repaint `Listenable` can mark
     /// this node needing paint (ADR-0013). `None` while detached.
@@ -128,6 +131,7 @@ impl RenderFlow {
             clip_behavior: Clip::HardEdge,
             child_sizes: Vec::new(),
             painted: RefCell::new(FlowPresentation::default()),
+            spare: RefCell::new(FlowPresentation::default()),
             render_invalidation_handle: None,
             delegate_listener: None,
         }
@@ -381,10 +385,12 @@ impl RenderBox for RenderFlow {
         // opened by the pipeline around this whole fragment; only the
         // delegate's per-child transform scopes are recorded here.
         //
-        // The record is taken out for the delegate call, so no borrow is held
-        // while user code runs; a delegate that panics leaves it empty, and an
-        // unpainted flow takes no hits.
-        let mut record = self.painted.take();
+        // The new record is built in the spare buffer, so no borrow is held
+        // while user code runs, and swapped in only once the delegate has
+        // finished. A delegate that panics leaves the last record in place:
+        // the failed frame is discarded, so what it describes is still what
+        // is on screen.
+        let mut record = self.spare.take();
         record.reset(self.child_sizes.len());
         let FlowPresentation {
             order,
@@ -394,7 +400,8 @@ impl RenderBox for RenderFlow {
         let mut flow_ctx =
             FlowPaintingContext::for_paint(ctx, &self.child_sizes, order, transforms, painted);
         self.delegate.paint_children(&mut flow_ctx);
-        *self.painted.borrow_mut() = record;
+        let outgoing = self.painted.replace(record);
+        self.spare.replace(outgoing);
     }
 
     /// Multiplies in the transform the delegate painted the child under.

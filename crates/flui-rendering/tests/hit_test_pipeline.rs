@@ -692,6 +692,77 @@ pub(crate) fn a_contained_hit_panic_retains_the_discarded_entries() {
     );
 }
 
+/// A parent that places child `i` at `offsets[i]` and keeps the default
+/// `hit_test`.
+#[derive(Debug)]
+struct PlacedParent(Vec<Offset>);
+impl flui_foundation::Diagnosticable for PlacedParent {}
+
+impl flui_rendering::traits::RenderBox for PlacedParent {
+    type Arity = flui_foundation::Variable;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
+        let loose = flui_rendering::constraints::BoxConstraints::loose(ctx.constraints().biggest());
+        for (index, offset) in self.0.iter().enumerate().take(ctx.child_count()) {
+            ctx.layout_child(index, loose)?;
+            ctx.position_child(index, *offset);
+        }
+        Ok(ctx
+            .constraints()
+            .constrain(flui_foundation::geometry::Size::new(100.0, 100.0)))
+    }
+
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+}
+
+/// A failed node gives up its say in expanded areas along with its entries:
+/// an absorbing child it hit before panicking is no barrier any more, so a
+/// neighbour's expanded area still takes a position only that subtree covered.
+pub(crate) fn a_contained_hit_panic_rolls_back_the_barrier_its_subtree_hit() {
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let root = owner.insert(
+        Box::new(PlacedParent(vec![Offset::new(50.0, 0.0), Offset::ZERO])) as BoxedRenderObject,
+    );
+    let slop = owner
+        .insert_child_render_object(
+            root,
+            Box::new(flui_objects::RenderHitSlop::new(
+                flui_foundation::geometry::EdgeInsets::all(10.0),
+                0.0,
+            )),
+        )
+        .expect("slop insert");
+    let target = owner
+        .insert_child_render_object(slop, Box::new(RenderColoredBox::red(20.0, 20.0)))
+        .expect("target insert");
+    let failing = owner
+        .insert_child_render_object(root, Box::new(PanicsAfterChild))
+        .expect("failing insert");
+    let absorb = owner
+        .insert_child_render_object(
+            failing,
+            Box::new(flui_objects::RenderAbsorbPointer::new(true)),
+        )
+        .expect("absorb insert");
+    owner
+        .insert_child_render_object(absorb, Box::new(RenderColoredBox::red(48.0, 40.0)))
+        .expect("absorbed box insert");
+    let owner = laid_out(owner, root);
+
+    // Over the absorbing box, inside the slop's area but outside its bounds.
+    let (path, panic) = contained_hit_path(&owner, 45.0, 10.0);
+    assert_eq!(panic.as_deref(), Some("parent hit test failed"));
+    assert_eq!(
+        path.first().map(|(id, _)| *id),
+        Some(target),
+        "the expanded area takes the position the failed subtree no longer covers"
+    );
+}
+
 /// A parent that keeps the default `hit_test` hands the position to its
 /// children, topmost first, and is hit only through one: it neither claims
 /// the empty space of its own box nor blocks the children it covers.
