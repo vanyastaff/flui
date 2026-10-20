@@ -127,7 +127,7 @@
 //! use flui_scheduler::prelude::*;
 //!
 //! let scheduler = UpdateScheduler::new();
-//! let budget = FrameBudget::new(60); // 60 FPS target
+//! let budget = FrameBudget::new(std::num::NonZeroU32::new(60).expect("60 is non-zero"));
 //! ```
 //!
 //! [`web_time`]: https://docs.rs/web-time

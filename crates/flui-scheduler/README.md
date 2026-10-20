@@ -145,7 +145,6 @@ let build_stats = budget.build_stats();
 println!("Build took {:.2}ms ({} of budget)",
          build_stats.duration_ms(), build_stats.budget_percent);
 ```
-```
 
 ### Priority-based Task Queue
 

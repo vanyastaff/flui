@@ -216,8 +216,8 @@ pub use flui_rendering::RenderUpdateImpact;
 
 // Nameable lifecycle capabilities and callback values for widget authors.
 pub use flui_scheduler::{
-    AsyncDriver, BoxedTask, BudgetPercentage, FrameDuration, FramePhase, FrameTiming, FrameWaker,
-    Instant, Microseconds, Milliseconds, PostFrameHandle, PostFrameScheduleError, Seconds,
+    AsyncDriver, BoxedTask, BudgetPercentage, FrameDuration, FrameId, FramePhase, FrameTiming,
+    FrameWaker, Instant, Microseconds, Milliseconds, PostFrameHandle, PostFrameScheduleError, Seconds,
     TaskToken, duration::InvalidDurationConfig,
 };
 // Keys
