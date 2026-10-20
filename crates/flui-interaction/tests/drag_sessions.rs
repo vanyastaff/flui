@@ -2566,11 +2566,107 @@ fn dropped_while_fetching_elsewhere(f: &Fixture) -> (DataTransferId, DragFetch) 
     (id, fetch)
 }
 
+/// A receiver drawn through a perspective tilt.
+struct TiltedPlane {
+    seen: RefCell<Vec<Offset<f64>>>,
+}
+
+impl DropReceiver for TiltedPlane {
+    fn drag_entered(&self, _: &DragView<'_>, at: DragPoint) -> DropFeedback {
+        self.seen.borrow_mut().push(at.local);
+        DropFeedback { accept: Some(COPY) }
+    }
+    fn drag_moved(&self, _: &DragView<'_>, at: DragPoint) -> DropFeedback {
+        self.seen.borrow_mut().push(at.local);
+        DropFeedback { accept: Some(COPY) }
+    }
+    fn drag_left(&self, _: &DragView<'_>) {}
+    fn dropped(&self, _: &DragView<'_>, _: DragPoint, _: TransferActions) {}
+}
+
+/// Puts one receiver under a perspective tilt over the whole window.
+struct TiltProbe {
+    forward: flui_foundation::geometry::Matrix4,
+    target: LocalPayloadTarget,
+}
+
+impl HitTestProbe for TiltProbe {
+    fn probe(
+        &self,
+        _: Offset<f64>,
+        _: PointerKind,
+        result: &mut HitTestResult,
+    ) -> Result<(), InteractionDispatchError> {
+        result
+            .with_paint_transform(self.forward, |result| {
+                result.add(HitTestEntry::new(RenderId::new(1)).metadata(Arc::new(self.target)));
+            })
+            .expect("an invertible tilt");
+        Ok(())
+    }
+}
+
+/// A receiver under a perspective ancestor sees the drag at the point of its
+/// own plane under the pointer, as a pointer target under it would.
+fn a_receiver_under_perspective_sees_its_own_plane() {
+    use flui_foundation::geometry::Matrix4;
+    in_lane(|f| {
+        // Perspective with depth, over a tilt toward the viewer.
+        let mut perspective = Matrix4::identity();
+        *perspective.get_mut(3, 2) = -0.002;
+        let forward = perspective * Matrix4::rotation_x(0.6);
+        let plane = Rc::new(TiltedPlane {
+            seen: RefCell::new(Vec::new()),
+        });
+        let target = f
+            .dispatch
+            .register_local_payload(Rc::new(DropReceiverSlot(plane.clone())))
+            .expect("active lane");
+        let hit = HitTestHandle::new(f.dispatch.clone(), Rc::new(TiltProbe { forward, target }));
+        let window = desktop();
+        let session = f
+            .handle
+            .start(
+                DragStart::new(
+                    f.presentation,
+                    vec![DragItem::new().with_value("payload".to_owned())],
+                    AllowedActions::within(COPY),
+                )
+                .pointer(PointerInfo::new(
+                    PointerId::try_from(1_u64).expect("pointer"),
+                    PointerKind::Touch,
+                ))
+                .window(Arc::downgrade(&window))
+                .hit_test(hit),
+            )
+            .expect("a valid drag starts");
+        // Where the plane's own point (20, 30) appears on screen.
+        let (x, y) = forward
+            .project_plane_point(20.0, 30.0)
+            .expect("the point is in front of the camera");
+        session
+            .pointer_moved(Offset::new(x, y), None)
+            .expect("a live session");
+        let seen = plane.seen.borrow();
+        let local = seen.first().expect("the receiver is under the drag");
+        assert!(
+            (local.dx - 20.0).abs() < 1e-6 && (local.dy - 30.0).abs() < 1e-6,
+            "the receiver's own point, not a projection of the screen point: {local:?}"
+        );
+        drop(seen);
+        session.cancel().expect("a live session");
+    });
+}
+
 #[test]
 fn drag_sessions() {
     run_table(
         "drag sessions",
         &[
+            (
+                "a_receiver_under_perspective_sees_its_own_plane",
+                a_receiver_under_perspective_sees_its_own_plane,
+            ),
             (
                 "a_drop_waits_for_a_fetch_made_over_another_window",
                 a_drop_waits_for_a_fetch_made_over_another_window,

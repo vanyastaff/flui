@@ -36,6 +36,8 @@ struct LifecycleLog {
     layout_count: Arc<AtomicUsize>,
     paint_count: Arc<AtomicUsize>,
     captured_handle: Rc<RefCell<Option<LocalRenderInvalidationHandle>>>,
+    /// When set, `paint` marks the probe for layout through its handle.
+    relayout_from_paint: Rc<Cell<bool>>,
     peer_drop: Option<Rc<PeerDropLog>>,
     peer_detach: Option<Rc<PeerDropLog>>,
 }
@@ -118,6 +120,12 @@ impl RenderBox for LifecycleProbe {
 
     fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Leaf>) {
         self.log.paint_count.fetch_add(1, Ordering::SeqCst);
+        if self.log.relayout_from_paint.get() {
+            self.log
+                .captured_handle()
+                .mark_needs_layout()
+                .expect("an attached probe paints");
+        }
     }
 
     fn detach(&mut self) {
@@ -535,3 +543,81 @@ static_assertions::assert_not_impl_any!(
 // `insert_sliver_child_render_object` (the Sliver-protocol counterpart of
 // `insert_child_render_object`).
 // ────────────────────────────────────────────────────────────────────────
+
+/// Paint must not change geometry: a layout mark made while painting is
+/// asserted against in debug builds and otherwise applies next frame.
+pub(crate) fn a_layout_mark_during_paint_is_diagnosed() {
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let log = LifecycleLog::default();
+    let id = owner.insert(probe(log.clone()));
+    owner.set_root_id(Some(id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(40.0, 40.0))));
+    let (owner, frame) = owner.run_frame();
+    frame.expect("initial layout and paint");
+    let layouts = log.layout_count.load(Ordering::SeqCst);
+
+    log.relayout_from_paint.set(true);
+    log.captured_handle()
+        .mark_needs_paint()
+        .expect("live attachment");
+    let painted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || owner.run_frame()));
+
+    if cfg!(debug_assertions) {
+        let Err(failure) = painted else {
+            panic!("a debug build asserts against a layout mark during paint");
+        };
+        let message = failure.downcast_ref::<String>().map_or("", String::as_str);
+        assert!(
+            message.contains("requested layout during paint"),
+            "unexpected panic: {message}"
+        );
+    } else {
+        let (owner, frame) = painted.expect("a release build only logs the mark");
+        frame.expect("the paint pass completes");
+        log.relayout_from_paint.set(false);
+        let (_, frame) = owner.run_frame();
+        frame.expect("the mark applies next frame");
+        assert_eq!(log.layout_count.load(Ordering::SeqCst), layouts + 1);
+    }
+}
+
+/// A relocated subtree takes the depth of its new position, also when the
+/// destination edge is written while the batch is detached (as the element
+/// tree's edge synchronization does).
+pub(crate) fn a_relocated_subtree_takes_its_new_depth() {
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let insert = |owner: &mut PipelineOwner, parent| {
+        owner
+            .insert_child_render_object(parent, probe(LifecycleLog::default()))
+            .expect("live parent")
+    };
+    let root = owner.set_root_render_object(probe(LifecycleLog::default()));
+    let shallow = insert(&mut owner, root);
+    let moved = insert(&mut owner, shallow);
+    let moved_child = insert(&mut owner, moved);
+    let between = insert(&mut owner, root);
+    let deep = insert(&mut owner, between);
+
+    let token = owner
+        .detach_render_subtrees(&[moved])
+        .expect("attached subtree");
+    owner
+        .render_tree_mut()
+        .get_mut(moved)
+        .expect("detached node stays live")
+        .set_parent(Some(deep));
+    owner
+        .render_tree_mut()
+        .get_mut(deep)
+        .expect("destination is live")
+        .add_child(moved);
+    owner
+        .attach_render_subtrees(token)
+        .expect("same subtree, new position");
+
+    let depths: Vec<_> = [deep, moved, moved_child]
+        .iter()
+        .map(|&id| owner.render_tree().depth(id))
+        .collect();
+    assert_eq!(depths, [Some(2), Some(3), Some(4)]);
+}

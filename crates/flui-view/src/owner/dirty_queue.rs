@@ -1,6 +1,9 @@
 //! The build drain's dirty-element queue.
 
-use std::{cmp::Reverse, collections::BinaryHeap};
+use std::{
+    cmp::Reverse,
+    collections::{BinaryHeap, HashMap},
+};
 
 use flui_foundation::ElementId;
 
@@ -65,6 +68,19 @@ impl DirtyQueue {
         self.heap.pop().map(|Reverse(dirty)| dirty)
     }
 
+    /// Re-key every entry to `depth_of` its id, in place: the heap keeps its
+    /// allocation and each entry its queue order.
+    pub(crate) fn rekey(&mut self, mut depth_of: impl FnMut(ElementId) -> usize) {
+        if self.heap.is_empty() {
+            return;
+        }
+        let mut entries = std::mem::take(&mut self.heap).into_vec();
+        for Reverse(dirty) in &mut entries {
+            dirty.depth = depth_of(dirty.id);
+        }
+        self.heap = BinaryHeap::from(entries);
+    }
+
     /// Remove every entry, keeping the order counter.
     pub(crate) fn take_entries(&mut self) -> impl Iterator<Item = DirtyElement> + use<> {
         std::mem::take(&mut self.heap)
@@ -83,5 +99,50 @@ impl DirtyQueue {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.heap.is_empty()
+    }
+}
+
+/// Nearest layout-builder scope per element, for a tree that stays immutable
+/// while the answers live: a walk stops at the first element already answered
+/// and records its answer for every element it passed, so classifying D dirty
+/// elements costs O(D + distinct ancestors), not O(D · depth).
+#[derive(Debug, Default)]
+pub(crate) struct ScopeMemo {
+    answers: HashMap<ElementId, Option<ElementId>>,
+    path: Vec<ElementId>,
+}
+
+impl ScopeMemo {
+    /// Forget every answer, keeping the storage.
+    pub(crate) fn clear(&mut self) {
+        self.answers.clear();
+    }
+
+    /// The nearest element from `element` up (itself included) that
+    /// `is_scope`, following `parent`.
+    pub(crate) fn nearest(
+        &mut self,
+        element: ElementId,
+        is_scope: impl Fn(ElementId) -> bool,
+        mut parent: impl FnMut(ElementId) -> Option<ElementId>,
+    ) -> Option<ElementId> {
+        self.path.clear();
+        let mut cursor = Some(element);
+        let scope = loop {
+            let Some(candidate) = cursor else {
+                break None;
+            };
+            if let Some(&known) = self.answers.get(&candidate) {
+                break known;
+            }
+            self.path.push(candidate);
+            if is_scope(candidate) {
+                break Some(candidate);
+            }
+            cursor = parent(candidate);
+        };
+        self.answers
+            .extend(self.path.drain(..).map(|visited| (visited, scope)));
+        scope
     }
 }

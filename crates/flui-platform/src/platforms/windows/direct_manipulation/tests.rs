@@ -12,7 +12,7 @@ use flui_platform_api::pointer::PointerEvent;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{GetUpdateRect, ValidateRect};
 use windows::Win32::UI::WindowsAndMessaging::{
-    KillTimer, SendMessageW, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_PAINT,
+    KillTimer, SendMessageW, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_KILLFOCUS, WM_PAINT,
 };
 
 use super::PUMP_TIMER;
@@ -228,6 +228,41 @@ fn the_size_and_move_loop_cancels_and_pauses_until_it_ends(f: &Fixture) {
     let _ = f.lines();
 }
 
+/// Red-checks: leave `WM_KILLFOCUS` without `cancel_pointers`, or have the
+/// cancellation unpause a viewport the size-and-move loop paused.
+fn focus_loss_cancels_without_pausing(f: &Fixture) {
+    push(f.hwnd, &[status(Running), content(-8.0)]);
+    pump(f.hwnd);
+    send(f.hwnd, WM_KILLFOCUS);
+    assert_eq!(f.lines(), ["Began 8", "Cancelled 0"]);
+    assert!(!take_timer(f.hwnd), "a cancelled viewport is not paced");
+
+    // An inactive window still scrolls under the cursor.
+    push(f.hwnd, &[status(Running), content(-3.0)]);
+    pump(f.hwnd);
+    assert_eq!(
+        f.lines(),
+        ["Began 3"],
+        "measured from the origin it reset to"
+    );
+    push(f.hwnd, &[status(Ready)]);
+    pump(f.hwnd);
+    let _ = f.lines();
+
+    // Losing focus inside the size-and-move loop keeps the pause.
+    send(f.hwnd, WM_ENTERSIZEMOVE);
+    send(f.hwnd, WM_KILLFOCUS);
+    push(f.hwnd, &[status(Running), content(-5.0)]);
+    pump(f.hwnd);
+    assert_eq!(f.lines(), Vec::<String>::new(), "still paused");
+    send(f.hwnd, WM_EXITSIZEMOVE);
+    pump(f.hwnd);
+    assert_eq!(f.lines(), ["Began 5"]);
+    push(f.hwnd, &[status(Ready)]);
+    pump(f.hwnd);
+    let _ = f.lines();
+}
+
 /// The cases sharing one window each, by name.
 type Row = (&'static str, Option<fn(HWND)>, fn(&Fixture));
 
@@ -254,6 +289,11 @@ fn the_window_pumps_paces_and_pauses_its_viewport() {
             None,
             the_size_and_move_loop_cancels_and_pauses_until_it_ends,
         ),
+        (
+            "focus_loss_cancels_without_pausing",
+            None,
+            focus_loss_cancels_without_pausing,
+        ),
     ];
     for (name, nested, case) in rows {
         eprintln!("case: {name}");
@@ -261,6 +301,60 @@ fn the_window_pumps_paces_and_pauses_its_viewport() {
         case(&f);
         f.window.close();
     }
+}
+
+/// A focus loss with a touchpad pan and a mouse press open ends both, in
+/// time order: the pan's cancellation is stamped from the performance
+/// counter, the press's from the message time, and the press's is not
+/// placed before it.
+///
+/// Red-check: deliver the touchpad's input without raising the window
+/// clock's floor.
+#[test]
+fn a_focus_loss_stamps_its_cancellations_in_order() {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONDOWN;
+
+    let f = fixture(None);
+    let timeline = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&timeline);
+    f.window.on_input(Box::new(move |input| {
+        let entry = match input.as_pointer() {
+            Some(PointerEvent::Scroll(scroll)) => Some(("scroll", scroll.time)),
+            Some(PointerEvent::Down(press)) => Some(("down", press.sample.time)),
+            Some(PointerEvent::Cancel(cancel)) => Some(("cancel", cancel.time)),
+            _ => None,
+        };
+        if let Some(entry) = entry {
+            recorded.lock().expect("timeline").push(entry);
+        }
+        DispatchEventResult::default()
+    }));
+    push(f.hwnd, &[status(Running), content(-8.0)]);
+    pump(f.hwnd);
+    // SAFETY: integer message data for the fixture's own window on its
+    // owner thread: a primary press at client (10, 10).
+    unsafe {
+        SendMessageW(
+            f.hwnd,
+            WM_LBUTTONDOWN,
+            Some(WPARAM(0x0001)),
+            Some(LPARAM((0x000a << 16) | 0x000a)),
+        )
+    };
+    send(f.hwnd, WM_KILLFOCUS);
+    let timeline = timeline.lock().expect("timeline").clone();
+    let kinds: Vec<_> = timeline.iter().map(|(kind, _)| *kind).collect();
+    assert_eq!(
+        kinds,
+        ["scroll", "down", "scroll", "cancel"],
+        "{timeline:?}"
+    );
+    assert!(
+        timeline.windows(2).all(|pair| pair[0].1 <= pair[1].1),
+        "every stamp follows the one delivered before it: {timeline:?}"
+    );
+    f.window.close();
 }
 
 /// Red-check: drop `release_touchpad` from `WM_DESTROY` (the open pan is

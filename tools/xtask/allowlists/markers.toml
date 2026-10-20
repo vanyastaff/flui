@@ -162,7 +162,7 @@ count = 4
 [[allow]]
 path = "crates/flui-platform/src/platforms/windows/platform.rs"
 class = "spec-task"
-count = 17
+count = 9
 
 [[allow]]
 path = "crates/flui-platform/src/traits/owner.rs"

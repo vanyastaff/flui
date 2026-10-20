@@ -103,6 +103,7 @@ impl PipelineOwner<PaintPhase> {
         .entered();
 
         self.scheduler.enter_phase(PhaseKind::Paint);
+        self.local_dirty.begin_paint();
 
         // Deepest-first ordering retained: the
         // full-tree descent below repaints everything, but per-boundary
@@ -337,6 +338,7 @@ impl PipelineOwner<PaintPhase> {
                 Err(e) => {
                     // Restore the debug invariant before propagating so
                     // the owner stays consistent on the error path.
+                    let _ = self.local_dirty.end_paint();
                     let _ = self.scheduler.exit_phase(PhaseKind::Paint);
                     return Err(e);
                 }
@@ -408,7 +410,13 @@ impl PipelineOwner<PaintPhase> {
         // The always-drain contract of exit_phase is the correct behavior:
         // mid-paint marks scheduled before the error survive into the next
         // frame's retry rather than being dropped.
+        let layout_during_paint = self.local_dirty.end_paint();
         let _ = self.scheduler.exit_phase(PhaseKind::Paint);
+        debug_assert!(
+            layout_during_paint.is_none(),
+            "BUG: render object {layout_during_paint:?} requested layout during paint; \
+             paint must not change geometry"
+        );
 
         Ok(())
     }
@@ -630,7 +638,8 @@ impl PipelineOwner<PaintPhase> {
              status changes, beside mark_needs_compositing_bits_update."
         );
 
-        let child_ids: Vec<RenderId> = render_node.children().to_vec();
+        // Borrowed, not copied: `&self` keeps the tree immutable for the walk.
+        let child_ids = render_node.children();
         // The generation this node's most recent layout stamped onto the
         // children it laid out; a child carrying anything else was not part of
         // that pass and is skipped at the splice below.

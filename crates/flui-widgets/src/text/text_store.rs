@@ -731,6 +731,10 @@ impl TextStore for EditableTextStore {
         calls.retire(previous);
         calls.resume();
     }
+
+    fn screen_moved(&self) {
+        self.layout_changed();
+    }
 }
 
 /// One lock's view of the field: the snapshot (read) or working copy

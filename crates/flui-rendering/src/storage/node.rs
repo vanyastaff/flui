@@ -321,12 +321,6 @@ impl RenderNode {
         self.links().depth()
     }
 
-    /// Sets the depth.
-    #[inline]
-    pub fn set_depth(&mut self, depth: u16) {
-        self.links_mut().set_depth(depth);
-    }
-
     /// Returns the number of children.
     #[inline]
     pub fn child_count(&self) -> usize {

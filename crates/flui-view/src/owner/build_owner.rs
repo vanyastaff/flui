@@ -46,6 +46,8 @@ use super::external_build_inbox::{BuildPremise, PendingBuilds};
 thread_local! {
     #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static LAYOUT_SCOPE_CLASSIFICATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
+    static LAYOUT_SCOPE_HOPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Upper bound on RE-ENTRY mid-drain absorbs per frame (issue #1180).
@@ -245,6 +247,8 @@ pub(crate) struct BuildScopeQueues {
     isolated: HashMap<ElementId, BinaryHeap<Reverse<DirtyElement>>>,
     /// Reused while rerouting after scope removal or tree reparenting.
     scratch: Vec<DirtyElement>,
+    /// Nearest scope per element, reused by each repartition.
+    scope_memo: super::dirty_queue::ScopeMemo,
 }
 
 /// Per-cause rebuild counters for one `build_scope`, indexed by the
@@ -1091,16 +1095,8 @@ impl BuildOwner {
     /// external-inbox drain uses) keeps the contract regardless of what
     /// `schedule_build_for` was told. Each entry keeps its queue order.
     fn rekey_dirty_depths(&mut self, tree: &ElementTree) {
-        if self.dirty_elements.is_empty() {
-            return;
-        }
-        let queued: Vec<DirtyElement> = self.dirty_elements.take_entries().collect();
-        for dirty in queued {
-            let depth = tree
-                .get(dirty.id())
-                .map_or(0, crate::tree::ElementNode::depth);
-            self.dirty_elements.requeue(dirty.at_depth(depth));
-        }
+        self.dirty_elements
+            .rekey(|id| tree.get(id).map_or(0, crate::tree::ElementNode::depth));
     }
 
     /// Return the nearest mounted layout-builder scope containing `element`.
@@ -1125,6 +1121,8 @@ impl BuildOwner {
         LAYOUT_SCOPE_CLASSIFICATIONS.with(|count| count.set(count.get() + 1));
         let mut cursor = Some(element);
         while let Some(candidate) = cursor {
+            #[cfg(test)]
+            LAYOUT_SCOPE_HOPS.with(|count| count.set(count.get() + 1));
             if live_scopes.contains(&candidate) && tree.contains(candidate) {
                 return Some(candidate);
             }
@@ -1177,6 +1175,14 @@ impl BuildOwner {
         live_scopes: &HashSet<ElementId>,
     ) {
         self.collect_partitioned_dirty();
+        let mut memo = std::mem::take(
+            &mut self
+                .build_scope_queues
+                .as_mut()
+                .expect("BUG: repartition creates scoped queues")
+                .scope_memo,
+        );
+        memo.clear();
         while let Some(mut dirty) = self
             .build_scope_queues
             .as_mut()
@@ -1188,8 +1194,21 @@ impl BuildOwner {
                 .get(dirty.id())
                 .map_or(0, crate::tree::ElementNode::depth);
             dirty = dirty.at_depth(depth);
-            let scope = Self::nearest_layout_builder_scope(tree, dirty.id(), live_scopes);
+            #[cfg(test)]
+            LAYOUT_SCOPE_CLASSIFICATIONS.with(|count| count.set(count.get() + 1));
+            let scope = memo.nearest(
+                dirty.id(),
+                |id| live_scopes.contains(&id) && tree.contains(id),
+                |id| {
+                    #[cfg(test)]
+                    LAYOUT_SCOPE_HOPS.with(|count| count.set(count.get() + 1));
+                    tree.get(id).and_then(crate::tree::ElementNode::parent)
+                },
+            );
             self.defer_dirty_element(scope, dirty);
+        }
+        if let Some(queues) = self.build_scope_queues.as_mut() {
+            queues.scope_memo = memo;
         }
     }
 
@@ -1248,6 +1267,12 @@ impl BuildOwner {
     #[cfg(test)]
     pub(crate) fn layout_scope_classifications() -> usize {
         LAYOUT_SCOPE_CLASSIFICATIONS.with(std::cell::Cell::get)
+    }
+
+    /// Resets and returns the parent-link steps scope classification took.
+    #[cfg(test)]
+    pub(crate) fn take_layout_scope_hops() -> usize {
+        LAYOUT_SCOPE_HOPS.with(|count| count.replace(0))
     }
 
     /// Acquire an [`ElementOwner`](super::ElementOwner) split-borrow

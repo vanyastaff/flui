@@ -143,6 +143,190 @@ fn shared_region_exits_once_per_device() {
     );
 }
 
+/// Two surfaces whose trees reuse one render id hold separate regions: each
+/// device's exit reaches the region it entered on its own surface.
+fn surfaces_keep_their_regions_apart_under_one_render_id() {
+    use flui_interaction::{GestureBinding, InputSurface};
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let binding = GestureBinding::new();
+    let embedded = binding.embed_surface().expect("surface");
+    let log = Log::default();
+    let (window_region, embedded_region) = lane.enter(|| {
+        (
+            logging_region(&handle, "W", &log),
+            logging_region(&handle, "E", &log),
+        )
+    });
+    let at = Offset::new(10.0, 10.0);
+    let pen = PointerKind::Pen { tool: PenTool::Tip };
+    lane.enter(|| {
+        let send = |surface, event: PointerEvent, over: Option<MouseRegionTarget>| {
+            let _ = binding.dispatch_pointer_on(surface, &event, |_| {
+                over.map_or_else(HitTestResult::new, |region| path(&[(1, region)]))
+            });
+        };
+        send(
+            InputSurface::Window,
+            hover(MOUSE, PointerKind::Mouse, at, 1),
+            Some(window_region),
+        );
+        send(embedded, hover(PEN, pen, at, 2), Some(embedded_region));
+        send(
+            InputSurface::Window,
+            hover(MOUSE, PointerKind::Mouse, at, 3),
+            None,
+        );
+        send(embedded, hover(PEN, pen, at, 4), None);
+    });
+    assert_eq!(
+        take(&log),
+        ["enter W 2", "enter E 3", "exit W 2", "exit E 3"],
+        "a surface's region is not replaced by another surface's under the same id"
+    );
+}
+
+/// How a hovering source goes away.
+#[derive(Clone, Copy, Debug)]
+enum Departure {
+    /// The pen lifts out of range: its own `Leave`.
+    PenLeave,
+    /// A source with no hardware identity reports its `Leave`.
+    FallbackLeave,
+    /// The device is unplugged.
+    DeviceRemoved,
+    /// The cursor leaves the window.
+    WindowLeft,
+}
+
+/// A source that leaves exits what it hovered once, gives the cursor back,
+/// is not re-entered by the next ambient refresh, and releases the regions
+/// only it hovered.
+fn departure_exits_once_and_releases_the_region(departure: Departure) {
+    use flui_interaction::GestureBinding;
+    use flui_platform_api::{
+        EventTime,
+        pointer::{PointerDeviceChange, PointerSignal},
+    };
+
+    struct Release(Rc<Cell<usize>>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let binding = GestureBinding::new();
+    let log = Log::default();
+    let released = Rc::new(Cell::new(0));
+    let region = lane.enter(|| {
+        let (entered, exited) = (Rc::clone(&log), Rc::clone(&log));
+        let capture = Release(Rc::clone(&released));
+        handle
+            .register_mouse_region(MouseRegionCallbacks {
+                on_enter: Some(Rc::new(move |_, _| {
+                    entered.borrow_mut().push("enter".to_owned());
+                })),
+                on_exit: Some(Rc::new(move |_, _| {
+                    let _ = &capture;
+                    exited.borrow_mut().push("exit".to_owned());
+                })),
+                ..MouseRegionCallbacks::default()
+            })
+            .expect("register region")
+    });
+    let id = RenderId::new(1);
+    let over = || {
+        let mut result = HitTestResult::new();
+        result.add(
+            HitTestEntry::new(id)
+                .mouse_annotation(MouseTrackerAnnotation::new(id, region))
+                .cursor(CursorIcon::Text),
+        );
+        result
+    };
+    let cursors = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&cursors);
+    binding
+        .mouse_tracker()
+        .set_cursor_change_callback(Rc::new(move |_, cursor| sink.borrow_mut().push(cursor)));
+    let mut movement = hover(
+        PEN,
+        PointerKind::Pen { tool: PenTool::Tip },
+        Offset::new(10.0, 10.0),
+        1,
+    );
+    let PointerEvent::Move(motion) = &mut movement else {
+        unreachable!("a move fixture")
+    };
+    if matches!(departure, Departure::FallbackLeave) {
+        motion.pointer.device = None;
+    }
+    let pointer = motion.pointer;
+    let later = EventTime::from_nanos(2_000_000);
+    lane.enter(|| {
+        binding.handle_pointer_event(&movement, |_| over());
+        binding.flush_pending_moves();
+        match departure {
+            Departure::PenLeave | Departure::FallbackLeave => binding.handle_pointer_event(
+                &PointerEvent::Leave(PointerSignal::new(pointer, later)),
+                |_| over(),
+            ),
+            Departure::DeviceRemoved => binding.handle_pointer_event(
+                &PointerEvent::DeviceRemoved(PointerDeviceChange::new(
+                    device(PEN),
+                    pointer.kind,
+                    later,
+                )),
+                |_| over(),
+            ),
+            Departure::WindowLeft => binding.handle_pointer_left_window(),
+        }
+        binding.mouse_tracker().update_all_devices(|_, _| over());
+        handle
+            .unregister_mouse_region(region)
+            .expect("unregister region");
+    });
+    assert_eq!(
+        take(&log),
+        ["enter", "exit"],
+        "{departure:?}: one exit and no re-entry"
+    );
+    assert_eq!(
+        cursors.borrow().as_slice(),
+        [CursorIcon::Text, CursorIcon::Default],
+        "{departure:?}: the cursor goes back to the arrow"
+    );
+    assert_eq!(
+        binding.mouse_tracker().source_position(&pointer).is_some(),
+        matches!(departure, Departure::WindowLeft),
+        "{departure:?}: only a window leave keeps the source for its return"
+    );
+    assert_eq!(
+        released.get(),
+        1,
+        "{departure:?}: the tracker no longer holds the region's callbacks"
+    );
+}
+
+fn pen_leave_exits_its_hover() {
+    departure_exits_once_and_releases_the_region(Departure::PenLeave);
+}
+
+fn fallback_source_leave_exits_its_hover() {
+    departure_exits_once_and_releases_the_region(Departure::FallbackLeave);
+}
+
+fn removed_device_exits_its_hover() {
+    departure_exits_once_and_releases_the_region(Departure::DeviceRemoved);
+}
+
+fn window_leave_releases_the_regions_it_exits() {
+    departure_exits_once_and_releases_the_region(Departure::WindowLeft);
+}
+
 fn stationary_device_follows_layout_without_duplicates() {
     let lane = InteractionLane::try_new().expect("lane");
     let handle = lane.dispatch_handle();
@@ -1681,10 +1865,32 @@ fn mouse_tracking_ordering_and_cursor_deferral() {
 fn shared_region_exit_per_device() {
     run_rows(
         "shared region",
-        &[(
-            "shared region exits once per device",
-            shared_region_exits_once_per_device,
-        )],
+        &[
+            (
+                "shared region exits once per device",
+                shared_region_exits_once_per_device,
+            ),
+            (
+                "surfaces keep their regions apart under one render id",
+                surfaces_keep_their_regions_apart_under_one_render_id,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn hover_ends_when_its_source_leaves() {
+    run_rows(
+        "hover departure",
+        &[
+            ("pen leave", pen_leave_exits_its_hover),
+            (
+                "fallback source leave",
+                fallback_source_leave_exits_its_hover,
+            ),
+            ("device removal", removed_device_exits_its_hover),
+            ("window leave", window_leave_releases_the_regions_it_exits),
+        ],
     );
 }
 
