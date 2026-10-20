@@ -2,7 +2,7 @@
 //! reach only the route on top, and the back and dismiss keys pop the right
 //! route.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -320,11 +320,11 @@ pub(crate) fn pop_restores_the_opening_element() {
 
 /// Records the routes a navigator reports removed.
 #[derive(Default)]
-struct Removals(RefCell<Vec<RouteId>>);
+struct Removals(parking_lot::Mutex<Vec<RouteId>>);
 
 impl NavigatorObserver for Removals {
     fn did_remove(&self, route: RouteId, _previous: Option<RouteId>) {
-        self.0.borrow_mut().push(route);
+        self.0.lock().push(route);
     }
 }
 
@@ -342,9 +342,8 @@ pub(crate) fn a_panicking_restored_focus_listener_still_closes_the_route() {
         Focus::new(SizedBox::new(40.0, 40.0))
             .debug_label("home")
             .on_focus_change(move |_, focused| {
-                if focused && trap.replace(false) {
-                    panic!("restored focus listener");
-                }
+                let trapped = focused && trap.replace(false);
+                assert!(!trapped, "restored focus listener");
             })
             .into_view()
             .boxed()
@@ -367,7 +366,7 @@ pub(crate) fn a_panicking_restored_focus_listener_still_closes_the_route() {
         payload.downcast_ref::<&str>(),
         Some(&"restored focus listener")
     );
-    assert_eq!(*removals.0.borrow(), [dialog], "observers hear the removal");
+    assert_eq!(*removals.0.lock(), [dialog], "observers hear the removal");
     settle(&mut harness);
     assert_eq!(navigator.route_ids().len(), 1);
     manager.unfocus();

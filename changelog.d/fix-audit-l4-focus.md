@@ -9,6 +9,10 @@
   the other routes unfocusable, tells its observers, removes the closed route's overlay entries
   and disposes it, then propagates the panic. One panicking observer or `dispose` no longer
   keeps the rest from running either.
+- **Closing a dialog returns the focus to its opener under a nested navigator**
+  (`flui-interaction`, `flui-widgets`): a nested navigator whose top changed while a dialog
+  covered its page no longer takes the focus when the dialog closes. Reopening a scope's
+  descendants to focus drops the first-focus intents recorded inside it while they were barred.
 - **A panicking key-cancel handler no longer leaves window focus half updated**
   (`flui-runtime`): every window's focus flag and lifecycle (with its pointer cancellation) are
   updated before the panic propagates.
