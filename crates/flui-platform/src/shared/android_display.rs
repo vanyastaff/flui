@@ -307,7 +307,11 @@ mod tests {
             ),
             (
                 "paused, a timer further ahead than the looper can wait",
-                turn(false, false, Some(now + Duration::from_secs(30 * 24 * 3600))),
+                turn(
+                    false,
+                    false,
+                    Some(now + Duration::from_secs(30 * 24 * 3600)),
+                ),
                 Some(LOOPER_MAX_WAIT),
             ),
         ] {
