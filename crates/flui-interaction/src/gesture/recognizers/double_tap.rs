@@ -9,7 +9,9 @@ use crate::gesture::observer::GestureContest;
 use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
-    gesture::arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
+    gesture::arena::{
+        GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition, MotionFrame,
+    },
     gesture::settings::{GestureSettings, GestureSettingsProvider},
     pointer::PointerDispatch,
 };
@@ -347,9 +349,11 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                     // The hold's beaten members hear they lost inside the
                     // join, with no borrow of this recognizer held.
                     if idle
-                        && let Some(entry) = self
-                            .bounce_membership
-                            .join_from(data.pointer.id, dispatch.feeder())
+                        && let Some(entry) = self.bounce_membership.join_from(
+                            data.pointer.id,
+                            dispatch.feeder(),
+                            MotionFrame::of_down(dispatch),
+                        )
                     {
                         let outgoing = self.bounce.borrow_mut().replace(entry);
                         if let Some(outgoing) = outgoing {

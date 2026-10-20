@@ -12,7 +12,9 @@ use super::{
     DragStartBehavior, DragStartDetails, DragUpdateDetails, GestureEndReason,
 };
 use crate::gesture::recognizers::{
-    callback_containment::invoke_callback, contact::ContactId, recognizer::EventTimeline,
+    callback_containment::invoke_callback,
+    contact::ContactId,
+    recognizer::{CancelOutcome, EventTimeline, slop_travel},
     scale::PanZoomDisposition,
 };
 use crate::{
@@ -79,7 +81,6 @@ enum Step {
     Start(DragStartDetails),
     Update(DragUpdateDetails),
     End(DragEndDetails),
-    Cancel,
 }
 
 impl DragGestureRecognizer {
@@ -148,8 +149,14 @@ impl DragGestureRecognizer {
                         }
                     },
                 );
-                if retired.is_some_and(|session| session.started) {
-                    self.deliver_native(Step::Cancel);
+                if let Some(session) = retired.filter(|session| session.started) {
+                    let end = self.end_native(
+                        session,
+                        GestureEndReason::Cancelled,
+                        clock,
+                        Some(local.time.as_nanos()),
+                    );
+                    self.deliver_native(Step::End(end));
                 }
                 PanZoomDisposition::Admitted
             }
@@ -194,8 +201,13 @@ impl DragGestureRecognizer {
                     } else {
                         // An independent step is a whole gesture: it needs no
                         // slop to count as one.
+                        // Slop is in root pixels, so a scaled or rotated route
+                        // is measured by its root displacement, as a pointer
+                        // drag's is.
+                        let slop_travel =
+                            slop_travel(travel, global_position - session.global_origin);
                         if !independent
-                            && !self.exceeds_slop(source.kind, &session.settings, travel)
+                            && !self.exceeds_slop(source.kind, &session.settings, slop_travel)
                         {
                             session.last = position;
                             session.global_last = global_position;
@@ -268,7 +280,12 @@ impl DragGestureRecognizer {
                 if independent && live() {
                     let session = self.native.borrow_mut().take();
                     if let Some(session) = session {
-                        let end = self.end_native(session, GestureEndReason::Completed, clock);
+                        let end = self.end_native(
+                            session,
+                            GestureEndReason::Completed,
+                            clock,
+                            Some(local.time.as_nanos()),
+                        );
                         RoutePanic::preserve_first(
                             &mut first,
                             RoutePanic::capture(|| self.deliver_native(Step::End(end))),
@@ -302,7 +319,7 @@ impl DragGestureRecognizer {
                 } else {
                     GestureEndReason::Completed
                 };
-                let end = self.end_native(session, reason, clock);
+                let end = self.end_native(session, reason, clock, Some(local.time.as_nanos()));
                 self.deliver_native(Step::End(end));
                 PanZoomDisposition::Handled
             }
@@ -310,13 +327,29 @@ impl DragGestureRecognizer {
         }
     }
 
+    /// End the native session if one is started, as an explicit cancel does:
+    /// the accepted drag hears `on_end(Cancelled)`, a staged one just goes.
+    pub(super) fn cancel_native(&self) -> Option<CancelOutcome> {
+        let session = self.native.borrow_mut().take()?;
+        if !session.started {
+            return Some(CancelOutcome::Cancelled);
+        }
+        let clock = self.arena.sample_now();
+        let end = self.end_native(session, GestureEndReason::Cancelled, clock, None);
+        self.deliver_native(Step::End(end));
+        Some(CancelOutcome::Cancelled)
+    }
+
+    /// The details a session ends with. `stamp` is the terminal packet's
+    /// production time, so velocity is not aged by delivery delay.
     fn end_native(
         &self,
         mut session: NativeDrag,
         reason: GestureEndReason,
         clock: Instant,
+        stamp: Option<u64>,
     ) -> DragEndDetails {
-        let now = session.timeline.instant(None, clock);
+        let now = session.timeline.instant(stamp, clock);
         let measured = session.velocity.velocity_at(now).pixels_per_second;
         let velocity = Velocity::new(on_rail(measured, session.rail));
         let global_velocity = session.global_velocity.velocity_at(now);
@@ -377,9 +410,6 @@ impl DragGestureRecognizer {
                     || {},
                     |callback| callback(details),
                 );
-            }
-            Step::Cancel => {
-                invoke_callback(callbacks.on_cancel.clone(), || {}, |callback| callback());
             }
         }
     }

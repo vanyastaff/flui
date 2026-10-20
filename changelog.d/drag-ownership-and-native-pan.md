@@ -1,5 +1,5 @@
 ### Added
-- `DragGestureRecognizer::handle_pan_zoom` reads a precision touchpad's two-finger pan as a drag, and a `GestureDetector` with a drag slot and no transform slot routes native pan/zoom to it. A canvas with only `on_pan_*` now pans from the touchpad on Windows and macOS.
+- `DragGestureRecognizer::handle_pan_zoom` reads a precision touchpad's two-finger pan as a drag, and a `GestureDetector` with a drag slot and no transform slot routes native pan/zoom to it. The route is the shared native pan/zoom stream; it is exercised through synthetic events only, and a run on a Windows or macOS touchpad is still owed.
 - `PointerDispatch::with_root_to_local` names the transform that rewrote the event into the target's space.
 
 ### Fixed

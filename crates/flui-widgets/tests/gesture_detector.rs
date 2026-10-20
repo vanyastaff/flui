@@ -2785,3 +2785,96 @@ pub(crate) fn a_native_pan_drives_a_drag_only_detector() {
     );
     assert_eq!(*outer.borrow(), 0, "the enclosing drag hears nothing");
 }
+
+/// Sends a vertical native pan through `laid`, one `(nanos, y, phase)` at a time.
+fn send_native_pan(
+    laid: &LaidOut,
+    steps: &[(u64, f64, flui_platform_api::pointer::PanZoomPhase)],
+) {
+    use flui_foundation::geometry::Point;
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            PanZoomEvent, PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition,
+        },
+    };
+    for &(nanos, y, phase) in steps {
+        laid.dispatch_pointer_event(&PointerEvent::PanZoom(PanZoomEvent::new(
+            PointerInfo::new(
+                PointerId::try_from(1_u64).expect("nonzero pointer"),
+                PointerKind::Mouse,
+            ),
+            EventTime::from_nanos(nanos),
+            PointerPosition::try_new(Point::new(50.0, y)).expect("finite position"),
+            phase,
+        )));
+    }
+}
+
+/// A drag configured only with `on_down` still hears its down from a
+/// touchpad pan once the pan crosses the slop.
+pub(crate) fn a_native_pan_reaches_a_drag_with_only_on_down() {
+    use flui_platform_api::pointer::{PanZoomPhase, PanZoomTransform};
+    use flui_widgets::SizedBox;
+    use std::{cell::Cell, rc::Rc};
+
+    let downs = Rc::new(Cell::new(0_u32));
+    let seen = downs.clone();
+    let laid = lay_out(
+        GestureDetector::new()
+            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .drag(DragSlot::vertical().on_down(move |_, _| seen.set(seen.get() + 1)))
+            .child(SizedBox::new(100.0, 100.0)),
+        tight(100.0, 100.0),
+    );
+    let pan = PanZoomPhase::Update(PanZoomTransform::try_new(1.0, 0.0).expect("finite"));
+    send_native_pan(
+        &laid,
+        &[
+            (1_000_000, 50.0, PanZoomPhase::Start),
+            (10_000_000, 80.0, pan),
+            (20_000_000, 90.0, PanZoomPhase::End),
+        ],
+    );
+    assert_eq!(
+        downs.get(),
+        1,
+        "on_down is a drag callback for touchpads too"
+    );
+}
+
+/// A second Start while a touchpad drag is accepted finishes that drag with
+/// `on_end(Cancelled)`, as a cancelled pointer drag does, not `on_cancel`.
+pub(crate) fn a_restarted_native_pan_ends_the_drag_it_replaces() {
+    use flui_interaction::GestureEndReason;
+    use flui_platform_api::pointer::{PanZoomPhase, PanZoomTransform};
+    use flui_widgets::SizedBox;
+    use std::{cell::RefCell, rc::Rc};
+
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let (end, cancel) = (log.clone(), log.clone());
+    let laid = lay_out(
+        GestureDetector::new()
+            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .drag(
+                DragSlot::vertical()
+                    .on_end(move |_, details| {
+                        end.borrow_mut().push(format!("{:?}", details.reason))
+                    })
+                    .on_cancel(move |_| cancel.borrow_mut().push("cancel".to_owned())),
+            )
+            .child(SizedBox::new(100.0, 100.0)),
+        tight(100.0, 100.0),
+    );
+    let pan = PanZoomPhase::Update(PanZoomTransform::try_new(1.0, 0.0).expect("finite"));
+    send_native_pan(
+        &laid,
+        &[
+            (1_000_000, 50.0, PanZoomPhase::Start),
+            (10_000_000, 80.0, pan),
+            (20_000_000, 50.0, PanZoomPhase::Start),
+        ],
+    );
+    let expected = format!("{:?}", GestureEndReason::Cancelled);
+    assert_eq!(*log.borrow(), vec![expected]);
+}

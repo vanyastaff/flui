@@ -75,6 +75,8 @@ fn callback_failure_containment() {
             ("gesture_detector::a_tap_cancel_only_follows_a_tap_down", crate::gesture_detector::a_tap_cancel_only_follows_a_tap_down),
             ("gesture_detector::a_rotated_axial_drag_claims_motion_along_its_own_axis", crate::gesture_detector::a_rotated_axial_drag_claims_motion_along_its_own_axis),
             ("gesture_detector::a_native_pan_drives_a_drag_only_detector", crate::gesture_detector::a_native_pan_drives_a_drag_only_detector),
+            ("gesture_detector::a_native_pan_reaches_a_drag_with_only_on_down", crate::gesture_detector::a_native_pan_reaches_a_drag_with_only_on_down),
+            ("gesture_detector::a_restarted_native_pan_ends_the_drag_it_replaces", crate::gesture_detector::a_restarted_native_pan_ends_the_drag_it_replaces),
             ("media_query_fields::a_build_that_panics_before_reading_keeps_its_dependency", crate::media_query_fields::a_build_that_panics_before_reading_keeps_its_dependency),
             ("signals::writes_and_creations_inside_build_are_refused_by_the_runtime", crate::signals::writes_and_creations_inside_build_are_refused_by_the_runtime),
             ("signals::a_stale_handle_read_in_build_is_a_typed_error_through_try_get", crate::signals::a_stale_handle_read_in_build_is_a_typed_error_through_try_get),

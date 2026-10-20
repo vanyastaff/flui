@@ -83,7 +83,7 @@ impl ArenaMembership {
     /// [`PrimaryContact::begin`].
     #[must_use]
     pub fn join(&self, pointer: PointerId) -> Option<GestureArenaEntry> {
-        self.join_from(pointer, None)
+        self.join_from(pointer, None, MotionFrame::IDENTITY)
     }
 
     /// Join for a Down `feeder` delivered: the route target whose other
@@ -92,8 +92,9 @@ impl ArenaMembership {
         &self,
         pointer: PointerId,
         feeder: Option<ContactFeeder>,
+        frame: MotionFrame,
     ) -> Option<GestureArenaEntry> {
-        let (entry, held_out) = self.admit_from(pointer, feeder, MotionFrame::IDENTITY)?;
+        let (entry, held_out) = self.admit_from(pointer, feeder, frame)?;
         self.arena.deliver_held_out(held_out);
         Some(entry)
     }
@@ -324,12 +325,7 @@ impl PrimaryContact {
             .ok_or(BeginContactError::ArenaClosed)?;
         let (entry, held_out) = self
             .membership
-            .admit_from(
-                pointer,
-                down.feeder(),
-                down.root_to_local()
-                    .map_or(MotionFrame::IDENTITY, MotionFrame::from_root_to_local),
-            )
+            .admit_from(pointer, down.feeder(), MotionFrame::of_down(down))
             .ok_or(BeginContactError::ArenaClosed)?;
         let contact = Contact {
             snapshot: ContactSnapshot {

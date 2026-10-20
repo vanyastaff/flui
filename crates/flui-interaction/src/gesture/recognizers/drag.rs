@@ -1058,6 +1058,9 @@ impl GestureRecognizer for DragGestureRecognizer {
         }
     }
     fn cancel(&self) -> CancelOutcome {
+        if let Some(outcome) = self.cancel_native() {
+            return outcome;
+        }
         self.terminate(GestureEndReason::Cancelled, None)
     }
 }

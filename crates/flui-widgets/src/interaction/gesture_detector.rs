@@ -53,7 +53,11 @@ struct DragCallbacks {
 
 impl DragCallbacks {
     fn is_active(&self) -> bool {
-        self.start.is_some() || self.update.is_some() || self.end.is_some() || self.cancel.is_some()
+        self.down.is_some()
+            || self.start.is_some()
+            || self.update.is_some()
+            || self.end.is_some()
+            || self.cancel.is_some()
     }
 }
 

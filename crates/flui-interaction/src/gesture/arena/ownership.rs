@@ -104,11 +104,24 @@ impl MotionFrame {
         linear: [1.0, 0.0, 0.0, 1.0],
     };
 
-    /// The frame of a target whose events the root-to-local `transform` maps.
-    pub(crate) fn from_root_to_local(transform: &Matrix4) -> Self {
-        let (ox, oy) = transform.transform_point(0.0, 0.0);
-        let (x_x, x_y) = transform.transform_point(1.0, 0.0);
-        let (y_x, y_y) = transform.transform_point(0.0, 1.0);
+    /// The frame of a Down's target: the transform its events were mapped
+    /// by, differentiated at the root-space contact so a perspective route
+    /// reports the motion it has there, not at the origin.
+    pub(crate) fn of_down(dispatch: crate::pointer::PointerDispatch<'_>) -> Self {
+        use crate::events::PointerEventExt as _;
+        let (Some(transform), Some(at)) = (dispatch.root_to_local(), dispatch.global.position())
+        else {
+            return Self::IDENTITY;
+        };
+        Self::from_root_to_local(transform, at)
+    }
+
+    /// The frame of a target whose events the root-to-local `transform` maps,
+    /// at the root-space point `at`.
+    fn from_root_to_local(transform: &Matrix4, at: Offset<f64>) -> Self {
+        let (ox, oy) = transform.transform_point(at.dx, at.dy);
+        let (x_x, x_y) = transform.transform_point(at.dx + 1.0, at.dy);
+        let (y_x, y_y) = transform.transform_point(at.dx, at.dy + 1.0);
         let linear = [x_x - ox, y_x - ox, x_y - oy, y_y - oy];
         if linear.iter().all(|value| value.is_finite()) {
             Self { linear }
