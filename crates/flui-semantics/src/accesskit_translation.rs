@@ -457,12 +457,15 @@ fn route(action: accesskit::Action) -> Result<SemanticsAction, UnroutedAction> {
 ///
 /// # Errors
 ///
-/// [`ActionDecodeError`] names the target, action or payload that did not fit.
+/// [`ActionDecodeError`] names the target, tree, action or payload that did not fit.
 pub fn semantics_action_request_for(
     request: &accesskit::ActionRequest,
 ) -> Result<crate::SemanticsActionRequest, ActionDecodeError> {
     use accesskit::ActionData;
 
+    if request.target_tree != TreeId::ROOT {
+        return Err(ActionDecodeError::UnknownTree(request.target_tree));
+    }
     let node_id = crate::AccessibilityNodeId::from_u64(request.target_node.0)
         .ok_or(ActionDecodeError::UnknownTarget(request.target_node.0))?;
     let action = route(request.action).map_err(ActionDecodeError::Unrouted)?;
@@ -1105,6 +1108,21 @@ mod tests {
             index,
             core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
         )
+    }
+    /// A window publishes one tree, so a request for another is not decoded.
+    #[test]
+    fn a_request_for_another_tree_is_refused() {
+        let other = TreeId(accesskit::Uuid::from_u128(1));
+        let request = accesskit::ActionRequest {
+            action: accesskit::Action::Click,
+            target_tree: other,
+            target_node: NodeId(AccessibilityNodeId::from(render_id(1)).as_u64()),
+            data: None,
+        };
+        assert_eq!(
+            semantics_action_request_for(&request).err(),
+            Some(ActionDecodeError::UnknownTree(other))
+        );
     }
 
     /// Every FLUI action publishes as an AccessKit action that routes back to

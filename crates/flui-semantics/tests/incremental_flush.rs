@@ -2065,3 +2065,58 @@ fn a_failed_publication_admits_only_what_both_nodes_offer() {
         "failed-publication admission rows failed: {failures:?}"
     );
 }
+
+/// A disabled control refuses a platform request the way it refuses an agent
+/// one; focus and blur still reach it, and enabling it again restores the
+/// click.
+#[test]
+fn a_disabled_node_takes_no_user_action_from_the_platform() {
+    use flui_semantics::{
+        ActionCall, SemanticsAction, SemanticsActionError, SemanticsActionRequest,
+    };
+
+    let (mut owner, _) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let mut button = node(1, "button");
+    let target = button.accessibility_id().expect("render-backed identity");
+    let clicks = Arc::new(Mutex::new(0_u32));
+    let focuses = Arc::new(Mutex::new(0_u32));
+    let (click_counter, focus_counter) = (Arc::clone(&clicks), Arc::clone(&focuses));
+    button.config_mut().set_enabled(Some(false));
+    button.config_mut().add_action(
+        SemanticsAction::Click,
+        Arc::new(move |_| *click_counter.lock() += 1),
+    );
+    button.config_mut().add_action(
+        SemanticsAction::Focus,
+        Arc::new(move |_| *focus_counter.lock() += 1),
+    );
+    let button = owner.insert(button);
+    owner.add_child(root, button);
+    owner.set_root(Some(root));
+    owner.flush();
+
+    assert_eq!(
+        owner
+            .resolve_action(SemanticsActionRequest::new(target, ActionCall::Click))
+            .err(),
+        Some(SemanticsActionError::Disabled { node_id: target })
+    );
+    owner
+        .resolve_action(SemanticsActionRequest::new(target, ActionCall::Focus))
+        .expect("a disabled node still takes focus")
+        .invoke();
+    assert_eq!((*clicks.lock(), *focuses.lock()), (0, 1));
+
+    owner
+        .get_mut(button)
+        .expect("the button is live")
+        .config_mut()
+        .set_enabled(Some(true));
+    owner.flush();
+    owner
+        .resolve_action(SemanticsActionRequest::new(target, ActionCall::Click))
+        .expect("an enabled node is actionable")
+        .invoke();
+    assert_eq!(*clicks.lock(), 1);
+}

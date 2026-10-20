@@ -828,8 +828,9 @@ as it stands after the last committed frame (`flui_semantics::SemanticsOwner::re
 action is resolved against that same tree and dispatched through
 `PresentationState::dispatch_semantics_action`, the path an assistive technology's action
 takes. An action's `Ok` means it was delivered to the element's semantics handler, not that its
-effect happened: a `GestureDetector` runs a semantics tap in the frame after the drain, so the
-effect reads two frames on. No lock guards per-node state: the owner reads its own tree on its
+effect happened: a `GestureDetector` runs a semantics tap synchronously inside the drain, so the
+callback has run when the reply arrives, and what it changed reads in the tree committed by the
+next frame. No lock guards per-node state: the owner reads its own tree on its
 own thread, and the agent's side holds only its channel ends and the record of handles its reads
 reported, which tells `gone` from `unknown_handle`. The record keeps the newest generation
 reported per render slot, so it is bounded by the slots the presentation has used, not by how

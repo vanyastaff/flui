@@ -81,6 +81,15 @@ pub enum SemanticsActionError {
         action: SemanticsAction,
     },
 
+    /// The node publishes as disabled, so it takes no user action. Focus,
+    /// blur and reveal still reach it: they move the viewport or the
+    /// cursor, not the control.
+    #[error("accessibility node {node_id} is disabled")]
+    Disabled {
+        /// Stable platform-facing node identity.
+        node_id: AccessibilityNodeId,
+    },
+
     /// The requested numeric value is absent, malformed, or outside the current range.
     #[error("accessibility node {node_id} refused an invalid numeric value")]
     InvalidNumericValue {
@@ -836,6 +845,90 @@ impl SemanticsOwner {
         Some(Delivered::Node(node, state.offers.get(&id)))
     }
 
+    /// The rooted node that publishes under `node_id`.
+    ///
+    /// One arena entry under the identity is unambiguous, so the lookup
+    /// checks only that the entry is rooted: its ancestors up to the root
+    /// are all addressable. Several entries need the whole tree, because an
+    /// unrooted one never counts toward ambiguity.
+    fn locate(
+        &self,
+        root: SemanticsId,
+        node_id: AccessibilityNodeId,
+    ) -> Result<(SemanticsId, &SemanticsNode), SemanticsActionError> {
+        let not_found = SemanticsActionError::NodeNotFound { node_id };
+        let found = match *self.tree.nodes_with_accessibility_id(node_id) {
+            [] => Err(not_found),
+            [only] => self.rooted(root, only).ok_or(not_found),
+            _ => self.locate_by_walk(root, node_id),
+        };
+        debug_assert_eq!(
+            found.as_ref().map(|(id, _)| *id),
+            self.locate_by_walk(root, node_id)
+                .as_ref()
+                .map(|(id, _)| *id),
+            "BUG: the indexed lookup must agree with the full walk",
+        );
+        found
+    }
+
+    /// `id` and its node when every node from `id` up to `root` is
+    /// addressable, the way the full publication reaches it.
+    fn rooted(&self, root: SemanticsId, id: SemanticsId) -> Option<(SemanticsId, &SemanticsNode)> {
+        let node = self.tree.get(id)?;
+        let mut current = id;
+        // A cycle never reaches the root; the arena size bounds the climb.
+        for _ in 0..=self.tree.len() {
+            let ancestor = self.tree.get(current)?;
+            ancestor.accessibility_id()?;
+            if current == root {
+                return Some((id, node));
+            }
+            current = ancestor.parent()?;
+        }
+        None
+    }
+
+    /// The same lookup by visiting every rooted node. Orphaned arena entries
+    /// were never exported and must not remain actionable. The visited set
+    /// also makes malformed repeated edges and cycles finite; snapshot
+    /// validation reports those structural errors separately.
+    fn locate_by_walk(
+        &self,
+        root: SemanticsId,
+        node_id: AccessibilityNodeId,
+    ) -> Result<(SemanticsId, &SemanticsNode), SemanticsActionError> {
+        let mut pending = SmallVec::<[SemanticsId; 32]>::new();
+        let mut visited = FxHashSet::default();
+        let mut resolved = None;
+        pending.push(root);
+
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            // An unaddressable node is not published, and neither is its
+            // subtree: the walk stops there, as the full update does.
+            let Some(node) = self
+                .tree
+                .get(id)
+                .filter(|node| node.accessibility_id().is_some())
+            else {
+                continue;
+            };
+            pending.extend(node.children().iter().rev().copied());
+
+            if node.accessibility_id() != Some(node_id) {
+                continue;
+            }
+            if resolved.is_some() {
+                return Err(SemanticsActionError::AmbiguousNode { node_id });
+            }
+            resolved = Some((id, node));
+        }
+        resolved.ok_or(SemanticsActionError::NodeNotFound { node_id })
+    }
+
     /// Resolves a platform request against the current rooted semantics tree,
     /// within what the last delivered update offered.
     ///
@@ -878,45 +971,10 @@ impl SemanticsOwner {
             .root()
             .ok_or(SemanticsActionError::SemanticsUnavailable)?;
 
-        // Traverse only the rooted result: orphaned arena entries were never
-        // exported and must not remain actionable. The visited set also makes
-        // malformed repeated edges/cycles finite; snapshot validation reports
-        // those structural errors separately.
-        let mut pending = SmallVec::<[SemanticsId; 32]>::new();
-        let mut visited = FxHashSet::default();
-        let mut resolved = None;
-        pending.push(root);
-
-        while let Some(id) = pending.pop() {
-            if !visited.insert(id) {
-                continue;
-            }
-            // An unaddressable node is not published, and neither is its
-            // subtree: the walk stops there, as the full update does.
-            let Some(node) = self
-                .tree
-                .get(id)
-                .filter(|node| node.accessibility_id().is_some())
-            else {
-                continue;
-            };
-            pending.extend(node.children().iter().rev().copied());
-
-            if node.accessibility_id() != Some(request.node_id) {
-                continue;
-            }
-            if resolved.is_some() {
-                return Err(SemanticsActionError::AmbiguousNode {
-                    node_id: request.node_id,
-                });
-            }
-            resolved = Some((id, node));
-        }
-
+        let (target_id, node) = self.locate(root, request.node_id)?;
         let not_found = SemanticsActionError::NodeNotFound {
             node_id: request.node_id,
         };
-        let (target_id, node) = resolved.ok_or(not_found)?;
         // A node the adapter does not hold offered it nothing.
         let delivered = self.delivered(request.node_id).ok_or(not_found)?;
         let requested = request.action();
@@ -931,6 +989,19 @@ impl SemanticsOwner {
         // The node as publication shows it: a state its role does not support
         // was not offered, so no request is resolved through it.
         let published = crate::applicability::retain_applicable(config.attributes());
+        // A disabled control takes no user action, whoever asks: the agent
+        // surface refuses it the same way. Focus, blur and reveal move the
+        // cursor or the viewport and stay available.
+        if published.states.enabled == Some(false)
+            && !matches!(
+                requested,
+                SemanticsAction::Focus | SemanticsAction::Blur | SemanticsAction::ScrollIntoView
+            )
+        {
+            return Err(SemanticsActionError::Disabled {
+                node_id: request.node_id,
+            });
+        }
         let actions = config.effective_actions_as_bits();
         // A hidden node is not revealed, whichever handler would serve it.
         if requested == SemanticsAction::ScrollIntoView
