@@ -371,7 +371,7 @@ impl StatelessView for MetricsReader {
         self.contrast.borrow_mut().push(media.high_contrast);
         self.text_scale.borrow_mut().push(media.text_sizing.clone());
         self.brightness.borrow_mut().push(media.platform_brightness);
-        self.padding.borrow_mut().push(media.padding);
+        self.padding.borrow_mut().push(media.padding());
         self.observed
             .borrow_mut()
             .push((media.size, media.device_pixel_ratio));

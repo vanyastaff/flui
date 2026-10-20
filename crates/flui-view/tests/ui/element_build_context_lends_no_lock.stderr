@@ -1,0 +1,11 @@
+error[E0599]: no method named `tree` found for reference `&ElementBuildContext` in the current scope
+ --> tests/ui/element_build_context_lends_no_lock.rs:6:21
+  |
+6 |     let _tree = ctx.tree().read();
+  |                     ^^^^ private field, not a method
+
+error[E0599]: no method named `build_owner` found for reference `&ElementBuildContext` in the current scope
+ --> tests/ui/element_build_context_lends_no_lock.rs:7:22
+  |
+7 |     let _owner = ctx.build_owner().write();
+  |                      ^^^^^^^^^^^ method not found in `&ElementBuildContext`

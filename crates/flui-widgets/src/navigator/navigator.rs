@@ -394,7 +394,7 @@ pub(super) fn terminal_binding_authority_is_closed_before_route_retirement() {
                     .expect("physical alias retains entry")
                     .opaque()
             );
-            assert!(callback_queue.lock().is_empty());
+            assert!(callback_queue.borrow().is_empty());
             callback_observed.set(true);
         }),
     });
@@ -412,14 +412,14 @@ pub(super) fn terminal_binding_authority_is_closed_before_route_retirement() {
             .opaque()
     );
     assert!(
-        queue.lock().is_empty(),
+        queue.borrow().is_empty(),
         "closed authority cannot enqueue orphan commands"
     );
 }
 
 impl NavigatorShared {
     fn rebind_clock(&self, current: Option<flui_animation::Vsync>) {
-        let unchanged = match (&*self.vsync.lock(), &current) {
+        let unchanged = match (&*self.vsync.borrow(), &current) {
             (Some(old), Some(new)) => old.is_same(new),
             (None, None) => true,
             _ => false,
@@ -427,7 +427,7 @@ impl NavigatorShared {
         if unchanged {
             return;
         }
-        let outgoing = std::mem::replace(&mut *self.vsync.lock(), current);
+        let outgoing = std::mem::replace(&mut *self.vsync.borrow_mut(), current);
         let mut peers: Vec<_> = self
             .registries
             .peers
@@ -438,7 +438,7 @@ impl NavigatorShared {
         peers.sort_unstable_by_key(|(id, _)| *id);
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
         for (_, rebind) in peers {
-            let current = self.vsync.lock().clone();
+            let current = self.vsync.borrow().clone();
             recovery.run(|| rebind(current.as_ref()));
         }
         recovery.retire(outgoing);
@@ -588,7 +588,9 @@ impl NavigatorShared {
             // "Pushing" and "Idle" (or whatever the entry has since moved to
             // — the `state == Pushing` guard in `apply_pending_commands`
             // handles a stale command, e.g. a pop that raced this future).
-            queue.lock().push_back(RouteCommand::PushCompleted(route));
+            queue
+                .borrow_mut()
+                .push_back(RouteCommand::PushCompleted(route));
             // Read now, not at registration: a route pushed before this
             // navigator mounted registers this closure while the slot is
             // still `None`, and only a later mount fills it. Cloned out and
@@ -1105,7 +1107,7 @@ impl NavigatorHandle {
         let shared = Arc::new(NavigatorShared {
             history: super::lifecycle::Terminal::new(Mutex::new(RouteHistory::new())),
             overlay: super::lifecycle::Terminal::new(OverlayHandle::new()),
-            vsync: super::lifecycle::Terminal::new(Rc::new(Mutex::new(None))),
+            vsync: super::lifecycle::Terminal::new(Rc::new(RefCell::new(None))),
             registries: super::lifecycle::Terminal::new(Rc::new(RouteRegistries::new())),
             named_routes: super::lifecycle::Terminal::new(RouteRegistry::default()),
             post_frame: Mutex::new(None),

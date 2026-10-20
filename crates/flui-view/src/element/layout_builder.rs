@@ -50,7 +50,7 @@
 //! The intrinsics, dry-layout, and double-invocation divergences are recorded
 //! in ADR-0017.
 
-use std::{rc::Rc, sync::Arc};
+use std::rc::Rc;
 
 use flui_objects::{LayoutConstraintsCell, RenderLayoutBuilder};
 use flui_rendering::{constraints::BoxConstraints, protocol::BoxProtocol};
@@ -150,12 +150,12 @@ impl RenderView for LayoutBuilder {
     ///
     /// The cell is created here, not on the view, because a view is rebuilt
     /// (and so reconstructed) on every parent rebuild — a cell owned by the
-    /// view would be a fresh `Arc` each time, silently orphaning the one the
+    /// view would be a fresh `Rc` each time, silently orphaning the one the
     /// render object and the registry hold. `create_render_object` runs exactly
     /// once per mount; `LayoutBuilderBehavior::on_mount` reads the cell back out
     /// of the render object, which is therefore the single source of truth.
     fn create_render_object(&self, _ctx: &crate::RenderObjectContext<'_>) -> Self::RenderObject {
-        RenderLayoutBuilder::new(Arc::new(LayoutConstraintsCell::new()))
+        RenderLayoutBuilder::new(Rc::new(LayoutConstraintsCell::new()))
     }
 
     /// Deliberately empty: the builder closure lives on the view, never on the
@@ -216,7 +216,7 @@ pub(crate) struct LayoutBuilderBehavior {
     inner: RenderBehavior<LayoutBuilder>,
     /// The cell shared with the render object. `None` until `on_mount` reads it
     /// back out of the freshly created render object.
-    cell: Option<Arc<LayoutConstraintsCell>>,
+    cell: Option<Rc<LayoutConstraintsCell>>,
 }
 
 impl std::fmt::Debug for LayoutBuilderBehavior {
@@ -296,7 +296,7 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
         self.inner.on_mount(core, owner);
 
         // Step 2: read the cell back out of the render object it just made. The
-        // render object is the single owner of that `Arc`; cloning it here is
+        // render object is the single owner of that `Rc`; cloning it here is
         // what makes the element and the render half share one channel.
         let Some(render_id) = self.inner.render_id else {
             tracing::warn!(
@@ -312,7 +312,7 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
                     .render_tree_mut()
                     .get_mut(render_id)
                     .and_then(|node| node.downcast_render_object_mut::<RenderLayoutBuilder>())
-                    .map(|render_object| Arc::clone(render_object.cell()))
+                    .map(|render_object| Rc::clone(render_object.cell()))
             })
         });
 
@@ -335,7 +335,7 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
             return;
         };
 
-        self.cell = Some(Arc::clone(&cell));
+        self.cell = Some(Rc::clone(&cell));
         owner.register_layout_builder(render_id, self_id, cell);
     }
 
@@ -368,6 +368,8 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     use flui_foundation::RenderId;
