@@ -63,8 +63,11 @@ struct Slot {
 /// sample equal to the published one keeps its revision.
 ///
 /// Threads may read at once. A sample begun before an invalidation that
-/// another read has already published past is discarded, so a slow read never
-/// puts an older window back over a newer one.
+/// another read has already published past is discarded, so once the read
+/// after a change has published, no slower read puts the window from before
+/// the change back. Reads begun before the same invalidation may still publish
+/// in either order until then: the samples cannot be ordered without a lock
+/// held across them, and a backend's sample may wait on its owner thread.
 pub(crate) struct WindowStateCell {
     last: Mutex<Slot>,
     /// Counts every invalidation, from any thread. A read takes the count
