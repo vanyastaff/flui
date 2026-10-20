@@ -8,7 +8,8 @@
 //! reports the parameters that change what it paints: a typed value where the inspect model has
 //! one, and otherwise (a filter, shader, annotation, or a clip shape that is not a rectangle) its
 //! `Debug` text. A clip layer also reports how it rasterises its edge, and a picture a fingerprint
-//! of its commands next to their count, so a changed drawing reads apart.
+//! of its commands next to their count, so a changed drawing reads apart. A backdrop filter names
+//! its group by a number its siblings in the group share.
 
 use core::fmt::{self, Write as _};
 use flui_foundation::LayerId;
@@ -37,6 +38,7 @@ impl Inspect for Layer {
             }
             Layer::Opacity(layer) => {
                 out.field("alpha", &layer.alpha()).unit(Unit::Fraction);
+                out.value("blend", Value::Debug(&layer.blend()));
                 out.field("offset", &layer.offset()).unit(Unit::LogicalPx);
             }
             Layer::ClipRect(layer) => {
@@ -81,6 +83,9 @@ impl Inspect for Layer {
             }
             Layer::PerformanceOverlay(layer) => {
                 out.value("options", Value::Debug(&layer.options()));
+                out.field("commands", &layer.readout().len());
+                out.field("content", &fingerprint(layer.readout()))
+                    .level(Level::Detail);
             }
             Layer::ColorFilter(layer) => {
                 out.value("color_filter", Value::Debug(&layer.color_filter()));
@@ -96,7 +101,12 @@ impl Inspect for Layer {
             Layer::BackdropFilter(layer) => {
                 out.value("filter", Value::Debug(layer.filter()));
                 out.value("blend_mode", Value::Debug(&layer.blend_mode()));
-                out.value("group", Value::Debug(&layer.group()));
+                out.value(
+                    "group",
+                    layer
+                        .group()
+                        .map_or(Value::None, |key| Value::Uint(key.token())),
+                );
             }
             Layer::Leader(layer) => {
                 out.value("link", Value::Debug(&layer.link()));

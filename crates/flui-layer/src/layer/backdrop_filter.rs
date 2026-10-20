@@ -32,6 +32,12 @@ impl BackdropGroupKey {
     pub fn new() -> Self {
         Self(Arc::new(BackdropGroupMarker))
     }
+
+    /// A number that names this group while any filter holds its key: equal for clones, apart
+    /// for keys alive at once. A key made after this one is dropped may reuse it.
+    pub(crate) fn token(&self) -> u64 {
+        Arc::as_ptr(&self.0).addr() as u64
+    }
 }
 
 impl Default for BackdropGroupKey {

@@ -957,6 +957,23 @@ fn the_diff_reports_bounds_that_appear_or_disappear() {
     }
 }
 
+/// A node replaced by one of the same kind and other type arguments is a removal and an
+/// addition, not the same node.
+///
+/// Fails when the diff pairs nodes by kind alone.
+#[test]
+fn the_diff_tells_kinds_apart_by_their_type_arguments() {
+    let mut before = whole(&sample(8.0));
+    before.kind_args = vec!["u8"];
+    let mut after = before.clone();
+    after.kind_args = vec!["String"];
+    let changes = diff(&before, &after, DiffOptions::default());
+    assert!(
+        matches!(changes.as_slice(), [Change::Removed(_), Change::Added(_)]),
+        "{changes:#?}"
+    );
+}
+
 fn with_attached_field(value: f64) -> Tree {
     let mut tree = sample(8.0);
     tree.nodes

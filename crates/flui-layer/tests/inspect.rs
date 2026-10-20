@@ -1,12 +1,13 @@
 //! A layer snapshot reads each layer's own fields.
 
-use flui_foundation::geometry::{Point, RRect, RSuperellipse, Rect};
+use flui_foundation::geometry::{Offset, Point, RRect, RSuperellipse, Rect};
 use flui_foundation::inspect::{
     DiffOptions, Level, Plain, SnapshotQuery, Variant, diff, render, snapshot,
 };
 use flui_layer::{
-    ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer,
-    FollowerLayer, ImageFilterLayer, Layer, LayerLink, LayerTree, OffsetLayer, PictureLayer,
+    BackdropFilterLayer, BackdropGroupKey, ClipPathLayer, ClipRRectLayer, ClipRectLayer,
+    ClipSuperellipseLayer, ColorFilterLayer, FollowerLayer, ImageFilterLayer, Layer, LayerLink,
+    LayerTree, OffsetLayer, OpacityLayer, PictureLayer,
 };
 use flui_painting::paint::{BlendMode, Clip, ColorFilter, ImageFilter, Path};
 use flui_painting::styling::Color;
@@ -110,7 +111,12 @@ fn diamond() -> Path {
 #[test]
 fn layers_that_differ_only_in_their_effect_diff_apart() {
     let link = LayerLink::new();
-    let pairs: [(&str, Layer, Layer); 4] = [
+    let pairs: [(&str, Layer, Layer); 5] = [
+        (
+            "Opacity",
+            OpacityLayer::with_blend(0.5, Offset::ZERO, BlendMode::SrcOver).into(),
+            OpacityLayer::with_blend(0.5, Offset::ZERO, BlendMode::Src).into(),
+        ),
         ("Picture", filled(Color::RED), filled(Color::BLUE)),
         (
             "ColorFilter",
@@ -180,4 +186,30 @@ fn filled(color: Color) -> Layer {
     let mut canvas = Canvas::new();
     canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 40.0, 20.0), &Paint::fill(color));
     PictureLayer::new(canvas.finish()).into()
+}
+
+/// Two backdrop filters that share a group snapshot apart from two in groups of their own,
+/// since a group samples one backdrop for all of its filters.
+///
+/// Fails when the group reports a label that every key shares.
+#[test]
+fn backdrop_filters_that_stop_sharing_a_group_diff_apart() {
+    let pane = |key| {
+        let bounds = Rect::from_xywh(0.0, 0.0, 40.0, 20.0);
+        Layer::from(
+            BackdropFilterLayer::new(ImageFilter::blur(4.0), BlendMode::SrcOver, bounds)
+                .with_group(Some(key)),
+        )
+    };
+    let panes = |first: BackdropGroupKey, second: BackdropGroupKey| {
+        let mut tree = LayerTree::new(Layer::from(OffsetLayer::zero()));
+        let root = tree.root();
+        tree.push_child(root, pane(first));
+        tree.push_child(root, pane(second));
+        snapshot(&tree, SnapshotQuery::default()).expect("a tree has a root")
+    };
+    let shared = BackdropGroupKey::new();
+    let grouped = panes(shared.clone(), shared.clone());
+    let apart = panes(shared, BackdropGroupKey::new());
+    assert_ne!(diff(&grouped, &apart, DiffOptions::default()), Vec::new());
 }

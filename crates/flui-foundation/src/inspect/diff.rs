@@ -148,7 +148,7 @@ impl Change {
 #[must_use]
 pub fn diff(before: &SnapshotNode, after: &SnapshotNode, options: DiffOptions) -> Vec<Change> {
     let mut changes = Vec::new();
-    if before.kind == after.kind {
+    if same_kind(before, after) {
         compare(before, after, &options, &mut changes);
     } else {
         changes.push(Change::Removed(path_of(before, &[])));
@@ -369,7 +369,7 @@ fn pair_children(before: &SnapshotNode, after: &SnapshotNode) -> Vec<(usize, usi
         let found = before
             .children
             .iter()
-            .position(|old| old.id == child.id && old.kind == child.kind);
+            .position(|old| old.id == child.id && same_kind(old, child));
         if let Some(old) = found.filter(|&old| !taken_before[old]) {
             taken_before[old] = true;
             taken_after[new] = true;
@@ -382,7 +382,7 @@ fn pair_children(before: &SnapshotNode, after: &SnapshotNode) -> Vec<(usize, usi
         }
         if let Some(old) = before.children.get(new)
             && !taken_before[new]
-            && old.kind == child.kind
+            && same_kind(old, child)
         {
             taken_before[new] = true;
             taken_after[new] = true;
@@ -391,6 +391,12 @@ fn pair_children(before: &SnapshotNode, after: &SnapshotNode) -> Vec<(usize, usi
     }
     pairs.sort_unstable_by_key(|&(_, new)| new);
     pairs
+}
+
+/// Whether two nodes are of one kind, type arguments included: `Widget<u8>` replaced by
+/// `Widget<String>` is a removal and an addition.
+fn same_kind(a: &SnapshotNode, b: &SnapshotNode) -> bool {
+    a.kind == b.kind && a.kind_args == b.kind_args
 }
 
 fn close(a: f64, b: f64, tolerance: f64) -> bool {
