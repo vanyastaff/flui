@@ -304,6 +304,10 @@ where
         ))?;
         let binding = frame.binding;
         window.on_request_frame(Box::new(move || {
+            // The frame is the turn a window command's wake asks for: it starts
+            // with the queued commands, before the callback guard would leave
+            // them waiting.
+            super::owner_dispatch::apply_queued_window_commands(std::thread::current().id());
             super::owner_dispatch::with_owner_callback(|_| {
                 let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
             });

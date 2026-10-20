@@ -153,13 +153,21 @@ impl NativeBindings {
     /// while it was out.
     fn checkout(&self, address: PresentationAddress) -> Option<FrameDriverLease> {
         let mut lease = self.0.drivers.borrow().checkout_presentation(address)?;
-        let deferred = {
-            let mut pending = self.0.pending_resizes.borrow_mut();
-            let index = pending.iter().position(|resize| resize.0 == address);
-            index.map(|index| pending.swap_remove(index))
-        };
-        if let Some((_, size, scale_factor)) = deferred {
+        let deferred = self
+            .0
+            .pending_resizes
+            .borrow()
+            .iter()
+            .find(|resize| resize.0 == address)
+            .copied();
+        if let Some(deferred @ (_, size, scale_factor)) = deferred {
             lease.resize(size, scale_factor);
+            // Taken once it has applied: a resize that panics is tried again at
+            // the next checkout, and a newer one deferred meanwhile stays.
+            self.0
+                .pending_resizes
+                .borrow_mut()
+                .retain(|resize| *resize != deferred);
         }
         Some(lease)
     }
