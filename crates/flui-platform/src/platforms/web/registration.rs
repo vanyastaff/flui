@@ -8,6 +8,7 @@ use std::{
 
 use wasm_bindgen::{JsCast, prelude::*};
 
+use super::window::DeviceSize;
 use crate::traits::OpenWindowError;
 
 #[wasm_bindgen(inline_js = "
@@ -34,7 +35,38 @@ export function isOwnedFocus(canvas, node) {
 export function setCanvasEditor(canvas, token, editor) {
     if (canvas[ownerKey] === token) token.editor = editor;
 }
-export function observeCanvas(observer, canvas) { observer.observe(canvas); }
+// Observe the device-pixel content box where the browser has it (Chrome,
+// Firefox); Safari rejects the box, and its content box is observed instead.
+// True when the device-pixel box is.
+export function observeCanvas(observer, canvas) {
+    try {
+        observer.observe(canvas, { box: 'device-pixel-content-box' });
+        return true;
+    } catch {
+        observer.observe(canvas);
+        return false;
+    }
+}
+export function observeBox(observer, canvas, box) { observer.observe(canvas, { box }); }
+// The last entry's device-pixel content box as [width, height]; [] when the
+// entry has none, or when the canvas has any padding, a fraction of a pixel
+// included: the window's size is the padding box (`clientWidth`), which the
+// content box does not measure. The box sizes are logical: a vertical writing
+// mode puts the width in blockSize.
+export function devicePixelSize(entries) {
+    const entry = entries[entries.length - 1];
+    const box = entry?.devicePixelContentBoxSize?.[0];
+    if (!box) return [];
+    const style = globalThis.getComputedStyle?.(entry.target);
+    if (!style) return [];
+    const sides = [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft];
+    if (sides.some(side => parseFloat(side) !== 0)) return [];
+    const vertical = /^(vertical|sideways)/.test(style.writingMode ?? '');
+    const width = vertical ? box.blockSize : box.inlineSize;
+    const height = vertical ? box.inlineSize : box.blockSize;
+    const valid = size => Number.isInteger(size) && size > 0;
+    return valid(width) && valid(height) ? [width, height] : [];
+}
 export function disconnectObserver(observer) { observer.disconnect(); }
 export function admitPointerCapture(canvas, token, id) {
     if (canvas[ownerKey] !== token) return false;
@@ -68,7 +100,15 @@ extern "C" {
     fn observe_canvas(
         observer: &web_sys::ResizeObserver,
         canvas: &web_sys::HtmlCanvasElement,
+    ) -> Result<bool, JsValue>;
+    #[wasm_bindgen(catch, js_name = observeBox)]
+    fn observe_box(
+        observer: &web_sys::ResizeObserver,
+        canvas: &web_sys::HtmlCanvasElement,
+        r#box: &str,
     ) -> Result<(), JsValue>;
+    #[wasm_bindgen(js_name = devicePixelSize)]
+    fn device_pixel_size(entries: &JsValue) -> Vec<u32>;
     #[wasm_bindgen(catch, js_name = disconnectObserver)]
     fn disconnect_observer(observer: &web_sys::ResizeObserver) -> Result<(), JsValue>;
     #[wasm_bindgen(catch, js_name = releasePointerCapture)]
@@ -227,8 +267,8 @@ impl Drop for Listener {
 
 struct ResizeSubscription {
     observer: web_sys::ResizeObserver,
-    closure: Option<Closure<dyn Fn()>>,
-    _body: Rc<dyn Fn()>,
+    closure: Option<Closure<dyn Fn(JsValue)>>,
+    _body: Rc<dyn Fn(Option<DeviceSize>)>,
 }
 
 impl Drop for ResizeSubscription {
@@ -290,7 +330,7 @@ pub(super) struct Registration {
     pub(super) pointers: Rc<RefCell<HashMap<i32, u16>>>,
     canvas: web_sys::HtmlCanvasElement,
     listeners: Vec<Listener>,
-    observer: Option<ResizeSubscription>,
+    observers: Vec<ResizeSubscription>,
     timers: Vec<Rc<DeadlineTimer>>,
     claim: CanvasClaim,
 }
@@ -302,7 +342,7 @@ impl Registration {
             pointers: Rc::default(),
             canvas: canvas.clone(),
             listeners: Vec::new(),
-            observer: None,
+            observers: Vec::new(),
             timers: Vec::new(),
             claim,
         }
@@ -346,15 +386,55 @@ impl Registration {
         Ok(())
     }
 
-    pub(super) fn observe(&mut self, body: impl Fn() + 'static) -> Result<(), OpenWindowError> {
-        let body: Rc<dyn Fn()> = Rc::new(body);
-        let weak = Rc::downgrade(&body);
+    /// Observe the canvas's size; `body` gets each report's device-pixel
+    /// size where the browser gives one and it can be used. Each observer
+    /// reports only a change of its own box, so three watch the canvas: the
+    /// device-pixel content box where the browser has it (Chrome, Firefox),
+    /// else the CSS content box (Safari); the CSS content box beside a
+    /// device-pixel one, as padding inside a `border-box` canvas or a reflow
+    /// can move it while the rounded device box stays; and the border box,
+    /// as padding around a `content-box` canvas grows the window's padding
+    /// box (`clientWidth`) and neither content box. Every entry carries the
+    /// device-pixel size where the browser has it, so any report replaces the
+    /// last. A browser without `ResizeObserver` is left to the window's
+    /// `resize` subscription.
+    pub(super) fn observe(
+        &mut self,
+        body: impl Fn(Option<DeviceSize>) + 'static,
+    ) -> Result<(), OpenWindowError> {
+        let body: Rc<dyn Fn(Option<DeviceSize>)> = Rc::new(body);
+        let Some(device) = self.subscribe(&body) else {
+            return Ok(());
+        };
+        let css_boxes: &[&str] = if observe_canvas(&device, &self.canvas).map_err(backend)? {
+            &["content-box", "border-box"]
+        } else {
+            &["border-box"]
+        };
+        for &css_box in css_boxes {
+            if let Some(observer) = self.subscribe(&body) {
+                observe_box(&observer, &self.canvas, css_box).map_err(backend)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// A `ResizeObserver` that calls `body` with each report's device-pixel
+    /// size while this registration accepts; `None` in a browser without one.
+    fn subscribe(
+        &mut self,
+        body: &Rc<dyn Fn(Option<DeviceSize>)>,
+    ) -> Option<web_sys::ResizeObserver> {
+        let weak = Rc::downgrade(body);
         let accepting = Rc::clone(&self.accepting);
-        let closure = Closure::<dyn Fn()>::new(move || {
+        let closure = Closure::<dyn Fn(JsValue)>::new(move |entries: JsValue| {
             if accepting.get()
                 && let Some(body) = weak.upgrade()
             {
-                body();
+                body(match device_pixel_size(&entries)[..] {
+                    [width, height] => Some(DeviceSize { width, height }),
+                    _ => None,
+                });
             }
         });
         let observer = match web_sys::ResizeObserver::new(closure.as_ref().unchecked_ref()) {
@@ -366,15 +446,15 @@ impl Registration {
                         "ResizeObserver unavailable; using window resize subscription"
                     );
                 });
-                return Ok(());
+                return None;
             }
         };
-        self.observer = Some(ResizeSubscription {
+        self.observers.push(ResizeSubscription {
             observer: observer.clone(),
             closure: Some(closure),
-            _body: body,
+            _body: Rc::clone(body),
         });
-        observe_canvas(&observer, &self.canvas).map_err(backend)
+        Some(observer)
     }
 
     pub(super) fn fence(&self) {
@@ -422,12 +502,12 @@ impl Drop for Registration {
         for id in pointers.into_keys() {
             crate::shared::panic_boundary::contain_owner_callback(|| owner.release(id));
         }
-        let observer = self.observer.take();
+        let observers = std::mem::take(&mut self.observers);
         let listeners = std::mem::take(&mut self.listeners);
         for timer in std::mem::take(&mut self.timers) {
             timer.cancel();
         }
-        drop(observer);
+        drop(observers);
         for listener in listeners {
             drop(listener);
         }

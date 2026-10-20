@@ -6,12 +6,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
 use std::time::Duration;
 
-use flui_platform::{OwnerPlatform, Platform, WebPlatform, WindowOpen, WindowOptions};
+use flui_platform::{HostWindow, OwnerPlatform, Platform, WebPlatform, WindowOpen, WindowOptions};
 use flui_platform_api::DisplaySnapshot;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::wasm_bindgen_test;
@@ -37,6 +37,7 @@ let sideScreen;
 let everScreens = [];
 let windowListeners = [];
 let lastCanvas;
+let resizeObservers = [];
 
 // An event target that counts the listeners it really holds, and removes one
 // only when that very function was added.
@@ -75,6 +76,7 @@ class FakeCanvas extends EventTarget {
         this.width = 300;
         this.height = 150;
         this.ownerDocument = document;
+        this.padding = 0;
     }
     getRootNode() { return document; }
     contains(node) { return node === this; }
@@ -87,7 +89,8 @@ export function installDisplayProbe(windowManagement) {
     const names = [
         'Window', 'matchMedia', 'requestAnimationFrame', 'cancelAnimationFrame',
         'devicePixelRatio', 'screen', 'document', 'navigator', 'getScreenDetails',
-        'HTMLCanvasElement', 'addEventListener', 'removeEventListener',
+        'HTMLCanvasElement', 'addEventListener', 'removeEventListener', 'ResizeObserver',
+        'getComputedStyle',
     ];
     const descriptors = names.map(name => Object.getOwnPropertyDescriptor(globalThis, name));
     const previous = Object.getPrototypeOf(globalThis);
@@ -105,6 +108,8 @@ export function installDisplayProbe(windowManagement) {
     permissionNames = [];
     screenDetailsCalls = 0;
     everScreens = [];
+    resizeObservers = [];
+    delete globalThis.ResizeObserver;
     define('devicePixelRatio', ratio);
     screenObject = Object.assign(track(new EventTarget()), { width: 1280, height: 720, onchange: null });
     define('screen', screenObject);
@@ -138,6 +143,13 @@ export function installDisplayProbe(windowManagement) {
     document.createElement = () => (lastCanvas = new FakeCanvas());
     define('document', document);
     define('HTMLCanvasElement', FakeCanvas);
+    define('getComputedStyle', element => {
+        const padding = `${element.padding ?? 0}px`;
+        return {
+            paddingTop: padding, paddingRight: padding, paddingBottom: padding, paddingLeft: padding,
+            writingMode: 'horizontal-tb',
+        };
+    });
     windowListeners = [];
     define('addEventListener', (name, callback) => { windowListeners.push({ name, callback }); });
     define('removeEventListener', (name, callback) => {
@@ -206,6 +218,58 @@ export function fireWindowResize() {
 }
 // The backing store of the canvas the page made last: [width, height].
 export function canvasBackingSize() { return [lastCanvas.width, lastCanvas.height]; }
+// A `ResizeObserver` that observes the device-pixel content box, as Chrome and
+// Firefox do, or rejects that box, as Safari does.
+export function installResizeObserver(devicePixels) {
+    globalThis.ResizeObserver = class {
+        constructor(callback) {
+            this.callback = callback;
+            this.targets = [];
+            resizeObservers.push(this);
+        }
+        observe(target, options) {
+            const box = options?.box ?? 'content-box';
+            if (box === 'device-pixel-content-box' && !devicePixels) {
+                throw new TypeError(`'${box}' is not a valid ResizeObserverBoxOptions value`);
+            }
+            this.targets.push({ target, box });
+        }
+        disconnect() { this.targets = []; }
+    };
+    globalThis.ResizeObserver.devicePixels = devicePixels;
+}
+// The page lays the last canvas out at a padding box of `width`×`height`
+// whose content box, `padding` CSS pixels in on every side, the browser
+// snapped to `deviceWidth`×`deviceHeight` device pixels. `boxes` names the
+// observed boxes that changed, so the observers of those report it; every
+// entry carries the device size where the browser has it, as Chrome's do.
+function layOut(width, height, deviceWidth, deviceHeight, padding, boxes) {
+    lastCanvas.clientWidth = width;
+    lastCanvas.clientHeight = height;
+    lastCanvas.padding = padding;
+    const content = { width: width - 2 * padding, height: height - 2 * padding };
+    const entry = {
+        target: lastCanvas,
+        contentRect: content,
+        contentBoxSize: [{ inlineSize: content.width, blockSize: content.height }],
+    };
+    if (globalThis.ResizeObserver.devicePixels) {
+        entry.devicePixelContentBoxSize = [{ inlineSize: deviceWidth, blockSize: deviceHeight }];
+    }
+    for (const observer of resizeObservers.slice()) {
+        const watched = each => each.target === lastCanvas && boxes.includes(each.box);
+        if (observer.targets.some(watched)) observer.callback([entry], observer);
+    }
+}
+// Every box changed.
+export function layOutCanvas(width, height, deviceWidth, deviceHeight, padding = 0) {
+    layOut(width, height, deviceWidth, deviceHeight, padding, ['content-box', 'device-pixel-content-box', 'border-box']);
+}
+// A layout in which only the boxes `changed` names, space-separated, moved:
+// the observers of the others do not report it.
+export function changeCanvasBoxes(width, height, deviceWidth, deviceHeight, padding, changed) {
+    layOut(width, height, deviceWidth, deviceHeight, padding, changed.split(' '));
+}
 export function windowResizeListeners() { return windowListeners.filter(entry => entry.name === 'resize').length; }
 export function pixelRatioListeners() { return ratioQueries.reduce((sum, query) => sum + query.listenerCount(), 0); }
 export function setHidden(value) {
@@ -279,6 +343,19 @@ extern "C" {
     fn window_resize_listeners() -> usize;
     #[wasm_bindgen(js_name = canvasBackingSize)]
     fn canvas_backing_size() -> Vec<u32>;
+    #[wasm_bindgen(js_name = installResizeObserver)]
+    fn install_resize_observer(device_pixels: bool);
+    #[wasm_bindgen(js_name = layOutCanvas)]
+    fn lay_out_canvas(width: u32, height: u32, device_width: u32, device_height: u32);
+    #[wasm_bindgen(js_name = changeCanvasBoxes)]
+    fn change_canvas_boxes(
+        width: u32,
+        height: u32,
+        device_width: u32,
+        device_height: u32,
+        padding: f64,
+        changed: &str,
+    );
     #[wasm_bindgen(js_name = pixelRatioListeners)]
     fn pixel_ratio_listeners() -> i32;
     #[wasm_bindgen(js_name = setHidden)]
@@ -1096,12 +1173,8 @@ async fn web_screen_change_keeps_the_period_while_the_current_screen_is_known() 
     settle().await;
 }
 
-#[wasm_bindgen_test]
-async fn web_window_backing_store_follows_a_pixel_ratio_change_without_a_resize() {
-    install_probe("none");
-    let _probe = Probe;
-    let running = Running::start();
-    settle().await;
+/// A window opened on `running`, and the scale of every resize it reports.
+fn open_recorded_window(running: &Running) -> (Arc<dyn HostWindow>, Arc<Mutex<Vec<f64>>>) {
     let window = {
         let owner = running.owner.borrow();
         match owner
@@ -1114,11 +1187,26 @@ async fn web_window_backing_store_follows_a_pixel_ratio_change_without_a_resize(
             WindowOpen::Pending(_) => panic!("a Web window opens at once"),
         }
     };
-    let resized = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let resized = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&resized);
     window.on_resize(Box::new(move |_, scale| {
         seen.lock().expect("resizes").push(scale);
     }));
+    (window, resized)
+}
+
+fn physical_size(window: &Arc<dyn HostWindow>) -> [i32; 2] {
+    let size = window.physical_size();
+    [size.width, size.height]
+}
+
+#[wasm_bindgen_test]
+async fn web_window_backing_store_follows_a_pixel_ratio_change_without_a_resize() {
+    install_probe("none");
+    let _probe = Probe;
+    let running = Running::start();
+    settle().await;
+    let (window, resized) = open_recorded_window(&running);
     assert_eq!(window.scale_factor(), 1.0);
     assert_eq!(canvas_backing_size(), [300, 150], "the 300×150 box at 1×");
     assert_eq!(
@@ -1144,4 +1232,154 @@ async fn web_window_backing_store_follows_a_pixel_ratio_change_without_a_resize(
     running.quit();
     settle().await;
     assert_eq!(pixel_ratio_listeners(), 0, "quit removes both queries");
+}
+
+#[wasm_bindgen_test]
+async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports() {
+    install_probe("none");
+    install_resize_observer(true);
+    let _probe = Probe;
+    let running = Running::start();
+    settle().await;
+    let (window, resized) = open_recorded_window(&running);
+    assert_eq!(
+        pixel_ratio_listeners(),
+        2,
+        "the display source's and the window's"
+    );
+
+    // A ratio change that leaves the rounded device-pixel box as it was (a
+    // small canvas) brings no observer entry; the window's own watch sees it.
+    set_pixel_ratio(1.5);
+    settle().await;
+    assert_eq!(window.scale_factor(), 1.5, "the watch synced the window");
+    assert_eq!(canvas_backing_size(), [450, 225]);
+
+    // At 1.5× the browser snaps a 301×150 box to 451×225 device pixels,
+    // where `round(301 × 1.5)` would be 452.
+    lay_out_canvas(301, 150, 451, 225);
+    settle().await;
+    assert_eq!(
+        canvas_backing_size(),
+        [451, 225],
+        "the reported size, not the estimate"
+    );
+    assert_eq!(
+        physical_size(&window),
+        [451, 225],
+        "the surface is the store"
+    );
+    assert_eq!(*resized.lock().expect("resizes"), [1.5, 1.5]);
+
+    // A `resize` event in the same layout keeps the reported size.
+    fire_window_resize();
+    settle().await;
+    assert_eq!(canvas_backing_size(), [451, 225]);
+    assert_eq!(resized.lock().expect("resizes").len(), 2, "nothing changed");
+
+    // A ratio change the device-pixel observer does not report left the
+    // device box as the browser last reported it, where the estimate at
+    // 1.501× would be 452.
+    set_pixel_ratio(1.501);
+    settle().await;
+    assert_eq!(window.scale_factor(), 1.501);
+    assert_eq!(
+        canvas_backing_size(),
+        [451, 225],
+        "the reported box holds across the ratio"
+    );
+    set_pixel_ratio(1.5);
+    settle().await;
+
+    // A reflow to 302 CSS pixels that leaves the rounded device-pixel box as
+    // it was is reported only by the CSS-box observers, whose entries carry
+    // the device size too.
+    change_canvas_boxes(302, 150, 452, 225, 0.0, "content-box border-box");
+    settle().await;
+    assert_eq!(
+        window.logical_size().width,
+        302.0,
+        "the window follows the reflow"
+    );
+    assert_eq!(
+        canvas_backing_size(),
+        [452, 225],
+        "the reported size, not round(302 × 1.5)"
+    );
+
+    // 0.2px of padding inside a `border-box` canvas moves only its content
+    // box: the window is the padding box, which the device box does not
+    // measure.
+    change_canvas_boxes(302, 150, 452, 225, 0.2, "content-box");
+    settle().await;
+    assert_eq!(
+        canvas_backing_size(),
+        [453, 225],
+        "the padding box's estimate, not the content box"
+    );
+    assert_eq!(physical_size(&window), [453, 225]);
+
+    // 10px of padding around a `content-box` canvas grows its padding box,
+    // the window, to 322×170 and moves neither content box.
+    change_canvas_boxes(322, 170, 452, 225, 10.0, "border-box");
+    settle().await;
+    assert_eq!(
+        window.logical_size().width,
+        322.0,
+        "the window follows the padding"
+    );
+    assert_eq!(canvas_backing_size(), [483, 255]);
+
+    drop(window);
+    running.quit();
+    settle().await;
+}
+
+#[wasm_bindgen_test]
+async fn web_window_backing_store_is_estimated_where_the_browser_reports_css_pixels() {
+    install_probe("none");
+    install_resize_observer(false);
+    let _probe = Probe;
+    let running = Running::start();
+    settle().await;
+    let (window, resized) = open_recorded_window(&running);
+    assert_eq!(
+        pixel_ratio_listeners(),
+        2,
+        "a CSS-box observer misses a ratio change, so the window watches the ratio"
+    );
+
+    set_pixel_ratio(1.5);
+    settle().await;
+    assert_eq!(
+        canvas_backing_size(),
+        [450, 225],
+        "the watch resized the store"
+    );
+
+    lay_out_canvas(301, 150, 451, 225);
+    settle().await;
+    assert_eq!(window.scale_factor(), 1.5);
+    assert_eq!(
+        canvas_backing_size(),
+        [452, 225],
+        "round(301 × 1.5) × round(150 × 1.5)"
+    );
+    assert_eq!(physical_size(&window), [452, 225]);
+    assert_eq!(*resized.lock().expect("resizes"), [1.5, 1.5]);
+
+    // Padding around a `content-box` canvas moves only its border box.
+    change_canvas_boxes(321, 170, 0, 0, 10.0, "border-box");
+    settle().await;
+    assert_eq!(
+        window.logical_size().width,
+        321.0,
+        "the window follows the padding"
+    );
+    assert_eq!(canvas_backing_size(), [482, 255]);
+
+    drop(window);
+    running.quit();
+    settle().await;
+    assert_eq!(pixel_ratio_listeners(), 0);
 }

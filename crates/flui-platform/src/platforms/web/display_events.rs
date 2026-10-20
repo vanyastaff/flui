@@ -317,9 +317,10 @@ impl PixelRatioShared {
 impl PixelRatioWatch {
     /// Watch the ratio for a window's layout: `on_change` runs each time it
     /// changes while `active` holds. A window dragged to a display of another
-    /// scale keeps its CSS box, so neither its `ResizeObserver` nor the
-    /// window's `resize` event reports it. `None` in a browser without media
-    /// queries.
+    /// scale keeps its CSS box, so neither a `ResizeObserver` of that box nor
+    /// the window's `resize` event reports it, and one of its device-pixel
+    /// box misses it while the rounded size stays. `None` in a browser
+    /// without media queries.
     pub(super) fn for_layout(
         active: &Rc<Cell<bool>>,
         on_change: impl Fn() + 'static,

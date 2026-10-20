@@ -229,9 +229,17 @@ pub fn run_direct(
 
         // 5. Register resize callback
         let renderer_resize = Arc::clone(&renderer);
-        window.on_resize(Box::new(move |size, scale_factor| {
-            let w = (size.width * scale_factor) as u32;
-            let h = (size.height * scale_factor) as u32;
+        // The window's own physical size, which the backend may have taken
+        // from the platform's device-pixel layout rather than `size × scale`.
+        // Weak: the window owns this callback.
+        let resized_window = Arc::downgrade(&window);
+        window.on_resize(Box::new(move |_size, scale_factor| {
+            let Some(window) = resized_window.upgrade() else {
+                return;
+            };
+            let physical = window.physical_size();
+            let w = u32::try_from(physical.width).unwrap_or(0);
+            let h = u32::try_from(physical.height).unwrap_or(0);
             if w > 0 && h > 0 {
                 renderer_resize.lock().resize(w, h);
                 tracing::debug!("Window resized to {}x{} (scale: {})", w, h, scale_factor);

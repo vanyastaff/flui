@@ -208,18 +208,21 @@ impl WebFrameDriver {
         let claim = self.gpu_loss.claim_initialization();
         self.spawn_build(None, claim, authority);
     }
-    pub(super) fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
+    pub(super) fn resize(
+        &mut self,
+        _size: flui_foundation::geometry::Size<f64>,
+        _scale_factor: f64,
+    ) {
         // A lost context cannot be configured; the rebuild reads the window's
         // size when it finishes.
         if !self.gpu_loss.can_draw() {
             return;
         }
         if let Some(renderer) = self.renderer.lock().as_mut() {
-            // Match the browser canvas backing store at fractional DPR.
-            renderer.resize(
-                (size.width * scale_factor).round() as u32,
-                (size.height * scale_factor).round() as u32,
-            );
+            // The canvas's backing store, which the browser may have sized
+            // from its device-pixel layout rather than `size × scale`.
+            let size = self.window.physical_size();
+            renderer.resize(size.width as u32, size.height as u32);
         }
     }
     pub(super) fn wake(
