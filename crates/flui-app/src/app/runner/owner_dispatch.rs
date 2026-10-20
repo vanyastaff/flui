@@ -674,25 +674,31 @@ fn dispatch_owner_turn(turn: OwnerTurn) -> Result<(), DispatchError> {
 fn dispatch_owner_turn_delivery(
     turn: OwnerTurn,
 ) -> Result<flui_runtime::owner::Delivery, DispatchError> {
-    // Window commands queued by application code apply at the start of the
-    // turn, before its frame and outside the turn's callback guard: a native
-    // call re-enters the window procedure. Where the owner's wake applies them
-    // (every host but Android and iOS, once an owner wake is installed), a
-    // frame turn leaves them to it: a frame runs inside the platform's paint
-    // callback, which holds back the resize a command causes, so the frame
-    // would draw the old size. With no wake, the queue asked for a redraw, and
-    // the frame is the turn that applies them.
+    // Window commands queued by application code apply outside the turn's
+    // callback guard, since a native call re-enters the window procedure. They
+    // apply at the start of a turn. On every host but Android and iOS, a frame
+    // turn applies them after its frame: the frame runs inside the platform's
+    // paint callback, which holds back the resize a command causes, so a frame
+    // drawn after the command would show the old size. The resize then asks
+    // for the next frame. Either way the turn drains the queue, so a command
+    // whose owner wake failed is applied by the redraw it fell back to.
+    let owner_thread = turn.owner_thread();
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    let applies = true;
+    let after_frame = false;
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let applies = !matches!(turn, OwnerTurn::Presentation(_, RuntimeTask::Frame(_)))
-        || APP_RUNTIME.with(|slot| {
-            slot.try_borrow()
-                .map_or(true, |state| state.owner_turn_wake.is_none())
-        });
-    if applies {
-        apply_queued_window_commands(turn.owner_thread());
+    let after_frame = matches!(turn, OwnerTurn::Presentation(_, RuntimeTask::Frame(_)));
+    if !after_frame {
+        apply_queued_window_commands(owner_thread);
     }
+    let delivered = deliver_owner_turn(turn);
+    if after_frame {
+        apply_queued_window_commands(owner_thread);
+    }
+    delivered
+}
+
+/// One owner turn's work, inside its callback guard.
+fn deliver_owner_turn(turn: OwnerTurn) -> Result<flui_runtime::owner::Delivery, DispatchError> {
     let host = current_host(turn.owner_thread())?;
     let _callback = host
         .logical()

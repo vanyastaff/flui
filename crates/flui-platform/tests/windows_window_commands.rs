@@ -974,6 +974,20 @@ fn the_fullscreen_hotkey_waits_for_the_app_to_let_its_key_through() {
     let platform = platform();
     let window = open(&platform, options());
     settle();
+    // A toggle request that names another window (one whose handle this
+    // window reuses) is not this window's.
+    // SAFETY: a post to the live window; the parameters are plain values.
+    let _ = unsafe {
+        PostMessageW(
+            Some(hwnd_of(&window)),
+            windows::Win32::UI::WindowsAndMessaging::WM_APP + 3,
+            WPARAM(0),
+            LPARAM(0),
+        )
+    };
+    settle();
+    assert_ne!(window.state().mode, WindowMode::Fullscreen);
+
     window.on_input(Box::new(|_| DispatchEventResult::resolved(false, true)));
     press_f11(&window);
     settle();

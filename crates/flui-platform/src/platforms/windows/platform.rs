@@ -136,6 +136,13 @@ impl WindowIdentity {
             .expect("BUG: the window identity counter is exhausted");
         Self(std::num::NonZeroU64::new(raw).expect("BUG: an admitted window identity is nonzero"))
     }
+
+    /// The identity as a posted message's two parameters, its low and high 32
+    /// bits, whole on a 32-bit target too.
+    pub(super) fn halves(self) -> (usize, isize) {
+        let raw = self.0.get();
+        ((raw & 0xFFFF_FFFF) as usize, (raw >> 32) as isize)
+    }
 }
 
 /// One window as an object that outlives its borrow of the window names it:
@@ -1714,8 +1721,12 @@ impl WindowsPlatform {
 
                 // Toggled after the key's dispatch, on a turn of its own (see
                 // `WM_KEYDOWN`).
+                // A handle the window's close let another window reuse is not
+                // the window whose key asked for it.
                 super::window::TOGGLE_FULLSCREEN => {
-                    WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
+                    if ctx.is_some_and(|ctx| ctx.identity.halves() == (wparam.0, lparam.0)) {
+                        WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
+                    }
                     LRESULT(0)
                 }
 
@@ -2041,13 +2052,15 @@ impl WindowsPlatform {
                         // The fullscreen hotkey (configurable, default F11) is
                         // a default the app can prevent. It toggles on a turn
                         // of its own, as a window command does, not inside
-                        // this message: the resize it causes renders.
+                        // this message: the resize it causes renders. The
+                        // request names this window, not just its handle.
                         if ctx.config.fullscreen_hotkey == Some(vk) && !is_repeat {
+                            let (low, high) = ctx.identity.halves();
                             let _ = PostMessageW(
                                 Some(hwnd),
                                 super::window::TOGGLE_FULLSCREEN,
-                                WPARAM(0),
-                                LPARAM(0),
+                                WPARAM(low),
+                                LPARAM(high),
                             );
                         }
                         let handled = DefWindowProcW(hwnd, msg, wparam, lparam);
