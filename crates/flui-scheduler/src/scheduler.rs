@@ -963,7 +963,7 @@ impl FrameWaker {
     /// # Panics
     ///
     /// Propagates a panic from the platform wake hook after recording the
-    /// demand as undelivered. A task's [`Waker`](std::task::Waker), which
+    /// demand as undelivered. A task's [`Waker`], which
     /// reaches this from whatever thread completed its future, contains that
     /// panic instead of unwinding into the waking executor.
     pub fn request_frame(&self) {
