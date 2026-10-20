@@ -296,7 +296,7 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
         let mut content_padding_bottom = 0.0;
 
         if view.resize_to_avoid_bottom_inset {
-            reduced.view_insets.bottom = 0.0;
+            reduced.remove_bottom_view_inset();
             content_padding_bottom = media.view_insets.bottom;
         }
 

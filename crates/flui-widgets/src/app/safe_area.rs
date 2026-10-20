@@ -157,16 +157,22 @@ impl StatelessView for SafeArea {
             effective_bottom,
             effective_left,
         );
+        // A consumed edge leaves neither `padding` nor `view_padding` for
+        // descendants to reserve again.
         if self.left {
+            media.view_padding.left = (media.view_padding.left - media.padding.left).max(0.0);
             media.padding.left = 0.0;
         }
         if self.top {
+            media.view_padding.top = (media.view_padding.top - media.padding.top).max(0.0);
             media.padding.top = 0.0;
         }
         if self.right {
+            media.view_padding.right = (media.view_padding.right - media.padding.right).max(0.0);
             media.padding.right = 0.0;
         }
         if self.bottom {
+            media.view_padding.bottom = (media.view_padding.bottom - media.padding.bottom).max(0.0);
             media.padding.bottom = 0.0;
         }
         Padding::new(insets).child(MediaQuery::new(media, self.child.clone()))

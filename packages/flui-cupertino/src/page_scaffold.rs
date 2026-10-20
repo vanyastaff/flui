@@ -151,7 +151,7 @@ impl StatelessView for CupertinoPageScaffold {
             let mut reduced = media;
             reduced.padding.top = 0.0;
             if self.resize_to_avoid_bottom_inset {
-                reduced.view_insets.bottom = 0.0;
+                reduced.remove_bottom_view_inset();
             }
             MediaQuery::new(
                 reduced,
@@ -161,7 +161,7 @@ impl StatelessView for CupertinoPageScaffold {
             .boxed()
         } else if self.resize_to_avoid_bottom_inset {
             let mut reduced = media.clone();
-            reduced.view_insets.bottom = 0.0;
+            reduced.remove_bottom_view_inset();
             MediaQuery::new(
                 reduced,
                 Padding::new(EdgeInsets::only_bottom(media.view_insets.bottom))

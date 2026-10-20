@@ -540,7 +540,7 @@ impl ViewState<Scaffold> for ScaffoldState {
                 reduced_media_query.padding.bottom = 0.0;
             }
             if view.resize_to_avoid_bottom_inset {
-                reduced_media_query.view_insets.bottom = 0.0;
+                reduced_media_query.remove_bottom_view_inset();
             }
             children.push(LayoutId::new(
                 SLOT_BODY,
@@ -646,14 +646,12 @@ impl ViewState<Scaffold> for ScaffoldState {
 
         // The raw safe-area bottom inset (e.g. the home-indicator area on iOS),
         // zeroed only while the keyboard is actually up and being resized
-        // around. `MediaQueryData` has no `viewPadding` field distinct from
-        // `padding` (both name the same "safe area from the OS" concept
-        // here), so `padding.bottom` is this substrate's `viewPadding.bottom`.
+        // around.
         let min_view_padding_bottom =
             if view.resize_to_avoid_bottom_inset && media_query.view_insets.bottom != 0.0 {
                 0.0
             } else {
-                media_query.padding.bottom
+                media_query.view_padding.bottom
             };
 
         let delegate: Arc<dyn MultiChildLayoutDelegate> = Arc::new(ScaffoldLayoutDelegate {

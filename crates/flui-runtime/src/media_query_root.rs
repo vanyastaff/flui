@@ -64,13 +64,14 @@ impl MediaQuerySource {
         window: &dyn flui_platform_api::PlatformWindow,
         device_pixel_ratio: f64,
     ) -> Self {
+        let mut data = MediaQueryData {
+            size: window.logical_size(),
+            device_pixel_ratio,
+            ..MediaQueryData::default()
+        };
+        data.set_view_padding(window.safe_area_insets());
         Self {
-            data: RefCell::new(MediaQueryData {
-                size: window.logical_size(),
-                device_pixel_ratio,
-                padding: window.safe_area_insets(),
-                ..MediaQueryData::default()
-            }),
+            data: RefCell::new(data),
             ..Self::default()
         }
     }

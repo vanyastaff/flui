@@ -2,13 +2,13 @@
 //!
 //! ## Implemented subset
 //!
-//! `size`, `device_pixel_ratio`, `text_sizing`, `font_weight_adjustment`, `padding`,
-//! `view_insets`, `platform_brightness`, `high_contrast`, `preferred_locales`, `motion` — presentation and
+//! `size`, `device_pixel_ratio`, `text_sizing`, `font_weight_adjustment`, `view_padding`,
+//! `padding`, `view_insets`, `platform_brightness`, `high_contrast`, `preferred_locales`, `motion` — presentation and
 //! preference fields for layout and theming.
 //!
 //! ## Deferred (not yet implemented)
 //!
-//! View padding, system gesture insets, 24-hour-format preference,
+//! System gesture insets, 24-hour-format preference,
 //! accessible navigation, inverted colors, display features, and navigation mode. Text-weight observation
 //! is implemented by the UIKit backend; other backends leave it unavailable.
 //! These require platform event plumbing (accessibility bridge, IME state)
@@ -42,6 +42,7 @@ use std::sync::Arc;
 /// - [`device_pixel_ratio`](Self::device_pixel_ratio)
 /// - [`text_sizing`](Self::text_sizing)
 /// - [`font_weight_adjustment`](Self::font_weight_adjustment)
+/// - [`view_padding`](Self::view_padding)
 /// - [`padding`](Self::padding)
 /// - [`view_insets`](Self::view_insets)
 /// - [`platform_brightness`](Self::platform_brightness)
@@ -71,13 +72,24 @@ pub struct MediaQueryData {
     pub font_weight_adjustment: i32,
 
     /// Safe-area insets from the window edges reserved by the OS (notch,
-    /// home indicator, status bar). App content should avoid rendering
-    /// interactive or critical elements in these areas.
+    /// home indicator, status bar), whether or not other system UI covers
+    /// them. Unlike [`padding`](Self::padding) it is not reduced by
+    /// [`view_insets`](Self::view_insets). Update it with
+    /// [`set_view_padding`](Self::set_view_padding) so `padding` follows.
+    pub view_padding: EdgeInsets,
+
+    /// The part of [`view_padding`](Self::view_padding) that is not already
+    /// covered by [`view_insets`](Self::view_insets), per edge: with the
+    /// keyboard up over the home-indicator area, the bottom value is zero.
+    /// App content avoids these areas, and [`SafeArea`](crate::SafeArea)
+    /// consumes them. Derived: write `view_padding` and `view_insets` through
+    /// their setters rather than this field.
     pub padding: EdgeInsets,
 
     /// Insets occupied by system UI that fully obscures part of the window,
     /// such as the software keyboard when it is visible. Unlike
     /// [`padding`](Self::padding), these areas are hidden — not just reserved.
+    /// Update it with [`set_view_insets`](Self::set_view_insets).
     pub view_insets: EdgeInsets,
 
     /// The OS-level light/dark preference as reported by the platform.
@@ -109,6 +121,7 @@ impl Default for MediaQueryData {
             device_pixel_ratio: 1.0,
             text_sizing: flui_painting::TextSizing::fixed(),
             font_weight_adjustment: 0,
+            view_padding: EdgeInsets::ZERO,
             padding: EdgeInsets::ZERO,
             view_insets: EdgeInsets::ZERO,
             platform_brightness: Brightness::Light,
@@ -116,6 +129,36 @@ impl Default for MediaQueryData {
             motion: flui_animation::MotionPolicy::Full,
             preferred_locales: None,
         }
+    }
+}
+
+impl MediaQueryData {
+    /// Set the raw OS safe-area insets and re-derive
+    /// [`padding`](Self::padding) from them and the current
+    /// [`view_insets`](Self::view_insets).
+    pub fn set_view_padding(&mut self, view_padding: EdgeInsets) {
+        self.view_padding = view_padding;
+        self.derive_padding();
+    }
+
+    /// Set the insets covered by system UI and re-derive
+    /// [`padding`](Self::padding) so the safe area is not reserved twice.
+    pub fn set_view_insets(&mut self, view_insets: EdgeInsets) {
+        self.view_insets = view_insets;
+        self.derive_padding();
+    }
+
+    /// Mark the bottom view inset as consumed by a descendant that resizes
+    /// around it (a scaffold body above the keyboard): the inset becomes zero
+    /// and `view_padding.bottom` shrinks by what the inset covered. `padding`
+    /// already excluded the covered part, so it is unchanged.
+    pub fn remove_bottom_view_inset(&mut self) {
+        self.view_padding.bottom = (self.view_padding.bottom - self.view_insets.bottom).max(0.0);
+        self.view_insets.bottom = 0.0;
+    }
+
+    fn derive_padding(&mut self) {
+        self.padding = (self.view_padding - self.view_insets).clamp_non_negative();
     }
 }
 
