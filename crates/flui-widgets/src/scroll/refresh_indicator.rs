@@ -62,7 +62,7 @@ use flui_interaction::InputSequenceId;
 use flui_painting::typography::TextDirection;
 use flui_platform_api::TargetPlatform;
 use flui_platform_api::keyboard::NamedKey;
-use flui_view::prelude::{StatefulView, StatelessView};
+use flui_view::prelude::StatefulView;
 use flui_view::{
     AsyncDriver, BoxedTask, BoxedView, BuildContext, BuildContextExt, EventCx, InheritedView,
     IntoView, LifecycleContext, PostFrameHandle, RebuildHandle, RebuildReason, TaskToken, View,
@@ -876,7 +876,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
 
 /// The content inside the alternatives, below the indicator's action, where
 /// the gesture resolves its command as the alternatives do.
-#[derive(Clone, StatelessView)]
+#[derive(Clone, StatefulView)]
 struct RefreshBody {
     refresher: Rc<Refresher>,
     alternatives: GestureAlternatives,
@@ -889,9 +889,21 @@ impl fmt::Debug for RefreshBody {
     }
 }
 
-impl StatelessView for RefreshBody {
-    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        if self
+/// `RefreshBody` keeps nothing between builds; its state exists to hold the
+/// view-to-slot write out of `build`.
+struct RefreshBodyState;
+
+impl StatefulView for RefreshBody {
+    type State = RefreshBodyState;
+
+    fn create_state(&self) -> Self::State {
+        RefreshBodyState
+    }
+}
+
+impl ViewState<RefreshBody> for RefreshBodyState {
+    fn apply_view(&mut self, view: &RefreshBody, ctx: &dyn BuildContext) {
+        if view
             .alternatives
             .commands()
             .next()
@@ -904,20 +916,23 @@ impl StatelessView for RefreshBody {
                  RefreshIntent::command"
             );
         }
-        let outgoing = self
+        let outgoing = view
             .refresher
             .command
-            .replace(Some(self.alternatives.handle(ctx)));
+            .replace(Some(view.alternatives.handle(ctx)));
         drop(outgoing);
+    }
+
+    fn build(&self, view: &RefreshBody, _ctx: &dyn BuildContext) -> impl IntoView {
         let overlay = RefreshOverlay {
-            controller: self.refresher.controller(),
-            axis: self.refresher.axis.get(),
-            from_far_end: self.refresher.starts_at_far_end(),
-            threshold_px: self.refresher.threshold_px.get(),
+            controller: view.refresher.controller(),
+            axis: view.refresher.axis.get(),
+            from_far_end: view.refresher.starts_at_far_end(),
+            threshold_px: view.refresher.threshold_px.get(),
         };
-        self.alternatives
+        view.alternatives
             .clone()
-            .child(Stack::new(vec![self.content.clone(), overlay.boxed()]))
+            .child(Stack::new(vec![view.content.clone(), overlay.boxed()]))
     }
 }
 
