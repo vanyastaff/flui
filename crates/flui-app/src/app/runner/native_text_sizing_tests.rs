@@ -252,7 +252,7 @@ fn native_acquisition_failures_back_off_to_a_ceiling() {
                 message: "injected acquisition failure".into(),
             })
         }));
-        for expected in [500, 1_000, 2_000, 4_000, 8_000, 8_000] {
+        let assert_next_retry_in = |expected: u64| {
             let expected = Duration::from_millis(expected);
             record.state.borrow_mut().deadline = Some(web_time::Instant::now());
             refresh_installed();
@@ -264,16 +264,30 @@ fn native_acquisition_failures_back_off_to_a_ceiling() {
                 armed <= expected && armed > expected / 2,
                 "armed {armed:?}, expected about {expected:?}"
             );
-        }
-        // A capture that answers ends the streak.
+        };
+        assert_next_retry_in(500);
+        assert_next_retry_in(1_000);
+        // Android answers a retry with `Pending` before the result of its
+        // capture; the failure that came before it still counts.
         let observed = Rc::clone(&calls);
         *record.capture_sampler.borrow_mut() = Some(Box::new(move || {
             observed.set(observed.get() + 1);
-            Ok(TextSizingCaptureState::RetryAfter(Duration::from_secs(1)))
+            Ok(TextSizingCaptureState::Pending {
+                check_after: Duration::from_millis(10),
+            })
         }));
         record.state.borrow_mut().deadline = Some(web_time::Instant::now());
         refresh_installed();
-        assert_eq!(record.state.borrow().failures, 0);
+        let observed = Rc::clone(&calls);
+        *record.capture_sampler.borrow_mut() = Some(Box::new(move || {
+            observed.set(observed.get() + 1);
+            Err(flui_platform::TextSizingCaptureError::Native {
+                message: "injected acquisition failure".into(),
+            })
+        }));
+        for expected in [2_000, 4_000, 8_000, 8_000] {
+            assert_next_retry_in(expected);
+        }
     });
 }
 

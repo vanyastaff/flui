@@ -25,8 +25,8 @@ struct State {
     admission: TextSizingAdmission,
     deadline: Option<web_time::Instant>,
     parked: bool,
-    /// Native acquisition failures since the last capture that answered, which
-    /// set the retry delay and keep the warning to once per streak.
+    /// Native acquisition failures since the last usable capture, which set the
+    /// retry delay and keep the warning to once per streak.
     failures: u32,
 }
 
@@ -160,9 +160,6 @@ impl NativeTextSizing {
         if !self.live.get() || !current() {
             return;
         }
-        if captured.is_ok() {
-            self.state.borrow_mut().failures = 0;
-        }
         match captured {
             Ok(TextSizingCaptureState::Ready(capsule)) if capsule.is_current() => {
                 let (source, changed, install, retired) = {
@@ -180,6 +177,10 @@ impl NativeTextSizing {
                     let old = state.capsule.replace(capsule);
                     let had_deadline = state.deadline.take().is_some();
                     let was_parked = std::mem::replace(&mut state.parked, false);
+                    // Only a usable capture ends a streak: Android answers a
+                    // retry with `Pending` before the result of its capture,
+                    // so a reset there would erase the failure that preceded it.
+                    state.failures = 0;
                     (
                         state.admission.source(),
                         changed

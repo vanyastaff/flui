@@ -413,21 +413,21 @@ impl FallbackWake {
     /// animation froze mid-flight, `next_wake` observing the deadline 5 µs
     /// late, and stayed frozen for the rest of the run.
     ///
-    /// A deadline already behind `now` is therefore still reported (as
-    /// `now`, so `WaitUntil` fires immediately) — that IS the wake being
-    /// asked for, and `gate` consumes it exactly once when the frame
-    /// callback it pokes finally runs, so at most one extra iteration is
-    /// spent, never a spin. The one case where that poke can never be
-    /// answered is a surface whose redraws the compositor withholds (a
-    /// hidden Wayland window): a deadline whose due report has gone a full
-    /// period unanswered is abandoned, which bounds that case at roughly one
-    /// period of wasted wakes and leaves the presentation idle, as a hidden
-    /// presentation should be. The period runs from the first report, not
-    /// from the deadline: a loop that was busy elsewhere (another window
-    /// blocked in `present`) reads a deadline late the first time it looks,
-    /// and the platform was never handed that wake to answer. The ticker's
-    /// demand is retained on the clock either way, so the next delivered
-    /// redraw produces.
+    /// A deadline already behind `now` is therefore still reported, the first
+    /// time as `now` (so `WaitUntil` fires immediately) — that IS the wake
+    /// being asked for, and `gate` consumes it exactly once when the frame
+    /// callback it pokes finally runs. Until it does, each further query
+    /// reports the instant a full period after that first report, a future
+    /// one, so a poke that is slow to dispatch costs one wake and not a spin.
+    /// The one case where the poke can never be answered is a surface whose
+    /// redraws the compositor withholds (a hidden Wayland window): once that
+    /// period passes the deadline is abandoned, which bounds the case at one
+    /// wake and leaves the presentation idle, as a hidden presentation should
+    /// be. The period runs from the first report, not from the deadline: a
+    /// loop that was busy elsewhere (another window blocked in `present`)
+    /// reads a deadline late the first time it looks, and the platform was
+    /// never handed that wake to answer. The ticker's demand is retained on
+    /// the clock either way, so the next delivered redraw produces.
     pub(super) fn next_wake(
         &self,
         now: web_time::Instant,
@@ -438,25 +438,31 @@ impl FallbackWake {
         if deadline > now {
             return Some(deadline);
         }
-        let delivered_at = *state.delivered_at.get_or_insert(now);
-        let unanswered = now.saturating_duration_since(delivered_at);
-        if unanswered > period {
-            // The wake this deadline asked for is not coming (a hidden
-            // surface withholds redraws). Abandon it rather than re-arming
-            // `WaitUntil` in the past every iteration — ADR-0044 §7's
-            // measured busy-spin. Clearing it also lifts the suppression of
-            // the ui_runtime's own redraw echo, so an ordinary wake produces.
-            state.deadline = None;
-            state.delivered_at = None;
-            tracing::trace!(
-                target: "flui.pace",
-                event = "fallback_abandoned",
-                unanswered_us = unanswered.as_micros() as u64,
-                "the deferred wake was never delivered; abandoning the deadline"
-            );
-            return None;
+        let Some(delivered_at) = state.delivered_at else {
+            state.delivered_at = Some(now);
+            return Some(now);
+        };
+        // Reported already: the platform has a period to answer it, and the
+        // loop waits for that period, not for `now` over and over.
+        let expiry = delivered_at + period;
+        if expiry > now {
+            return Some(expiry);
         }
-        Some(now)
+        // The wake this deadline asked for is not coming (a hidden surface
+        // withholds redraws). Abandon it rather than re-arming `WaitUntil`
+        // in the past every iteration — ADR-0044 §7's measured busy-spin.
+        // Clearing it also lifts the suppression of the ui_runtime's own
+        // redraw echo, so an ordinary wake produces.
+        let unanswered = now.saturating_duration_since(delivered_at);
+        state.deadline = None;
+        state.delivered_at = None;
+        tracing::trace!(
+            target: "flui.pace",
+            event = "fallback_abandoned",
+            unanswered_us = unanswered.as_micros() as u64,
+            "the deferred wake was never delivered; abandoning the deadline"
+        );
+        None
     }
 }
 
@@ -545,8 +551,9 @@ mod desktop_pacing_tests {
         let ten_ms_later = deadline + Duration::from_millis(10);
         assert_eq!(
             fallback.next_wake(ten_ms_later, Duration::from_millis(16)),
-            Some(ten_ms_later),
-            "10 ms unanswered on a 16 ms display is a wake still worth answering"
+            Some(deadline + Duration::from_millis(16)),
+            "10 ms unanswered on a 16 ms display is a wake still worth waiting for, until a \
+             future instant and not a spin on `now`"
         );
         assert_eq!(
             fallback.next_wake(ten_ms_later, Duration::from_millis(8)),
@@ -569,6 +576,11 @@ mod desktop_pacing_tests {
             fallback.next_wake(two_periods_late, period),
             Some(two_periods_late),
             "the first report of a due deadline is answered however late the loop looked"
+        );
+        assert_eq!(
+            fallback.next_wake(two_periods_late + period / 2, period),
+            Some(two_periods_late + period),
+            "a further query waits out the period; it does not report `now` again"
         );
         assert_eq!(
             fallback.next_wake(two_periods_late + period * 2, period),
