@@ -469,7 +469,7 @@ by pixel bytes (`with_decoded_image_budget`; 256 MiB, 64 MiB on Android, iOS and
 the web); an image larger than the budget is handed to its waiters and not kept.
 `cached_image` is the synchronous probe a frame makes before it starts a load.
 There is no process-wide image cache, so equal sources in two registries are two
-images (ADR-0248).
+images (ADR-0250).
 
 A request for a source already loading joins that load. Every `ImageLoad`
 waiting on it is a subscriber; when the last one is dropped the pending entry is

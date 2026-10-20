@@ -4,7 +4,7 @@
   keeps the decoded images of bridged loads within a byte budget
   (`AssetRegistryBuilder::with_decoded_image_budget`) and bounds concurrent decodes
   (`with_decode_threads`)
-  ([ADR-0248](/docs/adr/ADR-0248-asset-registry-keeps-decoded-images.md)).
+  ([ADR-0250](/docs/adr/ADR-0250-asset-registry-keeps-decoded-images.md)).
 - **`flui-widgets`**: `ImageProvider::cached`, the non-blocking probe `Image` makes before it
   starts a load, and `ImageCacheKey::custom` for a custom provider's typed key.
 

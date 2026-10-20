@@ -1105,7 +1105,7 @@ paint commands, including RTL and obscured cases.
 
 ### Network responses belong to their registry
 
-The registry keeps the decoded images and the loads in flight (ADR-0248), so
+The registry keeps the decoded images and the loads in flight (ADR-0250), so
 `AssetImage` and `NetworkImage` share a decode only with providers on the same
 registry. Their `ImageCacheKey` holds the registry's weak allocation identity
 beside the source (ADR-0118): HTTP headers and policies can change the response

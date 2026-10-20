@@ -4,7 +4,7 @@
 - **Date:** 2026-10-18
 - **Amended:** 2026-10-19 — decision 9's image cache is the renderer's image textures; decoded
   images belong to the application's asset registry, reclaimed once registered
-  ([ADR-0248](ADR-0248-asset-registry-keeps-decoded-images.md)).
+  ([ADR-0250](ADR-0250-asset-registry-keeps-decoded-images.md)).
 - **Related:** [ADR-0222](ADR-0222-window-appearance-is-a-presentation-observation.md) (the
   payload-free observation shape this follows),
   [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) (display snapshot and ids; this ADR

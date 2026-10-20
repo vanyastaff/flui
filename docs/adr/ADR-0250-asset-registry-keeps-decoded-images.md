@@ -1,4 +1,4 @@
-# ADR-0248: The asset registry keeps decoded images and schedules their decodes
+# ADR-0250: The asset registry keeps decoded images and schedules their decodes
 
 - **Status:** Accepted
 - **Date:** 2026-10-19
