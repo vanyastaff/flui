@@ -1,6 +1,6 @@
 # ADR-0240: Semantics carry a stable identifier for tests and automation
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-17
 - **Related:** [ADR-0238](ADR-0238-flui-driver-protocol.md),
   [ADR-0203](ADR-0203-semantics-vocabulary.md),

@@ -1,6 +1,6 @@
 # ADR-0239: Every debug FLUI app hosts the driver agent
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-17
 - **Supersedes in part:** [ADR-0095](ADR-0095-agent-protocol-schema-crate.md) §3 as amended on
   acceptance: where the server lives (`flui-devtools` → `flui-app`), who installs it (the host,

@@ -1,6 +1,6 @@
 # ADR-0238: One driver protocol and one `flui-driver` crate for tests, people and agents
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-17
 - **Supersedes in part:** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md): the desktop
   MCP server as the backend of the wire contract (retired), the closed error-code list (four codes

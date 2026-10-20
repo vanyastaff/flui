@@ -1,6 +1,6 @@
 # ADR-0241: A driver trace is a versioned JSONL directory that embeds the input recordings
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-17
 - **Related:** [ADR-0215](ADR-0215-input-recording-and-backend-conformance.md) (the input
   recording it embeds; its privacy rule and completeness rule are reused),

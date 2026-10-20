@@ -1,6 +1,6 @@
 # flui-driver: design (level 1)
 
-- **Status:** draft, awaiting owner approval
+- **Status:** approved by the owner (2026-10-20)
 - **Date:** 2026-10-17
 - **Requirements:** [requirements.md](requirements.md). **Tasks:** [tasks.md](tasks.md)
 - **ADRs:** [ADR-0238](../../../adr/ADR-0238-flui-driver-protocol.md),

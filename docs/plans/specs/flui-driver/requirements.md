@@ -1,6 +1,6 @@
 # flui-driver: one tool to drive and check FLUI apps (requirements, level 1)
 
-- **Status:** draft, awaiting owner approval
+- **Status:** approved by the owner (2026-10-20)
 - **Date:** 2026-10-17
 - **Base:** `main` @ `0fdd19f1e`; the implementation also absorbs what `interaction/completeness`
   (`4579e0bcf`) adds under `tools/xtask/src/device/`, `crates/flui-platform/tests/native_recording/`

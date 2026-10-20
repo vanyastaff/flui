@@ -1,6 +1,6 @@
 # ADR-0242: `Inspect` replaces `Diagnosticable`; one tracing convention and one span stream
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-18
 - **Amends:** [ADR-0040](ADR-0040-tree-observation-seam.md) (consumers of the observer seam join
   span time by element id) and [ADR-0202](ADR-0202-animation-observation-through-tracing.md)

@@ -1,6 +1,9 @@
 # flui-driver: tasks
 
-- **Status:** draft, awaiting owner approval
+- **Status:** approved by the owner (2026-10-20); no task started. `interaction/completeness`
+  has merged (#1733), so the IC tasks are unblocked. `flui run --agent` and `flui mcp` exist on
+  the ADR-0095 endpoint (#1769); the tasks that replace that endpoint and `flui mcp` start from
+  them.
 - **Date:** 2026-10-17
 - **Design:** [design.md](design.md); requirements: [requirements.md](requirements.md); ADRs:
   [ADR-0238](../../../adr/ADR-0238-flui-driver-protocol.md),
