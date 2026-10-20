@@ -471,9 +471,6 @@ impl DesktopWakeDeadlines {
             ),
             self.first_reveal.next_deadline(),
         );
-        // A window placement held back by the write throttle is written when
-        // its interval is over (`wake` ticks the recorders first thing).
-        let deadline = merge_wake_deadlines(deadline, super::placement::next_due());
         desktop_secondary_wake_deadline(deadline, frames_enabled)
     }
 }
@@ -496,9 +493,6 @@ impl DesktopFrameDriver {
         ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
         presentation: flui_foundation::PresentationId,
     ) {
-        // Before the gate, so a wake that only came for a held placement write
-        // does it even when no frame is due.
-        super::placement::tick();
         let lane_frame = &self.lane;
         let worker_reload_frame = &self.worker_reload;
         let device_recovery_backoff = &self.deadlines.device_recovery_backoff;
@@ -593,29 +587,6 @@ impl DesktopFrameDriver {
                 // frame. `pump_background` clears the frame latch before
                 // polling so accepted work can request another owner wake.
                 ui_runtime.pump_background();
-                // A backgrounded wake with dirty/pending work
-                // re-requesting another wake every loop tick has the
-                // identical busy-spin risk an un-presented frame with an
-                // open gate has, and nothing else paces it while frames
-                // are disabled — so it takes the same bound (ADR-0058),
-                // as a deferral rather than a sleep. The wake-deadline
-                // hook gates this source on `frames_enabled`, so the
-                // deadline is not reported while backgrounded; what
-                // bounds this arm is the deferral being consulted by the
-                // dirty gate above on the next wake, which is where a
-                // backgrounded self-re-arming task would otherwise spin.
-                let keeps_gate_open = keeps_frame_gate_open(
-                    ui_runtime.needs_redraw(),
-                    ui_runtime.scheduler().is_frame_scheduled(),
-                    ui_runtime.has_pending_work(),
-                );
-                if keeps_gate_open {
-                    self.deadlines.defer_after_no_present(
-                        ui_runtime,
-                        presentation,
-                        web_time::Instant::now(),
-                    );
-                }
                 return;
             }
             WakeAction::Render => {}

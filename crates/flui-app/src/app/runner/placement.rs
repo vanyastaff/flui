@@ -13,7 +13,7 @@ use flui_platform_api::DisplaySnapshot;
 use super::host::{APP_RUNTIME, runtime_storage, with_owner_platform};
 use crate::app::AppConfig;
 use crate::app::placement_recorder::{
-    FLUSH_BUDGET, PlacementRecorder, earliest_due, recall, restore_into, settle,
+    FLUSH_BUDGET, PlacementRecorder, recall, restore_into, settle,
 };
 
 /// Open `options` where `config`'s window was last time, when the
@@ -110,12 +110,9 @@ pub(super) fn flush_all() {
     settle(&recorders, Instant::now(), FLUSH_BUDGET);
 }
 
-/// When the owner should wake to write a placement held back by the throttle.
-pub(super) fn next_due() -> Option<Instant> {
-    earliest_due(Instant::now(), &recorders())
-}
-
-/// Write the placements whose throttle interval is over.
+/// Write the placements whose throttle interval is over. The owner calls it
+/// after every turn, so a wake for a held write does it whatever the frames
+/// are doing.
 pub(super) fn tick() {
     let now = Instant::now();
     for recorder in recorders() {

@@ -202,6 +202,81 @@ fn completion_wake_observes_the_receipt_without_wake_feedback() {
     });
 }
 
+/// A backgrounded Android or iOS app has no native window: every capture
+/// answers `Unavailable`, and no timer changes that. The record parks without
+/// a deadline and posts no wake, so the owner is not woken twice a second for as
+/// long as the window is gone.
+fn an_unavailable_context_parks_without_a_deadline_or_a_wake() {
+    installed_capture(|record, calls, turns, _| {
+        // The fixture's pending receipt check posted a wake; take it first.
+        turns.drive();
+        let observed = Rc::clone(&calls);
+        *record.capture_sampler.borrow_mut() = Some(Box::new(move || {
+            observed.set(observed.get() + 1);
+            Err(flui_platform::TextSizingCaptureError::Unavailable)
+        }));
+        record.state.borrow_mut().deadline = Some(web_time::Instant::now());
+        // Parking releases the document edits waiting on the geometry, once,
+        // which can cost one more owner turn.
+        refresh_installed();
+        turns.drive();
+        let before = calls.get();
+        for _ in 0..3 {
+            refresh_installed();
+            turns.drive();
+        }
+        assert_eq!(
+            calls.get(),
+            before + 3,
+            "each owner turn tries once; no wake of the record's own runs another"
+        );
+        assert!(
+            record.deadline().is_none(),
+            "a window that is gone arms no retry deadline"
+        );
+        assert!(
+            record.state.borrow().parked,
+            "document edits are released while the geometry is unavailable"
+        );
+    });
+}
+
+/// A failing native call is retried at a doubling delay up to a ceiling, not
+/// twice a second for as long as it fails.
+fn native_acquisition_failures_back_off_to_a_ceiling() {
+    installed_capture(|record, calls, _, _| {
+        let observed = Rc::clone(&calls);
+        *record.capture_sampler.borrow_mut() = Some(Box::new(move || {
+            observed.set(observed.get() + 1);
+            Err(flui_platform::TextSizingCaptureError::Native {
+                message: "injected acquisition failure".into(),
+            })
+        }));
+        for expected in [500, 1_000, 2_000, 4_000, 8_000, 8_000] {
+            let expected = Duration::from_millis(expected);
+            record.state.borrow_mut().deadline = Some(web_time::Instant::now());
+            refresh_installed();
+            let armed = record
+                .deadline()
+                .expect("a failed acquisition arms a retry")
+                .saturating_duration_since(web_time::Instant::now());
+            assert!(
+                armed <= expected && armed > expected / 2,
+                "armed {armed:?}, expected about {expected:?}"
+            );
+        }
+        // A capture that answers ends the streak.
+        let observed = Rc::clone(&calls);
+        *record.capture_sampler.borrow_mut() = Some(Box::new(move || {
+            observed.set(observed.get() + 1);
+            Ok(TextSizingCaptureState::RetryAfter(Duration::from_secs(1)))
+        }));
+        record.state.borrow_mut().deadline = Some(web_time::Instant::now());
+        refresh_installed();
+        assert_eq!(record.state.borrow().failures, 0);
+    });
+}
+
 fn stalled_capture_releases_waiting_document_edits_without_layout() {
     acquisition_without_progress_releases_document_edits(|| Ok(TextSizingCaptureState::Stalled));
 }
@@ -341,6 +416,14 @@ fn installed_native_text_sizing_delivery() {
             (
                 "reentrant_close_during_capture_cannot_restore_delivery",
                 reentrant_close_during_capture_cannot_restore_delivery as fn(),
+            ),
+            (
+                "an_unavailable_context_parks_without_a_deadline_or_a_wake",
+                an_unavailable_context_parks_without_a_deadline_or_a_wake as fn(),
+            ),
+            (
+                "native_acquisition_failures_back_off_to_a_ceiling",
+                native_acquisition_failures_back_off_to_a_ceiling as fn(),
             ),
         ],
     );

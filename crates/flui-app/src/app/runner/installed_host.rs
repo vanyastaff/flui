@@ -426,6 +426,16 @@ impl OwnerEffects for HostState {
                 self.native.refresh_text_sizing(&self.logical, self, false);
             });
         }
+        // A held window placement is written on the wake its deadline brought,
+        // not on a frame: a minimized window has none.
+        #[cfg(all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        if self.is_current() {
+            contain(&mut first, super::placement::tick);
+        }
         self.complete_native(&mut first);
         #[cfg(not(target_arch = "wasm32"))]
         let closed = std::mem::take(&mut *self.closed_presentations.borrow_mut());

@@ -875,10 +875,28 @@ impl AppRuntime {
             .frame_deadline(self.installed_host.logical());
         #[cfg(any(target_os = "android", target_os = "ios"))]
         let frame = None;
+        // A window placement held back by the write throttle is written when
+        // its interval is over. Frame-independent like text sizing: a
+        // minimized window has frames disabled, and the write must not wait
+        // for it to come back (`after_turn` ticks the recorders).
+        #[cfg(all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        let placement = super::placement_recorder::earliest_due(
+            std::time::Instant::now(),
+            self.placement_recorders
+                .iter()
+                .map(|(_, recorder)| recorder),
+        );
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        let placement = None;
         [
             runtime,
             frame,
             self.installed_host.native().text_sizing_deadline(),
+            placement,
         ]
         .into_iter()
         .flatten()
