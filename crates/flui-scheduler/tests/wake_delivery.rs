@@ -210,8 +210,9 @@ fn repeated_cloned_task_wake_retries_a_panicking_hook() {
         .clone()
         .expect("polled waker");
     let cloned = waker.clone();
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake_by_ref()));
-    assert!(failure.is_err());
+    // A task wake contains the hook's panic instead of unwinding into the
+    // waking executor; the demand stays pending for the next wake.
+    waker.wake_by_ref();
     cloned.wake_by_ref();
     waker.wake_by_ref();
     assert_eq!(calls.load(Ordering::Relaxed), 2);
@@ -252,9 +253,14 @@ fn scheduled_async_wake_retries_both_delivery_layers() {
         .expect("observed waker")
         .clone()
         .expect("polled waker");
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake_by_ref()));
-    assert!(failure.is_err());
-    waker.clone().wake_by_ref();
+    // The wake comes from a worker thread, as a completed IO job's does: the
+    // platform hook's panic must not unwind into that thread.
+    let worker_waker = waker.clone();
+    std::thread::spawn(move || worker_waker.wake_by_ref())
+        .join()
+        .expect("a panicking wake hook does not unwind into the waking thread");
+    assert_eq!(calls.load(Ordering::Relaxed), 1, "the hook ran and failed");
+    waker.wake_by_ref();
     assert_eq!(
         calls.load(Ordering::Relaxed),
         2,
@@ -309,10 +315,9 @@ fn driver_older_success_cannot_erase_newer_failed_wake() {
     entered_rx
         .recv_timeout(Duration::from_secs(10))
         .expect("old hook entered");
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| second.wake_by_ref()));
+    second.wake_by_ref();
     release_tx.send(()).expect("release old hook");
     worker.join().expect("old successful hook");
-    assert!(failure.is_err());
     second.wake_by_ref();
     assert_eq!(calls.load(Ordering::Relaxed), 3);
     assert_eq!(frame.pump_background(|| {}).expect("live owner turn"), 2);
@@ -555,12 +560,18 @@ fn assert_reentrant_hook_replacement_after_failure(use_driver: bool) {
             scheduler.request_frame();
         }
     };
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(demand))
-        .expect_err("initial hook failed");
-    assert_eq!(
-        failure.downcast_ref::<&str>(),
-        Some(&"initial hook failure")
-    );
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(demand));
+    if waker.is_some() {
+        // A task wake contains the hook's panic rather than unwinding into
+        // the waking thread.
+        outcome.expect("a task wake never panics");
+    } else {
+        let failure = outcome.expect_err("initial hook failed");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&"initial hook failure")
+        );
+    }
     assert_eq!(initial_calls.load(Ordering::Relaxed), 1);
     assert_eq!(replacement_calls.load(Ordering::Relaxed), 1);
     demand();

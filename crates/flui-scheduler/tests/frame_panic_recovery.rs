@@ -74,6 +74,15 @@ fn armed_completion_probe(
     (future, counter)
 }
 
+/// Whether the aborted frame left accepted work behind it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum AcceptedWork {
+    /// Nothing waits for a frame.
+    None,
+    /// Callbacks or tasks queued behind the failure wait for the next frame.
+    Queued,
+}
+
 /// The invariants every site below must satisfy once a panic from a phase
 /// `OwnerFrame::drive_frame` owns has been caught: the original panic
 /// text (not a secondary one), phase/timestamp/`frame_scheduled` closed,
@@ -87,6 +96,7 @@ fn assert_recovered_from_panic(
     frame_count_before: u64,
     mut completion_future: FrameCompletionFuture,
     completion_counter: &CountingWaker,
+    accepted: AcceptedWork,
 ) {
     assert_eq!(
         flui_foundation::panic::payload_text(payload),
@@ -102,22 +112,13 @@ fn assert_recovered_from_panic(
         scheduler.current_frame().is_none(),
         "no frame timing must be left open"
     );
-    // One ordering detail keeps this green now that registering an
-    // `end_of_frame()` waiter demands a frame: `armed_completion_probe`
-    // registers BEFORE the frame is driven, so `handle_begin_frame`'s
-    // unconditional `frame_scheduled.store(false)` clears that demand at
-    // the top of the very frame this aborts.
-    //
-    // A registration made from inside the frame would not change this
-    // either. `abort_frame` drains the WHOLE registry and resolves it with
-    // the aborted frame's own timing, so such a waiter needs no frame of
-    // its own; and while this probe is still live it would be suppressed
-    // and issue no demand at all. The only registration that leaves the
-    // latch set here is one made AFTER the drain, from inside a completion
-    // waker, which the drain has already passed by.
-    assert!(
-        !scheduler.is_frame_scheduled(),
-        "frame_scheduled must not be left latched by the aborted frame"
+    // `handle_begin_frame` cleared the latch before any callback ran; the
+    // abort re-arms it only for work accepted behind the failure, never for
+    // the failure itself (which would hot-loop a deterministic panic).
+    assert_eq!(
+        scheduler.is_frame_scheduled(),
+        accepted == AcceptedWork::Queued,
+        "the aborted frame requests the next one exactly when accepted work waits for it"
     );
     assert_eq!(
         scheduler.frame_count(),
@@ -174,6 +175,7 @@ fn transient_callback_panic_closes_the_frame_and_preserves_its_sibling() {
         frame_count_before,
         completion_future,
         &completion_counter,
+        AcceptedWork::Queued,
     );
     assert_eq!(
         sibling_ran.load(Ordering::SeqCst),
@@ -248,6 +250,7 @@ fn persistent_callback_panic_closes_the_frame_before_the_pipeline_slot_ever_open
         frame_count_before,
         completion_future,
         &completion_counter,
+        AcceptedWork::None,
     );
     assert_eq!(
         pipeline_ran.load(Ordering::SeqCst),
@@ -349,6 +352,7 @@ fn async_future_poll_panic_closes_the_frame() {
         frame_count_before,
         completion_future,
         &completion_counter,
+        AcceptedWork::None,
     );
     // The panicking future's own slot is gone; the well-behaved sibling's
     // is not -- only one of the two tasks the driver held is a zombie.
@@ -524,6 +528,36 @@ fn the_original_pipeline_panic_survives_a_panicking_completion_waker_during_abor
     );
 }
 
+/// The post-frame callbacks queued behind a failing one were accepted for a
+/// frame: the frame that failed requests the one that runs them.
+fn a_post_frame_panic_requests_the_frame_for_the_callbacks_behind_it() {
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let tail_ran = Arc::new(AtomicUsize::new(0));
+    let tail = Arc::clone(&tail_ran);
+    scheduler.add_post_frame_callback(Box::new(|_| panic!("post-frame probe")));
+    scheduler.add_post_frame_callback(Box::new(move |_| {
+        tail.fetch_add(1, Ordering::SeqCst);
+    }));
+
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        owner
+            .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+            .expect("live owner frame");
+    }))
+    .expect_err("the panic must propagate");
+    assert_eq!(tail_ran.load(Ordering::SeqCst), 0, "the tail waits");
+    assert!(
+        scheduler.is_frame_scheduled(),
+        "the failed frame requests the frame its tail runs in"
+    );
+
+    owner
+        .drive_frame(Instant::now(), far_deadline(), || {}, || {})
+        .expect("live owner frame");
+    assert_eq!(tail_ran.load(Ordering::SeqCst), 1);
+}
+
 #[test]
 fn frame_panic_recovery_matrix() {
     crate::run_table(
@@ -555,6 +589,10 @@ fn frame_panic_recovery_matrix() {
                 "the_original_pipeline_panic_survives_a_panicking_completion_waker_during_abort",
                 the_original_pipeline_panic_survives_a_panicking_completion_waker_during_abort
                     as fn(),
+            ),
+            (
+                "a_post_frame_panic_requests_the_frame_for_the_callbacks_behind_it",
+                a_post_frame_panic_requests_the_frame_for_the_callbacks_behind_it as fn(),
             ),
         ],
     );

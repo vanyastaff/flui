@@ -327,7 +327,7 @@ impl PendingWindowState {
             );
         }
         if redraw {
-            let failure = catch_unwind(AssertUnwindSafe(|| runtime.request_redraw())).err();
+            let failure = catch_unwind(AssertUnwindSafe(|| runtime.request_redraw_of(id))).err();
             crate::lifecycle_state::preserve_first_lifecycle_panic(
                 &mut first,
                 failure,
@@ -601,5 +601,50 @@ impl OwnerHost {
             owner: Rc::downgrade(&self.core),
             address,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flui_foundation::PresentationAddress;
+    use flui_platform_api::Brightness;
+
+    use super::{PendingWindowState, WindowObservation};
+    use crate::ui_runtime::UiRuntime;
+
+    /// A secondary window's appearance batch reschedules that window, not the
+    /// primary.
+    fn a_window_state_batch_redraws_the_window_it_came_from() {
+        let mut runtime = UiRuntime::for_test();
+        let primary = runtime.presentation_id();
+        let secondary = runtime.install_second_presentation_for_test();
+        for id in [primary, secondary] {
+            let _ = runtime.take_redraw_pending_for_test(id);
+        }
+
+        PendingWindowState::from_observation(WindowObservation::Brightness(Brightness::Dark))
+            .expect("appearance is a pending window state")
+            .apply(
+                &runtime,
+                PresentationAddress {
+                    ui_runtime_id: runtime.id(),
+                    presentation_id: secondary,
+                },
+                &|_, _| {},
+            );
+
+        assert_eq!(runtime.take_redraw_pending_for_test(secondary), Some(true));
+        assert_eq!(runtime.take_redraw_pending_for_test(primary), Some(false));
+    }
+
+    #[test]
+    fn window_state_batches() {
+        crate::table_test::run_table(
+            "window_state_batches",
+            &[(
+                "a_window_state_batch_redraws_the_window_it_came_from",
+                a_window_state_batch_redraws_the_window_it_came_from as fn(),
+            )],
+        );
     }
 }

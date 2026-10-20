@@ -45,6 +45,11 @@ impl UpdateScheduler {
         owner.restore_post_frame_queue();
         owner.finish_post_frame_batch();
         self.retain_pending_post_frame_cancellations();
+        // The tail behind a failed callback still needs a frame, and the
+        // caller is about to resume the panic rather than ask for one.
+        if result.is_err() && owner.has_queued_post_frame() {
+            super::request_frame_impl_preserving_failure(&self.inner.wake, true);
+        }
         result
     }
 

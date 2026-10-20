@@ -439,12 +439,12 @@ pub(crate) fn segment_runs_iff_woken_or_has_pending_work_over_the_full_table() {
 }
 
 /// Edge-trigger discipline, end to end: N ticks
-/// of a running controller that land while capacity never frees
+/// of a running controller that land while the produce throttle holds
 /// must collapse into exactly one platform-facing wake, through
 /// the REAL production call site — not just
 /// `FrameClock::try_arm_redraw_request` in isolation (see
 /// flui-scheduler's own unit test for that, at the bare-clock
-/// level). A produce (capacity freed) must re-arm it.
+/// level). A produce (throttle lifted) must re-arm it.
 ///
 /// Drives `render_frame`, not the bare `draw_frame_entered`
 /// this test used before: the continuation-wake check now runs
@@ -453,7 +453,7 @@ pub(crate) fn segment_runs_iff_woken_or_has_pending_work_over_the_full_table() {
 /// method's own comment for why the move was necessary: raising
 /// the wake before `mark_rendered()` let the SAME callback silently
 /// clobber it). One consequence, pinned here rather than left
-/// implicit: the callback that frees capacity and produces ALSO
+/// implicit: the callback that lifts the throttle and produces ALSO
 /// re-arms and wakes again in that SAME callback now (the check
 /// runs after `poll()` already reset the latch), not on a
 /// SEPARATE, later callback the way it did when the check ran
@@ -471,8 +471,10 @@ pub(crate) fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rea
     controller.forward().expect("fresh controller forwards");
 
     let clock = ui_runtime.presentations.primary().clock();
-    clock.set_max_in_flight(1);
-    clock.record_submit(); // at capacity for the whole loop below
+    // One produce opens a throttle window that outlasts the whole loop below.
+    clock.mark_demand(flui_scheduler::DemandKind::Host);
+    assert!(clock.poll(clock.now()).should_run_segment());
+    clock.set_min_produce_interval(Some(Duration::from_secs(3600)));
     wake_count.store(0, Ordering::Relaxed);
 
     let mut backend = ScriptedSink::always_presents();
@@ -493,7 +495,7 @@ pub(crate) fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rea
     // mask and the armed latch) AND re-arms a fresh wake for the
     // controller's continuation in its own post-render step --
     // the two are no longer split across two separate callbacks.
-    clock.record_retire();
+    clock.set_min_produce_interval(None);
     ui_runtime.set_now_secs_for_test(0.10);
     let _ = ui_runtime.render_frame(&mut backend);
     assert_eq!(

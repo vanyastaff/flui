@@ -33,9 +33,6 @@
 //! - [`execution`]: the loop-scoped background execution services (ADR-0047)
 //!   — the compute and IO lanes, their bounded admission and shutdown, and
 //!   the host-injection seam — which only the host constructs;
-//! - [`performance_stats`]: the rolling frame-time window whose numbers a
-//!   presentation's performance overlay records, shaped through the UI runtime's
-//!   text context;
 //! - [`pump`]: what a UI runtime's frame transaction reads and reports — the
 //!   [`FrameClockSource`](pump::FrameClockSource) it samples once per frame
 //!   and the [`FrameOutcome`](pump::FrameOutcome) the host paces from;
@@ -62,7 +59,6 @@ pub mod lifecycle_state;
 mod media_query_root;
 mod overlay_style;
 pub mod owner;
-pub mod performance_stats;
 pub mod presentation;
 mod presentation_forest;
 pub mod pump;
