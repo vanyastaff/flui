@@ -166,6 +166,7 @@ fn text_editing() {
             ("editable_text::insertion_keeps_the_caret_after_the_joined_combining_cluster", crate::editable_text::insertion_keeps_the_caret_after_the_joined_combining_cluster),
             ("editable_text::deleting_a_separator_keeps_the_caret_after_the_joined_flag", crate::editable_text::deleting_a_separator_keeps_the_caret_after_the_joined_flag),
             ("editable_text::text_store::rtl_scalar_rect_midpoints_resolve_to_the_source_scalar", crate::editable_text::text_store::rtl_scalar_rect_midpoints_resolve_to_the_source_scalar),
+            ("editable_text::the_store_reports_the_purpose_the_field_was_built_with", crate::editable_text::the_store_reports_the_purpose_the_field_was_built_with),
             ("editable_text::a_tap_places_the_caret_where_it_landed", crate::editable_text::a_tap_places_the_caret_where_it_landed),
             ("editable_text::a_pointer_down_and_a_paste_commit_the_composition_first", crate::editable_text::a_pointer_down_and_a_paste_commit_the_composition_first),
             ("editable_text::moving_focus_off_a_composing_field_commits_it_in_either_mount_order", crate::editable_text::moving_focus_off_a_composing_field_commits_it_in_either_mount_order),
@@ -595,6 +596,10 @@ fn scroll_physics_and_activity() {
             (
                 "scroll::scroll_activity_tracks_the_whole_gesture_lifecycle",
                 crate::scroll::scroll_activity_tracks_the_whole_gesture_lifecycle,
+            ),
+            (
+                "scroll::a_command_queued_before_mount_is_serviced_outside_build",
+                crate::scroll::a_command_queued_before_mount_is_serviced_outside_build,
             ),
             (
                 "scroll::scrollable_drag_up_increases_scroll_offset",

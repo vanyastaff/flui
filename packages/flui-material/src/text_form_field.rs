@@ -14,6 +14,7 @@
 use std::rc::Rc;
 
 use flui_sdk::interaction::FocusNode;
+use flui_sdk::platform::TextInputPurpose;
 use flui_sdk::view::element::ElementKind;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::__private::{TextFormFieldConfig, TextFormFieldCore};
@@ -136,6 +137,13 @@ impl TextFormField {
         self
     }
 
+    /// What the field is for (default [`TextInputPurpose::Text`]).
+    #[must_use]
+    pub fn input_purpose(mut self, purpose: TextInputPurpose) -> Self {
+        self.config.input_purpose = purpose;
+        self
+    }
+
     /// Use a caller-owned focus node.
     #[must_use]
     pub fn focus_node(mut self, focus_node: Rc<FocusNode>) -> Self {
@@ -207,6 +215,7 @@ impl ViewState<TextFormField> for TextFormFieldState {
                 .decoration(decoration)
                 .enabled(input.enabled)
                 .obscure_text(input.obscure_text)
+                .input_purpose(input.input_purpose)
                 .on_changed(input.on_changed());
             if let Some(node) = &input.focus_node {
                 field = field.focus_node(Rc::clone(node));

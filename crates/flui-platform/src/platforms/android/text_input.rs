@@ -31,8 +31,8 @@ use flui_platform_api::text_store::{
 use jni::{JValue, jni_sig, jni_str};
 
 use crate::shared::android_ime::{
-    CURSOR_UPDATE_IMMEDIATE, CURSOR_UPDATE_MONITOR, ImeEdit, Replayed, Snapshot, cursor_anchor,
-    editor_info, replay_current,
+    CURSOR_UPDATE_IMMEDIATE, CURSOR_UPDATE_MONITOR, ImeEdit, Snapshot, cursor_anchor, editor_info,
+    replay_current,
 };
 use crate::shared::os_version::Since;
 use crate::shared::os_version::android::{AndroidApi, StylusHandwriting};
@@ -215,10 +215,20 @@ impl AndroidTextInput {
         let published = Rc::clone(&self.published);
         let view = Arc::clone(&self.view);
         let status = self.status(&*store);
+        let this = self.this.clone();
+        let edited = Rc::clone(&store);
         let grant = LockGrant::read_write(move |session| {
             let outcome = replay_current(&edit, published.get(), session);
-            if outcome == Replayed::Refused {
-                // The store refused a step: the mirror no longer matches it.
+            // Focus may have moved to another field while the grant waited: its
+            // snapshot is the one the view mirrors now, and a restart on this
+            // store would overwrite it.
+            let still_focused = this
+                .upgrade()
+                .and_then(|input| input.focused())
+                .is_some_and(|current| Rc::ptr_eq(&current, &edited));
+            if outcome.restarts_the_view() && still_focused {
+                // The store refused a step, or the edit was dropped as stale:
+                // the input method's text no longer matches the store's.
                 let generation = Self::next_generation(&published);
                 publish(
                     &view,

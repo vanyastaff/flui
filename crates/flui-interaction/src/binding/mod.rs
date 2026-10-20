@@ -497,7 +497,8 @@ impl GestureBinding {
     /// reads the sequence from
     /// [`GestureArena::dispatched_sequence`](crate::gesture::GestureArena::dispatched_sequence),
     /// as it reads a contact's or a wheel latch's. The previous value comes
-    /// back when `body` returns or unwinds.
+    /// back when `body` returns or unwinds. It runs as one dispatch of this
+    /// binding.
     pub fn dispatch_contactless<R>(
         &self,
         sequence: InputSequenceId,
@@ -513,11 +514,16 @@ impl GestureBinding {
             }
         }
         let arena = self.arena.arena();
-        let _restore = Restore {
-            outer: arena.set_dispatched(Some(DispatchedInput::Contactless(sequence))),
-            arena,
-        };
-        body()
+        // A dispatch of its own: a decision the body commits delivers to
+        // gesture observers after the borrows are gone, and a close it
+        // requests waits for the body to return.
+        self.dispatch(|| {
+            let _restore = Restore {
+                outer: arena.set_dispatched(Some(DispatchedInput::Contactless(sequence))),
+                arena,
+            };
+            body()
+        })
     }
 
     /// Run `body` as one dispatch of this binding. A close requested while any

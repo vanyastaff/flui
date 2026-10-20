@@ -890,7 +890,20 @@ pub struct AnchoredDragState<K> {
     /// controllers, its source replaced when the axis, the reading direction
     /// or the controller changes.
     offset: ProxyAnimation<Offset<f64>>,
-    placement: Cell<Option<(Axis, bool)>>,
+    /// What `apply_view` resolved from the view and the ambient scopes, for
+    /// `build` to read.
+    placed: Option<Placed>,
+}
+
+/// How the drag sits in its surroundings: the reading direction its axis was
+/// placed under, the scrollable's axis direction and the node it is in the
+/// chains with.
+#[derive(Clone)]
+struct Placed {
+    axis: Axis,
+    rtl: bool,
+    axis_direction: AxisDirection,
+    node: Rc<ChainNode>,
 }
 
 /// The child's painted offset: the drag's offset along its axis, toward the
@@ -975,7 +988,7 @@ impl<K: Copy + Eq + 'static> AnchoredDragState<K> {
             node: RefCell::new(None),
             plane: PlaneSource::default(),
             offset: ProxyAnimation::new(Rc::new(ConstantAnimation::new(Offset::ZERO))),
-            placement: Cell::new(None),
+            placed: None,
         }
     }
 
@@ -1162,9 +1175,8 @@ impl<K: Copy + Eq + 'static> ViewState<AnchoredDrag<K>> for AnchoredDragState<K>
         self.acquire(ctx);
     }
 
-    fn build(&self, view: &AnchoredDrag<K>, ctx: &dyn BuildContext) -> impl IntoView {
+    fn apply_view(&mut self, view: &AnchoredDrag<K>, ctx: &dyn BuildContext) {
         let controller = &view.controller;
-        let anchors = controller.anchors();
         let axis = view.axis;
         let rtl =
             axis == Axis::Horizontal && Directionality::maybe_of(ctx) == Some(TextDirection::Rtl);
@@ -1176,13 +1188,38 @@ impl<K: Copy + Eq + 'static> ViewState<AnchoredDrag<K>> for AnchoredDragState<K>
             (Axis::Horizontal, true) => AxisDirection::LeftToRight,
         };
         let node = self.node(NestedScrollScope::parent_of(ctx));
-        if self.placement.replace(Some((axis, rtl))) != Some((axis, rtl)) {
+        let unchanged = self
+            .placed
+            .as_ref()
+            .is_some_and(|placed| (placed.axis, placed.rtl) == (axis, rtl));
+        if !unchanged {
             self.offset.set_parent(Rc::new(DragOffset {
                 scroll: controller.inner.scroll.clone(),
                 axis,
                 rtl,
             }));
         }
+        self.placed = Some(Placed {
+            axis,
+            rtl,
+            axis_direction,
+            node,
+        });
+    }
+
+    fn build(&self, view: &AnchoredDrag<K>, _ctx: &dyn BuildContext) -> impl IntoView {
+        let controller = &view.controller;
+        let anchors = controller.anchors();
+        let axis = view.axis;
+        let Placed {
+            rtl,
+            axis_direction,
+            node,
+            ..
+        } = self
+            .placed
+            .clone()
+            .expect("BUG: `apply_view` runs before every build");
         let offset = self.offset.clone();
         // The whole child is hit where it is painted, so the strip a drag
         // uncovers reaches what lies under the drag.

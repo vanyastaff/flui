@@ -1041,3 +1041,24 @@ fn a_surface_rect_applies_the_owners_published_ratio_once() {
         "a 2x window's button covers its logical bounds doubled"
     );
 }
+
+#[test]
+fn a_disabled_node_still_takes_focus_and_reveal() {
+    let mut f = Fixture::new();
+    let root = f.add(None, 1, |_| {});
+    f.add(Some(root), 2, |c| {
+        c.set_role(SemanticsRole::Button);
+        c.set_enabled(Some(false));
+        c.add_action(SemanticsAction::Click, noop());
+        c.add_action(SemanticsAction::Focus, noop());
+        c.add_action(SemanticsAction::ScrollIntoView, noop());
+    });
+    for action in [ActionName::Focus, ActionName::ScrollIntoView] {
+        assert!(
+            f.owner
+                .resolve_wire_action(&ActionRequest::new(e(2), action))
+                .is_ok(),
+            "{action} reaches a disabled node"
+        );
+    }
+}

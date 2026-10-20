@@ -10,8 +10,9 @@
 //! reports its state, and [`Mirror::report`] turns the report into one
 //! [`ImeEdit`] against the snapshot it was made on. The owner replays the
 //! edits in order ([`replay_current`]); an edit made on an older snapshot
-//! than the one the owner published last is dropped, because the owner's
-//! newer snapshot is already on its way to the view and resets it. The owner
+//! than the one the owner published last is dropped, and the owner restarts
+//! the view on the store's text, because a newer snapshot that only moved the
+//! selection leaves the dropped edit's text in the input method. The owner
 //! is the authority; the mirror never is.
 //!
 //! Cfg-free plain values over UTF-16, so Linux CI pins them;
@@ -24,11 +25,10 @@ use flui_platform_api::text_store::{
     Utf16Offset, Utf16Range,
 };
 
+use super::ime_text::document_text;
 use super::web_text::diff;
 
-/// What a protected field's text reads as in the mirror: one bullet per code
-/// unit, so the input method's offsets still land where they do in the field.
-pub const PROTECTED_UNIT: char = '\u{2022}';
+pub use super::ime_text::PROTECTED_UNIT;
 
 /// `InputConnection.CURSOR_UPDATE_IMMEDIATE`: send the cursor once, now.
 pub const CURSOR_UPDATE_IMMEDIATE: i32 = 1;
@@ -69,15 +69,9 @@ impl Snapshot {
     /// The store as `session` reads it, published as `generation`.
     #[must_use]
     pub fn read(session: &dyn TextStoreRead, generation: u32) -> Self {
-        let len = session.document_len();
-        let whole =
-            Utf16Range::new(Utf16Offset::ZERO, len).expect("BUG: the whole document is a range");
-        let text = session
-            .text(whole)
-            .unwrap_or_else(|_| std::iter::repeat_n(PROTECTED_UNIT, len.get()).collect());
         Self {
             generation,
-            text,
+            text: document_text(session),
             selection: session.selection(),
             composition: session.composition().map(|composition| composition.range),
         }
@@ -150,6 +144,18 @@ pub enum Replayed {
     /// The store refused a step: the view no longer mirrors the store, and
     /// the owner publishes a new snapshot.
     Refused,
+}
+
+impl Replayed {
+    /// Whether the view must restart on a fresh snapshot of the store. A
+    /// stale edit was dropped after the owner's newer snapshot reached the
+    /// view as a selection-only update, which only tells the input method:
+    /// the character it committed would otherwise stay in its cached text
+    /// while the field never received it.
+    #[must_use]
+    pub const fn restarts_the_view(self) -> bool {
+        !matches!(self, Self::Applied)
+    }
 }
 
 /// Replay `edit` into `session` if it was made on the snapshot the owner

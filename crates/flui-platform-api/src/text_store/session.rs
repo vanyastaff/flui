@@ -101,13 +101,17 @@ pub struct TextStoreStatus {
     pub protected: bool,
     /// The field holds one line.
     pub single_line: bool,
+    /// What the field is for, which input methods and on-screen keyboards
+    /// shape their layout and suggestions by.
+    pub purpose: TextInputPurpose,
 }
 
 impl TextStoreStatus {
-    /// An editable, unprotected, single-line field.
+    /// An editable, unprotected, single-line field for free text.
     pub const EDITABLE_SINGLE_LINE: Self = Self {
         protected: false,
         single_line: true,
+        purpose: TextInputPurpose::Text,
     };
 
     /// This status with `protected` set.
@@ -115,6 +119,36 @@ impl TextStoreStatus {
     pub const fn with_protected(self, protected: bool) -> Self {
         Self { protected, ..self }
     }
+
+    /// This status with `purpose` set.
+    #[must_use]
+    pub const fn with_purpose(self, purpose: TextInputPurpose) -> Self {
+        Self { purpose, ..self }
+    }
+}
+
+/// What a text field is for.
+///
+/// Independent of [`TextStoreStatus::protected`]: a protected field hides
+/// its text and tells input methods not to learn from it, whatever its
+/// purpose. A purpose only shapes the layout and suggestions an input
+/// method offers; it never filters what the field accepts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TextInputPurpose {
+    /// Free text.
+    #[default]
+    Text,
+    /// An email address.
+    Email,
+    /// A web address.
+    Url,
+    /// A telephone number.
+    Phone,
+    /// A whole number.
+    Number,
+    /// A search query.
+    Search,
 }
 
 /// The reads a platform makes under any lock.

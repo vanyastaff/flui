@@ -544,6 +544,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform_api::input_capabilities::Availability;",
         "pub use flui_platform_api::input_capabilities::InputCapabilities;",
         "pub use flui_platform_api::input_capabilities::PointerKindSet;",
+        "pub use flui_platform_api::text_store::TextInputPurpose;",
         "pub use flui_rendering::constraints::BoxConstraints;",
         "pub use flui_rendering::hit_testing::HitTestBehavior;",
         "pub use flui_rendering::protocol::BoxProtocol;",

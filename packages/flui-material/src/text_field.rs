@@ -116,6 +116,7 @@ use std::rc::Rc;
 use flui_sdk::foundation::ListenerId;
 use flui_sdk::foundation::notifier::Listenable;
 use flui_sdk::interaction::{FocusNode, FocusSubscription};
+use flui_sdk::platform::TextInputPurpose;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{EditableText, Listener, SubmitCallback, TextEditingController};
@@ -138,6 +139,8 @@ pub struct TextField {
     enabled: Option<bool>,
     /// Forwarded to [`EditableText::obscure_text`] — a password field.
     obscure_text: bool,
+    /// Forwarded to [`EditableText::input_purpose`].
+    input_purpose: TextInputPurpose,
     /// Forwarded to [`EditableText::required`] — see [`Self::required`].
     required: bool,
     /// Forwarded to [`EditableText::identifier`] — see [`Self::identifier`].
@@ -172,6 +175,7 @@ impl std::fmt::Debug for TextField {
             .field("decoration", &self.decoration)
             .field("enabled", &self.enabled)
             .field("obscure_text", &self.obscure_text)
+            .field("input_purpose", &self.input_purpose)
             .field("required", &self.required)
             .field("identifier", &self.identifier)
             .field("on_submitted", &self.on_submitted.is_some())
@@ -197,6 +201,15 @@ impl TextField {
     #[must_use]
     pub fn obscure_text(mut self, obscure: bool) -> Self {
         self.obscure_text = obscure;
+        self
+    }
+
+    /// What the field is for (default [`TextInputPurpose::Text`]): an email,
+    /// URL, phone, number or search field asks the input method for the
+    /// layout that suits it. Forwards to [`EditableText::input_purpose`].
+    #[must_use]
+    pub fn input_purpose(mut self, purpose: TextInputPurpose) -> Self {
+        self.input_purpose = purpose;
         self
     }
 
@@ -230,6 +243,7 @@ impl TextField {
             decoration: InputDecoration::default(),
             enabled: None,
             obscure_text: false,
+            input_purpose: TextInputPurpose::Text,
             required: false,
             identifier: None,
             on_submitted: None,
@@ -471,6 +485,7 @@ impl ViewState<TextField> for MaterialTextFieldState {
             .enabled(effective_enabled)
             .caret_color(caret_color)
             .obscure_text(view.obscure_text)
+            .input_purpose(view.input_purpose)
             .invalid(has_error)
             .required(view.required);
         if let Some(identifier) = &view.identifier {

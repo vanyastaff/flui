@@ -2631,3 +2631,55 @@ pub(crate) fn disabling_the_field_retires_its_selection_contact() {
 pub(crate) fn replacing_the_controller_retires_the_old_selection_contact() {
     selection_retarget(true);
 }
+
+/// The purpose a field is built with is the purpose its text store reports,
+/// follows a rebuild that changes it, and is independent of obscuring.
+///
+/// Red-check: leave `did_update_view` without the purpose cell — the store
+/// keeps reporting the first purpose after the swap.
+pub(crate) fn the_store_reports_the_purpose_the_field_was_built_with() {
+    use flui_platform_api::text_store::TextInputPurpose;
+    use flui_widgets::SizedBox;
+
+    let controller = TextEditingController::new();
+    let focus = FocusNode::new();
+    let field = |purpose, obscured| {
+        SizedBox::new(60.0, 30.0).child(
+            EditableText::new(controller.clone(), Rc::clone(&focus))
+                .input_purpose(purpose)
+                .obscure_text(obscured),
+        )
+    };
+    let mut harness = crate::common::harness::mount_with_ime(field(TextInputPurpose::Email, false));
+    let _ = focus.request_focus();
+    harness.tick();
+    let status = || {
+        harness
+            .active_text_store()
+            .expect("the focused field is the active IME client")
+            .status()
+    };
+    assert_eq!(status().purpose, TextInputPurpose::Email);
+    assert!(!status().protected);
+
+    harness.swap_root(field(TextInputPurpose::Url, false));
+    harness.tick();
+    let after = harness
+        .active_text_store()
+        .expect("still the active IME client")
+        .status();
+    assert_eq!(after.purpose, TextInputPurpose::Url, "a rebuild changes it");
+
+    harness.swap_root(field(TextInputPurpose::Url, true));
+    harness.tick();
+    let obscured = harness
+        .active_text_store()
+        .expect("still the active IME client")
+        .status();
+    assert!(obscured.protected, "obscuring protects the field");
+    assert_eq!(
+        obscured.purpose,
+        TextInputPurpose::Url,
+        "and leaves its purpose alone"
+    );
+}

@@ -32,6 +32,7 @@ use flui_foundation::geometry::EdgeInsets;
 use flui_interaction::FocusNode;
 use flui_painting::styling::Color;
 use flui_painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration};
+use flui_platform_api::text_store::TextInputPurpose;
 use flui_view::prelude::*;
 
 use crate::interaction::Listener;
@@ -76,6 +77,8 @@ pub struct RawTextField {
     content_padding: EdgeInsets,
     /// Forwarded to [`EditableText::obscure_text`] — a password field.
     obscure_text: bool,
+    /// Forwarded to [`EditableText::input_purpose`].
+    input_purpose: TextInputPurpose,
     /// Forwarded to [`EditableText::enabled`].
     enabled: bool,
     /// Forwarded to [`EditableText::invalid`].
@@ -101,6 +104,7 @@ impl std::fmt::Debug for RawTextField {
             .field("caret_color", &self.caret_color)
             .field("content_padding", &self.content_padding)
             .field("obscure_text", &self.obscure_text)
+            .field("input_purpose", &self.input_purpose)
             .field("enabled", &self.enabled)
             .field("invalid", &self.invalid)
             .field("identifier", &self.identifier)
@@ -121,6 +125,7 @@ impl RawTextField {
             caret_color: Color::BLACK,
             content_padding: EdgeInsets::symmetric(8.0, 12.0),
             obscure_text: false,
+            input_purpose: TextInputPurpose::Text,
             enabled: true,
             invalid: false,
             identifier: None,
@@ -176,6 +181,14 @@ impl RawTextField {
     #[must_use]
     pub fn obscure_text(mut self, obscure: bool) -> Self {
         self.obscure_text = obscure;
+        self
+    }
+
+    /// What the field is for (default [`TextInputPurpose::Text`]). Forwards
+    /// to [`EditableText::input_purpose`].
+    #[must_use]
+    pub fn input_purpose(mut self, purpose: TextInputPurpose) -> Self {
+        self.input_purpose = purpose;
         self
     }
 
@@ -262,6 +275,7 @@ impl ViewState<RawTextField> for RawTextFieldState {
         let mut editable = EditableText::new(view.controller.clone(), Rc::clone(&self.focus_node))
             .caret_color(view.caret_color)
             .obscure_text(view.obscure_text)
+            .input_purpose(view.input_purpose)
             .enabled(view.enabled)
             .invalid(view.invalid)
             .identifier_if(view.identifier.as_ref());

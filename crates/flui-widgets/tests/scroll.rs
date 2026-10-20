@@ -16,7 +16,7 @@ use crate::common::{LaidOut, lay_out, tight};
 use flui_animation::{ArcCurve, Vsync, curves};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::view::ScrollDirection;
-use flui_view::{IntoView, ViewExt};
+use flui_view::{IntoView, SignalWriteExt, ViewExt};
 use flui_widgets::{
     BouncingScrollPhysics, ClampingScrollPhysics, ScrollController, Scrollable, Scrollbar,
     SemanticsRole, SharedScrollPhysics, SizedBox, VsyncScope,
@@ -4798,4 +4798,44 @@ pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_
             "fresh transfer makes progress after containment"
         );
     }
+}
+
+/// A command queued before the scrollable mounted starts its run when the
+/// scrollable applies its view, and the activity listeners that run notifies
+/// may write signals: that is outside `build`, where the runtime refuses a
+/// write.
+pub(crate) fn a_command_queued_before_mount_is_serviced_outside_build() {
+    let mut laid = lay_out(SizedBox::square(1.0), tight(300.0, 300.0));
+    let vsync = Vsync::new();
+    laid.adopt_vsync(vsync.clone()).expect("clock admission");
+    let reactive = laid.with_build_owner_mut(|owner| owner.reactive().clone());
+    let signal = reactive.signal(0u32);
+    let controller = ScrollController::new();
+    // Room to scroll, so the command moves something.
+    controller
+        .update_dimensions(300.0, 0.0, 500.0)
+        .expect("ordered extents");
+    let outcome = Rc::new(Cell::new(None));
+    let seen = Rc::clone(&outcome);
+    let writer = reactive;
+    let _listener = controller
+        .position()
+        .add_activity_listener(Rc::new(move || {
+            seen.set(Some(signal.set(&writer, 1)));
+        }));
+    controller.animate_to(100.0, Duration::from_secs(1), ArcCurve::new(curves::LINEAR));
+    assert_eq!(outcome.get(), None, "nothing serves the command yet");
+
+    laid.pump_widget(VsyncScope::new(
+        vsync,
+        Scrollable::new()
+            .controller(controller)
+            .child(SizedBox::new(300.0, 800.0)),
+    ));
+
+    assert_eq!(
+        outcome.get(),
+        Some(Ok(())),
+        "the run started and its listener wrote a signal"
+    );
 }

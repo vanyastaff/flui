@@ -68,6 +68,9 @@ pub enum LifecycleHook {
     /// `ViewState::init_state`, run once during the first build-scope drain,
     /// immediately before the first build.
     InitState,
+    /// `ViewState::apply_view`, run right before a build that follows a first
+    /// mount, a new view configuration or a dependency change.
+    ApplyView,
     /// `ViewState::did_change_dependencies`, run when an ancestor
     /// `InheritedView` this element depends on notifies a change.
     DidChangeDependencies,
@@ -118,6 +121,7 @@ impl fmt::Display for LifecycleHook {
         f.write_str(match self {
             Self::Build => "build",
             Self::InitState => "init_state",
+            Self::ApplyView => "apply_view",
             Self::DidChangeDependencies => "did_change_dependencies",
             Self::Mount => "mount",
             Self::Activate => "activate",
