@@ -77,7 +77,7 @@ impl NodeLinks {
 
     /// Sets the parent ID.
     #[inline]
-    pub fn set_parent(&mut self, parent: Option<RenderId>) {
+    pub(crate) fn set_parent(&mut self, parent: Option<RenderId>) {
         self.parent = parent;
     }
 
@@ -111,24 +111,14 @@ impl NodeLinks {
 
     /// Adds a child ID to the end.
     #[inline]
-    pub fn add_child(&mut self, child: RenderId) {
+    pub(crate) fn add_child(&mut self, child: RenderId) {
         self.children.push(child);
-    }
-
-    /// Inserts a child ID at the given index.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `index > self.child_count()`.
-    #[inline]
-    pub fn insert_child(&mut self, index: usize, child: RenderId) {
-        self.children.insert(index, child);
     }
 
     /// Removes a child ID.
     ///
     /// Returns `true` if the child was found and removed.
-    pub fn remove_child(&mut self, child: RenderId) -> bool {
+    pub(crate) fn remove_child(&mut self, child: RenderId) -> bool {
         if let Some(pos) = self.children.iter().position(|&id| id == child) {
             self.children.remove(pos);
             true
@@ -139,7 +129,7 @@ impl NodeLinks {
 
     /// Removes all children.
     #[inline]
-    pub fn clear_children(&mut self) {
+    pub(crate) fn clear_children(&mut self) {
         self.children.clear();
     }
 

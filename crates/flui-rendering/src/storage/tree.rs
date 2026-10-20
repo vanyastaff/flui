@@ -530,6 +530,19 @@ impl RenderTree {
         }
     }
 
+    /// Appends `child_id` to `parent_id`'s child list and writes nothing
+    /// else: the child's parent link and depth stay as they were.
+    ///
+    /// Produces the torn shapes (a child list naming a removed node, or
+    /// closing a cycle) that the layout walk must survive and that the
+    /// edge primitives refuse to build. Never use it to build a real tree.
+    #[cfg(feature = "testing")]
+    pub fn append_unlinked_child(&mut self, parent_id: RenderId, child_id: RenderId) {
+        if let Some(parent) = self.get_mut(parent_id) {
+            parent.add_child(child_id);
+        }
+    }
+
     /// Drops `child_id` from `parent_id`: removes it from the parent's
     /// children list AND clears the child's parent link in one call — the
     /// inverse of [`adopt_child`](Self::adopt_child).
