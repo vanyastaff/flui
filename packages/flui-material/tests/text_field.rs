@@ -436,7 +436,7 @@ pub fn the_input_purpose_reaches_the_text_store() {
     let mut harness = flui_testing::widgets::harness::mount_with_ime(Theme::new(
         ThemeData::light(),
         SizedBox::new(300.0, 100.0).child(
-            TextField::new(controller.clone())
+            TextField::new(controller)
                 .focus_node(Rc::clone(&focus_node))
                 .input_purpose(TextInputPurpose::Email),
         ),
