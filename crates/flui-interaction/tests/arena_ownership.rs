@@ -485,10 +485,70 @@ pub(crate) fn unclaimed_wins_cancel_no_listener() {
     }
 }
 
+/// A window that counts the frames asked of it.
+struct RedrawCounter(std::sync::atomic::AtomicUsize);
+
+impl RedrawCounter {
+    fn requests(&self) -> usize {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+impl flui_platform_api::PlatformWindow for RedrawCounter {
+    fn id(&self) -> flui_platform_api::WindowId {
+        flui_platform_api::WindowId(1)
+    }
+    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
+        flui_foundation::geometry::Size::new(100, 100)
+    }
+    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
+        flui_foundation::geometry::Size::new(100.0, 100.0)
+    }
+    fn scale_factor(&self) -> f64 {
+        1.0
+    }
+    fn request_redraw(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn is_focused(&self) -> bool {
+        true
+    }
+    fn is_visible(&self) -> bool {
+        true
+    }
+    fn set_cursor(
+        &self,
+        _: flui_platform_api::CursorIcon,
+    ) -> Result<(), flui_platform_api::CursorError> {
+        Ok(())
+    }
+    fn state(&self) -> flui_platform_api::WindowState {
+        let size = self.logical_size();
+        flui_platform_api::WindowState::new(
+            flui_platform_api::WindowGeometry::new(None, size),
+            size,
+        )
+    }
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        Ok(())
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 /// Hover freezes while a moving member owns a contact (ADR-0208 rule 6): no
 /// region is entered or exited, by the dragging mouse or by another one
 /// hovering, until the contact ends; the first refresh after it hit-tests
-/// where each source went.
+/// where each source went, and the end of the latch asks for the frame that
+/// runs it.
 pub(crate) fn hover_freezes_while_a_scroll_is_latched() {
     use flui_interaction::events::PointerButtons;
     use flui_interaction::pointer::{MouseRegionCallbacks, MouseTrackerAnnotation};
@@ -512,6 +572,9 @@ pub(crate) fn hover_freezes_while_a_scroll_is_latched() {
     for (dragging, hovering, frozen_heard, heard) in cases {
         let lane = InteractionLane::try_new().expect("owner lane");
         let binding = GestureBinding::with_clock(Arc::new(ManualClock::new()));
+        let window = Arc::new(RedrawCounter(std::sync::atomic::AtomicUsize::new(0)));
+        let wake: Arc<dyn flui_platform_api::PlatformWindow> = window.clone();
+        flui_interaction::__runtime::set_pointer_capture_wake(&binding, Arc::downgrade(&wake));
         let arena = binding.arena().clone();
         let scroll = DragGestureRecognizer::builder(arena, DragAxis::Horizontal).build();
         let log = Events::default();
@@ -581,6 +644,7 @@ pub(crate) fn hover_freezes_while_a_scroll_is_latched() {
             send(hover(80.0));
         }
         let frozen: Vec<_> = log.borrow().clone();
+        let requested = window.requests();
         send(
             make_up_event_for_id_with_button(
                 contact,
@@ -591,6 +655,10 @@ pub(crate) fn hover_freezes_while_a_scroll_is_latched() {
             .expect("finite up"),
         );
         assert!(!binding.is_hover_frozen(), "{dragging:?}");
+        assert!(
+            window.requests() > requested,
+            "{dragging:?}: the latch's end asks for the frame whose refresh catches hover up"
+        );
         lane.enter(|| {
             binding
                 .mouse_tracker()
