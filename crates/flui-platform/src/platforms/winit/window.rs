@@ -562,20 +562,20 @@ impl WinitWindow {
 
     /// Make the window visible, ending a wait for the first frame. Every change
     /// of the native window's visibility is made holding `reveal_pending`, so a
-    /// reveal and a hide from two threads cannot interleave their halves.
+    /// reveal and a hide from two threads cannot interleave their halves. The
+    /// caller publishes the state and reports the visibility once its own
+    /// native work is done, so a callback that hides or minimizes the window
+    /// again is not undone by the rest of a show.
     fn make_visible(&self) {
-        {
-            let mut pending = self.reveal_pending.lock();
-            *pending = false;
-            self.map_window();
+        let mut pending = self.reveal_pending.lock();
+        if *pending || !*self.is_visible.lock() {
             // An occlusion belongs to the mapping that ended; X reports the
-            // new one's.
+            // new one's. A window that stays mapped keeps the one it has.
             self.occluded.store(false, Ordering::Release);
-            *self.is_visible.lock() = true;
         }
-        // The snapshot first, so the report never runs ahead of `state()`.
-        self.refresh_state();
-        self.report_visibility();
+        *pending = false;
+        self.map_window();
+        *self.is_visible.lock() = true;
     }
 
     /// Map the window, which is unmapped and holds `reveal_pending`: fitted to
@@ -591,15 +591,12 @@ impl WinitWindow {
     }
 
     /// Hide the window. A hidden window has no first frame to wait for.
+    /// Like [`Self::make_visible`], the caller publishes and reports.
     fn make_hidden(&self) {
-        {
-            let mut pending = self.reveal_pending.lock();
-            *pending = false;
-            self.window.set_visible(false);
-            *self.is_visible.lock() = false;
-        }
-        self.refresh_state();
-        self.report_visibility();
+        let mut pending = self.reveal_pending.lock();
+        *pending = false;
+        self.window.set_visible(false);
+        *self.is_visible.lock() = false;
     }
 }
 
@@ -808,7 +805,10 @@ impl PlatformWindow for WinitWindow {
             // `admit` refuses a command this window does not know.
             _ => return Err(WindowCommandError::Unsupported),
         }
+        // The snapshot first, so a visibility report never runs ahead of
+        // `state()`; both after the command's native work.
         self.refresh_state();
+        self.report_visibility();
         Ok(())
     }
 
@@ -823,6 +823,8 @@ impl PlatformWindow for WinitWindow {
         self.make_visible();
         self.window.set_minimized(false);
         self.window.focus_window();
+        self.refresh_state();
+        self.report_visibility();
         Ok(())
     }
 

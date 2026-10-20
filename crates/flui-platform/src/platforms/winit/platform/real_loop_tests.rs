@@ -1283,7 +1283,10 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
 mod x11_window {
     use flui_foundation::geometry::Point;
     use x11rb::{
-        protocol::xproto::{AtomEnum, ConnectionExt as _, MapState, PropMode},
+        connection::Connection as _,
+        protocol::xproto::{
+            AtomEnum, ConnectionExt as _, CreateWindowAux, MapState, PropMode, WindowClass,
+        },
         rust_connection::RustConnection,
         wrapper::ConnectionExt as _,
     };
@@ -1610,7 +1613,53 @@ mod x11_window {
                 &[true, false, true, false, true],
                 "a report of the return",
             );
+
+            // A window of the test's own covers it: winit reports it occluded.
+            let cover = cover_window(server, (800, 600), (480, 424));
+            until_reports(
+                &window,
+                &visibility,
+                &[true, false, true, false, true, false],
+                "a report of the cover",
+            );
+            // A show of a window that stays mapped keeps its occlusion.
+            window.show().expect("a desktop window shows");
+            assert!(!window.state().visible, "still covered");
+            assert_eq!(*visibility.lock(), [true, false, true, false, true, false]);
+            server.destroy_window(cover).expect("request");
+            server.flush().expect("flush");
+            until_reports(
+                &window,
+                &visibility,
+                &[true, false, true, false, true, false, true],
+                "a report of the uncovering",
+            );
         });
+    }
+
+    /// Map a plain window of `connection`'s own at `at` with `size`, above the
+    /// others; a bare server has no window manager to stack it elsewhere.
+    fn cover_window(connection: &RustConnection, at: (i16, i16), size: (u16, u16)) -> u32 {
+        let root = connection.setup().roots[0].root;
+        let cover = connection.generate_id().expect("an id");
+        connection
+            .create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                cover,
+                root,
+                at.0,
+                at.1,
+                size.0,
+                size.1,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                x11rb::COPY_FROM_PARENT,
+                &CreateWindowAux::new(),
+            )
+            .expect("request");
+        connection.map_window(cover).expect("request");
+        connection.flush().expect("flush");
+        cover
     }
 
     /// A window that opens maximized waits unmapped for its first frame, and
