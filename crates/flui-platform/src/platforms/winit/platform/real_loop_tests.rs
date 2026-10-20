@@ -1208,17 +1208,35 @@ mod x11_window {
         }
     }
 
-    /// Poll (bounded, 5 s) until the visibility reports are `expected`.
-    fn until_reports(reports: &Mutex<Vec<bool>>, expected: &[bool], what: &str) {
+    /// Poll (bounded, 5 s) until the last visibility report is what the window
+    /// answers now, and that is `expected` when given; no report repeats the
+    /// one before it. The suite's tests share one X server, so another test's
+    /// window may cover this one and be reported as well.
+    fn until_reported(
+        window: &Arc<dyn HostWindow>,
+        reports: &Mutex<Vec<bool>>,
+        expected: Option<bool>,
+        what: &str,
+    ) {
         let deadline = Instant::now() + Duration::from_secs(5);
-        while reports.lock().as_slice() != expected {
+        loop {
+            let visible = window.is_visible();
+            let last = reports.lock().last().copied();
+            if last == Some(visible) && expected.is_none_or(|expected| expected == visible) {
+                break;
+            }
             assert!(
                 Instant::now() < deadline,
-                "timed out waiting for {what}; reports {:?}",
+                "timed out waiting for {what}; visible {visible}, reports {:?}",
                 reports.lock()
             );
             thread::sleep(Duration::from_millis(10));
         }
+        let reports = reports.lock();
+        assert!(
+            reports.windows(2).all(|pair| pair[0] != pair[1]),
+            "a report repeats the one before it: {reports:?}"
+        );
     }
 
     fn map_state(connection: &RustConnection, id: u32) -> MapState {
@@ -1428,8 +1446,7 @@ mod x11_window {
             assert!(changes.load(Ordering::SeqCst) > before, "a notification");
             assert!(!window.state().visible, "a minimized window is not visible");
             // The report follows the publication on whichever thread made it.
-            until_reports(&visibility, &[false], "one report of the hiding");
-            assert!(!window.is_visible());
+            until_reported(&window, &visibility, Some(false), "a report of the hiding");
             assert_eq!(
                 window.state().normal_geometry.map(|geometry| geometry.size),
                 Some(Size::new(400.0, 300.0)),
@@ -1454,9 +1471,9 @@ mod x11_window {
                 Some(Size::new(400.0, 300.0)),
                 "it returns to the size it had in normal mode"
             );
-            assert!(window.state().visible);
-            until_reports(&visibility, &[false, true], "a report of the return");
-            assert!(window.is_visible());
+            // Visible again, unless another test's window now covers it.
+            until_reported(&window, &visibility, None, "a report of the return");
+            assert_eq!(window.state().visible, window.is_visible());
         });
     }
 
