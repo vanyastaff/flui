@@ -526,13 +526,23 @@ impl fmt::Debug for MouseRegionCallbacks {
 
 struct HandlerCell {
     current: RefCell<PointerHandler>,
+    /// Unregistered: a route resolved before still owes the target its
+    /// contact's end (ADR-0164), and nothing else.
+    retired: Cell<bool>,
 }
 
 impl HandlerCell {
     fn new(handler: PointerHandler) -> Self {
         Self {
             current: RefCell::new(handler),
+            retired: Cell::new(false),
         }
+    }
+
+    /// Whether this target still hears `event`: a retired one hears only
+    /// the Up or Cancel that ends a contact it was routed.
+    fn hears(&self, event: &PointerEvent) -> bool {
+        !self.retired.get() || matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
     }
 
     fn snapshot(&self) -> PointerHandler {
@@ -774,7 +784,7 @@ impl ResolvedHitRoute {
             {
                 continue;
             }
-            if entry.owner.is_closed() {
+            if entry.owner.is_closed() || !entry.handler_cell.hears(event) {
                 continue;
             }
             let local_event = match &entry.local_transform {
@@ -1624,7 +1634,8 @@ impl InteractionDispatchHandle {
         Ok(())
     }
 
-    /// Remove a target from future route resolution.
+    /// Remove a target from future route resolution. A route already resolved
+    /// over it delivers it only the Up or Cancel that ends its contact.
     pub fn unregister_pointer(
         &self,
         target: PointerTarget,
@@ -1636,6 +1647,7 @@ impl InteractionDispatchHandle {
             .borrow_mut()
             .remove(&target.target_id)
             .ok_or(InteractionDispatchError::TargetGone)?;
+        removed.retired.set(true);
         lane.target_owners.borrow_mut().remove(&target.target_id);
         drop(removed);
         Ok(())
