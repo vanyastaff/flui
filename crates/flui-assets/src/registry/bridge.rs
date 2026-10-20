@@ -2,14 +2,17 @@
 //!
 //! FLUI's view layer polls futures cooperatively on its own local scheduler
 //! (`flui-scheduler`'s `AsyncDriver`), not tokio — but the decode path this
-//! module bridges to (`ImageAsset::load`) is a genuine `tokio::fs` read plus a
-//! CPU-bound decode. Rather than require every host application to already
-//! run a tokio runtime, [`AssetRegistry`](super::AssetRegistry) owns one: a
-//! single-worker, named background runtime, started lazily on the first call
-//! that needs it. A host that already runs tokio can inject its [`Handle`]
+//! module bridges to is a genuine `tokio::fs` read or HTTP request plus a
+//! CPU-bound decode on the runtime's blocking pool. Rather than require every
+//! host application to already run a tokio runtime,
+//! [`AssetRegistry`](super::AssetRegistry) owns one: a single-worker, named
+//! background runtime whose blocking pool is sized to the registry's decode
+//! threads, started lazily on the first call that needs it. A host that already runs tokio can inject its [`Handle`]
 //! instead via `AssetRegistryBuilder::with_runtime_handle`. Ambient current-thread
 //! runtimes are not selected: entering one does not drive its queued tasks.
 //! Starting an owned runtime is fallible; a failed attempt can be retried.
+
+use std::num::NonZeroUsize;
 
 use parking_lot::Mutex;
 use tokio::runtime::{Builder, Handle, Runtime, RuntimeFlavor};
@@ -40,12 +43,19 @@ pub(crate) struct BridgeRuntime {
     /// Started lazily when neither an injected nor an ambient multi-thread
     /// handle is available; reused for subsequent calls with the same fallback.
     owned: Mutex<Option<Runtime>>,
+    /// Blocking threads the owned runtime may start: one per permitted decode,
+    /// plus [`IO_BLOCKING_THREADS`] so file reads are not queued behind them.
+    blocking_threads: usize,
 }
 
+/// Blocking threads the owned runtime keeps for `tokio::fs` beside decodes.
+const IO_BLOCKING_THREADS: usize = 2;
+
 impl BridgeRuntime {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(decode_threads: NonZeroUsize) -> Self {
         Self {
             owned: Mutex::new(None),
+            blocking_threads: decode_threads.get().saturating_add(IO_BLOCKING_THREADS),
         }
     }
 
@@ -65,6 +75,7 @@ impl BridgeRuntime {
         self.resolve_owned_with(|| {
             Builder::new_multi_thread()
                 .worker_threads(1)
+                .max_blocking_threads(self.blocking_threads)
                 .thread_name(WORKER_THREAD_NAME)
                 .enable_all()
                 .build()
@@ -121,7 +132,7 @@ mod tests {
             .expect("building a runtime must succeed");
         let injected_handle = source.handle().clone();
 
-        let bridge = BridgeRuntime::new();
+        let bridge = BridgeRuntime::new(std::num::NonZeroUsize::MIN);
         let resolved = bridge
             .resolve(Some(&injected_handle))
             .expect("injected handle resolves");
@@ -143,7 +154,7 @@ mod tests {
     /// first result) and fall back to its own durable owned runtime instead
     /// of returning a handle that will silently drop every future spawn.
     fn resolve_does_not_reuse_a_since_shut_down_ambient_handle() {
-        let bridge = BridgeRuntime::new();
+        let bridge = BridgeRuntime::new(std::num::NonZeroUsize::MIN);
 
         let ambient = Builder::new_multi_thread()
             .worker_threads(1)
@@ -180,7 +191,7 @@ mod tests {
     /// scope inside a spawned task. Before the `shutdown_background` fix,
     /// `Runtime`'s default blocking `Drop` panicked here.
     fn dropping_from_inside_its_own_task_does_not_panic() {
-        let bridge = BridgeRuntime::new();
+        let bridge = BridgeRuntime::new(std::num::NonZeroUsize::MIN);
         // No ambient context in this plain #[test] fn and no injection, so
         // this starts (and owns) a runtime.
         let handle = bridge.resolve(None).expect("owned runtime starts");
@@ -208,7 +219,7 @@ mod tests {
     }
 
     fn failed_runtime_creation_is_typed_and_retryable() {
-        let bridge = BridgeRuntime::new();
+        let bridge = BridgeRuntime::new(std::num::NonZeroUsize::MIN);
         let failure =
             bridge.resolve_owned_with(|| Err(std::io::Error::other("worker unavailable")));
         assert!(

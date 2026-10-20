@@ -1094,11 +1094,15 @@ paint commands, including RTL and obscured cases.
 
 ### Network responses belong to their registry
 
-`NetworkImage` includes its registry's weak allocation identity in both decoded
-cache and pending-load keys (ADR-0118). HTTP headers and policies can change the
-response at the same URL; different registries must not share those responses.
-Clones sharing one registry still share keys. Retained keys cannot retain the
-registry's HTTP pool or runtime, and their addresses cannot alias a later owner.
+The registry keeps the decoded images and the loads in flight (ADR-0248), so
+`AssetImage` and `NetworkImage` share a decode only with providers on the same
+registry. Their `ImageCacheKey` holds the registry's weak allocation identity
+beside the source (ADR-0118): HTTP headers and policies can change the response
+at the same URL, and equal paths in two registries are two images. Clones sharing
+one registry still share keys. Retained keys cannot retain the registry's HTTP
+pool or runtime, and their addresses cannot alias a later owner. A custom
+provider keys by a typed value (`ImageCacheKey::custom`), never equal to a
+built-in key or to a value of another type.
 **Test:** `network_images_scope_cached_and_pending_responses_to_the_registry`.
 
 ### 1. `DropTarget` registers one `DropReceiver` for its whole life
@@ -3560,31 +3564,19 @@ Raw text-store/IME scalar selection remains exact under ADR-0090.
 **Tests:** `insertion_keeps_the_caret_after_the_joined_combining_cluster`,
 `deleting_a_separator_keeps_the_caret_after_the_joined_flag`.
 
-### Decoded cache admission rechecks completed images and owns eviction
+### Async images probe their provider and let the registry own the cache
 
-`AssetImage::resolve_async` and `NetworkImage::resolve_async` probe the completed
-LRU while holding the pending-load admission guard. A completion between the
-widget's earlier miss and its subscription therefore does not start another
-load. Completed hits use `get` to refresh recency; a still-pending slot shares
-its existing future. Neither hit invokes a replacement loader. Incoming unused
-loader captures are retired after releasing both infrastructure guards.
+`Image` probes `ImageProvider::cached` before it starts a load, so an image the
+provider already holds renders in the same frame. For `AssetImage` and
+`NetworkImage` that probe and the load both go to the asset registry, which
+keeps decoded images within a byte budget, coalesces loads and cancels a load
+when its last waiter is dropped (`flui-assets`' ARCHITECTURE.md). Eviction
+cannot invalidate a pixel handle held by an already displayed image.
 
-LRU insertion uses `push`, which returns a replaced or evicted entry, rather
-than `put`, which destroys capacity evictions internally. The entry is retired
-after unlocking so a last pixel buffer is not freed while other cache probes
-wait. Current image/key types have no user destructor callback; this is an
-ownership and lock-duration decision. Nonzero capacity is represented by the
-type. The bound counts cached entries, and eviction cannot invalidate a pixel
-handle held by an already displayed image.
-
-**Tests:**
+**Test:**
 `asset_image_async_reuses_completed_decodes_after_cold_failure_recovery`
 removes the actual source after decoding and repeats async resolution, including
 cold failure followed by recovery.
-`decoded_cache_promotes_hits_and_preserves_displayed_pixels_after_eviction`
-uses a private local cache because production capacity is not a consumer
-contract. `decode_cache_coalescing_contracts` exercises unused capture reentry
-through the public asset provider on completed and pending hits.
 
 ## Controlled catalog inputs
 

@@ -35,6 +35,8 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use flui_foundation::memory::MemoryPressureLevel;
+
 use wgpu::{
     Device, Extent3d, Origin3d, Queue, TexelCopyBufferLayout, TexelCopyTextureInfo,
     TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
@@ -101,6 +103,10 @@ pub(crate) struct CachedTexture {
     pub view: TextureView,
     /// Number of times this texture has been used
     pub use_count: usize,
+    /// Whether the last finished frame drew this texture: what a moderate
+    /// memory-pressure trim keeps between frames, when every `use_count` has
+    /// been reset.
+    pub drawn_last_frame: bool,
     /// Size in bytes (for memory tracking)
     pub size_bytes: usize,
     /// UV rectangle for atlas entries.
@@ -124,6 +130,7 @@ impl CachedTexture {
         Self {
             view,
             use_count: 0,
+            drawn_last_frame: false,
             size_bytes,
             uv_rect: None,
         }
@@ -138,6 +145,7 @@ impl CachedTexture {
         Self {
             view: atlas_view,
             use_count: 0,
+            drawn_last_frame: false,
             size_bytes,
             uv_rect: Some(uv_rect),
         }
@@ -421,7 +429,29 @@ impl TextureCache {
     /// frame's counts — see [`Self::end_frame_maintenance`].
     pub(crate) fn reset_use_counters(&mut self) {
         for texture in self.textures.values_mut() {
+            texture.drawn_last_frame = texture.use_count > 0;
             texture.use_count = 0;
+        }
+    }
+
+    /// Give back GPU textures the next frames can upload again, for `level`.
+    ///
+    /// [`Moderate`](MemoryPressureLevel::Moderate) evicts the standalone
+    /// textures the last frame did not draw; the atlas, whose slots are not
+    /// freed one by one, stays. [`Critical`](MemoryPressureLevel::Critical)
+    /// evicts every texture and resets the atlas. Each key holds its source
+    /// image, so eviction also releases the decoded pixels the cache pinned;
+    /// a texture still on screen is uploaded again from the scene's own image
+    /// on the next frame. Call between frames, after the last submit:
+    /// submitted GPU work keeps the textures it reads alive.
+    pub(crate) fn reclaim(&mut self, level: MemoryPressureLevel) {
+        if level == MemoryPressureLevel::Moderate {
+            self.textures
+                .retain(|_, texture| texture.is_atlas_entry() || texture.drawn_last_frame);
+        } else {
+            self.textures.clear();
+            self.atlas.reset();
+            self.atlas_full = false;
         }
     }
 

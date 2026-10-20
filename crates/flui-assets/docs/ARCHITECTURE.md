@@ -461,8 +461,52 @@ matrix because the public font loader cannot deterministically suspend at each
 IO/cancellation/panic boundary. It invokes the actual private Moka helper and
 pins one accepted initializer, shared data/error, waiter restart and next hit.
 
-Bridged image loads bypass typed caching and retain the widget LRU's synchronous
-frame-path probe and subscriber-lifetime contract.
+### Bridged images are kept, shared and cancelled by their registry
+
+Bridged image loads (`load_image_bridged`, `load_network_image_bridged`) bypass
+typed caching. Each registry keeps their decoded images in its own LRU, bounded
+by pixel bytes (`with_decoded_image_budget`; 256 MiB, 64 MiB on Android, iOS and
+the web); an image larger than the budget is handed to its waiters and not kept.
+`cached_image` is the synchronous probe a frame makes before it starts a load.
+There is no process-wide image cache, so equal sources in two registries are two
+images (ADR-0248).
+
+A request for a source already loading joins that load. Every `ImageLoad`
+waiting on it is a subscriber; when the last one is dropped the pending entry is
+removed, its ticket cancelled and its task aborted, so the read or request stops
+and the decode never starts. The ticket's allocation is the load's identity: a
+task finishing after its entry was abandoned or replaced compares tickets and
+leaves the newer entry alone. A task that panics or is dropped by its runtime
+settles its entry from a drop guard, closing its waiters with an error.
+
+Bytes are read on the loading runtime's async workers and decoded on its
+blocking pool, at most `with_decode_threads` at once (half the cores, at most
+four). A host runtime's async workers never run a decode. Permits are taken in
+request order; a load abandoned while it waited for one skips the decode.
+
+One mutex guards the cache and the pending map. Senders are completed, aborts
+issued, tasks spawned and evicted pixels freed after it is released: a runtime
+that has shut down drops a task inside `spawn`, and that drop settles its entry
+through the same lock.
+
+Under memory pressure the registry trims decoded images to half the budget
+(moderate) or drops them all (critical); loads in flight are left alone.
+
+`decoded_images_stay_within_their_byte_budget_and_give_back_under_pressure`
+pins byte eviction, the over-budget image and both pressure levels.
+`an_image_request_lives_exactly_as_long_as_someone_waits_for_it` pins coalescing
+onto one HTTP connection, which stays open while one waiter remains and closes
+when the last is dropped. The separate `image_decode_scheduling` target, which
+registers real decoder hooks, runs
+`bridged_decodes_leave_a_host_runtimes_async_workers_free` (a decode waits for a
+task on the host runtime's only worker) and
+`abandoned_loads_never_decode_and_do_not_delay_a_live_one` (one decode thread:
+five loads abandoned behind a running decode never decode, and the live load
+queued after them decodes next).
+
+`NetworkLoader::new` gives up on a connection after `CONNECT_TIMEOUT` and on a
+silent response after `READ_TIMEOUT`; `load_url` refuses a body over
+`MAX_BODY_BYTES`.
 
 ### Observation and invalidation have distinct effects
 

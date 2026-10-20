@@ -381,11 +381,11 @@ futures-core = { version = "0.3", default-features = false, features = ["std"] }
 # also needs StreamExt to await portal notifications on its existing executor.
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 
-# Count-bounded LRU — flui-widgets' decoded-image cache
-# (`flui_widgets::image`'s sync probe before spawning an async load). No
-# time-based eviction. flui-assets' Moka cache stores typed loaded results,
-# including decoded images, with configurable expiration. Widget image
-# bridges bypass that cache and use this synchronous frame-path probe.
+# Recency order for each asset registry's byte-budgeted decoded-image cache
+# (`flui_assets::registry::images`), the one a frame probes synchronously
+# before starting a bridged image load. No time-based eviction. flui-assets'
+# Moka cache stores typed loaded results with configurable expiration; bridged
+# image loads use this cache instead.
 lru = "0.18.5"
 
 # CLIPBOARD - Cross-platform clipboard access

@@ -27,6 +27,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
 use flui_assets::AssetRegistryBuilder;
+use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
 
 /// Absolute path to the committed 4x2 RGBA fixture PNG (shared with
 /// `image_asset_integration.rs`).
@@ -124,6 +125,121 @@ fn entered_current_thread_runtime_does_not_trap_bridged_loads() {
     let _entered = runtime.enter();
     // No Runtime::block_on: the ambient runtime never drives its queue.
     load_image_bridged_reports_a_missing_file_as_an_error_not_a_hang();
+}
+
+/// Copies of the 4x2 fixture (32 decoded bytes each) under distinct paths, in
+/// a directory removed on drop.
+struct FixtureCopies(std::path::PathBuf);
+
+/// Decoded bytes of one fixture image.
+const FIXTURE_BYTES: usize = 4 * 2 * 4;
+
+impl FixtureCopies {
+    fn new(name: &str) -> Self {
+        let directory = std::env::temp_dir().join(format!(
+            "flui-assets-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock is after the epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).expect("test directory is created");
+        Self(directory)
+    }
+
+    fn copy(&self, name: &str) -> String {
+        let path = self.0.join(name);
+        std::fs::copy(fixture_path(), &path).expect("fixture is copied");
+        path.to_string_lossy().into_owned()
+    }
+}
+
+impl Drop for FixtureCopies {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn budgeted(bytes: usize) -> flui_assets::AssetRegistry {
+    AssetRegistryBuilder::new()
+        .with_default_capacity()
+        .with_decoded_image_budget(bytes)
+        .build()
+}
+
+fn is_kept(registry: &flui_assets::AssetRegistry, path: &str) -> bool {
+    registry
+        .cached_image(&flui_assets::ImageSource::Asset(path.into()))
+        .is_some()
+}
+
+fn budget_evicts_the_least_recently_used_image() {
+    let files = FixtureCopies::new("budget");
+    let registry = budgeted(2 * FIXTURE_BYTES);
+    let [a, b, c] = ["a.png", "b.png", "c.png"].map(|name| files.copy(name));
+    for path in [&a, &b, &c] {
+        block_on(registry.load_image_bridged(path.as_str())).expect("fixture decodes");
+    }
+    assert!(
+        !is_kept(&registry, &a),
+        "the oldest image goes past the budget"
+    );
+    assert!(is_kept(&registry, &b) && is_kept(&registry, &c));
+}
+
+fn an_image_over_the_budget_is_returned_but_not_kept() {
+    let files = FixtureCopies::new("over-budget");
+    let registry = budgeted(FIXTURE_BYTES - 1);
+    let path = files.copy("large.png");
+    let image = block_on(registry.load_image_bridged(path.as_str())).expect("fixture decodes");
+    assert_eq!((image.width(), image.height()), (4, 2));
+    assert!(!is_kept(&registry, &path));
+}
+
+fn trims_by_pressure_level(level: MemoryPressureLevel, older_kept: bool, newer_kept: bool) {
+    let files = FixtureCopies::new("pressure");
+    let registry = budgeted(2 * FIXTURE_BYTES);
+    let [older, newer] = ["older.png", "newer.png"].map(|name| files.copy(name));
+    for path in [&older, &newer] {
+        block_on(registry.load_image_bridged(path.as_str())).expect("fixture decodes");
+    }
+
+    registry.reclaim(level);
+
+    assert_eq!(is_kept(&registry, &older), older_kept, "{level:?}");
+    assert_eq!(is_kept(&registry, &newer), newer_kept, "{level:?}");
+    let reloaded = block_on(registry.load_image_bridged(older.as_str())).expect("reloads");
+    assert_eq!((reloaded.width(), reloaded.height()), (4, 2));
+}
+
+fn moderate_pressure_trims_to_half_the_budget() {
+    trims_by_pressure_level(MemoryPressureLevel::Moderate, false, true);
+}
+
+fn critical_pressure_drops_every_image() {
+    trims_by_pressure_level(MemoryPressureLevel::Critical, false, false);
+}
+
+/// A registry keeps decoded images within its byte budget, least recently used
+/// first, and gives them back under memory pressure by level.
+#[test]
+fn decoded_images_stay_within_their_byte_budget_and_give_back_under_pressure() {
+    crate::cases::run_cases(&[
+        (
+            "budget evicts the least recent",
+            budget_evicts_the_least_recently_used_image,
+        ),
+        (
+            "an image over the budget",
+            an_image_over_the_budget_is_returned_but_not_kept,
+        ),
+        (
+            "moderate pressure",
+            moderate_pressure_trims_to_half_the_budget,
+        ),
+        ("critical pressure", critical_pressure_drops_every_image),
+    ]);
 }
 
 /// The bridge end to end with no ambient runtime: the success path decodes and

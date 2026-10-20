@@ -1,6 +1,8 @@
 //! The memory the host gives back when the system asks for it (ADR-0237
 //! decision 9): the receivers the application registered
-//! ([`AppConfig::with_memory_reclaim`]) and the GPU memory behind each raster lane.
+//! ([`AppConfig::with_memory_reclaim`]), among them the asset registry that
+//! keeps decoded images, and the GPU memory behind each raster lane: pooled
+//! buffers, the glyph atlas and image textures.
 //!
 //! One [`HostMemory`] per host is reclaimed once per notice, however many
 //! windows it has, and a window opened later is reached along with the lanes and

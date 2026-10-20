@@ -3917,3 +3917,65 @@ fn trim_evicts_free_buffers_by_level() {
         );
     }
 }
+
+/// Between frames, a moderate trim evicts the image textures the last frame
+/// did not draw and keeps the atlas; a critical one evicts every texture and
+/// empties the atlas, releasing the pixels the cache pinned.
+#[test]
+fn trim_evicts_image_textures_by_level() {
+    use crate::texture_cache::TextureKey;
+    use flui_foundation::memory::MemoryPressureLevel;
+    use flui_painting::paint::Image;
+
+    // Above the atlas's largest dimension, so standalone textures.
+    const SIDE: u32 = 300;
+    let standalone =
+        |shade: u8| Image::from_rgba8(SIDE, SIDE, vec![shade; (SIDE * SIDE * 4) as usize]);
+    let icon = Image::from_rgba8(8, 8, vec![9; 8 * 8 * 4]);
+    for (level, kept_bytes) in [
+        (
+            MemoryPressureLevel::Moderate,
+            (SIDE * SIDE * 4 + 8 * 8 * 4) as usize,
+        ),
+        (MemoryPressureLevel::Critical, 0),
+    ] {
+        let (device, queue) = test_device_and_queue();
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            wgpu::TextureFormat::Rgba8Unorm,
+            (64, 64),
+        );
+        let drawn = standalone(1);
+        let hidden = standalone(2);
+        let cache = painter.resources.texture_cache_mut();
+        for image in [&drawn, &hidden, &icon] {
+            cache
+                .load_from_rgba(
+                    TextureKey::from_image(image),
+                    image.width(),
+                    image.height(),
+                    image.data(),
+                )
+                .expect("texture uploads");
+        }
+        // The last frame drew `drawn` and the icon, not `hidden`.
+        cache.get(&TextureKey::from_image(&drawn));
+        cache.get(&TextureKey::from_image(&icon));
+        cache.end_frame_maintenance();
+
+        painter.reclaim(level);
+
+        let cache = painter.resources.texture_cache_mut();
+        assert_eq!(cache.memory_bytes(), kept_bytes, "{level:?}");
+        assert_eq!(
+            cache.get(&TextureKey::from_image(&drawn)).is_some(),
+            level == MemoryPressureLevel::Moderate,
+            "{level:?} keeps a texture on screen only under moderate pressure"
+        );
+        assert!(
+            cache.get(&TextureKey::from_image(&hidden)).is_none(),
+            "{level:?} evicts a texture the last frame did not draw"
+        );
+    }
+}

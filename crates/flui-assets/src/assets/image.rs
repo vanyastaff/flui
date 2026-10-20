@@ -67,6 +67,31 @@ impl ImageAsset {
     }
 }
 
+/// Decodes encoded image bytes into RGBA8 pixels, synchronously.
+///
+/// CPU-bound: the registry's bridged loads run it on a blocking thread, never
+/// on an async worker.
+pub(crate) fn decode_rgba8(
+    path: &str,
+    bytes: &[u8],
+) -> Result<flui_painting::paint::Image, AssetError> {
+    let img = image::load_from_memory(bytes).map_err(|e| AssetError::LoadFailed {
+        path: path.to_owned(),
+        reason: format!("Failed to decode image: {e}"),
+    })?;
+
+    let rgba = img.into_rgba8();
+    let (width, height) = rgba.dimensions();
+    let data = rgba.into_raw();
+
+    flui_painting::paint::Image::try_from_rgba8(width, height, data).map_err(|e| {
+        AssetError::LoadFailed {
+            path: path.to_owned(),
+            reason: format!("Decoded image is malformed: {e}"),
+        }
+    })
+}
+
 impl Asset for ImageAsset {
     type Data = flui_painting::paint::Image;
     type Key = AssetKey;
@@ -89,25 +114,7 @@ impl Asset for ImageAsset {
             )
         };
 
-        {
-            // Decode image using image crate
-            let img = image::load_from_memory(&bytes).map_err(|e| AssetError::LoadFailed {
-                path: self.path.to_string(),
-                reason: format!("Failed to decode image: {e}"),
-            })?;
-
-            // Convert to RGBA8
-            let rgba = img.into_rgba8();
-            let (width, height) = rgba.dimensions();
-            let data = rgba.into_raw();
-
-            flui_painting::paint::Image::try_from_rgba8(width, height, data).map_err(|e| {
-                AssetError::LoadFailed {
-                    path: self.path.to_string(),
-                    reason: format!("Decoded image is malformed: {e}"),
-                }
-            })
-        }
+        decode_rgba8(&self.path, &bytes)
     }
 
     fn metadata(&self) -> Option<AssetMetadata> {
