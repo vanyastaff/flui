@@ -33,8 +33,8 @@ pub use fields::{
 };
 pub use render::{Ansi, Plain, Role, Style, render, style_for};
 pub use snapshot::{
-    FieldError, FromField, MatchError, Matches, OwnedField, OwnedValue, SnapshotError,
-    SnapshotNode, SnapshotQuery, Variant, snapshot,
+    FieldError, FromField, INSPECT_FAILED, MatchError, Matches, OwnedField, OwnedValue,
+    SnapshotError, SnapshotNode, SnapshotQuery, Variant, snapshot,
 };
 pub use tree::{InspectId, InspectTree, Link, Links, NodeView, SceneLayer};
 pub use type_name::{kind_args_of, kind_of};

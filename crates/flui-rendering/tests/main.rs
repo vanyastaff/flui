@@ -32,6 +32,9 @@ mod layout_dirty_root;
 #[path = "layout_poison.rs"]
 mod layout_poison;
 
+#[path = "render_inspect_reentry.rs"]
+mod render_inspect_reentry;
+
 #[path = "retained_boundary_layers.rs"]
 mod retained_boundary_layers;
 
