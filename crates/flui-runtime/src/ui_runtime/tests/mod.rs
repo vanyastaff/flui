@@ -438,6 +438,7 @@ fn ui_runtime_and_presentation_isolation_matrix() {
             ("addressed_input_routing::an_unfocused_snapshot_forgets_held_keys", addressed_input_routing::an_unfocused_snapshot_forgets_held_keys as fn()),
             ("addressed_input_routing::a_sibling_gaining_focus_forgets_held_keys", addressed_input_routing::a_sibling_gaining_focus_forgets_held_keys as fn()),
             ("addressed_input_routing::a_sibling_snapshot_forgets_held_keys", addressed_input_routing::a_sibling_snapshot_forgets_held_keys as fn()),
+            ("addressed_input_routing::a_panicking_key_cancel_still_moves_window_focus", addressed_input_routing::a_panicking_key_cancel_still_moves_window_focus as fn()),
             ("async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach", async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach as fn()),
             ("closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical", closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical as fn()),
             ("closing_one_presentation_is_invisible_to_siblings::presentation_close_retirement_failures_preserve_focus_ime_and_siblings", closing_one_presentation_is_invisible_to_siblings::presentation_close_retirement_failures_preserve_focus_ime_and_siblings as fn()),

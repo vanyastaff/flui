@@ -15,7 +15,7 @@ use flui_interaction::PointerDispatch;
 use flui_interaction::events::PointerEventExt;
 use flui_interaction::events::PointerId;
 use flui_interaction::focus::{
-    FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, KeyEventHandler,
+    FocusAttachment, FocusCause, FocusManager, FocusNode, FocusNodeRegistration, KeyEventHandler,
     KeyEventResult, RectProvider,
 };
 use flui_interaction::{ClientToken, ClipboardHandle, TextInputClient, TextInputHandle};
@@ -1281,7 +1281,8 @@ impl FieldSemanticsActions {
             return;
         }
         if let Some(node) = self.live_node().filter(|node| node.can_request_focus()) {
-            let _ = node.request_focus();
+            // Assistive focus is shown, as `Focus` shows it on any control.
+            let _ = node.request_focus_with(FocusCause::Assistive);
         }
     }
 

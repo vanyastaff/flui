@@ -1547,10 +1547,11 @@ impl GestureDetectorState {
     ///
     /// Each handler runs the current callback inside the platform request's
     /// own [`EventCx`], as a pointer or a key would.
-    fn semantics_actions(&self, view: &GestureDetector) -> Option<Semantics> {
-        if view.press.tap.is_none() && view.press.long_press.is_none() {
-            return None;
-        }
+    /// The tap and long-press actions assistive technology can invoke. A
+    /// detector with neither still gets the (empty, contributing nothing)
+    /// annotation, so that setting or clearing `on_tap` keeps the subtree's
+    /// shape and the child's state.
+    fn semantics_actions(&self, view: &GestureDetector) -> Semantics {
         let mut semantics = Semantics::new();
         if view.press.tap.is_some() {
             let (live, mounted) = (Rc::clone(&self.live), Rc::clone(&self.mounted));
@@ -1564,7 +1565,7 @@ impl GestureDetectorState {
                 activate(&live, &mounted, cx, |press| press.long_press.clone());
             });
         }
-        Some(semantics)
+        semantics
     }
 
     /// The raw detector mounting one recognizer per configured slot, each
@@ -1685,10 +1686,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             Some(child) => raw.child(child),
             None => raw,
         };
-        match self.semantics_actions(view) {
-            Some(semantics) => semantics.child(raw).boxed(),
-            None => raw.boxed(),
-        }
+        self.semantics_actions(view).child(raw)
     }
 
     fn dispose(&mut self) {

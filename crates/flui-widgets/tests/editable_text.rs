@@ -207,6 +207,10 @@ pub(crate) mod native_actions {
         );
         fixture.pump();
         assert!(fixture.node.borrow().has_primary_focus());
+        assert!(
+            fixture.node.borrow().has_visible_focus(),
+            "focus assistive technology moved is shown, as on any control"
+        );
         assert_eq!(
             fixture
                 .ui_runtime

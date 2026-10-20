@@ -280,6 +280,7 @@ fn pointer_and_gesture_recognition() {
             ("gesture_detector::unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival", crate::gesture_detector::unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival as fn()),
             ("gesture_detector::viewer_reports_cancelled_then_completed_interactions", crate::gesture_detector::viewer_reports_cancelled_then_completed_interactions as fn()),
             ("gesture_detector::gesture_detector_fires_on_tap_for_a_down_up_on_the_child", crate::gesture_detector::gesture_detector_fires_on_tap_for_a_down_up_on_the_child as fn()),
+            ("gesture_detector::toggling_on_tap_keeps_the_childs_state", crate::gesture_detector::toggling_on_tap_keeps_the_childs_state),
             ("gesture_detector::gesture_detector_recognizes_a_pan_and_suppresses_the_tap", crate::gesture_detector::gesture_detector_recognizes_a_pan_and_suppresses_the_tap),
             ("gesture_detector::a_vertical_drag_slot_claims_only_vertical_motion", crate::gesture_detector::a_vertical_drag_slot_claims_only_vertical_motion),
             ("gesture_detector::two_contacts_released_together_fire_on_multi_tap", crate::gesture_detector::two_contacts_released_together_fire_on_multi_tap),
@@ -450,6 +451,14 @@ fn keyboard_focus_contracts() {
             (
                 "keyboard_focus::routes::pop_restores_the_opening_element",
                 crate::keyboard_focus::routes::pop_restores_the_opening_element,
+            ),
+            (
+                "keyboard_focus::routes::a_panicking_restored_focus_listener_still_closes_the_route",
+                crate::keyboard_focus::routes::a_panicking_restored_focus_listener_still_closes_the_route,
+            ),
+            (
+                "keyboard_focus::routes::a_covered_nested_navigator_does_not_take_the_restored_focus",
+                crate::keyboard_focus::routes::a_covered_nested_navigator_does_not_take_the_restored_focus,
             ),
             (
                 "keyboard_focus::routes::keys_during_transition_reach_only_the_top_route",

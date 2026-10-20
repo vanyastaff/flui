@@ -822,8 +822,12 @@ impl FocusNode {
         }
         self.notify_listeners();
         if focusable {
+            // A first-focus intent a scope inside recorded while this node
+            // forbade it focus (a nested navigator's route, pushed while a
+            // dialog covered this route) is not fulfilled: the scope that
+            // opens restores the focus it remembers instead.
             for child in self.children() {
-                Self::fulfill_pending_first_focus_subtree(&child);
+                Self::forget_pending_first_focus_subtree(&child);
             }
             self.fulfill_pending_first_focus_ancestors();
         }
@@ -1679,6 +1683,16 @@ impl FocusNode {
         }
         for child in node.children() {
             Self::fulfill_pending_first_focus_subtree(&child);
+        }
+    }
+
+    /// Drop the first-focus intents of scopes rooted inside `node`.
+    fn forget_pending_first_focus_subtree(node: &Rc<FocusNode>) {
+        if let Some(scope) = node.as_scope() {
+            scope.pending_first_focus.set(false);
+        }
+        for child in node.children() {
+            Self::forget_pending_first_focus_subtree(&child);
         }
     }
 

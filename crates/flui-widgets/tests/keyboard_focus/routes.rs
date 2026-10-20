@@ -2,8 +2,10 @@
 //! reach only the route on top, and the back and dismiss keys pop the right
 //! route.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
@@ -15,7 +17,9 @@ use flui_testing::MouseScript;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};
 use flui_widgets::interaction::{Actions, ActivateIntent, CallbackAction, Focus};
-use flui_widgets::navigator::{Navigator, NavigatorHandle, PageRoute, PopupRoute, RouteAnimation};
+use flui_widgets::navigator::{
+    Navigator, NavigatorHandle, NavigatorObserver, PageRoute, PopupRoute, RouteAnimation, RouteId,
+};
 use flui_widgets::{Align, AnimatedBuilder, Column, SizedBox};
 
 use super::{chord, down, press, tab, up};
@@ -311,6 +315,112 @@ pub(crate) fn pop_restores_the_opening_element() {
         focused(&harness).as_deref(),
         Some("second"),
         "the focus returns to the element that opened the route"
+    );
+}
+
+/// Records the routes a navigator reports removed.
+#[derive(Default)]
+struct Removals(RefCell<Vec<RouteId>>);
+
+impl NavigatorObserver for Removals {
+    fn did_remove(&self, route: RouteId, _previous: Option<RouteId>) {
+        self.0.borrow_mut().push(route);
+    }
+}
+
+/// Closing a route whose page's restored control has a focus listener that
+/// panics still closes it: the panic reaches the caller, and the observers
+/// hear the removal, the route leaves the overlay, and the keyboard reaches
+/// only the page below.
+pub(crate) fn a_panicking_restored_focus_listener_still_closes_the_route() {
+    let counts = Rc::new(Cell::new(0));
+    let armed = Rc::new(Cell::new(false));
+    let navigator = NavigatorHandle::new();
+    let trap = Rc::clone(&armed);
+    navigator.seed_initial(PageRoute::<i32>::new(move |_, _, _| {
+        let trap = Rc::clone(&trap);
+        Focus::new(SizedBox::new(40.0, 40.0))
+            .debug_label("home")
+            .on_focus_change(move |_, focused| {
+                if focused && trap.replace(false) {
+                    panic!("restored focus listener");
+                }
+            })
+            .into_view()
+            .boxed()
+    }));
+    let removals = Arc::new(Removals::default());
+    navigator.add_observer(Arc::clone(&removals) as Arc<dyn NavigatorObserver>);
+    let mut harness = mount(Navigator::new(navigator.clone()));
+    harness.tick();
+    let manager = harness.focus_manager();
+    assert!(tab(&manager));
+    drop(navigator.push(dialog("dialog", &counts)));
+    settle(&mut harness);
+    assert_eq!(focused(&harness).as_deref(), Some("dialog"));
+
+    let dialog = *navigator.route_ids().last().expect("the dialog is on top");
+    armed.set(true);
+    let payload = catch_unwind(AssertUnwindSafe(|| navigator.remove_route(dialog)))
+        .expect_err("the listener's panic reaches the caller");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"restored focus listener")
+    );
+    assert_eq!(*removals.0.borrow(), [dialog], "observers hear the removal");
+    settle(&mut harness);
+    assert_eq!(navigator.route_ids().len(), 1);
+    manager.unfocus();
+    for _ in 0..3 {
+        assert!(tab(&manager));
+        assert_eq!(
+            focused(&harness).as_deref(),
+            Some("home"),
+            "the closed dialog is no Tab stop"
+        );
+    }
+}
+
+/// A nested navigator whose top changed while a dialog covered its page does
+/// not take the focus when the dialog closes: it returns to the control that
+/// opened the dialog.
+pub(crate) fn a_covered_nested_navigator_does_not_take_the_restored_focus() {
+    let counts = Rc::new(Cell::new(0));
+    let outer = NavigatorHandle::new();
+    let inner = NavigatorHandle::new();
+    inner.seed_initial(page("inner-home", &counts));
+    let (nested, shared) = (inner.clone(), Rc::clone(&counts));
+    outer.seed_initial(PageRoute::<i32>::new(move |_, _, _| {
+        Column::new((
+            control("opener", &shared),
+            SizedBox::new(200.0, 200.0).child(Navigator::new(nested.clone())),
+        ))
+        .into_view()
+        .boxed()
+    }));
+    let mut harness = mount(Navigator::new(outer.clone()));
+    harness.tick();
+    let manager = harness.focus_manager();
+    assert!(tab(&manager));
+    assert_eq!(focused(&harness).as_deref(), Some("opener"));
+
+    drop(outer.push(dialog("dialog", &counts)));
+    settle(&mut harness);
+    assert_eq!(focused(&harness).as_deref(), Some("dialog"));
+    drop(inner.push(page("inner-detail", &counts)));
+    settle(&mut harness);
+    assert_eq!(
+        focused(&harness).as_deref(),
+        Some("dialog"),
+        "the covered page's navigator takes no focus from the dialog"
+    );
+
+    assert!(outer.pop());
+    settle(&mut harness);
+    assert_eq!(
+        focused(&harness).as_deref(),
+        Some("opener"),
+        "the focus returns to the control that opened the dialog"
     );
 }
 
