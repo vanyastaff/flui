@@ -17,7 +17,7 @@
 
 use std::rc::Rc;
 
-use flui_foundation::geometry::{Axis, Offset};
+use flui_foundation::geometry::{Axis, Matrix4, Offset};
 
 use crate::gesture::constraints::DragAxis;
 
@@ -89,10 +89,52 @@ impl PanClaimNode {
     }
 }
 
+/// How a member sees displacement: the linear part of the transform from the
+/// root's space to the member's own, so an axial member measures a rotated or
+/// scaled route along the axis it drags on, not along the root's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MotionFrame {
+    /// Row-major 2 × 2: `local = [a b; c d] · root`.
+    linear: [f64; 4],
+}
+
+impl MotionFrame {
+    /// The root's own space.
+    pub(crate) const IDENTITY: Self = Self {
+        linear: [1.0, 0.0, 0.0, 1.0],
+    };
+
+    /// The frame of a target whose events the root-to-local `transform` maps.
+    pub(crate) fn from_root_to_local(transform: &Matrix4) -> Self {
+        let (ox, oy) = transform.transform_point(0.0, 0.0);
+        let (x_x, x_y) = transform.transform_point(1.0, 0.0);
+        let (y_x, y_y) = transform.transform_point(0.0, 1.0);
+        let linear = [x_x - ox, y_x - ox, x_y - oy, y_y - oy];
+        if linear.iter().all(|value| value.is_finite()) {
+            Self { linear }
+        } else {
+            Self::IDENTITY
+        }
+    }
+
+    /// `root` displacement in the member's own space.
+    pub(crate) fn localize(self, root: Offset<f64>) -> Offset<f64> {
+        let [a, b, c, d] = self.linear;
+        Offset::new(a * root.dx + b * root.dy, c * root.dx + d * root.dy)
+    }
+}
+
+impl Default for MotionFrame {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
 /// One moving member competing for a contact, in route order (innermost
 /// first).
 pub(super) struct MotionCandidate<'a> {
     pub(super) role: MotionRole,
+    pub(super) frame: MotionFrame,
     pub(super) pan_claim: Option<&'a Rc<PanClaimNode>>,
 }
 
@@ -141,8 +183,9 @@ pub(super) fn motion_owner(
         .iter()
         .position(|candidate| matches!(candidate.role, MotionRole::Free | MotionRole::ChannelLeaf));
     // The larger component wins; iteration is innermost first, so only a
-    // strictly larger component displaces an earlier member.
-    let mut best: Option<(usize, f64)> = None;
+    // strictly larger component displaces an earlier member. Each axial
+    // member measures the motion in its own space, along its own axis.
+    let mut best: Option<(usize, f64, f64)> = None;
     for (index, candidate) in candidates.iter().enumerate() {
         let MotionRole::Axial(axis) = candidate.role else {
             continue;
@@ -152,22 +195,24 @@ pub(super) fn motion_owner(
         {
             continue;
         }
-        let projection = component(displacement, axis);
-        if best.is_none_or(|(_, larger)| projection > larger) {
-            best = Some((index, projection));
+        let local = candidate.frame.localize(displacement);
+        let projection = component(local, axis);
+        if best.is_none_or(|(_, larger, _)| projection > larger) {
+            best = Some((index, projection, local.distance_squared()));
         }
     }
     match (free, best) {
-        // |d · axis| ≥ |d| cos 45° ⇔ 2 (d · axis)² ≥ |d|², exact at 45°.
-        (Some(free), Some((axial, projection))) => {
-            if 2.0 * projection * projection >= displacement.distance_squared() {
+        // |d · axis| ≥ |d| cos 45° ⇔ 2 (d · axis)² ≥ |d|², exact at 45°, with
+        // both sides in the axial member's space.
+        (Some(free), Some((axial, projection, magnitude_squared))) => {
+            if 2.0 * projection * projection >= magnitude_squared {
                 Some(axial)
             } else {
                 Some(free)
             }
         }
+        (None, Some((axial, _, _))) => Some(axial),
         (Some(free), None) => Some(free),
-        (None, Some((axial, _))) => Some(axial),
         (None, None) => None,
     }
 }

@@ -51,6 +51,12 @@ struct DragCallbacks {
     cancel: Option<EventCallback>,
 }
 
+impl DragCallbacks {
+    fn is_active(&self) -> bool {
+        self.start.is_some() || self.update.is_some() || self.end.is_some() || self.cancel.is_some()
+    }
+}
+
 /// One drag recognizer for a [`GestureDetector`]: its axis, the devices it
 /// admits, how contacts hand the drag on, and its callbacks.
 ///
@@ -1183,7 +1189,11 @@ struct DragFactory {
     strategy: DragPointerStrategy,
     axis_lock: AxisLock,
     live: Rc<LiveCallbacks>,
+    link: Rc<DragLink>,
+    route: Rc<RefCell<NativeScaleRoute>>,
 }
+
+type DragLink = RefCell<Weak<DragGestureRecognizer>>;
 
 impl GestureRecognizerFactory for DragFactory {
     type Recognizer = DragGestureRecognizer;
@@ -1203,7 +1213,7 @@ impl GestureRecognizerFactory for DragFactory {
             cx.writer().clone(),
             cx.writer().clone(),
         );
-        DragGestureRecognizer::builder(cx.arena().clone(), self.axis)
+        let recognizer = DragGestureRecognizer::builder(cx.arena().clone(), self.axis)
             .allowed_devices(self.devices)
             .pointer_strategy(self.strategy)
             .axis_lock(self.axis_lock)
@@ -1245,7 +1255,11 @@ impl GestureRecognizerFactory for DragFactory {
                     live.drag.borrow().cancel.clone()
                 });
             })
-            .build()
+            .build();
+        // The replacement owns the native route from here, as a scale's does.
+        *self.link.borrow_mut() = Rc::downgrade(&recognizer);
+        *self.route.borrow_mut() = NativeScaleRoute::default();
+        recognizer
     }
 
     // The axis, devices, strategy and lock are in the key and the callbacks
@@ -1369,20 +1383,58 @@ fn same_native_source(left: &PointerInfo, right: &PointerInfo) -> bool {
     left.id == right.id && left.device == right.device
 }
 
-/// What the native pinch route reads besides the recognizer.
+/// The recognizer a native pan/zoom stream is read by: a scale for a pinch,
+/// a drag for a precision touchpad's pan.
+trait NativePanZoomActor {
+    fn handle_native(&self, dispatch: PanZoomDispatch<'_>) -> PanZoomDisposition;
+}
+
+impl NativePanZoomActor for ScaleGestureRecognizer {
+    fn handle_native(&self, dispatch: PanZoomDispatch<'_>) -> PanZoomDisposition {
+        self.handle_pan_zoom(dispatch)
+    }
+}
+
+impl NativePanZoomActor for DragGestureRecognizer {
+    fn handle_native(&self, dispatch: PanZoomDispatch<'_>) -> PanZoomDisposition {
+        self.handle_pan_zoom(dispatch)
+    }
+}
+
+/// Which slot's callbacks a native route serves.
+#[derive(Clone, Copy)]
+enum NativeSlot {
+    Transform,
+    Drag,
+}
+
+/// What the native route reads besides the recognizer.
 struct NativeScaleGate<'a> {
     mounted: &'a Cell<bool>,
     live: &'a LiveCallbacks,
+    slot: NativeSlot,
 }
 
 impl NativeScaleGate<'_> {
     fn active(&self) -> bool {
-        self.mounted.get() && self.live.transform.borrow().is_active()
+        self.mounted.get()
+            && match self.slot {
+                NativeSlot::Transform => self.live.transform.borrow().is_active(),
+                NativeSlot::Drag => self.live.drag.borrow().is_active(),
+            }
+    }
+
+    /// The transform slot's own test of a staged pinch; a pan has none.
+    fn admission(&self) -> Option<NativeScaleAdmission> {
+        match self.slot {
+            NativeSlot::Transform => self.live.transform.borrow().native_admission.clone(),
+            NativeSlot::Drag => None,
+        }
     }
 }
 
 fn claim_native_scale(
-    recognizer: &ScaleGestureRecognizer,
+    recognizer: &impl NativePanZoomActor,
     gate: &NativeScaleGate<'_>,
     route: &Rc<RefCell<NativeScaleRoute>>,
     dispatch: PanZoomDispatch<'_>,
@@ -1432,7 +1484,7 @@ fn claim_native_scale(
             });
             // Start captures the dormant actor's profile immediately. Claiming
             // and recognized callbacks still wait for an admitted real Update.
-            let disposition = recognizer.handle_pan_zoom(dispatch);
+            let disposition = recognizer.handle_native(dispatch);
             {
                 let mut route = route.borrow_mut();
                 if let Some(pending) = route.pending.as_mut()
@@ -1454,6 +1506,7 @@ fn claim_native_scale(
             }
         }
         PanZoomPhase::Update(transform) => {
+            let mut staged = None;
             let active = route.borrow().active.as_ref().map(|(source, _)| *source);
             if let Some(active) = active {
                 if !same_native_source(&active, event.pointer()) {
@@ -1486,7 +1539,7 @@ fn claim_native_scale(
                 if !matches!(dispatch.global.phase, PanZoomPhase::Update(_)) {
                     return EventPropagation::Continue;
                 }
-                let admission = gate.live.transform.borrow().native_admission.clone();
+                let admission = gate.admission();
                 if admission.is_some_and(|admit| !admit(event, translation)) {
                     return EventPropagation::Continue;
                 }
@@ -1500,11 +1553,12 @@ fn claim_native_scale(
                             .pending
                             .take()
                             .expect("BUG: matching pending native admission");
-                        route.active = Some((*event.pointer(), pending.generation));
+                        route.active = Some((*event.pointer(), pending.generation.clone()));
+                        staged = Some(pending);
                     }
                 }
             }
-            let handled = recognizer.handle_pan_zoom(dispatch);
+            let handled = recognizer.handle_native(dispatch);
             if handled == PanZoomDisposition::Handled || active.is_some() {
                 EventPropagation::Stop
             } else {
@@ -1515,6 +1569,13 @@ fn claim_native_scale(
                     .is_some_and(|(active, _)| same_native_source(active, event.pointer()))
                 {
                     route.active = None;
+                }
+                // A drag holds its session until the pan passes its slop: the
+                // stream stays staged, measured from the same Start.
+                if handled == PanZoomDisposition::Admitted
+                    && let Some(pending) = staged
+                {
+                    route.pending = Some(pending);
                 }
                 EventPropagation::Continue
             }
@@ -1541,7 +1602,7 @@ fn claim_native_scale(
                 (active, staged)
             };
             if active || staged {
-                let _ = recognizer.handle_pan_zoom(dispatch);
+                let _ = recognizer.handle_native(dispatch);
             }
             if active {
                 EventPropagation::Stop
@@ -1571,6 +1632,8 @@ pub struct GestureDetectorState {
     owner_generation: u64,
     scale_link: Rc<ScaleLink>,
     native_scale_route: Rc<RefCell<NativeScaleRoute>>,
+    drag_link: Rc<DragLink>,
+    native_drag_route: Rc<RefCell<NativeScaleRoute>>,
 }
 
 impl std::fmt::Debug for GestureDetectorState {
@@ -1593,6 +1656,8 @@ impl StatefulView for GestureDetector {
             owner_generation: 0,
             scale_link: Rc::new(RefCell::new(Weak::new())),
             native_scale_route: Rc::new(RefCell::new(NativeScaleRoute::default())),
+            drag_link: Rc::new(RefCell::new(Weak::new())),
+            native_drag_route: Rc::new(RefCell::new(NativeScaleRoute::default())),
         }
     }
 }
@@ -1682,8 +1747,35 @@ impl GestureDetectorState {
                     strategy: slot.strategy,
                     axis_lock: slot.axis_lock,
                     live: Rc::clone(&self.live),
+                    link: Rc::clone(&self.drag_link),
+                    route: Rc::clone(&self.native_drag_route),
                 },
             );
+            // A precision touchpad's two-finger pan is a pan: a drag reads
+            // it unless a transform slot already does.
+            if view.transform.is_none() {
+                raw = raw.pan_zoom_claim({
+                    let live = Rc::clone(&self.live);
+                    let mounted = Rc::clone(&self.mounted);
+                    let link = Rc::clone(&self.drag_link);
+                    let route = Rc::clone(&self.native_drag_route);
+                    move |dispatch| {
+                        if !mounted.get() {
+                            return EventPropagation::Continue;
+                        }
+                        let recognizer = link.borrow().upgrade();
+                        let Some(recognizer) = recognizer else {
+                            return EventPropagation::Continue;
+                        };
+                        let gate = NativeScaleGate {
+                            mounted: &mounted,
+                            live: &live,
+                            slot: NativeSlot::Drag,
+                        };
+                        claim_native_scale(&*recognizer, &gate, &route, dispatch)
+                    }
+                });
+            }
         }
         if let Some(slot) = &view.transform {
             raw = raw
@@ -1714,8 +1806,9 @@ impl GestureDetectorState {
                         let gate = NativeScaleGate {
                             mounted: &mounted,
                             live: &live,
+                            slot: NativeSlot::Transform,
                         };
-                        claim_native_scale(&recognizer, &gate, &route, dispatch)
+                        claim_native_scale(&*recognizer, &gate, &route, dispatch)
                     }
                 });
         }

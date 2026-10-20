@@ -2674,3 +2674,114 @@ pub(crate) fn a_tap_cancel_only_follows_a_tap_down() {
         assert_eq!(*log.borrow(), expected);
     }
 }
+
+/// An axial drag measures a rotated route along its own axis: a horizontal
+/// drag inside a quarter turn takes a vertical motion of the root, and wins
+/// the tie against an enclosing vertical drag, which is the outer one's axis
+/// only in root space.
+pub(crate) fn a_rotated_axial_drag_claims_motion_along_its_own_axis() {
+    use flui_foundation::geometry::Matrix4;
+    use flui_painting::Alignment;
+    use flui_widgets::{SizedBox, Transform};
+    use std::{cell::Cell, rc::Rc, time::Duration};
+
+    let inner_updates = Rc::new(Cell::new(0_u32));
+    let outer_updates = Rc::new(Cell::new(0_u32));
+    let (inner, outer) = (inner_updates.clone(), outer_updates.clone());
+    let laid = lay_out(
+        GestureDetector::new()
+            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .drag(DragSlot::vertical().on_update(move |_, _| outer.set(outer.get() + 1)))
+            .child(
+                Transform::new(Matrix4::rotation_z(std::f64::consts::FRAC_PI_2))
+                    .alignment(Alignment::CENTER)
+                    .child(
+                        GestureDetector::new()
+                            .behavior(flui_widgets::HitTestBehavior::Opaque)
+                            .drag(
+                                DragSlot::horizontal()
+                                    .on_update(move |_, _| inner.set(inner.get() + 1)),
+                            )
+                            .child(SizedBox::new(100.0, 100.0)),
+                    ),
+            ),
+        tight(100.0, 100.0),
+    );
+    laid.dispatch_pointer_down(50.0, 20.0);
+    for y in [40.0, 60.0, 80.0] {
+        laid.dispatch_pointer_move_after(50.0, y, Duration::from_millis(20));
+    }
+    laid.dispatch_pointer_up(50.0, 80.0);
+    assert_eq!(
+        (inner_updates.get() > 0, outer_updates.get()),
+        (true, 0),
+        "the inner drag owns a motion along its own horizontal axis"
+    );
+}
+
+/// A precision touchpad's two-finger pan drives a detector that has only a
+/// drag: the drag starts past its slop, reports motion on its axis, ends with
+/// the release velocity, and leaves an enclosing detector out of it.
+pub(crate) fn a_native_pan_drives_a_drag_only_detector() {
+    use flui_foundation::geometry::Point;
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
+            PointerKind, PointerPosition,
+        },
+    };
+    use flui_widgets::SizedBox;
+    use std::{cell::RefCell, rc::Rc};
+
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let outer = Rc::new(RefCell::new(0_u32));
+    let (start, update, end, outer_update) = (log.clone(), log.clone(), log.clone(), outer.clone());
+    let laid = lay_out(
+        GestureDetector::new()
+            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .drag(DragSlot::vertical().on_update(move |_, _| *outer_update.borrow_mut() += 1))
+            .child(
+                GestureDetector::new()
+                    .behavior(flui_widgets::HitTestBehavior::Opaque)
+                    .drag(
+                        DragSlot::vertical()
+                            .on_start(move |_, _| start.borrow_mut().push("start".to_owned()))
+                            .on_update(move |_, details| {
+                                update
+                                    .borrow_mut()
+                                    .push(format!("update {}", details.delta.dy));
+                            })
+                            .on_end(move |_, _| end.borrow_mut().push("end".to_owned())),
+                    )
+                    .child(SizedBox::new(100.0, 100.0)),
+            ),
+        tight(100.0, 100.0),
+    );
+    let send = |nanos: u64, y: f64, phase| {
+        laid.dispatch_pointer_event(&PointerEvent::PanZoom(PanZoomEvent::new(
+            PointerInfo::new(
+                PointerId::try_from(1_u64).expect("nonzero pointer"),
+                PointerKind::Mouse,
+            ),
+            EventTime::from_nanos(nanos),
+            PointerPosition::try_new(Point::new(50.0, y)).expect("finite position"),
+            phase,
+        )));
+    };
+    let pan = || PanZoomPhase::Update(PanZoomTransform::try_new(1.0, 0.0).expect("finite"));
+    send(1_000_000, 50.0, PanZoomPhase::Start);
+    send(2_000_000, 51.0, pan());
+    assert!(log.borrow().is_empty(), "within the slop nothing starts");
+    send(10_000_000, 80.0, pan());
+    send(20_000_000, 100.0, pan());
+    send(30_000_000, 110.0, PanZoomPhase::End);
+    let log = log.borrow();
+    assert_eq!(log.first().map(String::as_str), Some("start"), "{log:?}");
+    assert_eq!(log.last().map(String::as_str), Some("end"), "{log:?}");
+    assert!(
+        log.iter().any(|entry| entry == "update 20"),
+        "the pan reports its motion on the axis: {log:?}"
+    );
+    assert_eq!(*outer.borrow(), 0, "the enclosing drag hears nothing");
+}
