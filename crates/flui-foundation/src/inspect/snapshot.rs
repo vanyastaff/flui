@@ -230,7 +230,7 @@ pub enum SnapshotError {
 /// Takes an owned snapshot of `tree` from the query's start node.
 ///
 /// The walk keeps its own stack, so a deep chain costs no Rust stack; so do the snapshot's own
-/// walks ([`iter`](SnapshotNode::iter), [`diff`](super::diff), [`render`](super::render)) and
+/// walks ([`iter`](SnapshotNode::iter), [`diff`](super::diff()), [`render`](super::render())) and
 /// its clone, comparison and drop.
 ///
 /// # Errors
