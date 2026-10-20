@@ -599,7 +599,9 @@ straight run (`harness_clip_rrect_pill_hit_tests_the_painted_radius`; the
 engine row `rrect_hit_testing_matches_the_mask_with_oversized_and_elliptical_radii`
 reads oversized and elliptical corners back from the GPU against the same
 `contains`). At `Clip::None` a clip paints nothing and reports no accessible
-clip, so it clips no hits either.
+clip, so it clips no hits either. A directly drawn rounded rect (a decoration) is
+fitted the same way at the engine's draw entry: `harness_decorated_box_pill_hits_the_painted_radius`
+and the readback row `a_drawn_rrect_matches_hit_testing_with_oversized_radii`.
 
 ### Superellipse clips and backdrop groups
 

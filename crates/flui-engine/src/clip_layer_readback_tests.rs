@@ -313,6 +313,63 @@ fn rrect_hit_testing_matches_the_mask_with_oversized_and_elliptical_radii() {
     }
 }
 
+/// A rounded rect drawn directly — the decoration path, no clip layer — paints
+/// the radii `RRect::contains` hit-tests: a pill whose radius exceeds its
+/// height fills its whole straight run, as the normalized shape says.
+fn a_drawn_rrect_matches_hit_testing_with_oversized_radii() {
+    use flui_foundation::geometry::{Point, RRect};
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let side = f64::from(SIDE as f32);
+    let pill = RRect::from_rect_circular(Rect::from_xywh(0.0, 16.0, side, 32.0), 200.0);
+    let tree = {
+        let mut builder = SceneBuilder::new();
+        let mut canvas = Canvas::new();
+        full_surface(&mut canvas, Color::rgb(255, 0, 0));
+        canvas.draw_rrect(
+            pill,
+            &Paint::fill(Color::rgb(0, 160, 0)).with_anti_alias(false),
+        );
+        builder.add_picture(canvas.finish());
+        builder.build()
+    };
+    let frame = renderer
+        .render_layer_tree(&tree, (SIDE, SIDE))
+        .expect("the headless capture path must rasterize the scene");
+    let inside_at = |x: i64, y: i64| pill.contains(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+    let (mut kept, mut cut) = (0_usize, 0_usize);
+    for y in 1..i64::from(SIDE) - 1 {
+        for x in 1..i64::from(SIDE) - 1 {
+            let here = inside_at(x, y);
+            let unanimous = (-1..=1)
+                .flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
+                .all(|(dx, dy)| inside_at(x + dx, y + dy) == here);
+            if !unanimous {
+                continue;
+            }
+            let pixel = sample(&frame, x as u32, y as u32);
+            if here {
+                kept += 1;
+                assert!(
+                    pixel[1] > 128 && pixel[0] < 64,
+                    "drawn pill: ({x}, {y}) inside, got {pixel:?}"
+                );
+            } else {
+                cut += 1;
+                assert!(
+                    pixel[0] > 200 && pixel[1] < 64,
+                    "drawn pill: ({x}, {y}) outside, got {pixel:?}"
+                );
+            }
+        }
+    }
+    assert!(
+        kept > 600 && cut > 100,
+        "drawn pill: kept {kept}, cut {cut}"
+    );
+}
+
 /// Every pixel clear of the boundary reads back as `inside` says: the fill is
 /// kept inside the clip `push_clip` installs and the red backdrop survives
 /// outside it — for an unbounded fill and an instanced rect, in both in-place
@@ -659,6 +716,7 @@ fn clip_layers_read_back_as_the_clip_contract_specifies() {
     the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary();
     superellipse_hit_testing_matches_the_mask_with_oversized_radii();
     rrect_hit_testing_matches_the_mask_with_oversized_and_elliptical_radii();
+    a_drawn_rrect_matches_hit_testing_with_oversized_radii();
     a_path_clip_lets_through_what_lies_inside_the_box_but_outside_the_shape();
     an_empty_clip_path_clips_everything();
     a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings();

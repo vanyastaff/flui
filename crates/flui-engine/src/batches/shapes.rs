@@ -289,6 +289,10 @@ impl DrawBatcher {
         if segment.recording_result().is_err() {
             return;
         }
+        // Every route below — shader, tessellated, instanced, stroke — draws
+        // the radii fitted to the box exactly as `RRect::contains` hit-tests
+        // them and the clip mask clips them.
+        let rrect = rrect.normalized();
 
         // Shader/gradient fill — dispatch before any opacity or color work.
         // Advanced blend modes are handled inside dispatch_shader.

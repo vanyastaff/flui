@@ -221,6 +221,10 @@ fn hit_test_matrix() {
             crate::hit_test_pipeline::caught_zero_offset_driver_node_scope_restores_hit_coordinates,
         ),
         (
+            "hit_test_pipeline::a_contained_hit_panic_retains_the_discarded_entries",
+            crate::hit_test_pipeline::a_contained_hit_panic_retains_the_discarded_entries,
+        ),
+        (
             "hit_test_pipeline::default_parent_hit_test_reaches_its_children",
             crate::hit_test_pipeline::default_parent_hit_test_reaches_its_children,
         ),

@@ -6613,6 +6613,35 @@ fn harness_decorated_box_circle_shape_hit_test_misses_the_corner() {
     );
 }
 
+/// A decoration whose radius is far past its height hit-tests the pill the
+/// engine draws (radii fitted 100 → 10 on a 200x20 box, the readback row
+/// `a_drawn_rrect_matches_hit_testing_with_oversized_radii`): the straight run
+/// takes hits right up to its edges, and only the rounded ends cut.
+fn harness_decorated_box_pill_hits_the_painted_radius() {
+    use flui_painting::styling::{BorderRadius, BorderRadiusExt as _};
+
+    let run = RenderTester::mount(box_node(RenderDecoratedBox::new(
+        BoxDecoration::with_color(Color::RED)
+            .set_border_radius(Some(BorderRadius::circular(100.0))),
+    )))
+    .with_size(Size::new(200.0, 20.0))
+    .run_frame();
+
+    for (x, y) in [(50.0, 2.0), (150.0, 18.0), (100.0, 10.0)] {
+        assert!(
+            run.hit_first(x, y).is_some(),
+            "({x}, {y}) is on the painted pill"
+        );
+    }
+    for (x, y) in [(0.5, 0.5), (199.5, 19.5)] {
+        assert_eq!(
+            run.hit_first(x, y),
+            None,
+            "({x}, {y}) is outside the pill's rounded end"
+        );
+    }
+}
+
 fn harness_decorated_box_paints_background_before_child() {
     // With the default `DecorationPosition::Background`, the decoration's fill must
     // land on the canvas BEFORE the child's. `run.painted()` (a layer tree
@@ -12472,6 +12501,10 @@ fn family_content_paint() {
             (
                 "decorated_box_circle_shape_hit_test_misses_the_corner",
                 harness_decorated_box_circle_shape_hit_test_misses_the_corner,
+            ),
+            (
+                "decorated_box_pill_hits_the_painted_radius",
+                harness_decorated_box_pill_hits_the_painted_radius,
             ),
             (
                 "decorated_box_paints_background_before_child",

@@ -2202,7 +2202,7 @@ fn no_op_semantics_update_callback() -> flui_semantics::SemanticsUpdateCallback 
 /// Every hook the walk calls on a node — `hit_test_transform`, the expanded
 /// area, `hit_test` itself (path clippers, flow delegates), the entry's
 /// targets — is user code. A panic in any of them makes the node a miss: what
-/// its subtree added to the path is dropped (driver and context scopes restore
+/// its subtree added to the path is taken off it and retained (driver and context scopes restore
 /// their transforms on unwind), it blocks nothing below, and the payload waits
 /// in `walk` until the path is complete. A descendant's panic is contained at
 /// the descendant, so its ancestors still decide for themselves.
@@ -2215,8 +2215,12 @@ fn contain_node(
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| visit(result, walk))) {
         Ok(hit) => hit,
         Err(payload) => {
-            result.path_mut().truncate(mark);
+            // The payload is held before anything else runs. The discarded
+            // entries are retained, not dropped: their metadata is user data
+            // whose destructor may panic too, and `thread::panicking()` is
+            // false here, so a drop would replace the failure being reported.
             walk.contain_panic(payload);
+            std::mem::forget(result.path_mut().split_off(mark));
             false
         }
     }

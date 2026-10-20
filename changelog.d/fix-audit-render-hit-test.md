@@ -2,7 +2,8 @@
 
 - `RRect::contains` fits oversized radii the way paint does (`RRect::normalized`, the CSS/Skia
   factor), so a pill whose radius exceeds its height takes hits along its whole straight run
-  instead of only its centre column; the engine's rounded clips use the same normalization.
+  instead of only its centre column; the engine draws (decorations included) and clips rounded
+  rects with the same normalization.
 - `RenderClip*` at `Clip::None` no longer clips hits: it paints no clip and reports no accessible
   clip, so its child takes the corners it paints.
 - A render object whose hit test panics is a miss instead of aborting the walk: its siblings and
