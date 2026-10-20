@@ -17,11 +17,11 @@
 //!
 //! A swap and `dispose` both drop the `TaskToken`, which cancels the load
 //! outright — the future is dropped, not merely ignored, so an abandoned load
-//! stops costing whatever it held open. (What that does to the *shared* decode
-//! cache is `decode_cache`'s business, not this module's: a key another widget
-//! is still awaiting keeps loading and still lands in the cache; a key nobody
-//! else wants is removed from the pending map. Either way this widget is no
-//! longer a subscriber.)
+//! stops costing whatever it held open. (What that does to a *shared* load is
+//! the provider's business, not this module's: for the built-in providers the
+//! asset registry keeps loading a source another widget still awaits, and
+//! aborts one nobody else wants before it decodes. Either way this widget is
+//! no longer a subscriber.)
 //!
 //! Every resolve additionally carries a monotonically increasing generation,
 //! and a completion may publish only while its own generation is still
@@ -42,7 +42,6 @@ use flui_view::{RebuildHandle, RebuildReason};
 use parking_lot::Mutex;
 
 use super::cache_key::ImageCacheKey;
-use super::decode_cache;
 use super::provider::ImageProvider;
 
 /// The frame the widget displays, plus the generation allowed to write it.
@@ -199,13 +198,13 @@ impl ImageResolver {
             published.generation
         };
 
-        let Some(key) = key else {
+        if key.is_none() {
             return;
-        };
+        }
 
-        // A key already in
-        // the decode cache resolves in this very frame, with no placeholder.
-        if let Some(hit) = decode_cache::cached(&key) {
+        // An image the provider already holds resolves in this very frame,
+        // with no placeholder.
+        if let Some(hit) = self.provider.cached() {
             self.published.lock().publish(generation, hit);
             return;
         }

@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-04
+- **Amended:** 2026-10-19 — the registry keeps decoded images itself and asset images share the
+  registry identity; the key is an opaque `ImageCacheKey` and `NetworkImageKey` is gone
+  ([ADR-0250](ADR-0250-asset-registry-keeps-decoded-images.md)).
 - **Related:** ADR-0105 (asset runtime ownership), ADR-0107 (asset byte sources)
 
 ## Context

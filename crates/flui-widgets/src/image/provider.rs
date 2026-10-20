@@ -25,8 +25,8 @@
 //!
 //! Not yet built (tracked, not silently missing): frame, loading and error
 //! builders (an error currently renders the same empty box as no data, with a
-//! `tracing::warn!`), device-pixel-ratio-based cache-key scaling, a cache
-//! eviction API, and font unification.
+//! `tracing::warn!`), device-pixel-ratio-based cache-key scaling, and font
+//! unification.
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -44,7 +44,7 @@ use super::cache_key::ImageCacheKey;
 /// The [`Image`](crate::Image) widget calls [`cache_key`](Self::cache_key) to
 /// decide which path to take: `None` means synchronous-only, and it calls
 /// [`resolve`](Self::resolve) when creating or updating its render object;
-/// `Some(key)` means it probes the decode cache for `key` and, on a miss,
+/// `Some(key)` means it probes [`cached`](Self::cached) and, on a miss,
 /// awaits [`resolve_async`](Self::resolve_async) for as long as it stays
 /// mounted with that key. On error the widget renders an empty box — no
 /// panic, but a `tracing::warn!` so the failure is observable.
@@ -84,20 +84,29 @@ pub trait ImageProvider: std::fmt::Debug + Send + Sync {
         Box::pin(std::future::ready(self.resolve()))
     }
 
-    /// The cache/coalescing/subscription identity for asynchronous
-    /// resolution, or `None` to stay on the synchronous-only path.
+    /// The decoded image available without leaving the calling thread, if
+    /// any: the probe [`Image`](crate::Image) makes before starting an async
+    /// load, so a hit renders in the same frame with no placeholder.
+    ///
+    /// Must not block. The default `None` always starts
+    /// [`resolve_async`](Self::resolve_async).
+    fn cached(&self) -> Option<PixelImage> {
+        None
+    }
+
+    /// The subscription identity for asynchronous resolution, or `None` to
+    /// stay on the synchronous-only path.
     ///
     /// The default `None` preserves today's behavior exactly: [`Image`](crate::Image)
-    /// never probes the decode cache, never spawns a load, and always calls
-    /// [`resolve`](Self::resolve) directly. A provider backed by genuinely
-    /// asynchronous I/O (disk via a background runtime, network) overrides
-    /// this to opt into the cached, coalesced, subscription-driven path.
+    /// never probes [`cached`](Self::cached), never spawns a load, and always
+    /// calls [`resolve`](Self::resolve) directly. A provider backed by
+    /// genuinely asynchronous I/O (disk via a background runtime, network)
+    /// overrides this to opt into the subscription-driven path.
     ///
     /// Note: [`Image`](crate::Image) only *acts* on a `Some` key — probing
-    /// the decode cache and holding a subscription — when the
-    /// `asset-images` feature is enabled (the cache/coalescing engine's
-    /// dependencies, `lru`/`futures-util`, are pulled in only by that
-    /// feature). A custom provider overriding this method without
+    /// [`cached`](Self::cached) and holding a subscription — when the
+    /// `asset-images` feature is enabled, the feature that makes `Image`
+    /// stateful. A custom provider overriding this method without
     /// `asset-images` enabled falls back to [`resolve`](Self::resolve).
     fn cache_key(&self) -> Option<ImageCacheKey> {
         None

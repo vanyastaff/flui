@@ -188,12 +188,12 @@ pub use icon::{Icon, IconData, IconTheme, IconThemeData};
 pub use image::AssetImage;
 #[cfg(feature = "asset-images")]
 pub use image::ImageState;
+#[cfg(feature = "network-images")]
+pub use image::NetworkImage;
 pub use image::{
     DirectImageProvider, FileImage, Image, ImageCacheKey, ImageProvider, ImageProviderError,
     MemoryImage, Texture, TextureState,
 };
-#[cfg(feature = "network-images")]
-pub use image::{NetworkImage, NetworkImageKey};
 pub use interaction::{
     AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, ActivationPressIntent,
     Alternative, AlternativeKind, AnimatedCrossFade, AnimatedCrossFadeState, BackIntent,

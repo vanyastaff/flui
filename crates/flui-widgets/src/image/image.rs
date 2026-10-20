@@ -45,7 +45,7 @@ const DEFAULT_PLACEMENT: ImagePlacement =
 /// `asset`/`network` require the `asset-images`/`network-images` features
 /// respectively (hence the plain, non-linked names above — they do not exist
 /// in this doc build); both are off by default so stable builds do not pull
-/// in `flui-assets`/`futures-util`/`lru` unless asked for.
+/// in `flui-assets` unless asked for.
 ///
 /// For static or frequently-rebuilt sync images, pre-decode once and use
 /// [`from_image`] to avoid per-rebuild cost.
@@ -53,14 +53,15 @@ const DEFAULT_PLACEMENT: ImagePlacement =
 /// # Async dispatch
 ///
 /// When [`ImageProvider::cache_key`] returns `Some(key)`, `Image` subscribes
-/// to that key for as long as it stays mounted. Subscribing first probes the
-/// decode cache synchronously — a hit (e.g. after unmount+remount, or a
-/// second widget mounted with the same key) renders immediately with **no
-/// placeholder frame**. A miss shows the same empty-box placeholder a sync
-/// failure would, and the render updates in place once
-/// [`ImageProvider::resolve_async`] completes. Two widgets mounted with the
-/// same key while a load is in flight share ONE load
-/// (`image::decode_cache`'s in-flight coalescing) rather than starting two.
+/// to that key for as long as it stays mounted. Subscribing first probes
+/// [`ImageProvider::cached`] synchronously — a hit (e.g. after
+/// unmount+remount, or a second widget mounted with the same key) renders
+/// immediately with **no placeholder frame**. A miss shows the same empty-box
+/// placeholder a sync failure would, and the render updates in place once
+/// [`ImageProvider::resolve_async`] completes. For `asset`/`network`, the
+/// asset registry keeps the decoded images, and two widgets mounted with the
+/// same source while a load is in flight share ONE load rather than starting
+/// two; unmounting the last of them cancels it.
 ///
 /// The subscription is keyed on [`cache_key`](ImageProvider::cache_key), not
 /// on provider instance identity: rebuilding with a freshly constructed
@@ -92,8 +93,8 @@ const DEFAULT_PLACEMENT: ImagePlacement =
 ///
 /// Deferred (tracked, not silently missing): frame, loading and error
 /// builders (an error renders the same empty box as no data, with a
-/// `tracing::warn!`), device-pixel-ratio-based cache-key scaling, a cache
-/// eviction API, and font unification.
+/// `tracing::warn!`), device-pixel-ratio-based cache-key scaling, and font
+/// unification.
 ///
 /// [`from_image`]: Image::from_image
 /// [`memory`]: Image::memory
@@ -104,7 +105,7 @@ const DEFAULT_PLACEMENT: ImagePlacement =
 #[derive(Clone, Debug)]
 // Async resolution is a subscription with lifecycle (start, cancel, retire),
 // so `Image` is stateful exactly where that subscription exists: without `asset-images`
-// there is no decode cache to subscribe to and every provider resolves inline
+// there is no async provider to subscribe to and every provider resolves inline
 // in `build`.
 #[cfg_attr(feature = "asset-images", derive(StatefulView))]
 #[cfg_attr(not(feature = "asset-images"), derive(StatelessView))]
@@ -319,9 +320,8 @@ impl Image {
     }
 }
 
-/// Async dispatch — only compiled under `asset-images`, since the
-/// subscription needs `image::decode_cache`'s `lru`/`futures-util`-backed
-/// engine. Without this feature `Image` always takes the `build_sync` path,
+/// Async dispatch — only compiled under `asset-images`, the feature that
+/// brings in the asynchronous providers. Without this feature `Image` always takes the `build_sync` path,
 /// even for a custom provider that overrides [`ImageProvider::cache_key`] —
 /// see that method's doc for the honest fallback contract.
 #[cfg(feature = "asset-images")]

@@ -5,11 +5,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use flui_assets::AssetRegistry;
+use flui_assets::{AssetRegistry, ImageSource};
 use flui_painting::paint::Image as PixelImage;
 
-use super::cache_key::{ImageCacheKey, NetworkImageKey};
-use super::decode_cache;
+use super::cache_key::ImageCacheKey;
 use super::provider::{ImageProvider, ImageProviderError};
 
 /// An [`ImageProvider`] that fetches and decodes an image over HTTP/HTTPS
@@ -18,8 +17,8 @@ use super::provider::{ImageProvider, ImageProviderError};
 ///
 /// Like [`AssetImage`](super::AssetImage), the registry is an explicit
 /// constructor argument, so the request
-/// runs on whichever background runtime and byte-loader machinery the
-/// application already owns.
+/// runs on whichever background runtime and HTTP pool the application already
+/// owns, and the decoded image is kept by that registry.
 /// Cached responses and pending loads are shared only by providers using the
 /// same registry and URL, because client headers and policies can change the
 /// response at an otherwise identical URL.
@@ -29,7 +28,7 @@ use super::provider::{ImageProvider, ImageProviderError};
 #[derive(Debug, Clone)]
 pub struct NetworkImage {
     registry: Arc<AssetRegistry>,
-    url: String,
+    url: Arc<str>,
 }
 
 impl NetworkImage {
@@ -38,7 +37,7 @@ impl NetworkImage {
     pub fn new(registry: Arc<AssetRegistry>, url: impl Into<String>) -> Self {
         Self {
             registry,
-            url: url.into(),
+            url: Arc::from(url.into()),
         }
     }
 
@@ -47,45 +46,47 @@ impl NetworkImage {
         &self.url
     }
 
-    fn cache_key_value(&self) -> ImageCacheKey {
-        ImageCacheKey::Network(NetworkImageKey::new(&self.registry, self.url.clone()))
+    fn source(&self) -> ImageSource {
+        ImageSource::Network(Arc::clone(&self.url))
     }
 }
 
 impl ImageProvider for NetworkImage {
-    /// Returns the decode cache's current entry for this registry and URL, if any.
+    /// Returns the registry's decoded image for this URL, if any.
     ///
     /// `NetworkImage` never performs a blocking network request here — see
     /// [`AssetImage::resolve`](super::AssetImage) for the same contract on
     /// the asset-file provider.
     fn resolve(&self) -> Result<PixelImage, ImageProviderError> {
-        decode_cache::cached(&self.cache_key_value()).ok_or(
-            ImageProviderError::RequiresAsyncResolve {
+        self.cached()
+            .ok_or(ImageProviderError::RequiresAsyncResolve {
                 provider_name: "NetworkImage",
-            },
-        )
+            })
     }
 
-    /// Reuses a completed decoded image, or shares an in-flight load for the
-    /// same registry and URL. A hit refreshes LRU recency without HTTP traffic.
-    /// Failed loads are not cached and a later request can retry.
+    /// Reuses the registry's decoded image, or shares an in-flight load for
+    /// the same URL. A hit refreshes recency without HTTP traffic. Failed
+    /// loads are not cached and a later request can retry. Dropping the future
+    /// aborts the request once no other request waits for it.
     fn resolve_async(
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<PixelImage, ImageProviderError>> + Send + 'static>>
     {
-        let key = self.cache_key_value();
-        let registry = Arc::clone(&self.registry);
-        let url = self.url.clone();
+        let load = self
+            .registry
+            .load_network_image_bridged(Arc::clone(&self.url));
+        let url = Arc::clone(&self.url);
+        Box::pin(async move {
+            load.await
+                .map_err(|error| ImageProviderError::from_asset_error(url.to_string(), error))
+        })
+    }
 
-        Box::pin(decode_cache::load_coalesced(key, move || async move {
-            registry
-                .load_network_image_bridged(url.clone())
-                .await
-                .map_err(|error| ImageProviderError::from_asset_error(url, error))
-        }))
+    fn cached(&self) -> Option<PixelImage> {
+        self.registry.cached_image(&self.source())
     }
 
     fn cache_key(&self) -> Option<ImageCacheKey> {
-        Some(self.cache_key_value())
+        Some(ImageCacheKey::registry(&self.registry, self.source()))
     }
 }

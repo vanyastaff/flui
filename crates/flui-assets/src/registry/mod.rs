@@ -17,7 +17,33 @@ use crate::types::AssetHandle;
 #[cfg(feature = "images")]
 mod bridge;
 #[cfg(feature = "images")]
+mod images;
+#[cfg(feature = "images")]
+mod ordered_slots;
+#[cfg(feature = "images")]
 use bridge::BridgeRuntime;
+#[cfg(feature = "images")]
+pub use images::{ImageLoad, ImageSource};
+
+/// How a registry keeps and decodes bridged images.
+#[cfg(feature = "images")]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ImageConfig {
+    /// The most decoded pixel bytes kept.
+    pub(crate) budget: usize,
+    /// The most decodes running at once.
+    pub(crate) decode_threads: std::num::NonZeroUsize,
+}
+
+#[cfg(feature = "images")]
+impl Default for ImageConfig {
+    fn default() -> Self {
+        Self {
+            budget: images::DEFAULT_DECODED_IMAGE_BYTES,
+            decode_threads: images::default_decode_threads(),
+        }
+    }
+}
 
 /// Asset registry for central asset management.
 ///
@@ -58,6 +84,10 @@ pub struct AssetRegistry {
     #[cfg(feature = "images")]
     bridge_runtime: BridgeRuntime,
 
+    /// Bridged loads' decoded images and loads in flight.
+    #[cfg(feature = "images")]
+    decoded_images: Arc<images::DecodedImages>,
+
     /// One HTTP connection pool per registry, initialized on the loading runtime.
     #[cfg(all(feature = "images", feature = "network"))]
     network_loader: Arc<tokio::sync::OnceCell<crate::NetworkLoader>>,
@@ -79,43 +109,71 @@ impl std::fmt::Debug for AssetRegistry {
 impl AssetRegistry {
     /// Creates a new empty registry with the given default capacity.
     fn new(cache_config: AssetCacheConfig) -> Self {
-        Self {
-            caches: Arc::new(RwLock::new(HashMap::new())),
-            cache_config,
-            #[cfg(feature = "images")]
-            injected_runtime_handle: None,
-            #[cfg(feature = "images")]
-            bridge_runtime: BridgeRuntime::new(),
-            #[cfg(all(feature = "images", feature = "network"))]
-            network_loader: Arc::new(tokio::sync::OnceCell::new()),
+        #[cfg(feature = "images")]
+        {
+            Self::with_images(
+                cache_config,
+                None,
+                ImageConfig::default(),
+                #[cfg(feature = "network")]
+                None,
+            )
+        }
+        #[cfg(not(feature = "images"))]
+        {
+            Self {
+                caches: Arc::new(RwLock::new(HashMap::new())),
+                cache_config,
+            }
         }
     }
 
     /// As [`new`](Self::new), additionally recording a host-supplied runtime
-    /// handle for bridged image loads to spawn onto.
+    /// handle for bridged image loads to spawn onto and how decoded images
+    /// are kept.
     #[cfg(feature = "images")]
-    fn with_injected_handle(
+    fn with_images(
         cache_config: AssetCacheConfig,
         injected_runtime_handle: Option<tokio::runtime::Handle>,
+        image_config: ImageConfig,
         #[cfg(feature = "network")] network_loader: Option<crate::NetworkLoader>,
     ) -> Self {
         Self {
             caches: Arc::new(RwLock::new(HashMap::new())),
             cache_config,
             injected_runtime_handle,
-            bridge_runtime: BridgeRuntime::new(),
+            bridge_runtime: BridgeRuntime::new(image_config.decode_threads),
+            decoded_images: Arc::new(images::DecodedImages::new(
+                image_config.budget,
+                image_config.decode_threads,
+            )),
             #[cfg(feature = "network")]
             network_loader: Arc::new(tokio::sync::OnceCell::new_with(network_loader)),
         }
     }
 
-    /// Asynchronously loads and decodes the image asset at `path`, running
-    /// the file read and decode on a background tokio runtime this registry
-    /// owns or was handed — never on the caller's thread.
+    /// Loads and decodes the image asset at `path` off the caller's thread,
+    /// through this registry's decoded-image cache.
     ///
-    /// Spawns onto [`AssetRegistryBuilder::with_runtime_handle`]'s injected
-    /// handle if one was supplied at construction; otherwise an ambient multi-thread
-    /// tokio runtime on the calling thread right now
+    /// A completed image for `path` is returned at once and made most recently
+    /// used; a request for a path already loading joins that load; otherwise
+    /// one task reads the file on the bridge runtime and decodes it on that
+    /// runtime's blocking pool, at most
+    /// [`with_decode_threads`](AssetRegistryBuilder::with_decode_threads)
+    /// decodes at a time. The decoded image is kept within
+    /// [`with_decoded_image_budget`](AssetRegistryBuilder::with_decoded_image_budget);
+    /// failures are not kept, so a later request retries.
+    ///
+    /// Dropping the last [`ImageLoad`] waiting for a load cancels it: the file
+    /// is read in chunks and stops at the next one (a chunk already being read
+    /// on a blocking thread finishes), and a decode that has not started never
+    /// runs. Loads start reading in the order they were requested, up to four
+    /// per decode thread; a decode slot goes to the earliest-requested load
+    /// whose bytes are ready, never held for one still fetching.
+    ///
+    /// The task spawns onto [`AssetRegistryBuilder::with_runtime_handle`]'s
+    /// injected handle if one was supplied at construction; otherwise an
+    /// ambient multi-thread tokio runtime on the calling thread right now
     /// (`tokio::runtime::Handle::try_current`, re-checked on **every** call —
     /// never memoized, since an ambient runtime can shut down and restart
     /// between calls); otherwise a dedicated single-worker runtime, started
@@ -125,17 +183,13 @@ impl AssetRegistry {
     /// does not drive spawned tasks. Explicitly injected runtimes must remain
     /// driven until the loads complete.
     ///
-    /// The returned future is reactor-free: it only awaits a
-    /// [`tokio::sync::oneshot`] receiver, so *polling* it never requires an
+    /// The returned future is reactor-free: polling it never requires an
     /// ambient tokio context — only the spawn (done inside this method, once)
     /// needs a runtime handle.
     ///
-    /// This method does not consult or populate [`AssetRegistry::load`]'s own
-    /// cache (`AssetCache<ImageAsset>`, moka-backed with a 5-minute TTL) —
-    /// the decoded-image cache a UI layer probes synchronously before
-    /// spawning a load, and the in-flight load coalescing that lets two
-    /// concurrent subscribers share one load, are both a UI-layer concern
-    /// (`flui_widgets::image`'s decode cache), not this registry's.
+    /// This method does not consult or populate [`AssetRegistry::load`]'s
+    /// typed cache (`AssetCache<ImageAsset>`): the decoded-image cache is the
+    /// one a UI layer probes synchronously with [`cached_image`](Self::cached_image).
     ///
     /// # Errors
     ///
@@ -146,49 +200,21 @@ impl AssetRegistry {
     /// shuts down while the task is still in flight. Returns [`AssetError::Io`]
     /// if starting the owned runtime fails; a later call retries initialization.
     #[cfg(feature = "images")]
-    pub fn load_image_bridged(
-        &self,
-        path: impl Into<String>,
-    ) -> impl std::future::Future<Output = Result<crate::Image>> + Send + 'static {
-        let path = path.into();
-        let handle = self
-            .bridge_runtime
-            .resolve(self.injected_runtime_handle.as_ref());
-        let (tx, rx) = tokio::sync::oneshot::channel();
-
-        let spawn_path = path.clone();
-        match handle {
-            Ok(handle) => {
-                handle.spawn(async move {
-                    let asset = crate::assets::image::ImageAsset::file(spawn_path);
-                    let outcome = Asset::load(&asset).await;
-                    // A dropped receiver means the observer abandoned the load.
-                    let _ = tx.send(outcome);
-                });
-            }
-            Err(error) => {
-                let _ = tx.send(Err(error));
-            }
-        }
-
-        async move {
-            rx.await.map_err(|_| AssetError::LoadFailed {
-                path,
-                reason: "the asset-loading task was dropped before completing".to_string(),
-            })?
-        }
+    pub fn load_image_bridged(&self, path: impl Into<Arc<str>>) -> ImageLoad {
+        let source = ImageSource::Asset(path.into());
+        self.load_decoded(source, read_in_chunks)
     }
 
-    /// Asynchronously fetches and decodes an image over HTTP/HTTPS via
-    /// [`NetworkLoader`](crate::loaders::NetworkLoader), running the request
-    /// and decode on the same background runtime
-    /// [`load_image_bridged`](Self::load_image_bridged) uses — never on the
-    /// caller's thread.
+    /// Fetches and decodes an image over HTTP/HTTPS via
+    /// [`NetworkLoader`](crate::loaders::NetworkLoader), through the same
+    /// decoded-image cache, runtime selection and cancellation as
+    /// [`load_image_bridged`](Self::load_image_bridged).
     ///
     /// Requires both the `images` (decode) and `network` (HTTP client)
     /// features.
     /// Requests share this registry's lazily initialized HTTP connection pool.
     /// Client initialization errors are returned and a later load may retry.
+    /// Dropping the last waiter aborts the request, closing its connection.
     ///
     /// # Errors
     ///
@@ -198,54 +224,80 @@ impl AssetRegistry {
     /// [`load_image_bridged`](Self::load_image_bridged)'s `# Errors` for the
     /// same contract.
     #[cfg(all(feature = "images", feature = "network"))]
-    pub fn load_network_image_bridged(
-        &self,
-        url: impl Into<String>,
-    ) -> impl std::future::Future<Output = Result<crate::Image>> + Send + 'static {
-        let url = url.into();
-        let handle = self
-            .bridge_runtime
-            .resolve(self.injected_runtime_handle.as_ref());
-        let (tx, rx) = tokio::sync::oneshot::channel();
-
-        let spawn_url = url.clone();
+    pub fn load_network_image_bridged(&self, url: impl Into<Arc<str>>) -> ImageLoad {
+        let source = ImageSource::Network(url.into());
         let network_loader = Arc::clone(&self.network_loader);
-        match handle {
-            Ok(handle) => {
-                handle.spawn(async move {
-                    let outcome = async {
-                        let loader = network_loader
-                            .get_or_try_init(|| async {
-                                crate::NetworkLoader::new().map_err(|error| {
-                                    AssetError::LoadFailed {
-                                        path: spawn_url.clone(),
-                                        reason: format!(
-                                            "HTTP client initialization failed: {error}"
-                                        ),
-                                    }
-                                })
-                            })
-                            .await?;
-                        let bytes = loader.load_url(&spawn_url).await?;
-                        let asset =
-                            crate::assets::image::ImageAsset::from_bytes(spawn_url.clone(), bytes);
-                        Asset::load(&asset).await
-                    }
-                    .await;
-                    let _ = tx.send(outcome);
-                });
-            }
-            Err(error) => {
-                let _ = tx.send(Err(error));
-            }
-        }
+        self.load_decoded(source, move |url| async move {
+            let loader = network_loader
+                .get_or_try_init(|| async {
+                    crate::NetworkLoader::new().map_err(|error| AssetError::LoadFailed {
+                        path: url.to_string(),
+                        reason: format!("HTTP client initialization failed: {error}"),
+                    })
+                })
+                .await?;
+            loader.load_url(&url).await
+        })
+    }
 
-        async move {
-            rx.await.map_err(|_| AssetError::LoadFailed {
-                path: url,
-                reason: "the network-image loading task was dropped before completing".to_string(),
-            })?
-        }
+    /// The completed decoded image this registry keeps for `source`, made most
+    /// recently used — the synchronous probe a frame makes before starting a
+    /// bridged load.
+    #[cfg(feature = "images")]
+    #[must_use]
+    pub fn cached_image(&self, source: &ImageSource) -> Option<crate::Image> {
+        self.decoded_images.cached(source)
+    }
+
+    /// Serves `source` from the decoded-image cache, joins its load in flight,
+    /// or spawns a task that reads it with `fetch` and decodes it.
+    #[cfg(feature = "images")]
+    fn load_decoded<F, Fut>(&self, source: ImageSource, fetch: F) -> ImageLoad
+    where
+        F: FnOnce(Arc<str>) -> Fut,
+        Fut: std::future::Future<Output = Result<Vec<u8>>> + Send + 'static,
+    {
+        let (load, ticket, load_slot) = match self.decoded_images.admit(source.clone()) {
+            images::Admission::Served(load) => return load,
+            images::Admission::Start(load, ticket, load_slot) => (load, ticket, load_slot),
+        };
+        let completion =
+            images::Completion::new(Arc::clone(&self.decoded_images), source.clone(), ticket);
+        let handle = match self
+            .bridge_runtime
+            .resolve(self.injected_runtime_handle.as_ref())
+        {
+            Ok(handle) => handle,
+            Err(error) => {
+                completion.settle(Some(Err(error)));
+                return load;
+            }
+        };
+        let bytes = fetch(Arc::clone(source.label()));
+        let ticket = Arc::clone(completion.ticket());
+        // Spawned with no registry lock held: a runtime that has shut down
+        // drops the task inside `spawn`, and the completion's drop then
+        // settles the entry on this thread.
+        let task = handle.spawn(async move {
+            // Reserved at admission, granted before the read starts and held
+            // until the decode returns:
+            // reads past admission, and the encoded bytes waiting to decode,
+            // are bounded by count.
+            let _load = load_slot.granted().await;
+            let outcome = match bytes.await {
+                Ok(bytes) => {
+                    completion
+                        .images()
+                        .decode(completion.source(), completion.ticket(), bytes)
+                        .await
+                }
+                Err(error) => Some(Err(error)),
+            };
+            completion.settle(outcome);
+        });
+        self.decoded_images
+            .attach(&source, &ticket, task.abort_handle());
+        load
     }
 
     /// Loads an asset, using the cache if available.
@@ -433,15 +485,72 @@ impl AssetRegistry {
     }
 }
 
-/// Under memory pressure the registry gives back every completed entry.
+/// Bytes one blocking read takes of an image file: an abandoned load stops
+/// reading at the next chunk instead of holding a blocking thread for the
+/// whole file.
+#[cfg(feature = "images")]
+const FILE_READ_CHUNK: usize = 256 * 1024;
+
+/// The largest encoded image file a bridged load reads: 256 MiB, the same
+/// bound `NetworkLoader::load_url` puts on a response body. A larger file
+/// fails before it is buffered.
+#[cfg(feature = "images")]
+const MAX_ENCODED_FILE_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Reads the file at `path` one [`FILE_READ_CHUNK`] per blocking read, so the
+/// future can be dropped between chunks, and never more than
+/// [`MAX_ENCODED_FILE_BYTES`].
 ///
-/// An asset reloads from its source on the next request, and there is no
+/// `tokio::fs::read` runs the whole `std::fs::read` as one blocking call,
+/// which an abort cannot stop.
+#[cfg(feature = "images")]
+async fn read_in_chunks(path: Arc<str>) -> Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+
+    let failed = |error: std::io::Error| AssetError::LoadFailed {
+        path: path.to_string(),
+        reason: error.to_string(),
+    };
+    let too_large = || AssetError::LoadFailed {
+        path: path.to_string(),
+        reason: format!("the file is larger than {MAX_ENCODED_FILE_BYTES} bytes"),
+    };
+    let mut file = tokio::fs::File::open(path.as_ref()).await.map_err(failed)?;
+    let length = file.metadata().await.map_err(failed)?.len();
+    if length > MAX_ENCODED_FILE_BYTES {
+        return Err(too_large());
+    }
+    file.set_max_buf_size(FILE_READ_CHUNK);
+    // The metadata length is a hint, not a bound: the file can grow while it
+    // is read. The buffer takes at most the cap; one more byte, read into a
+    // probe of its own, tells a file that grew past it.
+    let mut bytes = Vec::with_capacity(usize::try_from(length).unwrap_or(0));
+    let mut capped = file.take(MAX_ENCODED_FILE_BYTES);
+    capped.read_to_end(&mut bytes).await.map_err(failed)?;
+    let mut probe = [0_u8; 1];
+    if capped.into_inner().read(&mut probe).await.map_err(failed)? > 0 {
+        return Err(too_large());
+    }
+    Ok(bytes)
+}
+
+/// Under memory pressure the registry gives back every completed typed-cache
+/// entry, and decoded images by level.
+///
+/// A typed asset reloads from its source on the next request, and there is no
 /// cheaper half-way to give back, so each level drops the same entries.
-/// Handles already given out keep their data, and loads in flight finish into
-/// the caches they started with.
+/// Decoded images (`images` feature) are kept by recency: moderate pressure
+/// trims them to half the decoded-image budget
+/// (`AssetRegistryBuilder::with_decoded_image_budget`), critical pressure drops
+/// them all. Handles and images already given out keep their data, and loads
+/// in flight finish into the caches they started with.
 impl ReclaimMemory for AssetRegistry {
-    fn reclaim(&self, _level: MemoryPressureLevel) {
+    fn reclaim(&self, level: MemoryPressureLevel) {
         self.retire_caches();
+        #[cfg(feature = "images")]
+        self.decoded_images.reclaim(level);
+        #[cfg(not(feature = "images"))]
+        let _ = level;
     }
 }
 
@@ -503,6 +612,10 @@ pub struct AssetRegistryBuilder<C = NoCapacity> {
     /// [`AssetRegistryBuilder::<HasCapacity>::build`].
     #[cfg(feature = "images")]
     runtime_handle: Option<tokio::runtime::Handle>,
+    /// Set via [`with_decoded_image_budget`](Self::with_decoded_image_budget)
+    /// and [`with_decode_threads`](Self::with_decode_threads).
+    #[cfg(feature = "images")]
+    images: ImageConfig,
     #[cfg(all(feature = "images", feature = "network"))]
     network_loader: Option<crate::NetworkLoader>,
 }
@@ -525,6 +638,8 @@ impl AssetRegistryBuilder<NoCapacity> {
             capacity: NoCapacity,
             #[cfg(feature = "images")]
             runtime_handle: None,
+            #[cfg(feature = "images")]
+            images: ImageConfig::default(),
             #[cfg(all(feature = "images", feature = "network"))]
             network_loader: None,
         }
@@ -558,6 +673,8 @@ impl AssetRegistryBuilder<NoCapacity> {
             capacity: HasCapacity(config),
             #[cfg(feature = "images")]
             runtime_handle: self.runtime_handle,
+            #[cfg(feature = "images")]
+            images: self.images,
             #[cfg(all(feature = "images", feature = "network"))]
             network_loader: self.network_loader,
         }
@@ -635,6 +752,31 @@ impl<C> AssetRegistryBuilder<C> {
         self.runtime_handle = Some(handle);
         self
     }
+
+    /// Bounds the decoded images bridged loads keep, in pixel bytes
+    /// (`width * height * 4` each).
+    ///
+    /// The least recently used images go first once the total passes `bytes`;
+    /// an image larger than `bytes` is handed to its waiters and not kept, and
+    /// `0` keeps none. Loads in flight are still shared. The default is 256 MiB,
+    /// and 64 MiB on Android, iOS and the web.
+    #[cfg(feature = "images")]
+    #[must_use]
+    pub fn with_decoded_image_budget(mut self, bytes: usize) -> Self {
+        self.images.budget = bytes;
+        self
+    }
+
+    /// Bounds how many bridged images decode at once.
+    ///
+    /// Decodes run on the loading runtime's blocking pool, never on its async
+    /// workers. The default is half the available cores, at most four.
+    #[cfg(feature = "images")]
+    #[must_use]
+    pub fn with_decode_threads(mut self, threads: std::num::NonZeroUsize) -> Self {
+        self.images.decode_threads = threads;
+        self
+    }
 }
 
 // ===== Final State: HasCapacity =====
@@ -654,9 +796,10 @@ impl AssetRegistryBuilder<HasCapacity> {
     pub fn build(self) -> AssetRegistry {
         #[cfg(feature = "images")]
         {
-            AssetRegistry::with_injected_handle(
+            AssetRegistry::with_images(
                 self.capacity.0,
                 self.runtime_handle,
+                self.images,
                 #[cfg(feature = "network")]
                 self.network_loader,
             )
@@ -691,6 +834,8 @@ impl AssetRegistryBuilder<HasCapacity> {
             capacity: HasCapacity(config),
             #[cfg(feature = "images")]
             runtime_handle: self.runtime_handle,
+            #[cfg(feature = "images")]
+            images: self.images,
             #[cfg(all(feature = "images", feature = "network"))]
             network_loader: self.network_loader,
         }
