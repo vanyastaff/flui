@@ -840,7 +840,7 @@ impl ElementOwner<'_> {
     /// can schedule the element, but it deliberately cannot mutate this
     /// registry.
     ///
-    /// `cell` must be the same `Arc` the render object registered under
+    /// `cell` must be the same `Rc` the render object registered under
     /// `render_id` publishes into. The registry is payload-blind — a
     /// `LayoutBuilder` publishes box constraints, a sliver persistent header
     /// its shrink state — so what matters here is only that both halves hold
@@ -849,7 +849,7 @@ impl ElementOwner<'_> {
         &mut self,
         render_id: RenderId,
         element: ElementId,
-        cell: Arc<dyn BuildDuringLayoutCell>, // the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
+        cell: Rc<dyn BuildDuringLayoutCell>, // the registry services heterogeneous build-during-layout nodes (LayoutBuilder's constraints cell, and a sliver persistent header's shrink cell next) and needs only needs_build/has_published/commit; a generic would monomorphise the registry per payload type, so one map could not hold both
     ) {
         self.layout_builder_registry
             .insert(render_id, LayoutBuilderEntry { element, cell });
