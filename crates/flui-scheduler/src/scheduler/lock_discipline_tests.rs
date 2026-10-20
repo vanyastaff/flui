@@ -90,6 +90,8 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     let FrameState {
         current_frame,
         current_vsync_time,
+        next_frame_id: _,
+        clock: _,
         budget,
         frame_count: _,
         janky_frame_count: _,
@@ -105,6 +107,7 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         wake_delivery,
         on_frame_scheduled,
         closed: _,
+        late_visual_update: _,
     } = &**wake;
     assert!(
         current_frame.try_borrow_mut().is_ok(),

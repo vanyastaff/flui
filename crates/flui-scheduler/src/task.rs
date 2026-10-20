@@ -17,7 +17,7 @@
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, cmp::Ordering, collections::BinaryHeap, rc::Rc};
+use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
@@ -235,37 +235,24 @@ impl std::fmt::Debug for Task {
     }
 }
 
-/// Wrapper for priority queue ordering (higher priority first)
-struct PriorityTask(Task);
+/// One FIFO lane per [`Priority`], indexed by [`Priority::as_u8`].
+type Lanes = [VecDeque<Task>; Priority::ALL.len()];
 
-impl PartialEq for PriorityTask {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.priority == other.0.priority && self.0.id == other.0.id
-    }
-}
-
-impl Eq for PriorityTask {}
-
-impl PartialOrd for PriorityTask {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for PriorityTask {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Higher priority first, then by task ID (FIFO within priority)
-        match self.0.priority.cmp(&other.0.priority) {
-            Ordering::Equal => other.0.id.get().cmp(&self.0.id.get()), // Earlier ID first
-            ord => ord,
-        }
-    }
+/// What one `TaskQueue::drain` did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TaskDrain {
+    /// Tasks that ran.
+    pub(crate) executed: usize,
+    /// Whether eligible tasks queued before the drain began were left queued:
+    /// the run limit or the admission check stopped it first.
+    pub(crate) deferred: bool,
 }
 
 /// Priority-based task queue
 ///
 /// Tasks are executed in priority order:
-/// UserInput > Animation > Build > Idle
+/// UserInput > Animation > Build > Idle,
+/// and in admission order within a priority.
 ///
 /// ## Task Addition
 ///
@@ -277,12 +264,12 @@ impl Ord for PriorityTask {
 /// ```
 #[derive(Clone)]
 pub struct TaskQueue {
-    queue: Rc<RefCell<BinaryHeap<PriorityTask>>>,
+    lanes: Rc<RefCell<Lanes>>,
 }
 
 impl std::fmt::Debug for TaskQueue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // The heap holds opaque task closures; report the lock-free length.
+        // The lanes hold opaque task closures; report the length.
         f.debug_struct("TaskQueue")
             .field("len", &self.len())
             .finish_non_exhaustive()
@@ -292,32 +279,28 @@ impl std::fmt::Debug for TaskQueue {
 impl TaskQueue {
     /// Detach scheduler-owned work before terminal callback retirement.
     pub(crate) fn detach_for_retirement(&self) -> impl Iterator<Item = Task> {
-        self.queue.take().into_iter().map(|entry| entry.0)
+        self.lanes.take().into_iter().flatten()
     }
 
     /// Create a new task queue
     pub fn new() -> Self {
         Self {
-            queue: Rc::new(RefCell::new(BinaryHeap::new())),
+            lanes: Rc::new(RefCell::new(Default::default())),
         }
     }
 
-    /// Create a task queue with pre-allocated capacity
+    /// Create a task queue with room for `capacity` tasks of each priority
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            queue: Rc::new(RefCell::new(BinaryHeap::with_capacity(capacity))),
+            lanes: Rc::new(RefCell::new(std::array::from_fn(|_| {
+                VecDeque::with_capacity(capacity)
+            }))),
         }
     }
 
     /// Add a task to the queue
     pub fn add_task(&self, task: Task) {
-        let mut queue = self.queue.borrow_mut();
-        queue.push(PriorityTask(task));
-        // Update the atomic len mirror BEFORE releasing the heap mutex.
-        // Otherwise concurrent observers see a window where the heap
-        // contains the new task but `len()` still reads the old value:
-        // updating the atomic outside the critical section creates a
-        // TOCTOU gap between the heap mutation and the atomic mirror update.
+        self.lanes.borrow_mut()[usize::from(task.priority.as_u8())].push_back(task);
     }
 
     /// Add a task with priority
@@ -328,192 +311,131 @@ impl TaskQueue {
         self.add_task(Task::new(priority, callback));
     }
 
-    /// Get the next task (highest priority)
+    /// Remove the next task: the oldest of the highest priority.
     pub fn pop(&self) -> Option<Task> {
-        let mut queue = self.queue.borrow_mut();
-        let popped = queue.pop().map(|pt| pt.0);
-        if popped.is_some() {
-            // Decrement inside the critical section — matches add_task
-            // ordering so observers don't see len > heap-size or vice versa.
-        }
-        popped
+        self.lanes
+            .borrow_mut()
+            .iter_mut()
+            .rev()
+            .find_map(VecDeque::pop_front)
     }
 
-    /// Peek at the next task without removing it
+    /// The priority of the task [`Self::pop`] would return
     pub fn peek_priority(&self) -> Option<Priority> {
-        self.queue.borrow_mut().peek().map(|pt| pt.0.priority)
+        Priority::ALL
+            .into_iter()
+            .rev()
+            .find(|priority| !self.lanes.borrow()[usize::from(priority.as_u8())].is_empty())
     }
 
-    /// Get number of pending tasks (lock-free).
-    ///
-    /// Reads the atomic length mirror; no lock acquisition. See [`TaskQueue::len`]
-    /// field docs for ordering rationale.
+    /// Get number of pending tasks
     pub fn len(&self) -> usize {
-        self.queue.borrow().len()
+        self.lanes.borrow().iter().map(VecDeque::len).sum()
     }
 
-    /// Check if queue is empty (lock-free).
+    /// Check if queue is empty
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.lanes.borrow().iter().all(VecDeque::is_empty)
     }
 
-    /// Execute tasks at or above `min_priority`, one at a time, bounded to
-    /// the NUMBER of tasks already queued when THIS call started.
+    /// Execute the tasks at or above `min_priority` that were queued when this
+    /// call started, highest priority first.
     ///
-    /// Each iteration takes the queue lock only long enough to pop one
-    /// eligible task and execute it OUTSIDE the lock — the same
-    /// pop-one-under-lock, execute-outside-it shape [`Self::pop`] and
-    /// `UpdateScheduler::flush_microtasks` use, rather than draining the
-    /// whole matching run into a batch before executing any of it. A task
-    /// that panics loses only itself: every task still behind it stays
-    /// queued for the next call to see, instead of already being removed
-    /// from the heap by this call's own batch drain and lost with it
-    /// (issue #1057). The atomic `len` mirror is decremented per pop,
-    /// inside the same critical section as the pop itself — matching
-    /// `add_task`/`pop`'s ordering, so a panic mid-loop cannot leave
-    /// `len()` under- or over-reporting the heap's real size.
-    ///
-    /// # The count budget, and why not an id watermark
-    ///
-    /// Simply re-peeking the live heap until its top drops below
-    /// `min_priority` is NOT equivalent to the batched version this
-    /// replaced: a task that enqueues another task of its own during this
-    /// same call would be visible to that live re-peek and run in the SAME
-    /// call, with nothing bounding a chain that keeps re-enqueuing itself
-    /// (measured: a self-re-enqueuing `Priority::Build` task ran 500+
-    /// times in one `execute_until` call and never returned, hanging the
-    /// frame — the caller's own reentrant-pass cap in `handle_draw_frame`
-    /// never got a chance to fire, since it only runs BETWEEN calls to this
-    /// method). This reads `queue.len()` ONCE, under the first lock
-    /// acquisition, as a budget, and decrements it once per pop; the loop
-    /// stops the moment EITHER the budget is spent OR the top no longer
-    /// meets `min_priority`. Unlike `handle_begin_frame`'s transient-
-    /// callback deque, this heap has no mid-scan removal API (nothing here
-    /// plays the role `cancel_frame_callback` plays there), so a plain
-    /// count is sound: the budget can only ever be spent on pops this call
-    /// itself performs, never invalidated out from under it by a sibling
-    /// mutation.
-    ///
-    /// A first attempt at this used an id watermark instead — pop, and if
-    /// the popped task's id exceeded the watermark, set it aside in a local
-    /// buffer and keep scanning past it — to let a reentrant HIGHER-priority
-    /// task skip the scan without ending it early. That local buffer is
-    /// itself the bug this replaced: a later task's panic in the SAME call
-    /// unwound straight through it, dropping every task it had set aside
-    /// with no way back into the live heap — losing reentrant work the
-    /// pre-#1057 batch drain never lost, since nothing there ever left the
-    /// heap except what was already executing. The count budget has no such
-    /// buffer at all: a reentrant task, if it displaces anything, displaces
-    /// a PRE-EXISTING one to the next call (the reentrant task consumes a
-    /// budget slot a pre-existing task would otherwise have used), never a
-    /// task already popped and pending re-insertion.
-    ///
-    /// Returns the number of tasks executed before returning — a panic
-    /// propagates past this method with that count short of the full
-    /// matching run; the caller observes the panic, not a partial count.
+    /// Returns the number of tasks executed; a task queued while it runs waits
+    /// for the next call, and a panicking task loses only itself.
     pub fn execute_until(&self, min_priority: Priority) -> usize {
-        let mut budget = self.queue.borrow_mut().len();
-        let mut executed = 0usize;
-        while budget > 0 {
-            let task = {
-                let mut queue = self.queue.borrow_mut();
-                match queue.peek() {
-                    Some(pt) if pt.0.priority >= min_priority => {
-                        let popped = queue.pop().expect(
-                            "BUG: peek returned Some under the same lock, so pop must succeed",
-                        );
-                        // Decrement inside the critical section — matches
-                        // add_task / pop ordering.
-                        Some(popped.0)
-                    }
-                    _ => None,
-                }
-            };
-            let Some(task) = task else {
-                break;
-            };
-            budget -= 1;
-            task.execute();
-            executed += 1;
-        }
-        executed
+        self.drain(min_priority, usize::MAX, |_| true).executed
     }
 
-    /// Execute all tasks of a specific priority
+    /// Execute, one at a time and outside the queue's borrow, the tasks at or
+    /// above `min_priority` that were queued when this call started: highest
+    /// priority first, oldest first within a priority, at most `limit` of
+    /// them, each only if `admit` accepts its priority when its turn comes.
+    ///
+    /// The tasks a drain may run are fixed when it starts, by each lane's
+    /// newest task id (ids grow in admission order). A task queued while the
+    /// drain runs has a larger id and waits for the next drain, so a task that
+    /// re-queues itself, at any priority, cannot run twice in one drain or
+    /// push older tasks out of it. A task that panics loses only itself: the
+    /// tasks behind it are still queued when the panic propagates.
+    ///
+    /// The first task `admit` refuses ends the drain; the frame uses it to
+    /// stop `Priority::Idle` work at its deadline.
+    pub(crate) fn drain(
+        &self,
+        min_priority: Priority,
+        limit: usize,
+        mut admit: impl FnMut(Priority) -> bool,
+    ) -> TaskDrain {
+        let watermarks: [Option<TaskId>; Priority::ALL.len()] = {
+            let lanes = self.lanes.borrow();
+            std::array::from_fn(|lane| lanes[lane].back().map(Task::id))
+        };
+        let mut drain = TaskDrain::default();
+        loop {
+            let next = {
+                let lanes = self.lanes.borrow();
+                Priority::ALL.into_iter().rev().find(|priority| {
+                    let lane = usize::from(priority.as_u8());
+                    *priority >= min_priority
+                        && lanes[lane]
+                            .front()
+                            .zip(watermarks[lane])
+                            .is_some_and(|(task, watermark)| task.id.get() <= watermark.get())
+                })
+            };
+            let Some(priority) = next else {
+                return drain;
+            };
+            if drain.executed == limit || !admit(priority) {
+                drain.deferred = true;
+                return drain;
+            }
+            let task = self.lanes.borrow_mut()[usize::from(priority.as_u8())]
+                .pop_front()
+                .expect("BUG: the lane's front was found under the previous borrow");
+            task.execute();
+            drain.executed += 1;
+        }
+    }
+
+    /// Execute the tasks of exactly `priority` that were queued when this call
+    /// started, oldest first, one at a time.
     ///
     /// Returns number of tasks executed
     pub fn execute_priority(&self, priority: Priority) -> usize {
-        let tasks = {
-            let mut queue = self.queue.borrow_mut();
-            let mut batch = Vec::with_capacity(queue.len());
-            while let Some(pt) = queue.peek() {
-                if pt.0.priority == priority {
-                    let task = queue
-                        .pop()
-                        .expect("BUG: peek returned Some under the same lock, so pop must succeed");
-                    batch.push(task.0);
-                } else {
-                    break;
-                }
-            }
-            batch
-        };
-
-        let count = tasks.len();
-        for task in tasks {
-            task.execute();
-        }
-        count
+        self.drain(priority, usize::MAX, |candidate| candidate == priority)
+            .executed
     }
 
-    /// Execute all pending tasks
+    /// Execute every task that was queued when this call started.
     ///
     /// Returns number of tasks executed
     pub fn execute_all(&self) -> usize {
-        let tasks: Vec<Task> = {
-            let mut queue = self.queue.borrow_mut();
-            let mut batch = Vec::with_capacity(queue.len());
-            while let Some(pt) = queue.pop() {
-                batch.push(pt.0);
-            }
-            batch
-        };
-
-        let count = tasks.len();
-        for task in tasks {
-            task.execute();
-        }
-        count
+        self.execute_until(Priority::Idle)
     }
 
     /// Get count of tasks at each priority level
     pub fn count_by_priority(&self) -> PriorityCount {
-        let mut counts = PriorityCount::default();
-        {
-            let queue = self.queue.borrow_mut();
-            for pt in queue.iter() {
-                match pt.0.priority {
-                    Priority::UserInput => counts.user_input += 1,
-                    Priority::Animation => counts.animation += 1,
-                    Priority::Build => counts.build += 1,
-                    Priority::Idle => counts.idle += 1,
-                }
-            }
+        let lanes = self.lanes.borrow();
+        let count = |priority: Priority| lanes[usize::from(priority.as_u8())].len();
+        PriorityCount {
+            user_input: count(Priority::UserInput),
+            animation: count(Priority::Animation),
+            build: count(Priority::Build),
+            idle: count(Priority::Idle),
         }
-        counts
     }
 
-    /// Test-only probe: `true` if this queue's lock is currently free.
+    /// Test-only probe: `true` if this queue's borrow is currently free.
     ///
     /// Backs `flui-scheduler`'s scheduler-wide lock-discipline oracle
     /// (`scheduler/lock_discipline_tests.rs`'s `assert_no_scheduler_lock_held`),
-    /// so a callback that calls `add_task`/`execute_until` from inside another callback
-    /// can be observed NOT deadlocking against this queue's own mutex.
-    /// `queue` is private to this module; the oracle probes it through
-    /// this method rather than reaching into the field directly.
+    /// so a callback that calls `add_task`/`execute_until` from inside another
+    /// callback can be observed not re-entering this queue's borrow.
     #[cfg(test)]
     pub(crate) fn is_unlocked(&self) -> bool {
-        self.queue.try_borrow_mut().ok().is_some()
+        self.lanes.try_borrow_mut().is_ok()
     }
 }
 
@@ -553,6 +475,8 @@ impl PriorityCount {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
 
     /// A panicking task must not take its queued siblings down with it: a
@@ -647,6 +571,32 @@ mod tests {
         assert_eq!(*ran.borrow(), vec![1, 2, 3, 4]);
     }
 
+    /// A higher-priority task that re-queues itself waits for the next drain
+    /// instead of taking every turn from older, lower-priority work.
+    fn a_requeuing_input_task_does_not_starve_older_builds() {
+        fn requeue(queue: TaskQueue, runs: Rc<Cell<u32>>) {
+            let next = queue.clone();
+            queue.add(Priority::UserInput, move || {
+                runs.set(runs.get() + 1);
+                requeue(next, runs);
+            });
+        }
+        let queue = TaskQueue::new();
+        let input_runs = Rc::new(Cell::new(0));
+        requeue(queue.clone(), Rc::clone(&input_runs));
+        let built = Rc::new(Cell::new(false));
+        let build = Rc::clone(&built);
+        queue.add(Priority::Build, move || build.set(true));
+
+        assert_eq!(queue.execute_until(Priority::Build), 2);
+        assert_eq!(
+            input_runs.get(),
+            1,
+            "the re-queued copy waits for the next drain"
+        );
+        assert!(built.get(), "the older Build task ran in the same drain");
+    }
+
     #[test]
     fn execute_until_leaves_later_same_priority_tasks_queued_when_one_panics() {
         crate::table_test::run_table(
@@ -659,6 +609,10 @@ mod tests {
                 (
                     "exhausted_task_ids_preserve_priority_fifo",
                     exhausted_task_ids_preserve_priority_fifo as fn(),
+                ),
+                (
+                    "a_requeuing_input_task_does_not_starve_older_builds",
+                    a_requeuing_input_task_does_not_starve_older_builds as fn(),
                 ),
             ],
         );
