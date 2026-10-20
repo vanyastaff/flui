@@ -792,6 +792,14 @@ pub(crate) mod activator_tests {
             "Arabic-Indic digit on the 5 key"
         );
         assert!(
+            SingleActivator::character("[").meta().matches(&on(
+                "х",
+                Code::BracketLeft,
+                Modifiers::META
+            )),
+            "Russian layout, Cmd+Х on the bracket key (the macOS back chord)"
+        );
+        assert!(
             !copy.matches(&on("с", Code::KeyC, Modifiers::NONE)),
             "typing с is not the chord"
         );

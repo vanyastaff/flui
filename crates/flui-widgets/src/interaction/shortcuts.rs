@@ -252,13 +252,30 @@ impl SingleActivator {
     }
 }
 
-/// The letter or digit a US layout puts on the physical key `code`.
+/// The letter, digit or punctuation mark a US layout puts on the physical key
+/// `code`.
 fn latin_of_code(code: Code) -> Option<&'static str> {
     let name = code.as_str();
-    let tail = name
+    if let Some(tail) = name
         .strip_prefix("Key")
-        .or_else(|| name.strip_prefix("Digit"))?;
-    (tail.len() == 1).then_some(tail)
+        .or_else(|| name.strip_prefix("Digit"))
+    {
+        return (tail.len() == 1).then_some(tail);
+    }
+    Some(match name {
+        "BracketLeft" => "[",
+        "BracketRight" => "]",
+        "Minus" => "-",
+        "Equal" => "=",
+        "Comma" => ",",
+        "Period" => ".",
+        "Slash" => "/",
+        "Semicolon" => ";",
+        "Quote" => "'",
+        "Backquote" => "`",
+        "Backslash" => "\\",
+        _ => return None,
+    })
 }
 
 /// `pressed` is `trigger`, an ASCII letter compared without case.
