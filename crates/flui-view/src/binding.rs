@@ -323,8 +323,8 @@ pub use flui_scheduler::AppLifecycleState;
 /// The binding stays on its owner thread. Code it runs (a view's `build` or
 /// `inspect`, a lifecycle hook, a `with_element_tree` closure) may reach the
 /// binding again: a call that needs the tree while it is in use gets
-/// [`TreeBusy`] from a `try_` accessor and a panic naming the phase from a
-/// plain one, never a deadlock.
+/// [`SnapshotError::Busy`] from [`Self::inspect_elements`] and a panic naming
+/// the phase from the other accessors, never a deadlock.
 pub struct WidgetsBinding {
     pub(crate) lifecycle: crate::lifecycle::LifecycleSource,
     /// Inner mutable state. `Rc` so the GlobalKey registry closures can
