@@ -1540,11 +1540,15 @@ workspace's `Cargo.lock`, not recalled.
 
 **Trade-off:** the cached display follows the window across screens and backing
 changes. A mode change that leaves the window where it is (a user switching
-refresh rate in System Settings) is **not** observed yet: this backend observes no
-screen-parameters notification, so the new period is picked up the next time the
-host samples the snapshot (a move, a resize or another owner wake) rather than
-immediately. Named rather than assumed away — it is unobservable on the single
-fixed-mode display this was measured on.
+refresh rate in System Settings) is observed too: `ScreenObserver`
+(`platforms/macos/display.rs`) marks the snapshot stale on
+`NSApplicationDidChangeScreenParametersNotification` and wakes the owner, and the
+host derives every window's display again on that wake. What stays open is a
+display whose current mode reports 0 Hz, which some built-in panels do: its period
+is unknown and the host paces at its 60 Hz default, because the
+`CVDisplayLinkGetNominalOutputVideoRefreshPeriod` fallback winit takes is not
+written ([gaps](../../docs/gaps.md), entry 4). Neither a live refresh switch nor
+such a panel ran: the display this was measured on has one fixed mode.
 
 **Replacement coverage:** the arithmetic is free-standing and AppKit-free
 (`RefreshPeriod::from_hz`, reached through `shared::display_period`), pinned by
@@ -2275,14 +2279,16 @@ match, or a window with no monitor, has no display.
 **What reaches the window.** `Moved`, `ScaleFactorChanged` and `Resized` ask
 the window whether its display changed. A change of the monitor list needs no
 event of its own: the thread wakes the owner and the host derives every window's
-display from the new snapshot. Two Wayland gaps are named. A window is on no
-output until its first frame enters one, and winit reports no event for that, so
-a window without a display is looked at again each time the loop goes idle
-(`about_to_wait`), which follows the compositor's `enter`. And winit reports
-nothing when a window crosses to another output of equal scale, so a refresh
-rate that differs between two same-scale outputs is followed only at the next
-event of the kinds above; the `wl_surface.enter` events that would tell belong
-to winit's connection.
+display from the new snapshot. On Wayland winit reports no event when a window
+enters an output: none for its first (a window is on no output until its first
+frame enters one), and only a `ScaleFactorChanged` for a later one of another
+scale, so a window moved to an output of equal scale but another refresh rate
+would keep the old one. Every Wayland window is therefore asked its monitor again
+each time the loop goes idle (`about_to_wait`, `sync_unannounced_displays`),
+which follows the compositor's `enter`; a change publishes the window's state
+and then raises the display hint. An X11 window reports moves with `Moved`, so
+only one with no display yet is looked at there. The `wl_surface.enter` events
+themselves belong to winit's connection.
 
 **What was not run.** The pure rows run on every host. The thread is tested
 against a scripted session on Linux (`display_thread_contract`: change, wake,
