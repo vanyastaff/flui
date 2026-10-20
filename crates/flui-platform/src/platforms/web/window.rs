@@ -23,7 +23,7 @@ use crate::{
 
 use super::{
     display::WebDisplays,
-    registration::{CanvasClaim, CanvasResize, Registration, effective_focus},
+    registration::{CanvasClaim, Registration, effective_focus},
 };
 
 /// Web window wrapping a `<canvas>` element
@@ -528,47 +528,51 @@ pub(super) struct LayoutSync {
     callbacks: Arc<WindowCallbacks>,
     publisher: StatePublisher,
     /// The device-pixel size the `ResizeObserver` last reported, with the
-    /// layout it was reported for.
+    /// CSS box it was reported for.
     observed: Cell<Option<ObservedSize>>,
 }
 
 /// A `ResizeObserverEntry`'s `devicePixelContentBoxSize`: the device pixels
 /// the browser laid the box out at, exact where the estimate can be a pixel
-/// off. It holds only while the layout it was reported for does.
+/// off. It holds while the CSS box it was reported for does, across a change
+/// of the device pixel ratio too: the device-pixel observer reports a ratio
+/// change that moves the device box, so one it does not report left the box
+/// as it was, which the estimate at the new ratio may not be.
 #[derive(Clone, Copy)]
 struct ObservedSize {
-    layout: (f64, f64, f64),
+    css: (f64, f64),
     device: DeviceSize,
 }
 
 impl LayoutSync {
-    /// A `ResizeObserver` reported the canvas: a device-pixel report is
-    /// recorded for the current layout, replacing the last one, then the
-    /// window syncs.
-    pub(super) fn observe(&self, report: CanvasResize) {
-        if let CanvasResize::DevicePixels(device) = report {
-            let observed = device
-                .zip(layout_size(&self.canvas))
-                .map(|(device, layout)| ObservedSize { layout, device });
-            self.observed.set(observed);
-        }
+    /// A `ResizeObserver` reported the canvas, with its device-pixel size
+    /// where the browser gives one and it can be used: record it for the
+    /// current CSS box, replacing the last, and sync.
+    pub(super) fn observe(&self, device: Option<DeviceSize>) {
+        let observed = device
+            .zip(layout_size(&self.canvas))
+            .map(|(device, (width, height, _))| ObservedSize {
+                css: (width, height),
+                device,
+            });
+        self.observed.set(observed);
         self.sync();
     }
 
     /// Bring the backing store and the tracked size up to the layout; see
     /// [`WebWindow::layout_sync`]. The backing store is the observed device
-    /// size while the layout is the one it was observed for, and the
+    /// size while the CSS box is the one it was observed for, and the
     /// estimate otherwise: a `resize` event can run before the observer
-    /// reports the new layout. The state lock is released before the
-    /// dispatch, which runs embedder callbacks.
+    /// reports the new box. The state lock is released before the dispatch,
+    /// which runs embedder callbacks.
     pub(super) fn sync(&self) {
-        let Some(layout @ (width, height, scale_factor)) = layout_size(&self.canvas) else {
+        let Some((width, height, scale_factor)) = layout_size(&self.canvas) else {
             return;
         };
         let backing = self
             .observed
             .get()
-            .filter(|observed| observed.layout == layout)
+            .filter(|observed| observed.css == (width, height))
             .map_or_else(
                 || DeviceSize::estimate(width, height, scale_factor),
                 |observed| observed.device,

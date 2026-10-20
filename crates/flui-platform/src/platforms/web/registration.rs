@@ -264,20 +264,10 @@ impl Drop for Listener {
     }
 }
 
-/// What a canvas's `ResizeObserver` reported.
-#[derive(Clone, Copy, Debug)]
-pub(super) enum CanvasResize {
-    /// The observed box's device-pixel size, `None` where the browser gives
-    /// none or it measures less than the window (a canvas with padding).
-    DevicePixels(Option<DeviceSize>),
-    /// The CSS content box changed; it says nothing of device pixels.
-    Layout,
-}
-
 struct ResizeSubscription {
     observer: web_sys::ResizeObserver,
     closure: Option<Closure<dyn Fn(JsValue)>>,
-    _body: Rc<dyn Fn(CanvasResize)>,
+    _body: Rc<dyn Fn(Option<DeviceSize>)>,
 }
 
 impl Drop for ResizeSubscription {
@@ -395,39 +385,37 @@ impl Registration {
         Ok(())
     }
 
-    /// Observe the canvas's size. Where the browser observes the device-pixel
-    /// box (Chrome, Firefox), a second observer watches the CSS content box:
-    /// each observer reports only a change of its own box, and a reflow can
-    /// move the CSS box while the rounded device-pixel box stays. A browser
-    /// without `ResizeObserver` is left to the window's `resize` subscription.
+    /// Observe the canvas's size; `body` gets each report's device-pixel
+    /// size where the browser gives one and it can be used. Where the browser
+    /// observes the device-pixel box (Chrome, Firefox), a second observer
+    /// watches the CSS content box: each observer reports only a change of
+    /// its own box, and a reflow or a change of padding can move the CSS box
+    /// while the rounded device-pixel box stays. Its entries carry the
+    /// device-pixel size as well, so either report replaces the last. A
+    /// browser without `ResizeObserver` is left to the window's `resize`
+    /// subscription.
     pub(super) fn observe(
         &mut self,
-        body: impl Fn(CanvasResize) + 'static,
+        body: impl Fn(Option<DeviceSize>) + 'static,
     ) -> Result<(), OpenWindowError> {
-        let body: Rc<dyn Fn(CanvasResize)> = Rc::new(body);
-        let Some(device) = self.subscribe(&body, |entries| {
-            CanvasResize::DevicePixels(match device_pixel_size(entries)[..] {
-                [width, height] => Some(DeviceSize { width, height }),
-                _ => None,
-            })
-        }) else {
+        let body: Rc<dyn Fn(Option<DeviceSize>)> = Rc::new(body);
+        let Some(device) = self.subscribe(&body) else {
             return Ok(());
         };
         if !observe_canvas(&device, &self.canvas).map_err(backend)? {
             return Ok(());
         }
-        match self.subscribe(&body, |_| CanvasResize::Layout) {
+        match self.subscribe(&body) {
             Some(layout) => observe_content_box(&layout, &self.canvas).map_err(backend),
             None => Ok(()),
         }
     }
 
-    /// A `ResizeObserver` whose entries `report` turns into calls of `body`
-    /// while this registration accepts; `None` in a browser without one.
+    /// A `ResizeObserver` that calls `body` with each report's device-pixel
+    /// size while this registration accepts; `None` in a browser without one.
     fn subscribe(
         &mut self,
-        body: &Rc<dyn Fn(CanvasResize)>,
-        report: fn(&JsValue) -> CanvasResize,
+        body: &Rc<dyn Fn(Option<DeviceSize>)>,
     ) -> Option<web_sys::ResizeObserver> {
         let weak = Rc::downgrade(body);
         let accepting = Rc::clone(&self.accepting);
@@ -435,7 +423,10 @@ impl Registration {
             if accepting.get()
                 && let Some(body) = weak.upgrade()
             {
-                body(report(&entries));
+                body(match device_pixel_size(&entries)[..] {
+                    [width, height] => Some(DeviceSize { width, height }),
+                    _ => None,
+                });
             }
         });
         let observer = match web_sys::ResizeObserver::new(closure.as_ref().unchecked_ref()) {

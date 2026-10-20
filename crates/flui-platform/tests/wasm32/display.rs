@@ -240,9 +240,10 @@ export function installResizeObserver(devicePixels) {
 }
 // The page lays the last canvas out at a padding box of `width`×`height`
 // whose content box, `padding` CSS pixels in on every side, the browser
-// snapped to `deviceWidth`×`deviceHeight` device pixels, and its observers
-// report it; the device size only where the browser has it.
-export function layOutCanvas(width, height, deviceWidth, deviceHeight, padding = 0) {
+// snapped to `deviceWidth`×`deviceHeight` device pixels. `boxes` names the
+// observed boxes that changed, so the observers of those report it; every
+// entry carries the device size where the browser has it, as Chrome's do.
+function layOut(width, height, deviceWidth, deviceHeight, padding, boxes) {
     lastCanvas.clientWidth = width;
     lastCanvas.clientHeight = height;
     lastCanvas.padding = padding;
@@ -256,23 +257,18 @@ export function layOutCanvas(width, height, deviceWidth, deviceHeight, padding =
         entry.devicePixelContentBoxSize = [{ inlineSize: deviceWidth, blockSize: deviceHeight }];
     }
     for (const observer of resizeObservers.slice()) {
-        if (observer.targets.some(each => each.target === lastCanvas)) observer.callback([entry], observer);
-    }
-}
-// A reflow moves the last canvas's CSS box to `width`×`height` and leaves its
-// rounded device-pixel box as it was: only content-box observers report it.
-export function reflowCanvas(width, height) {
-    lastCanvas.clientWidth = width;
-    lastCanvas.clientHeight = height;
-    const entry = {
-        target: lastCanvas,
-        contentRect: { width, height },
-        contentBoxSize: [{ inlineSize: width, blockSize: height }],
-    };
-    for (const observer of resizeObservers.slice()) {
-        const watched = each => each.target === lastCanvas && each.box === 'content-box';
+        const watched = each => each.target === lastCanvas && boxes.includes(each.box);
         if (observer.targets.some(watched)) observer.callback([entry], observer);
     }
+}
+// Both boxes changed.
+export function layOutCanvas(width, height, deviceWidth, deviceHeight, padding = 0) {
+    layOut(width, height, deviceWidth, deviceHeight, padding, ['content-box', 'device-pixel-content-box']);
+}
+// A reflow, or a change of padding, that moves the CSS content box and leaves
+// the rounded device-pixel box as it was: only content-box observers report it.
+export function reflowCanvas(width, height, deviceWidth, deviceHeight, padding = 0) {
+    layOut(width, height, deviceWidth, deviceHeight, padding, ['content-box']);
 }
 export function windowResizeListeners() { return windowListeners.filter(entry => entry.name === 'resize').length; }
 export function pixelRatioListeners() { return ratioQueries.reduce((sum, query) => sum + query.listenerCount(), 0); }
@@ -352,15 +348,7 @@ extern "C" {
     #[wasm_bindgen(js_name = layOutCanvas)]
     fn lay_out_canvas(width: u32, height: u32, device_width: u32, device_height: u32);
     #[wasm_bindgen(js_name = reflowCanvas)]
-    fn reflow_canvas(width: u32, height: u32);
-    #[wasm_bindgen(js_name = layOutCanvas)]
-    fn lay_out_padded_canvas(
-        width: u32,
-        height: u32,
-        device_width: u32,
-        device_height: u32,
-        padding: f64,
-    );
+    fn reflow_canvas(width: u32, height: u32, device_width: u32, device_height: u32, padding: f64);
     #[wasm_bindgen(js_name = pixelRatioListeners)]
     fn pixel_ratio_listeners() -> i32;
     #[wasm_bindgen(js_name = setHidden)]
@@ -1282,9 +1270,24 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
     assert_eq!(canvas_backing_size(), [451, 225]);
     assert_eq!(resized.lock().expect("resizes").len(), 2, "nothing changed");
 
-    // A reflow to 302 CSS pixels that the browser snaps to the same device
-    // pixels brings no device-pixel entry; the CSS-box observer reports it.
-    reflow_canvas(302, 150);
+    // A ratio change the device-pixel observer does not report left the
+    // device box as the browser last reported it, where the estimate at
+    // 1.501× would be 452.
+    set_pixel_ratio(1.501);
+    settle().await;
+    assert_eq!(window.scale_factor(), 1.501);
+    assert_eq!(
+        canvas_backing_size(),
+        [451, 225],
+        "the reported box holds across the ratio"
+    );
+    set_pixel_ratio(1.5);
+    settle().await;
+
+    // A reflow to 302 CSS pixels that leaves the rounded device-pixel box as
+    // it was is reported only by the CSS-box observer, whose entry carries
+    // the device size too.
+    reflow_canvas(302, 150, 452, 225, 0.0);
     settle().await;
     assert_eq!(
         window.logical_size().width,
@@ -1293,22 +1296,20 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
     );
     assert_eq!(
         canvas_backing_size(),
-        [453, 225],
-        "the estimate for the new box"
+        [452, 225],
+        "the reported size, not round(302 × 1.5)"
     );
-    assert_eq!(resized.lock().expect("resizes").len(), 3);
 
-    // With 0.2px of padding the window is the 301×150 padding box, and the
-    // device-pixel box measures only the 300.6×149.6 content inside it, a
-    // difference rounding to the CSS pixel would hide.
-    lay_out_padded_canvas(301, 150, 450, 224, 0.2);
+    // 0.2px of padding moves the content box and not the rounded device box:
+    // the window is the padding box, which the device box does not measure.
+    reflow_canvas(302, 150, 452, 225, 0.2);
     settle().await;
     assert_eq!(
         canvas_backing_size(),
-        [452, 225],
+        [453, 225],
         "the padding box's estimate, not the content box"
     );
-    assert_eq!(physical_size(&window), [452, 225]);
+    assert_eq!(physical_size(&window), [453, 225]);
 
     drop(window);
     running.quit();
