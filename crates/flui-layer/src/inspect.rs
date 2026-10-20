@@ -1,13 +1,14 @@
 //! The layer tree as an [`InspectTree`] (ADR-0242), and each layer's own fields.
 //!
-//! A node is named by its [`LayerId`] (`l4`), which is minted per frame: a layer of the next
-//! frame's tree is a different node even when it paints the same thing. A layer that a repaint
-//! boundary originated links to that boundary's render object. Its rect is the rectangle the
-//! layer defines in its own coordinates, for the variants that define one.
+//! A node is named by its [`LayerId`] and the tree's [`scene`](LayerTree::scene) (`l4.37`): ids
+//! are minted per frame, so a layer of the next frame's tree is a different node even when it
+//! paints the same thing, and an id kept from an earlier scene is gone here. A layer that a
+//! repaint boundary originated links to that boundary's render object. Its rect is the rectangle
+//! the layer defines in its own coordinates, for the variants that define one.
 
 use flui_foundation::LayerId;
 use flui_foundation::inspect::{
-    Fields, Inspect, InspectId, InspectTree, Link, Links, NodeView, Unit,
+    Fields, Inspect, InspectId, InspectTree, Link, Links, NodeView, SceneLayer, Unit,
 };
 
 use crate::{Layer, LayerTree};
@@ -41,10 +42,21 @@ impl Inspect for Layer {
     }
 }
 
-fn layer_id(id: InspectId) -> Option<LayerId> {
-    match id.link() {
-        Link::Layer(id) => Some(id),
-        _ => None,
+impl LayerTree {
+    /// `id` as a layer of this scene.
+    fn in_scene(&self, id: LayerId) -> SceneLayer {
+        SceneLayer {
+            scene: self.scene(),
+            id,
+        }
+    }
+
+    /// The layer `id` names, when it names one of this scene.
+    fn layer_id(&self, id: InspectId) -> Option<LayerId> {
+        match id.link() {
+            Link::Layer(layer) if layer.scene == self.scene() => Some(layer.id),
+            _ => None,
+        }
     }
 }
 
@@ -52,17 +64,17 @@ impl InspectTree for LayerTree {
     type Node = Layer;
 
     fn root(&self) -> Option<InspectId> {
-        Some(LayerTree::root(self).into())
+        Some(self.in_scene(LayerTree::root(self)).into())
     }
 
     fn node(&self, id: InspectId) -> Option<NodeView<'_, Layer>> {
-        let id = layer_id(id)?;
+        let id = self.layer_id(id)?;
         let node = self.get(id)?;
         Some(NodeView {
             object: node.layer(),
             rect: node.layer().bounds(),
             links: Links {
-                layer: Some(id),
+                layer: Some(self.in_scene(id)),
                 render: node.render_id(),
                 ..Links::default()
             },
@@ -70,10 +82,10 @@ impl InspectTree for LayerTree {
     }
 
     fn children(&self, id: InspectId) -> impl Iterator<Item = InspectId> + '_ {
-        layer_id(id)
+        self.layer_id(id)
             .and_then(|id| LayerTree::children(self, id))
             .unwrap_or_default()
             .iter()
-            .map(|&child| child.into())
+            .map(|&child| self.in_scene(child).into())
     }
 }

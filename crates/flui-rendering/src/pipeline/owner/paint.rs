@@ -333,7 +333,10 @@ impl PipelineOwner<PaintPhase> {
                     self.last_follower_offsets = follower_offsets;
                     self.last_hidden_follower_ids = hidden_follower_ids;
 
-                    self.last_layer_tree = Some(layer_tree);
+                    self.scenes_painted = self.scenes_painted.saturating_add(1);
+                    let scene = std::num::NonZeroU64::new(self.scenes_painted)
+                        .expect("BUG: incremented from at least 0 just above");
+                    self.last_layer_tree = Some(layer_tree.with_scene(scene));
                 }
                 Err(e) => {
                     // Restore the debug invariant before propagating so

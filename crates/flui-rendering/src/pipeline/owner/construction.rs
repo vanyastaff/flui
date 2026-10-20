@@ -87,6 +87,7 @@ impl PipelineOwner<Idle> {
             unchecked_semantics_diagnostics: Vec::new(),
             semantics_update_callback: None,
             last_layer_tree: None,
+            scenes_painted: 0,
             last_follower_offsets: FxHashMap::default(),
             retained_boundaries: FxHashMap::default(),
             root_content: None,

@@ -4,9 +4,9 @@ use core::fmt;
 use core::time::Duration;
 
 use crate::geometry::{Axis, EdgeInsets, Matrix4, Offset, Rect, Size};
-use crate::id::{ElementId, LayerId, RenderId, SemanticsId};
+use crate::id::{ElementId, RenderId, SemanticsId};
 
-use super::tree::Link;
+use super::tree::{Link, SceneLayer};
 
 /// One field's value, borrowed from the object that describes itself.
 ///
@@ -403,6 +403,6 @@ macro_rules! to_value_link {
 to_value_link!(
     ElementId => Element,
     RenderId => Render,
-    LayerId => Layer,
+    SceneLayer => Layer,
     SemanticsId => Semantics
 );

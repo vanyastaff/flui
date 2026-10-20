@@ -35,7 +35,7 @@ pub use snapshot::{
     FieldError, FromField, MatchError, Matches, OwnedField, OwnedValue, SnapshotError,
     SnapshotNode, SnapshotQuery, Variant, snapshot,
 };
-pub use tree::{InspectId, InspectTree, Link, Links, NodeView};
+pub use tree::{InspectId, InspectTree, Link, Links, NodeView, SceneLayer};
 pub use type_name::{kind_args_of, kind_of};
 pub use value::{Rgba, ToValue, Value};
 

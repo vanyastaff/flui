@@ -6,15 +6,15 @@
 //! installs a counting allocator.
 
 use std::collections::BTreeMap;
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::time::Duration;
 
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Rect, Size};
 use flui_foundation::inspect::{
     Change, DiffOptions, Field, FieldError, Fields, Inspect, InspectId, InspectTree, Level, Link,
-    Links, MatchError, Meta, NodeView, OwnedValue, Plain, Rgba, Seq, Sink, SnapshotError,
-    SnapshotNode, SnapshotQuery, ToValue, Unit, Value, Variant, diff, kind_args_of, kind_of,
-    render, snapshot,
+    Links, MatchError, Meta, NodeView, OwnedValue, Plain, Rgba, SceneLayer, Seq, Sink,
+    SnapshotError, SnapshotNode, SnapshotQuery, ToValue, Unit, Value, Variant, diff, kind_args_of,
+    kind_of, render, snapshot,
 };
 use flui_foundation::{ElementId, LayerId, RenderId, SemanticsId};
 
@@ -172,7 +172,26 @@ fn each_field_type_maps_to_its_value_and_compact_text() {
             "link",
             "v3.2",
         ),
-        ("layer link", LayerId::new(4).into_boxed(), "link", "l4"),
+        (
+            "layer link",
+            SceneLayer {
+                scene: NonZeroU64::MIN,
+                id: LayerId::new(4),
+            }
+            .into_boxed(),
+            "link",
+            "l4",
+        ),
+        (
+            "layer link, later scene",
+            SceneLayer {
+                scene: NonZeroU64::new(37).expect("37 is nonzero"),
+                id: LayerId::new(4),
+            }
+            .into_boxed(),
+            "link",
+            "l4.37",
+        ),
         (
             "semantics link",
             SemanticsId::new(7).into_boxed(),
@@ -753,7 +772,13 @@ fn a_snapshot_reads_fields_by_type_and_finds_nodes_by_link_and_kind() {
         .find_by_link(Link::Render(render_id(4)))
         .expect("the node r4");
     assert_eq!(by_id.get::<&str>("text"), Ok("Cancel"));
-    assert!(root.find_by_link(Link::Layer(LayerId::new(1))).is_none());
+    assert!(
+        root.find_by_link(Link::Layer(SceneLayer {
+            scene: NonZeroU64::MIN,
+            id: LayerId::new(1),
+        }))
+        .is_none()
+    );
     let flex = root
         .find_by_link(Link::Element(ElementId::new(10)))
         .expect("the element link");

@@ -293,3 +293,33 @@ fn an_id_from_before_a_removal_is_gone() {
         Err(SnapshotError::Gone(render.into()))
     );
 }
+
+/// A layer id kept from an earlier frame answers `gone` after a repaint, although the new
+/// frame's tree mints the same slots from the first.
+///
+/// Fails when the layer tree resolves a kept id by its slot alone, which reads an unrelated layer
+/// of the newer scene.
+#[test]
+fn a_layer_id_from_an_earlier_frame_is_gone() {
+    let mut app = counter();
+    let layers = app.inspect_layers(everything()).expect("painted");
+    let kept = layers.id.link();
+    assert!(app.inspect_layers(from(kept)).is_ok());
+
+    app.pump_widget(Labelled { label: "replaced" });
+    app.tick();
+
+    let after = app.inspect_layers(everything()).expect("painted");
+    let (Link::Layer(old), Link::Layer(new)) = (kept, after.id.link()) else {
+        unreachable!("a layer tree names layers")
+    };
+    assert_eq!(
+        new.id, old.id,
+        "both scenes mint their root in the first slot"
+    );
+    assert_ne!(new.scene, old.scene);
+    assert_eq!(
+        app.inspect_layers(from(kept)),
+        Err(SnapshotError::Gone(kept.into()))
+    );
+}

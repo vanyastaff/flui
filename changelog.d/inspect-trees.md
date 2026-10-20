@@ -19,3 +19,7 @@
 - `flui_foundation::inspect::snapshot` answers `Result<SnapshotNode, SnapshotError>`: `Empty` for
   a tree with no root, `Gone(id)` for a start node that is no longer in the tree, which includes an
   id whose slot now holds a newer node.
+- `flui_foundation::inspect::Link::Layer` and `Links::layer` carry a `SceneLayer`: the `LayerId`
+  and the scene it was minted in, which `LayerTree::scene` gives and `PipelineOwner` numbers per
+  painted frame. A layer id kept from an earlier frame answers `Gone` instead of naming whatever
+  holds its slot now, and reads as `l4.37` past the first scene.

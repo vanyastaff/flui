@@ -184,7 +184,8 @@ graph LR
     `a_counters_elements_link_to_render_objects_that_link_to_semantics`,
     `budgets_truncate_every_tree_with_omitted_children_counts` (elements, render, layers),
     `an_id_from_before_a_removal_is_gone` (the replacement reuses the slot, so only the
-    generation tells the nodes apart), `render_facts_read_back_typed`,
+    generation tells the nodes apart), `a_layer_id_from_an_earlier_frame_is_gone` (layer ids
+    are minted per frame, so the scene number tells them apart), `render_facts_read_back_typed`,
     `a_views_inspect_fields_follow_the_element_facts`;
   - `flui-foundation`'s `foundation_it::inspect`:
     `a_query_from_a_missing_node_is_gone_and_an_empty_tree_is_empty`,
