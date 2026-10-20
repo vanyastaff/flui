@@ -32,15 +32,15 @@ use std::any::{Any, TypeId};
 /// notification.dispatch(ctx);
 /// ```
 ///
-/// # Plan §D3 decision
+/// # Why a marker trait
 ///
-/// `Notification: Any + Send + Sync + 'static` is the **marker** trait —
+/// `Notification: Any + 'static` is the **marker** trait —
 /// it is opaque and `Any` is the downcast vehicle. The object-safe
 /// `ElementBase::on_notification(TypeId, &dyn Any) -> bool` handler
 /// protocol does the runtime-type check + downcast at the dispatch
 /// boundary; user-impls don't need to provide any methods, the empty
 /// body `impl Notification for MyEvent {}` is enough.
-pub trait Notification: Any + Send + Sync + 'static {
+pub trait Notification: Any + 'static {
     /// Get the type ID of this notification for type checking.
     ///
     /// Default impl uses `TypeId::of::<Self>()`; override is rarely
