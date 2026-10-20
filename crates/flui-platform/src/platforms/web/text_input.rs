@@ -878,7 +878,8 @@ impl WebTextInput {
             // One rect per code unit: both halves of a surrogate pair get the
             // rect of the scalar they make. A protected document reads as one
             // bullet per unit, which splits a real pair, so a unit the store
-            // refuses is retried together with the next one.
+            // refuses is retried together with the next one, or with the one before it
+            // when the request starts at the second half of a pair.
             let text = document_text(session);
             let (start, end) = (start as usize, end as usize);
             let spans = scalar_spans(&text, start, end);
@@ -891,6 +892,11 @@ impl WebTextInput {
                     && let Ok(rect) = session.rect_for_range(pair)
                 {
                     spans.next();
+                    Some((pair, rect))
+                } else if let Some(before) = span.start().get().checked_sub(1)
+                    && let Some(pair) = Utf16Range::new(Utf16Offset::new(before), span.end())
+                    && let Ok(rect) = session.rect_for_range(pair)
+                {
                     Some((pair, rect))
                 } else {
                     None
