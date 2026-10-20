@@ -219,6 +219,103 @@ fn scale_start_can_cancel_reentrantly_and_begin_a_healthy_later_scale() {
     assert!(arena.is_empty());
 }
 
+/// `event` stamped `ms` milliseconds into the timeline.
+fn timed(mut event: PointerEvent, ms: u64) -> PointerEvent {
+    let time = flui_platform_api::EventTime::from_nanos(ms * 1_000_000);
+    match &mut event {
+        PointerEvent::Down(down) => down.sample.time = time,
+        PointerEvent::Up(up) => up.sample.time = time,
+        PointerEvent::Move(movement) => {
+            let mut sample = *movement.current();
+            sample.time = time;
+            *movement = flui_interaction::events::PointerMove::new(
+                movement.pointer,
+                movement.buttons,
+                sample,
+            );
+        }
+        _ => {}
+    }
+    event
+}
+
+/// Contacts pan together at 1000 px/s and lift one at a time, 8 ms apart,
+/// with no move between: the release still flings at their speed, in a
+/// pan-or-scale lifting 2 → 0 and a scale lifting 3 → 1.
+fn a_staggered_lift_keeps_the_focal_fling() {
+    use flui_interaction::gesture::ScaleStartMode;
+    for (mode, contacts) in [
+        (ScaleStartMode::PanOrScale, 2_u64),
+        (ScaleStartMode::Scale, 3),
+    ] {
+        let arena = GestureArena::new();
+        let flings = Rc::new(RefCell::new(Vec::new()));
+        let observed = Rc::clone(&flings);
+        let recognizer = ScaleGestureRecognizer::builder(arena.clone())
+            .start_mode(mode)
+            .on_end(move |end| observed.borrow_mut().push(end.focal_fling_velocity()))
+            .build();
+        let start = |raw: u64| 100.0 * raw as f64;
+        for raw in 1..=contacts {
+            admit(&*recognizer, &arena, &timed(down(raw, start(raw)), 0), raw);
+        }
+        for step in 1..=5_u64 {
+            for raw in 1..=contacts {
+                let x = start(raw) + 10.0 * step as f64;
+                let moved =
+                    make_move_event_for_id(pointer(raw), Offset::new(x, 0.0), PointerKind::Touch)
+                        .expect("finite move");
+                recognizer.handle_event(PointerDispatch::at_root(&timed(moved, step * 10)));
+            }
+        }
+        for (lift, raw) in (1..=contacts).enumerate() {
+            let x = start(raw) + 50.0;
+            let up = make_up_event_for_id(pointer(raw), Offset::new(x, 0.0), PointerKind::Touch)
+                .expect("finite release");
+            recognizer.handle_event(PointerDispatch::at_root(&timed(up, 50 + 8 * lift as u64)));
+            arena.sweep(pointer(raw));
+            arena.drain_deferred_resolutions();
+        }
+        let fling = flings.borrow().first().copied().expect("the scale ended");
+        assert!(
+            fling.pixels_per_second.dx > 500.0,
+            "{mode:?}: released at {fling:?}"
+        );
+        assert!(arena.is_empty());
+    }
+}
+
+/// Two touches in one column have no horizontal span: a half-pixel drift
+/// against it cannot set a baseline a later 40 px slide divides into a
+/// 40x horizontal scale.
+fn a_same_column_pinch_does_not_jump_its_horizontal_scale() {
+    let arena = GestureArena::new();
+    let horizontal = Rc::new(RefCell::new(Vec::new()));
+    let observed = Rc::clone(&horizontal);
+    let recognizer = ScaleGestureRecognizer::builder(arena.clone())
+        .on_update(move |update| observed.borrow_mut().push(update.horizontal_scale))
+        .build();
+    let touch = |raw: u64, x: f64, y: f64| {
+        make_down_event_for_id(pointer(raw), Offset::new(x, y), PointerKind::Touch)
+            .expect("finite touch")
+    };
+    admit(&*recognizer, &arena, &touch(1, 200.0, 100.0), 1);
+    admit(&*recognizer, &arena, &touch(2, 200.0, 300.0), 2);
+    for x in [201.0, 240.0] {
+        let moved = make_move_event_for_id(pointer(2), Offset::new(x, 300.0), PointerKind::Touch)
+            .expect("finite move");
+        recognizer.handle_event(PointerDispatch::at_root(&moved));
+    }
+    let published = horizontal.borrow().clone();
+    assert!(
+        published.iter().all(|factor| (factor - 1.0).abs() < 1e-9),
+        "horizontal scale {published:?}"
+    );
+    assert!(!published.is_empty(), "the scale published its motion");
+    recognizer.cancel();
+    assert!(arena.is_empty());
+}
+
 #[test]
 fn scale_and_force_press_owner_lifecycle() {
     let cases: &[(&str, fn())] = &[
@@ -261,6 +358,14 @@ fn scale_and_force_press_owner_lifecycle() {
         (
             "scale start reenters cancel",
             scale_start_can_cancel_reentrantly_and_begin_a_healthy_later_scale,
+        ),
+        (
+            "a staggered lift keeps the focal fling",
+            a_staggered_lift_keeps_the_focal_fling,
+        ),
+        (
+            "a same-column pinch does not jump its horizontal scale",
+            a_same_column_pinch_does_not_jump_its_horizontal_scale,
         ),
     ];
     let mut failures = Vec::new();
@@ -546,8 +651,8 @@ fn carried_scale_does_not_underflow_its_intermediate_ratio() {
         ));
     };
     admit(&*recognizer, &arena, &down(1, 0.0), 1);
-    admit(&*recognizer, &arena, &down(2, 2.0), 2);
-    motion(2, 2e200);
+    admit(&*recognizer, &arena, &down(2, 200.0), 2);
+    motion(2, 2e202);
     let expanded = *updates.borrow().last().expect("expanded scale update");
     for factor in [expanded.0, expanded.1] {
         assert!(
@@ -557,9 +662,10 @@ fn carried_scale_does_not_underflow_its_intermediate_ratio() {
     }
     // A contact change carries the expanded factor into a huge new baseline.
     // The next ratio is smaller than f64 can hold, but the carried result is
-    // representable: 1e200 * (tiny span / huge span) = 1e-200.
+    // representable: 1e200 * (tiny span / huge span) = 1e-200. The spans
+    // start past the span slop, which a baseline must exceed to divide by.
     admit(&*recognizer, &arena, &down(3, 0.0), 3);
-    motion(2, 2e-200);
+    motion(2, 2e-198);
     let contracted = *updates.borrow().last().expect("contracted scale update");
     for factor in [contracted.0, contracted.1] {
         assert!(
@@ -576,8 +682,8 @@ fn carried_scale_does_not_underflow_its_intermediate_ratio() {
     recognizer.cancel();
     assert!(arena.is_empty());
     admit(&*recognizer, &arena, &down(1, 0.0), 1);
-    admit(&*recognizer, &arena, &down(2, 2.0), 2);
-    motion(2, 4.0);
+    admit(&*recognizer, &arena, &down(2, 200.0), 2);
+    motion(2, 400.0);
     let recovered = *updates.borrow().last().expect("fresh scale update");
     assert_eq!(recovered, (2.0, 2.0));
     recognizer.cancel();

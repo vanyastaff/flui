@@ -1219,13 +1219,6 @@ fn a_polled_deadline_records_its_contest_before_its_verdicts() {
     assert_eq!(fired, ["long_press"]);
     let recording = replayable(&bytes).expect("a whole recording");
     let rows = recording.rows();
-    let deadline = rows
-        .iter()
-        .position(|row| matches!(row, InputRecord::Deadline(_)))
-        .expect("the long press's deadline was polled");
-    let InputRecord::Deadline(polled) = &rows[deadline] else {
-        unreachable!("the position names a deadline row")
-    };
     let won = rows
         .iter()
         .position(|row| {
@@ -1236,9 +1229,18 @@ fn a_polled_deadline_records_its_contest_before_its_verdicts() {
     let InputRecord::Decision(decision) = &rows[won] else {
         unreachable!("the position names a decision row")
     };
+    // The tap's press timeout is polled too, before the long press's.
+    let deadline = rows
+        .iter()
+        .position(
+            |row| matches!(row, InputRecord::Deadline(polled) if polled.member == decision.member),
+        )
+        .expect("the long press's deadline was polled");
+    let InputRecord::Deadline(polled) = &rows[deadline] else {
+        unreachable!("the position names a deadline row")
+    };
     assert!(deadline < won, "the poll precedes the verdict it made");
     assert_eq!(polled.pointer, Some(decision.pointer));
     assert!(polled.sequence.is_some());
     assert_eq!(polled.sequence, decision.sequence);
-    assert_eq!(polled.member, decision.member, "the polled member won");
 }

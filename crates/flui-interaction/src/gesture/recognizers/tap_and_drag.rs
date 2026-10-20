@@ -45,12 +45,15 @@ use std::{
 };
 
 use flui_foundation::geometry::Offset;
+use smallvec::SmallVec;
 use web_time::Instant;
 
 use super::{
-    ArenaMembership, CancelOutcome, PrimaryContact,
+    ArenaMembership, CancelOutcome, ContactEnd, PrimaryContact,
     callback_containment::{finish_containment, invoke_callback, retire_callbacks},
-    recognizer::{EventTimeline, GestureRecognizer, event_time, is_primary_down, motion_history},
+    recognizer::{
+        EventTimeline, GestureRecognizer, event_time, is_primary_down, motion_history, slop_travel,
+    },
 };
 use crate::gesture::observer::GestureContest;
 use crate::{
@@ -274,6 +277,10 @@ impl Default for TapDragState {
     }
 }
 
+/// One transition's notices: at most a tap down, a drag start and its first
+/// update. Inline, so a drag's moves allocate nothing per sample.
+type Notices = SmallVec<[Notice; 3]>;
+
 /// A user callback owed once the state lock is released.
 enum Notice {
     TapDown(TapDragDownDetails),
@@ -304,7 +311,7 @@ impl TapDragState {
         };
     }
 
-    fn deliver_tap_down(&mut self, out: &mut Vec<Notice>) {
+    fn deliver_tap_down(&mut self, out: &mut Notices) {
         if !self.tap_down_delivered {
             self.tap_down_delivered = true;
             out.push(Notice::TapDown(TapDragDownDetails {
@@ -316,7 +323,7 @@ impl TapDragState {
         }
     }
 
-    fn start_drag(&mut self, out: &mut Vec<Notice>) {
+    fn start_drag(&mut self, out: &mut Notices) {
         self.deliver_tap_down(out);
         self.phase = Phase::Dragging;
         self.last_tap = None;
@@ -339,7 +346,7 @@ impl TapDragState {
         }
     }
 
-    fn complete_tap(&mut self, out: &mut Vec<Notice>) {
+    fn complete_tap(&mut self, out: &mut Notices) {
         self.deliver_tap_down(out);
         if let (Some(up), Some(up_time), Some(down_time)) =
             (self.pending_up.take(), self.up_time, self.down_time)
@@ -360,7 +367,7 @@ impl TapDragState {
 
     /// End the sequence without an outcome. Returns the arena entry, which
     /// the caller withdraws when it is still unresolved.
-    fn abandon(&mut self, out: &mut Vec<Notice>) -> Option<GestureArenaEntry> {
+    fn abandon(&mut self, out: &mut Notices) -> Option<GestureArenaEntry> {
         if self.tap_down_delivered || self.phase == Phase::Dragging {
             out.push(Notice::Cancel);
         }
@@ -511,7 +518,7 @@ impl TapAndDragGestureRecognizer {
     /// Run the arena step, then deliver the notices in order. The state was
     /// committed beforehand; the first panic is resumed after the arena step
     /// ran and every notice of the transition was delivered.
-    fn finish(&self, step: ArenaStep, notices: Vec<Notice>) {
+    fn finish(&self, step: ArenaStep, notices: Notices) {
         let contact_id = self.contact.current().map(|contact| contact.id);
         let self_driven = self.arena.sweep_model() == SweepModel::SelfDriven;
         let mut first = match step {
@@ -519,12 +526,20 @@ impl TapAndDragGestureRecognizer {
             ArenaStep::Claim(entry, displacement) => {
                 RoutePanic::capture(|| entry.claim_motion(displacement))
             }
-            ArenaStep::Withdraw(entry) => RoutePanic::capture(|| {
-                entry.resolve(GestureDisposition::Rejected);
+            ArenaStep::Withdraw(entry) => {
+                let mut first = RoutePanic::capture(|| {
+                    entry.resolve(GestureDisposition::Rejected);
+                });
+                // A failing withdrawal still leaves the contest ended.
                 if self_driven {
-                    entry.sweep();
+                    RoutePanic::preserve_first(
+                        &mut first,
+                        RoutePanic::capture(|| entry.sweep()),
+                        "tap and drag sweep",
+                    );
                 }
-            }),
+                first
+            }
             ArenaStep::Sweep(entry) => RoutePanic::capture(|| {
                 if self_driven {
                     entry.sweep();
@@ -553,7 +568,7 @@ impl TapAndDragGestureRecognizer {
             RoutePanic::preserve_first(
                 &mut first,
                 RoutePanic::capture(|| {
-                    self.contact.finish();
+                    self.contact.finish(ContactEnd::Contending);
                 }),
                 "tap and drag completion",
             );
@@ -599,7 +614,7 @@ impl TapAndDragGestureRecognizer {
         position: Offset<f64>,
         global_position: Offset<f64>,
         stamp: Option<u64>,
-        history: impl Iterator<Item = (Option<u64>, Offset<f64>)>,
+        history: impl Iterator<Item = ((Option<u64>, Offset<f64>), Offset<f64>)>,
     ) {
         if !position.is_finite() {
             return;
@@ -613,7 +628,7 @@ impl TapAndDragGestureRecognizer {
         if !self.contact.is_current(contact.id) {
             return;
         }
-        let mut notices = Vec::new();
+        let mut notices = Notices::new();
         let mut step = ArenaStep::None;
         let mut state = self.gesture_state.borrow_mut();
         let origin = match state.phase {
@@ -629,15 +644,16 @@ impl TapAndDragGestureRecognizer {
         }
         let mut exceeded_tap = false;
         let mut exceeded_drag = false;
-        for (stamp, position) in history {
+        for ((stamp, position), global) in history {
             let delta = position - state.initial;
             if !delta.is_finite() {
                 drop(state);
                 self.cancel();
                 return;
             }
-            exceeded_tap |= settings.exceeds_hit_slop(kind, delta);
-            exceeded_drag |= settings.exceeds_pan_slop_for(kind, delta);
+            let travel = slop_travel(delta, global - state.initial_global);
+            exceeded_tap |= settings.exceeds_hit_slop(kind, travel);
+            exceeded_drag |= settings.exceeds_pan_slop_for(kind, travel);
             let timestamp = state.timeline.instant(stamp, now);
             state.velocity_tracker.add_position(timestamp, position);
         }
@@ -652,10 +668,11 @@ impl TapAndDragGestureRecognizer {
         state.last_time = Some(now);
         match state.phase {
             Phase::Down => {
-                if exceeded_tap || settings.exceeds_hit_slop(kind, delta) {
+                let travel = slop_travel(delta, global_position - state.initial_global);
+                if exceeded_tap || settings.exceeds_hit_slop(kind, travel) {
                     state.tap_viable = false;
                 }
-                if exceeded_drag || settings.exceeds_pan_slop_for(kind, delta) {
+                if exceeded_drag || settings.exceeds_pan_slop_for(kind, travel) {
                     if state.won {
                         state.start_drag(&mut notices);
                     } else {
@@ -694,7 +711,7 @@ impl TapAndDragGestureRecognizer {
         if !self.contact.is_current(contact.id) {
             return;
         }
-        let mut notices = Vec::new();
+        let mut notices = Notices::new();
         let mut state = self.gesture_state.borrow_mut();
         state.kind = kind;
         let position = if position.is_finite() {
@@ -876,7 +893,8 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
             }
             PointerEvent::Move(data) => {
                 let pos = data.current().position.get();
-                let history = motion_history(event);
+                let history = motion_history(event)
+                    .zip(motion_history(dispatch.global).map(|(_, global)| global));
                 self.handle_move(
                     Offset::new(pos.x, pos.y),
                     global_position,
@@ -901,7 +919,7 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         if self.contact.current().is_none() {
             return CancelOutcome::Idle;
         }
-        let mut notices = Vec::new();
+        let mut notices = Notices::new();
         self.gesture_state.borrow_mut().abandon(&mut notices);
         let mut first = RoutePanic::capture(|| {
             self.contact.cancel();
@@ -918,7 +936,7 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
 
 impl GestureArenaMember for TapAndDragGestureRecognizer {
     fn accept_gesture(&self, contest: GestureContest) {
-        let mut notices = Vec::new();
+        let mut notices = Notices::new();
         let mut state = self.gesture_state.borrow_mut();
         if state
             .entry
@@ -939,7 +957,7 @@ impl GestureArenaMember for TapAndDragGestureRecognizer {
     }
 
     fn reject_gesture(&self, contest: GestureContest) {
-        let mut notices = Vec::new();
+        let mut notices = Notices::new();
         let mut state = self.gesture_state.borrow_mut();
         if state
             .entry

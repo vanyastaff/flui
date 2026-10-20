@@ -3,7 +3,7 @@ use super::{
     callback_containment::{
         finish_containment, invoke_callback, retire_callback, retire_callbacks,
     },
-    contact::{ArenaMembership, ContactId, PrimaryContact},
+    contact::{ArenaMembership, ContactEnd, ContactId, PrimaryContact},
     recognizer::{
         CancelOutcome, EventTimeline, GestureRecognizer, event_time, is_primary_down,
         motion_history,
@@ -157,8 +157,10 @@ pub struct DragEndDetails {
 impl DragEndDetails {
     /// Release velocity resolved with the gesture's admitted minimum and maximum.
     ///
-    /// Cancellation and releases below the minimum give zero. The maximum caps
-    /// vector magnitude while preserving direction. [`Self::velocity`] remains
+    /// The limits read the motion the drag follows: an axial drag's
+    /// component on its axis, a railed free drag's on its rail, a free drag's
+    /// vector. Cancellation and releases below the minimum give zero. The
+    /// maximum caps that magnitude while preserving direction. [`Self::velocity`] remains
     /// the raw finite-component measurement, independent of fling policy. A
     /// component estimate outside the representable range is refused as zero.
     #[must_use]
@@ -166,8 +168,14 @@ impl DragEndDetails {
         self.fling_velocity
     }
 
-    /// Presentation-space release motion, retaining the receiving node's
-    /// admitted fling threshold and cap. Cancellation gives zero.
+    /// [`Self::fling_velocity`] carried into presentation space through the
+    /// receiving node's transform, so it keeps the drag's axis, threshold and
+    /// cap. Cancellation gives zero.
+    ///
+    /// The transform is inferred from the release velocity measured in both
+    /// spaces, since the dispatch does not carry the hit-test transform: the
+    /// mapping is exact for zoom, rotation and translation, and approximate
+    /// under a non-uniform scale or a skew.
     #[must_use]
     pub const fn global_fling_velocity(&self) -> Velocity {
         self.global_fling_velocity
@@ -445,10 +453,14 @@ impl DragGestureRecognizer {
         Some(contacts.remove(index))
     }
     fn project_delta(&self, delta: Offset<f64>) -> Offset<f64> {
+        self.project(delta, self.rail.get())
+    }
+    /// `delta` on this drag's axis, or on `rail` for a railed free drag.
+    fn project(&self, delta: Offset<f64>, rail: Option<Axis>) -> Offset<f64> {
         match self.axis {
             DragAxis::Vertical => Offset::new(0.0, delta.dy),
             DragAxis::Horizontal => Offset::new(delta.dx, 0.0),
-            DragAxis::Free => on_rail(delta.to_delta(), self.rail.get()),
+            DragAxis::Free => on_rail(delta.to_delta(), rail),
         }
     }
     fn primary_delta(&self, delta: Offset<f64>) -> f64 {
@@ -561,9 +573,9 @@ impl DragGestureRecognizer {
                 primary_delta: self.primary_delta(delta),
                 kind: snapshot.kind,
             });
-            let crossed = super::recognizer::measured_positions(dispatch.local).any(|position| {
-                self.exceeds_slop(snapshot.kind, &snapshot.settings, position - snapshot.local)
-            });
+            let crossed = snapshot
+                .measured_travel(dispatch)
+                .any(|travel| self.exceeds_slop(snapshot.kind, &snapshot.settings, travel));
             state.past_slop |= crossed;
             // The ownership table decides on the displacement accumulated
             // since Down, in root space so every competitor measures alike.
@@ -737,12 +749,21 @@ impl DragGestureRecognizer {
         }
         // The successor's own latest position and tracker already establish the
         // baseline. No synthetic move or inter-finger velocity sample is added.
-        tracked.contact.finish();
+        // A contact the arena never gave this drag leaves its contest.
+        let end = if tracked.state.borrow().accepted {
+            ContactEnd::Contending
+        } else {
+            ContactEnd::Withdrawn
+        };
+        tracked.contact.finish(end);
         drop(outgoing);
-        if let Some(next) = next
-            && !self.started.get()
-            && self.is_current(&next)
-        {
+        // The successor starts the drag only past its own slop; until then it
+        // holds, as a lone default win does, and its crossing begins it.
+        let Some(next) = next else {
+            return;
+        };
+        let crossed = next.state.borrow().past_slop;
+        if crossed && !self.started.get() && self.is_current(&next) {
             self.begin_accepted_drag(&next, self.start_behavior);
         }
     }
@@ -778,15 +799,13 @@ impl DragGestureRecognizer {
                 Ok(now) => (now, None),
                 Err(failure) => (active.state.borrow().last_time, Some(failure)),
             };
-        let (velocity, global_velocity, position, global) = {
+        let (velocity, measured, global_velocity, position, global) = {
             let mut state = active.state.borrow_mut();
             let now = state
                 .timeline
                 .instant(dispatch.and_then(|d| event_time(d.local)), clock);
-            let velocity = Velocity::new(on_rail(
-                state.velocity_tracker.velocity_at(now).pixels_per_second,
-                rail,
-            ));
+            let measured = state.velocity_tracker.velocity_at(now).pixels_per_second;
+            let velocity = Velocity::new(on_rail(measured, rail));
             let global_now = state
                 .global_timeline
                 .instant(dispatch.and_then(|d| event_time(d.global)), clock);
@@ -799,25 +818,25 @@ impl DragGestureRecognizer {
                         d.global.position().unwrap_or(state.last_global_position),
                     )
                 });
-            (velocity, global_velocity, position, global)
+            (velocity, measured, global_velocity, position, global)
         };
+        // The fling limits apply to the motion the drag follows: an axial
+        // drag's threshold and cap read its axis, never the 2D speed.
+        let along = self.project(velocity.pixels_per_second, rail);
         let fling_velocity = if reason == GestureEndReason::Completed {
             snapshot
                 .settings
-                .resolve_fling_velocity(snapshot.kind, velocity)
+                .resolve_fling_velocity(snapshot.kind, Velocity::new(along))
         } else {
             Velocity::ZERO
         };
-        let raw = velocity.pixels_per_second;
-        let admitted = fling_velocity.pixels_per_second;
-        let ratio = if raw.dx.abs() >= raw.dy.abs() && raw.dx != 0.0 {
-            admitted.dx / raw.dx
-        } else if raw.dy != 0.0 {
-            admitted.dy / raw.dy
-        } else {
-            0.0
-        };
-        let global_fling_velocity = Velocity::new(global_velocity.pixels_per_second * ratio);
+        // The transform is read off the same unprojected motion measured in
+        // both spaces; a rail applied to one side alone would misread it.
+        let global_fling_velocity = Velocity::new(to_root(
+            fling_velocity.pixels_per_second,
+            measured,
+            global_velocity.pixels_per_second,
+        ));
         let retire = || {
             let mut first = clock_failure;
             for contact in outgoing {
@@ -826,7 +845,7 @@ impl DragGestureRecognizer {
                     // the remaining competition; it must not win by order.
                     if accepted && reason == GestureEndReason::Completed && contact.id == active.id
                     {
-                        contact.contact.finish();
+                        contact.contact.finish(ContactEnd::Contending);
                     } else if accepted {
                         contact.contact.cancel();
                     } else {
@@ -865,6 +884,36 @@ impl DragGestureRecognizer {
         CancelOutcome::Cancelled
     }
 }
+/// `local_vector` carried into root space by the map that took the local
+/// release velocity `local` to its root-space measurement `root`.
+///
+/// The two velocities measure one motion through the hit-test transform, so
+/// their complex quotient `root / local` is that transform's linear part,
+/// exactly for a similarity (zoom, rotation): the admitted fling is mapped
+/// through it rather than the raw root vector rescaled, which would keep a
+/// perpendicular component the drag's axis dropped. A still or unmeasurable
+/// release maps to zero.
+fn to_root(local_vector: Offset<f64>, local: Offset<f64>, root: Offset<f64>) -> Offset<f64> {
+    let length = local.dx.hypot(local.dy);
+    if !(length.is_finite() && length > 0.0) {
+        return Offset::ZERO;
+    }
+    let (ux, uy) = (local.dx / length, local.dy / length);
+    // root / local = (a + ib), divided through by |local| in two steps so
+    // neither the product nor the square of a representable speed overflows.
+    let a = (root.dx * ux + root.dy * uy) / length;
+    let b = (root.dy * ux - root.dx * uy) / length;
+    let mapped = Offset::new(
+        a * local_vector.dx - b * local_vector.dy,
+        b * local_vector.dx + a * local_vector.dy,
+    );
+    if mapped.is_finite() {
+        mapped
+    } else {
+        Offset::ZERO
+    }
+}
+
 impl GestureRecognizer for DragGestureRecognizer {
     fn allowed_devices(&self) -> PointerKindSet {
         self.allowed_devices

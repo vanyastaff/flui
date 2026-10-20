@@ -212,7 +212,7 @@ pub use ids::{
 // Re-exports: Input Processing
 // ============================================================================
 pub use gesture::{
-    ArenaMembership, BeginContactError, CancelOutcome, ContactId, ContactSnapshot,
+    ArenaMembership, BeginContactError, CancelOutcome, ContactEnd, ContactId, ContactSnapshot,
     DoubleTapDetails, DoubleTapGestureRecognizer, DragCancelCallback, DragDownCallback,
     DragDownDetails, DragEndCallback, DragEndDetails, DragGestureRecognizer, DragPointerStrategy,
     DragStartCallback, DragStartDetails, DragUpdateCallback, DragUpdateDetails,

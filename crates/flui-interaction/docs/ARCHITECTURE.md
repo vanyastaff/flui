@@ -301,9 +301,18 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   `ArenaMembership` independently for each pointer.
   `public_recognizer_extension_contracts` pins overlapping admission, settings
   freezing, cancellation of every owner, silent Drop and later recovery.
+- **A recognizer that recognized nothing leaves at release.**
+  `PrimaryContact::finish` takes a `ContactEnd`: `Contending` stays in the
+  contest for the Up sweep (a tap, a started long press), `Withdrawn` leaves
+  it first (a long press released early, a force press without its start
+  pressure, a swipe that never crossed its slop, a drag contact never given
+  the drag), so an inner member cannot win the sweep by its route position
+  and silence the outer tap.
+  `an_unrecognized_inner_gesture_leaves_the_outer_tap_its_contact` pins it.
 - **Multi-tap is a simultaneous contact group.** `MultiTapGestureRecognizer`
   recognizes the configured number of contacts only after all have released
-  within their own slop. Either release order completes once; an unrelated
+  within their own slop; a contact that lifts before the group is complete
+  ends the attempt (`multi_tap_needs_its_contacts_down_together`). Either release order completes once; an unrelated
   cancellation leaves the group intact, while a tracked cancellation retires
   the attempt and allows the next group. This is the policy documented in
   [GESTURES.md](GESTURES.md), pinned by
@@ -327,6 +336,10 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   historical sample. Velocity trackers still consume the measured timestamps
   within their estimator's own retention window. Recognition still follows
   arena verdicts, and callback reentry rechecks the exact contact generation.
+  Slops are root pixels: each recognizer measures a sample's local
+  displacement from Down rescaled to its root-space length (`slop_travel`),
+  so a tolerance does not shrink inside a zoom and an axial slop still reads
+  the local axis; positions are still reported locally.
   `tap_and_drag_resolves_through_the_shared_arena` pins each recognizer's isolated
   excursion, queued/authored history equivalence, prediction exclusion, reused-ID
   recovery and cancellation from a coalesced start callback.
@@ -455,6 +468,15 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   implementations through the same attachment and arbitration path.
   Hit-test contracts are a separate surface.
 - **`pending_up` deferral for `on_tap_up`.** Before the fix, `handle_tap_up` fired `on_tap_up` and `on_tap` unconditionally on pointer up, even though every arena member receives Up events. The fix stores a `pending_up` until `accept_gesture` confirms arena victory; only the eventual winner fires the user callback. The same pattern was extended to per-button slots.
+- **A tap shows its press before release.** The down callback runs at the
+  tap's win or 100 ms after Down while its arena is undecided (the contact's
+  deadline), whichever comes first; up and tap still wait for the win. A
+  contact that stops being a tap still hears its cancellation whether or not
+  its down showed, as `GestureDetector::on_tap_cancel` documents.
+  `an_undecided_press_shows_before_its_release` pins the four orders.
+- **A long press released past its timeout is a long press.** An Up that
+  arrives after the deadline but before its poll (a stalled frame) fires the
+  deadline first, so start, up and end deliver in that dispatch.
 - **A fired long press resolves its own arena.** Deadline delivery commits the
   started state and disarms the deadline before accepting exact membership and
   invoking callbacks outside the state borrow. A repeated poll cannot refire
@@ -465,7 +487,9 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   clock, independently of how long the first contact stayed down. Earlier Downs
   are ignored while the first tap's held verdict and original timeout remain
   pending; lifting that bounced contact after the boundary cannot admit it
-  retroactively. Exact 40 ms is eligible. Timeout and inter-tap distance retain
+  retroactively. The bounce's own contest admits the double tap as a hold
+  until that contact ends, so no tap wins it and the first tap arrives once,
+  with its verdict (`double_tap_bounce_yields_no_tap_of_its_own`). Exact 40 ms is eligible. Timeout and inter-tap distance retain
   their separate frozen-settings policy. A clock callback can retire or replace
   the contact, so the first-release snapshot commits only after checking the
   exact contact identity again. `tap_and_drag_resolves_through_the_shared_arena`

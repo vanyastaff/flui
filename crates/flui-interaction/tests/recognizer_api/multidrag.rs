@@ -109,13 +109,13 @@ fn first_multidrag_update_reports_observed_transformed_coordinates() {
             "contested contacts await movement"
         );
         route.dispatch(&stamp(
-            make_move_event_for_id(first, Offset::new(130.0, 260.0), PointerKind::Touch)
+            make_move_event_for_id(first, Offset::new(128.0, 250.0), PointerKind::Touch)
                 .expect("move"),
             10,
         ));
         assert!(
             updates.borrow().is_empty(),
-            "sub-slop sample does not start a client"
+            "a sample within the slop in root pixels does not start a client"
         );
         for (pointer, global) in [
             (first, Offset::new(180.0, 320.0)),

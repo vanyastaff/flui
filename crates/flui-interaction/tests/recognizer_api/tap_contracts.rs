@@ -44,11 +44,88 @@ fn tap_builder_lifecycle_contract() {
             "a_tap_joins_only_contacts_of_buttons_it_reports",
             a_tap_joins_only_contacts_of_buttons_it_reports,
         ),
+        (
+            "an_undecided_press_shows_before_its_release",
+            an_undecided_press_shows_before_its_release,
+        ),
     ] {
         if let Err(payload) = std::panic::catch_unwind(row) {
             eprintln!("tap contract `{name}` failed");
             std::panic::resume_unwind(payload);
         }
+    }
+}
+
+/// A press its arena has not decided shows as pressed 100 ms after Down,
+/// before its release; the up and the tap still wait for the win. A press
+/// another member takes before then showed nothing and hears only its
+/// cancellation.
+fn an_undecided_press_shows_before_its_release() {
+    use flui_interaction::gesture::{GestureArenaMember, GestureContest};
+    struct Rival;
+    impl GestureArenaMember for Rival {
+        fn accept_gesture(&self, _: GestureContest) {}
+        fn reject_gesture(&self, _: GestureContest) {}
+    }
+    /// What happens after Down: wait this long, then the rival takes the
+    /// contact or the press is released and swept.
+    #[derive(Clone, Copy, Debug)]
+    enum Then {
+        Released,
+        Taken,
+    }
+    let rows: [(u64, Then, &[&str]); 4] = [
+        (150, Then::Released, &["down", "up", "tap"]),
+        (150, Then::Taken, &["down", "cancel"]),
+        (50, Then::Taken, &["cancel"]),
+        (50, Then::Released, &["down", "up", "tap"]),
+    ];
+    for (wait, then, heard) in rows {
+        let clock = flui_interaction::ManualClock::new();
+        let arena = GestureArena::binding_driven(std::sync::Arc::new(clock.clone()));
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let entry = |name: &'static str| {
+            let log = Rc::clone(&log);
+            move || log.borrow_mut().push(name)
+        };
+        let (on_down, on_up, on_tap, on_cancel) =
+            (entry("down"), entry("up"), entry("tap"), entry("cancel"));
+        let recognizer = TapGestureRecognizer::builder(arena.clone())
+            .on_tap_down(move |_| on_down())
+            .on_tap_up(move |_| on_up())
+            .on_tap(move |_| on_tap())
+            .on_tap_cancel(move |_| on_cancel())
+            .build();
+        let rival = Rc::new(Rival);
+        let down = make_down_event(Offset::ZERO, PointerKind::Touch).expect("valid fixture sample");
+        let pointer = down.pointer_id().expect("fixture contact identity");
+        recognizer.add_pointer(PointerDispatch::at_root(&down));
+        let _rival_entry = arena.add(pointer, &rival);
+        arena.close(pointer);
+        arena.drain_deferred_resolutions();
+        assert!(
+            log.borrow().is_empty(),
+            "an undecided press shows nothing yet"
+        );
+        clock.advance(std::time::Duration::from_millis(wait));
+        arena.poll_deadlines();
+        let shown: &[&str] = if wait >= 100 { &["down"] } else { &[] };
+        assert_eq!(&*log.borrow(), shown, "{wait} ms undecided, still held");
+        match then {
+            Then::Taken => {
+                let erased: Rc<dyn GestureArenaMember> = rival.clone();
+                arena.accept(pointer, &erased);
+            }
+            Then::Released => {
+                let up =
+                    make_up_event(Offset::ZERO, PointerKind::Touch).expect("valid fixture sample");
+                recognizer.handle_event(PointerDispatch::at_root(&up));
+                arena.sweep(pointer);
+            }
+        }
+        arena.drain_deferred_resolutions();
+        assert_eq!(&*log.borrow(), heard, "{then:?} after {wait} ms");
+        assert!(arena.is_empty());
     }
 }
 

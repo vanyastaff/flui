@@ -16,9 +16,11 @@ use flui_foundation::geometry::{Axis, Offset};
 use flui_platform_api::input_capabilities::PointerKindSet;
 
 use super::{
-    ArenaMembership, CancelOutcome, GestureRecognizer, PrimaryContact,
+    ArenaMembership, CancelOutcome, ContactEnd, GestureRecognizer, PrimaryContact,
     callback_containment::{invoke_callback, retire_callbacks},
-    recognizer::{EventTimeline, admission_kind, event_time, is_primary_down, motion_history},
+    recognizer::{
+        EventTimeline, admission_kind, event_time, is_primary_down, motion_history, slop_travel,
+    },
 };
 use crate::gesture::observer::GestureContest;
 use crate::{
@@ -254,7 +256,10 @@ impl SwipeGestureRecognizer {
             }
             let time = state.timeline.instant(event_time(event), now);
             state.velocity.add_position(time, position);
-            let travel = component(position - snapshot.local, axis);
+            let travel = component(
+                slop_travel(position - snapshot.local, global - snapshot.global),
+                axis,
+            );
             let slop = match axis {
                 Axis::Horizontal => snapshot.settings.pan_slop_horizontal_for(snapshot.kind),
                 Axis::Vertical => snapshot.settings.pan_slop_vertical_for(snapshot.kind),
@@ -285,6 +290,18 @@ impl SwipeGestureRecognizer {
             return;
         };
         let now = self.contact.arena().sample_now();
+        // A swipe that never crossed its slop recognized nothing: it leaves
+        // the contest, so the Up sweep cannot hand it the contact.
+        let end = if self
+            .state
+            .borrow()
+            .as_ref()
+            .is_some_and(|state| state.crossed || state.accepted)
+        {
+            ContactEnd::Contending
+        } else {
+            ContactEnd::Withdrawn
+        };
         let swipe = self.state.take().and_then(|mut state| {
             if !(state.accepted && state.crossed) {
                 return None;
@@ -305,7 +322,7 @@ impl SwipeGestureRecognizer {
                 kind: snapshot.kind,
             })
         });
-        self.contact.finish();
+        self.contact.finish(end);
         if let Some(details) = swipe {
             invoke_callback(
                 self.callbacks.on_swipe.clone(),

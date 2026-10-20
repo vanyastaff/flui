@@ -10,14 +10,18 @@
 
 use std::{cell::RefCell, rc::Rc};
 
+use smallvec::SmallVec;
+
 use web_time::Instant;
 
 use flui_foundation::geometry::Offset;
 
 use super::{
     callback_containment::{finish_containment, invoke_callback, retire_callback},
-    contact::{ArenaMembership, PrimaryContact},
-    recognizer::{CancelOutcome, EventTimeline, GestureRecognizer, event_time, is_primary_down},
+    contact::{ArenaMembership, ContactEnd, PrimaryContact},
+    recognizer::{
+        CancelOutcome, EventTimeline, GestureRecognizer, event_time, is_primary_down, slop_travel,
+    },
 };
 use crate::gesture::observer::GestureContest;
 use crate::{
@@ -132,7 +136,7 @@ impl ForcePressState {
         ForcePressDetails::new(global, position, self.pressure, 1.0)
     }
 
-    fn start(&mut self, peak: f64, notices: &mut Vec<Notice>) {
+    fn start(&mut self, peak: f64, notices: &mut Notices) {
         self.phase = ForcePressPhase::Started;
         // Updates smooth from the position the press started at.
         if let (Some(smoother), Some(time)) = (self.smoother.as_mut(), self.sample_time) {
@@ -145,7 +149,7 @@ impl ForcePressState {
         }
     }
 
-    fn retire(&mut self, notices: &mut Vec<Notice>) {
+    fn retire(&mut self, notices: &mut Notices) {
         if self.is_active() {
             notices.push(Notice::End(self.details()));
         }
@@ -160,12 +164,16 @@ enum Notice {
     End(ForcePressDetails),
 }
 
+/// One sample's notices: at most a peak and its update, or an end. Inline, so
+/// a pen's coalesced pressure history allocates nothing per sample.
+type Notices = SmallVec<[Notice; 2]>;
+
 enum ArenaStep {
     None,
     Claim(Box<GestureArenaEntry>),
     Withdraw,
     Abandon,
-    Finish,
+    Finish(ContactEnd),
 }
 
 /// Immutable configuration for a shared force-press recognizer.
@@ -266,7 +274,7 @@ impl ForcePressGestureRecognizer {
         }
     }
 
-    fn finish(&self, step: ArenaStep, notices: Vec<Notice>) {
+    fn finish(&self, step: ArenaStep, notices: Notices) {
         let id = self.contact.current().map(|snapshot| snapshot.id);
         let ends_sequence = notices
             .iter()
@@ -280,8 +288,8 @@ impl ForcePressGestureRecognizer {
             ArenaStep::Abandon => {
                 self.contact.cancel();
             }
-            ArenaStep::Finish => {
-                self.contact.finish();
+            ArenaStep::Finish(end) => {
+                self.contact.finish(end);
             }
         });
         for notice in notices {
@@ -319,7 +327,7 @@ impl ForcePressGestureRecognizer {
         };
         let entry = self.contact.entry();
         let clock = self.contact.arena().sample_now();
-        let mut notices = Vec::new();
+        let mut notices = Notices::new();
         let mut state = self.gesture_state.borrow_mut();
         if state.phase == ForcePressPhase::Ready {
             return;
@@ -327,9 +335,10 @@ impl ForcePressGestureRecognizer {
         let time = state.timeline.instant(stamp, clock);
         state.sample_time = Some(time);
         if position.is_finite()
-            && contact
-                .settings
-                .exceeds_hit_slop(contact.kind, position - contact.local)
+            && contact.settings.exceeds_hit_slop(
+                contact.kind,
+                slop_travel(position - contact.local, global - contact.global),
+            )
         {
             state.retire(&mut notices);
             drop(state);
@@ -387,8 +396,24 @@ impl ForcePressGestureRecognizer {
     }
 
     fn end(&self, dispatch: Option<PointerDispatch<'_>>, step: ArenaStep) {
-        let mut notices = Vec::new();
+        let mut notices = Notices::new();
         let mut state = self.gesture_state.borrow_mut();
+        // A press that never reached its start pressure, or a device without
+        // pressure, recognized nothing: it leaves the contest at release.
+        let step = match step {
+            ArenaStep::Finish(_)
+                if !state.won
+                    && !matches!(
+                        state.phase,
+                        ForcePressPhase::Claiming
+                            | ForcePressPhase::Started
+                            | ForcePressPhase::Peaked
+                    ) =>
+            {
+                ArenaStep::Finish(ContactEnd::Withdrawn)
+            }
+            step => step,
+        };
         if let Some(dispatch) = dispatch {
             if let Some(position) = dispatch.local.position() {
                 state.position = position;
@@ -497,7 +522,9 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
                 }
                 finish_containment(first, std::thread::panicking());
             }
-            PointerEvent::Up(_) => self.end(Some(dispatch), ArenaStep::Finish),
+            PointerEvent::Up(_) => {
+                self.end(Some(dispatch), ArenaStep::Finish(ContactEnd::Contending));
+            }
             PointerEvent::Cancel(_) => {
                 self.cancel();
             }
@@ -519,7 +546,7 @@ impl GestureArenaMember for ForcePressGestureRecognizer {
         if !self.contact.tracks_contest(contest) {
             return;
         }
-        let mut notices = Vec::new();
+        let mut notices = Notices::new();
         let mut state = self.gesture_state.borrow_mut();
         state.won = true;
         if state.phase == ForcePressPhase::Claiming {
@@ -533,7 +560,7 @@ impl GestureArenaMember for ForcePressGestureRecognizer {
         if !self.contact.tracks_contest(contest) {
             return;
         }
-        let mut notices = Vec::new();
+        let mut notices = Notices::new();
         self.gesture_state.borrow_mut().retire(&mut notices);
         self.finish(ArenaStep::Withdraw, notices);
     }

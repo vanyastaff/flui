@@ -432,6 +432,10 @@ struct ScaleState {
     published_focal: Offset<f64>,
     previous_focal: Offset<f64>,
     focal_velocity_tracker: VelocityTracker,
+    /// What the focal point jumped by, summed over every change of the
+    /// contact set: the tracker follows `focal_point + focal_shift`, one
+    /// continuous path, so a staggered lift keeps the motion before it.
+    focal_shift: Offset<f64>,
     /// Velocity tracker for scale changes.
     scale_velocity_tracker: VelocityTracker,
     timeline: EventTimeline,
@@ -465,6 +469,7 @@ impl Default for ScaleState {
             published_focal: Offset::ZERO,
             previous_focal: Offset::ZERO,
             focal_velocity_tracker: VelocityTracker::new(),
+            focal_shift: Offset::ZERO,
             scale_velocity_tracker: VelocityTracker::new(),
             timeline: EventTimeline::default(),
             smoother: None,
@@ -499,6 +504,19 @@ fn carried_ratio(carried: f64, current: f64, baseline: f64) -> Option<f64> {
         return Some(direct);
     }
     Some((carried * current) / baseline)
+}
+
+/// The shortest baseline span a factor divides by: the span slop of `kind`.
+fn span_floor(settings: &GestureSettings, kind: PointerKind) -> f64 {
+    settings.span_slop_for(kind).max(DEGENERATE_SPAN)
+}
+
+/// [`carried_ratio`] against a baseline longer than `floor`, or `None`.
+fn span_ratio(carried: f64, current: f64, baseline: f64, floor: f64) -> Option<f64> {
+    if baseline <= floor {
+        return None;
+    }
+    carried_ratio(carried, current, baseline)
 }
 
 impl ScaleState {
@@ -570,6 +588,7 @@ impl ScaleState {
     /// Re-measure the baseline after the contact set changed, carrying the
     /// factors reached so far so the published values stay continuous.
     fn rebaseline(&mut self) {
+        let previous = self.baseline.map(|_| self.focal_point);
         self.carried = self.current;
         self.baseline = Measure::of(&self.contacts);
         self.rotation_reference = self.pair_angle();
@@ -578,6 +597,18 @@ impl ScaleState {
             smoother.reset();
         }
         if let Some(measure) = self.baseline {
+            // The velocity tracker keeps its samples across the jump: the
+            // shift carries the old path on, so a lift with no move after
+            // it still releases at the speed the contacts had.
+            if let Some(previous) = previous {
+                let shift = self.focal_shift + (previous - measure.focal);
+                self.focal_shift = if shift.is_finite() {
+                    shift
+                } else {
+                    self.focal_velocity_tracker.reset();
+                    Offset::ZERO
+                };
+            }
             self.focal_point = measure.focal;
             self.previous_focal = measure.focal;
         }
@@ -586,7 +617,12 @@ impl ScaleState {
         {
             self.global_focal_point = measure.focal;
         }
-        self.focal_velocity_tracker.reset();
+    }
+
+    /// Sample the focal path the velocity tracker follows at `time`.
+    fn track_focal(&mut self, time: Instant, focal: Offset<f64>) {
+        let tracked = focal + self.focal_shift;
+        self.focal_velocity_tracker.add_position(time, tracked);
     }
 
     /// Recompute the factors from the current positions. Commits and returns
@@ -598,28 +634,37 @@ impl ScaleState {
             return None;
         }
         let mut baseline = self.baseline.unwrap_or(measure);
-        // A degenerate baseline axis is re-measured from the first usable
-        // span, so the factor holds there instead of dividing by zero.
+        // A baseline axis within the span slop is too short to divide by: a
+        // half-pixel drift against it would publish a factor of dozens. It
+        // is re-measured from the first span past the slop, and the factor
+        // holds until then.
+        let floor = span_floor(&self.settings, self.focal_velocity_tracker.kind());
         for (base, now) in [
             (&mut baseline.span, measure.span),
             (&mut baseline.horizontal, measure.horizontal),
             (&mut baseline.vertical, measure.vertical),
         ] {
-            if *base <= DEGENERATE_SPAN && now > DEGENERATE_SPAN {
+            if *base <= floor && now > floor {
                 *base = now;
             }
         }
         let current = Ratios {
-            scale: carried_ratio(self.carried.scale, measure.span, baseline.span)
+            scale: span_ratio(self.carried.scale, measure.span, baseline.span, floor)
                 .unwrap_or(self.current.scale),
-            horizontal: carried_ratio(
+            horizontal: span_ratio(
                 self.carried.horizontal,
                 measure.horizontal,
                 baseline.horizontal,
+                floor,
             )
             .unwrap_or(self.current.horizontal),
-            vertical: carried_ratio(self.carried.vertical, measure.vertical, baseline.vertical)
-                .unwrap_or(self.current.vertical),
+            vertical: span_ratio(
+                self.carried.vertical,
+                measure.vertical,
+                baseline.vertical,
+                floor,
+            )
+            .unwrap_or(self.current.vertical),
         };
         let angle = self.pair_angle();
         let rotation = match (angle, self.rotation_reference) {
@@ -666,8 +711,13 @@ impl ScaleState {
         let pan = self.settings.exceeds_pan_slop_for(kind, travel);
         let zoom = two
             && ((measure.span - baseline.span).abs() > span_slop
-                || carried_ratio(1.0, measure.span, baseline.span)
-                    .is_some_and(|ratio| self.settings.exceeds_scale_slop(ratio)));
+                || span_ratio(
+                    1.0,
+                    measure.span,
+                    baseline.span,
+                    span_floor(&self.settings, kind),
+                )
+                .is_some_and(|ratio| self.settings.exceeds_scale_slop(ratio)));
         // The arc the turn swept at the span, against the span's own slop.
         let turn = two && self.rotation.abs() * baseline.span > span_slop;
         if !(pan || zoom || turn) {
@@ -1077,26 +1127,29 @@ impl ScaleGestureRecognizer {
                     pointer_count: 0,
                 });
                 let travel = focal - native.origin;
-                // A session that moved before it scaled or turned began as a
-                // pan; only a pan rails or pins a transform.
+                let (axis_lock, transform_lock) = {
+                    let config = self.gesture_state.borrow();
+                    (config.axis_lock, config.transform_lock)
+                };
+                // A session that moved past the pan slop before it scaled or
+                // turned began as a pan; only a pan rails or pins a
+                // transform. Below the slop, a first stray pixel cannot pick
+                // the rail for the whole session.
                 let still = transform.scale() == 1.0 && transform.rotation() == 0.0;
-                let locks =
-                    if native.locks == Locks::Undecided && (!still || travel != Offset::ZERO) {
-                        let (axis_lock, transform_lock) = {
-                            let config = self.gesture_state.borrow();
-                            (config.axis_lock, config.transform_lock)
-                        };
-                        Locks::Decided {
-                            rail: still.then(|| axis_lock.rail(source.kind, travel)).flatten(),
-                            pinned: if still {
-                                transform_lock
-                            } else {
-                                TransformLock::None
-                            },
-                        }
-                    } else {
-                        native.locks
-                    };
+                let locks = if native.locks == Locks::Undecided
+                    && (!still || native.settings.exceeds_pan_slop_for(source.kind, travel))
+                {
+                    Locks::Decided {
+                        rail: still.then(|| axis_lock.rail(source.kind, travel)).flatten(),
+                        pinned: if still {
+                            transform_lock
+                        } else {
+                            TransformLock::None
+                        },
+                    }
+                } else {
+                    native.locks
+                };
                 let pinned = locks.pinned();
                 let scale = if pinned == TransformLock::Scale {
                     1.0
@@ -1108,10 +1161,17 @@ impl ScaleGestureRecognizer {
                 } else {
                     transform.rotation()
                 };
+                // Under rails, focal motion waits for the slop that picks its
+                // axis, then arrives whole on it, as a touch scale's does.
+                let held = locks == Locks::Undecided && axis_lock.rails(source.kind);
                 let details = ScaleUpdateDetails {
                     focal_point: global_focal,
                     local_focal_point: focal,
-                    focal_point_delta: on_rail(focal - native.focal, locks.rail()),
+                    focal_point_delta: if held {
+                        Offset::ZERO
+                    } else {
+                        on_rail(focal - native.focal, locks.rail())
+                    },
                     scale,
                     horizontal_scale: scale,
                     vertical_scale: scale,
@@ -1123,7 +1183,9 @@ impl ScaleGestureRecognizer {
                 }
                 native.locks = locks;
                 native.started = true;
-                native.focal = focal;
+                if !held {
+                    native.focal = focal;
+                }
                 native.global_focal = global_focal;
                 native.scale = scale;
                 native.rotation = rotation;
@@ -1243,14 +1305,17 @@ impl ScaleGestureRecognizer {
         for entry in entries {
             RoutePanic::preserve_first(
                 &mut first,
-                RoutePanic::capture(|| {
-                    entry.reject_without_self();
-                    if self_driven {
-                        entry.sweep();
-                    }
-                }),
+                RoutePanic::capture(|| entry.reject_without_self()),
                 "scale arena withdrawal",
             );
+            // A failing withdrawal still leaves the contest ended.
+            if self_driven {
+                RoutePanic::preserve_first(
+                    &mut first,
+                    RoutePanic::capture(|| entry.sweep()),
+                    "scale arena sweep",
+                );
+            }
         }
         RoutePanic::preserve_first(
             &mut first,
@@ -1339,10 +1404,11 @@ impl ScaleGestureRecognizer {
         if (current.span - baseline.span).abs() > settings.span_slop_for(kind) {
             return true;
         }
-        // A degenerate initial span means the pointers started coincident;
-        // the ratio is undefined there, so leave that arm to the two distance
-        // tiers.
-        if let Some(ratio) = carried_ratio(1.0, current.span, baseline.span)
+        // An initial span within the span slop means the pointers started
+        // (nearly) coincident; the ratio means nothing there, so leave that
+        // arm to the two distance tiers.
+        if let Some(ratio) =
+            span_ratio(1.0, current.span, baseline.span, span_floor(settings, kind))
             && settings.exceeds_scale_slop(ratio)
         {
             return true;
@@ -1395,7 +1461,7 @@ impl ScaleGestureRecognizer {
                     .add_position(timestamp, Offset::new(scale, 0.0));
             }
             let focal = state.focal_point;
-            state.focal_velocity_tracker.add_position(timestamp, focal);
+            state.track_focal(timestamp, focal);
         }
         let now = state.timeline.instant(stamp, now);
         state.sample_time = Some(now);
@@ -1415,9 +1481,7 @@ impl ScaleGestureRecognizer {
                 .scale_velocity_tracker
                 .add_position(now, Offset::new(scale, 0.0));
         }
-        state
-            .focal_velocity_tracker
-            .add_position(now, measure.focal);
+        state.track_focal(now, measure.focal);
         match state.phase {
             ScalePhase::Possible => {
                 // Crossing a tier is a request to win, not permission to
@@ -1635,7 +1699,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         }
         let now = state.timeline.instant(event_time(down.local), clock);
         let focal = state.focal_point;
-        state.focal_velocity_tracker.add_position(now, focal);
+        state.track_focal(now, focal);
         let start = state.try_start();
         let sequence = state.sequence;
         drop(state);

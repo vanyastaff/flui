@@ -1593,6 +1593,18 @@ fn tap_and_drag_resolves_through_the_shared_arena() {
                 "double tap admits exact 40 ms",
                 double_tap_admits_exact_40ms,
             ),
+            (
+                "double tap bounce yields no tap",
+                double_tap_bounce_yields_no_tap_of_its_own,
+            ),
+            (
+                "a bounce outliving the first attempt yields no tap",
+                a_bounce_outliving_the_first_attempt_yields_no_tap,
+            ),
+            (
+                "slops in root pixels inside a transform",
+                slops_measure_root_pixels_inside_a_transform,
+            ),
             ("tap against a tap", tap_wins_against_a_later_tap_recognizer),
             ("drag against a pan", drag_claims_the_arena_before_starting),
             ("consecutive clicks", consecutive_clicks_count_up_and_reset),
@@ -1753,6 +1765,157 @@ fn double_tap_minimum_interval(gap_ms: u64) {
 
 fn double_tap_rejects_39ms_bounce() {
     double_tap_minimum_interval(39);
+}
+
+/// A bounce still down when the first attempt times out keeps its hold until
+/// it lifts: its lift is no tap, though the first tap has fired.
+fn a_bounce_outliving_the_first_attempt_yields_no_tap() {
+    use flui_interaction::DoubleTapGestureRecognizer;
+    for kind in [PointerKind::Mouse, PointerKind::Touch] {
+        let rig = Rig::new();
+        let taps = Rc::new(Cell::new(0));
+        let tapped = taps.clone();
+        let tap = TapGestureRecognizer::builder(rig.binding.arena().clone())
+            .on_tap(move |_| tapped.set(tapped.get() + 1))
+            .build();
+        let double = DoubleTapGestureRecognizer::builder(rig.binding.arena().clone())
+            .on_double_tap(|_| {})
+            .build();
+        rig.attach(&tap, None);
+        rig.attach(&double, None);
+        let at = Offset::new(100.0, 100.0);
+        let send = |lifts: bool| {
+            let event = if lifts {
+                make_up_event_for_id(id(1), at, kind).expect("finite primary Up")
+            } else {
+                make_down_event_for_id(id(1), at, kind).expect("finite primary Down")
+            };
+            rig.send(&event);
+            rig.frame();
+        };
+        send(false);
+        rig.advance(10);
+        send(true);
+        rig.advance(20);
+        send(false);
+        rig.advance(400);
+        rig.binding.arena().poll_deadlines();
+        rig.frame();
+        assert_eq!(
+            taps.get(),
+            1,
+            "{kind:?}: the first tap fires at its timeout"
+        );
+        rig.advance(10);
+        send(true);
+        assert_eq!(taps.get(), 1, "{kind:?}: the bounce's lift is no tap");
+        assert!(rig.binding.arena().is_empty(), "{kind:?}");
+    }
+}
+
+/// The root-space event of a recognizer whose local space is `zoom` times
+/// the root's, as inside a scaled viewer.
+fn under_zoom(zoom: f64) -> impl Fn(&PointerEvent) -> PointerEvent + 'static {
+    move |event| {
+        let root = |point: flui_foundation::geometry::Point<f64>| {
+            Offset::new(point.x / zoom, point.y / zoom)
+        };
+        match event {
+            PointerEvent::Down(press) => make_down_event_for_id(
+                press.pointer.id,
+                root(press.sample.position.get()),
+                press.pointer.kind,
+            )
+            .expect("finite root Down"),
+            PointerEvent::Move(movement) => make_move_event_for_id(
+                movement.pointer.id,
+                root(movement.current().position.get()),
+                movement.pointer.kind,
+            )
+            .expect("finite root Move"),
+            PointerEvent::Up(release) => make_up_event_for_id(
+                release.pointer.id,
+                root(release.sample.position.get()),
+                release.pointer.kind,
+            )
+            .expect("finite root Up"),
+            other => other.clone(),
+        }
+    }
+}
+
+/// Slops are root pixels: inside a 4x zoom a 6 px jitter (24 local px)
+/// still taps, and inside a quarter zoom a 40 px slide (10 local px) still
+/// starts a drag.
+fn slops_measure_root_pixels_inside_a_transform() {
+    let rig = Rig::new();
+    let taps = Rc::new(Cell::new(0));
+    let tapped = taps.clone();
+    let tap = TapGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_tap(move |_| tapped.set(tapped.get() + 1))
+        .build();
+    rig.attach_with_global(&tap, None, under_zoom(4.0));
+    rig.down(1, 0.0, 0.0);
+    rig.frame();
+    rig.move_to(1, 24.0, 0.0);
+    rig.up(1, 24.0, 0.0);
+    rig.frame();
+    assert_eq!(taps.get(), 1, "a 6 root px jitter inside a 4x zoom taps");
+
+    let rig = Rig::new();
+    let starts = Rc::new(Cell::new(0));
+    let started = starts.clone();
+    let drag = DragGestureRecognizer::builder(rig.binding.arena().clone(), DragAxis::Vertical)
+        .on_start(move |_| started.set(started.get() + 1))
+        .build();
+    rig.attach_with_global(&drag, None, under_zoom(0.25));
+    rig.down(1, 0.0, 0.0);
+    rig.frame();
+    rig.move_to(1, 0.0, 10.0);
+    assert_eq!(
+        starts.get(),
+        1,
+        "a 40 root px slide inside a quarter zoom drags"
+    );
+    rig.up(1, 0.0, 10.0);
+    rig.frame();
+    assert!(rig.binding.arena().is_empty());
+}
+
+/// A bounced second Down is not a second tap: no tap on it wins its contact,
+/// and the first tap arrives once, when the double tap gives it up.
+fn double_tap_bounce_yields_no_tap_of_its_own() {
+    use flui_interaction::DoubleTapGestureRecognizer;
+    for kind in [PointerKind::Mouse, PointerKind::Touch] {
+        let rig = Rig::new();
+        let taps = Rc::new(Cell::new(0));
+        let tapped = taps.clone();
+        let tap = TapGestureRecognizer::builder(rig.binding.arena().clone())
+            .on_tap(move |_| tapped.set(tapped.get() + 1))
+            .build();
+        let double = DoubleTapGestureRecognizer::builder(rig.binding.arena().clone())
+            .on_double_tap(|_| {})
+            .build();
+        rig.attach(&tap, None);
+        rig.attach(&double, None);
+        let at = Offset::new(100.0, 100.0);
+        for (wait, lifts) in [(0, false), (10, true), (20, false), (20, true)] {
+            rig.advance(wait);
+            let event = if lifts {
+                make_up_event_for_id(id(1), at, kind).expect("finite primary Up")
+            } else {
+                make_down_event_for_id(id(1), at, kind).expect("finite primary Down")
+            };
+            rig.send(&event);
+            rig.frame();
+        }
+        assert_eq!(taps.get(), 0, "{kind:?}: the bounce yields no tap");
+        rig.advance(300);
+        rig.binding.arena().poll_deadlines();
+        rig.frame();
+        assert_eq!(taps.get(), 1, "{kind:?}: the first tap arrives once");
+        assert!(rig.binding.arena().is_empty(), "{kind:?}");
+    }
 }
 fn double_tap_admits_exact_40ms() {
     double_tap_minimum_interval(40);

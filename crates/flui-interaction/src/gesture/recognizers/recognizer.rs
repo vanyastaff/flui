@@ -112,6 +112,37 @@ pub(crate) fn measured_positions(event: &PointerEvent) -> impl Iterator<Item = O
         .chain(event.position())
 }
 
+/// A sample's displacement from Down as a slop compares it: the local
+/// displacement rescaled to its root-space length.
+///
+/// Slops are logical pixels of the screen, while `local` lives in the
+/// recognizer's hit-test-transformed space; measured there, a tolerance would
+/// shrink fourfold inside a 4x zoom. The direction stays the recognizer's own,
+/// so an axial slop still reads its local axis; under a similarity transform
+/// (zoom, rotation, translation) the result is exact. A transform that
+/// collapses the local motion leaves the root displacement itself. Non-finite
+/// input stays non-finite, which every tolerance treats as exceeded.
+pub(crate) fn slop_travel(local: Offset<f64>, global: Offset<f64>) -> Offset<f64> {
+    let local_length = local.dx.hypot(local.dy);
+    if local_length == 0.0 {
+        return global;
+    }
+    let scale = global.dx.hypot(global.dy) / local_length;
+    Offset::new(local.dx * scale, local.dy * scale)
+}
+
+/// [`slop_travel`] for each measured sample of `dispatch` from the Down at
+/// `local_origin` and `global_origin`, in packet order.
+pub(crate) fn measured_travel(
+    dispatch: crate::pointer::PointerDispatch<'_>,
+    local_origin: Offset<f64>,
+    global_origin: Offset<f64>,
+) -> impl Iterator<Item = Offset<f64>> {
+    measured_positions(dispatch.local)
+        .zip(measured_positions(dispatch.global))
+        .map(move |(local, global)| slop_travel(local - local_origin, global - global_origin))
+}
+
 /// Places device production timestamps on the arena clock.
 ///
 /// Velocity uses sample production time, because queued events can arrive back

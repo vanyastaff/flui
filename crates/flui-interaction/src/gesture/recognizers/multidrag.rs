@@ -366,16 +366,19 @@ impl MultiDragGestureRecognizer {
             } else {
                 state.pending_delta = pending;
                 state.pending_global_delta = pending_global;
-                let crossed =
-                    super::recognizer::measured_positions(dispatch.local).any(|position| {
-                        let delta = position - state.initial_position;
-                        let movement = match self.axis {
-                            MultiDragAxis::Free => delta,
-                            MultiDragAxis::Horizontal => Offset::new(delta.dx, 0.0),
-                            MultiDragAxis::Vertical => Offset::new(0.0, delta.dy),
-                        };
-                        state.settings.exceeds_hit_slop(state.kind, movement)
-                    });
+                let crossed = super::recognizer::measured_travel(
+                    dispatch,
+                    state.initial_position,
+                    state.initial_global_position,
+                )
+                .any(|delta| {
+                    let movement = match self.axis {
+                        MultiDragAxis::Free => delta,
+                        MultiDragAxis::Horizontal => Offset::new(delta.dx, 0.0),
+                        MultiDragAxis::Vertical => Offset::new(0.0, delta.dy),
+                    };
+                    state.settings.exceeds_hit_slop(state.kind, movement)
+                });
                 (
                     None,
                     None,

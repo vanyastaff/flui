@@ -1,7 +1,7 @@
 //! Owner-local held-press recognition, driven by the arena's frame clock.
 
 use super::{
-    ArenaMembership, CancelOutcome, ContactId, PrimaryContact,
+    ArenaMembership, CancelOutcome, ContactEnd, ContactId, PrimaryContact,
     callback_containment::{CallbackSequence, finish_containment, retire_callbacks},
     recognizer::{
         EventTimeline, GestureRecognizer, event_time, is_primary_down, measured_positions,
@@ -245,12 +245,12 @@ impl LongPressGestureRecognizer {
         }
         finish_containment(first, std::thread::panicking());
     }
-    fn finish_contact(&self, id: ContactId, first: &mut Option<RoutePanic>) {
+    fn finish_contact(&self, id: ContactId, end: ContactEnd, first: &mut Option<RoutePanic>) {
         if self.contact.is_current(id) {
             RoutePanic::preserve_first(
                 first,
                 RoutePanic::capture(|| {
-                    let _ = self.contact.finish();
+                    let _ = self.contact.finish(end);
                 }),
                 "long press contact completion",
             );
@@ -447,10 +447,9 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                     return;
                 }
                 if phase == LongPressPhase::Possible
-                    && measured_positions(dispatch.local).any(|position| {
-                        let delta = position - contact.local;
-                        contact.settings.exceeds_hit_slop(contact.kind, delta)
-                    })
+                    && contact
+                        .measured_travel(dispatch)
+                        .any(|travel| contact.settings.exceeds_hit_slop(contact.kind, travel))
                 {
                     self.cancel();
                     return;
@@ -500,8 +499,27 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                 }
             }
             PointerEvent::Up(_) => {
+                let clock = clock.expect("BUG: Up reads the owner clock");
+                // A stalled frame or an Up queued before the deadline's poll
+                // still ends a press held past its timeout as a long press.
+                // A failing recognition callback cannot strand the release:
+                // its failure resumes once the contact is finished.
+                let due = self.state.borrow().phase == LongPressPhase::Possible
+                    && self
+                        .contact
+                        .deadline()
+                        .is_some_and(|deadline| clock >= deadline)
+                    && !contact
+                        .measured_travel(dispatch)
+                        .any(|travel| contact.settings.exceeds_hit_slop(contact.kind, travel));
+                let mut first = if due {
+                    RoutePanic::capture(|| self.fire_deadline(clock))
+                } else {
+                    None
+                };
                 self.contact.disarm_deadline();
                 if !self.contact.is_current(contact.id) {
+                    finish_containment(first, std::thread::panicking());
                     return;
                 }
                 let (started, velocity) = {
@@ -510,11 +528,9 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                     state.phase = LongPressPhase::Ready;
                     state.local = dispatch.local.position().unwrap_or(contact.local);
                     state.global = dispatch.global.position().unwrap_or(contact.global);
-                    let time = state.timeline.instant(
-                        event_time(dispatch.local),
-                        self.contact
-                            .instant_at(clock.expect("BUG: Up reads the owner clock")),
-                    );
+                    let time = state
+                        .timeline
+                        .instant(event_time(dispatch.local), self.contact.instant_at(clock));
                     (started, state.velocity_tracker.velocity_at(time))
                 };
                 let details = self.details(contact.kind);
@@ -524,7 +540,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                     velocity,
                     kind: contact.kind,
                 };
-                let mut notices = CallbackSequence::new();
+                let mut notices = CallbackSequence::preserving_failure(first.is_some());
                 if started {
                     notices.call(self.callbacks.on_long_press_up.clone(), |callback| {
                         callback(details.clone());
@@ -535,8 +551,19 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                         });
                     }
                 }
-                let mut first = RoutePanic::capture(|| notices.finish());
-                self.finish_contact(contact.id, &mut first);
+                RoutePanic::preserve_first(
+                    &mut first,
+                    RoutePanic::capture(|| notices.finish()),
+                    "long press release",
+                );
+                // A press released before its timeout recognized nothing: it
+                // leaves the contest, so the Up sweep cannot hand it the contact.
+                let end = if started {
+                    ContactEnd::Contending
+                } else {
+                    ContactEnd::Withdrawn
+                };
+                self.finish_contact(contact.id, end, &mut first);
                 finish_containment(first, std::thread::panicking());
             }
             PointerEvent::Cancel(_) => {

@@ -176,6 +176,31 @@ pub struct ContactSnapshot {
     pub settings: GestureSettings,
 }
 
+impl ContactSnapshot {
+    /// Each measured sample's displacement from Down, as a slop compares it
+    /// ([`slop_travel`](super::recognizer::slop_travel)): root-space length in
+    /// the recognizer's own direction.
+    pub(crate) fn measured_travel<'a>(
+        &'a self,
+        dispatch: PointerDispatch<'a>,
+    ) -> impl Iterator<Item = Offset<f64>> + 'a {
+        super::recognizer::measured_travel(dispatch, self.local, self.global)
+    }
+}
+
+/// How a lifted contact leaves its contest ([`PrimaryContact::finish`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ContactEnd {
+    /// The recognizer recognized its gesture or competes for the Up sweep (a
+    /// tap): it stays in the contest.
+    Contending,
+    /// The recognizer recognized nothing (a long press released early, a
+    /// swipe that never crossed its slop): it leaves the contest, so the rest
+    /// of the route can win the contact.
+    Withdrawn,
+}
+
 /// A pointer sequence could not be admitted.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -405,8 +430,40 @@ impl PrimaryContact {
         Some(outgoing.snapshot)
     }
 
-    /// Complete pointer-up tracking, sweeping only in a self-driven arena.
-    pub fn finish(&self) -> Option<ContactSnapshot> {
+    /// Complete pointer-up tracking.
+    ///
+    /// [`ContactEnd::Contending`] keeps the member in its contest for the Up
+    /// sweep, sweeping only in a self-driven arena;
+    /// [`ContactEnd::Withdrawn`] leaves the contest first, so a member that
+    /// recognized nothing cannot win the sweep by its place in the route.
+    pub fn finish(&self, end: ContactEnd) -> Option<ContactSnapshot> {
+        if end == ContactEnd::Withdrawn {
+            let snapshot = self.current()?;
+            let entry = self.entry();
+            // The withdrawal commits before it runs user code (other members,
+            // diagnostics); a failure there is held until the contest ended.
+            let mut first = RoutePanic::capture(|| {
+                let _ = self.withdraw();
+            });
+            // No binding sweeps a self-driven arena on Up: the contest this
+            // member left still ends here, among the members that remain.
+            RoutePanic::preserve_first(
+                &mut first,
+                RoutePanic::capture(|| {
+                    if self.membership.arena.sweep_model() == SweepModel::SelfDriven
+                        && let Some(entry) = entry
+                    {
+                        entry.sweep();
+                    }
+                }),
+                "withdrawn contact sweep",
+            );
+            tracing::debug!(name: "recognizer.stop_tracking", pointer = ?snapshot.pointer,
+                event = %crate::gesture::observability::GestureEvent::StoppedTracking,
+                "recognizer stopped tracking");
+            super::callback_containment::finish_containment(first, std::thread::panicking());
+            return Some(snapshot);
+        }
         let snapshot = self.current()?;
         if let Some(contact) = self.current.borrow().as_ref() {
             contact.deadline_registration.withdraw();

@@ -6040,7 +6040,9 @@ fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) 
     use flui_interaction::gesture::GestureArena;
     use flui_interaction::gesture::GestureArenaMember;
     use flui_interaction::pointer::PointerDispatch;
-    use flui_interaction::{ArenaMembership, GestureSettings, Offset, PointerId, PrimaryContact};
+    use flui_interaction::{
+        ArenaMembership, ContactEnd, GestureSettings, Offset, PointerId, PrimaryContact,
+    };
     use std::cell::Cell;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
@@ -6092,7 +6094,9 @@ fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) 
         .contact
         .begin(PointerDispatch::at_root(&down), &GestureSettings::default())
         .expect("initial generation admitted");
-    let result = catch_unwind(AssertUnwindSafe(|| member.contact.finish()));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        member.contact.finish(ContactEnd::Contending)
+    }));
     if fail_after_admission {
         assert_eq!(
             result
@@ -6124,7 +6128,7 @@ fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) 
         1
     );
     assert!(arena.is_open(PointerId::new(core::num::NonZeroU64::MIN)));
-    member.contact.finish();
+    member.contact.finish(ContactEnd::Contending);
     assert!(member.contact.current().is_none());
     assert!(
         !member
