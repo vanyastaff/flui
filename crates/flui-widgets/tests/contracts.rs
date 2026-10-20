@@ -262,6 +262,7 @@ fn pointer_and_gesture_recognition() {
             ("interactive_viewer::viewer_degenerate_geometry_and_bounds_publish_finite_transforms", crate::interactive_viewer::viewer_degenerate_geometry_and_bounds_publish_finite_transforms),
             ("interactive_viewer::viewer_rebuild_from_its_update_callback_keeps_the_gesture", crate::interactive_viewer::viewer_rebuild_from_its_update_callback_keeps_the_gesture),
             ("interactive_viewer::viewer_pinch_past_the_scale_bounds_stretches_and_snaps_back", crate::interactive_viewer::viewer_pinch_past_the_scale_bounds_stretches_and_snaps_back),
+            ("interactive_viewer::viewer_touch_twist_rotates_only_when_rotation_is_enabled", crate::interactive_viewer::viewer_touch_twist_rotates_only_when_rotation_is_enabled),
             ("interactive_viewer::viewer_contact_gives_it_the_keys", crate::interactive_viewer::viewer_contact_gives_it_the_keys),
             ("interactive_viewer::viewer_key_sequence_ends_when_focus_moves_before_the_release", crate::interactive_viewer::viewer_key_sequence_ends_when_focus_moves_before_the_release),
             ("gesture_detector::clearing_pan_callbacks_mid_drag_still_finishes_the_drag", crate::gesture_detector::clearing_pan_callbacks_mid_drag_still_finishes_the_drag as fn()),
