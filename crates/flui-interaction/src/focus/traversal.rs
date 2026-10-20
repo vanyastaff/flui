@@ -61,6 +61,12 @@ pub(super) struct GroupConfig {
     pub edge: TraversalEdgeBehavior,
 }
 
+impl crate::retain::Retain for GroupConfig {
+    fn retain(self) {
+        crate::retain::Retain::retain(self.policy);
+    }
+}
+
 pub(super) type GroupOrderCache = Vec<(FocusNodeId, Vec<FocusNodeId>)>;
 
 struct GroupSnapshot {

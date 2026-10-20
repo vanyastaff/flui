@@ -24,7 +24,8 @@
 //! `flui-devtools` imports it outside its tests, or because an approved
 //! feature spec places it in the package-author surface (the input
 //! completeness spec's placement table: arena observation, gesture presets,
-//! system preferences, haptic feedback kinds and input regions);
+//! the gesture slots' locks, the swipe recognizer, system preferences, haptic
+//! feedback kinds and input regions);
 //! `tests/surface.rs` pins the list.
 
 pub use flui_animation as animation;
@@ -115,9 +116,13 @@ pub mod platform {
 /// `MotionRole` when it moves) or `PrimaryContact`, composes with
 /// `GestureComposition` or a `SequencedBranch`, admits device kinds through
 /// `PointerKindSet`, and is mounted by `widgets::RawGestureDetector` through a
-/// `widgets::GestureRecognizerFactory`.
+/// `widgets::GestureRecognizerFactory`. `AxisLock` and `TransformLock`
+/// configure the drag and transform slots of `widgets::GestureDetector`, and
+/// `SwipeGestureRecognizer` is the built-in a package's edge or fling gesture
+/// composes with.
 pub mod interaction {
     pub use flui_interaction::ArenaMembership;
+    pub use flui_interaction::AxisLock;
     pub use flui_interaction::BeginContactError;
     pub use flui_interaction::CancelOutcome;
     pub use flui_interaction::ContactEnd;
@@ -140,6 +145,7 @@ pub mod interaction {
     #[cfg(feature = "unstable-input")]
     pub use flui_interaction::HapticsHandle;
     pub use flui_interaction::ObserverHandle;
+    pub use flui_interaction::PhysicalEdge;
     pub use flui_interaction::PointerDispatch;
     pub use flui_interaction::PointerEvent;
     pub use flui_interaction::PointerEventExt;
@@ -147,6 +153,10 @@ pub mod interaction {
     pub use flui_interaction::PointerKind;
     pub use flui_interaction::PointerKindSet;
     pub use flui_interaction::PrimaryContact;
+    pub use flui_interaction::SwipeDetails;
+    pub use flui_interaction::SwipeGestureRecognizer;
+    pub use flui_interaction::SwipeStart;
+    pub use flui_interaction::TransformLock;
     pub use flui_interaction::cancel_all;
     pub use flui_interaction::focus::FocusNode;
     pub use flui_interaction::focus::FocusSubscription;

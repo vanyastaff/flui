@@ -628,14 +628,14 @@ mod tests {
             a.doctest_args
         );
         // a feature of a package outside the selection would be rejected by cargo
-        let devtools = args(&["packages/flui-devtools/src/lib.rs"]);
-        assert!(!devtools.packages.split(' ').any(|n| n == "flui"));
-        assert!(devtools.doctest_args.starts_with("-p flui-devtools"));
+        // (the CLI is a package the facade does not depend on)
+        let cli = args(&["crates/flui-cli/src/main.rs"]);
+        assert!(!cli.packages.split(' ').any(|n| n == "flui"));
         assert!(
-            !devtools.doc_args.contains("flui/") && !devtools.doctest_args.contains("flui/"),
+            !cli.doc_args.contains("flui/") && !cli.doctest_args.contains("flui/"),
             "{} / {}",
-            devtools.doc_args,
-            devtools.doctest_args
+            cli.doc_args,
+            cli.doctest_args
         );
     }
 

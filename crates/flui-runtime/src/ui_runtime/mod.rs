@@ -122,6 +122,7 @@ pub(crate) use agent::DevAgentSlot;
 pub use agent::{AgentError, AgentReply, SemanticsAgent};
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
 use input::FocusCoordinator;
+pub(crate) use presentations::start_os_drags;
 
 // ---------------------------------------------------------------------------
 // Errors

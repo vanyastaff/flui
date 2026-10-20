@@ -12,14 +12,16 @@ checks them with no exceptions. Each public item has one module path; the crate 
 
 | Layer | Module | One-paragraph description |
 |---|---|---|
-| 0 | `events`, `ids`, `retain`; `close`, `containment` | The owned input vocabulary and identities. `retain` decides what a failure path keeps rather than destroys; `close` holds the terminal close policy (`CloseMode`, `CloseTombstone`, `ClosePanic`) every owner shares; `containment` holds `RoutePanic`, the first failure of a synchronous dispatch phase, kept until mandatory cleanup finishes. |
-| 1 | `pointer` | Pointer delivery: hit testing, the `InteractionLane` that resolves and invokes pointer routes, `PointerRouter`, `PointerCapture`, `MouseTracker` (enter/exit/hover), the `TransformGuard` stack-RAII, `PointerEventResampler` (frame-rate adaptation with a 100-event pressure threshold, preserved sequence boundaries and 1 ms minimum sample interval), its `SamplingClock`, and wheel preferences. Route resolution on Down and cached-route invocation on every Move/Up are on the per-pointer hot path (`benches/pointer_route_bench.rs`). |
-| 1 | `focus` | The presentation-owned `FocusManager` (`FocusManager::new` returns an `Rc<Self>`; there is no thread-local focus state), `FocusScopeNode` / reading-order Tab traversal and directional traversal. |
-| 1 | `text_input` | `TextInputOwner` and the `TextInputHandle` a text widget attaches through, and `ClipboardHandle`. |
-| 2 | `gesture` | The arena: owner-local conflict resolution between competing recognizers, per-pointer members as `Weak<dyn GestureArenaMember>` in an inline-four `SmallVec`, generational slots that keep held competitions separate across pointer-ID reuse, eager acceptors that win when the arena closes. Eleven recognizer types (tap, double tap, long press, hold, swipe, drag, scale, force press, multi-tap, multi-drag, tap-and-drag) and drag-axis builders, each implementing the open `GestureRecognizer` and `GestureArenaMember` traits; `ArenaMembership` names an exact weak allocation, `PrimaryContact` owns one admitted sequence, `RecognizerSet` shares ordered weak attachments with listeners. `GestureSettings`, the callback details, `DragAxis`, `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate) and its crate-internal `lsq_solver`, One Euro filters (applied by every position-publishing recognizer after acceptance when settings select a tuning; slop, arena and velocity read raw samples), and observability: `GestureEvent` names events, `SPAN_RECOGNIZER` and `SPAN_ARENA` name spans; rejection and terminal tracking commit local withdrawal before diagnostics, because subscribers can reenter or panic. |
-| 2 | `drag` | Drag-and-drop sessions (ADR-0211). One `DragOwner` per UI runtime holds `DragSessions` (a `Slab` of entries behind `Rc<RefCell<..>>`, borrowed only for short reads and writes, never across a receiver, observer, provider or platform call). A `DragSession` runs in its window on the contact's pointer capture and hit test (its presentation's tree, attached with each presentation's window and hit test, unless the source passes its own). Leaving the window, it asks the window what is under the pointer (`PlatformWindow::window_at`): over another presentation of the runtime it stays on the same capture and hit-tests that tree, leaving the last window's receivers before the next one's enter, and the sibling-presentation reason to escalate applies only where the backend cannot place its windows. When the pointer leaves for anything else, or at the start on an `AtStart` backend, the pure `plan_os_session` (`flui-platform-api`) decides whether it becomes an OS session, and the request waits in the table until the host enters it at its outermost quiescent point. The identity `(ProcessNonce, UiRuntimeId, DragSessionId)` rides in a private representation of the offer; only the source runtime's table turns it back into the Rust value. `DropTracker` keeps the per-receiver contract (one enter, moves, then exactly one leave or drop; drop only to the receiver that accepted the last move), and a dropped offer is concluded with the OS once every request made from it has resolved. A receiver is one registration, its lane ticket holding that receiver: a ticket unregistered or given another receiver mid-hover leaves the old one at the next move or tick, and it never spring-loads or takes the drop. `DragOwner::tick` runs spring-loading that came due (an undated hover asks for a turn at once) and one autoscroll frame, asking receivers innermost first until one answers `Autoscroll::Scrolling`. A presentation reaches its runtime's drags through `DragAndDrop`, the lifecycle capability the `Draggable` and `DropTarget` widgets acquire: it starts drags that leave through its window, and a mouse or pen drag shows on its cursor what a drop would do (grabbing over nothing or a target that would move it, copy and alias badges, no-drop over a target that declines) through an override of the presentation's `MouseTracker`, because hover is frozen while the drag owns the contact; the override goes when the session ends or the OS takes it. A keyboard or assistive cut or copy is a held session no pointer moves, at most one per runtime; a paste resolves the receiver its target's ticket names, enters it and drops on it as a release would, as a move for a cut and a copy for a copy. `DragOwner::cancel_on_escape` cancels a presentation's in-window and held sessions, which the runtime calls for Escape before focus sees the key. A release whose receivers panic still concludes the session, cancelled, before the panic propagates. After an autoscroll frame that scrolled, an in-window session hit-tests again where its pointer rests. |
-| 3 | `binding` | `GestureBinding` — the owner-local composition root (ADR-0217 §2) over `pub(crate)` services that hold no reference to it or to each other: `PointerSequences` (admitted contacts and their Down routes, captures, resamplers, refusals), `MoveCoalescer`, `ScrollSequences`, `PanZoomSequences`, `MouseTracker`, `ArenaDriver` (close on Down, sweep on Up, abandon on Cancel) and `CloseCoordinator`. Every service is keyed by `InputSurface` (the window, or a surface minted by `embed_surface`); a contact stays with the surface that admitted its Down. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
-| above | `__runtime`, `testing` | The runtime's terminal-cleanup seam over every owner above (hidden; no semver promise), and the `testing` feature's synthetic event builders. |
+| 0 | `events`, `ids`, `retain` | The owned input vocabulary and identities. `retain` decides what a failure path keeps rather than destroys. |
+| 1 | `close`, `containment` | `close` holds the terminal close policy (`CloseMode`, `CloseTombstone`, `ClosePanic`) every owner shares; `containment` holds `RoutePanic`, the first failure of a synchronous dispatch phase, kept until mandatory cleanup finishes. |
+| 2 | `pointer` | Pointer delivery: hit testing, the `InteractionLane` that resolves and invokes pointer routes, `PointerRouter`, `PointerCapture`, `MouseTracker` (enter/exit/hover), the `TransformGuard` stack-RAII, `PointerEventResampler` (frame-rate adaptation with a 100-event pressure threshold, preserved sequence boundaries and 1 ms minimum sample interval), its `SamplingClock`, and wheel preferences. Route resolution on Down and cached-route invocation on every Move/Up are on the per-pointer hot path (`benches/pointer_route_bench.rs`). |
+| 2 | `focus` | The presentation-owned `FocusManager` (`FocusManager::new` returns an `Rc<Self>`; there is no thread-local focus state), `FocusScopeNode` / reading-order Tab traversal and directional traversal. |
+| 2 | `text_input` | `TextInputOwner` and the `TextInputHandle` a text widget attaches through, and `ClipboardHandle`. |
+| 3 | `gesture` | The arena: owner-local conflict resolution between competing recognizers, per-pointer members as `Weak<dyn GestureArenaMember>` in an inline-four `SmallVec`, generational slots that keep held competitions separate across pointer-ID reuse, eager acceptors that win when the arena closes. Eleven recognizer types (tap, double tap, long press, hold, swipe, drag, scale, force press, multi-tap, multi-drag, tap-and-drag) and drag-axis builders, each implementing the open `GestureRecognizer` and `GestureArenaMember` traits; `ArenaMembership` names an exact weak allocation, `PrimaryContact` owns one admitted sequence, `RecognizerSet` shares ordered weak attachments with listeners. `GestureSettings`, the callback details, `DragAxis`, `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate) and its crate-internal `lsq_solver`, One Euro filters (applied by every position-publishing recognizer after acceptance when settings select a tuning; slop, arena and velocity read raw samples), and observability: `GestureEvent` names events, `SPAN_RECOGNIZER` and `SPAN_ARENA` name spans; rejection and terminal tracking commit local withdrawal before diagnostics, because subscribers can reenter or panic. |
+| 3 | `drag` | Drag-and-drop sessions (ADR-0211). One `DragOwner` per UI runtime holds `DragSessions` (a `Slab` of entries behind `Rc<RefCell<..>>`, borrowed only for short reads and writes, never across a receiver, observer, provider or platform call). A `DragSession` runs in its window on the contact's pointer capture and hit test (its presentation's tree, attached with each presentation's window and hit test, unless the source passes its own). Leaving the window, it asks the window what is under the pointer (`PlatformWindow::window_at`): over another presentation of the runtime it stays on the same capture and hit-tests that tree, leaving the last window's receivers before the next one's enter, and the sibling-presentation reason to escalate applies only where the backend cannot place its windows. When the pointer leaves for anything else, or at the start on an `AtStart` backend, the pure `plan_os_session` (`flui-platform-api`) decides whether it becomes an OS session, and the request waits in the table until the host enters it at its outermost quiescent point with `PendingOsDrag::start`. A session the OS took always ends: its backend calls the end hook, or drops it uncalled and the session ends cancelled; a hook dropped inside a start that fails is the refusal's, and a refused or panicking start sends the session back to its window (`DragOwner::os_drag_refused`), after which a hook the backend kept ends nothing. An OS offer has one record, and one hover per window it is over (keyed by presentation and offer id): the record holds what the OS sees of the offer, so only the hover that answered last can withdraw the answer, and the offer's count of requests in flight lives on the record, so a dropped offer is concluded once no request of it is in flight, whichever windows its hovers left or closed, and the record outlives its last hover while one is. The identity `(ProcessNonce, UiRuntimeId, DragSessionId)` rides in a private representation of the offer; only the source runtime's table turns it back into the Rust value. `DropTracker` keeps the per-receiver contract (one enter, moves, then exactly one leave or drop; drop only to the receiver that accepted the last move), and a dropped offer is concluded with the OS once every request made from it has resolved. A receiver is one registration, its lane ticket holding that receiver: a ticket unregistered or given another receiver mid-hover leaves the old one at the next move or tick, and it never spring-loads or takes the drop. `DragOwner::tick` runs spring-loading that came due (an undated hover asks for a turn at once) and one autoscroll frame, asking receivers innermost first until one answers `Autoscroll::Scrolling`. A presentation reaches its runtime's drags through `DragAndDrop`, the lifecycle capability the `Draggable` and `DropTarget` widgets acquire: it starts drags that leave through its window, and a mouse or pen drag shows on its cursor what a drop would do (grabbing over nothing or a target that would move it, copy and alias badges, no-drop over a target that declines) through an override of the presentation's `MouseTracker`, because hover is frozen while the drag owns the contact; the override goes when the session ends or the OS takes it. A keyboard or assistive cut or copy is a held session no pointer moves, at most one per runtime; a paste resolves the receiver its target's ticket names, enters it and drops on it as a release would, as a move for a cut and a copy for a copy. `DragOwner::cancel_on_escape` cancels a presentation's in-window and held sessions, which the runtime calls for Escape before focus sees the key. A release whose receivers panic still concludes the session, cancelled, before the panic propagates. After an autoscroll frame that scrolled, an in-window session hit-tests again where its pointer rests. |
+| 4 | `binding` | `GestureBinding` — the owner-local composition root (ADR-0217 §2) over `pub(crate)` services that hold no reference to it or to each other: `PointerSequences` (admitted contacts and their Down routes, captures, resamplers, refusals), `MoveCoalescer`, `ScrollSequences`, `PanZoomSequences`, `MouseTracker`, `ArenaDriver` (close on Down, sweep on Up, abandon on Cancel) and `CloseCoordinator`. Every service is keyed by `InputSurface` (the window, or a surface minted by `embed_surface`); a contact stays with the surface that admitted its Down. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
+| 5 | `haptics` | A presentation's haptics (ADR-0210): the `HapticsHandle` widgets request through, the frame queue and the outcome mailbox; see [Haptics frame queue and mailbox](#haptics-frame-queue-and-mailbox). |
+| 6 | `__runtime`, `testing` | The runtime's terminal-cleanup seam over every owner above (hidden; no semver promise), and the `testing` feature's synthetic event builders. |
 
 ## Ownership and synchronization
 
@@ -127,7 +129,10 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   clock and compare the same instant. `flui-widgets`'
   `an_idle_wheel_sequence_ends_at_its_latch_deadline` pins it.
 - **The binding owns mounted gesture progression.** `GestureBinding` admits
-  at most 32 simultaneous contacts, retains each admitted Down route, closes
+  at most 32 simultaneous contacts: a Down at the limit first cancels the
+  oldest contact with `Cancel(Superseded)`, as a Down for a pointer whose
+  contact never ended cancels that contact, since only a lost terminal fills
+  the limit. It retains each admitted Down route, closes
   its arena after routing Down, and sweeps or abandons its exact generation on
   terminal input. It flushes accepted motion before terminal delivery and owns
   deferred verdict/deadline progression. `GestureArenaScope` supplies that
@@ -137,8 +142,11 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   eventually release their exact entry handle, including after pointer reuse;
   reserving capacity does not remove those obligations. The public
   `gesture_lifecycle_matrix` covers held release and pointer reuse, while
-  `binding_input_contract_matrix` covers capped contacts, refused tails and
-  lifecycle reset. The binding's contact cap does not limit members per contact.
+  `binding_input_contract_matrix` covers the contact limit, superseded
+  contacts, refused tails and lifecycle reset. A pressed move with no contact
+  reaches the pointer router only: no target heard its Down. A mouse or pen
+  with every button up hovers whatever refusal its contact carried. The
+  binding's contact cap does not limit members per contact.
 - **Terminal lane retirement commits before user destruction (ADR-0127).**
   Closing withdraws executable callbacks and opaque route ownership before
   retiring them outside borrows. Healthy retirement releases resources; after
@@ -228,7 +236,9 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   before the one `CaptureLost`, and newer released tails are refused by pointer
   and optional device identity. Missing device identity cannot distinguish
   unreported sources. Listener unmount removes future hit-test admission but
-  preserves the cached contact's terminal obligation; presentation close has
+  preserves the cached contact's terminal obligation, and only that: the
+  unregistered target hears the contact's Up or Cancel, not its later moves
+  (`unregistered_target_hears_only_its_contacts_end`); presentation close has
   its separate retirement policy. This controls logical routing and does not
   advertise an OS capture-release operation. `explicit_pointer_capture_contract`
   and widget `listener_unmount_preserves_one_captured_contact_terminal` pin the
@@ -246,7 +256,12 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   preserves that device's prior
   state for retry, and every committed callback batch runs before the first
   failure resumes. Replaced and departed captures retire outside the tracker
-  borrow under ADR-0127. `shared_region_exit_per_device`,
+  borrow under ADR-0127. Annotations are kept per surface, since two
+  surfaces' trees may reuse a render id. A source that leaves (its own
+  `Leave`, its device removed) exits what it hovered and is forgotten; a
+  window leave keeps sources for their return. Either way the regions no
+  source still hovers are released after the exits run.
+  `hover_ends_when_its_source_leaves`, `shared_region_exit_per_device`,
   `ambient_refresh_contains_each_device` (including later-probe reentry) and
   `released_region_destructor_reenters_tracker` pin these contracts.
 - **Hover payload retirement preserves delivery and first failure (ADR-0127).**
@@ -420,7 +435,8 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   `GestureBinding::is_hover_frozen` holds, moves record each source's
   position without entering, exiting or changing the cursor, and the frame
   driver skips its ambient refresh; the first refresh after the latch
-  hit-tests where the pointer went. Raw `Listener` hover callbacks are not
+  hit-tests where the pointer went, and the dispatch that ends the latch asks
+  the window for that frame. Raw `Listener` hover callbacks are not
   frozen. `hover_freezes_while_a_scroll_is_latched` and the `flui-widgets`
   row `hover_holds_while_a_touch_scroll_is_latched` pin it.
 - **Locks are recognizer configuration (ADR-0208 §4).** `AxisLock::Rails`
@@ -956,3 +972,31 @@ subscribers run. Terminal tracking withdraws local state before arena sweep; a
 reentrant same-pointer contact belongs to its new generation and is not cleared
 by the old operation's tail. `drag_callback_ownership_and_retirement` exercises
 these boundaries, first-failure competition and the next public drag.
+
+## Haptics frame queue and mailbox
+
+One `HapticsHost` belongs to each presentation and runs on its owner thread;
+widgets hold a weak `HapticsHandle`. An immediate request plays at once. A
+frame-aligned request joins the frame queue with its deadline snapshotted at
+enqueue, and resolves exactly once: played when a frame is presented by its
+deadline, `Suppressed` when the deadline passes first, when the window is hidden
+or haptics are turned off, or when the presentation closes.
+
+- A queued request leaves the queue only as its outcome enters the mailbox, one
+  request at a time, and no borrow is held while the backend plays it. A backend
+  that panics loses no outcome resolved before it; its request and those behind
+  it stay queued for the next frame within their deadlines
+  (`a_backend_panic_in_a_frame_keeps_every_other_request`).
+- The mailbox capacity counts queued requests too. A frame-aligned request that
+  finds it full plays immediately, before a ticket exists. Outcomes wait for an
+  observer (ADR-0210 §4), so a presentation whose widgets never observe fills it,
+  and its frame-aligned requests then play immediately.
+- A delivery pass runs observers with no borrow held; an entry leaves the
+  mailbox once every registered observer's call for it returned. A failing
+  registration is retried for at most three consecutive passes. Outgoing
+  observers are retired outside every borrow.
+- `close` resolves the queue, runs one final pass, reports what it could not
+  deliver with its ticket, and retires the observers. `withdraw`, the close after
+  a failure that preserves ownership, runs no observer code: pending outcomes are
+  reported, and observers are retained, never dropped (ADR-0127,
+  `withdrawing_runs_no_observer_code`).

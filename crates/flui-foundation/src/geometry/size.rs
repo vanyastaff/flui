@@ -18,7 +18,7 @@ use super::{
 /// - `Size` - UI dimensions
 /// - `DeviceSize` - Screen dimensions
 ///
-/// Display format: `{width}×{height}` (e.g. `800px×600px`).
+/// Display format: `{width}x{height}` (e.g. `800x600`).
 ///
 /// # Examples
 ///
@@ -763,10 +763,11 @@ impl From<Size<f64>> for [f64; 2] {
 // Display (generic)
 // ============================================================================
 
+/// `360x48`, each side in its own `Display` (Rust's shortest round-trip form for a float).
 impl<T: Unit + Display> Display for Size<T> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}×{}", self.width, self.height)
+        write!(f, "{}x{}", self.width, self.height)
     }
 }
 

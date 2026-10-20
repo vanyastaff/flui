@@ -1,15 +1,13 @@
 //! The rules of the Android display source that need no JVM: what a sample of a
 //! `Display` becomes in the snapshot, how a reported refresh rate becomes a
-//! period, how long the idle loop waits for it, and what rate a window asks for.
+//! period, how long the event loop may block, and what rate a window asks for.
 
 use std::time::Duration;
 
+use web_time::Instant;
+
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform_api::{DisplayId, DisplayInfo, FrameRateHint, RefreshPeriod};
-
-/// How long the loop waits for an event when nothing asks for a frame and the
-/// display's period is unknown: one frame of a 60 Hz display, rounded down.
-const FALLBACK_IDLE_WAIT: Duration = Duration::from_millis(16);
 
 /// What one `android.view.Display` reported, before it has an identity.
 #[derive(Debug, Clone, PartialEq)]
@@ -60,27 +58,55 @@ pub(crate) fn refresh_period(hz: f32) -> Option<RefreshPeriod> {
     RefreshPeriod::from_hz(f64::from(hz)).ok()
 }
 
-/// The longest the loop blocks waiting for an event when it has nothing to
-/// render: the display's period, so that wall-clock deadlines and a frame the
-/// system will not announce are noticed within a frame, and 16 ms when the
-/// period is unknown.
-pub(crate) fn idle_wait(period: Option<RefreshPeriod>) -> Duration {
-    period.map_or(FALLBACK_IDLE_WAIT, RefreshPeriod::get)
+/// What one turn of the Android event loop knows when it chooses how long
+/// `poll_events` may block.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LoopTurn {
+    /// The turn has a frame to deliver: a redraw request or a due deadline,
+    /// while resumed.
+    pub(crate) should_render: bool,
+    /// The Activity is resumed, so a frame can be delivered at all.
+    pub(crate) resumed: bool,
+    /// The earliest wall-clock deadline the wake hook reported.
+    pub(crate) wake_deadline: Option<Instant>,
+    /// When the preferences that have no change notification are read next.
+    pub(crate) next_preference_sample: Instant,
 }
 
-/// How long the loop blocks when it has nothing to render: [`idle_wait`], cut
-/// short by the time left to the next wall-clock deadline (`None` when there is
-/// none), so a deadline nearer than one frame is not served a frame late.
+/// The longest wait `ALooper_pollOnce` takes: its timeout is `i32` milliseconds,
+/// and `android-activity` converts with `as i32`, so a longer one wraps negative
+/// and waits forever.
+const LOOPER_MAX_WAIT: Duration = Duration::from_millis(i32::MAX as u64);
+
+/// How long `poll_events` may block; `None` blocks until the looper is woken.
 ///
-/// The loop keeps waking once per period even when the next deadline is far,
-/// instead of blocking until it: the same iteration samples preferences every
-/// 500 ms, settles the safe area and consumes redraw requests that set a flag
-/// without waking the looper.
-pub(crate) fn idle_wait_until(
-    period: Option<RefreshPeriod>,
-    until_deadline: Option<Duration>,
-) -> Duration {
-    until_deadline.map_or_else(|| idle_wait(period), |left| idle_wait(period).min(left))
+/// Every producer of work wakes the looper (a window redraw request, the owner
+/// signal, the Java view's event queue, the inset reply, the display watch), so
+/// the loop wakes on no timer of its own:
+///
+/// - a turn with a frame to deliver does not block;
+/// - a resumed turn blocks until the next deadline or preference sample;
+/// - a paused turn blocks until a deadline that is still ahead, and with none
+///   until it is woken. A deadline already behind was offered to the owner this
+///   turn and is left waiting for a frame, which nothing delivers before the
+///   Activity resumes; preferences are read again on `Resume`.
+pub(crate) fn poll_timeout(turn: LoopTurn, now: Instant) -> Option<Duration> {
+    if turn.should_render {
+        return Some(Duration::ZERO);
+    }
+    let until = |deadline: Instant| deadline.saturating_duration_since(now).min(LOOPER_MAX_WAIT);
+    if turn.resumed {
+        let next = turn
+            .wake_deadline
+            .map_or(turn.next_preference_sample, |deadline| {
+                deadline.min(turn.next_preference_sample)
+            });
+        Some(until(next))
+    } else {
+        turn.wake_deadline
+            .filter(|deadline| *deadline > now)
+            .map(until)
+    }
 }
 
 /// The highest valid rate among `rates`.
@@ -232,40 +258,60 @@ mod tests {
         );
     }
 
+    /// A paused Activity cannot deliver a frame, so the loop blocks: no timer
+    /// of its own, no past deadline turning the poll into a busy loop, and only
+    /// a deadline still ahead (a timer the owner serves without a frame) bounds
+    /// the wait.
     #[test]
-    fn idle_wait_is_cut_short_by_the_wake_deadline() {
-        let period = refresh_period(60.0);
-        let wait = |left: Option<Duration>| idle_wait_until(period, left);
-        assert_eq!(wait(None).as_micros(), 16_666, "no deadline: one period");
-        assert_eq!(
-            wait(Some(Duration::from_millis(3))),
-            Duration::from_millis(3),
-            "a deadline nearer than a frame is not served a frame late"
-        );
-        assert_eq!(wait(Some(Duration::ZERO)), Duration::ZERO, "already due");
-        assert_eq!(
-            wait(Some(Duration::from_secs(5))).as_micros(),
-            16_666,
-            "a far deadline does not stretch the wait"
-        );
-    }
-
-    /// The idle wait is the period the display runs at, not a fixed 16 ms.
-    #[test]
-    fn idle_wait_follows_the_real_period() {
-        let wait = |hz: f32| idle_wait(refresh_period(hz));
-        assert_eq!(
-            wait(120.0).as_micros(),
-            8_333,
-            "a 120 Hz display was polled every 16 ms"
-        );
-        assert_eq!(wait(90.0).as_micros(), 11_111);
-        assert_eq!(wait(60.0).as_micros(), 16_666);
-        assert_eq!(
-            idle_wait(None),
-            Duration::from_millis(16),
-            "an unknown period keeps the 60 Hz cadence"
-        );
-        assert_eq!(wait(0.0), Duration::from_millis(16));
+    fn a_paused_loop_blocks_until_it_is_woken() {
+        let now = Instant::now();
+        let ms = Duration::from_millis;
+        let turn = |should_render, resumed, wake_deadline| LoopTurn {
+            should_render,
+            resumed,
+            wake_deadline,
+            next_preference_sample: now + ms(500),
+        };
+        for (case, turn, expected) in [
+            (
+                "a frame to deliver",
+                turn(true, true, None),
+                Some(Duration::ZERO),
+            ),
+            ("resumed and idle", turn(false, true, None), Some(ms(500))),
+            (
+                "resumed, a deadline before the next sample",
+                turn(false, true, Some(now + ms(3))),
+                Some(ms(3)),
+            ),
+            (
+                "resumed, a deadline after the next sample",
+                turn(false, true, Some(now + ms(5_000))),
+                Some(ms(500)),
+            ),
+            ("paused and idle", turn(false, false, None), None),
+            (
+                "paused, a deadline that needs a frame is already behind",
+                turn(false, false, now.checked_sub(ms(40))),
+                None,
+            ),
+            (
+                "paused, a deadline exactly due",
+                turn(false, false, Some(now)),
+                None,
+            ),
+            (
+                "paused, a timer still ahead",
+                turn(false, false, Some(now + ms(250))),
+                Some(ms(250)),
+            ),
+            (
+                "paused, a timer further ahead than the looper can wait",
+                turn(false, false, Some(now + Duration::from_hours(30 * 24))),
+                Some(LOOPER_MAX_WAIT),
+            ),
+        ] {
+            assert_eq!(poll_timeout(turn, now), expected, "{case}");
+        }
     }
 }

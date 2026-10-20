@@ -208,6 +208,34 @@ exists to prevent.
 
 ---
 
+## Typed inspection (`inspect`)
+
+`inspect` is ADR-0242's description model, landed beside `debug`'s `Diagnosticable`, which the
+workspace migrates off and then deletes. Invariants:
+
+- **Describing allocates only in the sink.** `Inspect::inspect` writes borrowed `Field`s into
+  one `&mut dyn Sink`; `Value` is `Copy` and owns nothing. `inspect_allocation` (its own test
+  target, because it installs a counting allocator) walks every value kind, a sequence and a
+  `Debug` field with a counting sink and requires zero allocations; the snapshot sink is its
+  positive control.
+- **The value set is closed.** A consumer that handles every `Value` handles every description,
+  which is what lets the owned snapshot be a wire contract (`flui_protocol::InspectNode`). The
+  colour type lives in `flui-painting`, so a description carries `Rgba` channels.
+- **Values compare by value; `Value::Debug` equals nothing,** itself included, because its type
+  is unknown. A snapshot counts `Debug` fields per node so a ratchet can drive them down.
+- **Identity and structure belong to the tree.** An object never describes its children or its
+  id: `InspectTree` yields `InspectId`s over the generational ids, children, `Links` and the
+  tree's own facts. A reused slot prints with its generation (`r12.2`), so a stale id never reads
+  as the node that replaced it.
+- **One pinned text form.** `Display` for `Size` (`360x48`), `Offset` (`@8,8`), `Rect`
+  (`8,8 344x32`), `EdgeInsets` (`8` or `top,right,bottom,left`) and every `Value` prints numbers
+  in Rust's shortest round-trip form, and `geometry_text_parses_back_to_the_same_values` parses
+  them back bit for bit. `Debug` is not an output format.
+- **The diff's tolerance is the unit's.** Pixels for geometry and `logical_px`/`device_px`
+  fields, and an exact comparison for a field with no unit.
+
+---
+
 ## Diagnostics serialization
 
 Diagnostics nodes expose their structured properties and children and their

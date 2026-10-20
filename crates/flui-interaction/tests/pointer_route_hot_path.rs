@@ -130,6 +130,133 @@ fn resolved_route_move_invocation_allocates_no_heap_after_setup() {
     }
     resampler_raised_timestamp_keeps_checked_history_policy();
     saturated_resampler_admission_reuses_bounded_history_storage();
+    binding_frame_coalescing_moves_bounded_history();
+    steady_hover_allocates_nothing();
+    empty_hit_test_result_allocates_nothing();
+}
+
+/// A contact's moves coalesced into one frame move their history instead of
+/// copying it, and keep a bounded tail however many arrive before the frame.
+fn binding_frame_coalescing_moves_bounded_history() {
+    use flui_interaction::{GestureBinding, HitTestResult, InputSurface};
+    use flui_platform_api::pointer::{PointerButton, PointerButtons, PointerInfo, PointerPress};
+    let binding = GestureBinding::new();
+    let pointer = PointerInfo::new(
+        flui_platform_api::pointer::PointerId::new(core::num::NonZeroU64::MIN),
+        PointerKind::Touch,
+    );
+    let buttons = PointerButtons::only(PointerButton::PRIMARY);
+    let longest = Rc::new(Cell::new(0));
+    let observed = Rc::clone(&longest);
+    binding
+        .pointer_router()
+        .add_global_handler(Rc::new(move |event| {
+            if let PointerEvent::Move(movement) = event {
+                observed.set(observed.get().max(movement.coalesced().len() + 1));
+            }
+        }));
+    let down = PointerEvent::Down(PointerPress::new(
+        pointer,
+        PointerButton::PRIMARY,
+        PointerButtons::NONE,
+        route_sample(0, 0.0, 0.0),
+    ));
+    let moves: Vec<_> = (1..=300_u64)
+        .map(|millis| {
+            PointerEvent::Move(PointerMove::new(
+                pointer,
+                buttons,
+                route_sample(millis * 1_000_000, millis as f64, 0.0),
+            ))
+        })
+        .collect();
+    binding.handle_pointer_event(&down, |_| HitTestResult::new());
+    // Warm the coalescer's slot before counting.
+    binding.handle_pointer_event(&moves[0], |_| HitTestResult::new());
+    binding.flush_pending_moves();
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    for movement in &moves[1..] {
+        let _ = binding.dispatch_pointer_on(InputSurface::Window, movement, |_| {
+            panic!("a contact keeps its route")
+        });
+    }
+    let allocations = ALLOCATIONS.load(Ordering::Relaxed);
+    binding.flush_pending_moves();
+    assert!(
+        allocations <= 16,
+        "folding a stalled frame's moves grows one history, never copies it: {allocations}"
+    );
+    assert_eq!(
+        longest.get(),
+        PointerMove::COALESCED_HISTORY_LIMIT + 1,
+        "the frame's move keeps the latest bounded history and its own reading"
+    );
+    binding.handle_lifecycle_pause();
+}
+
+/// A mouse resting over the same regions updates its hover without
+/// allocating.
+fn steady_hover_allocates_nothing() {
+    use flui_interaction::events::PointerButtons;
+    use flui_interaction::pointer::{
+        MouseRegionCallbacks, MouseTracker, MouseTrackerAnnotation, PointerMotionKind,
+    };
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let tracker = MouseTracker::new();
+    let hover = |millis: u64| {
+        let PointerEvent::Move(base) =
+            make_move_event(Offset::new(5.0, 5.0), PointerKind::Mouse).expect("hover fixture")
+        else {
+            panic!("move fixture")
+        };
+        PointerEvent::Move(PointerMove::new(
+            base.pointer
+                .with_device(DeviceId::try_from(7_u64).expect("device")),
+            PointerButtons::NONE,
+            route_sample(millis * 1_000_000, 5.0, 5.0),
+        ))
+    };
+    let moves: Vec<_> = (1..=8).map(hover).collect();
+    lane.enter(|| {
+        let mut path = flui_interaction::HitTestResult::new();
+        for index in 1..=3 {
+            let region = handle
+                .register_mouse_region(MouseRegionCallbacks {
+                    on_enter: Some(Rc::new(|_, _| {})),
+                    on_exit: Some(Rc::new(|_, _| {})),
+                    ..MouseRegionCallbacks::default()
+                })
+                .expect("region");
+            let id = RenderId::new(index);
+            path.add(
+                HitTestEntry::new(id).mouse_annotation(MouseTrackerAnnotation::new(id, region)),
+            );
+        }
+        tracker.update_with_motion(&moves[0], PointerMotionKind::Hover, &path);
+        tracker.update_with_motion(&moves[1], PointerMotionKind::Hover, &path);
+        ALLOCATIONS.store(0, Ordering::Relaxed);
+        for movement in &moves[2..] {
+            tracker.update_with_motion(movement, PointerMotionKind::Hover, &path);
+        }
+        assert_eq!(
+            ALLOCATIONS.load(Ordering::Relaxed),
+            0,
+            "an unchanged hover keeps its regions and collections"
+        );
+    });
+}
+
+fn empty_hit_test_result_allocates_nothing() {
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    let result = flui_interaction::HitTestResult::new();
+    assert!(result.is_empty());
+    drop(result);
+    assert_eq!(
+        ALLOCATIONS.load(Ordering::Relaxed),
+        0,
+        "an empty hit test result owns no storage"
+    );
 }
 
 fn resampler_packets(down_time: u64) -> [PointerEvent; 3] {

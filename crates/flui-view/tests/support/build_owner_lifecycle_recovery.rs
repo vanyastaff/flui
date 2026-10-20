@@ -183,7 +183,7 @@ fn production_layout_builder_contains_a_stateful_descendant_init_panic() {
     assert_eq!(owner.layout_builder_count(), 1);
     let (scope, cell) = owner.layout_builder_registry.with_entries(|entries| {
         let entry = entries.values().next().expect("live LayoutBuilder entry");
-        (entry.element, Arc::clone(&entry.cell))
+        (entry.element, Rc::clone(&entry.cell))
     });
     cell.as_any()
         .downcast_ref::<flui_objects::LayoutConstraintsCell>()
@@ -227,6 +227,36 @@ fn production_layout_builder_contains_a_stateful_descendant_init_panic() {
     );
 }
 
+fn repartition_walks_each_ancestor_once() {
+    let mut owner = BuildOwner::new();
+    let mut tree = ElementTree::new();
+    let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
+    settle_initial_builds(&mut tree, &mut owner);
+    let scope = insert_child(&mut tree, &mut owner, root, 0);
+    let mut chain = vec![scope];
+    for _ in 0..20 {
+        let parent = *chain.last().expect("chain starts at the scope");
+        chain.push(insert_child(&mut tree, &mut owner, parent, 0));
+    }
+    settle_initial_builds(&mut tree, &mut owner);
+    let _cell = owner.register_layout_builder_for_test(RenderId::new(72), scope);
+    for &element in &chain[1..] {
+        tree.mark_needs_build(element);
+        let depth = tree.get(element).expect("chain element is live").depth();
+        owner.schedule_build_for(element, depth, RebuildReason::StateChange);
+    }
+
+    let live_scopes = owner.live_layout_scope_ids(&tree);
+    BuildOwner::take_layout_scope_hops();
+    owner.repartition_dirty(&tree, &live_scopes);
+
+    assert_eq!(owner.ready_layout_scopes(), [scope]);
+    assert!(
+        BuildOwner::take_layout_scope_hops() <= chain.len(),
+        "each element of the chain is walked once, not once per dirty descendant"
+    );
+}
+
 #[test]
 fn build_owner_lifecycle_recovery_matrix() {
     crate::table_test::run_table(
@@ -234,6 +264,7 @@ fn build_owner_lifecycle_recovery_matrix() {
         &[
             ("scoped_child_dependency_panic_is_replaced_without_consuming_foreign_work", scoped_child_dependency_panic_is_replaced_without_consuming_foreign_work as fn()),
             ("production_layout_builder_contains_a_stateful_descendant_init_panic", production_layout_builder_contains_a_stateful_descendant_init_panic as fn()),
+            ("repartition_walks_each_ancestor_once", repartition_walks_each_ancestor_once as fn()),
         ],
     );
 }

@@ -456,11 +456,12 @@ impl HitTestResult {
         }
     }
 
-    /// Creates an empty hit test result.
-    pub fn new() -> Self {
+    /// Creates an empty hit test result. It allocates nothing until an entry
+    /// or a transform is added: an empty transform stack is the identity.
+    pub const fn new() -> Self {
         Self {
             path: Vec::new(),
-            transforms: vec![Matrix4::identity()],
+            transforms: Vec::new(),
             local_transforms: Vec::new(),
         }
     }
@@ -539,9 +540,7 @@ impl HitTestResult {
 
     /// Pops the last transform from the stack.
     pub fn pop_transform(&mut self) {
-        if !self.local_transforms.is_empty() {
-            self.local_transforms.pop();
-        } else if self.transforms.len() > 1 {
+        if self.local_transforms.pop().is_none() {
             self.transforms.pop();
         }
     }
@@ -666,7 +665,6 @@ impl HitTestResult {
     pub fn clear(&mut self) {
         self.path.clear();
         self.transforms.clear();
-        self.transforms.push(Matrix4::identity());
         self.local_transforms.clear();
     }
 
@@ -993,8 +991,19 @@ fn transform_move_event(event: &PointerMove, transform: &Matrix4) -> Option<Poin
 /// Refuse a local coordinate that cannot be represented by the checked vocabulary.
 fn transform_position(position: PointerPosition, transform: &Matrix4) -> Option<PointerPosition> {
     let point = position.get();
-    let (x, y) = transform.unproject_to_plane(point.x, point.y)?;
-    PointerPosition::try_new(Point::new(x, y)).ok()
+    let local = localize_point(Offset::new(point.x, point.y), transform)?;
+    PointerPosition::try_new(Point::new(local.dx, local.dy)).ok()
+}
+
+/// Where the root-space `global` meets an entry's own plane, through the
+/// entry's composed global-to-local `transform`: the ray through the screen
+/// point is intersected with local `z = 0`, so a perspective ancestor maps
+/// correctly. `None` when it cannot (a parallel ray, a point behind the
+/// camera, a non-finite result). Every delivery that localizes a root-space
+/// point to a hit entry goes through here.
+pub(crate) fn localize_point(global: Offset<f64>, transform: &Matrix4) -> Option<Offset<f64>> {
+    let (x, y) = transform.unproject_to_plane(global.dx, global.dy)?;
+    Some(Offset::new(x, y))
 }
 
 fn transform_sample(mut sample: PointerSample, transform: &Matrix4) -> Option<PointerSample> {

@@ -529,7 +529,7 @@ impl ViewState<Scaffold> for ScaffoldState {
         if let Some(body) = &view.body {
             let mut reduced_media_query = media_query.clone();
             if view.app_bar.is_some() {
-                reduced_media_query.padding.top = 0.0;
+                reduced_media_query.remove_top_padding();
             }
             if view.bottom_navigation_bar.is_some() {
                 // Oracle: `removeBottomPadding: widget.bottomNavigationBar !=
@@ -537,10 +537,10 @@ impl ViewState<Scaffold> for ScaffoldState {
                 // consumes `padding.bottom` internally (see the module docs'
                 // "`bottom_navigation_bar` slot" section), so the body must
                 // not also see it.
-                reduced_media_query.padding.bottom = 0.0;
+                reduced_media_query.remove_bottom_padding();
             }
             if view.resize_to_avoid_bottom_inset {
-                reduced_media_query.view_insets.bottom = 0.0;
+                reduced_media_query.remove_bottom_view_inset();
             }
             children.push(LayoutId::new(
                 SLOT_BODY,
@@ -549,7 +549,7 @@ impl ViewState<Scaffold> for ScaffoldState {
         }
 
         if let Some(app_bar) = &view.app_bar {
-            let max_height = view.app_bar_preferred_height + media_query.padding.top;
+            let max_height = view.app_bar_preferred_height + media_query.padding().top;
             let cap = BoxConstraints {
                 max_height,
                 ..BoxConstraints::UNCONSTRAINED
@@ -575,7 +575,7 @@ impl ViewState<Scaffold> for ScaffoldState {
             // consume it (that's the whole point of this slot padding
             // itself).
             let mut reduced_media_query = media_query.clone();
-            reduced_media_query.padding.top = 0.0;
+            reduced_media_query.remove_top_padding();
             children.push(LayoutId::new(
                 SLOT_BOTTOM_NAV,
                 MediaQuery::new(reduced_media_query, bottom_navigation_bar.clone()),
@@ -634,26 +634,24 @@ impl ViewState<Scaffold> for ScaffoldState {
         // The safe-area padding on every edge, with the bottom edge swapped
         // for the keyboard inset when resizing.
         let min_insets = EdgeInsets::new(
-            media_query.padding.top,
-            media_query.padding.right,
+            media_query.padding().top,
+            media_query.padding().right,
             if view.resize_to_avoid_bottom_inset {
                 media_query.view_insets.bottom
             } else {
                 0.0
             },
-            media_query.padding.left,
+            media_query.padding().left,
         );
 
         // The raw safe-area bottom inset (e.g. the home-indicator area on iOS),
         // zeroed only while the keyboard is actually up and being resized
-        // around. `MediaQueryData` has no `viewPadding` field distinct from
-        // `padding` (both name the same "safe area from the OS" concept
-        // here), so `padding.bottom` is this substrate's `viewPadding.bottom`.
+        // around.
         let min_view_padding_bottom =
             if view.resize_to_avoid_bottom_inset && media_query.view_insets.bottom != 0.0 {
                 0.0
             } else {
-                media_query.padding.bottom
+                media_query.view_padding.bottom
             };
 
         let delegate: Arc<dyn MultiChildLayoutDelegate> = Arc::new(ScaffoldLayoutDelegate {

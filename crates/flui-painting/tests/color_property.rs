@@ -458,3 +458,20 @@ pub(crate) fn lerp_outside_the_segment_saturates_and_nan_keeps_begin() {
     assert_eq!(Color::lerp(opaque, clear, f64::NAN), opaque);
     assert_eq!(opaque.lerp_to(&clear, f64::NAN), opaque);
 }
+
+pub(crate) fn a_colour_describes_itself_by_its_exact_channels() {
+    use flui_foundation::inspect::{Rgba, ToValue, Value};
+    let colour = Color::rgba(255, 128, 0, 128);
+    assert_eq!(
+        colour.to_value(),
+        Value::Color(Rgba::new(
+            colour.red_f32(),
+            colour.green_f32(),
+            colour.blue_f32(),
+            colour.alpha_f32()
+        )),
+        "the description carries the channels unrounded"
+    );
+    assert_eq!(colour.to_value().to_string(), "#FF800080");
+    assert_eq!(Color::rgb(16, 32, 48).to_value().to_string(), "#102030");
+}

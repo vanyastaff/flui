@@ -14,7 +14,8 @@ use flui_foundation::{DragSessionId, IdMint, PresentationId, RenderId, UiRuntime
 use flui_interaction::drag::{
     AllowedActions, Autoscroll, DragError, DragFetch, DragHandle, DragItem, DragObserver,
     DragOutcome, DragOwner, DragPoint, DragReach, DragScope, DragSession, DragStage, DragStart,
-    DragView, DropReceiver, DropReceiverSlot, MoveOutcome, ProcessNonce, SpringLoading,
+    DragView, DropReceiver, DropReceiverSlot, MoveOutcome, PendingOsDrag, ProcessNonce,
+    SpringLoading,
 };
 use flui_interaction::events::{
     PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
@@ -66,6 +67,8 @@ fn logged(log: &Log) -> Vec<String> {
 struct RecordingSource {
     feedback: Mutex<Vec<(DataTransferId, DropFeedback)>>,
     concluded: Mutex<Vec<DataTransferId>>,
+    /// Concluding a drop panics, as a failing backend would.
+    fail_conclude: std::sync::atomic::AtomicBool,
     requests: Mutex<Vec<(DataTransferId, RepresentationIndex, TransferCompleter)>>,
 }
 
@@ -91,6 +94,10 @@ impl DataTransferSource for RecordingSource {
 
     fn conclude_drop(&self, id: DataTransferId) {
         self.concluded.lock().push(id);
+        assert!(
+            !self.fail_conclude.load(std::sync::atomic::Ordering::SeqCst),
+            "conclude failure"
+        );
     }
 }
 
@@ -194,6 +201,7 @@ struct Spot {
     fetched: RefCell<Vec<DragFetch>>,
     on_spring: RefCell<Option<Box<dyn Fn()>>>,
     on_autoscroll: RefCell<Option<AutoscrollHook>>,
+    on_drop: RefCell<Option<Box<dyn Fn()>>>,
 }
 
 type AutoscrollHook = Box<dyn Fn(Duration) -> Autoscroll>;
@@ -245,6 +253,9 @@ impl DropReceiver for Spot {
         self.values
             .borrow_mut()
             .push(drag.value::<String>().cloned());
+        if let Some(hook) = &*self.on_drop.borrow() {
+            hook();
+        }
     }
 
     fn spring_loading(&self) -> Option<SpringLoading> {
@@ -405,6 +416,7 @@ impl Fixture {
             fetched: RefCell::default(),
             on_spring: RefCell::new(None),
             on_autoscroll: RefCell::new(None),
+            on_drop: RefCell::new(None),
         })
     }
 
@@ -502,6 +514,22 @@ fn moved(session: &DragSession, x: f64) -> MoveOutcome {
 
 fn take_started() -> Vec<OsDragRequest> {
     STARTED.with(|started| std::mem::take(&mut *started.borrow_mut()))
+}
+
+/// Enter `pending` on a backend that accepts it: the request the OS now holds.
+fn enter_os(pending: PendingOsDrag) -> OsDragRequest {
+    pending
+        .start(Some(&FakeDragSource(OsDragStart::OnLeavingWindow)))
+        .expect("the backend accepts");
+    take_started().pop().expect("started")
+}
+
+/// The single OS session `f`'s drags decided on, entered on a backend that
+/// accepts it.
+fn enter_one(f: &Fixture) -> OsDragRequest {
+    let mut pending = f.owner.take_pending_os_drags();
+    assert_eq!(pending.len(), 1, "one OS session");
+    enter_os(pending.remove(0))
 }
 
 // --- drop_reaches_only_last_accepting_target -----------------------------------------------------
@@ -795,7 +823,7 @@ fn escalates_only_outside_window_with_outside_actions_or_sibling_presentation() 
             let session = f.start_with(Arc::clone(&w), case.allowed, case.reach, text());
             let x = if case.outside { 150.0 } else { 50.0 };
             let outcome = moved(&session, x);
-            let pending = f.owner.take_pending_os_drags();
+            let mut pending = f.owner.take_pending_os_drags();
             let name = case.name;
             match case.expect {
                 Expect::InWindow => {
@@ -832,7 +860,7 @@ fn escalates_only_outside_window_with_outside_actions_or_sibling_presentation() 
                 Expect::Full => {
                     assert_eq!(outcome, MoveOutcome::Escalating, "{name}");
                     assert_eq!(pending.len(), 1, "{name}");
-                    let request = &pending[0].request;
+                    let request = enter_os(pending.remove(0));
                     assert_eq!(request.allowed, COPY | MOVE, "{name}");
                     assert_eq!(
                         request.representations.len(),
@@ -860,7 +888,7 @@ fn escalates_only_outside_window_with_outside_actions_or_sibling_presentation() 
                 Expect::IdentityOnly => {
                     assert_eq!(outcome, MoveOutcome::Escalating, "{name}");
                     assert_eq!(pending.len(), 1, "{name}");
-                    let request = &pending[0].request;
+                    let request = enter_os(pending.remove(0));
                     assert_eq!(request.allowed, MOVE, "within_app is advertised: {name}");
                     assert_eq!(request.representations.len(), 1, "identity only: {name}");
                     assert_eq!(session.stage(), Ok(DragStage::System), "{name}");
@@ -884,9 +912,21 @@ fn a_refused_os_drag_still_drops_in_its_window() {
             vec![DragItem::new().with_text("payload")],
         );
         assert_eq!(moved(&session, 150.0), MoveOutcome::Escalating);
-        assert_eq!(f.owner.take_pending_os_drags().len(), 1);
-        f.owner
-            .os_drag_refused(session.key().expect("live"), DragError::Unavailable);
+        let mut pending = f.owner.take_pending_os_drags();
+        assert_eq!(pending.len(), 1);
+        let pending = pending.remove(0);
+        let key = pending.key();
+        assert_eq!(
+            pending.start(None),
+            Err(DragError::Unavailable),
+            "a window with no drag source refuses"
+        );
+        assert_eq!(
+            session.stage(),
+            Ok(DragStage::System),
+            "until the host says so"
+        );
+        f.owner.os_drag_refused(key, DragError::Unavailable);
         assert_eq!(
             moved(&session, 10.0),
             MoveOutcome::Tracking(Some(COPY)),
@@ -985,8 +1025,7 @@ fn drag_between_presentations_of_one_runtime_redeems_the_value() {
         let w = desktop();
         let session = f.start(Arc::clone(&w), AllowedActions::within(MOVE));
         assert_eq!(moved(&session, 150.0), MoveOutcome::Escalating);
-        let mut pending = f.owner.take_pending_os_drags();
-        let request = pending.remove(0).request;
+        let request = enter_one(&f);
         assert_eq!(
             request.allowed, MOVE,
             "the identity-only session advertises within_app"
@@ -1068,6 +1107,7 @@ fn a_drop_is_concluded_once_its_requests_resolve() {
             fetched: RefCell::default(),
             on_spring: RefCell::new(None),
             on_autoscroll: RefCell::new(None),
+            on_drop: RefCell::new(None),
         });
         f.register(&target, 0.0, 100.0);
         let offer = {
@@ -1247,7 +1287,7 @@ fn a_cancel_whose_observer_panics_keeps_the_first_failure() {
 
 /// The window an OS drop landed in closes while a request made from the drop
 /// is outstanding: the offer is concluded then, once.
-fn detaching_a_window_concludes_a_drop_still_fetching() {
+fn closing_the_window_that_took_a_drop_waits_for_its_fetch() {
     in_lane(|f| {
         let target = Rc::new(Spot {
             name: "T",
@@ -1262,6 +1302,7 @@ fn detaching_a_window_concludes_a_drop_still_fetching() {
             fetched: RefCell::default(),
             on_spring: RefCell::new(None),
             on_autoscroll: RefCell::new(None),
+            on_drop: RefCell::new(None),
         });
         f.register(&target, 0.0, 100.0);
         let offer = f.text_offer();
@@ -1288,10 +1329,9 @@ fn detaching_a_window_concludes_a_drop_still_fetching() {
             "a fetch is outstanding"
         );
         f.owner.detach_presentation(f.presentation);
-        assert_eq!(
-            *f.source.concluded.lock(),
-            [id],
-            "the closing window concludes its drop"
+        assert!(
+            f.source.concluded.lock().is_empty(),
+            "the fetch its window made is still outstanding"
         );
         drop(
             target
@@ -1301,6 +1341,12 @@ fn detaching_a_window_concludes_a_drop_still_fetching() {
                 .expect("a request was made"),
         );
         f.owner.tick(EventTime::from_nanos(1));
+        assert_eq!(
+            *f.source.concluded.lock(),
+            [id],
+            "concluded once it resolves"
+        );
+        f.owner.tick(EventTime::from_nanos(2));
         assert_eq!(*f.source.concluded.lock(), [id], "concluded once");
     });
 }
@@ -1329,11 +1375,18 @@ fn value_is_redeemed_only_in_source_runtime() {
             ],
         );
         assert_eq!(moved(&session, 150.0), MoveOutcome::Escalating);
-        let request = a.owner.take_pending_os_drags().remove(0).request;
+        let request = enter_one(&a);
         drop(w);
         (request, session)
     });
     assert_eq!(request.representations.len(), 2);
+    let offer = a.offer_for(&request);
+    // The OS holds the end hook until the drag ends.
+    let OsDragRequest {
+        mut provider,
+        on_end,
+        ..
+    } = request;
 
     lane_b.enter(|| {
         let target = Rc::new(Spot {
@@ -1349,9 +1402,9 @@ fn value_is_redeemed_only_in_source_runtime() {
             fetched: RefCell::default(),
             on_spring: RefCell::new(None),
             on_autoscroll: RefCell::new(None),
+            on_drop: RefCell::new(None),
         });
         b.register(&target, 0.0, 100.0);
-        let offer = a.offer_for(&request);
         let id = offer.id();
         b.deliver(
             sibling,
@@ -1377,7 +1430,6 @@ fn value_is_redeemed_only_in_source_runtime() {
             .pop()
             .expect("the text was requested");
         assert_eq!((asked, index), (id, RepresentationIndex(0)));
-        let mut provider = request.provider;
         completer.complete(provider(index));
         let fetch = target
             .fetched
@@ -1400,6 +1452,7 @@ fn value_is_redeemed_only_in_source_runtime() {
         !b.owner.is_live(session.key().expect("key")),
         "the other runtime's table does not hold the session"
     );
+    drop(on_end);
 }
 
 // --- reentrancy and containment ----------------------------------------------------------------------
@@ -1505,6 +1558,7 @@ fn spring_loading_hook_fires_once_per_hover() {
             fetched: RefCell::default(),
             on_spring: RefCell::new(None),
             on_autoscroll: RefCell::new(None),
+            on_drop: RefCell::new(None),
         });
         f.register(&spot, 0.0, 50.0);
         let w = desktop();
@@ -2030,11 +2084,625 @@ fn autoscroll_frames_ask_innermost_first_until_one_scrolls() {
     });
 }
 
+// --- the end of an OS session --------------------------------------------------------------------
+
+/// Accepts or refuses every start, dropping the request either way.
+struct ForgetfulDragSource(Result<(), DragError>);
+
+impl PlatformDragSource for ForgetfulDragSource {
+    fn start_timing(&self) -> OsDragStart {
+        OsDragStart::OnLeavingWindow
+    }
+
+    fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
+        drop(request);
+        self.0
+    }
+}
+
+/// Keeps every request it refuses.
+struct HoardingDragSource;
+
+impl PlatformDragSource for HoardingDragSource {
+    fn start_timing(&self) -> OsDragStart {
+        OsDragStart::OnLeavingWindow
+    }
+
+    fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
+        STARTED.with(|started| started.borrow_mut().push(request));
+        Err(DragError::Unavailable)
+    }
+}
+
+/// A session that left its window and waits for the host to enter its OS session.
+fn escalated(f: &Fixture) -> DragSession {
+    let session = f.start_with(
+        desktop(),
+        AllowedActions::new(COPY, COPY),
+        None,
+        vec![DragItem::new().with_text("payload")],
+    );
+    assert_eq!(moved(&session, 150.0), MoveOutcome::Escalating);
+    session
+}
+
+fn the_one_pending(f: &Fixture) -> PendingOsDrag {
+    let mut pending = f.owner.take_pending_os_drags();
+    assert_eq!(pending.len(), 1, "one OS session");
+    pending.remove(0)
+}
+
+const ENDED_CANCELLED: &str = "observer:ended Cancelled";
+
+/// A session the OS took ends however its backend lets go of the end hook:
+/// called, dropped uncalled while the OS runs it or inside a start that
+/// succeeded, or never started at all. A hook dropped inside a start that
+/// failed is the refusal's, and one a refusing backend kept means nothing.
+fn an_os_session_ends_however_its_end_hook_goes() {
+    in_lane(|f| {
+        let session = escalated(f);
+        let request = enter_os(the_one_pending(f));
+        assert_eq!(session.stage(), Ok(DragStage::System));
+        drop(request);
+        assert_eq!(
+            session.outcome(),
+            Some(DragOutcome::Cancelled),
+            "dropped uncalled"
+        );
+        assert_eq!(count(&f.log, ENDED_CANCELLED), 1);
+    });
+    in_lane(|f| {
+        let session = escalated(f);
+        assert_eq!(
+            the_one_pending(f).start(Some(&ForgetfulDragSource(Ok(())))),
+            Ok(())
+        );
+        assert_eq!(
+            session.outcome(),
+            Some(DragOutcome::Cancelled),
+            "dropped inside a start that succeeded"
+        );
+        assert_eq!(count(&f.log, ENDED_CANCELLED), 1);
+    });
+    in_lane(|f| {
+        let session = escalated(f);
+        drop(the_one_pending(f));
+        assert_eq!(
+            session.outcome(),
+            Some(DragOutcome::Cancelled),
+            "never started"
+        );
+        assert_eq!(count(&f.log, ENDED_CANCELLED), 1);
+    });
+    in_lane(|f| {
+        let session = escalated(f);
+        let pending = the_one_pending(f);
+        let key = pending.key();
+        assert_eq!(
+            pending.start(Some(&ForgetfulDragSource(Err(DragError::Unavailable)))),
+            Err(DragError::Unavailable)
+        );
+        assert_eq!(
+            session.stage(),
+            Ok(DragStage::System),
+            "a refusal, not an end"
+        );
+        f.owner.os_drag_refused(key, DragError::Unavailable);
+        assert_eq!(session.stage(), Ok(DragStage::InWindow));
+        assert_eq!(count(&f.log, ENDED_CANCELLED), 0);
+    });
+    in_lane(|f| {
+        let session = escalated(f);
+        let pending = the_one_pending(f);
+        let key = pending.key();
+        assert_eq!(
+            pending.start(Some(&HoardingDragSource)),
+            Err(DragError::Unavailable)
+        );
+        f.owner.os_drag_refused(key, DragError::Unavailable);
+        let kept = take_started().pop().expect("kept");
+        (kept.on_end)(OsDragEnd::Dropped(COPY));
+        assert_eq!(
+            session.stage(),
+            Ok(DragStage::InWindow),
+            "the refused session's old hook ends nothing"
+        );
+        assert!(
+            !logged(&f.log)
+                .iter()
+                .any(|line| line.starts_with("observer:ended")),
+            "{:?}",
+            logged(&f.log)
+        );
+    });
+}
+
+/// A value whose destructor fails.
+struct PanicsOnDrop;
+
+impl Drop for PanicsOnDrop {
+    fn drop(&mut self) {
+        panic!("value dropped");
+    }
+}
+
+/// The OS ends a session whose handle is gone: the entry goes with it, and the
+/// drag's value failing as it is dropped does not keep the observer from
+/// hearing the end.
+fn an_os_end_whose_value_fails_to_drop_still_tells_the_observer() {
+    in_lane(|f| {
+        let session = f.start_with(
+            desktop(),
+            AllowedActions::new(COPY, COPY),
+            None,
+            vec![
+                DragItem::new()
+                    .with_text("payload")
+                    .with_value(PanicsOnDrop),
+            ],
+        );
+        assert_eq!(moved(&session, 150.0), MoveOutcome::Escalating);
+        let OsDragRequest {
+            provider, on_end, ..
+        } = enter_os(the_one_pending(f));
+        drop(provider);
+        drop(session);
+        let failure = catch_unwind(AssertUnwindSafe(|| on_end(OsDragEnd::Dropped(COPY))))
+            .expect_err("the value's failure propagates");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("value dropped")
+        );
+        assert_eq!(
+            count(
+                &f.log,
+                "observer:ended Dropped { action: TransferActions(COPY) }"
+            ),
+            1,
+            "{:?}",
+            logged(&f.log)
+        );
+    });
+}
+
+/// A receiver fails with an OS drop, and so does telling the OS the target is
+/// done: the receiver's failure is the one that propagates.
+fn a_drop_whose_receiver_and_conclusion_fail_reports_the_receiver() {
+    in_lane(|f| {
+        let spot = f.spot("D", 0.0, 100.0, Some(COPY));
+        *spot.on_drop.borrow_mut() = Some(Box::new(|| panic!("drop failure")));
+        f.source
+            .fail_conclude
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let offer = f.text_offer();
+        let id = offer.id();
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Entered {
+                offer,
+                allowed: COPY,
+                position: Some(Point::new(5.0, 5.0)),
+            },
+        );
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            f.deliver(
+                f.presentation,
+                DragDropEvent::Dropped {
+                    id,
+                    action: COPY,
+                    position: None,
+                },
+            );
+        }))
+        .expect_err("the drop fails");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("drop failure")
+        );
+        assert_eq!(*f.source.concluded.lock(), [id], "the OS was still told");
+    });
+}
+
+/// One OS offer over two windows of the runtime is two hovers: closing one
+/// window leaves its receivers, and the other window's hover takes the drop.
+fn one_offer_over_two_windows_is_two_hovers() {
+    in_lane(|f| {
+        let second = presentation(2);
+        f.owner
+            .attach_presentation(second, WindowId(2), f.hit.clone());
+        let _first_spot = f.spot("A", 0.0, 50.0, Some(COPY));
+        let _second_spot = f.spot("B", 50.0, 100.0, Some(COPY));
+        let offer = f.text_offer();
+        let id = offer.id();
+        for (over, x) in [(f.presentation, 5.0), (second, 80.0)] {
+            f.deliver(
+                over,
+                DragDropEvent::Entered {
+                    offer: offer.clone(),
+                    allowed: COPY,
+                    position: Some(Point::new(x, 5.0)),
+                },
+            );
+        }
+        f.owner.detach_presentation(second);
+        assert_eq!(
+            logged(&f.log),
+            ["A:enter", "B:enter", "B:left"],
+            "the closing window's hover left, the other's stays"
+        );
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Dropped {
+                id,
+                action: COPY,
+                position: None,
+            },
+        );
+        assert_eq!(count(&f.log, "A:dropped COPY"), 1, "{:?}", logged(&f.log));
+    });
+}
+
+/// A receiver over one window fetches from an OS offer, and the offer drops
+/// over another window: the OS is not told the target is done until that
+/// fetch resolves.
+fn a_drop_waits_for_a_fetch_made_over_another_window() {
+    in_lane(|f| {
+        let (id, fetch) = dropped_while_fetching_elsewhere(f);
+        drop(fetch);
+        f.owner.tick(time_at(0));
+        assert_eq!(*f.source.concluded.lock(), [id]);
+        assert_eq!(
+            count(&f.log, "B:left"),
+            1,
+            "the other window's hover leaves with the offer"
+        );
+    });
+}
+
+/// The window the drop landed in closes while a fetch made over another
+/// window is outstanding: the OS is still not told until that fetch resolves.
+fn closing_the_dropped_window_waits_for_a_fetch_made_over_another() {
+    in_lane(|f| {
+        let (id, fetch) = dropped_while_fetching_elsewhere(f);
+        f.owner.detach_presentation(f.presentation);
+        assert!(
+            f.source.concluded.lock().is_empty(),
+            "the fetch over the other window is outstanding"
+        );
+        drop(fetch);
+        f.owner.tick(time_at(0));
+        assert_eq!(*f.source.concluded.lock(), [id]);
+    });
+}
+
+/// The same offer hovers two windows, each over an accepting receiver, and the
+/// pointer is over the first: the second window's receiver going away does not
+/// withdraw the first window's answer.
+fn another_windows_hover_keeps_the_answer_standing() {
+    in_lane(|f| {
+        let second = presentation(2);
+        f.owner
+            .attach_presentation(second, WindowId(2), f.hit.clone());
+        let _first_spot = f.spot("A", 0.0, 50.0, Some(COPY));
+        let leaving = f.unregistered("B", Some(COPY), None);
+        let ticket = f.register(&leaving, 50.0, 100.0);
+        let offer = f.text_offer();
+        let id = offer.id();
+        for (over, x) in [(second, 80.0), (f.presentation, 5.0)] {
+            f.deliver(
+                over,
+                DragDropEvent::Entered {
+                    offer: offer.clone(),
+                    allowed: COPY,
+                    position: Some(Point::new(x, 5.0)),
+                },
+            );
+        }
+        f.dispatch
+            .unregister_local_payload(ticket)
+            .expect("registered");
+        f.owner.tick(time_at(0));
+        assert_eq!(count(&f.log, "B:left"), 1, "{:?}", logged(&f.log));
+        assert_eq!(
+            f.source.feedback.lock().last(),
+            Some(&(id, DropFeedback { accept: Some(COPY) })),
+            "the window under the pointer still accepts"
+        );
+    });
+}
+
+/// A receiver fetches from an OS offer over one window, and the pointer moves
+/// on: that window hears the offer exit, and the drop lands over another. The
+/// OS is not told the target is done until the fetch resolves.
+fn a_fetch_from_a_hover_that_left_holds_the_drop_open() {
+    in_lane(|f| {
+        let (offer, fetch) = fetched_over_a_window_that_left(f, true);
+        let id = offer.id();
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Dropped {
+                id,
+                action: COPY,
+                position: None,
+            },
+        );
+        assert!(
+            f.source.concluded.lock().is_empty(),
+            "the fetch made over the window the pointer left is outstanding"
+        );
+        drop(fetch);
+        f.owner.tick(time_at(0));
+        assert_eq!(*f.source.concluded.lock(), [id]);
+    });
+}
+
+/// The only hover of an offer leaves while a fetch it made is in flight, and
+/// the offer comes back over another window and drops: the earlier fetch
+/// still holds the drop open.
+fn an_offer_outlives_its_last_hover_while_a_fetch_is_in_flight() {
+    in_lane(|f| {
+        let (offer, fetch) = fetched_over_a_window_that_left(f, false);
+        let id = offer.id();
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Entered {
+                offer,
+                allowed: COPY,
+                position: Some(Point::new(5.0, 5.0)),
+            },
+        );
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Dropped {
+                id,
+                action: COPY,
+                position: None,
+            },
+        );
+        assert!(
+            f.source.concluded.lock().is_empty(),
+            "the fetch made before the offer left is outstanding"
+        );
+        drop(fetch);
+        f.owner.tick(time_at(0));
+        assert_eq!(*f.source.concluded.lock(), [id]);
+    });
+}
+
+/// An offer enters a second window, whose receiver fetches from it, and then
+/// exits that window; with `stay`, the offer is still over the first window
+/// meanwhile, otherwise the second window was its only hover.
+fn fetched_over_a_window_that_left(f: &Fixture, stay: bool) -> (DataTransferOffer, DragFetch) {
+    let second = presentation(2);
+    f.owner
+        .attach_presentation(second, WindowId(2), f.hit.clone());
+    let _first_spot = f.spot("A", 0.0, 50.0, Some(COPY));
+    let fetcher = Rc::new(Spot {
+        name: "B",
+        log: Rc::clone(&f.log),
+        answer: Cell::new(Some(COPY)),
+        on_enter: RefCell::new(None),
+        on_leave: RefCell::new(None),
+        spring: None,
+        scopes: RefCell::default(),
+        values: RefCell::default(),
+        fetch_text: true,
+        fetched: RefCell::default(),
+        on_spring: RefCell::new(None),
+        on_autoscroll: RefCell::new(None),
+        on_drop: RefCell::new(None),
+    });
+    f.register(&fetcher, 50.0, 100.0);
+    let offer = f.text_offer();
+    let id = offer.id();
+    let mut over = vec![(second, 80.0)];
+    if stay {
+        over.push((f.presentation, 5.0));
+    }
+    for (window, x) in over {
+        f.deliver(
+            window,
+            DragDropEvent::Entered {
+                offer: offer.clone(),
+                allowed: COPY,
+                position: Some(Point::new(x, 5.0)),
+            },
+        );
+    }
+    let fetch = fetcher.fetched.borrow_mut().pop().expect("B fetched");
+    f.deliver(second, DragDropEvent::Exited { id });
+    assert_eq!(count(&f.log, "B:left"), 1);
+    (offer, fetch)
+}
+
+/// An offer over two windows, a receiver over the second fetching from it,
+/// dropped over the first: the drop and the outstanding fetch.
+fn dropped_while_fetching_elsewhere(f: &Fixture) -> (DataTransferId, DragFetch) {
+    let second = presentation(2);
+    f.owner
+        .attach_presentation(second, WindowId(2), f.hit.clone());
+    let _first_spot = f.spot("A", 0.0, 50.0, Some(COPY));
+    let fetcher = Rc::new(Spot {
+        name: "B",
+        log: Rc::clone(&f.log),
+        answer: Cell::new(Some(COPY)),
+        on_enter: RefCell::new(None),
+        on_leave: RefCell::new(None),
+        spring: None,
+        scopes: RefCell::default(),
+        values: RefCell::default(),
+        fetch_text: true,
+        fetched: RefCell::default(),
+        on_spring: RefCell::new(None),
+        on_autoscroll: RefCell::new(None),
+        on_drop: RefCell::new(None),
+    });
+    f.register(&fetcher, 50.0, 100.0);
+    let offer = f.text_offer();
+    let id = offer.id();
+    for (over, x) in [(second, 80.0), (f.presentation, 5.0)] {
+        f.deliver(
+            over,
+            DragDropEvent::Entered {
+                offer: offer.clone(),
+                allowed: COPY,
+                position: Some(Point::new(x, 5.0)),
+            },
+        );
+    }
+    let fetch = fetcher.fetched.borrow_mut().pop().expect("B fetched");
+    f.deliver(
+        f.presentation,
+        DragDropEvent::Dropped {
+            id,
+            action: COPY,
+            position: None,
+        },
+    );
+    assert!(
+        f.source.concluded.lock().is_empty(),
+        "the fetch over the other window is outstanding"
+    );
+    (id, fetch)
+}
+
+/// A receiver drawn through a perspective tilt.
+struct TiltedPlane {
+    seen: RefCell<Vec<Offset<f64>>>,
+}
+
+impl DropReceiver for TiltedPlane {
+    fn drag_entered(&self, _: &DragView<'_>, at: DragPoint) -> DropFeedback {
+        self.seen.borrow_mut().push(at.local);
+        DropFeedback { accept: Some(COPY) }
+    }
+    fn drag_moved(&self, _: &DragView<'_>, at: DragPoint) -> DropFeedback {
+        self.seen.borrow_mut().push(at.local);
+        DropFeedback { accept: Some(COPY) }
+    }
+    fn drag_left(&self, _: &DragView<'_>) {}
+    fn dropped(&self, _: &DragView<'_>, _: DragPoint, _: TransferActions) {}
+}
+
+/// Puts one receiver under a perspective tilt over the whole window.
+struct TiltProbe {
+    forward: flui_foundation::geometry::Matrix4,
+    target: LocalPayloadTarget,
+}
+
+impl HitTestProbe for TiltProbe {
+    fn probe(
+        &self,
+        _: Offset<f64>,
+        _: PointerKind,
+        result: &mut HitTestResult,
+    ) -> Result<(), InteractionDispatchError> {
+        result
+            .with_paint_transform(self.forward, |result| {
+                result.add(HitTestEntry::new(RenderId::new(1)).metadata(Arc::new(self.target)));
+            })
+            .expect("an invertible tilt");
+        Ok(())
+    }
+}
+
+/// A receiver under a perspective ancestor sees the drag at the point of its
+/// own plane under the pointer, as a pointer target under it would.
+fn a_receiver_under_perspective_sees_its_own_plane() {
+    use flui_foundation::geometry::Matrix4;
+    in_lane(|f| {
+        // Perspective with depth, over a tilt toward the viewer.
+        let mut perspective = Matrix4::identity();
+        *perspective.get_mut(3, 2) = -0.002;
+        let forward = perspective * Matrix4::rotation_x(0.6);
+        let plane = Rc::new(TiltedPlane {
+            seen: RefCell::new(Vec::new()),
+        });
+        let target = f
+            .dispatch
+            .register_local_payload(Rc::new(DropReceiverSlot(plane.clone())))
+            .expect("active lane");
+        let hit = HitTestHandle::new(f.dispatch.clone(), Rc::new(TiltProbe { forward, target }));
+        let window = desktop();
+        let session = f
+            .handle
+            .start(
+                DragStart::new(
+                    f.presentation,
+                    vec![DragItem::new().with_value("payload".to_owned())],
+                    AllowedActions::within(COPY),
+                )
+                .pointer(PointerInfo::new(
+                    PointerId::try_from(1_u64).expect("pointer"),
+                    PointerKind::Touch,
+                ))
+                .window(Arc::downgrade(&window))
+                .hit_test(hit),
+            )
+            .expect("a valid drag starts");
+        // Where the plane's own point (20, 30) appears on screen.
+        let (x, y) = forward
+            .project_plane_point(20.0, 30.0)
+            .expect("the point is in front of the camera");
+        session
+            .pointer_moved(Offset::new(x, y), None)
+            .expect("a live session");
+        let seen = plane.seen.borrow();
+        let local = seen.first().expect("the receiver is under the drag");
+        assert!(
+            (local.dx - 20.0).abs() < 1e-6 && (local.dy - 30.0).abs() < 1e-6,
+            "the receiver's own point, not a projection of the screen point: {local:?}"
+        );
+        drop(seen);
+        session.cancel().expect("a live session");
+    });
+}
+
 #[test]
 fn drag_sessions() {
     run_table(
         "drag sessions",
         &[
+            (
+                "a_receiver_under_perspective_sees_its_own_plane",
+                a_receiver_under_perspective_sees_its_own_plane,
+            ),
+            (
+                "a_drop_waits_for_a_fetch_made_over_another_window",
+                a_drop_waits_for_a_fetch_made_over_another_window,
+            ),
+            (
+                "a_fetch_from_a_hover_that_left_holds_the_drop_open",
+                a_fetch_from_a_hover_that_left_holds_the_drop_open,
+            ),
+            (
+                "an_offer_outlives_its_last_hover_while_a_fetch_is_in_flight",
+                an_offer_outlives_its_last_hover_while_a_fetch_is_in_flight,
+            ),
+            (
+                "closing_the_dropped_window_waits_for_a_fetch_made_over_another",
+                closing_the_dropped_window_waits_for_a_fetch_made_over_another,
+            ),
+            (
+                "another_windows_hover_keeps_the_answer_standing",
+                another_windows_hover_keeps_the_answer_standing,
+            ),
+            (
+                "an_os_session_ends_however_its_end_hook_goes",
+                an_os_session_ends_however_its_end_hook_goes,
+            ),
+            (
+                "an_os_end_whose_value_fails_to_drop_still_tells_the_observer",
+                an_os_end_whose_value_fails_to_drop_still_tells_the_observer,
+            ),
+            (
+                "a_drop_whose_receiver_and_conclusion_fail_reports_the_receiver",
+                a_drop_whose_receiver_and_conclusion_fail_reports_the_receiver,
+            ),
+            (
+                "one_offer_over_two_windows_is_two_hovers",
+                one_offer_over_two_windows_is_two_hovers,
+            ),
             (
                 "an_undated_hover_still_comes_due",
                 an_undated_hover_still_comes_due,
@@ -2125,8 +2793,8 @@ fn drag_sessions() {
                 a_paste_whose_receiver_panics_ends_the_held_cut,
             ),
             (
-                "detaching_a_window_concludes_a_drop_still_fetching",
-                detaching_a_window_concludes_a_drop_still_fetching,
+                "closing_the_window_that_took_a_drop_waits_for_its_fetch",
+                closing_the_window_that_took_a_drop_waits_for_its_fetch,
             ),
             (
                 "a_panicking_hover_before_an_os_drop_still_concludes_it",

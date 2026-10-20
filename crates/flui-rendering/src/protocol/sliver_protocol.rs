@@ -887,7 +887,7 @@ pub struct ErasedSliverLayoutCtx<'ctx> {
     /// decides what to build.  Drained by the binding layer via
     /// `PipelineOwner::take_pending_child_requests` between layout passes of
     /// the frame's fixpoint.
-    pending_child_requests: &'ctx parking_lot::Mutex<Vec<(RenderId, usize)>>,
+    pending_child_requests: &'ctx std::cell::RefCell<Vec<(RenderId, usize)>>,
     /// Sink for retain-band signals from element-owned slivers — the removal
     /// half of the request-strategy seam. `RenderSliverList::perform_layout`
     /// emits `(sliver_id, first, last)` after the band walk via
@@ -896,7 +896,7 @@ pub struct ErasedSliverLayoutCtx<'ctx> {
     /// which evicts everything outside the band on the element side. The
     /// render side never disposes a child itself, which is what avoids a
     /// double-remove ABA on the arena slot.
-    pending_retain_bands: &'ctx parking_lot::Mutex<Vec<(RenderId, usize, usize)>>,
+    pending_retain_bands: &'ctx std::cell::RefCell<Vec<(RenderId, usize, usize)>>,
     /// See [`DegradationProbe`](super::box_protocol::DegradationProbe): how
     /// this context learns of a degraded descendant. `None` in contexts the
     /// production walk did not build.
@@ -906,7 +906,7 @@ pub struct ErasedSliverLayoutCtx<'ctx> {
 impl std::fmt::Debug for ErasedSliverLayoutCtx<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Callbacks are live driver closures and the pending_* sinks are
-        // shared mutexes (never locked in fmt); report ids + child state.
+        // never borrowed in fmt; report ids + child state.
         f.debug_struct("ErasedSliverLayoutCtx")
             .field("constraints", &self.constraints)
             .field("children", &self.children)
@@ -932,8 +932,8 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
         layout_box_child_callback: BoxChildLayoutCallback<'ctx>,
         box_child_intrinsic_callback: BoxChildIntrinsicCallback<'ctx>,
         node_id: RenderId,
-        pending_child_requests: &'ctx parking_lot::Mutex<Vec<(RenderId, usize)>>,
-        pending_retain_bands: &'ctx parking_lot::Mutex<Vec<(RenderId, usize, usize)>>,
+        pending_child_requests: &'ctx std::cell::RefCell<Vec<(RenderId, usize)>>,
+        pending_retain_bands: &'ctx std::cell::RefCell<Vec<(RenderId, usize, usize)>>,
         degradation: Option<super::box_protocol::DegradationProbe<'ctx>>,
     ) -> Self {
         Self {
@@ -1053,14 +1053,14 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
         // context to locate the right child manager without leaking any
         // view-layer type into this crate (H3 seam discipline).
         self.pending_child_requests
-            .lock()
+            .borrow_mut()
             .push((self.node_id, logical_index));
         ChildLayout::Scheduled
     }
 
     fn emit_retain_band(&mut self, first: usize, last: usize) {
         self.pending_retain_bands
-            .lock()
+            .borrow_mut()
             .push((self.node_id, first, last));
     }
 }

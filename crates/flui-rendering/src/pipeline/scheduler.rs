@@ -133,6 +133,9 @@ pub(super) struct DirtyTracker {
     /// Rejected layout retains its work until a live layout invalidation.
     blocked_layout: Option<RenderId>,
 
+    /// The layout batch buffer, lent out per `run_layout` pass and returned.
+    layout_batch: Vec<DirtyNode>,
+
     /// Shared wake sink — the same `Arc` that `PipelineOwner` holds for its
     /// callback setters. Both clones point at the same
     /// `RwLock<VisualUpdateNotifier>`.
@@ -151,6 +154,7 @@ impl DirtyTracker {
             layout_drained_total: 0,
             layout_stamp: LayoutStamp::Tracked(0),
             blocked_layout: None,
+            layout_batch: Vec::new(),
             notifier,
         }
     }
@@ -800,22 +804,38 @@ impl DirtyTracker {
     }
 
     // =========================================================================
-    // Batch-take methods (sort + drain into a caller-owned Vec)
+    // Batch-take methods (sort + drain into a reused Vec)
     // =========================================================================
 
-    /// Sorts the layout queue shallow-first and drains it into a
-    /// caller-owned `Vec<DirtyNode>`.
+    /// Drains the layout queue shallow-first into the tracker's reused batch
+    /// buffer; hand it back with [`Self::recycle_layout_batch`].
+    ///
+    /// Each entry is re-keyed from the node's depth now: a mark records the
+    /// depth at mark time, and an adoption between mark and flush moves the
+    /// node. Entries whose node is gone keep their recorded depth.
     ///
     /// After this call the layout queue is empty; new marks made during
     /// the iteration (routed to `mid_layout_marks` while
     /// `debug_doing_layout` is true) are drained back by
     /// [`Self::exit_phase`] so the outer `while has_layout_work()`
     /// loop picks them up in the next iteration.
-    pub(super) fn take_layout_batch_shallow_first(&mut self) -> Vec<DirtyNode> {
-        self.dirty.needs_layout.sort_shallow_first();
-        let batch: Vec<DirtyNode> = self.dirty.needs_layout.drain().collect();
+    pub(super) fn take_layout_batch_shallow_first(&mut self, tree: &RenderTree) -> Vec<DirtyNode> {
+        let mut batch = std::mem::take(&mut self.layout_batch);
+        batch.clear();
+        batch.extend(self.dirty.needs_layout.drain().map(|entry| {
+            tree.get(entry.id).map_or(entry, |node| {
+                DirtyNode::new(entry.id, usize::from(node.depth()))
+            })
+        }));
+        batch.sort_unstable_by_key(|entry| entry.depth);
         self.layout_drained_total += batch.len() as u64;
         batch
+    }
+
+    /// Returns a batch taken by [`Self::take_layout_batch_shallow_first`] so
+    /// its allocation serves the next pass.
+    pub(super) fn recycle_layout_batch(&mut self, batch: Vec<DirtyNode>) {
+        self.layout_batch = batch;
     }
 
     /// Retains an aborted batch. Authored rejection waits for changed input;
@@ -1024,7 +1044,7 @@ mod tests {
     // Only its initial stamp is seeded privately; real admission and transport
     // paths must continue delivering work while compatibility stays refused.
     fn exhausted_layout_premise_keeps_work_deliverable() {
-        let (mut tracker, _) = super::DirtyTracker::new_test_pair();
+        let (mut tracker, tree) = super::DirtyTracker::new_test_pair();
         tracker.layout_stamp = super::LayoutStamp::Tracked(u64::MAX - 1);
         let first = flui_foundation::RenderId::new(1);
         let second = flui_foundation::RenderId::new(2);
@@ -1035,7 +1055,7 @@ mod tests {
         let exhausted = tracker.layout_stamp();
         assert!(!tracker.layout_stamp().compatible(exhausted));
         assert!(!tracker.layout_stamp().compatible(last_tracked));
-        let batch = tracker.take_layout_batch_shallow_first();
+        let batch = tracker.take_layout_batch_shallow_first(&tree);
         assert_eq!(
             batch.len(),
             1,
@@ -1046,7 +1066,7 @@ mod tests {
         assert!(!tracker.layout_waits_for_input());
         assert!(!tracker.layout_stamp().compatible(exhausted));
         tracker.add_node_needing_layout(second, 1);
-        let delivered = tracker.take_layout_batch_shallow_first();
+        let delivered = tracker.take_layout_batch_shallow_first(&tree);
         assert_eq!(delivered.len(), 2);
         assert_eq!(delivered[0].id, first);
         assert_eq!(delivered[1].id, second);

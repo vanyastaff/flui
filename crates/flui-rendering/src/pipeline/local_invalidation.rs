@@ -42,6 +42,11 @@ pub(crate) fn bit(kind: DirtyKind) -> u8 {
 pub(crate) struct LocalDirtyInbox {
     pending: RefCell<Vec<Weak<LocalDirtyRecord>>>,
     notifier: Arc<RwLock<VisualUpdateNotifier>>,
+    /// Set while the owner paints. Paint must not change geometry, so a
+    /// layout mark in that window is a bug in the render object that made it.
+    painting: Cell<bool>,
+    /// The first node that requested layout while `painting` was set.
+    layout_during_paint: Cell<Option<RenderId>>,
 }
 
 impl LocalDirtyInbox {
@@ -49,6 +54,8 @@ impl LocalDirtyInbox {
         Rc::new(Self {
             pending: RefCell::new(Vec::new()),
             notifier,
+            painting: Cell::new(false),
+            layout_during_paint: Cell::new(None),
         })
     }
 
@@ -67,6 +74,17 @@ impl LocalDirtyInbox {
                 marks: Cell::new(0),
             }),
         }
+    }
+
+    pub(crate) fn begin_paint(&self) {
+        self.painting.set(true);
+    }
+
+    /// Leaves the paint window and returns the first node that requested
+    /// layout inside it.
+    pub(crate) fn end_paint(&self) -> Option<RenderId> {
+        self.painting.set(false);
+        self.layout_during_paint.take()
     }
 
     pub(crate) fn has_pending(&self) -> bool {
@@ -127,6 +145,16 @@ impl LocalRenderInvalidationHandle {
         let Some(inbox) = self.inbox.upgrade() else {
             return Err(SendError::OwnerGone);
         };
+        if marks & bit(DirtyKind::Layout) != 0
+            && inbox.painting.get()
+            && inbox.layout_during_paint.get().is_none()
+        {
+            inbox.layout_during_paint.set(Some(self.record.id));
+            tracing::error!(
+                id = ?self.record.id,
+                "a render object requested layout during paint; the mark applies next frame"
+            );
+        }
         self.record.marks.set(self.record.marks.get() | marks);
         if !self.record.queued.replace(true) {
             inbox.pending.borrow_mut().push(Rc::downgrade(&self.record));

@@ -644,6 +644,10 @@ fn assert_capture_route(case: CaptureCase) {
                             if case == CaptureCase::DeviceRemoval {
                                 assert_eq!(cancel.reason, CancelReason::DeviceRemoved);
                                 "removed"
+                            } else if cancel.reason == CancelReason::Superseded {
+                                // The reused identity's Down ends the old contact.
+                                assert!(case == CaptureCase::ReusedId);
+                                "superseded"
                             } else {
                                 assert_eq!(cancel.reason, CancelReason::CaptureLost);
                                 "lost"
@@ -686,6 +690,11 @@ fn assert_capture_route(case: CaptureCase) {
                         PointerEvent::Down(_) => "down",
                         PointerEvent::Move(_) => "move",
                         PointerEvent::Up(_) => "up",
+                        PointerEvent::Cancel(cancel)
+                            if cancel.reason == CancelReason::Superseded =>
+                        {
+                            "superseded"
+                        }
                         PointerEvent::Cancel(_) => "lost",
                         _ => "other",
                     },
@@ -1017,8 +1026,24 @@ fn binding_input_contract_matrix() {
             checked_down_refuses_non_finite_position,
         ),
         (
-            "capped_contact_never_becomes_hover",
-            capped_contact_never_becomes_hover,
+            "contact_limit_supersedes_the_oldest_contact",
+            contact_limit_supersedes_the_oldest_contact,
+        ),
+        (
+            "superseding_down_cancels_the_old_contact_once",
+            superseding_down_cancels_the_old_contact_once,
+        ),
+        (
+            "pressed_move_without_contact_reaches_only_the_router",
+            pressed_move_without_contact_reaches_only_the_router,
+        ),
+        (
+            "unregistered_target_hears_only_its_contacts_end",
+            unregistered_target_hears_only_its_contacts_end,
+        ),
+        (
+            "refused_mouse_hovers_once_its_buttons_are_up",
+            refused_mouse_hovers_once_its_buttons_are_up,
         ),
         (
             "refusal_saturation_preserves_admitted_contacts_and_resets_with_lifecycle",
@@ -1736,7 +1761,14 @@ fn assert_lifecycle_snapshot_preserves_replacement(device_removed: bool, competi
                 );
                 assert!(!competing, "first lifecycle cancellation failure");
             }
-            PointerEvent::Cancel(data) if data.pointer.id == second && did_replace.get() => {
+            // The re-admitted Down supersedes the old contact of that id,
+            // which hears its own end; only a lifecycle cancellation of the
+            // replacement would be wrong.
+            PointerEvent::Cancel(data)
+                if data.pointer.id == second
+                    && did_replace.get()
+                    && data.reason != flui_platform_api::pointer::CancelReason::Superseded =>
+            {
                 cancels.set(cancels.get() + 1);
             }
             PointerEvent::Cancel(data) if data.pointer.id == third => {
@@ -1927,9 +1959,15 @@ fn assert_non_finite_motion_or_signal_is_refused(input: NonFiniteInput) {
             hits.set(0);
             deliveries.set(0);
             let event = |position| match input {
-                NonFiniteInput::HoverMove | NonFiniteInput::ContactMove => {
-                    checked_move(pointer, position, PointerKind::Touch)
-                }
+                // A hover is a mouse with every button up.
+                NonFiniteInput::HoverMove => checked_move(pointer, position, PointerKind::Mouse)
+                    .map(|mut event| {
+                        if let flui_interaction::events::PointerEvent::Move(motion) = &mut event {
+                            motion.buttons = flui_interaction::events::PointerButtons::NONE;
+                        }
+                        event
+                    }),
+                NonFiniteInput::ContactMove => checked_move(pointer, position, PointerKind::Touch),
                 NonFiniteInput::Wheel => checked_scroll(position, Offset::new(0.0, 10.0)),
                 NonFiniteInput::Pinch | NonFiniteInput::PinchDuringContact => {
                     checked_pinch(position, 0.1)
@@ -2307,176 +2345,402 @@ fn assert_frame_coalesced_velocity(producer: HardwareVelocityProducer, expected:
     );
 }
 
-fn capped_contact_never_becomes_hover() {
-    use flui_foundation::geometry::Offset;
+/// A name for what a target or the router heard.
+fn heard(event: &flui_interaction::events::PointerEvent) -> String {
+    use flui_interaction::events::PointerEvent;
+    let id = flui_interaction::PointerEventExt::pointer_id(event).map_or(0, |id| id.get().get());
+    match event {
+        PointerEvent::Down(_) => format!("down {id}"),
+        PointerEvent::Move(_) => format!("move {id}"),
+        PointerEvent::Up(_) => format!("up {id}"),
+        PointerEvent::Cancel(cancel) => format!("cancel {id} {:?}", cancel.reason),
+        _ => format!("other {id}"),
+    }
+}
+
+/// A Down for a pointer whose earlier contact never ended: the old contact's
+/// route hears one `Cancel(Superseded)` before the new Down, and the new
+/// contact completes.
+fn superseding_down_cancels_the_old_contact_once() {
     use flui_interaction::events::{
         PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
     };
-    use flui_interaction::{GestureBinding, HitTestResult, PointerId};
-    use std::cell::Cell;
+    use flui_interaction::{GestureBinding, HitTestResult, Offset, PointerId};
+    use std::{cell::RefCell, rc::Rc};
 
+    let lane = InteractionLane::try_new().expect("owner lane");
     let binding = GestureBinding::new();
-    let hits = Cell::new(0);
-    let result = |_| {
-        hits.set(hits.get() + 1);
-        HitTestResult::new()
+    let targets = Rc::new(RefCell::new(Vec::new()));
+    let router = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&router);
+    binding
+        .pointer_router()
+        .add_global_handler(Rc::new(move |event| sink.borrow_mut().push(heard(event))));
+    let finger = PointerId::try_from(1_u64).expect("pointer");
+    lane.enter(|| {
+        let sink = Rc::clone(&targets);
+        let target = lane
+            .dispatch_handle()
+            .register_pointer(move |dispatch| sink.borrow_mut().push(heard(dispatch.global)))
+            .expect("target");
+        let path = || {
+            let mut result = HitTestResult::new();
+            result.add(hit_entry(target));
+            result
+        };
+        let send = |event| {
+            binding.handle_pointer_event(&event, |_| path());
+            binding.flush_pending_moves();
+        };
+        send(make_down_event_for_id(finger, Offset::ZERO, PointerKind::Touch).expect("down"));
+        send(
+            make_move_event_for_id(finger, Offset::new(5.0, 0.0), PointerKind::Touch)
+                .expect("move"),
+        );
+        // The platform lost the Up: the same pointer goes down again.
+        send(make_down_event_for_id(finger, Offset::ZERO, PointerKind::Touch).expect("down"));
+        send(make_up_event_for_id(finger, Offset::ZERO, PointerKind::Touch).expect("up"));
+    });
+    let expected = ["down 1", "move 1", "cancel 1 Superseded", "down 1", "up 1"];
+    assert_eq!(
+        *targets.borrow(),
+        expected,
+        "the old contact's route ends once"
+    );
+    assert_eq!(*router.borrow(), expected, "the router hears the same end");
+    assert_eq!(binding.active_pointer_count(), 0);
+}
+
+/// At the simultaneous-contact limit a new Down cancels the oldest contact,
+/// once, and is admitted: a backend that lost Ups cannot lock input out.
+fn contact_limit_supersedes_the_oldest_contact() {
+    use flui_interaction::events::{
+        PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
     };
-    for raw in 1..=33 {
-        let pointer = PointerId::try_from(raw).expect("nonzero pointer");
+    use flui_interaction::{GestureBinding, HitTestResult, Offset, PointerId};
+    use std::{cell::RefCell, rc::Rc};
+
+    let lane = InteractionLane::try_new().expect("owner lane");
+    let binding = GestureBinding::new();
+    let targets = Rc::new(RefCell::new(Vec::new()));
+    lane.enter(|| {
+        let sink = Rc::clone(&targets);
+        let target = lane
+            .dispatch_handle()
+            .register_pointer(move |dispatch| sink.borrow_mut().push(heard(dispatch.global)))
+            .expect("target");
+        let path = || {
+            let mut result = HitTestResult::new();
+            result.add(hit_entry(target));
+            result
+        };
+        let pointer = |raw: u64| PointerId::try_from(raw).expect("nonzero pointer");
+        for raw in 1..=33 {
+            binding.handle_pointer_event(
+                &make_down_event_for_id(pointer(raw), Offset::ZERO, PointerKind::Touch)
+                    .expect("down"),
+                |_| path(),
+            );
+        }
+        assert_eq!(binding.active_pointer_count(), 32, "the limit holds");
+        assert_eq!(
+            targets.borrow()[32..],
+            ["cancel 1 Superseded".to_owned(), "down 33".to_owned()],
+            "the oldest contact ends once, then the new one is admitted"
+        );
+        targets.borrow_mut().clear();
+        // What the platform still reports of the cancelled contact belongs to
+        // no contact: no target hears it.
         binding.handle_pointer_event(
-            &make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
-                .expect("finite input"),
-            result,
+            &make_move_event_for_id(pointer(1), Offset::new(5.0, 0.0), PointerKind::Touch)
+                .expect("move"),
+            |_| path(),
+        );
+        binding.flush_pending_moves();
+        binding.handle_pointer_event(
+            &make_up_event_for_id(pointer(33), Offset::ZERO, PointerKind::Touch).expect("up"),
+            |_| path(),
+        );
+        assert_eq!(*targets.borrow(), ["up 33"]);
+        binding.handle_lifecycle_pause();
+    });
+}
+
+/// A pressed move with no contact (a drag begun outside the window) reaches
+/// the router, never a target as a drag; hover still follows it.
+fn pressed_move_without_contact_reaches_only_the_router() {
+    use flui_interaction::events::{PointerKind, make_move_event_for_id};
+    use flui_interaction::pointer::{MouseRegionCallbacks, MouseTrackerAnnotation};
+    use flui_interaction::{GestureBinding, HitTestResult, Offset, PointerId};
+    use std::{cell::RefCell, rc::Rc};
+
+    for kind in [PointerKind::Mouse, PointerKind::Touch] {
+        let lane = InteractionLane::try_new().expect("owner lane");
+        let binding = GestureBinding::new();
+        let targets = Rc::new(RefCell::new(Vec::new()));
+        let router = Rc::new(RefCell::new(Vec::new()));
+        let entered = Rc::new(RefCell::new(0));
+        let sink = Rc::clone(&router);
+        binding
+            .pointer_router()
+            .add_global_handler(Rc::new(move |event| sink.borrow_mut().push(heard(event))));
+        lane.enter(|| {
+            let handle = lane.dispatch_handle();
+            let sink = Rc::clone(&targets);
+            let target = handle
+                .register_pointer(move |dispatch| sink.borrow_mut().push(heard(dispatch.global)))
+                .expect("target");
+            let count = Rc::clone(&entered);
+            let region = handle
+                .register_mouse_region(MouseRegionCallbacks {
+                    on_enter: Some(Rc::new(move |_, _| *count.borrow_mut() += 1)),
+                    ..MouseRegionCallbacks::default()
+                })
+                .expect("region");
+            let id = RenderId::new(2);
+            let pressed = make_move_event_for_id(
+                PointerId::try_from(4_u64).expect("pointer"),
+                Offset::new(5.0, 0.0),
+                kind,
+            )
+            .expect("pressed move");
+            binding.handle_pointer_event(&pressed, |_| {
+                let mut result = HitTestResult::new();
+                result.add(hit_entry(target));
+                result.add(
+                    HitTestEntry::new(id).mouse_annotation(MouseTrackerAnnotation::new(id, region)),
+                );
+                result
+            });
+            binding.flush_pending_moves();
+        });
+        assert!(
+            targets.borrow().is_empty(),
+            "{kind:?}: no target hears a drag"
+        );
+        assert_eq!(
+            *router.borrow(),
+            ["move 4"],
+            "{kind:?}: the router observes it"
+        );
+        assert_eq!(
+            *entered.borrow(),
+            usize::from(kind == PointerKind::Mouse),
+            "{kind:?}: a mouse's hover follows it"
         );
     }
-    assert_eq!(hits.get(), 32, "the thirty-third contact is refused");
-    let refused = PointerId::try_from(33).expect("nonzero pointer");
-    binding.handle_pointer_event(
-        &make_move_event_for_id(refused, Offset::ZERO, PointerKind::Touch).expect("finite input"),
-        result,
-    );
-    binding.flush_pending_moves();
-    assert_eq!(hits.get(), 32, "the refused contact does not become hover");
-    binding.handle_pointer_event(
-        &make_up_event_for_id(refused, Offset::ZERO, PointerKind::Touch).expect("finite input"),
-        result,
-    );
-    binding.handle_pointer_event(
-        &make_up_event_for_id(
-            PointerId::new(core::num::NonZeroU64::MIN),
-            Offset::ZERO,
-            PointerKind::Touch,
-        )
-        .expect("finite input"),
-        result,
-    );
-    binding.handle_pointer_event(
-        &make_down_event_for_id(refused, Offset::ZERO, PointerKind::Touch).expect("finite input"),
-        result,
-    );
-    assert_eq!(hits.get(), 33, "a released slot accepts the next sequence");
-    binding.handle_lifecycle_pause();
+}
+
+/// A target unregistered while its contact is down hears no more of that
+/// contact's moves, and still hears the contact's end (ADR-0164).
+fn unregistered_target_hears_only_its_contacts_end() {
+    use flui_interaction::events::{
+        PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+    };
+    use flui_interaction::{GestureBinding, HitTestResult, Offset, PointerId};
+    use std::{cell::RefCell, rc::Rc};
+
+    let lane = InteractionLane::try_new().expect("owner lane");
+    let binding = GestureBinding::new();
+    let targets = Rc::new(RefCell::new(Vec::new()));
+    let finger = PointerId::try_from(1_u64).expect("pointer");
+    lane.enter(|| {
+        let handle = lane.dispatch_handle();
+        let sink = Rc::clone(&targets);
+        let target = handle
+            .register_pointer(move |dispatch| sink.borrow_mut().push(heard(dispatch.global)))
+            .expect("target");
+        binding.handle_pointer_event(
+            &make_down_event_for_id(finger, Offset::ZERO, PointerKind::Touch).expect("down"),
+            |_| {
+                let mut result = HitTestResult::new();
+                result.add(hit_entry(target));
+                result
+            },
+        );
+        handle.unregister_pointer(target).expect("unregister");
+        binding.handle_pointer_event(
+            &make_move_event_for_id(finger, Offset::new(5.0, 0.0), PointerKind::Touch)
+                .expect("move"),
+            |_| panic!("a contact keeps its route"),
+        );
+        binding.flush_pending_moves();
+        binding.handle_pointer_event(
+            &make_up_event_for_id(finger, Offset::ZERO, PointerKind::Touch).expect("up"),
+            |_| panic!("a contact keeps its route"),
+        );
+    });
+    assert_eq!(*targets.borrow(), ["down 1", "up 1"]);
+}
+
+/// A mouse whose contact was refused (cancelled on focus loss while pressed,
+/// or refused because the binding could admit nothing) hovers again once its
+/// buttons are up.
+fn refused_mouse_hovers_once_its_buttons_are_up() {
+    use flui_interaction::events::{
+        PointerButtons, PointerEvent, PointerKind, make_down_event_for_id, make_move_event_for_id,
+    };
+    use flui_interaction::{GestureBinding, HitTestResult, Offset, PointerId};
+    use std::cell::Cell;
+
+    for saturated in [false, true] {
+        let lane = InteractionLane::try_new().expect("owner lane");
+        let binding = if saturated {
+            // One identity left: every later Down is refused.
+            GestureBinding::new().with_sequences_after(u64::MAX - 1)
+        } else {
+            GestureBinding::new()
+        };
+        let mouse = PointerId::try_from(1_u64).expect("pointer");
+        let hits = Cell::new(0);
+        let probe = |_| {
+            hits.set(hits.get() + 1);
+            HitTestResult::new()
+        };
+        lane.enter(|| {
+            let down = |raw: u64| {
+                make_down_event_for_id(
+                    PointerId::try_from(raw).expect("pointer"),
+                    Offset::ZERO,
+                    PointerKind::Mouse,
+                )
+                .expect("down")
+            };
+            binding.handle_pointer_event(&down(1), probe);
+            binding.cancel_active_pointers();
+            if saturated {
+                // Refusals past what the binding tracks suppress every
+                // untracked tail.
+                for raw in 2..=40 {
+                    binding.handle_pointer_event(&down(raw), probe);
+                }
+            }
+            hits.set(0);
+            let mut pressed =
+                make_move_event_for_id(mouse, Offset::new(5.0, 0.0), PointerKind::Mouse)
+                    .expect("move");
+            binding.handle_pointer_event(&pressed, probe);
+            assert_eq!(
+                hits.get(),
+                0,
+                "saturated={saturated}: the refused drag stays refused"
+            );
+            if let PointerEvent::Move(motion) = &mut pressed {
+                motion.buttons = PointerButtons::NONE;
+            }
+            binding.handle_pointer_event(&pressed, probe);
+            binding.flush_pending_moves();
+            assert_eq!(
+                hits.get(),
+                1,
+                "saturated={saturated}: the buttons-up move hovers"
+            );
+        });
+    }
 }
 
 fn refusal_saturation_preserves_admitted_contacts_and_resets_with_lifecycle() {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{
-        PointerKind, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
-        make_up_event_for_id,
+        PointerEvent, PointerKind, make_cancel_event_for_id, make_down_event_for_id,
+        make_move_event_for_id, make_up_event_for_id,
     };
-    use flui_interaction::{GestureBinding, HitTestResult, PointerId};
-    use std::{cell::Cell, rc::Rc};
+    use flui_interaction::{GestureBinding, HitTestResult, PointerCapture, PointerId};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
 
+    let lane = InteractionLane::try_new().expect("owner lane");
     let binding = GestureBinding::new();
     let delivered = Rc::new(Cell::new(0));
     let log = Rc::clone(&delivered);
     binding
         .pointer_router()
         .add_global_handler(Rc::new(move |_| log.set(log.get() + 1)));
-    for raw in 1..=65 {
-        binding.handle_pointer_event(
-            &make_down_event_for_id(
-                PointerId::try_from(raw).expect("nonzero pointer"),
-                Offset::ZERO,
-                PointerKind::Touch,
-            )
-            .expect("finite input"),
-            |_| HitTestResult::new(),
+    let tokens = Rc::new(RefCell::new(Vec::<PointerCapture>::new()));
+    let pointer = |raw: u64| PointerId::try_from(raw).expect("nonzero pointer");
+    lane.enter(|| {
+        let held = Rc::clone(&tokens);
+        let target = lane
+            .dispatch_handle()
+            .register_pointer(move |dispatch| {
+                if matches!(dispatch.global, PointerEvent::Down(_)) {
+                    held.borrow_mut()
+                        .push(dispatch.capture().expect("real Down"));
+                }
+            })
+            .expect("target");
+        let path = || {
+            let mut result = HitTestResult::new();
+            result.add(hit_entry(target));
+            result
+        };
+        let send = |event: PointerEvent| {
+            binding.handle_pointer_event(&event, |_| path());
+            binding.flush_pending_moves();
+        };
+        let down = |raw| make_down_event_for_id(pointer(raw), Offset::ZERO, PointerKind::Touch);
+        let moved = |raw| make_move_event_for_id(pointer(raw), Offset::ZERO, PointerKind::Touch);
+        let up = |raw| make_up_event_for_id(pointer(raw), Offset::ZERO, PointerKind::Touch);
+        // Focus loss refuses the tails of every pressed contact; one more
+        // contact whose capture is then released fills the refusal table.
+        for raw in 1..=32 {
+            send(down(raw).expect("finite input"));
+        }
+        binding.cancel_active_pointers();
+        tokens.borrow_mut().clear();
+        send(down(33).expect("finite input"));
+        tokens.borrow_mut().clear();
+        binding.flush_pending_moves();
+        assert_eq!(binding.active_pointer_count(), 0);
+
+        send(down(34).expect("finite input"));
+        delivered.set(0);
+        send(moved(34).expect("finite input"));
+        assert_eq!(
+            delivered.get(),
+            1,
+            "saturation preserves an admitted contact's Move"
         );
-    }
-    delivered.set(0);
-    binding.handle_pointer_event(
-        &make_move_event_for_id(
-            PointerId::new(core::num::NonZeroU64::MIN),
-            Offset::ZERO,
+        delivered.set(0);
+        let unknown = 200;
+        send(moved(unknown).expect("finite input"));
+        send(up(unknown).expect("finite input"));
+        send(make_cancel_event_for_id(
+            pointer(unknown),
             PointerKind::Touch,
-        )
-        .expect("finite input"),
-        |_| HitTestResult::new(),
-    );
-    binding.flush_pending_moves();
-    assert_eq!(
-        delivered.get(),
-        1,
-        "saturation preserves an admitted contact's Move"
-    );
-    delivered.set(0);
-    let unknown = PointerId::try_from(200).expect("nonzero pointer");
-    binding.handle_pointer_event(
-        &make_move_event_for_id(unknown, Offset::ZERO, PointerKind::Touch).expect("finite input"),
-        |_| HitTestResult::new(),
-    );
-    binding.flush_pending_moves();
-    binding.handle_pointer_event(
-        &make_up_event_for_id(unknown, Offset::ZERO, PointerKind::Touch).expect("finite input"),
-        |_| HitTestResult::new(),
-    );
-    binding.handle_pointer_event(
-        &make_cancel_event_for_id(unknown, PointerKind::Touch),
-        |_| HitTestResult::new(),
-    );
-    assert_eq!(
-        delivered.get(),
-        0,
-        "saturation suppresses every untracked tail"
-    );
-    binding.handle_pointer_event(
-        &make_up_event_for_id(
-            PointerId::new(core::num::NonZeroU64::MIN),
-            Offset::ZERO,
-            PointerKind::Touch,
-        )
-        .expect("finite input"),
-        |_| HitTestResult::new(),
-    );
-    binding.handle_pointer_event(
-        &make_down_event_for_id(unknown, Offset::ZERO, PointerKind::Touch).expect("finite input"),
-        |_| HitTestResult::new(),
-    );
-    binding.handle_pointer_event(
-        &make_move_event_for_id(unknown, Offset::ZERO, PointerKind::Touch).expect("finite input"),
-        |_| HitTestResult::new(),
-    );
-    binding.flush_pending_moves();
-    binding.handle_pointer_event(
-        &make_up_event_for_id(unknown, Offset::ZERO, PointerKind::Touch).expect("finite input"),
-        |_| HitTestResult::new(),
-    );
-    assert_eq!(
-        delivered.get(),
-        4,
-        "saturation still admits a fresh Down and delivers its full sequence"
-    );
-    binding.handle_pointer_event(
-        &make_up_event_for_id(
-            PointerId::try_from(33).expect("nonzero pointer"),
-            Offset::ZERO,
-            PointerKind::Touch,
-        )
-        .expect("finite input"),
-        |_| HitTestResult::new(),
-    );
-    binding.handle_pointer_event(
-        &make_move_event_for_id(unknown, Offset::ZERO, PointerKind::Touch).expect("finite input"),
-        |_| HitTestResult::new(),
-    );
-    binding.flush_pending_moves();
-    assert_eq!(
-        delivered.get(),
-        4,
-        "an unknown terminal event cannot lift saturation"
-    );
-    binding.handle_lifecycle_pause();
-    binding.handle_pointer_event(
-        &make_move_event_for_id(unknown, Offset::ZERO, PointerKind::Touch).expect("finite input"),
-        |_| HitTestResult::new(),
-    );
-    binding.flush_pending_moves();
-    assert_eq!(
-        delivered.get(),
-        5,
-        "lifecycle reset restores ordinary hover admission"
-    );
+        ));
+        assert_eq!(
+            delivered.get(),
+            0,
+            "saturation suppresses every untracked tail"
+        );
+        send(up(34).expect("finite input"));
+        send(down(unknown).expect("finite input"));
+        send(moved(unknown).expect("finite input"));
+        send(up(unknown).expect("finite input"));
+        assert_eq!(
+            delivered.get(),
+            4,
+            "saturation still admits a fresh Down and delivers its full sequence"
+        );
+        send(up(33).expect("finite input"));
+        send(moved(unknown).expect("finite input"));
+        assert_eq!(
+            delivered.get(),
+            4,
+            "an unknown terminal event cannot lift saturation"
+        );
+        tokens.borrow_mut().clear();
+        binding.handle_lifecycle_pause();
+        send(moved(unknown).expect("finite input"));
+        assert_eq!(
+            delivered.get(),
+            5,
+            "lifecycle reset restores ordinary admission"
+        );
+    });
 }
 
 #[derive(Clone, Copy)]

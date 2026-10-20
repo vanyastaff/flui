@@ -39,7 +39,7 @@ use std::thread::ThreadId;
 
 use android_activity::AndroidApp;
 use android_activity::ndk::native_window::NativeWindow;
-use flui_platform_api::{DisplayId, DisplayKey, DisplaySnapshot, FrameRateHint, RefreshPeriod};
+use flui_platform_api::{DisplayId, DisplayKey, DisplaySnapshot, FrameRateHint};
 use jni::{
     Env, JValue, jni_sig, jni_str,
     objects::{JObject, JObjectArray, JString},
@@ -63,7 +63,6 @@ const FRAME_RATE_COMPATIBILITY_DEFAULT: i8 = 0;
 #[derive(Clone, Copy)]
 struct ActivityDisplay {
     id: DisplayId,
-    period: Option<RefreshPeriod>,
     max_hz: Option<f32>,
 }
 
@@ -222,7 +221,6 @@ impl AndroidDisplays {
                 if raw.display_id == sample.activity_display_id {
                     activity = Some(ActivityDisplay {
                         id,
-                        period: info.refresh_period,
                         max_hz: raw.max_refresh_hz,
                     });
                 }
@@ -258,11 +256,6 @@ impl AndroidDisplays {
     /// The display the Activity was on at the last sample.
     pub(super) fn activity_display(&self) -> Option<DisplayId> {
         self.activity.lock().map(|activity| activity.id)
-    }
-
-    /// The refresh period of that display at the last sample.
-    pub(super) fn activity_period(&self) -> Option<RefreshPeriod> {
-        self.activity.lock().and_then(|activity| activity.period)
     }
 
     /// Whether the highest rate of the Activity's display changed since this was
