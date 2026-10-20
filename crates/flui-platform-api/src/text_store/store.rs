@@ -55,6 +55,16 @@ pub trait TextStore {
     /// Register the platform's observer, replacing any earlier one, or
     /// remove it with `None`.
     fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>);
+
+    /// The field's text moved on the screen without a relayout: its window
+    /// moved or changed scale. The platform calls this; the store reports
+    /// [`TextStoreObserver::layout_changed`] under the same rule as its own
+    /// layout changes, at once or at the next point it may, so an input
+    /// method's candidate window follows the text.
+    ///
+    /// The default reports nothing: a store without screen geometry of its
+    /// own has no layout to report.
+    fn screen_moved(&self) {}
 }
 
 /// Notifications from a store to the platform, TSF's `ITextStoreACPSink`.
