@@ -3016,6 +3016,21 @@ fn resizable_snapping_list(
     resized: &Rc<flui_foundation::ChangeNotifier>,
     vsync: &Vsync,
 ) -> impl flui_view::View {
+    resizable_list(controller, height, resized, vsync, |list| match snap {
+        Some(snap) => list.snap_policy(snap),
+        None => list,
+    })
+}
+
+/// A list of `height` (a viewport of 300) configured by `configure`, its
+/// height read again whenever `resized` notifies.
+fn resizable_list(
+    controller: &ScrollController,
+    height: &Rc<Cell<f64>>,
+    resized: &Rc<flui_foundation::ChangeNotifier>,
+    vsync: &Vsync,
+    configure: impl FnOnce(Scrollable) -> Scrollable,
+) -> impl flui_view::View {
     let height = Rc::clone(height);
     let listenable = Rc::clone(resized) as Rc<dyn flui_foundation::Listenable>;
     let content =
@@ -3023,13 +3038,151 @@ fn resizable_snapping_list(
     let list = Scrollable::new()
         .controller(controller.clone())
         .child(content);
-    VsyncScope::new(
+    VsyncScope::new(vsync.clone(), configure(list))
+}
+
+/// A fling under `physics` down a 5000 px range that a rebuild switches to
+/// `rebuilt` physics three frames in, as the end moves in to 1000: each
+/// frame's offset and range.
+fn fling_rebuilt_as_the_end_moves_in(
+    physics: SharedScrollPhysics,
+    rebuilt: SharedScrollPhysics,
+) -> Vec<(f64, f64)> {
+    use crate::nested_scroll::{Device, at, fling};
+    let (controller, vsync) = (ScrollController::new(), Vsync::new());
+    let height = Rc::new(Cell::new(5300.0));
+    let resized = Rc::new(flui_foundation::ChangeNotifier::new());
+    let first = Arc::clone(&physics);
+    let mut laid = crate::common::lay_out_animated(
+        resizable_list(&controller, &height, &resized, &vsync, |list| {
+            list.physics(first)
+        }),
+        tight(300.0, 300.0),
         vsync.clone(),
-        match snap {
-            Some(snap) => list.snap_policy(snap),
-            None => list,
-        },
-    )
+    );
+    laid.replay(&fling(Device::Touch, at(150.0, 250.0), at(150.0, 100.0)));
+    let mut frames = Vec::new();
+    for _ in 0..3 {
+        laid.pump_for(Duration::from_millis(16));
+        frames.push((controller.pixels(), controller.max_scroll_extent()));
+    }
+    laid.pump_widget(resizable_list(
+        &controller,
+        &height,
+        &resized,
+        &vsync,
+        |list| list.physics(rebuilt),
+    ));
+    height.set(1300.0);
+    resized.notify_listeners();
+    for _ in 0..240 {
+        laid.pump_for(Duration::from_millis(16));
+        frames.push((controller.pixels(), controller.max_scroll_extent()));
+    }
+    frames
+}
+
+/// A fling a rebuild gave other physics keeps its own when the end moves in
+/// under it: a bouncing fling rebuilt with clamping physics still
+/// overscrolls the new end and comes back, as a set physics leaves a run in
+/// progress its simulation.
+pub(crate) fn a_rebuilt_run_keeps_the_physics_its_release_started_with() {
+    let frames = fling_rebuilt_as_the_end_moves_in(
+        Arc::new(BouncingScrollPhysics::new()),
+        Arc::new(ClampingScrollPhysics::new()),
+    );
+    let past = frames
+        .iter()
+        .map(|(pixels, max)| pixels - max)
+        .fold(f64::MIN, f64::max);
+    assert!(
+        past > 1.0,
+        "the bouncing fling overscrolls the new end by {past}"
+    );
+    assert_eq!(frames.last(), Some(&(1000.0, 1000.0)), "and rests on it");
+}
+
+/// Clamping physics that writes the offset to `JUMP_TO` once, from its
+/// `boundary_velocity`, after it is armed: user code taking over the start
+/// of a run.
+#[derive(Debug, Default)]
+struct JumpingPhysics;
+
+thread_local! {
+    static JUMP: std::cell::RefCell<Option<(ScrollController, f64)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+impl flui_widgets::ScrollPhysics for JumpingPhysics {
+    fn apply_boundary_conditions(
+        &self,
+        metrics: &flui_widgets::ScrollMetrics,
+        proposed: f64,
+    ) -> f64 {
+        ClampingScrollPhysics::new().apply_boundary_conditions(metrics, proposed)
+    }
+
+    fn create_ballistic_simulation(
+        &self,
+        metrics: &flui_widgets::ScrollMetrics,
+        velocity: f64,
+    ) -> Option<Box<dyn flui_animation::Simulation>> {
+        ClampingScrollPhysics::new().create_ballistic_simulation(metrics, velocity)
+    }
+
+    fn boundary_velocity(
+        &self,
+        metrics: &flui_widgets::ScrollMetrics,
+        velocity: f64,
+    ) -> Option<f64> {
+        if let Some((controller, to)) = JUMP.with_borrow_mut(Option::take) {
+            controller.set_pixels(to);
+        }
+        ClampingScrollPhysics::new().boundary_velocity(metrics, velocity)
+    }
+}
+
+/// A physics that moves the offset while a run is rebuilt for new extents
+/// takes the run over: the obsolete run stops where the physics put the
+/// offset instead of applying its stale motion from there.
+pub(crate) fn a_rebuild_taken_over_by_its_physics_stops_the_obsolete_run() {
+    use crate::nested_scroll::{Device, at, fling};
+    let (controller, vsync) = (ScrollController::new(), Vsync::new());
+    let height = Rc::new(Cell::new(5300.0));
+    let resized = Rc::new(flui_foundation::ChangeNotifier::new());
+    let mut laid = crate::common::lay_out_animated(
+        resizable_list(&controller, &height, &resized, &vsync, |list| {
+            list.physics(Arc::new(JumpingPhysics))
+        }),
+        tight(300.0, 300.0),
+        vsync.clone(),
+    );
+    laid.replay(&fling(Device::Touch, at(150.0, 250.0), at(150.0, 100.0)));
+    for _ in 0..3 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    let coasting = controller.pixels();
+    laid.pump_for(Duration::from_millis(16));
+    assert!(controller.pixels() > coasting, "the fling coasts");
+    JUMP.with_borrow_mut(|jump| *jump = Some((controller.clone(), 300.0)));
+    height.set(4300.0);
+    resized.notify_listeners();
+    for _ in 0..120 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert!(
+        JUMP.with_borrow(Option::is_none),
+        "the rebuild asked the physics"
+    );
+    assert_eq!(
+        controller.pixels(),
+        300.0,
+        "the run stopped where the physics put it"
+    );
+    assert!(
+        !controller.position().is_scrolling(),
+        "and its activity ended"
+    );
 }
 
 /// Anchors at 0, 500 and 1000 px.

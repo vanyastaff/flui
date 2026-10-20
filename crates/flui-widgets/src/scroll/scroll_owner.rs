@@ -142,25 +142,25 @@ struct RunTag {
     release: Option<Release>,
 }
 
-/// What a release's run was built from. A change of the content extents
-/// under the run (a lazy list measuring its rows, an item resizing) rebuilds
-/// it from where the offset is, so it rests on the extents the content has
-/// now instead of where the old ones put it.
+/// What a release's run was built from, and the one source a rebuild reads.
+/// A change of the content extents under the run (a lazy list measuring its
+/// rows, an item resizing) rebuilds it from where the offset is, so it rests
+/// on the extents the content has now instead of where the old ones put it,
+/// in the same mode and with the same physics: a physics or snap policy a
+/// rebuild of the scrollable installed since shapes the next release, not
+/// this one.
 struct Release {
     /// The extents the run was built for.
-    extents: Cell<(f64, f64)>,
-    /// How the release came to rest, kept across rebuilds: a snap policy
-    /// installed or removed while the run goes on shapes the next release,
-    /// not this one.
+    extents: (f64, f64),
     mode: ReleaseMode,
     device_pixel_ratio: f64,
 }
 
 /// How a release comes to rest.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone)]
 enum ReleaseMode {
-    /// The physics' ballistic simulation.
-    Physics,
+    /// The ballistic simulation of the physics the release started under.
+    Physics(SharedScrollPhysics),
     /// A settle on the snap policy's target as the release chose it,
     /// clamped to the extents the run is built for.
     Snap(f64),
@@ -245,6 +245,10 @@ pub(crate) struct ScrollOwner {
     /// The slot is being serviced: a request the service makes waits for
     /// the same loop.
     servicing: Cell<bool>,
+    /// A release run is being rebuilt for new extents: user code the
+    /// rebuild calls (a physics, an activity listener) that notifies the
+    /// position starts no second rebuild under it.
+    rebuilding: Cell<bool>,
     /// The live contact sequence: from a hold or a drag start until the
     /// contact lifts.
     contact: RefCell<Option<Rc<ScrollSequence>>>,
@@ -293,6 +297,7 @@ impl ScrollOwner {
             alive: Cell::new(true),
             passes: Cell::new(0),
             servicing: Cell::new(false),
+            rebuilding: Cell::new(false),
             contact: RefCell::new(None),
             driving: RefCell::new(None),
             keyboard: RefCell::new(None),
@@ -1062,7 +1067,7 @@ impl ScrollOwner {
     /// a snap settles on its target, clamped to the new extents. Returns
     /// whether the run was replaced or ended.
     fn follow_extents(self: &Rc<Self>, recovery: &mut PanicRecovery) -> bool {
-        if !self.alive.get() || self.in_pass() {
+        if !self.alive.get() || self.in_pass() || self.rebuilding.get() {
             return false;
         }
         let Some((sequence, position, run)) = self.driving.borrow().as_ref().and_then(|driving| {
@@ -1082,29 +1087,51 @@ impl ScrollOwner {
             self.controller.min_scroll_extent(),
             self.controller.max_scroll_extent(),
         );
-        let (min, max) = release.extents.get();
+        let (min, max) = release.extents;
         if min.to_bits() == extents.0.to_bits() && max.to_bits() == extents.1.to_bits() {
             return false;
         }
-        release.extents.set(extents);
         // Even a snap whose target the new extents hold is rebuilt: layout
         // may have clamped the offset under it, and the old simulation's
         // remaining motion would land the clamped offset off the target.
-        let velocity = self.fling.velocity();
-        let started = self.start_release(
-            &sequence,
-            position,
-            velocity,
-            release.device_pixel_ratio,
-            Some(release.mode),
-            recovery,
-        );
-        if started == RunStart::Rest {
-            // Nothing left to run from here: the run ends where it is.
-            if self.detach_run(&run).is_some() {
-                let _ = self.fling.stop();
+        let (mode, device_pixel_ratio) = (release.mode.clone(), release.device_pixel_ratio);
+        // The simulation and the physics are user code: one that panics ends
+        // the run here, and its failure resumes when the entry point's work
+        // is done.
+        let mut started = RunStart::Rest;
+        struct Rebuilt<'a>(&'a Cell<bool>);
+        impl Drop for Rebuilt<'_> {
+            fn drop(&mut self) {
+                self.0.set(false);
             }
-            Self::settle(&sequence, sequence.end_reason(), recovery);
+        }
+        recovery.run(|| {
+            self.rebuilding.set(true);
+            let _rebuilt = Rebuilt(&self.rebuilding);
+            let velocity = self.fling.velocity();
+            let mut rebuild = PanicRecovery::new();
+            started = self.start_release(
+                &sequence,
+                position,
+                velocity,
+                device_pixel_ratio,
+                Some(mode),
+                &mut rebuild,
+            );
+            rebuild.finish();
+        });
+        match started {
+            RunStart::Running => {}
+            // Nothing to run from here, or user code moved the offset while
+            // the rebuild was starting: the obsolete run ends where it is
+            // rather than apply its stale motion to the new offset. A run
+            // that user code started in its place goes on.
+            RunStart::Rest | RunStart::TakenOver => {
+                if self.detach_run(&run).is_some() {
+                    let _ = self.fling.stop();
+                }
+                Self::settle(&sequence, sequence.end_reason(), recovery);
+            }
         }
         true
     }
@@ -1153,19 +1180,18 @@ impl ScrollOwner {
         Some((Rc::clone(&current.sequence), current.position))
     }
 
-    /// The run a release at `velocity` in `mode` starts: the physics'
-    /// ballistic simulation, or a settle on the snap target clamped to the
-    /// extents of `metrics`.
+    /// The run a release at `velocity` in `mode` starts: the mode's
+    /// physics' ballistic simulation, or a settle on the snap target clamped
+    /// to the extents of `metrics`.
     fn release_simulation(
-        &self,
-        mode: ReleaseMode,
+        mode: &ReleaseMode,
         metrics: &ScrollMetrics,
         velocity: f64,
     ) -> Option<Box<dyn Simulation>> {
-        match mode {
-            ReleaseMode::Physics => self
-                .physics()
-                .create_ballistic_simulation(metrics, velocity),
+        match *mode {
+            ReleaseMode::Physics(ref physics) => {
+                physics.create_ballistic_simulation(metrics, velocity)
+            }
             ReleaseMode::Snap(target) => {
                 let target = metrics
                     .ordered_extents()
@@ -1196,8 +1222,8 @@ impl ScrollOwner {
     }
 
     /// [`start_run`](Self::start_run) in `mode` when one is given (a rebuilt
-    /// run keeps the mode its release started in), else in the one the
-    /// current snap policy, or its absence, chooses.
+    /// run keeps the mode and physics its release started with), else in
+    /// the one the current snap policy, or its absence, and physics choose.
     fn start_release(
         self: &Rc<Self>,
         sequence: &Rc<ScrollSequence>,
@@ -1221,18 +1247,18 @@ impl ScrollOwner {
         };
         let mode = mode.unwrap_or_else(|| match self.snap() {
             Some(snap) => ReleaseMode::Snap(snap_target(&*snap, &metrics, velocity)),
-            None => ReleaseMode::Physics,
+            None => ReleaseMode::Physics(self.physics()),
         });
         // Determine transfer policy before owning a returned simulation. A
         // failing custom callback must not unwind through its arbitrary Drop.
-        let residual = match mode {
-            ReleaseMode::Physics => self.physics().boundary_velocity(&metrics, velocity),
+        let residual = match &mode {
+            ReleaseMode::Physics(physics) => physics.boundary_velocity(&metrics, velocity),
             ReleaseMode::Snap(_) => None,
         };
         if !is_current() {
             return RunStart::TakenOver;
         }
-        let Some(simulation) = self.release_simulation(mode, &metrics, velocity) else {
+        let Some(simulation) = Self::release_simulation(&mode, &metrics, velocity) else {
             return RunStart::Rest;
         };
         if !is_current() {
@@ -1252,7 +1278,7 @@ impl ScrollOwner {
             return RunStart::TakenOver;
         }
         let release = Release {
-            extents: Cell::new((metrics.min_scroll_extent, metrics.max_scroll_extent)),
+            extents: (metrics.min_scroll_extent, metrics.max_scroll_extent),
             mode,
             device_pixel_ratio,
         };

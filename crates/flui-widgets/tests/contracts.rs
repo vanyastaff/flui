@@ -627,6 +627,14 @@ fn scroll_physics_and_activity() {
                 "scroll::a_rebuilt_run_keeps_the_mode_its_release_started_in",
                 crate::scroll::a_rebuilt_run_keeps_the_mode_its_release_started_in,
             ),
+            (
+                "scroll::a_rebuilt_run_keeps_the_physics_its_release_started_with",
+                crate::scroll::a_rebuilt_run_keeps_the_physics_its_release_started_with,
+            ),
+            (
+                "scroll::a_rebuild_taken_over_by_its_physics_stops_the_obsolete_run",
+                crate::scroll::a_rebuild_taken_over_by_its_physics_stops_the_obsolete_run,
+            ),
         ],
     );
 }

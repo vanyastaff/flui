@@ -3142,15 +3142,21 @@ A release's run records the extents it was built for. When layout commits other 
 under it (a lazy list measuring rows shorter than its estimate, an item resizing), the
 owner rebuilds the run from the shown offset at the run's current velocity under the same
 sequence, at the position notify that follows the layout and, failing that, at the next
-tick, before the run's stale delta would carry the offset past the new end. The rebuilt
-run keeps the mode its release started in, physics or a snap on the target it chose (now
-clamped to the new extents), whatever snap policy a rebuild installed or removed since; a
-snap is rebuilt even when its target stays in range, since layout may have clamped the
-offset under it. `ClampingScrollPhysics` returns a release from past an edge to it on a
+tick, before the run's stale delta would carry the offset past the new end. The run's
+release record (the extents, the mode and the physics it started with) is the one source
+the rebuild reads: the rebuilt run keeps the physics, or the snap target (now clamped to
+the new extents), whatever physics or snap policy a rebuild of the scrollable installed
+since; a snap is rebuilt even when its target stays in range, since layout may have
+clamped the offset under it. User code the rebuild calls that moves the offset takes the
+run over: the obsolete run stops where it is, and a run that code started goes on; a
+position notify from inside the rebuild starts no second one, and a physics that panics
+ends the run, its failure resuming after the owner's bookkeeping. `ClampingScrollPhysics` returns a release from past an edge to it on a
 critically damped spring, at any velocity, rather than refusing a run there
 (`a_fling_rests_on_the_end_the_measured_rows_give`,
 `a_snap_rests_on_its_target_when_the_end_clamps_the_offset`,
 `a_rebuilt_run_keeps_the_mode_its_release_started_in`,
+`a_rebuilt_run_keeps_the_physics_its_release_started_with`,
+`a_rebuild_taken_over_by_its_physics_stops_the_obsolete_run`,
 `clamping_release_past_an_edge_returns_to_it`).
 
 Every owner entry point holds one `PanicRecovery`: a participant that panics is
