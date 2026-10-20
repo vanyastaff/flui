@@ -48,3 +48,6 @@ pub(crate) fn run_table(cases: &[(&str, fn())]) {
         panic!("failed numerical cases: {names:?}");
     }
 }
+
+#[path = "inspect.rs"]
+mod inspect;

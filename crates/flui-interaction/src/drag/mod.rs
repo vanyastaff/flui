@@ -39,10 +39,7 @@ pub use owner::{
     DragHandle, DragObserver, DragOutcome, DragOwner, DragSession, DragStage, DragStart,
     MoveOutcome,
 };
-pub use receiver::{
-    Autoscroll, DragPoint, DropReceiver, DropReceiverSlot, ResolvedReceiver, SpringLoading,
-    receivers_on_path,
-};
+pub use receiver::{Autoscroll, DragPoint, DropReceiver, DropReceiverSlot, SpringLoading};
 pub use sessions::PendingOsDrag;
 pub use view::{DragFetch, DragIdentity, DragScope, DragView};
 

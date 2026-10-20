@@ -125,7 +125,7 @@ impl std::fmt::Debug for DropReceiverSlot {
 
 /// A receiver found under the pointer.
 #[derive(Clone)]
-pub struct ResolvedReceiver {
+pub(crate) struct ResolvedReceiver {
     pub(super) key: LocalPayloadTarget,
     pub(super) receiver: Rc<dyn DropReceiver>,
     pub(super) local: Offset<f64>,
@@ -175,7 +175,7 @@ impl std::fmt::Debug for ResolvedReceiver {
 ///
 /// Any lane error other than a gone target: the question could not be asked, which
 /// is different from nothing being there.
-pub fn receivers_on_path(
+pub(crate) fn receivers_on_path(
     path: &[HitTestEntry],
     global: Offset<f64>,
 ) -> Result<Vec<ResolvedReceiver>, InteractionDispatchError> {

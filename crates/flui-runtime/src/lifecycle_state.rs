@@ -25,6 +25,15 @@ pub(crate) fn derive_lifecycle_state(visible: bool, focused: bool) -> AppLifecyc
     }
 }
 
+/// The states a presentation climbs through when it leaves `Detached`, least
+/// active first: it enters on the side it leaves by.
+const ENTRY: [AppLifecycleState; 4] = [
+    AppLifecycleState::Paused,
+    AppLifecycleState::Hidden,
+    AppLifecycleState::Inactive,
+    AppLifecycleState::Resumed,
+];
+
 /// The intermediate `AppLifecycleState` steps between `old` and `new`,
 /// inclusive of `new`, exclusive of `old`.
 ///
@@ -34,7 +43,7 @@ pub(crate) fn derive_lifecycle_state(visible: bool, focused: bool) -> AppLifecyc
 /// lists `Detached` **first** (it is the state a window starts in *before*
 /// initialization, not a terminal "highest" state).
 ///
-/// Three cases:
+/// Four cases:
 /// - **Target is `Detached`**: walk forward from `old` to the end of `ALL`
 ///   (through every remaining non-detached state), then append `Detached`
 ///   itself — going to `Detached` always visits every state after `old`,
@@ -44,13 +53,12 @@ pub(crate) fn derive_lifecycle_state(visible: bool, focused: bool) -> AppLifecyc
 ///   ending at `new`.
 /// - **Going forward** (otherwise): the intermediate states in ascending
 ///   index order, ending at `new`.
-///
-/// Because `Detached` sits at index 0 (the lowest), a transition FROM
-/// `Detached` to anything else always takes the forward branch: `Detached
-/// -> Resumed` is the single step `[Resumed]`, not a crawl through
-/// `Paused`/`Hidden`/`Inactive` first — reachable via Android's Pause/Resume
-/// reroute if `UpdateScheduler::lifecycle_state()`'s corrupt-byte fallback
-/// (`try_from_u8`'s `unwrap_or(AppLifecycleState::Detached)`) is ever hit.
+/// - **Leaving `Detached`**: the order is a ring, and a presentation enters
+///   it from the `Paused` side, the side it leaves by, so no step reports a
+///   state more active than the one being entered: `Detached -> Inactive` is
+///   `[Paused, Hidden, Inactive]`, `Detached -> Paused` is `[Paused]`. A
+///   window that starts detached and comes up unfocused never reports
+///   `Resumed` on the way.
 ///
 /// Returns an empty `Vec` when `old == new` — this is where change-detection
 /// for the whole re-derivation lives: a wake that doesn't change the derived
@@ -62,6 +70,13 @@ pub(crate) fn lifecycle_ladder(
 ) -> Vec<AppLifecycleState> {
     if old == new {
         return Vec::new();
+    }
+    if old == AppLifecycleState::Detached {
+        let end = ENTRY
+            .iter()
+            .position(|&s| s == new)
+            .expect("BUG: every state other than Detached appears in ENTRY");
+        return ENTRY[..=end].to_vec();
     }
 
     let order = AppLifecycleState::ALL;
@@ -192,6 +207,33 @@ mod lifecycle_derivation_tests {
         );
     }
 
+    /// Leaving `Detached` climbs from the `Paused` side: no step is more active
+    /// than the state entered, so a window that comes up unfocused or hidden
+    /// never reports `Resumed`.
+    fn leaving_detached_never_passes_a_state_more_active_than_the_target() {
+        use AppLifecycleState::{Detached, Hidden, Inactive, Paused, Resumed};
+        let activity = |state| match state {
+            Paused => 0,
+            Hidden => 1,
+            Inactive => 2,
+            Resumed => 3,
+            Detached => unreachable!("Detached is never a step of leaving it"),
+        };
+        for (target, expected) in [
+            (Paused, &[Paused][..]),
+            (Hidden, &[Paused, Hidden][..]),
+            (Inactive, &[Paused, Hidden, Inactive][..]),
+            (Resumed, &[Paused, Hidden, Inactive, Resumed][..]),
+        ] {
+            let steps = lifecycle_ladder(Detached, target);
+            assert_eq!(steps, expected, "Detached -> {target:?}");
+            assert!(
+                steps.iter().all(|&step| activity(step) <= activity(target)),
+                "Detached -> {target:?} reported a state more active than its target: {steps:?}"
+            );
+        }
+    }
+
     fn multi_step_lifecycle_commits_the_target_before_the_first_panic_resumes() {
         let ui_runtime = crate::ui_runtime::UiRuntime::for_test();
         ui_runtime.synchronize_window_lifecycle();
@@ -293,6 +335,10 @@ mod lifecycle_derivation_tests {
                 (
                     "ladder_steps_forward_through_every_intermediate_state_in_order",
                     ladder_steps_forward_through_every_intermediate_state_in_order as fn(),
+                ),
+                (
+                    "leaving_detached_never_passes_a_state_more_active_than_the_target",
+                    leaving_detached_never_passes_a_state_more_active_than_the_target as fn(),
                 ),
                 (
                     "multi_step_lifecycle_commits_the_target_before_the_first_panic_resumes",

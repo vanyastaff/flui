@@ -257,11 +257,13 @@ fn pointer_and_gesture_recognition() {
             ("pointer_vocabulary::viewer_extreme_zoom_reports_the_finite_applied_change", crate::pointer_vocabulary::viewer_extreme_zoom_reports_the_finite_applied_change),
             ("pointer_vocabulary::viewer_page_overflow_and_empty_viewport_recover", crate::pointer_vocabulary::viewer_page_overflow_and_empty_viewport_recover),
             ("interactive_viewer::viewer_keys_pan_and_zoom_from_the_focused_row", crate::interactive_viewer::viewer_keys_pan_and_zoom_from_the_focused_row),
+            ("interactive_viewer::keys_typed_in_a_field_inside_the_viewer_stay_in_the_field", crate::interactive_viewer::keys_typed_in_a_field_inside_the_viewer_stay_in_the_field),
             ("interactive_viewer::viewer_assistive_actions_zoom_and_pan", crate::interactive_viewer::viewer_assistive_actions_zoom_and_pan),
             ("interactive_viewer::viewer_double_tap_zooms_about_the_tap_and_back_out_at_the_maximum", crate::interactive_viewer::viewer_double_tap_zooms_about_the_tap_and_back_out_at_the_maximum),
             ("interactive_viewer::viewer_degenerate_geometry_and_bounds_publish_finite_transforms", crate::interactive_viewer::viewer_degenerate_geometry_and_bounds_publish_finite_transforms),
             ("interactive_viewer::viewer_rebuild_from_its_update_callback_keeps_the_gesture", crate::interactive_viewer::viewer_rebuild_from_its_update_callback_keeps_the_gesture),
             ("interactive_viewer::viewer_pinch_past_the_scale_bounds_stretches_and_snaps_back", crate::interactive_viewer::viewer_pinch_past_the_scale_bounds_stretches_and_snaps_back),
+            ("interactive_viewer::viewer_touch_twist_rotates_only_when_rotation_is_enabled", crate::interactive_viewer::viewer_touch_twist_rotates_only_when_rotation_is_enabled),
             ("interactive_viewer::viewer_contact_gives_it_the_keys", crate::interactive_viewer::viewer_contact_gives_it_the_keys),
             ("interactive_viewer::viewer_key_sequence_ends_when_focus_moves_before_the_release", crate::interactive_viewer::viewer_key_sequence_ends_when_focus_moves_before_the_release),
             ("gesture_detector::clearing_pan_callbacks_mid_drag_still_finishes_the_drag", crate::gesture_detector::clearing_pan_callbacks_mid_drag_still_finishes_the_drag as fn()),
@@ -1132,6 +1134,7 @@ fn nested_scroll_channel() {
             ("nested_scroll::a_fresh_ancestor_physics_mid_drag_keeps_taking_the_remainder", crate::nested_scroll::a_fresh_ancestor_physics_mid_drag_keeps_taking_the_remainder),
             ("nested_scroll::a_new_chain_above_keeps_the_leaf_run", crate::nested_scroll::a_new_chain_above_keeps_the_leaf_run),
             ("nested_scroll::participant_panic_consumes_all_and_next_sequence_recovers", crate::nested_scroll::participant_panic_consumes_all_and_next_sequence_recovers),
+            ("nested_scroll::a_contact_that_ends_without_release_names_why", crate::nested_scroll::a_contact_that_ends_without_release_names_why),
             ("nested_scroll::contained_scrollable_keeps_its_remainder", crate::nested_scroll::contained_scrollable_keeps_its_remainder),
             ("nested_scroll::snap_policy_targets", crate::nested_scroll::snap_policy_targets),
             ("interactive_viewer::photo_in_pager_hands_pan_remainder_to_pager", crate::interactive_viewer::photo_in_pager_hands_pan_remainder_to_pager),
@@ -1275,6 +1278,18 @@ fn gesture_alternatives() {
             (
                 "gesture_alternatives::every_preset_opens_the_menu_by_its_pointer_trigger",
                 crate::gesture_alternatives::every_preset_opens_the_menu_by_its_pointer_trigger,
+            ),
+            (
+                "gesture_alternatives::a_press_off_the_revealed_control_frees_the_trailing_edge",
+                crate::gesture_alternatives::a_press_off_the_revealed_control_frees_the_trailing_edge,
+            ),
+            (
+                "gesture_alternatives::the_menu_long_press_waits_for_the_system_setting",
+                crate::gesture_alternatives::the_menu_long_press_waits_for_the_system_setting,
+            ),
+            (
+                "gesture_alternatives::the_revealed_menu_control_follows_focus_and_reading_direction",
+                crate::gesture_alternatives::the_revealed_menu_control_follows_focus_and_reading_direction,
             ),
             (
                 "gesture_alternatives::labels_name_one_action_each",

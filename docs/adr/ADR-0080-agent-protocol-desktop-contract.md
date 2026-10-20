@@ -4,6 +4,9 @@
 - **Date:** 2026-09-24
 - **Amended by:** [ADR-0095](ADR-0095-agent-protocol-schema-crate.md) §3 (the in-process
   transport this ADR left open: a local endpoint `flui mcp` will proxy)
+- **Superseded in part by (Proposed):** [ADR-0238](ADR-0238-flui-driver-protocol.md): the
+  desktop server is retired, four error codes are added, and elements across windows are
+  spelled `w3/e12`
 - **Refs:** roadmap tracks G1 (devtools protocol) and G2 (`flui mcp`)
 
 ## Context

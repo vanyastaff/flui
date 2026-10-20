@@ -310,6 +310,10 @@ fn color_contract() {
                 "contrast_selection_uses_linear_relative_luminance",
                 color_property::contrast_selection_uses_linear_relative_luminance,
             ),
+            (
+                "a_colour_describes_itself_by_its_exact_channels",
+                color_property::a_colour_describes_itself_by_its_exact_channels,
+            ),
         ],
     );
 }
