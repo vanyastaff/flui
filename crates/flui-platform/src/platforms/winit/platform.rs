@@ -1568,7 +1568,7 @@ impl ApplicationHandler for WinitApp {
                 // hidden from its mode instead, so the report is what
                 // `is_visible` says, and only when that changed.
                 if let Some(ref win) = window {
-                    win.set_visible(!occluded);
+                    win.set_occluded(occluded);
                     win.refresh_state();
                     win.report_visibility();
                 }

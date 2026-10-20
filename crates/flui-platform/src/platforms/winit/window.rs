@@ -124,6 +124,8 @@ pub struct WinitWindow {
     /// `Occluded`: the window is hidden from the published mode instead.
     #[cfg(target_os = "linux")]
     wm_minimized: AtomicBool,
+    /// Whether winit last reported the window fully covered (`Occluded`).
+    occluded: AtomicBool,
     /// What `on_visibility_status_change` last reported (at first, what the
     /// window opened as): a report is raised only when it changes.
     reported_visible: parking_lot::Mutex<bool>,
@@ -246,6 +248,7 @@ impl WinitWindow {
             window,
             is_focused: parking_lot::Mutex::new(true),
             is_visible: parking_lot::Mutex::new(options.visible),
+            occluded: AtomicBool::new(false),
             reported_visible: parking_lot::Mutex::new(options.visible),
             callbacks: crate::shared::WindowCallbacks::new(),
             #[cfg(all(target_os = "linux", feature = "a11y"))]
@@ -388,6 +391,12 @@ impl WinitWindow {
         *self.is_visible.lock() = visible;
     }
 
+    /// Record winit's `Occluded`. Kept apart from whether the window is shown,
+    /// so an occlusion event that arrives after a hide cannot show it.
+    pub(super) fn set_occluded(&self, occluded: bool) {
+        self.occluded.store(occluded, Ordering::Release);
+    }
+
     /// The window may differ from its last snapshot: read it again, and raise
     /// `on_state_changed` when the revision grew.
     pub(super) fn refresh_state(&self) {
@@ -409,7 +418,7 @@ impl WinitWindow {
                 title: &title,
                 constraints: *self.constraints.lock(),
                 focused: *self.is_focused.lock(),
-                visible: *self.is_visible.lock(),
+                visible: *self.is_visible.lock() && !self.occluded.load(Ordering::Acquire),
                 display: PlatformWindow::display_id(self),
                 probed_mode: self.probed_mode(),
             },
@@ -718,7 +727,7 @@ impl PlatformWindow for WinitWindow {
         if self.wm_minimized.load(Ordering::Acquire) {
             return false;
         }
-        *self.is_visible.lock()
+        *self.is_visible.lock() && !self.occluded.load(Ordering::Acquire)
     }
 
     fn state(&self) -> WindowState {
