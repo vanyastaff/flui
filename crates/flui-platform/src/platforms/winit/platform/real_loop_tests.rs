@@ -1208,35 +1208,25 @@ mod x11_window {
         }
     }
 
-    /// Poll (bounded, 5 s) until the last visibility report is what the window
-    /// answers now, and that is `expected` when given; no report repeats the
-    /// one before it. The suite's tests share one X server, so another test's
-    /// window may cover this one and be reported as well.
-    fn until_reported(
+    /// Poll (bounded, 5 s) until the visibility reports are exactly
+    /// `expected`, the last of which `is_visible` answers. A report may follow
+    /// a publication on another thread, hence the wait.
+    fn until_reports(
         window: &Arc<dyn HostWindow>,
         reports: &Mutex<Vec<bool>>,
-        expected: Option<bool>,
+        expected: &[bool],
         what: &str,
     ) {
         let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let visible = window.is_visible();
-            let last = reports.lock().last().copied();
-            if last == Some(visible) && expected.is_none_or(|expected| expected == visible) {
-                break;
-            }
+        while reports.lock().as_slice() != expected {
             assert!(
                 Instant::now() < deadline,
-                "timed out waiting for {what}; visible {visible}, reports {:?}",
+                "timed out waiting for {what}; reports {:?}",
                 reports.lock()
             );
             thread::sleep(Duration::from_millis(10));
         }
-        let reports = reports.lock();
-        assert!(
-            reports.windows(2).all(|pair| pair[0] != pair[1]),
-            "a report repeats the one before it: {reports:?}"
-        );
+        assert_eq!(Some(&window.is_visible()), expected.last(), "{what}");
     }
 
     fn map_state(connection: &RustConnection, id: u32) -> MapState {
@@ -1376,10 +1366,14 @@ mod x11_window {
 
     #[test]
     fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
+        // The suite's tests share one X server (`xvfb-run`'s 1280×1024 screen)
+        // and open their windows within 800×600 of the origin, so this one
+        // stays beyond that, where none of theirs can cover it and make its
+        // visibility reports another test's.
         let opening = WindowOptions::default()
             .with_title("x11-window")
             .with_size(Size::new(320.0, 240.0))
-            .with_position(Some(Point::new(40.0, 60.0)))
+            .with_position(Some(Point::new(840.0, 640.0)))
             .with_reveal(WindowReveal::AfterFirstFrame);
         run_x11_scenario(opening, |window, id, server| {
             // Created hidden, to be shown with the first frame; the window
@@ -1406,7 +1400,7 @@ mod x11_window {
             // The position it opened at, and the commands a server carries
             // out without a window manager.
             until_state(&window, "the opening position", |state| {
-                state.outer.position == Some(Point::new(40.0, 60.0))
+                state.outer.position == Some(Point::new(840.0, 640.0))
             });
             window
                 .apply(WindowCommand::SetSize(Size::new(400.0, 300.0)))
@@ -1415,10 +1409,10 @@ mod x11_window {
                 state.content_size == Size::new(400.0, 300.0)
             });
             window
-                .apply(WindowCommand::SetPosition(Point::new(100.0, 120.0)))
+                .apply(WindowCommand::SetPosition(Point::new(860.0, 680.0)))
                 .expect("a desktop window moves");
             until_state(&window, "the new position", |state| {
-                state.outer.position == Some(Point::new(100.0, 120.0))
+                state.outer.position == Some(Point::new(860.0, 680.0))
             });
             window
                 .apply(WindowCommand::SetTitle("renamed".into()))
@@ -1433,14 +1427,18 @@ mod x11_window {
                 .expect("a desktop window hides");
             until_map_state(server, id, MapState::UNMAPPED);
             assert!(!window.state().visible);
-            until_reported(&window, &visibility, Some(false), "a report of the hide");
+            until_reports(&window, &visibility, &[true, false], "a report of the hide");
             window
                 .apply(WindowCommand::Show)
                 .expect("a desktop window shows");
             until_map_state(server, id, MapState::VIEWABLE);
-            // Visible, unless another test's window now covers it.
-            until_reported(&window, &visibility, None, "a report of the show");
-            assert_eq!(window.state().visible, window.is_visible());
+            assert!(window.state().visible);
+            until_reports(
+                &window,
+                &visibility,
+                &[true, false, true],
+                "a report of the show",
+            );
 
             // The window manager minimizes the window: winit reports no
             // event, the probe hears of it, and the snapshot follows with
@@ -1454,7 +1452,12 @@ mod x11_window {
             assert!(changes.load(Ordering::SeqCst) > before, "a notification");
             assert!(!window.state().visible, "a minimized window is not visible");
             // The report follows the publication on whichever thread made it.
-            until_reported(&window, &visibility, Some(false), "a report of the hiding");
+            until_reports(
+                &window,
+                &visibility,
+                &[true, false, true, false],
+                "a report of the minimizing",
+            );
             assert_eq!(
                 window.state().normal_geometry.map(|geometry| geometry.size),
                 Some(Size::new(400.0, 300.0)),
@@ -1479,9 +1482,13 @@ mod x11_window {
                 Some(Size::new(400.0, 300.0)),
                 "it returns to the size it had in normal mode"
             );
-            // Visible again, unless another test's window now covers it.
-            until_reported(&window, &visibility, None, "a report of the return");
-            assert_eq!(window.state().visible, window.is_visible());
+            assert!(window.state().visible, "visible again");
+            until_reports(
+                &window,
+                &visibility,
+                &[true, false, true, false, true],
+                "a report of the return",
+            );
         });
     }
 
