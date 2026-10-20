@@ -53,7 +53,7 @@ pub(crate) enum DeviceReading {
 /// Query Java's capability metadata before entering the owner-local state guard.
 /// InputManager replaces its cached Java object when a device is reconfigured.
 /// JNI object identity avoids descriptors (which can be duplicated) and hidden APIs.
-/// Inside a sequence the cached reading stands ([`needs_device_query`]): the
+/// For a move the cached reading stands ([`needs_device_query`]): the
 /// per-event attach and lookup would run at the touch sample rate.
 pub(crate) fn motion_device(
     app: &android_activity::AndroidApp,

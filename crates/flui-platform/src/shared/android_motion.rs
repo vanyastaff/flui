@@ -250,11 +250,12 @@ impl DeviceCapabilities {
 }
 
 /// Whether an event of `source` doing `action` needs its device's Java query,
-/// given the capabilities `cached` for its device id. A sequence's first
-/// event (a press or a hover entering) queries again, so a device the OS
-/// removed or reconfigured is seen before the sequence it starts; the events
-/// inside a sequence use the cache, since Android cancels an open sequence
-/// when its device is reset. A source the cache was not read for queries.
+/// given the capabilities `cached` for its device id. Only moves (in contact
+/// or hovering, the events at the sample rate) use the cache; every other
+/// event queries again, so a device the OS removed or reconfigured is seen at
+/// the press that starts a sequence and at the lift, exit or cancel that ends
+/// one (a device reset cancels its open sequences). A source the cache was
+/// not read for queries.
 #[must_use]
 pub fn needs_device_query(
     cached: Option<DeviceCapabilities>,
@@ -263,7 +264,7 @@ pub fn needs_device_query(
 ) -> bool {
     match cached {
         Some(cached) if cached.source == source => {
-            matches!(action, MotionAction::Down | MotionAction::HoverEnter)
+            !matches!(action, MotionAction::Move | MotionAction::HoverMove)
         }
         _ => true,
     }

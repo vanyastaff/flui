@@ -74,9 +74,9 @@ pub(super) fn register_event_listeners(
     // runtime may start a session from inside that dispatch.
     let drag = super::drag::register(canvas, transfer, &callbacks, registration)?;
     let menu = Rc::new(MenuAnswer::default());
-    register_pointer_events(canvas, &contacts, &pinch, &menu, registration)?;
+    let loss = register_pointer_events(canvas, &contacts, &pinch, &menu, registration)?;
     register_keyboard_events(canvas, &keys, registration)?;
-    let focus = register_focus_events(window, registration)?;
+    let focus = register_focus_events(window, &loss, registration)?;
     let text = super::text_input::WebTextInput::new(
         canvas,
         registration.editor_slot(),
@@ -86,13 +86,14 @@ pub(super) fn register_event_listeners(
     );
     let visibility = Rc::new(window.visibility_sync(Rc::clone(&registration.accepting)));
     let observer = Rc::clone(&visibility);
-    registration.listen(
-        visibility.document.as_ref(),
-        "visibilitychange",
-        move |_| {
-            observer.sync();
-        },
-    )?;
+    registration.listen(visibility.document.as_ref(), "visibilitychange", move |e| {
+        // The sequences end before the change is reported: its callback
+        // may close the window.
+        if observer.document.hidden() {
+            loss.cancel(event_time(e.time_stamp()), NativeCancel::FocusLost);
+        }
+        observer.sync();
+    })?;
     register_wheel_events(canvas, &callbacks, &pinch, registration)?;
     register_gesture_events(canvas, &pinch, registration)?;
     register_context_menu(canvas, &menu, registration)?;
@@ -265,7 +266,7 @@ fn register_pointer_events(
     pinch: &Rc<Pinch>,
     menu: &Rc<MenuAnswer>,
     registration: &mut Registration,
-) -> Result<(), crate::OpenWindowError> {
+) -> Result<Rc<PointerLoss>, crate::OpenWindowError> {
     let active = Rc::clone(&registration.pointers);
     // DOM getters and application callbacks can synchronously dispatch another
     // pointer event. Listener captures are immutable; mutable state is scoped
@@ -286,7 +287,7 @@ fn register_pointer_events(
                 return;
             }
             let buttons = pe.buttons();
-            let secondary = pe.button() == SECONDARY_BUTTON;
+            let contextual = opens_menu(pe.button(), pe.ctrl_key());
             if !accepting.get() {
                 return;
             }
@@ -308,7 +309,7 @@ fn register_pointer_events(
                 return;
             }
             let pressed = dispatch(&pinch, &pe, convert_pointer_down(&pe, &contacts));
-            menu.record(secondary, pressed);
+            menu.record(contextual, pressed);
         })?;
     }
 
@@ -326,16 +327,16 @@ fn register_pointer_events(
                 return;
             }
             let buttons = pe.buttons();
-            let secondary = pe.button() == SECONDARY_BUTTON;
+            let contextual = opens_menu(pe.button(), pe.ctrl_key());
             if !accepting.get() {
                 return;
             }
             if let Some(held) = active.borrow_mut().get_mut(&id) {
                 *held = buttons;
             }
-            // A chorded secondary press opens the menu as a first one does.
+            // A chorded press opens the menu as a first one does.
             let pressed = dispatch(&pinch, &pe, convert_pointer_move(&pe, &contacts));
-            menu.record(secondary, pressed);
+            menu.record(contextual, pressed);
         })?;
     }
 
@@ -367,39 +368,6 @@ fn register_pointer_events(
                 assemble(&contacts, &pointer_reading(&pe, action)),
             );
         })?;
-    }
-
-    let loss = Rc::new(PointerLoss {
-        contacts: Rc::clone(contacts),
-        pinch: Rc::clone(pinch),
-        active: Rc::clone(&active),
-        custody: registration.capture_owner(),
-    });
-    let browser = web_sys::window().expect("BUG: window construction verified browser");
-    {
-        let loss = Rc::clone(&loss);
-        // The page itself losing the OS focus, not focus moving between its
-        // elements.
-        registration.listen(browser.as_ref(), "blur", move |e: web_sys::Event| {
-            let own = e
-                .target()
-                .is_some_and(|target| target.dyn_ref::<web_sys::Window>().is_some());
-            if own {
-                loss.cancel(event_time(e.time_stamp()), NativeCancel::FocusLost);
-            }
-        })?;
-    }
-    if let Some(document) = browser.document() {
-        let hidden = document.clone();
-        registration.listen(
-            document.as_ref(),
-            "visibilitychange",
-            move |e: web_sys::Event| {
-                if hidden.hidden() {
-                    loss.cancel(event_time(e.time_stamp()), NativeCancel::FocusLost);
-                }
-            },
-        )?;
     }
 
     // pointerup
@@ -490,7 +458,16 @@ fn register_pointer_events(
             },
         )?;
     }
-    Ok(())
+    // The page's focus and visibility listeners end the sequences through
+    // it, before they report the change: a callback for the change can close
+    // the window, after which nothing would cancel them.
+    Ok(Rc::new(PointerLoss {
+        contacts: Rc::clone(contacts),
+        pinch: Rc::clone(pinch),
+        active: Rc::clone(&registration.pointers),
+        custody: registration.capture_owner(),
+        menu: Rc::clone(menu),
+    }))
 }
 
 // ==================== Keyboard Events ====================
@@ -527,20 +504,29 @@ fn dispatch(
 /// `MouseEvent.button` of the secondary button.
 const SECONDARY_BUTTON: i16 = 2;
 
+/// Whether a press of `button`, with Control held when `control`, opens the
+/// context menu: the secondary button, or on macOS a Control-held primary
+/// click (its `contextmenu` reports the primary button with Control). A
+/// Control-held primary click elsewhere opens none, and no menu takes its
+/// answer.
+const fn opens_menu(button: i16, control: bool) -> bool {
+    button == SECONDARY_BUTTON || (button == 0 && control)
+}
+
 /// How the browser's context menu is answered: as the application answered
-/// the secondary press that opened it (`contextmenu` follows the press, or
-/// on Windows its release), its propagation and its default alike. A menu no
-/// secondary press opened (the keyboard's menu key) stays the application's,
-/// its default prevented.
+/// the press that opened it (`contextmenu` follows the press, or on Windows
+/// its release), its propagation and its default alike. A menu no press
+/// opened (the keyboard's menu key) stays the application's, its default
+/// prevented.
 #[derive(Default)]
 struct MenuAnswer {
-    /// The answer to the last secondary press, until a menu takes it.
+    /// The answer to the last press that opens a menu, until a menu takes it.
     answer: Cell<Option<DispatchEventResult>>,
 }
 
 impl MenuAnswer {
-    fn record(&self, secondary: bool, answer: Option<DispatchEventResult>) {
-        if secondary && answer.is_some() {
+    fn record(&self, contextual: bool, answer: Option<DispatchEventResult>) {
+        if contextual && answer.is_some() {
             self.answer.set(answer);
         }
     }
@@ -555,6 +541,8 @@ struct PointerLoss {
     pinch: Rc<Pinch>,
     active: Rc<RefCell<std::collections::HashMap<i32, u16>>>,
     custody: super::registration::PointerCaptureOwner,
+    /// A menu answer the ended press left is not a later menu's.
+    menu: Rc<MenuAnswer>,
 }
 
 impl PointerLoss {
@@ -573,6 +561,7 @@ impl PointerLoss {
             .cancel_surface(SURFACE, time, reason);
         *self.pinch.wheel.borrow_mut() = CtrlWheel::default();
         *self.pinch.gesture.borrow_mut() = GestureTracker::default();
+        self.menu.answer.set(None);
         self.pinch.deliver(ended.into_iter().collect(), None);
         for id in ids {
             self.custody.release(id);
@@ -635,6 +624,7 @@ pub(super) fn is_focus_handoff(
 
 fn register_focus_events(
     window: &WebWindow,
+    loss: &Rc<PointerLoss>,
     registration: &mut Registration,
 ) -> Result<Rc<super::window::FocusSync>, crate::OpenWindowError> {
     let focus = Rc::new(window.focus_sync());
@@ -642,8 +632,19 @@ fn register_focus_events(
     for target in [window.canvas().as_ref(), browser.as_ref()] {
         for kind in ["focus", "blur"] {
             let focus = Rc::clone(&focus);
+            let loss = Rc::clone(loss);
             let canvas = window.canvas().clone();
             registration.listen(target, kind, move |event| {
+                // The page itself losing the OS focus (`blur` does not
+                // bubble, so the window's own) ends every sequence before
+                // the change is reported: its callback may close the window.
+                let page_lost = event.type_() == "blur"
+                    && event
+                        .target()
+                        .is_some_and(|target| target.dyn_ref::<web_sys::Window>().is_some());
+                if page_lost {
+                    loss.cancel(event_time(event.time_stamp()), NativeCancel::FocusLost);
+                }
                 if !is_focus_handoff(&canvas, &event) {
                     focus.sync();
                 }
@@ -984,10 +985,10 @@ fn register_context_menu(
 ) -> Result<(), crate::OpenWindowError> {
     let menu = Rc::clone(menu);
     registration.listen(canvas.as_ref(), "contextmenu", move |e: web_sys::Event| {
-        let secondary = e
+        let contextual = e
             .dyn_ref::<web_sys::MouseEvent>()
-            .is_some_and(|mouse| mouse.button() == SECONDARY_BUTTON);
-        let answered = if secondary { menu.answer.take() } else { None };
+            .is_some_and(|mouse| opens_menu(mouse.button(), mouse.ctrl_key()));
+        let answered = if contextual { menu.answer.take() } else { None };
         match answered {
             Some(result) => answer(&e, result),
             None => e.prevent_default(),

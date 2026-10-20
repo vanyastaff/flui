@@ -449,9 +449,10 @@ fn a_cancelled_pointer_up_is_a_cancel_not_a_lift() {
     )));
 }
 
-/// The Java device query runs where a sequence starts or the cache does not
-/// answer, never for the moves inside one.
-fn the_device_is_queried_where_a_sequence_starts() {
+/// The Java device query runs for every event but a move, so a device the
+/// OS reset or removed is seen where a sequence starts and where it ends (a
+/// reset cancels it), and wherever the cache does not answer.
+fn the_device_is_queried_for_every_event_but_a_move() {
     let cached = Some(DeviceCapabilities::new(SOURCE_TOUCHSCREEN, axis::SENSORS));
     for (action, cache, source, queries) in [
         (MotionAction::Move, None, SOURCE_TOUCHSCREEN, true),
@@ -460,9 +461,11 @@ fn the_device_is_queried_where_a_sequence_starts() {
         (MotionAction::HoverEnter, cached, SOURCE_TOUCHSCREEN, true),
         (MotionAction::Move, cached, SOURCE_TOUCHSCREEN, false),
         (MotionAction::HoverMove, cached, SOURCE_TOUCHSCREEN, false),
-        (MotionAction::PointerDown, cached, SOURCE_TOUCHSCREEN, false),
-        (MotionAction::PointerUp, cached, SOURCE_TOUCHSCREEN, false),
-        (MotionAction::Up, cached, SOURCE_TOUCHSCREEN, false),
+        (MotionAction::PointerDown, cached, SOURCE_TOUCHSCREEN, true),
+        (MotionAction::PointerUp, cached, SOURCE_TOUCHSCREEN, true),
+        (MotionAction::Up, cached, SOURCE_TOUCHSCREEN, true),
+        (MotionAction::Cancel, cached, SOURCE_TOUCHSCREEN, true),
+        (MotionAction::HoverExit, cached, SOURCE_TOUCHSCREEN, true),
     ] {
         assert_eq!(
             needs_device_query(cache, source, action),
@@ -581,8 +584,8 @@ fn android_motion_translation() {
                 a_cancelled_pointer_up_is_a_cancel_not_a_lift,
             ),
             (
-                "the_device_is_queried_where_a_sequence_starts",
-                the_device_is_queried_where_a_sequence_starts,
+                "the_device_is_queried_for_every_event_but_a_move",
+                the_device_is_queried_for_every_event_but_a_move,
             ),
             (
                 "lifecycle_cancellation_retires_contacts",

@@ -94,8 +94,16 @@ export function pointerAt(type, pointerId, pointerType, button, buttons, x, y) {
         button, buttons, pressure: buttons ? 0.5 : 0, clientX: x, clientY: y,
     }));
 }
-export function contextMenu(button) {
-    return dispatch(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button }));
+// A Control-held primary mouse press or release at the canvas (macOS's
+// secondary click).
+export function controlClick(type, x, y) {
+    canvas().dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse', isPrimary: true,
+        button: 0, buttons: type === 'pointerdown' ? 1 : 0, ctrlKey: true, clientX: x, clientY: y,
+    }));
+}
+export function contextMenu(button, ctrlKey) {
+    return dispatch(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button, ctrlKey }));
 }
 // The page losing the OS focus (Alt+Tab).
 export function pageBlur() { window.dispatchEvent(new FocusEvent('blur')); }
@@ -216,7 +224,9 @@ extern "C" {
         y: f64,
     ) -> Vec<f64>;
     #[wasm_bindgen(js_name = contextMenu)]
-    fn context_menu(button: i16) -> Vec<f64>;
+    fn context_menu(button: i16, ctrl: bool) -> Vec<f64>;
+    #[wasm_bindgen(js_name = controlClick)]
+    fn control_click(kind: &str, x: f64, y: f64);
     #[wasm_bindgen(js_name = pageBlur)]
     fn page_blur();
     #[wasm_bindgen(js_name = hidePage)]
@@ -791,7 +801,7 @@ fn the_context_menu_is_answered_as_its_secondary_press() {
     for (propagate, prevent) in [(true, false), (true, true), (false, false), (false, true)] {
         window.answer(propagate, prevent);
         pointer_at("pointerdown", 1, "mouse", 2, 2, 40.0, 30.0);
-        let menu = dispatched(&context_menu(2));
+        let menu = dispatched(&context_menu(2, false));
         pointer_at("pointerup", 1, "mouse", 2, 0, 40.0, 30.0);
         assert_eq!(
             (menu.prevented, menu.reached_ancestor),
@@ -799,8 +809,48 @@ fn the_context_menu_is_answered_as_its_secondary_press() {
             "a press answered propagate={propagate} prevent={prevent}"
         );
     }
+    // macOS opens it from a Control-held primary click: that press answers
+    // it, as a secondary one does.
+    window.answer(false, false);
+    control_click("pointerdown", 40.0, 30.0);
+    let menu = dispatched(&context_menu(0, true));
+    control_click("pointerup", 40.0, 30.0);
+    assert_eq!(
+        (menu.prevented, menu.reached_ancestor),
+        (false, false),
+        "a Control-held click's menu"
+    );
     window.answer(true, false);
-    assert!(dispatched(&context_menu(0)).prevented, "the menu key");
+    assert!(
+        dispatched(&context_menu(0, false)).prevented,
+        "the menu key"
+    );
+}
+
+/// A page hidden mid-press ends the press before its visibility is
+/// reported, so a callback that closes the window on it does not leave the
+/// press without its end.
+#[wasm_bindgen_test]
+fn a_hidden_page_ends_its_presses_before_a_visibility_callback_closes_it() {
+    let window = CanvasWindow::open();
+    let closing = Arc::clone(&window.window);
+    window
+        .window
+        .on_visibility_status_change(Box::new(move |visible| {
+            if !visible {
+                closing.close();
+            }
+        }));
+    pointer_at("pointerdown", 5, "touch", 0, 1, 40.0, 30.0);
+    hide_page(true);
+    hide_page(false);
+    let verbs = pointer_verbs(&window.pointer_events());
+    assert!(
+        verbs
+            .last()
+            .is_some_and(|verb| verb.starts_with("cancel Touch") && verb.ends_with("FocusLost")),
+        "{verbs:?}"
+    );
 }
 
 /// A pen whose browser reports only the tilt planes keeps its orientation.

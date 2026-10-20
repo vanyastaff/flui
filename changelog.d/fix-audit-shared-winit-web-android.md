@@ -38,4 +38,4 @@
 - **A Control-held mouse wheel at a page zoom zoomed the app** (`flui-platform`, Web): a detent
   that is a whole number of device pixels is a scroll, not a trackpad pinch.
 - **Android queried its input device through JNI on every motion event** (`flui-platform`): the
-  query runs where a sequence starts, and the cache serves its moves.
+  cache serves its moves, and every other event (a press, a lift, a cancel) queries again.

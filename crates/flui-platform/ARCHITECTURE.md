@@ -2411,10 +2411,11 @@ the translation's own:
   (`a_cancelled_pointer_up_is_a_cancel_not_a_lift`).
 
 The Java device query (`InputDevice.getDevice` and its motion ranges) runs
-where a sequence starts (`ACTION_DOWN`, `ACTION_HOVER_ENTER`), for a device id
-the cache does not hold, or for a source it was not read for; the moves inside
-a sequence use the cache, since Android cancels a sequence whose device is
-reset (`the_device_is_queried_where_a_sequence_starts`).
+for every event but a move (`ACTION_MOVE`, `ACTION_HOVER_MOVE`, the events at
+the sample rate), for a device id the cache does not hold, or for a source it
+was not read for: a device the OS reset or removed is seen at the press that
+starts a sequence and at the lift, exit or cancel that ends it (a reset
+cancels its sequences) (`the_device_is_queried_for_every_event_but_a_move`).
 
 Android has no counterpart to `PointerRevision`: a `MotionEvent` carries no
 estimated properties to revise, so the backend never emits `Revise`.
