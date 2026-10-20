@@ -1785,6 +1785,53 @@ pub(crate) mod text_store {
         );
     }
 
+    /// A read the store answers `NoLayout` (the application changed the text
+    /// and the frame has not laid it out) owes the input method a layout
+    /// notification once the layout exists, even when the caret rect ends up
+    /// where it was: the cursor-area loop only sends a rect that moved.
+    ///
+    /// Red-check: drop `settle_owed_layout` from `CursorAreaLoop::fire` — the
+    /// observer hears nothing after the frame.
+    pub(crate) fn a_no_layout_answer_is_followed_by_a_layout_notification() {
+        use flui_platform_api::text_store::{TextStoreError, TextStoreObserver, Utf16Range};
+        struct Layouts(Rc<std::cell::Cell<usize>>);
+        impl TextStoreObserver for Layouts {
+            fn text_changed(&self, _: flui_platform_api::text_store::TextChange) {}
+            fn selection_changed(&self) {}
+            fn layout_changed(&self) {
+                self.0.set(self.0.get() + 1);
+            }
+            fn status_changed(&self) {}
+        }
+        let controller = TextEditingController::with_text("ab");
+        let (mut harness, _focus) = focused(&controller);
+        controller.set_selection(0, 0);
+        harness.tick();
+        let field = store(&harness);
+        let heard = Rc::new(std::cell::Cell::new(0));
+        field.set_observer(Some(Rc::new(Layouts(Rc::clone(&heard)))));
+        // The caret is back at the start of different text: its rect is the one
+        // already sent.
+        controller.set_text("ba");
+        controller.set_selection(0, 0);
+        let refused = read(&field, |session| {
+            session.rect_for_range(Utf16Range::new(at(0), at(1)).expect("ordered"))
+        });
+        assert_eq!(
+            refused.err(),
+            Some(TextStoreError::NoLayout),
+            "not laid out yet"
+        );
+        let before = heard.get();
+        harness.tick();
+        harness.tick();
+        field.set_observer(None);
+        assert!(
+            heard.get() > before,
+            "the observer was told that layout exists"
+        );
+    }
+
     /// The application gives the field another controller while an input
     /// method holds a read-write lock (a rebuild in a nested owner-thread
     /// loop): the session was made against the replaced controller, so it is

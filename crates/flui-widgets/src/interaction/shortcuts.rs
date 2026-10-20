@@ -27,7 +27,7 @@ use std::rc::Rc;
 use flui_interaction::focus::{FocusNode, KeyEventResult};
 use flui_platform_api::TargetPlatform;
 use flui_platform_api::keyboard::{
-    ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey,
+    Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey,
 };
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
@@ -201,13 +201,31 @@ impl SingleActivator {
         };
         phase
             && event.composition != ImeComposition::Active
-            && trigger_matches(&self.trigger, &event.key)
+            && (trigger_matches(&self.trigger, &event.key) || self.matches_latin_position(event))
             && modifiers.contains(Modifiers::CONTROL) == self.control
             && self
                 .shift
                 .is_none_or(|required| modifiers.contains(Modifiers::SHIFT) == required)
             && modifiers.contains(Modifiers::ALT) == self.alt
             && modifiers.contains(Modifiers::META) == self.meta
+    }
+
+    /// Whether a command chord typed on a layout without Latin letters is the
+    /// chord's Latin letter or digit by its physical key: Ctrl+С on a Russian
+    /// layout is Ctrl+C. Only a Control or Meta activator qualifies, and only
+    /// when the layout produced a non-ASCII character, so a layout that has
+    /// the letter (AZERTY, Dvorak) keeps matching by what the key produced.
+    fn matches_latin_position(&self, event: &KeyEvent) -> bool {
+        let Key::Character(produced) = &event.key else {
+            return false;
+        };
+        let Key::Character(trigger) = &self.trigger else {
+            return false;
+        };
+        (self.control || self.meta)
+            && !produced.as_str().is_ascii()
+            && latin_of_code(event.code)
+                .is_some_and(|latin| trigger.as_str().eq_ignore_ascii_case(latin))
     }
 
     /// Whether one key event can trigger both `self` and `other`, by the
@@ -227,6 +245,15 @@ impl SingleActivator {
             && (trigger_matches(&self.trigger, &other.trigger)
                 || trigger_matches(&other.trigger, &self.trigger))
     }
+}
+
+/// The letter or digit a US layout puts on the physical key `code`.
+fn latin_of_code(code: Code) -> Option<&'static str> {
+    let name = code.as_str();
+    let tail = name
+        .strip_prefix("Key")
+        .or_else(|| name.strip_prefix("Digit"))?;
+    (tail.len() == 1).then_some(tail)
 }
 
 /// `pressed` is `trigger`, an ASCII letter compared without case.

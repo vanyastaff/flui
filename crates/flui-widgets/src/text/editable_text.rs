@@ -2234,6 +2234,12 @@ impl CursorAreaLoop {
                 None => {}
             }
         }
+        // A read the store answered `NoLayout` inside an edit session owes the
+        // input method a notification once layout exists, even when the rect
+        // is the one already sent.
+        if let Some(store) = &store {
+            calls.run(|| store.settle_owed_layout());
+        }
         calls.run(|| self.schedule());
         calls.resume();
     }
