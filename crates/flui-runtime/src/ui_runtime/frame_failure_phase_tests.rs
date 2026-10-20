@@ -68,7 +68,7 @@ pub(crate) fn every_segment_phase_survives_unwind_and_retries_to_scene() {
         } else {
             ui_runtime.presentations.primary().set_segment_probe(
                 phase,
-                Some(Box::new(move || {
+                Some(Box::new(move |_| {
                     assert!(
                         !armed.replace(false),
                         "phase probe — intentional one-shot panic"

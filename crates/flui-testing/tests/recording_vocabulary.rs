@@ -494,6 +494,7 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("CancelReason", "DeviceRemoved") => one(cancel(CancelReason::DeviceRemoved)),
         ("CancelReason", "InvalidInput") => one(cancel(CancelReason::InvalidInput)),
         ("CancelReason", "Claimed") => one(cancel(CancelReason::Claimed)),
+        ("CancelReason", "Superseded") => one(cancel(CancelReason::Superseded)),
         ("PenSqueezePhase", "Began") => one(squeeze(PenSqueezePhase::Began)),
         ("PenSqueezePhase", "Changed") => one(squeeze(PenSqueezePhase::Changed)),
         ("PenSqueezePhase", "Ended") => one(squeeze(PenSqueezePhase::Ended)),

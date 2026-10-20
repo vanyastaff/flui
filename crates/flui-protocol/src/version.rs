@@ -16,7 +16,8 @@
 //!   error code reads as [`ErrorCode::Platform`](crate::ErrorCode::Platform).
 //! - A change that is not additive (a field renamed or removed, a name
 //!   respelled, an optional field made required, or an existing field given
-//!   a new meaning) is listed in [`BREAKING`] with the ADR that decided it.
+//!   a new meaning) is listed in [`BREAKING`] with the ADR that decided it and
+//!   the names it respelled; the test lets those names, and nothing else, go.
 //!   After 1.0 it also bumps `major`, and that ADR supersedes ADR-0080. The
 //!   test sees only the schema's shape, so a new meaning is caught in review:
 //!   it goes under a new name instead, as `surface_rect` did beside `rect`.
@@ -44,12 +45,32 @@ impl ProtocolVersion {
 }
 
 /// The schema this build of the crate speaks.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 4);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 5);
 
-/// The versions whose schema is not additive to the one before it, each with
-/// the ADR that decided the break. Empty: every published schema so far only
-/// adds to the last.
-pub const BREAKING: &[(ProtocolVersion, &str)] = &[];
+/// A published version that is not additive to the one before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Break {
+    /// The version that broke.
+    pub version: ProtocolVersion,
+    /// The ADR that decided the break.
+    pub adr: &'static str,
+    /// The names it respelled, old then new. Nothing else may differ from the version before.
+    pub renamed: &'static [(&'static str, &'static str)],
+}
+
+/// The versions whose schema is not additive to the one before it, each with the ADR that
+/// decided the break and exactly what it renamed.
+pub const BREAKING: &[Break] = &[Break {
+    version: ProtocolVersion::new(0, 5),
+    adr: "ADR-0238",
+    // The ADR-0095 endpoint's operations, now methods of the one table (`crate::method`).
+    renamed: &[
+        ("windows", "windows.list"),
+        ("read", "semantics.read"),
+        ("act", "semantics.act"),
+        ("motion", "motion.set"),
+    ],
+}];
 
 impl fmt::Display for ProtocolVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -132,8 +153,8 @@ mod tests {
 
     #[test]
     fn a_version_is_spelled_major_dot_minor_and_parses_back() {
-        assert_eq!(PROTOCOL_VERSION.to_string(), "0.4");
-        assert_eq!("0.4".parse(), Ok(PROTOCOL_VERSION));
+        assert_eq!(PROTOCOL_VERSION.to_string(), "0.5");
+        assert_eq!("0.5".parse(), Ok(PROTOCOL_VERSION));
         assert_eq!("0.1".parse(), Ok(ProtocolVersion::new(0, 1)));
         assert_eq!("12.30".parse(), Ok(ProtocolVersion::new(12, 30)));
         for refused in ["", "1", "0.01", "+0.1", "0.1.2", "0.x", " 0.1", "00.1"] {
@@ -155,10 +176,10 @@ mod tests {
     fn a_version_serializes_as_its_string() {
         assert_eq!(
             serde_json::to_value(PROTOCOL_VERSION).ok(),
-            Some(serde_json::json!("0.4"))
+            Some(serde_json::json!("0.5"))
         );
         assert_eq!(
-            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.4")).ok(),
+            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.5")).ok(),
             Some(PROTOCOL_VERSION)
         );
         assert!(serde_json::from_value::<ProtocolVersion>(serde_json::json!(0.1)).is_err());

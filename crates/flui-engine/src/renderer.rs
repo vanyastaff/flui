@@ -108,24 +108,136 @@ impl From<wgpu::CurrentSurfaceTexture> for SurfaceAcquireOutcome<wgpu::SurfaceTe
     }
 }
 
+/// What the acquire path owes the surface between frames.
+///
+/// Two obligations outlive the acquisition that raised them, so they live on
+/// the renderer rather than in a local of [`acquire_surface_texture_with`]:
+///
+/// - a frame acquired `Suboptimal` leaves the surface presentable but
+///   mismatched (a rotation or scale change with the same extent), and only a
+///   `Surface::configure` matches it again. The surface is configured right
+///   after that frame is presented, not before the next acquire: the frame
+///   may be the last one with damage, and a clean frame never reaches the
+///   acquire, so a configure left for it could wait indefinitely. One
+///   configure answers an episode: if the surface stays suboptimal after it,
+///   frames present as they are until a `Success` ends the episode, so a
+///   surface the configuration cannot satisfy never costs a configure per
+///   frame.
+/// - a recreation after `Lost` drops the old surface before building the new
+///   one ([`Renderer::recreate_surface`]), so a failed one leaves the renderer
+///   holding no surface. Its owner never released it, so the acquire that
+///   finds it released must not read that as a deliberate release and skip
+///   frames forever: it recreates again first.
+///
+/// The owner's own [`Renderer::release_surface`] and a successful
+/// [`Renderer::recreate_surface`] supersede both, and a resize or reconfigure
+/// discharges the configure.
+#[derive(Debug, Default)]
+struct SurfaceRecovery {
+    reconfigure_after_present: bool,
+    suboptimal_answered: bool,
+    recreate_owed: bool,
+}
+
+impl SurfaceRecovery {
+    /// The surface was configured from the current configuration.
+    fn configured(&mut self) {
+        self.reconfigure_after_present = false;
+    }
+
+    /// The owner released or rebuilt the surface; nothing earlier is owed.
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 trait SurfaceAcquireBackend {
     type Frame;
 
     fn acquire(&mut self) -> Result<SurfaceAcquireOutcome<Self::Frame>, EngineError>;
 
     fn reconfigure(&mut self) -> Result<(), EngineError>;
+
+    /// Build a new surface against the same device; see
+    /// [`Renderer::recreate_surface`].
+    fn recreate(&mut self) -> Result<(), EngineError>;
+
+    fn recovery(&mut self) -> &mut SurfaceRecovery;
 }
 
+/// Recreate a surface the acquire path found lost, recording the obligation
+/// when the recreation fails so the next acquire retries it.
+///
+/// A transient failure (the window has no handle right now) reports
+/// [`EngineError::SurfaceLost`], which the caller retries. A fatal one
+/// ([`EngineError::SurfaceCreation`], a handle kind the owner never
+/// supports) is returned as it is, so the caller stops retrying instead of
+/// arming a retry loop. The obligation is kept either way: the surface may
+/// already be dropped, and without it the next frame the caller does ask for
+/// would read the renderer as released on purpose and skip in silence rather
+/// than report the failure again.
+fn recreate_lost_surface<B>(backend: &mut B) -> Result<(), EngineError>
+where
+    B: SurfaceAcquireBackend,
+{
+    match backend.recreate() {
+        Ok(()) => {
+            backend.recovery().reset();
+            Ok(())
+        }
+        Err(error) => {
+            backend.recovery().recreate_owed = true;
+            if error.recoverability() == crate::error::Recoverability::Recoverable {
+                tracing::warn!(
+                    target: "flui.gpu",
+                    event = "surface_recreate_failed",
+                    %error,
+                    "lost surface could not be recreated; retrying on the next frame"
+                );
+                Err(EngineError::SurfaceLost)
+            } else {
+                tracing::error!(
+                    target: "flui.gpu",
+                    event = "surface_recreate_failed",
+                    %error,
+                    "lost surface cannot be recreated"
+                );
+                Err(error)
+            }
+        }
+    }
+}
+
+/// Acquire the next surface texture, escalating on failure: `Outdated`,
+/// `Lost` and `Validation` reconfigure and retry once; a `Lost` that survives
+/// the reconfigure recreates the surface, because `Lost` says the surface
+/// itself is gone and no configuration of it can return a texture.
+///
+/// A recreation skips the frame (`Ok(None)`, which the caller retries) rather
+/// than acquiring from the new surface: the frame was planned against the old
+/// one, and the new one may differ in format or `COPY_SRC` support, which
+/// decide where the frame renders.
 fn acquire_surface_texture_with<B>(backend: &mut B) -> Result<Option<B::Frame>, EngineError>
 where
     B: SurfaceAcquireBackend,
 {
-    let mut may_retry = true;
+    if backend.recovery().recreate_owed {
+        recreate_lost_surface(backend)?;
+        return Ok(None);
+    }
+    let mut may_reconfigure = true;
     loop {
         match backend.acquire()? {
-            SurfaceAcquireOutcome::Success(frame) => return Ok(Some(frame)),
+            SurfaceAcquireOutcome::Success(frame) => {
+                backend.recovery().suboptimal_answered = false;
+                return Ok(Some(frame));
+            }
             SurfaceAcquireOutcome::Suboptimal(frame) => {
-                tracing::debug!("Surface suboptimal; will reconfigure on next resize");
+                let recovery = backend.recovery();
+                if !recovery.suboptimal_answered {
+                    tracing::debug!("Surface suboptimal; reconfiguring after this frame presents");
+                    recovery.reconfigure_after_present = true;
+                }
                 return Ok(Some(frame));
             }
             SurfaceAcquireOutcome::Timeout => return Err(EngineError::Timeout),
@@ -142,18 +254,27 @@ where
                 tracing::trace!("Surface released by its owner; skipping frame");
                 return Ok(None);
             }
-            SurfaceAcquireOutcome::Outdated | SurfaceAcquireOutcome::Lost if may_retry => {
+            SurfaceAcquireOutcome::Outdated | SurfaceAcquireOutcome::Lost if may_reconfigure => {
                 backend.reconfigure()?;
-                may_retry = false;
+                backend.recovery().configured();
+                may_reconfigure = false;
             }
-            SurfaceAcquireOutcome::Validation if may_retry => {
+            SurfaceAcquireOutcome::Validation if may_reconfigure => {
                 tracing::warn!("Surface texture validation error; reconfiguring and retrying once");
                 backend.reconfigure()?;
-                may_retry = false;
+                backend.recovery().configured();
+                may_reconfigure = false;
             }
-            SurfaceAcquireOutcome::Outdated | SurfaceAcquireOutcome::Lost => {
-                return Err(EngineError::SurfaceLost);
+            SurfaceAcquireOutcome::Lost => {
+                tracing::warn!(
+                    target: "flui.gpu",
+                    event = "surface_lost_after_reconfigure",
+                    "surface still lost after a reconfigure; recreating it"
+                );
+                recreate_lost_surface(backend)?;
+                return Ok(None);
             }
+            SurfaceAcquireOutcome::Outdated => return Err(EngineError::SurfaceLost),
             SurfaceAcquireOutcome::Validation => {
                 tracing::error!("Surface texture validation error after reconfigure");
                 return Err(EngineError::SurfaceValidation);
@@ -162,46 +283,238 @@ where
     }
 }
 
+/// Configure a surface whose presented frame was acquired `Suboptimal`, and
+/// mark its episode answered. Runs after the present, where the configure
+/// cannot wait on a later frame that may never come (see [`SurfaceRecovery`]).
+///
+/// Returns whether it configured. A configure owes a full repaint that no
+/// caller knows about (the frame reported itself presented), so the caller
+/// repaints the same scene at once rather than leave the configured surface
+/// waiting for unrelated damage.
+fn reconfigure_after_suboptimal_present<B>(backend: &mut B) -> Result<bool, EngineError>
+where
+    B: SurfaceAcquireBackend,
+{
+    if !backend.recovery().reconfigure_after_present {
+        return Ok(false);
+    }
+    backend.reconfigure()?;
+    let recovery = backend.recovery();
+    recovery.configured();
+    recovery.suboptimal_answered = true;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod surface_acquisition_tests {
-    use super::{SurfaceAcquireBackend, SurfaceAcquireOutcome, acquire_surface_texture_with};
+    use super::{
+        SurfaceAcquireBackend, SurfaceAcquireOutcome, SurfaceRecovery,
+        acquire_surface_texture_with, reconfigure_after_suboptimal_present,
+    };
     use crate::error::EngineError;
 
+    use SurfaceAcquireOutcome::{Lost, Outdated, Suboptimal, Success, Validation};
+
+    /// A surface that answers from a script shared by every frame of a case
+    /// and logs each call the acquire path makes on it.
     struct FakeSurface {
         outcomes: std::vec::IntoIter<SurfaceAcquireOutcome<u8>>,
-        reconfigure_count: usize,
-    }
-
-    impl FakeSurface {
-        fn new(outcomes: Vec<SurfaceAcquireOutcome<u8>>) -> Self {
-            Self {
-                outcomes: outcomes.into_iter(),
-                reconfigure_count: 0,
-            }
-        }
+        recreations: std::vec::IntoIter<Result<(), EngineError>>,
+        calls: Vec<&'static str>,
+        recovery: SurfaceRecovery,
     }
 
     impl SurfaceAcquireBackend for FakeSurface {
         type Frame = u8;
 
         fn acquire(&mut self) -> Result<SurfaceAcquireOutcome<Self::Frame>, EngineError> {
-            self.outcomes.next().ok_or(EngineError::SurfaceLost)
+            self.calls.push("acquire");
+            Ok(self
+                .outcomes
+                .next()
+                .expect("BUG: the case scripts every acquisition it makes"))
         }
 
         fn reconfigure(&mut self) -> Result<(), EngineError> {
-            self.reconfigure_count += 1;
+            self.calls.push("reconfigure");
             Ok(())
+        }
+
+        fn recreate(&mut self) -> Result<(), EngineError> {
+            self.calls.push("recreate");
+            self.recreations.next().unwrap_or(Ok(()))
+        }
+
+        fn recovery(&mut self) -> &mut SurfaceRecovery {
+            &mut self.recovery
         }
     }
 
-    pub(super) fn outdated_and_lost_still_share_the_single_retry_budget() {
-        for initial in [SurfaceAcquireOutcome::Outdated, SurfaceAcquireOutcome::Lost] {
-            let mut surface = FakeSurface::new(vec![initial, SurfaceAcquireOutcome::Lost]);
+    #[derive(Debug, PartialEq)]
+    enum Acquired {
+        Frame(u8),
+        Skipped,
+        SurfaceLost,
+        SurfaceValidation,
+        Fatal,
+    }
 
-            let result = acquire_surface_texture_with(&mut surface);
+    struct Case {
+        name: &'static str,
+        outcomes: Vec<SurfaceAcquireOutcome<u8>>,
+        recreations: Vec<Result<(), EngineError>>,
+        /// Per frame: what the acquisition returns and the calls it made.
+        frames: Vec<(Acquired, &'static [&'static str])>,
+    }
 
-            assert!(matches!(result, Err(EngineError::SurfaceLost)));
-            assert_eq!(surface.reconfigure_count, 1);
+    fn cases() -> Vec<Case> {
+        vec![
+            Case {
+                name: "outdated twice reconfigures once and never recreates",
+                outcomes: vec![Outdated, Outdated],
+                recreations: vec![],
+                frames: vec![(
+                    Acquired::SurfaceLost,
+                    &["acquire", "reconfigure", "acquire"],
+                )],
+            },
+            Case {
+                name: "validation twice reconfigures once",
+                outcomes: vec![Validation, Validation],
+                recreations: vec![],
+                frames: vec![(
+                    Acquired::SurfaceValidation,
+                    &["acquire", "reconfigure", "acquire"],
+                )],
+            },
+            Case {
+                name: "lost after a reconfigure recreates once and skips the frame",
+                outcomes: vec![Lost, Lost, Success(1)],
+                recreations: vec![],
+                frames: vec![
+                    (
+                        Acquired::Skipped,
+                        &["acquire", "reconfigure", "acquire", "recreate"],
+                    ),
+                    (Acquired::Frame(1), &["acquire"]),
+                ],
+            },
+            Case {
+                name: "outdated then lost recreates",
+                outcomes: vec![Outdated, Lost, Success(1)],
+                recreations: vec![],
+                frames: vec![
+                    (
+                        Acquired::Skipped,
+                        &["acquire", "reconfigure", "acquire", "recreate"],
+                    ),
+                    (Acquired::Frame(1), &["acquire"]),
+                ],
+            },
+            Case {
+                name: "a surface lost on every frame recreates once per frame",
+                outcomes: vec![Lost, Lost, Lost, Lost],
+                recreations: vec![],
+                frames: vec![
+                    (
+                        Acquired::Skipped,
+                        &["acquire", "reconfigure", "acquire", "recreate"],
+                    ),
+                    (
+                        Acquired::Skipped,
+                        &["acquire", "reconfigure", "acquire", "recreate"],
+                    ),
+                ],
+            },
+            Case {
+                name: "a failed recreation is retried before the next acquire",
+                outcomes: vec![Lost, Lost, Success(2)],
+                recreations: vec![Err(EngineError::SurfaceTargetUnavailable {
+                    source: raw_window_handle::HandleError::Unavailable,
+                })],
+                frames: vec![
+                    (
+                        Acquired::SurfaceLost,
+                        &["acquire", "reconfigure", "acquire", "recreate"],
+                    ),
+                    (Acquired::Skipped, &["recreate"]),
+                    (Acquired::Frame(2), &["acquire"]),
+                ],
+            },
+            Case {
+                name: "a fatal recreation failure is reported as it is",
+                outcomes: vec![Lost, Lost],
+                recreations: vec![
+                    Err(EngineError::SurfaceTargetUnavailable {
+                        source: raw_window_handle::HandleError::NotSupported,
+                    }),
+                    Err(EngineError::SurfaceTargetUnavailable {
+                        source: raw_window_handle::HandleError::NotSupported,
+                    }),
+                ],
+                frames: vec![
+                    (
+                        Acquired::Fatal,
+                        &["acquire", "reconfigure", "acquire", "recreate"],
+                    ),
+                    (Acquired::Fatal, &["recreate"]),
+                ],
+            },
+            Case {
+                name: "one reconfigure answers a suboptimal episode",
+                outcomes: vec![
+                    Suboptimal(1),
+                    Suboptimal(2),
+                    Suboptimal(3),
+                    Success(4),
+                    Suboptimal(5),
+                    Success(6),
+                ],
+                recreations: vec![],
+                frames: vec![
+                    (Acquired::Frame(1), &["acquire", "reconfigure", "repaint"]),
+                    (Acquired::Frame(2), &["acquire"]),
+                    (Acquired::Frame(3), &["acquire"]),
+                    (Acquired::Frame(4), &["acquire"]),
+                    (Acquired::Frame(5), &["acquire", "reconfigure", "repaint"]),
+                    (Acquired::Frame(6), &["acquire"]),
+                ],
+            },
+        ]
+    }
+
+    pub(super) fn acquisition_escalates_from_reconfigure_to_recreate() {
+        for case in cases() {
+            let mut surface = FakeSurface {
+                outcomes: case.outcomes.into_iter(),
+                recreations: case.recreations.into_iter(),
+                calls: Vec::new(),
+                recovery: SurfaceRecovery::default(),
+            };
+            for (frame, (expected, calls)) in case.frames.into_iter().enumerate() {
+                surface.calls.clear();
+                let acquired = match acquire_surface_texture_with(&mut surface) {
+                    Ok(Some(frame)) => {
+                        // The frame presents; the renderer then settles a
+                        // suboptimal acquisition, as `render_frame_inner` does.
+                        if reconfigure_after_suboptimal_present(&mut surface)
+                            .expect("the fake reconfigure succeeds")
+                        {
+                            surface.calls.push("repaint");
+                        }
+                        Acquired::Frame(frame)
+                    }
+                    Ok(None) => Acquired::Skipped,
+                    Err(EngineError::SurfaceLost) => Acquired::SurfaceLost,
+                    Err(EngineError::SurfaceValidation) => Acquired::SurfaceValidation,
+                    Err(EngineError::SurfaceTargetUnavailable {
+                        source: raw_window_handle::HandleError::NotSupported,
+                    }) => Acquired::Fatal,
+                    Err(other) => panic!("{}: frame {frame} failed with {other:?}", case.name),
+                };
+                assert_eq!(acquired, expected, "{}: frame {frame}", case.name);
+                assert_eq!(surface.calls, calls, "{}: frame {frame}", case.name);
+            }
         }
     }
 }
@@ -231,8 +544,8 @@ mod new_probes_before_gpu_work_tests {
     /// than exactly `["window_handle"]` means the probe ran further than it
     /// should have, or something downstream of it ran at all.
     #[test]
-    fn renderer_construction_fails_before_gpu_work_and_surface_acquisition_shares_one_retry() {
-        super::surface_acquisition_tests::outdated_and_lost_still_share_the_single_retry_budget();
+    fn renderer_construction_fails_before_gpu_work_and_surface_acquisition_escalates() {
+        super::surface_acquisition_tests::acquisition_escalates_from_reconfigure_to_recreate();
         renderer_new_fails_before_instance_creation_when_target_is_unavailable();
         device_request_uses_only_advertised_features();
     }
@@ -485,6 +798,8 @@ pub struct Renderer {
     /// Runs immediately before every `queue.present` — see
     /// [`crate::RasterBackend::set_pre_present_hook`].
     pre_present_hook: Option<crate::raster::PrePresentHook>,
+    /// What the acquire path owes the surface before the next acquisition.
+    surface_recovery: SurfaceRecovery,
     /// The owned window target and the surface built from it; the surface
     /// is absent while released (`release_surface`), which is the one state
     /// a renderer has besides "windowed". See [`SurfaceLease`].
@@ -533,7 +848,7 @@ impl SurfaceAcquireBackend for Renderer {
         let Some(surface) = self.lease.surface() else {
             return Ok(SurfaceAcquireOutcome::Released);
         };
-        // Under `Fifo` with a frame latency of 1 this is where the vsync
+        // Under `Fifo` with a full present queue this is where the vsync
         // block lands (ADR-0045 decision 3), so its duration is the one
         // number that says whether the display is pacing this thread.
         // Measured on the native AppKit backend 2026-09-17: it is not the
@@ -566,6 +881,14 @@ impl SurfaceAcquireBackend for Renderer {
     fn reconfigure(&mut self) -> Result<(), EngineError> {
         Self::reconfigure_surface(self);
         Ok(())
+    }
+
+    fn recreate(&mut self) -> Result<(), EngineError> {
+        Self::recreate_surface(self)
+    }
+
+    fn recovery(&mut self) -> &mut SurfaceRecovery {
+        &mut self.surface_recovery
     }
 }
 
@@ -647,6 +970,7 @@ impl Renderer {
             device_lost_hook,
             frame: crate::frame_protocol::FrameProtocol::new(),
             pre_present_hook: None,
+            surface_recovery: SurfaceRecovery::default(),
             lease,
             #[cfg(feature = "gpu-profiler")]
             gpu_profiler: stack.gpu_profiler,
@@ -775,17 +1099,16 @@ impl Renderer {
             // is global to every wgpu backend, where 2 is wgpu's own default
             // and the other backends are unmeasured either way.
             //
-            // Pinned independently of the clock-side produce-capacity threshold
-            // (`flui_scheduler::FrameClock::set_max_in_flight`, issue #556): that
-            // number is never threaded into this field, and this field is never
-            // derived from it.
-            // Re-coupling the two is a separate decision that needs its own
-            // evidence, not something to slip in by widening this literal. Two
+            // This field is the only in-flight bound FLUI sets: the frame clock
+            // throttles produces by interval, never by frames in flight. Two
             // implementer notes worth having in one place: (a)
             // wgpu ignores `desired_maximum_frame_latency` entirely on the GL
             // backend (live here — `Backends::GL` is selectable via the `gles`
-            // feature), so on GL the clock-side in-flight counter is the ONLY
-            // in-flight bound that exists; (b) this field only takes effect at
+            // feature), so on GL nothing bounds frames in flight beyond the
+            // driver's own queue, which `get_current_texture` blocks on; the
+            // raster lane runs inline on the owner thread and holds one frame
+            // in its mailbox, so the owner cannot run further ahead than that
+            // queue lets it; (b) this field only takes effect at
             // `Surface::configure` — every reconfigure must resupply it. `resize`
             // and `reconfigure_surface` below both mutate and re-`configure` THIS
             // SAME `SurfaceConfiguration` value (so it never needs resupplying —
@@ -1129,6 +1452,7 @@ impl Renderer {
             self.gpu_profiler = stack.gpu_profiler;
         }
         self.lease.replace_surface(released, stack.surface);
+        self.surface_recovery.reset();
         // Force a full repaint so the first recovered frame is complete.
         self.frame.mark_full_repaint();
         // The retained target belongs to the lost device.
@@ -1412,6 +1736,7 @@ impl Renderer {
         config.height = height;
         if let Some(surface) = self.lease.surface() {
             surface.configure(&self.device, config);
+            self.surface_recovery.configured();
         }
 
         self.painter.resize(width, height);
@@ -1570,6 +1895,7 @@ impl Renderer {
             return;
         };
         surface.configure(&self.device, &self.config);
+        self.surface_recovery.configured();
         self.frame.surface_changed();
         tracing::info!(
             "Surface reconfigured ({}x{})",
@@ -1607,6 +1933,9 @@ impl Renderer {
     /// the target is retained, so [`Renderer::recreate_surface`] needs no new
     /// ownership.
     pub fn release_surface(&mut self) {
+        // The owner's release supersedes a recreation the acquire path still
+        // owes: the owner now decides when a surface comes back.
+        self.surface_recovery.reset();
         let lease = &mut self.lease;
         if !lease.has_surface() {
             return;
@@ -1796,6 +2125,7 @@ impl Renderer {
 
         self.config = fresh_config;
         self.supports_copy_src = supports_copy_src;
+        self.surface_recovery.reset();
         self.frame.surface_changed();
 
         tracing::debug!(
@@ -1828,8 +2158,9 @@ impl Renderer {
     /// (ADR-0058's per-backend facts).
     /// [`PresentDisposition::NotShown`] skips presentation without error and
     /// so carries no vsync signal: this backend owed content it could not put
-    /// on screen (the surface reporting `Occluded`, or released by its owner
-    /// via [`Renderer::release_surface`]) and the caller should come back for
+    /// on screen (the surface reporting `Occluded`, released by its owner
+    /// via [`Renderer::release_surface`], or just recreated after it was
+    /// lost, so the frame planned for the old one) and the caller should come back for
     /// it rather than counting the frame finished.
     pub fn render_scene(
         &mut self,
@@ -1905,7 +2236,8 @@ impl Renderer {
         }
 
         // Acquire the swapchain texture; returns None when the frame should be
-        // skipped (Occluded, or the surface is released), or Err for
+        // skipped (Occluded, the surface is released, or it was just
+        // recreated after a loss), or Err for
         // unrecoverable surface states. All the `None` causes are the same
         // answer to the caller — content was owed and there is nothing to
         // present it into — so they collapse here on purpose, at the one place
@@ -1915,6 +2247,10 @@ impl Renderer {
             // `classify_frame`, which is where that distinction is pinned.
             return Ok(classify_frame(true, false));
         };
+        // Plan again: acquiring may have configured the surface (the retry
+        // after `Outdated` or `Validation`), which invalidates the retained target a partial plan reads from and
+        // owes a full repaint. The first plan only decided whether to acquire.
+        let plan = self.frame.plan(self.uses_intermediate_texture());
 
         let view = output
             .texture
@@ -2001,17 +2337,35 @@ impl Renderer {
 
         // The damage this frame covered is paid.
         self.frame.presented();
+        // After `presented`, so the full repaint the configure owes survives
+        // into the next frame instead of being paid off by this one. A failure
+        // is logged, not returned: this frame did present, and the obligation
+        // stays set for the next one.
+        match reconfigure_after_suboptimal_present(self) {
+            // Nothing else will ask for the repaint the configure owes: this
+            // may be a static UI's last frame, and the caller is told it
+            // presented. Present the same scene again on the configured
+            // surface. The episode is answered, so a second `Suboptimal`
+            // does not configure again and this goes at most one level deep;
+            // its disposition (or error) is what the screen now shows.
+            Ok(true) => return self.render_frame_inner(scene),
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(target: "flui.gpu", %error, "reconfigure after a suboptimal frame failed");
+            }
+        }
 
         Ok(classify_frame(true, true))
     }
 
     /// Acquire the current swapchain texture, handling device-lost and all
-    /// `CurrentSurfaceTexture` variants with one reconfigure-and-retry on
-    /// Outdated, Lost, or Validation.
+    /// `CurrentSurfaceTexture` variants: one reconfigure-and-retry on
+    /// Outdated, Lost, or Validation, then one recreation for a surface still
+    /// Lost (see [`acquire_surface_texture_with`] and [`SurfaceRecovery`]).
     ///
     /// Returns `Ok(None)` when the frame should be skipped rather than
-    /// presented — the surface reports itself `Occluded`, or its owner has
-    /// released it. Both mean the same thing to `render_scene` (content was
+    /// presented — the surface reports itself `Occluded`, its owner has
+    /// released it, or it was just recreated after a loss. Both mean the same thing to `render_scene` (content was
     /// owed and there is nowhere to put it), which classifies them together;
     /// the distinction is only ever useful in a trace, where each cause logs
     /// its own line.
@@ -2565,27 +2919,54 @@ mod tests {
         );
     }
 
+    /// A window with no native handle: `Unavailable` (gone for now) or, when
+    /// `supported` is false, `NotSupported` (never answerable).
     #[cfg(not(target_arch = "wasm32"))]
-    fn quarantined_domain_reaches_the_backend_recovery_predicate() {
-        struct ReleasedWindow;
-        impl raw_window_handle::HasWindowHandle for ReleasedWindow {
-            fn window_handle(
-                &self,
-            ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError>
-            {
-                Err(raw_window_handle::HandleError::Unavailable)
+    struct HandlelessWindow {
+        supported: bool,
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl HandlelessWindow {
+        fn error(&self) -> raw_window_handle::HandleError {
+            if self.supported {
+                raw_window_handle::HandleError::Unavailable
+            } else {
+                raw_window_handle::HandleError::NotSupported
             }
         }
-        impl raw_window_handle::HasDisplayHandle for ReleasedWindow {
-            fn display_handle(
-                &self,
-            ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError>
-            {
-                Err(raw_window_handle::HandleError::Unavailable)
-            }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl raw_window_handle::HasWindowHandle for HandlelessWindow {
+        fn window_handle(
+            &self,
+        ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+            Err(self.error())
         }
-        // This tests the actual backend predicate in the released-surface state;
-        // it needs no fabricated native handles and never creates a surface.
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl raw_window_handle::HasDisplayHandle for HandlelessWindow {
+        fn display_handle(
+            &self,
+        ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+            Err(self.error())
+        }
+    }
+
+    /// A real windowed `Renderer` on a real device whose surface is
+    /// released and whose window has no handle, with the domain its painter
+    /// uses and the flag its device-lost callback would set. It needs no
+    /// fabricated native handles and never creates a surface.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn released_renderer(
+        window: HandlelessWindow,
+    ) -> (
+        Renderer,
+        Arc<crate::device_domain::DeviceDomain>,
+        Arc<std::sync::atomic::AtomicBool>,
+    ) {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(
             &crate::adapter::trusted_adapter_options(wgpu::PowerPreference::LowPower, None),
@@ -2609,7 +2990,7 @@ mod tests {
             (16, 16),
         );
         let callback_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let mut renderer = Renderer {
+        let renderer = Renderer {
             instance,
             adapter,
             device,
@@ -2633,13 +3014,72 @@ mod tests {
             device_lost_hook: Arc::default(),
             frame: crate::frame_protocol::FrameProtocol::new(),
             pre_present_hook: None,
-            lease: SurfaceLease::released_for_test(Arc::new(ReleasedWindow)),
+            surface_recovery: SurfaceRecovery::default(),
+            lease: SurfaceLease::released_for_test(Arc::new(window)),
             _single_mutator: PhantomData,
             #[cfg(feature = "gpu-profiler")]
             gpu_profiler: None,
             force_intermediate: false,
             external_frames: std::collections::HashMap::new(),
         };
+        (renderer, domain, callback_flag)
+    }
+
+    /// A recreation the acquire path owes runs through the public
+    /// `RasterBackend::render_scene` of a real renderer: a window without a
+    /// handle for now reports the retryable `SurfaceLost` and keeps the
+    /// obligation, one that can never answer reports its own fatal error,
+    /// and the owner's release supersedes the obligation.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn an_owed_surface_recreation_runs_through_the_backend_render_path() {
+        use crate::RasterBackend;
+
+        let scene = flui_layer::Scene::new(flui_layer::LayerTree::new(flui_layer::LayerNode::new(
+            flui_layer::Layer::from(flui_layer::OffsetLayer::new(
+                flui_foundation::geometry::Offset::new(0.0, 0.0),
+            )),
+        )));
+
+        let (mut renderer, _domain, _flag) =
+            released_renderer(HandlelessWindow { supported: true });
+        renderer.surface_recovery.recreate_owed = true;
+        RasterBackend::mark_full_repaint(&mut renderer);
+        assert!(matches!(
+            RasterBackend::render_scene(&mut renderer, &scene),
+            Err(EngineError::SurfaceLost)
+        ));
+        assert!(
+            renderer.surface_recovery.recreate_owed,
+            "a transient failure keeps the recreation owed"
+        );
+        renderer.release_surface();
+        assert!(matches!(
+            RasterBackend::render_scene(&mut renderer, &scene),
+            Ok(crate::raster::PresentDisposition::NotShown)
+        ));
+
+        let (mut renderer, _domain, _flag) =
+            released_renderer(HandlelessWindow { supported: false });
+        renderer.surface_recovery.recreate_owed = true;
+        RasterBackend::mark_full_repaint(&mut renderer);
+        let result = RasterBackend::render_scene(&mut renderer, &scene);
+        assert!(
+            matches!(
+                result,
+                Err(EngineError::SurfaceTargetUnavailable {
+                    source: raw_window_handle::HandleError::NotSupported
+                })
+            ),
+            "a fatal recreation failure reaches the caller: {result:?}"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn quarantined_domain_reaches_the_backend_recovery_predicate() {
+        // This tests the actual backend predicate in the released-surface state.
+        let (mut renderer, domain, callback_flag) =
+            released_renderer(HandlelessWindow { supported: true });
+        let format = renderer.config.format;
         assert!(!crate::RasterBackend::is_device_lost(&renderer));
         // Domain quarantine can happen without a wgpu device-lost callback.
         domain.mark_lost();
@@ -3152,6 +3592,8 @@ mod tests {
         shader_mask_external_texture_registrations_follow_parent();
         #[cfg(not(target_arch = "wasm32"))]
         quarantined_domain_reaches_the_backend_recovery_predicate();
+        #[cfg(not(target_arch = "wasm32"))]
+        an_owed_surface_recreation_runs_through_the_backend_render_path();
         #[cfg(not(target_arch = "wasm32"))]
         a_lost_device_reaches_the_installed_hook();
         a_refused_texture_frame_keeps_the_accepted_one_for_reupload();

@@ -22,6 +22,20 @@ fn terminal_close_mode(failure_held: bool) -> flui_interaction::__runtime::Close
     }
 }
 
+/// Forget `presentation`'s held keys. A key-cancel handler's panic is held in
+/// `first`, so the caller still finishes every window-focus write and the
+/// lifecycle pass (pointer cancellation included) before it propagates.
+fn forget_pressed_keys(
+    presentation: &crate::presentation::PresentationState,
+    first: &mut Option<Box<dyn std::any::Any + Send>>,
+) {
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        presentation.focus_manager().forget_pressed_keys();
+    }))
+    .err();
+    preserve_first_lifecycle_panic(first, failure, "held key cancellation");
+}
+
 /// An observed Detached state is reversible; terminal lifetime is explicit.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum HostLifecycle {
@@ -68,22 +82,23 @@ impl UiRuntime {
         presentation.window_visible.set(visible);
         presentation.window_focused.set(focused);
         let mut cancel = Vec::new();
+        let mut first = None;
         if focused {
             for other in self.presentations.iter() {
                 if other.id() != id && other.window_focused.replace(false) {
-                    other.focus_manager().forget_pressed_keys();
+                    forget_pressed_keys(other, &mut first);
                     cancel.push(other.id());
                 }
             }
             self.notify_presentation_focus_gained(id);
         } else {
-            presentation.focus_manager().forget_pressed_keys();
+            forget_pressed_keys(presentation, &mut first);
         }
         if !focused || !visible || execution != flui_platform_api::WindowExecutionState::Running {
             cancel.push(id);
         }
         self.set_presentation_hidden(id, !visible);
-        self.reconcile_lifecycle(cancel);
+        self.reconcile_lifecycle_after_failure(cancel, first);
     }
 
     /// Record presentation `id`'s window execution state; a window that
@@ -127,21 +142,22 @@ impl UiRuntime {
             return;
         }
         let mut cancel = Vec::new();
+        let mut first = None;
         if focused {
             for other in self.presentations.iter() {
                 if other.id() != id && other.window_focused.replace(false) {
-                    other.focus_manager().forget_pressed_keys();
+                    forget_pressed_keys(other, &mut first);
                     cancel.push(other.id());
                 }
             }
             self.notify_presentation_focus_gained(id);
         } else {
-            presentation.focus_manager().forget_pressed_keys();
+            forget_pressed_keys(presentation, &mut first);
         }
         if presentation.window_focused.replace(focused) && !focused {
             cancel.push(id);
         }
-        self.reconcile_lifecycle(cancel);
+        self.reconcile_lifecycle_after_failure(cancel, first);
     }
 
     /// Record presentation `id`'s window visibility, gating its frame clock.

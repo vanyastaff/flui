@@ -2,7 +2,33 @@
 
 use reqwest;
 
+use std::time::Duration;
+
 use crate::error::AssetError;
+
+/// How long [`NetworkLoader::new`]'s client waits for a connection.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long [`NetworkLoader::new`]'s client waits for the next bytes of a
+/// response.
+pub const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long [`NetworkLoader::new`]'s client lets a whole request take, body
+/// included. The read timeout alone restarts with every byte, so a server
+/// that drips one byte per read timeout would otherwise hold the request open
+/// indefinitely.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The largest response body [`NetworkLoader::load_url`] accepts: 256 MiB.
+/// A larger one fails instead of growing without bound.
+pub const MAX_BODY_BYTES: usize = 256 * 1024 * 1024;
+
+fn read_failed(url: &str, error: &reqwest::Error) -> AssetError {
+    AssetError::LoadFailed {
+        path: url.to_string(),
+        reason: format!("Failed to read response body: {error}"),
+    }
+}
 
 /// Loads assets from HTTP/HTTPS URLs.
 ///
@@ -27,13 +53,22 @@ impl NetworkLoader {
     /// Creates a new network loader with default HTTP client.
     ///
     /// Reuse this loader or its clones to share HTTP connections. The default
-    /// client has no request deadline; use [`Self::with_client`] to configure one.
+    /// client gives up on a connection attempt after [`CONNECT_TIMEOUT`] and on
+    /// a response that sends nothing for [`READ_TIMEOUT`], and on any request
+    /// still unfinished after [`REQUEST_TIMEOUT`], so neither a stalled nor a
+    /// trickling server can hold a request open forever; use
+    /// [`Self::with_client`] to configure other deadlines.
     ///
     /// # Errors
     ///
     /// Returns an error if TLS or resolver initialization fails.
     pub fn new() -> reqwest::Result<Self> {
-        reqwest::Client::builder().build().map(Self::with_client)
+        reqwest::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(READ_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .map(Self::with_client)
     }
 
     /// Creates a network loader with a custom HTTP client.
@@ -71,12 +106,44 @@ impl NetworkLoader {
             });
         }
 
-        let bytes = response.bytes().await.map_err(|e| AssetError::LoadFailed {
+        let too_large = || AssetError::LoadFailed {
             path: url.to_string(),
-            reason: format!("Failed to read response body: {e}"),
-        })?;
-
-        Ok(bytes.into())
+            reason: format!("response body is larger than {MAX_BODY_BYTES} bytes"),
+        };
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_BODY_BYTES as u64)
+        {
+            return Err(too_large());
+        }
+        let mut response = response;
+        let first = response.chunk().await.map_err(|e| read_failed(url, &e))?;
+        let Some(first) = first else {
+            return Ok(Vec::new());
+        };
+        if first.len() > MAX_BODY_BYTES {
+            return Err(too_large());
+        }
+        // A body that arrives in one chunk is handed over without a copy.
+        let Some(second) = response.chunk().await.map_err(|e| read_failed(url, &e))? else {
+            return Ok(first.into());
+        };
+        // Every size is checked before anything is allocated or copied for it:
+        // `first.len() <= MAX_BODY_BYTES` and each later check keeps
+        // `body.len() <= MAX_BODY_BYTES`, so the subtractions cannot wrap.
+        if second.len() > MAX_BODY_BYTES - first.len() {
+            return Err(too_large());
+        }
+        let mut body = Vec::with_capacity(first.len() + second.len());
+        body.extend_from_slice(&first);
+        body.extend_from_slice(&second);
+        while let Some(chunk) = response.chunk().await.map_err(|e| read_failed(url, &e))? {
+            if chunk.len() > MAX_BODY_BYTES - body.len() {
+                return Err(too_large());
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body)
     }
 
     /// Loads strict UTF-8 text from a URL, preserving any UTF-8 BOM.
@@ -137,10 +204,9 @@ mod tests {
     /// genuinely round-trips bytes over HTTP. Widget image decoding and
     /// presentation are covered by their own consumer tests.
     ///
-    /// The `load_url` call is wrapped in a bounded [`tokio::time::timeout`]:
-    /// `NetworkLoader::new()` builds a `reqwest::Client` with no request
-    /// timeout of its own, so a wedged exchange (a server that accepts but
-    /// never writes) would otherwise hang this test — and CI — forever.
+    /// The `load_url` call is wrapped in a bounded [`tokio::time::timeout`]
+    /// shorter than the client's own read timeout, so a wedged exchange (a
+    /// server that accepts but never writes) fails this test promptly.
     #[tokio::test]
     async fn load_url_round_trips_bytes_from_a_hermetic_local_server() {
         use std::time::Duration;

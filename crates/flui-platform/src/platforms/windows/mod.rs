@@ -22,6 +22,7 @@ mod drag;
 mod events;
 mod haptics;
 mod host_events;
+mod modal_loop;
 mod platform;
 pub(crate) mod preferences;
 mod text_services;
@@ -32,6 +33,7 @@ mod window_frame;
 mod window_limits;
 mod window_modes;
 mod window_placement;
+mod window_visibility;
 
 #[cfg(feature = "a11y")]
 pub use accessibility::WindowsAccessibility;

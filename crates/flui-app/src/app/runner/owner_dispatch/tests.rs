@@ -1349,6 +1349,74 @@ fn owner_wake_refreshes_installed_preference_consumers() {
     teardown_platform_ui_runtime();
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn a_frame_turn_applies_queued_window_commands_after_its_frame() {
+    use super::super::frame_driver::{FrameDriver, TestFrameDriver};
+    use flui_platform::{HeadlessPlatform, Platform};
+
+    let _clear = OwnerHostClearGuard::arm();
+    let platform = HeadlessPlatform::new();
+    let window = test_window();
+    let native = Arc::clone(&window);
+    let drawn = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&drawn);
+    let observed = Arc::clone(&window);
+    let installed = Rc::new(RefCell::new(None));
+    let output = Rc::clone(&installed);
+    Box::new(platform)
+        .run(Box::new(move |owner| {
+            install_owner_platform(owner)?;
+            let runtime = super::super::host::build_ui_runtime(Arc::clone(&native), 1.0)?;
+            let address = flui_foundation::PresentationAddress {
+                ui_runtime_id: runtime.id(),
+                presentation_id: runtime.presentation_id(),
+            };
+            let mut installation = prepare_platform_ui_runtime(runtime, native);
+            let dispatcher = installation.dispatcher();
+            let frame = installation
+                .frame_driver(FrameDriver::Test(TestFrameDriver {
+                    installed: None,
+                    sink: flui_runtime::testing::ScriptedSink::always_presents(),
+                    prelude: Some(Box::new(move || {
+                        seen.borrow_mut().push(observed.state().title);
+                    })),
+                    resize: None,
+                }))
+                .expect("prepare driver");
+            installation
+                .submit()
+                .outcome()
+                .expect("idle publication")
+                .expect("installed");
+            output.replace(Some((dispatcher, frame.binding, address)));
+            Ok(())
+        }))
+        .expect("headless bootstrap");
+    let (dispatcher, frame, address) = installed.borrow().expect("installed frame");
+    let handle = APP_RUNTIME
+        .with(|slot| slot.borrow().window_commands.handle_for(address))
+        .expect("the window's handle");
+    handle.set_title("queued").expect("accepted");
+    // The frame turn comes first, as a paint does, and it is the only turn:
+    // its frame must not see the command, and the command must not wait for
+    // another turn (the one its wake asked for may never come).
+    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("frame");
+    assert!(
+        drawn
+            .borrow()
+            .last()
+            .is_some_and(|title| title.as_deref() != Some("queued")),
+        "the frame ran inside the paint callback, where a command's resize is held back: {:?}",
+        drawn.borrow()
+    );
+    assert_eq!(
+        window.state().title.as_deref(),
+        Some("queued"),
+        "applied once the frame is done"
+    );
+    teardown_platform_ui_runtime();
+}
+
 fn platform_brightness_follows_the_window_appearance() {
     use super::super::frame_driver::{FrameDriver, TestFrameDriver};
     use flui_platform::{HeadlessPlatform, Platform, WindowAppearance};
@@ -2595,6 +2663,11 @@ fn owner_dispatch_matrix() {
             (
                 "native_keyboard_cannot_overtake_queued_window_changes_and_keys",
                 native_keyboard_cannot_overtake_queued_window_changes_and_keys as fn(),
+            ),
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            (
+                "a_frame_turn_applies_queued_window_commands_after_its_frame",
+                a_frame_turn_applies_queued_window_commands_after_its_frame as fn(),
             ),
             (
                 "late_event_never_crosses_ui_runtime_incarnations",

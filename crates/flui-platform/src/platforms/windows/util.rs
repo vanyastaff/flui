@@ -43,6 +43,21 @@ pub fn logical_to_device(logical: f64, scale_factor: f64) -> i32 {
     (logical * scale_factor).round() as i32
 }
 
+/// The largest device coordinate or extent a window command may name. It
+/// leaves room below `i32::MAX` for the frame `AdjustWindowRectExForDpi` adds
+/// and for an origin plus a size.
+pub const DEVICE_COORDINATE_LIMIT: i32 = 0x3FFF_0000;
+
+/// Convert logical pixels to device pixels, or `None` when the result is not
+/// a finite device value within [`DEVICE_COORDINATE_LIMIT`]: geometry Win32
+/// would otherwise receive saturated.
+#[inline]
+pub fn checked_logical_to_device(logical: f64, scale_factor: f64) -> Option<i32> {
+    let device = (logical * scale_factor).round();
+    let limit = f64::from(DEVICE_COORDINATE_LIMIT);
+    (device.is_finite() && (-limit..=limit).contains(&device)).then_some(device as i32)
+}
+
 /// Convert device pixels to logical pixels
 #[inline]
 pub fn device_to_logical(device: i32, scale_factor: f64) -> f64 {

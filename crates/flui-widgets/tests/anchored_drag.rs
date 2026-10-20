@@ -532,10 +532,17 @@ pub(crate) fn anchored_drag_assistive_and_key_steps_move_between_anchors() {
         let mut laid = mount(view, &vsync);
         let right = Key::Named(NamedKey::ArrowRight);
         let left = Key::Named(NamedKey::ArrowLeft);
-        assert!(
-            !Keys::of(&laid).down(Code::ArrowRight, right.clone()),
-            "{direction:?}: nothing has the focus yet"
+        // With nothing focused the arrow can only bring the focus in; it
+        // steps no drag.
+        let _ = Keys::of(&laid).down(Code::ArrowRight, right.clone());
+        Keys::of(&laid).up(Code::ArrowRight, right.clone());
+        settle(&mut laid);
+        assert_eq!(
+            anchors.current(),
+            Stop::Closed,
+            "{direction:?}: nothing had the focus"
         );
+        laid.focus_manager().unfocus();
         // A drag that returns home focuses the drag.
         laid.replay(&slow(Device::Mouse, at(150.0, 150.0), at(160.0, 150.0)));
         settle(&mut laid);

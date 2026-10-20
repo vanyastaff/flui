@@ -1963,7 +1963,9 @@ pub(crate) fn a_step_that_is_not_finite_is_dropped_at_the_channel() {
 
     // Every operand finite, the distance not: `f64::MAX - -f64::MAX`.
     probe.take();
-    controller.update_dimensions(300.0, -f64::MAX, f64::MAX);
+    controller
+        .update_dimensions(300.0, -f64::MAX, f64::MAX)
+        .expect("ordered extents");
     controller.set_pixels(-f64::MAX);
     let jumped = catch_unwind(AssertUnwindSafe(|| controller.jump_to(f64::MAX)));
     assert!(
@@ -2351,6 +2353,74 @@ pub(crate) fn a_contact_that_ends_without_release_names_why() {
             inner.ended(),
             vec![(next[0], ScrollEndReason::Released)],
             "{device:?}: released as usual"
+        );
+    }
+}
+
+/// A release that reentrant code takes over ends its sequence at once: a
+/// press lifted on a moving pager starts its settle, the settle raises the
+/// scroll activity, and an activity listener jumps the pager, so no settle
+/// runs. The press's sequence still ends `Released` there, before any next
+/// contact, and the jump is a sequence of its own.
+pub(crate) fn a_release_taken_over_by_reentrant_code_still_ends_its_sequence() {
+    for device in DEVICES {
+        let (controller, probe, vsync) = (ScrollController::new(), Probe::new(), Vsync::new());
+        let tree = VsyncScope::new(
+            vsync.clone(),
+            NestedScroll::new(
+                probe.connection(),
+                Scrollable::new()
+                    .controller(controller.clone())
+                    .snap_policy(Arc::new(PageSnap::new(ViewportFraction::FULL)))
+                    .child(SizedBox::new(300.0, 3000.0)),
+            ),
+        )
+        .boxed();
+        let mut laid = mounted(tree, vsync);
+        laid.replay(&fling(device, at(150.0, 250.0), at(150.0, 100.0)));
+        laid.pump_for(SAMPLE);
+        laid.pump_for(SAMPLE);
+        let moving = controller.pixels();
+        laid.pump_for(SAMPLE);
+        assert!(
+            controller.pixels() > moving && controller.pixels() % 300.0 != 0.0,
+            "{device:?}: the pager settles between pages, at {}",
+            controller.pixels()
+        );
+        let armed = Rc::new(Cell::new(true));
+        let (jumping, position) = (controller.clone(), controller.position());
+        let arm = Rc::clone(&armed);
+        let listener = position.add_activity_listener(Rc::new(move || {
+            if jumping.position().is_scrolling() && arm.replace(false) {
+                jumping.jump_to(900.0);
+            }
+        }));
+        probe.take();
+        laid.replay(&press(device, at(150.0, 150.0)));
+        settle(&mut laid);
+        position.remove_activity_listener(listener);
+        assert!(!armed.get(), "{device:?}: the settle raised the activity");
+        assert_eq!(controller.pixels(), 900.0, "{device:?}: the jump took over");
+        let started = probe.started();
+        assert_eq!(
+            started.len(),
+            2,
+            "{device:?}: the press and the jump: {:?}",
+            probe.seen()
+        );
+        let ended: Vec<_> = probe
+            .ended()
+            .into_iter()
+            .filter(|(id, _)| started.contains(id))
+            .collect();
+        assert_eq!(
+            ended,
+            vec![
+                (started[1], ScrollEndReason::Released),
+                (started[0], ScrollEndReason::Released),
+            ],
+            "{device:?}: the jump ends, then the press it took over: {:?}",
+            probe.seen()
         );
     }
 }

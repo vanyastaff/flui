@@ -7,7 +7,7 @@ use std::time::Duration;
 use flui_platform::shared::android_motion::{
     AndroidMotion, Axes, DeviceCapabilities, DeviceDiscovery, EXIT_GRACE, Motion, MotionAction,
     PointerFacts, SOURCE_MOUSE, Tool, axis, button, native_buttons, native_device, native_sensors,
-    pen_angles, pointer_kind,
+    needs_device_query, pen_angles, pointer_kind,
 };
 use flui_platform::shared::pointer_assembly::{NativeCancel, PenAngles};
 use flui_platform::traits::PlatformInput;
@@ -82,6 +82,7 @@ impl Feed {
                 action_index: 0,
                 action_button: 0,
                 buttons,
+                canceled: false,
                 modifiers: Modifiers::NONE,
                 time: Some(EventTime::from_nanos(ms * 1_000_000)),
                 pointers,
@@ -395,6 +396,85 @@ fn readings_follow_the_device_and_its_ranges() {
     assert_ne!(native_device(1), native_device(-1));
 }
 
+/// A pointer the system takes back (`ACTION_POINTER_UP` with
+/// `FLAG_CANCELED`, a rejected palm) is cancelled, not lifted: a tap under
+/// the palm must not accept, and the finger that stays is untouched.
+fn a_cancelled_pointer_up_is_a_cancel_not_a_lift() {
+    let mut motion = AndroidMotion::default();
+    let now = Instant::now();
+    let finger = pointer(0, Tool::Finger, at(10.0, 10.0));
+    let palm = pointer(1, Tool::Finger, at(80.0, 80.0));
+    let mut event = |action, index, canceled, ms: u64, pointers: &[PointerFacts]| {
+        motion.decode(
+            &Motion {
+                device: 4,
+                source: SOURCE_TOUCHSCREEN,
+                action,
+                action_index: index,
+                action_button: 0,
+                buttons: 0,
+                canceled,
+                modifiers: Modifiers::NONE,
+                time: Some(EventTime::from_nanos(ms * 1_000_000)),
+                pointers,
+            },
+            SCALE,
+            &|_, _| None,
+            sensing(SOURCE_TOUCHSCREEN),
+            now,
+        )
+    };
+    let both = [finger.clone(), palm];
+    let mut events = event(
+        MotionAction::Down,
+        0,
+        false,
+        1,
+        std::slice::from_ref(&finger),
+    );
+    events.extend(event(MotionAction::PointerDown, 1, false, 2, &both));
+    let rejected = event(MotionAction::PointerUp, 1, true, 3, &both);
+    events.extend(rejected.iter().cloned());
+    events.extend(event(
+        MotionAction::Up,
+        0,
+        false,
+        4,
+        std::slice::from_ref(&finger),
+    ));
+    assert_eq!(verbs(&events), ["down 1", "down 2", "cancel 2", "up 1"]);
+    assert!(rejected.iter().any(|event| matches!(
+        event.as_pointer(),
+        Some(PointerEvent::Cancel(cancel)) if cancel.reason == CancelReason::Platform
+    )));
+}
+
+/// The Java device query runs for every event but a move, so a device the
+/// OS reset or removed is seen where a sequence starts and where it ends (a
+/// reset cancels it), and wherever the cache does not answer.
+fn the_device_is_queried_for_every_event_but_a_move() {
+    let cached = Some(DeviceCapabilities::new(SOURCE_TOUCHSCREEN, axis::SENSORS));
+    for (action, cache, source, queries) in [
+        (MotionAction::Move, None, SOURCE_TOUCHSCREEN, true),
+        (MotionAction::Move, cached, SOURCE_STYLUS, true),
+        (MotionAction::Down, cached, SOURCE_TOUCHSCREEN, true),
+        (MotionAction::HoverEnter, cached, SOURCE_TOUCHSCREEN, true),
+        (MotionAction::Move, cached, SOURCE_TOUCHSCREEN, false),
+        (MotionAction::HoverMove, cached, SOURCE_TOUCHSCREEN, false),
+        (MotionAction::PointerDown, cached, SOURCE_TOUCHSCREEN, true),
+        (MotionAction::PointerUp, cached, SOURCE_TOUCHSCREEN, true),
+        (MotionAction::Up, cached, SOURCE_TOUCHSCREEN, true),
+        (MotionAction::Cancel, cached, SOURCE_TOUCHSCREEN, true),
+        (MotionAction::HoverExit, cached, SOURCE_TOUCHSCREEN, true),
+    ] {
+        assert_eq!(
+            needs_device_query(cache, source, action),
+            queries,
+            "{action:?} from {source:#x} with {cache:?}"
+        );
+    }
+}
+
 /// Pausing ends every admitted contact with the lifecycle's reason, once.
 fn lifecycle_cancellation_retires_contacts() {
     let mut feed = Feed::new();
@@ -434,6 +514,7 @@ fn a_wheel_scrolls_unphased_from_the_cursor() {
             action_index: 0,
             action_button: 0,
             buttons: 0,
+            canceled: false,
             modifiers: Modifiers::NONE,
             time: Some(EventTime::from_nanos(7)),
             pointers: &[pointer(
@@ -497,6 +578,14 @@ fn android_motion_translation() {
             (
                 "readings_follow_the_device_and_its_ranges",
                 readings_follow_the_device_and_its_ranges,
+            ),
+            (
+                "a_cancelled_pointer_up_is_a_cancel_not_a_lift",
+                a_cancelled_pointer_up_is_a_cancel_not_a_lift,
+            ),
+            (
+                "the_device_is_queried_for_every_event_but_a_move",
+                the_device_is_queried_for_every_event_but_a_move,
             ),
             (
                 "lifecycle_cancellation_retires_contacts",

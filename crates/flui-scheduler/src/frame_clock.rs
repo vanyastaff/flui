@@ -10,16 +10,14 @@
 //! ([`try_arm_redraw_request`](FrameClock::try_arm_redraw_request)),
 //! compositor pacing feedback
 //! ([`record_compositor_tick`](FrameClock::record_compositor_tick)),
-//! first-frame deferral, visibility gating, a produce-capacity threshold,
+//! first-frame deferral, visibility gating, an optional produce throttle,
 //! and frame timestamps. It answers exactly one question — "does this
 //! surface produce a frame now?" — and never touches a phase, a callback,
 //! or an element tree, and never reaches out to read an actual display or
 //! window: every physical-time fact it reasons about (a compositor tick,
-//! a produce capacity signal) is fed in by a caller that owns the real
-//! surface. Raster capacity (whether the GPU will accept another frame)
-//! is a third, still-separate owner; `FrameClock`'s in-flight/throttle
-//! knobs exist so that owner has somewhere to report backpressure, not so
-//! this clock reaches into a GPU queue itself.
+//! a minimum produce interval) is fed in by a caller that owns the real
+//! surface. Raster capacity (whether the GPU will accept another frame) is
+//! bounded by the surface's configured frame latency, not by this clock.
 //!
 //! # The driver-loop hybrid
 //!
@@ -101,7 +99,8 @@ use std::cell::{Cell, RefCell};
 
 use crate::frame::FrameId;
 use crate::frame_telemetry::{
-    FrameHistory, FrameSnapshot, InputEpochId, InputEpochs, PendingInputEpochs, PresentOutcome,
+    FrameHistory, FramePhaseDurations, FrameSnapshot, InputEpochId, InputEpochs,
+    PendingInputEpochs, PresentOutcome,
 };
 use flui_foundation::{ManualClock, MonotonicClock, PresentationId};
 use web_time::{Duration, Instant};
@@ -178,11 +177,9 @@ pub enum SkipReason {
     /// This presentation is hidden ([`FrameClock::set_hidden`]); demand is
     /// retained so an unhide with a nonzero mask produces immediately.
     Hidden,
-    /// Produce capacity is unavailable right now — either the in-flight
-    /// count has reached [`FrameClock::set_max_in_flight`]'s threshold, or a
-    /// caller-configured minimum produce interval
-    /// ([`FrameClock::set_min_produce_interval`]) has not yet elapsed.
-    /// Demand is retained.
+    /// The caller-configured minimum produce interval
+    /// ([`FrameClock::set_min_produce_interval`]) has not yet elapsed since
+    /// the last produce. Demand is retained.
     Backpressure,
 }
 
@@ -284,8 +281,6 @@ pub struct FrameClock {
     hidden: Cell<bool>,
     deferred_count: Cell<u32>,
     first_frame_sent: Cell<bool>,
-    max_in_flight: Cell<u8>,
-    in_flight: Cell<u8>,
     min_produce_interval: Cell<Option<Duration>>,
     last_produce_at: Cell<Option<Instant>>,
     produced: Cell<u64>,
@@ -321,27 +316,25 @@ pub struct FrameClock {
     history: RefCell<FrameHistory>,
 }
 
-/// The default in-flight capacity before any raster-owner wiring configures
-/// it explicitly — matches the raster owner's own documented default, so a
-/// `FrameClock` constructed with no explicit call to
-/// [`FrameClock::set_max_in_flight`] already agrees with it.
-const DEFAULT_MAX_IN_FLIGHT: u8 = 2;
-
-/// The four [`FrameSnapshot`] timing fields [`FrameClock::record_frame`]/
-/// [`FrameClock::record_frame_retaining_epochs`] pass through unchanged to
-/// their shared private core — bundled purely to keep that core's own
-/// arity under clippy's `too_many_arguments` bound; not part of either
-/// public method's own signature.
-struct FrameTiming {
-    clock_timestamp: Instant,
-    segment_start: Instant,
-    segment_end: Instant,
-    submit_at: Instant,
+/// When the stages of one produced frame happened: what
+/// [`FrameClock::record_frame`] stores in its [`FrameSnapshot`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameTimes {
+    /// The frame time the pump sampled the presentation at.
+    pub clock_timestamp: Instant,
+    /// When the presentation's segment started.
+    pub segment_start: Instant,
+    /// When it finished.
+    pub segment_end: Instant,
+    /// When the raster backend returned from consuming the scene.
+    pub submit_at: Instant,
+    /// How long the segment's build, layout and paint took.
+    pub phases: FramePhaseDurations,
 }
 
 impl FrameClock {
     /// A fresh clock reading the real platform clock, with an empty demand
-    /// mask, not hidden, not deferred, and the default in-flight capacity.
+    /// mask, not hidden, not deferred, and no throttle.
     #[must_use]
     pub fn new() -> Self {
         Self::with_source(ClockSource::Platform)
@@ -358,8 +351,6 @@ impl FrameClock {
             hidden: Cell::new(false),
             deferred_count: Cell::new(0),
             first_frame_sent: Cell::new(false),
-            max_in_flight: Cell::new(DEFAULT_MAX_IN_FLIGHT),
-            in_flight: Cell::new(0),
             min_produce_interval: Cell::new(None),
             last_produce_at: Cell::new(None),
             produced: Cell::new(0),
@@ -505,14 +496,9 @@ impl FrameClock {
     /// `Skip(Hidden)` today is bounded: it un-strands at the next unhide,
     /// not "whenever something else happens to wake the loop".
     ///
-    /// **`Backpressure` remains open** — no raster owner exists yet, so
-    /// nothing calls [`set_max_in_flight`](Self::set_max_in_flight)/
-    /// [`record_submit`](Self::record_submit) against a real presentation's
-    /// clock, and `poll` never actually returns `Skip(Backpressure)` in
-    /// production. Wiring either knob into production ahead of a real
-    /// retire→wake edge (the raster-owner work this issue's later slice
-    /// owns) would turn this dormant half into a real stall, the same shape
-    /// `Hidden` had before it was closed. A caller that settles its OWN
+    /// **`Backpressure` comes only from the throttle**
+    /// ([`set_min_produce_interval`](Self::set_min_produce_interval)), which
+    /// a later pump past the interval clears. A caller that settles its OWN
     /// demand away without ever reaching a produce (rather than being
     /// blocked by hidden/backpressure) is a different, already-handled
     /// case: see [`clear_demand`](Self::clear_demand)'s doc.
@@ -675,56 +661,23 @@ impl FrameClock {
     }
 
     // ------------------------------------------------------------------
-    // Produce capacity (in-flight threshold + optional throttle) — the
-    // knobs a raster owner's backpressure reports through; this clock
-    // never reaches into a GPU queue itself.
+    // Produce throttle — a self-imposed minimum interval between produces.
+    // GPU in-flight capacity is bounded by the surface's configured frame
+    // latency, not by this clock.
     // ------------------------------------------------------------------
 
-    /// Configure the in-flight capacity threshold (the raster owner's
-    /// clock-side counterpart). Clamped to at least 1 — a zero threshold
-    /// would make `poll` permanently non-producing with no way to ever
-    /// recover.
-    pub fn set_max_in_flight(&self, max: u8) {
-        self.max_in_flight.set(max.max(1));
-    }
-
-    /// Record that a frame was submitted (increments the in-flight count).
-    pub fn record_submit(&self) {
-        self.in_flight.set(self.in_flight.get().saturating_add(1));
-    }
-
-    /// Record that a submitted frame retired — presented, errored, or
-    /// dropped at shutdown/device-loss, all funneled through one RAII
-    /// ticket upstream of this call.
-    pub fn record_retire(&self) {
-        self.in_flight.set(self.in_flight.get().saturating_sub(1));
-    }
-
-    /// The current in-flight count.
-    #[must_use]
-    pub fn in_flight(&self) -> u8 {
-        self.in_flight.get()
-    }
-
     /// Configure a minimum interval between produces (a self-imposed
-    /// throttle, independent of GPU in-flight capacity — e.g. a target
-    /// frame rate lower than the demand cadence). `None` (the default)
-    /// imposes no throttle.
+    /// throttle, e.g. a target frame rate lower than the demand cadence).
+    /// `None` (the default) imposes no throttle.
     pub fn set_min_produce_interval(&self, interval: Option<Duration>) {
         self.min_produce_interval.set(interval);
     }
 
     fn has_capacity(&self, now: Instant) -> bool {
-        if self.in_flight.get() >= self.max_in_flight.get() {
-            return false;
+        match (self.min_produce_interval.get(), self.last_produce_at.get()) {
+            (Some(interval), Some(last)) => now.saturating_duration_since(last) >= interval,
+            _ => true,
         }
-        if let Some(interval) = self.min_produce_interval.get()
-            && let Some(last) = self.last_produce_at.get()
-            && now.duration_since(last) < interval
-        {
-            return false;
-        }
-        true
     }
 
     // ------------------------------------------------------------------
@@ -744,9 +697,9 @@ impl FrameClock {
     /// The produce/skip decision for physical instant `now`.
     ///
     /// Checked in this order: the demand mask FIRST, then hidden, then
-    /// capacity (in-flight/throttle). An empty mask is ALWAYS
-    /// `Skip(NoDemand)`, regardless of whether hidden/a throttle/an
-    /// in-flight limit happens to be configured — hidden and capacity are
+    /// the throttle. An empty mask is ALWAYS
+    /// `Skip(NoDemand)`, regardless of whether hidden or a throttle
+    /// happens to be configured — hidden and capacity are
     /// reasons to defer demand that exists, not reasons to invent a demand
     /// that doesn't; checking either before the mask would misreport an
     /// idle clock (no demand at all) as deferred whenever a caller had ALSO
@@ -855,7 +808,7 @@ impl FrameClock {
     /// presentation I happened to have a reference to."
     ///
     /// `frame_id` is deliberately derived from [`Self::produced_count`]
-    /// (`FrameId::zip(produced_count())`, valid because `poll` has already
+    /// (`FrameId::from_count(produced_count())`, valid because `poll` has already
     /// incremented it by the time a caller reaches its own submit point) —
     /// not a second, independent counter minted here, which would drift
     /// from `produced_count` the first time the two disagreed about what
@@ -878,24 +831,11 @@ impl FrameClock {
     pub fn record_frame(
         &self,
         presentation: PresentationId,
-        clock_timestamp: Instant,
-        segment_start: Instant,
-        segment_end: Instant,
-        submit_at: Instant,
+        times: FrameTimes,
         present_outcome: PresentOutcome,
     ) -> FrameSnapshot {
         let input_epochs = self.pending_input_epochs.borrow_mut().drain();
-        self.record_frame_with_epochs(
-            presentation,
-            FrameTiming {
-                clock_timestamp,
-                segment_start,
-                segment_end,
-                submit_at,
-            },
-            present_outcome,
-            input_epochs,
-        )
+        self.record_frame_with_epochs(presentation, times, present_outcome, input_epochs)
     }
 
     /// Like [`Self::record_frame`], but for a submit attempt that FAILED on
@@ -920,35 +860,18 @@ impl FrameClock {
     pub fn record_frame_retaining_epochs(
         &self,
         presentation: PresentationId,
-        clock_timestamp: Instant,
-        segment_start: Instant,
-        segment_end: Instant,
-        submit_at: Instant,
+        times: FrameTimes,
         present_outcome: PresentOutcome,
     ) -> FrameSnapshot {
         let input_epochs = self.pending_input_epochs.borrow().peek();
-        self.record_frame_with_epochs(
-            presentation,
-            FrameTiming {
-                clock_timestamp,
-                segment_start,
-                segment_end,
-                submit_at,
-            },
-            present_outcome,
-            input_epochs,
-        )
+        self.record_frame_with_epochs(presentation, times, present_outcome, input_epochs)
     }
 
     /// Shared core of [`Self::record_frame`]/[`Self::record_frame_retaining_epochs`]:
     /// mint this produce's `frame_id`, build the [`FrameSnapshot`], and
     /// store it in the history ring. The only difference between the two
     /// public callers is whether `input_epochs` came from a drain or a
-    /// peek — a decision made by the caller, not this shared core. `timing`
-    /// bundles the four `Instant` fields both callers pass through
-    /// unchanged, keeping this function's own arity within clippy's
-    /// `too_many_arguments` bound without changing either public caller's
-    /// own (pre-existing, six-`Instant`-plus-enum) signature.
+    /// peek — a decision made by the caller, not this shared core.
     ///
     /// # Panics
     ///
@@ -958,27 +881,25 @@ impl FrameClock {
     fn record_frame_with_epochs(
         &self,
         presentation: PresentationId,
-        timing: FrameTiming,
+        times: FrameTimes,
         present_outcome: PresentOutcome,
         input_epochs: InputEpochs,
     ) -> FrameSnapshot {
-        let produced_count = self.produced_count();
-        let frame_id = (produced_count > 0)
-            .then(|| FrameId::zip(produced_count as usize))
-            .expect(
-                "BUG: record_frame(_retaining_epochs) called before this clock's poll() ever \
+        let frame_id = FrameId::from_count(self.produced_count()).expect(
+            "BUG: record_frame(_retaining_epochs) called before this clock's poll() ever \
              produced a frame -- only call this after a real submit attempt, whose produce \
              already incremented produced_count",
-            );
+        );
         let snapshot = FrameSnapshot {
             presentation,
             frame_id,
-            clock_timestamp: timing.clock_timestamp,
-            segment_start: timing.segment_start,
-            segment_end: timing.segment_end,
-            submit_at: timing.submit_at,
+            clock_timestamp: times.clock_timestamp,
+            segment_start: times.segment_start,
+            segment_end: times.segment_end,
+            submit_at: times.submit_at,
             present_outcome,
             input_epochs,
+            phases: times.phases,
         };
         self.history.borrow_mut().record(&snapshot);
         snapshot
@@ -987,8 +908,8 @@ impl FrameClock {
     /// Every retained [`FrameSnapshot`] with `frame_id` strictly greater
     /// than `since` (or every retained snapshot, if `since` is `None`),
     /// oldest first, as owned values. `Option<FrameId>` rather than a bare
-    /// `FrameId` sentinel: this workspace's IDs are 1-based `NonZeroUsize`
-    /// under the hood (see `AGENTS.md`'s ID offset pattern), so there is no
+    /// `FrameId` sentinel: frame ids are 1-based `NonZeroU64`
+    /// under the hood, so there is no
     /// representable "before the first frame" `FrameId` to pass instead.
     ///
     /// Allocates a `Vec` — this is the pull side an app/devtools consumer
@@ -1026,11 +947,7 @@ mod tests {
     // ----------------------------------------------------------------
 
     // ----------------------------------------------------------------
-    // Backpressure (in-flight) — retains the mask.
-    // ----------------------------------------------------------------
-
-    // ----------------------------------------------------------------
-    // Throttle — a second, independent capacity axis, also Backpressure.
+    // Throttle — the capacity axis behind Backpressure.
     // ----------------------------------------------------------------
 
     // ----------------------------------------------------------------

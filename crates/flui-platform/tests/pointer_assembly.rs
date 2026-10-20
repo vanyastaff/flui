@@ -146,6 +146,51 @@ fn a_mouse_keeps_its_identity_across_presses() {
     assert_eq!(after.pointer, down.pointer);
 }
 
+/// The reserved contact is the backend's one cursor: a reading that names the
+/// mouse, one that names none (a legacy or synthesized message) and one from
+/// a second mouse all move it, so its identity never splits into two live
+/// contacts with one pointer id and two held-button states.
+fn the_reserved_contact_is_one_cursor_across_devices() {
+    let mut contacts = registry().with_reserved_contact(NativeContact(0));
+    let named = |action, ms, device| mouse(action, ms).from_device(NativeDevice(device));
+    let events = decode(&mut contacts, &named(ReadingAction::Move, 1, 7)).expect("valid");
+    let [PointerEvent::DeviceAdded(first), PointerEvent::Move(hover)] =
+        pointer_events(&events).as_slice()
+    else {
+        panic!("the mouse is announced and moves: {events:?}")
+    };
+    let first = first.device;
+    assert_eq!(hover.pointer.device, Some(first));
+    let PointerEvent::Down(down) = single(&decode(&mut contacts, &mouse(PRESS, 2)).expect("valid"))
+    else {
+        panic!("a press naming no device presses the same cursor")
+    };
+    assert_eq!(down.pointer, hover.pointer);
+    let events = decode(&mut contacts, &named(ReadingAction::Move, 3, 8)).expect("valid");
+    let [
+        PointerEvent::DeviceAdded(second),
+        PointerEvent::Move(dragged),
+    ] = pointer_events(&events).as_slice()
+    else {
+        panic!("a second mouse is announced and drags the same cursor: {events:?}")
+    };
+    assert_eq!(dragged.pointer.id, down.pointer.id);
+    assert_eq!(dragged.pointer.device, Some(second.device));
+    assert!(
+        dragged.buttons.contains(PointerButton::PRIMARY),
+        "one held state"
+    );
+    assert!(matches!(
+        single(&decode(&mut contacts, &mouse(RELEASE, 4)).expect("valid")),
+        PointerEvent::Up(up) if up.pointer.id == down.pointer.id
+    ));
+    assert_eq!(
+        contacts.pointer(NativeSurface(0), None, NativeContact(0)),
+        contacts.pointer(NativeSurface(0), Some(NativeDevice(7)), NativeContact(0)),
+        "one contact, whichever device the lookup names"
+    );
+}
+
 fn a_pen_sequence_is_its_contact_not_its_barrel_button() {
     let mut contacts = registry();
     let pen = PointerKind::Pen {
@@ -460,6 +505,19 @@ fn an_entered_touch_leaves_when_it_ends() {
         .flat_map(|(action, ms)| decode(&mut contacts, &touch(9, action, ms)).expect("valid"))
         .collect();
     assert_eq!(verbs(&events), ["down", "up"], "a touch that never entered");
+
+    // A mouse that left on its own has no leave to pair when it is retired.
+    let mut contacts = registry();
+    let mut events = Vec::new();
+    for (action, ms) in [(ReadingAction::Enter, 1), (ReadingAction::Leave, 2)] {
+        events.extend(decode(&mut contacts, &mouse(action, ms)).expect("valid"));
+    }
+    events.extend(contacts.cancel_surface(
+        flui_platform::shared::pointer_assembly::NativeSurface(0),
+        EventTime::from_nanos(3_000_000),
+        flui_platform::shared::pointer_assembly::NativeCancel::FocusLost,
+    ));
+    assert_eq!(verbs(&events), ["enter", "leave"], "one leave per enter");
 }
 
 fn the_originating_reading_lives_for_its_sequence() {
@@ -1135,6 +1193,10 @@ fn pointer_assembly_contracts() {
             (
                 "a_mouse_keeps_its_identity_across_presses",
                 a_mouse_keeps_its_identity_across_presses,
+            ),
+            (
+                "the_reserved_contact_is_one_cursor_across_devices",
+                the_reserved_contact_is_one_cursor_across_devices,
             ),
             (
                 "a_pen_sequence_is_its_contact_not_its_barrel_button",

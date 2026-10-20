@@ -919,11 +919,14 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
             return false;
         }
         // Honour the clip: a hit outside the clip shape doesn't reach
-        // the child.
-        let position = Point::new(ctx.x(), ctx.y());
-        let stored = self.resolve_clip(ctx.own_size());
-        if !S::contains(<S::Stored as Borrow<S>>::borrow(&stored), position) {
-            return false;
+        // the child. At `Clip::None` nothing is clipped — paint pushes no
+        // clip and semantics reports none — so hits are not clipped either.
+        if self.clip_behavior != Clip::None {
+            let position = Point::new(ctx.x(), ctx.y());
+            let stored = self.resolve_clip(ctx.own_size());
+            if !S::contains(<S::Stored as Borrow<S>>::borrow(&stored), position) {
+                return false;
+            }
         }
         if self.has_child {
             ctx.hit_test_child_at_offset(0, Offset::ZERO)

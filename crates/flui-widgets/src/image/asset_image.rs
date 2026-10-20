@@ -4,11 +4,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use flui_assets::AssetRegistry;
+use flui_assets::{AssetRegistry, ImageSource};
 use flui_painting::paint::Image as PixelImage;
 
 use super::cache_key::ImageCacheKey;
-use super::decode_cache;
 use super::provider::{ImageProvider, ImageProviderError};
 
 /// An [`ImageProvider`] that loads and decodes an asset file through a
@@ -18,19 +17,18 @@ use super::provider::{ImageProvider, ImageProviderError};
 ///
 /// There is no process-wide registry: the registry is an explicit
 /// constructor argument, so the same registry (and therefore
-/// the same background runtime, byte-loader cache, and lifetime) an
-/// application already manages is the one `AssetImage` loads through. Two
-/// `AssetImage`s built with different registries but the same `path` are
-/// still coalesced and cached together at the `flui-widgets` layer (the
-/// decode cache is keyed on the path alone, per [`ImageCacheKey::Asset`]) —
-/// only the underlying *load* runs against whichever registry each provider
-/// was given.
+/// the same background runtime, decoded-image cache, and lifetime) an
+/// application already manages is the one `AssetImage` loads through. The
+/// registry keeps the decoded images: two `AssetImage`s for one path share a
+/// decode only when they share a registry, and the registry gives them back
+/// under memory pressure once the application registers it
+/// (`AppConfig::with_memory_reclaim` in `flui-app`).
 ///
 /// Prefer [`Image::asset`](crate::Image::asset) as the ergonomic constructor.
 #[derive(Debug, Clone)]
 pub struct AssetImage {
     registry: Arc<AssetRegistry>,
-    path: String,
+    path: Arc<str>,
 }
 
 impl AssetImage {
@@ -39,7 +37,7 @@ impl AssetImage {
     pub fn new(registry: Arc<AssetRegistry>, path: impl Into<String>) -> Self {
         Self {
             registry,
-            path: path.into(),
+            path: Arc::from(path.into()),
         }
     }
 
@@ -48,13 +46,13 @@ impl AssetImage {
         &self.path
     }
 
-    fn cache_key_value(&self) -> ImageCacheKey {
-        ImageCacheKey::Asset(self.path.clone())
+    fn source(&self) -> ImageSource {
+        ImageSource::Asset(Arc::clone(&self.path))
     }
 }
 
 impl ImageProvider for AssetImage {
-    /// Returns the decode cache's current entry for this path, if any.
+    /// Returns the registry's decoded image for this path, if any.
     ///
     /// `AssetImage` never performs blocking I/O here — the whole point of the
     /// provider is to load off-thread. A cache miss is
@@ -63,33 +61,33 @@ impl ImageProvider for AssetImage {
     /// [`Image`](crate::Image) does automatically via
     /// [`cache_key`](ImageProvider::cache_key)).
     fn resolve(&self) -> Result<PixelImage, ImageProviderError> {
-        decode_cache::cached(&self.cache_key_value()).ok_or(
-            ImageProviderError::RequiresAsyncResolve {
+        self.cached()
+            .ok_or(ImageProviderError::RequiresAsyncResolve {
                 provider_name: "AssetImage",
-            },
-        )
+            })
     }
 
-    /// Reuses a completed decoded image, or shares an in-flight load for the
-    /// same cache key. A hit refreshes LRU recency without reading the source.
-    /// Failed loads are not cached and a later request can retry.
+    /// Reuses the registry's decoded image, or shares an in-flight load for
+    /// the same path. A hit refreshes recency without reading the source.
+    /// Failed loads are not cached and a later request can retry. Dropping the
+    /// future cancels the load once no other request waits for it.
     fn resolve_async(
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<PixelImage, ImageProviderError>> + Send + 'static>>
     {
-        let key = self.cache_key_value();
-        let registry = Arc::clone(&self.registry);
-        let path = self.path.clone();
+        let load = self.registry.load_image_bridged(Arc::clone(&self.path));
+        let path = Arc::clone(&self.path);
+        Box::pin(async move {
+            load.await
+                .map_err(|error| ImageProviderError::from_asset_error(path.to_string(), error))
+        })
+    }
 
-        Box::pin(decode_cache::load_coalesced(key, move || async move {
-            registry
-                .load_image_bridged(path.clone())
-                .await
-                .map_err(|error| ImageProviderError::from_asset_error(path, error))
-        }))
+    fn cached(&self) -> Option<PixelImage> {
+        self.registry.cached_image(&self.source())
     }
 
     fn cache_key(&self) -> Option<ImageCacheKey> {
-        Some(self.cache_key_value())
+        Some(ImageCacheKey::registry(&self.registry, self.source()))
     }
 }

@@ -339,7 +339,7 @@ host.
 - **Per UI runtime, per presentation or per host loop, never per process.** Every
   type here is owned by one UI runtime (`UiRuntime`, its scheduler and command
   inbox), one presentation (`PresentationState`, `HeldPointerQueue`,
-  `SemanticsHost`, `PerformanceStats`, the commit epoch) or, for
+  `SemanticsHost`, the commit epoch) or, for
   `ExecutionServices`, one host loop, constructed only by the host's
   composition root. The one static is `runtime_services`' incarnation counter,
   an identity counter with an explicit ADR-0097 counter grant. Its `try_update`
@@ -920,13 +920,13 @@ in `ui_runtime_and_presentation_isolation_matrix` exercises the production alloc
 with a local counter at its terminal boundary; exhausting the actual global
 source is impractical and would invalidate unrelated UI runtime tests.
 
-### A zero-capacity performance window is disabled
+### The performance overlay reads the frame history
 
-`PerformanceStats::new(0)` retains no duration samples, so both average frame
-time and FPS stay zero. A nonzero window still records platform-clock intervals.
-The consumer row `a_zero_capacity_performance_window_retains_no_frame_samples`
-in flui-testing's `headless_frame_driver_matrix` distinguishes the two through
-the public timing methods. Production overlays retain their default 120 samples.
+The overlay's frame rate and frame time come from `flui_scheduler::frame_pace`
+over the presentation clock's `FrameSnapshot` ring, the window its latency
+percentiles already use: frame time is segment start to submit, on the frame
+clock, and an idle gap longer than `FRAME_RUN_GAP` starts a new run instead of
+counting as one slow frame. There is no second, wall-clock frame window.
 
 
 ### Deterministic execution preserves concurrent admission during compaction

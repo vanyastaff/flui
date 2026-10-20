@@ -273,6 +273,14 @@ struct VsyncInner {
     /// Admission and gate mutations invalidate cached ancestry for active walks.
     /// Saturation disables caching instead of reusing an earlier revision.
     walk_revision: u64,
+    /// Set when [`Vsync::has_running`] found nothing running here or below;
+    /// cleared by everything that can start a run: a run's frame request, an
+    /// admission, an attach, an unmute and a tick (which resumes parked runs).
+    quiet: Cell<bool>,
+    /// Controllers [`Vsync::has_running`] has probed, for the test that pins
+    /// the cache.
+    #[cfg(test)]
+    running_probes: Cell<usize>,
 }
 
 /// Borrowed admission chain for one recursive frame delivery. A callback can
@@ -377,6 +385,9 @@ impl Vsync {
     fn request_frame_from(owner: &Rc<RefCell<VsyncInner>>, retirement: &mut RecoveryScope<'_>) {
         let (request, parent) = {
             let mut inner = owner.borrow_mut();
+            // Every run start reaches here; an unmuted owner forwards to its
+            // parent below, which clears its own record the same way.
+            inner.quiet.set(false);
             if inner.muted {
                 return;
             }
@@ -433,8 +444,20 @@ impl Vsync {
             slot: id,
         };
         drop(inner);
+        self.clear_quiet_chain();
         controller.add_frame_route(registration.clone());
         Ok(registration)
+    }
+
+    /// Forget that this registry and its ancestors were found quiet: a run
+    /// may now be live below them.
+    fn clear_quiet_chain(&self) {
+        let mut registry = Some(Rc::clone(&self.inner));
+        while let Some(current) = registry {
+            let inner = current.borrow();
+            inner.quiet.set(false);
+            registry = inner.parent.as_ref().and_then(|seat| seat.owner.upgrade());
+        }
     }
 
     /// Remove the controller previously registered under `id`. Idempotent: an
@@ -501,6 +524,7 @@ impl Vsync {
         child.invalidate_walks();
         child.inner.borrow_mut().parent = Some(registration.clone());
         self.invalidate_walks();
+        self.clear_quiet_chain();
         let mut retirement = Retirement::new();
         let tick = self.inner.borrow().last_tick;
         if child.has_frame_demand(tick) {
@@ -596,6 +620,9 @@ impl Vsync {
         if changed {
             self.invalidate_walks();
         }
+        if changed && !muted {
+            self.clear_quiet_chain();
+        }
         if changed && !muted && self.has_frame_demand(None) {
             let mut retirement = Retirement::new();
             Self::request_frame_from(&self.inner, &mut retirement.scope());
@@ -648,11 +675,12 @@ impl Vsync {
     /// the driver does NOT re-request, so the window quiesces cleanly — no
     /// infinite redraw after all animations settle.
     ///
-    /// **O(N)**: the indexed registry (see [`tick_all`](Self::tick_all)'s doc)
-    /// speeds up *resolving one id*, not "is anything running", which still
-    /// reads every entry's status. No active-set index: that would need
-    /// start/stop notifications from the controller to track membership,
-    /// which nothing here provides.
+    /// A scan that finds nothing running is remembered until something can
+    /// start a run here or below: a run's frame request (every run start makes
+    /// one), an admission, an attach, an unmute or a tick (which resumes
+    /// parked runs). Until then a repeated call reads no controller, so a host
+    /// that asks once per input event pays for one scan per frame, not per
+    /// event. A scan that finds a run stops at the first one.
     ///
     /// Reads the controller's crate-private `walk_probe().live_running`, not
     /// bare `status().is_directional()`: a controller `dispose()`d mid-run keeps
@@ -665,21 +693,23 @@ impl Vsync {
         let inner = self.inner.borrow();
         // A muted registry advances nothing — not its own controllers, not a
         // nested registry's — so nothing under it can hold the frame loop open.
-        if inner.muted {
+        if inner.muted || inner.quiet.get() {
             return false;
         }
         // Nested registries hold real controllers: a `TickerMode` (and so every
         // `Hero` child) puts its subtree's animations in one, and a frame-loop
         // gate that only looked at this level would stall them after one frame.
         // Recursive probes invoke no user code and retire no owned values.
-        inner
-            .controllers
-            .values()
-            .any(|registered| registered.controller.walk_probe().live_running)
-            || inner
-                .children
-                .iter()
-                .any(|registered| registered.child.has_running())
+        let running = inner.controllers.values().any(|registered| {
+            #[cfg(test)]
+            inner.running_probes.set(inner.running_probes.get() + 1);
+            registered.controller.walk_probe().live_running
+        }) || inner
+            .children
+            .iter()
+            .any(|registered| registered.child.has_running());
+        inner.quiet.set(!running);
+        running
     }
 
     /// Advance live controller registrations using a presentation's typed tick.
@@ -723,6 +753,8 @@ impl Vsync {
     /// walk. Neither path loses live peers or admitted delivery on failure.
     #[doc(hidden)]
     pub fn tick_all_with_recovery(&self, tick: &FrameTick, retirement: &mut RecoveryScope<'_>) {
+        // A tick can resume a parked run anywhere below the root it reaches.
+        self.clear_quiet_chain();
         retirement.run_with(|retirement| {
             let authority = self.frame_authority();
             self.tick_all_with_retirement(*tick, &authority, None, retirement);
@@ -774,6 +806,7 @@ impl Vsync {
         }
         let (fence, mut children) = {
             let mut inner = self.inner.borrow_mut();
+            inner.quiet.set(false);
             if inner
                 .frame_authority
                 .as_ref()
@@ -1268,9 +1301,53 @@ mod tests {
         }
     }
 
+    /// An idle registry is scanned once; repeated queries between frames read
+    /// no controller, and every way a run can start is still observed.
+    fn an_idle_registry_is_scanned_once_between_run_starts() {
+        use crate::MotionClock;
+        let root = Vsync::new();
+        let child = Vsync::new();
+        let _seat = root.attach_child(&child).expect("child admission");
+        let idle: [_; 3] = std::array::from_fn(|_| {
+            AnimationController::builder(Duration::from_secs(1)).build_on(Some(&root))
+        });
+        let nested = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&child));
+        let probes = || root.inner.borrow().running_probes.get();
+
+        assert!(!root.has_running());
+        let first_scan = probes();
+        assert_eq!(
+            first_scan,
+            idle.len(),
+            "the first query scans every controller"
+        );
+        for _ in 0..10 {
+            assert!(!root.has_running());
+        }
+        assert_eq!(probes(), first_scan, "an idle registry is not rescanned");
+
+        let _run = nested.controller().forward().expect("nested run admission");
+        assert!(
+            root.has_running(),
+            "a run started below the root is observed"
+        );
+
+        let mut clock = MotionClock::new();
+        root.tick_all(&clock.frame(Duration::ZERO));
+        root.tick_all(&clock.frame(Duration::from_secs(2)));
+        assert!(!root.has_running(), "a completed run releases the root");
+        let settled = probes();
+        assert!(!root.has_running());
+        assert_eq!(probes(), settled, "the settled registry is not rescanned");
+    }
+
     #[test]
     fn vsync_nesting_and_reentrancy() {
         crate::test_cases::run_cases(&[
+            (
+                "an idle registry is scanned once between run starts",
+                an_idle_registry_is_scanned_once_between_run_starts,
+            ),
             (
                 "saturated walk revisions revalidate ancestor admission",
                 saturated_walk_revisions_revalidate_ancestor_admission,

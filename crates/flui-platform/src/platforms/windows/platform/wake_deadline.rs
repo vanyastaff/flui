@@ -83,7 +83,7 @@ impl ModalDelivery {
     }
 
     /// No deadline is asked for: the next one is new whatever it is.
-    pub(super) fn clear(&self) {
+    pub(in crate::platforms::windows) fn clear(&self) {
         *self.0.borrow_mut() = None;
     }
 }

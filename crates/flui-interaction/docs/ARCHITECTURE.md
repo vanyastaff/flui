@@ -129,7 +129,10 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   clock and compare the same instant. `flui-widgets`'
   `an_idle_wheel_sequence_ends_at_its_latch_deadline` pins it.
 - **The binding owns mounted gesture progression.** `GestureBinding` admits
-  at most 32 simultaneous contacts, retains each admitted Down route, closes
+  at most 32 simultaneous contacts: a Down at the limit first cancels the
+  oldest contact with `Cancel(Superseded)`, as a Down for a pointer whose
+  contact never ended cancels that contact, since only a lost terminal fills
+  the limit. It retains each admitted Down route, closes
   its arena after routing Down, and sweeps or abandons its exact generation on
   terminal input. It flushes accepted motion before terminal delivery and owns
   deferred verdict/deadline progression. `GestureArenaScope` supplies that
@@ -139,8 +142,11 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   eventually release their exact entry handle, including after pointer reuse;
   reserving capacity does not remove those obligations. The public
   `gesture_lifecycle_matrix` covers held release and pointer reuse, while
-  `binding_input_contract_matrix` covers capped contacts, refused tails and
-  lifecycle reset. The binding's contact cap does not limit members per contact.
+  `binding_input_contract_matrix` covers the contact limit, superseded
+  contacts, refused tails and lifecycle reset. A pressed move with no contact
+  reaches the pointer router only: no target heard its Down. A mouse or pen
+  with every button up hovers whatever refusal its contact carried. The
+  binding's contact cap does not limit members per contact.
 - **Terminal lane retirement commits before user destruction (ADR-0127).**
   Closing withdraws executable callbacks and opaque route ownership before
   retiring them outside borrows. Healthy retirement releases resources; after
@@ -230,7 +236,9 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   before the one `CaptureLost`, and newer released tails are refused by pointer
   and optional device identity. Missing device identity cannot distinguish
   unreported sources. Listener unmount removes future hit-test admission but
-  preserves the cached contact's terminal obligation; presentation close has
+  preserves the cached contact's terminal obligation, and only that: the
+  unregistered target hears the contact's Up or Cancel, not its later moves
+  (`unregistered_target_hears_only_its_contacts_end`); presentation close has
   its separate retirement policy. This controls logical routing and does not
   advertise an OS capture-release operation. `explicit_pointer_capture_contract`
   and widget `listener_unmount_preserves_one_captured_contact_terminal` pin the
@@ -248,7 +256,12 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   preserves that device's prior
   state for retry, and every committed callback batch runs before the first
   failure resumes. Replaced and departed captures retire outside the tracker
-  borrow under ADR-0127. `shared_region_exit_per_device`,
+  borrow under ADR-0127. Annotations are kept per surface, since two
+  surfaces' trees may reuse a render id. A source that leaves (its own
+  `Leave`, its device removed) exits what it hovered and is forgotten; a
+  window leave keeps sources for their return. Either way the regions no
+  source still hovers are released after the exits run.
+  `hover_ends_when_its_source_leaves`, `shared_region_exit_per_device`,
   `ambient_refresh_contains_each_device` (including later-probe reentry) and
   `released_region_destructor_reenters_tracker` pin these contracts.
 - **Hover payload retirement preserves delivery and first failure (ADR-0127).**
@@ -409,7 +422,8 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   `GestureBinding::is_hover_frozen` holds, moves record each source's
   position without entering, exiting or changing the cursor, and the frame
   driver skips its ambient refresh; the first refresh after the latch
-  hit-tests where the pointer went. Raw `Listener` hover callbacks are not
+  hit-tests where the pointer went, and the dispatch that ends the latch asks
+  the window for that frame. Raw `Listener` hover callbacks are not
   frozen. `hover_freezes_while_a_scroll_is_latched` and the `flui-widgets`
   row `hover_holds_while_a_touch_scroll_is_latched` pin it.
 - **Locks are recognizer configuration (ADR-0208 §4).** `AxisLock::Rails`

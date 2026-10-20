@@ -818,6 +818,93 @@ fn accessibility_input_reaches_the_semantics_owner() {
     assert_eq!(clicks.get(), 1);
 }
 
+/// A 40x40 leaf whose hit test panics.
+#[derive(Debug)]
+struct PanicOnHit;
+impl flui_foundation::Diagnosticable for PanicOnHit {}
+
+impl flui_rendering::traits::RenderBox for PanicOnHit {
+    type Arity = flui_foundation::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
+        Ok(ctx
+            .constraints()
+            .constrain(flui_foundation::geometry::Size::new(40.0, 40.0)))
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<'_, Self::Arity, Self::ParentData>,
+    ) -> bool {
+        panic!("render object hit test failed");
+    }
+}
+
+/// A view's hit test says when its tree cannot answer, instead of handing
+/// back an empty path that reads as "nothing is here", and contains a render
+/// object's panic: the path to every other target is complete, and the panic
+/// is the caller's to report once the event reached it.
+fn a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic() {
+    use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
+    use flui_rendering::traits::RenderObject;
+
+    let binding = flui_runtime::renderer_binding::RenderingBinding::new(
+        flui_rendering::TextContextHandle::standalone(),
+    );
+    let pipeline = binding.root_pipeline_owner();
+    let healthy = pipeline.with_mut(|owner| {
+        let root = owner.set_root_render_object(Box::new(flui_objects::RenderStack::new())
+            as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
+        let healthy = owner
+            .insert_child_render_object(
+                root,
+                Box::new(flui_objects::RenderColoredBox::red(40.0, 40.0)),
+            )
+            .expect("healthy child attaches");
+        owner
+            .insert_child_render_object(root, Box::new(PanicOnHit))
+            .expect("panicking child attaches");
+        owner.set_root_constraints(Some(flui_rendering::constraints::BoxConstraints::tight(
+            flui_foundation::geometry::Size::new(100.0, 100.0),
+        )));
+        let (returned, frame) = owner.take_idle().run_frame();
+        frame.expect("the tree paints");
+        *owner = returned;
+        healthy
+    });
+    let position = flui_foundation::geometry::Offset::new(10.0, 10.0);
+    let kind = flui_interaction::events::PointerKind::Touch;
+
+    pipeline.withdraw_layout();
+    let mut result = flui_interaction::pointer::HitTestResult::new();
+    assert!(matches!(
+        binding.hit_test_in_view(&mut result, position, kind, 0),
+        ViewHitTest::TreeBusy
+    ));
+    assert!(result.is_empty(), "a busy tree leaves the result untouched");
+
+    pipeline.publish_layout();
+    let ViewHitTest::Answered { panic } = binding.hit_test_in_view(&mut result, position, kind, 0)
+    else {
+        panic!("a published layout answers");
+    };
+    assert_eq!(
+        panic
+            .as_deref()
+            .and_then(flui_foundation::panic::payload_text),
+        Some("render object hit test failed")
+    );
+    assert_eq!(
+        result.path().first().map(|entry| entry.target),
+        Some(healthy),
+        "the panicking child above is a miss; the one below it is hit"
+    );
+}
+
 #[test]
 fn owner_input_contract() {
     crate::table_test::run_table(
@@ -855,6 +942,10 @@ fn owner_input_contract() {
             (
                 "accessibility_input_reaches_the_semantics_owner",
                 accessibility_input_reaches_the_semantics_owner as fn(),
+            ),
+            (
+                "a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic",
+                a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic as fn(),
             ),
         ],
     );

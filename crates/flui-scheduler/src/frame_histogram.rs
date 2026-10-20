@@ -252,6 +252,61 @@ pub fn input_to_present_histogram(snapshots: &[FrameSnapshot]) -> LatencyHistogr
     histogram
 }
 
+/// Frames closer together than this belong to one run of continuous
+/// production; a longer gap is idle time, not a slow frame.
+pub const FRAME_RUN_GAP: Duration = Duration::from_millis(100);
+
+/// How fast a presentation produced frames while it was producing, and how
+/// long each frame's work took: what a performance overlay shows.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[non_exhaustive]
+pub struct FramePace {
+    /// Frames per second over consecutive frames less than
+    /// [`FRAME_RUN_GAP`] apart; zero when no two frames were.
+    pub frames_per_second: f64,
+    /// Mean time from a frame's segment start to its submit returning; zero
+    /// with no frame.
+    pub frame_work: Duration,
+}
+
+/// The [`FramePace`] of a `frames_since`-pulled slice.
+///
+/// Demand-driven frames leave the loop idle between bursts, so an interval
+/// longer than [`FRAME_RUN_GAP`] starts a new run instead of counting as one
+/// very slow frame: a frame after ten idle seconds does not report 0.1 fps.
+/// Frame work is measured on the frames' own clock, never the wall clock.
+#[must_use]
+pub fn frame_pace(snapshots: &[FrameSnapshot]) -> FramePace {
+    let mut ordered: Vec<&FrameSnapshot> = snapshots.iter().collect();
+    ordered.sort_by_key(|snapshot| snapshot.frame_id);
+    let (mut interval_total, mut intervals) = (Duration::ZERO, 0u32);
+    for pair in ordered.windows(2) {
+        let interval = pair[1]
+            .clock_timestamp
+            .saturating_duration_since(pair[0].clock_timestamp);
+        if interval < FRAME_RUN_GAP {
+            interval_total = interval_total.saturating_add(interval);
+            intervals += 1;
+        }
+    }
+    let work_total = ordered.iter().fold(Duration::ZERO, |total, snapshot| {
+        total.saturating_add(
+            snapshot
+                .submit_at
+                .saturating_duration_since(snapshot.segment_start),
+        )
+    });
+    let frames = u32::try_from(ordered.len()).unwrap_or(u32::MAX);
+    FramePace {
+        frames_per_second: if interval_total.is_zero() {
+            0.0
+        } else {
+            f64::from(intervals) / interval_total.as_secs_f64()
+        },
+        frame_work: work_total.checked_div(frames).unwrap_or_default(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
 

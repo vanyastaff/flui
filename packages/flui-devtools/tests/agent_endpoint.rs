@@ -146,6 +146,8 @@ struct Client {
     stream: Stream,
     buffer: Vec<u8>,
     next_id: u64,
+    /// The protocol version the server greeted with.
+    protocol: Value,
 }
 
 impl Client {
@@ -156,6 +158,7 @@ impl Client {
             stream,
             buffer: Vec::new(),
             next_id: 1,
+            protocol: Value::Null,
         }
     }
 
@@ -164,10 +167,13 @@ impl Client {
         let mut client = Self::connect(address);
         client.send(&json!({ "hello": { "token": TOKEN } }));
         match client.recv(RECV) {
-            Recv::Line(welcome) => assert!(
-                welcome["hello"]["protocol"].is_string(),
-                "the server greets: {welcome}"
-            ),
+            Recv::Line(welcome) => {
+                assert!(
+                    welcome["hello"]["protocol"].is_string(),
+                    "the server greets: {welcome}"
+                );
+                client.protocol = welcome["hello"]["protocol"].clone();
+            }
             Recv::Closed => panic!("the server closed the connection at the hello"),
             Recv::TimedOut => panic!("the server did not greet"),
         }
@@ -274,6 +280,10 @@ impl Client {
                     "only a retryable failure is retried: {reply}"
                 );
             } else {
+                assert_eq!(
+                    reply["result"]["protocol"], self.protocol,
+                    "a reply speaks the version the hello announced: {reply}"
+                );
                 let tree: Tree =
                     serde_json::from_value(reply["result"].clone()).expect("a wire tree");
                 if let Some(value) = found(&tree) {

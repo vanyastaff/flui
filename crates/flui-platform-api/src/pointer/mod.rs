@@ -510,6 +510,12 @@ pub struct PointerMove {
 pub struct MismatchedPointerInfo;
 
 impl PointerMove {
+    /// The measured history a queue that folds moves into one keeps: the
+    /// latest readings, enough for a velocity estimate, however long a frame
+    /// stalls. Fold with [`try_coalesce_from`](Self::try_coalesce_from), then
+    /// [`retain_latest_coalesced`](Self::retain_latest_coalesced) to this.
+    pub const COALESCED_HISTORY_LIMIT: usize = 100;
+
     /// Convert positions without changing the admitted readings.
     ///
     /// The returned movement preserves pointer metadata, buttons, modifiers,
@@ -741,6 +747,10 @@ pub enum CancelReason {
     /// feeds (ADR-0208 rule 5), as a browser's `pointercancel` does when it takes over. Only
     /// the framework emits it; a backend never does.
     Claimed,
+    /// A newer contact took the pointer's place: a Down arrived for a pointer whose earlier
+    /// contact never ended, or the binding's contact limit was reached and this was its
+    /// oldest contact. Only the framework emits it; a backend never does.
+    Superseded,
 }
 
 /// A pointer's sequence ended without its `Up`.

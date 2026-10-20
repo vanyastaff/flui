@@ -220,9 +220,14 @@ impl HeldPointerQueue {
             && let Some(index) = self.coalescible_motion_index(pointer_id, class)
             && self.events[index].surface == held.surface
             && let PointerEvent::Move(newer) = &mut held.event
-            && let PointerEvent::Move(older) = &self.events[index].event
-            && newer.try_coalesce(older).is_ok()
+            && let PointerEvent::Move(older) = &mut self.events[index].event
+            && newer.try_coalesce_from(older).is_ok()
         {
+            // The older packet retires here: its history moves into the newer
+            // one, bounded however long the hold lasts.
+            newer.retain_latest_coalesced(
+                flui_interaction::events::PointerMove::COALESCED_HISTORY_LIMIT,
+            );
             let _ = self.events.remove(index);
             self.events.push_back(held);
             self.counters.coalesced_events = self.counters.coalesced_events.saturating_add(1);
@@ -1393,6 +1398,36 @@ mod tests {
         );
     }
 
+    /// Moves held while the tree is busy fold into one, keeping a bounded
+    /// tail of their history however long the hold lasts.
+    fn held_motion_keeps_a_bounded_history() {
+        let queue = queue();
+        let finger = pointer(2);
+        queue.borrow_mut().append(down(finger));
+        for x in 1..=300 {
+            queue
+                .borrow_mut()
+                .append(contact_move(finger, f64::from(x)));
+        }
+        let events = drain(&queue);
+        assert_eq!(positions(&events), vec![0.0, 300.0]);
+        let PointerEvent::Move(update) = &events[1] else {
+            panic!("the folded move")
+        };
+        assert_eq!(
+            update.coalesced().len(),
+            flui_interaction::events::PointerMove::COALESCED_HISTORY_LIMIT,
+            "the latest readings stay, the rest retire"
+        );
+        assert_eq!(
+            update
+                .coalesced()
+                .last()
+                .map(|sample| sample.position.get().x),
+            Some(299.0)
+        );
+    }
+
     #[test]
     fn held_input_reentry_matrix() {
         crate::table_test::run_table(
@@ -1422,6 +1457,10 @@ mod tests {
                 (
                     "held_events_replay_to_the_surface_they_addressed",
                     held_events_replay_to_the_surface_they_addressed as fn(),
+                ),
+                (
+                    "held_motion_keeps_a_bounded_history",
+                    held_motion_keeps_a_bounded_history as fn(),
                 ),
             ],
         );

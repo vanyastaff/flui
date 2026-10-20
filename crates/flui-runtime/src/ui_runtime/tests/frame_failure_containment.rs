@@ -182,7 +182,7 @@ pub(crate) fn an_escaped_segment_panic_is_contained_to_its_own_presentation_and_
     let armed = Rc::clone(&probe_armed);
     ui_runtime.presentations.primary().set_segment_probe(
         SegmentPhase::Build,
-        Some(Box::new(move || {
+        Some(Box::new(move |_| {
             assert!(
                 !armed.replace(false),
                 "segment probe — intentional test panic"
@@ -317,7 +317,7 @@ pub(crate) fn consecutive_failures_count_up_and_reset_on_a_clean_segment() {
     let armed = Rc::clone(&probe_armed);
     ui_runtime.presentations.primary().set_segment_probe(
         SegmentPhase::Build,
-        Some(Box::new(move || {
+        Some(Box::new(move |_| {
             assert!(!armed.get(), "segment probe — intentional test panic");
         })),
     );
@@ -479,7 +479,7 @@ pub(crate) fn run_opaque_frame_child(kind: &str) {
     let fail_producer = matches!(kind, "producer" | "competition");
     ui_runtime.presentations.primary().set_segment_probe(
         SegmentPhase::Build,
-        Some(Box::new(move || {
+        Some(Box::new(move |_| {
             if probe.replace(false) {
                 if fail_producer {
                     opaque_failure(&producer_drops);

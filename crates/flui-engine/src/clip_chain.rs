@@ -8,7 +8,7 @@ use crate::{
     error::{EngineError, EngineResult, GeometryError},
     recording_budget::RecordingBudget,
 };
-use flui_foundation::geometry::{Point, RSuperellipse, Radius, Rect};
+use flui_foundation::geometry::{Point, RRect, Radius, Rect};
 use flui_painting::paint::{PathCommand, PathFillType};
 use lyon::path::{PathEvent, iterator::Flattened};
 
@@ -329,15 +329,15 @@ fn pack_rect(rect: Rect<f64>) -> Result<[f32; 4], GeometryError> {
     Ok(result)
 }
 
-/// Radii fitted to `rect` by the one normalization shapes share
-/// ([`RSuperellipse::normalized`]).
+/// Radii fitted to `rect` by [`RRect::normalized`], the shape
+/// `RRect::contains` hit-tests.
 fn normalize_radii(rect: Rect<f64>, [tl, tr, br, bl]: [Radius<f64>; 4]) -> [Radius<f64>; 4] {
-    let shape = RSuperellipse::from_rect_and_corners(rect, tl, tr, br, bl).normalized();
+    let shape = RRect::new(rect, tl, tr, br, bl).normalized();
     [
-        shape.tl_radius(),
-        shape.tr_radius(),
-        shape.br_radius(),
-        shape.bl_radius(),
+        shape.top_left,
+        shape.top_right,
+        shape.bottom_right,
+        shape.bottom_left,
     ]
 }
 

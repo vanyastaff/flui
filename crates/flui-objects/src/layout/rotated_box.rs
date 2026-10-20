@@ -211,19 +211,10 @@ impl RenderBox for RenderRotatedBox {
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !self.has_child {
-            return false;
-        }
-        let own_size = ctx.own_size();
-        let paint_matrix = Self::build_paint_matrix(own_size, self.child_size, self.quarter_turns);
-        let Some(inverse) = paint_matrix.try_inverse() else {
-            // Degenerate rotation matrix (e.g. child has zero size in one
-            // axis).  Nothing is hittable.
-            return false;
-        };
-        let pos = ctx.position();
-        let (child_local_x, child_local_y) = inverse.transform_point(pos.dx, pos.dy);
-        ctx.hit_test_child(0, Offset::new(child_local_x, child_local_y))
+        // The walk already mapped the position through the inverse of
+        // `hit_test_transform` (the paint matrix), refusing a degenerate one
+        // before this call: it is in the child's space.
+        self.has_child && ctx.hit_test_child(0, *ctx.position())
     }
 
     // ---- paint effects / hit-test transform ---------------------------------
