@@ -14,6 +14,8 @@ use std::{
     rc::Rc,
 };
 
+use flui_foundation::inspect::{SnapshotError, SnapshotNode, SnapshotQuery};
+
 use super::PipelineOwner;
 
 /// Owner-local shared handle to one presentation's [`PipelineOwner`].
@@ -57,6 +59,8 @@ pub struct PipelineCell(Rc<PipelineSlot>);
 struct PipelineSlot {
     owner: RefCell<PipelineOwner>,
     layout_available: Cell<bool>,
+    /// Whether [`PipelineCell::inspect_render`] is walking the tree.
+    inspecting: Cell<bool>,
 }
 
 impl PipelineCell {
@@ -65,6 +69,7 @@ impl PipelineCell {
         Self(Rc::new(PipelineSlot {
             owner: RefCell::new(owner),
             layout_available: Cell::new(true),
+            inspecting: Cell::new(false),
         }))
     }
 
@@ -118,6 +123,31 @@ impl PipelineCell {
     /// [`Self::with_mut`]'s panic is load-bearing for the frame pipeline.
     pub fn try_with<R>(&self, f: impl FnOnce(&PipelineOwner) -> R) -> Option<R> {
         self.0.owner.try_borrow().ok().map(|owner| f(&owner))
+    }
+
+    /// A typed snapshot of the render tree ([`PipelineOwner::inspect`]).
+    ///
+    /// A render object's description that panics, a reentrant
+    /// [`Self::with_mut`] among them, is recorded on its node as
+    /// [`INSPECT_FAILED`](flui_foundation::inspect::INSPECT_FAILED).
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::Busy`] while a frame holds the owner checked out or a snapshot of
+    /// this cell is already being taken further up the stack, and the tree's own
+    /// [`SnapshotError`]s otherwise.
+    pub fn inspect_render(&self, query: SnapshotQuery) -> Result<SnapshotNode, SnapshotError> {
+        if self.0.inspecting.get() {
+            return Err(SnapshotError::Busy("inspecting"));
+        }
+        let owner = self
+            .0
+            .owner
+            .try_borrow()
+            .map_err(|_| SnapshotError::Busy("checked out by a frame"))?;
+        self.0.inspecting.set(true);
+        let _inspecting = ClearOnDrop(&self.0.inspecting);
+        flui_foundation::inspect::snapshot(&owner.inspect(), query)
     }
 
     /// Read geometry only while the presentation has a complete layout.
@@ -270,6 +300,15 @@ impl WeakPipelineCell {
     #[must_use]
     pub fn upgrade(&self) -> Option<PipelineCell> {
         self.0.upgrade().map(PipelineCell)
+    }
+}
+
+/// Clears its flag when dropped, unwinding included.
+struct ClearOnDrop<'a>(&'a Cell<bool>);
+
+impl Drop for ClearOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.set(false);
     }
 }
 

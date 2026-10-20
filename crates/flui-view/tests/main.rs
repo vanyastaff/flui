@@ -35,6 +35,8 @@ mod global_key_duplication;
 mod global_key_reparent;
 #[path = "inherited_dependency.rs"]
 mod inherited_dependency;
+#[path = "inspect_reentry.rs"]
+mod inspect_reentry;
 #[path = "support/lifecycle_hook_payload_retirement.rs"]
 mod lifecycle_hook_payload_retirement;
 #[path = "lifecycle_panic_containment.rs"]
