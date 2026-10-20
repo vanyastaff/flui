@@ -229,6 +229,10 @@ impl super::platform::WindowContext {
             return;
         }
         self.apply_dpi_rectangle(hwnd, suggested, new_scale / old_scale);
+        // So may the resize callback the rectangle's `WM_SIZE` ran.
+        if !self.still_owns(hwnd) {
+            return;
+        }
         drop(hold);
         self.publish_window_state(hwnd);
 
