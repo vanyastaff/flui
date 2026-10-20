@@ -659,6 +659,9 @@ impl WinitPlatform {
         }
 
         self.with_state(|state| {
+            state
+                .native_pointer
+                .observe_session(winit_session(event_loop));
             // The initial snapshot reflects the devices already seen.
             winit_window
                 .callbacks()
@@ -1040,6 +1043,26 @@ fn presence_dispatch(
         .collect()
 }
 
+/// `inputs` addressed to the windows still open, after the presence change
+/// their readings revealed: a device is present before its input.
+fn native_batch(
+    state: &mut WinitPlatformState,
+    inputs: Vec<(WindowId, crate::traits::PlatformInput)>,
+) -> Vec<(Arc<WinitWindow>, NativeDispatch)> {
+    let mut batch = state
+        .native_pointer
+        .presence_change()
+        .map(|present| presence_dispatch(state, present))
+        .unwrap_or_default();
+    batch.extend(inputs.into_iter().filter_map(|(window, input)| {
+        state
+            .windows
+            .get(&window)
+            .map(|window| (Arc::clone(window), NativeDispatch::Input(input)))
+    }));
+    batch
+}
+
 fn dispatch_native_inputs(inputs: Vec<(Arc<WinitWindow>, NativeDispatch)>) {
     let mut first = None;
     for (window, input) in inputs {
@@ -1310,7 +1333,7 @@ impl ApplicationHandler for WinitApp {
                 tracing::debug!(?delta, "MouseWheel");
             }
             let scale = window.scale_factor();
-            let (inputs, mut batch) = self.platform.with_state(|state| {
+            let mut batch = self.platform.with_state(|state| {
                 if let WinitWindowEvent::CursorMoved { position, .. } = &event {
                     state.cursor_positions.insert(platform_id, *position);
                 }
@@ -1319,19 +1342,8 @@ impl ApplicationHandler for WinitApp {
                     .native_pointer
                     .window_event(platform_id, &event, scale, modifiers)
                     .unwrap_or_default();
-                // A device the reading revealed is present before its input.
-                let presence = state
-                    .native_pointer
-                    .presence_change()
-                    .map(|present| presence_dispatch(state, present))
-                    .unwrap_or_default();
-                (inputs, presence)
+                native_batch(state, inputs)
             });
-            batch.extend(
-                inputs
-                    .into_iter()
-                    .map(|input| (Arc::clone(&window), NativeDispatch::Input(input))),
-            );
             match event {
                 WinitWindowEvent::CursorEntered { .. } => {
                     batch.push((Arc::clone(&window), NativeDispatch::Hover(true)));
@@ -1344,6 +1356,8 @@ impl ApplicationHandler for WinitApp {
             dispatch_native_inputs(batch);
             return;
         }
+        // A held pointer move is delivered before anything that follows it.
+        self.flush_native_pointer();
         if matches!(event, WinitWindowEvent::Focused(false)) {
             let inputs = self.platform.with_state(|state| {
                 state.native_pointer.cancel_window(
@@ -1599,6 +1613,7 @@ impl ApplicationHandler for WinitApp {
             self.request_exit(event_loop);
             return;
         }
+        self.flush_native_pointer();
         // Drop-burst boundary (ADR-0038): winit delivers one `DroppedFile`
         // per file with no end-of-burst marker, so the first `about_to_wait`
         // after at least one `DroppedFile` freezes the accumulated list as
@@ -1890,6 +1905,16 @@ impl WinitApp {
             win.callbacks()
                 .dispatch_input(PlatformInput::DragDrop(event));
         }
+    }
+
+    /// Deliver the pointer move the translation holds to see whether the next
+    /// event replaces it: the loop turn ended, or something else follows.
+    fn flush_native_pointer(&self) {
+        let batch = self.platform.with_state(|state| {
+            let inputs = state.native_pointer.flush();
+            native_batch(state, inputs)
+        });
+        dispatch_native_inputs(batch);
     }
 
     /// Freeze completed drop bursts and dispatch their `Dropped` events.

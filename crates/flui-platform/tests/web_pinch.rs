@@ -27,7 +27,46 @@ fn wheel(ctrl: bool, dy: f64, millis: u64) -> WheelStep {
         mode: 0,
         dx: 0.0,
         dy,
+        scale: 1.0,
         time: at(millis),
+    }
+}
+
+/// A Control-held mouse detent is a scroll whatever the page zoom and wheel
+/// acceleration make of its CSS pixels; a pinch step stays a pinch on any
+/// display.
+fn a_mouse_detent_at_a_page_zoom_stays_a_scroll() {
+    // Chromium's detent of 100 device pixels at 110% page zoom, as the
+    // single-precision CSS pixels the page reads.
+    let zoomed = f64::from(100.0_f32 / 1.1);
+    for (name, dy, scale, expected) in [
+        ("110% zoom", zoomed, 1.1, WheelRoute::Scroll),
+        ("110% zoom on a 2x display", zoomed, 2.2, WheelRoute::Scroll),
+        (
+            "300% zoom",
+            f64::from(100.0_f32 / 3.0),
+            3.0,
+            WheelRoute::Scroll,
+        ),
+        ("an accelerated wheel", 4.000_244, 1.0, WheelRoute::Scroll),
+    ] {
+        let step = WheelStep {
+            scale,
+            ..wheel(true, dy, 10)
+        };
+        assert_eq!(CtrlWheel::default().route(step), expected, "{name}");
+    }
+    let pinch = -100.0 * 1.07_f64.ln();
+    for ratio in [1.0, 1.1, 2.0, 2.2] {
+        let step = WheelStep {
+            scale: ratio,
+            ..wheel(true, pinch, 10)
+        };
+        assert_eq!(
+            scale(CtrlWheel::default().route(step)).0,
+            GesturePhase::Began,
+            "a pinch at {ratio}x"
+        );
     }
 }
 
@@ -260,6 +299,10 @@ fn web_pinch_table() {
             (
                 "the_first_event_classifies_the_whole_sequence",
                 the_first_event_classifies_the_whole_sequence,
+            ),
+            (
+                "a_mouse_detent_at_a_page_zoom_stays_a_scroll",
+                a_mouse_detent_at_a_page_zoom_stays_a_scroll,
             ),
             (
                 "a_pinch_ends_at_its_deadline_on_the_event_timeline",

@@ -14,8 +14,8 @@ use flui_platform_api::{
     EventTime,
     keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey},
     pointer::{
-        PenTool, PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
-        PointerPosition, PointerRole, ScrollEvent,
+        ButtonChange, PenTool, PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo,
+        PointerKind, PointerPosition, PointerRole, ScrollEvent,
     },
 };
 
@@ -53,7 +53,7 @@ pub(super) fn register_event_listeners(
     let canvas = window.canvas();
     let callbacks = Arc::clone(window.callbacks());
     let contacts = Rc::new(RefCell::new(
-        ContactRegistry::new(NativeClock::epoch_only()),
+        ContactRegistry::new(NativeClock::epoch_only()).with_reserved_contact(MOUSE_CONTACT),
     ));
     let pinch = Rc::new(Pinch {
         callbacks: Arc::clone(&callbacks),
@@ -73,7 +73,8 @@ pub(super) fn register_event_listeners(
     // The drag source learns of a press before the press is dispatched: the
     // runtime may start a session from inside that dispatch.
     let drag = super::drag::register(canvas, transfer, &callbacks, registration)?;
-    register_pointer_events(canvas, &contacts, &pinch, registration)?;
+    let menu = Rc::new(MenuAnswer::default());
+    register_pointer_events(canvas, &contacts, &pinch, &menu, registration)?;
     register_keyboard_events(canvas, &keys, registration)?;
     let focus = register_focus_events(window, registration)?;
     let text = super::text_input::WebTextInput::new(
@@ -94,7 +95,7 @@ pub(super) fn register_event_listeners(
     )?;
     register_wheel_events(canvas, &callbacks, &pinch, registration)?;
     register_gesture_events(canvas, &pinch, registration)?;
-    register_context_menu_block(canvas, registration)?;
+    register_context_menu(canvas, &menu, registration)?;
     register_layout_events(window, registration)?;
     register_appearance_events(&callbacks, registration)?;
     register_page_lifecycle_events(window, registration)?;
@@ -262,6 +263,7 @@ fn register_pointer_events(
     canvas: &web_sys::HtmlCanvasElement,
     contacts: &Rc<RefCell<ContactRegistry>>,
     pinch: &Rc<Pinch>,
+    menu: &Rc<MenuAnswer>,
     registration: &mut Registration,
 ) -> Result<(), crate::OpenWindowError> {
     let active = Rc::clone(&registration.pointers);
@@ -276,6 +278,7 @@ fn register_pointer_events(
         let capture = canvas.clone();
         let accepting = Rc::clone(&registration.accepting);
         let custody = registration.capture_owner();
+        let menu = Rc::clone(menu);
         registration.listen(canvas.as_ref(), "pointerdown", move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
             let id = pe.pointer_id();
@@ -283,6 +286,7 @@ fn register_pointer_events(
                 return;
             }
             let buttons = pe.buttons();
+            let secondary = pe.button() == SECONDARY_BUTTON;
             if !accepting.get() {
                 return;
             }
@@ -303,7 +307,8 @@ fn register_pointer_events(
                 custody.release(id);
                 return;
             }
-            dispatch(&pinch, &pe, convert_pointer_down(&pe, &contacts));
+            let pressed = dispatch(&pinch, &pe, convert_pointer_down(&pe, &contacts));
+            menu.record(secondary, pressed);
         })?;
     }
 
@@ -313,6 +318,7 @@ fn register_pointer_events(
         let contacts = Rc::clone(contacts);
         let pinch = Rc::clone(pinch);
         let accepting = Rc::clone(&registration.accepting);
+        let menu = Rc::clone(menu);
         registration.listen(canvas.as_ref(), "pointermove", move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
             let id = pe.pointer_id();
@@ -320,14 +326,80 @@ fn register_pointer_events(
                 return;
             }
             let buttons = pe.buttons();
+            let secondary = pe.button() == SECONDARY_BUTTON;
             if !accepting.get() {
                 return;
             }
             if let Some(held) = active.borrow_mut().get_mut(&id) {
                 *held = buttons;
             }
-            dispatch(&pinch, &pe, convert_pointer_move(&pe, &contacts));
+            // A chorded secondary press opens the menu as a first one does.
+            let pressed = dispatch(&pinch, &pe, convert_pointer_move(&pe, &contacts));
+            menu.record(secondary, pressed);
         })?;
+    }
+
+    // A mouse or pen coming over the canvas and leaving it, outside a press
+    // (a captured press sees its boundary events after its release): a pen
+    // that leaves is out of range, and its contact ends. A touch enters at
+    // its press and leaves at its release.
+    for (kind, action) in [
+        ("pointerenter", ReadingAction::Enter),
+        ("pointerleave", ReadingAction::Leave),
+    ] {
+        let active = Rc::clone(&active);
+        let contacts = Rc::clone(contacts);
+        let pinch = Rc::clone(pinch);
+        let accepting = Rc::clone(&registration.accepting);
+        registration.listen(canvas.as_ref(), kind, move |e: web_sys::Event| {
+            let pe: web_sys::PointerEvent = e.unchecked_into();
+            let id = pe.pointer_id();
+            if !accepting.get() {
+                return;
+            }
+            let hovers = matches!(pe.pointer_type().as_str(), "mouse" | "pen");
+            if !accepting.get() || !hovers || active.borrow().contains_key(&id) {
+                return;
+            }
+            dispatch(
+                &pinch,
+                &pe,
+                assemble(&contacts, &pointer_reading(&pe, action)),
+            );
+        })?;
+    }
+
+    let loss = Rc::new(PointerLoss {
+        contacts: Rc::clone(contacts),
+        pinch: Rc::clone(pinch),
+        active: Rc::clone(&active),
+        custody: registration.capture_owner(),
+    });
+    let browser = web_sys::window().expect("BUG: window construction verified browser");
+    {
+        let loss = Rc::clone(&loss);
+        // The page itself losing the OS focus, not focus moving between its
+        // elements.
+        registration.listen(browser.as_ref(), "blur", move |e: web_sys::Event| {
+            let own = e
+                .target()
+                .is_some_and(|target| target.dyn_ref::<web_sys::Window>().is_some());
+            if own {
+                loss.cancel(event_time(e.time_stamp()), NativeCancel::FocusLost);
+            }
+        })?;
+    }
+    if let Some(document) = browser.document() {
+        let hidden = document.clone();
+        registration.listen(
+            document.as_ref(),
+            "visibilitychange",
+            move |e: web_sys::Event| {
+                if hidden.hidden() {
+                    loss.cancel(event_time(e.time_stamp()), NativeCancel::FocusLost);
+                }
+            },
+        )?;
     }
 
     // pointerup
@@ -425,14 +497,82 @@ fn register_pointer_events(
 
 /// Deliver assembled pointer input while the registration still accepts it:
 /// a callback can close the window between two events of one reading. A
-/// pinch whose deadline `event` passed ends first.
-fn dispatch(pinch: &Pinch, event: &web_sys::Event, inputs: Assembled) {
+/// pinch whose deadline `event` passed ends first. Returns whether the
+/// application prevented the default of a press among them.
+fn dispatch(pinch: &Pinch, event: &web_sys::Event, inputs: Assembled) -> Option<bool> {
     pinch.flush(event_time(event.time_stamp()));
+    let mut pressed = None;
     for input in inputs {
         if !pinch.accepting.get() {
+            break;
+        }
+        let press = matches!(
+            input,
+            PlatformInput::Pointer(
+                PointerEvent::Down(_) | PointerEvent::ButtonChange(ButtonChange::Pressed(_))
+            )
+        );
+        let result = pinch.callbacks.dispatch_input(input);
+        if press {
+            pressed = Some(result.default_prevented);
+        }
+    }
+    pressed
+}
+
+/// `MouseEvent.button` of the secondary button.
+const SECONDARY_BUTTON: i16 = 2;
+
+/// How the browser's context menu is answered: as the application answered
+/// the secondary press that opened it (`contextmenu` follows the press, or
+/// on Windows its release). A menu no secondary press opened (the keyboard's
+/// menu key) stays the application's, its default prevented.
+#[derive(Default)]
+struct MenuAnswer {
+    /// Whether the last secondary press had its default prevented, until a
+    /// menu takes it.
+    prevented: Cell<Option<bool>>,
+}
+
+impl MenuAnswer {
+    fn record(&self, secondary: bool, prevented: Option<bool>) {
+        if secondary && prevented.is_some() {
+            self.prevented.set(prevented);
+        }
+    }
+}
+
+/// End every pointer sequence of the canvas: the page lost the OS focus or
+/// was hidden, and the browser may never send their release or capture loss
+/// (a press released after Alt+Tab reaches no page). Without it, the next
+/// press of a button the registry still holds would be no press at all.
+struct PointerLoss {
+    contacts: Rc<RefCell<ContactRegistry>>,
+    pinch: Rc<Pinch>,
+    active: Rc<RefCell<std::collections::HashMap<i32, u16>>>,
+    custody: super::registration::PointerCaptureOwner,
+}
+
+impl PointerLoss {
+    fn cancel(&self, time: EventTime, reason: NativeCancel) {
+        if !self.pinch.accepting.get() {
             return;
         }
-        pinch.callbacks.dispatch_input(input);
+        let ids: Vec<i32> = self.active.borrow_mut().drain().map(|(id, _)| id).collect();
+        // Admission ends before release, which can dispatch the capture loss.
+        for &id in &ids {
+            self.custody.forget(id);
+        }
+        let ended = self
+            .contacts
+            .borrow_mut()
+            .cancel_surface(SURFACE, time, reason);
+        *self.pinch.wheel.borrow_mut() = CtrlWheel::default();
+        *self.pinch.gesture.borrow_mut() = GestureTracker::default();
+        self.pinch.deliver(ended.into_iter().collect(), None);
+        for id in ids {
+            self.custody.release(id);
+        }
     }
 }
 
@@ -657,6 +797,7 @@ fn register_wheel_events(
             mode: we.delta_mode(),
             dx: we.delta_x(),
             dy: we.delta_y(),
+            scale: web_sys::window().map_or(1.0, |window| window.device_pixel_ratio()),
             time: event_time(we.time_stamp()),
         };
         let ended = {
@@ -675,7 +816,7 @@ fn register_wheel_events(
         match route {
             WheelRoute::Refused => {}
             WheelRoute::Scroll => {
-                if let Some(input) = convert_wheel_event(we, &target) {
+                if let Some(input) = convert_wheel_event(we, &target, &pinch.contacts) {
                     answer(&e, callbacks.dispatch_input(input));
                 }
             }
@@ -769,6 +910,19 @@ fn register_gesture_events(
             let values: &GestureEventValues = e.unchecked_ref();
             let time = event_time(e.time_stamp());
             pinch.flush(time);
+            // WebKit on a touch screen reports a two-finger pinch as gesture
+            // events beside the touches themselves, which the application
+            // already has: delivering both would scale it twice. A gesture
+            // that starts over an open touch is left to the touches.
+            if kind == GestureEventKind::Start
+                && pinch
+                    .contacts
+                    .borrow()
+                    .has_open_kind(SURFACE, PointerKind::Touch)
+            {
+                *pinch.gesture.borrow_mut() = GestureTracker::default();
+                return;
+            }
             let scale = values.scale().unwrap_or(f64::NAN);
             let rotation = values.rotation().unwrap_or(f64::NAN);
             let focal = values
@@ -817,12 +971,26 @@ fn client_to_canvas(canvas: &web_sys::HtmlCanvasElement, x: f64, y: f64) -> Opti
 
 // ==================== Context Menu Block ====================
 
-fn register_context_menu_block(
+/// The browser's context menu over the canvas, answered as [`MenuAnswer`]
+/// says.
+fn register_context_menu(
     canvas: &web_sys::HtmlCanvasElement,
+    menu: &Rc<MenuAnswer>,
     registration: &mut Registration,
 ) -> Result<(), crate::OpenWindowError> {
+    let menu = Rc::clone(menu);
     registration.listen(canvas.as_ref(), "contextmenu", move |e: web_sys::Event| {
-        e.prevent_default();
+        let secondary = e
+            .dyn_ref::<web_sys::MouseEvent>()
+            .is_some_and(|mouse| mouse.button() == SECONDARY_BUTTON);
+        let answered = if secondary {
+            menu.prevented.take()
+        } else {
+            None
+        };
+        if answered.unwrap_or(true) {
+            e.prevent_default();
+        }
     })
 }
 
@@ -967,8 +1135,18 @@ fn map_button(button: i16) -> Option<PointerButton> {
 /// Each canvas registration serves one surface.
 const SURFACE: NativeSurface = NativeSurface(0);
 
-/// The DOM `pointerId`, as the contact's label.
+/// The contact label of the mouse: a page has one mouse pointer, whose
+/// `pointerId` differs between engines (1 in Chromium and WebKit, 0 in
+/// Gecko), and a wheel event names none. Above every DOM `pointerId` and
+/// apart from [`PINCH_CONTACT`]; the registry reserves pointer identity one
+/// for it, so wheel and pointer events share one mouse.
+const MOUSE_CONTACT: NativeContact = NativeContact((1 << 32) + 1);
+
+/// The contact's label: the mouse's own, or the DOM `pointerId`.
 fn pointer_label(pe: &web_sys::PointerEvent) -> NativeContact {
+    if pe.pointer_type() == "mouse" {
+        return MOUSE_CONTACT;
+    }
     NativeContact(u64::from(u32::from_ne_bytes(pe.pointer_id().to_ne_bytes())))
 }
 
@@ -1160,22 +1338,33 @@ fn convert_pointer_move(
 /// the `ScrollDelta` variants — kept in `crate::shared::scroll` so this
 /// boundary appears in the same sign/unit table (and executing contract
 /// tests) as the backends that DO have to flip or rescale.
+///
+/// A wheel event names no pointer: it is the mouse's, the contact pointer
+/// events of the mouse open, with pointer identity one (reserved for it, so
+/// no touch or pen takes it), at the wheel event's own position. No scroll
+/// phase is guessed.
 fn convert_wheel_event(
     we: &web_sys::WheelEvent,
     canvas: &web_sys::HtmlCanvasElement,
+    contacts: &RefCell<ContactRegistry>,
 ) -> Option<PlatformInput> {
     let delta =
         crate::shared::scroll::from_web(we.delta_mode(), we.delta_x(), we.delta_y()).ok()?;
+    // DOM getters run before the registry is borrowed: they can reenter.
     let position = PointerPosition::try_new(wheel_position(we, canvas)).ok()?;
-    let time = EventTime::from_nanos((we.time_stamp() * 1_000_000.0) as u64);
+    let time = event_time(we.time_stamp());
     let modifiers = extract_modifiers_from_mouse(we);
-    // DOM wheel events have no pointer identity. Keep the documented primary
-    // mouse fallback rather than guessing a hardware source or scroll phase.
-    let pointer = PointerInfo::new(
-        PointerId::try_from(1_u64).expect("BUG: the primary mouse identity is nonzero"),
-        PointerKind::Mouse,
-    )
-    .with_role(PointerRole::Primary);
+    // Before the mouse's first pointer event its contact is not open yet.
+    let pointer = contacts
+        .borrow()
+        .pointer(SURFACE, None, MOUSE_CONTACT)
+        .unwrap_or_else(|| {
+            PointerInfo::new(
+                PointerId::try_from(1_u64).expect("BUG: the mouse's reserved identity is nonzero"),
+                PointerKind::Mouse,
+            )
+            .with_role(PointerRole::Primary)
+        });
     Some(PlatformInput::Pointer(PointerEvent::Scroll(
         ScrollEvent::new(pointer, time, position, delta).with_modifiers(modifiers),
     )))

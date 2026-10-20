@@ -11,9 +11,11 @@
 //! [`Availability::Emulated`](flui_platform_api::input_capabilities::Availability)
 //! and is taken once per sequence, from its first event:
 //!
-//! - a pinch is a pixel-mode vertical delta with a fractional part (Chromium
-//!   reports `-100 · ln(scale)` CSS pixels, never a whole number in
-//!   practice); a mouse detent is a whole number of pixels, or lines;
+//! - a pinch is a pixel-mode vertical delta that is a whole number neither
+//!   of CSS pixels nor of device pixels (Chromium reports `-100 · ln(scale)`
+//!   CSS pixels, never a whole number in practice); a mouse detent is a
+//!   whole number of one of them, or lines: at a page zoom its CSS pixels
+//!   are fractional and its device pixels whole;
 //! - a sequence is the run of Control-held wheel events no further apart than
 //!   [`PINCH_GAP`] on the event timeline, and every event of it is treated as
 //!   its first was, so one whole-number step of a pinch stays in it and one
@@ -63,6 +65,8 @@ pub struct WheelStep {
     pub dx: f64,
     /// `deltaY`.
     pub dy: f64,
+    /// `devicePixelRatio`: device pixels per CSS pixel, page zoom included.
+    pub scale: f64,
     /// `timeStamp` on the event timeline.
     pub time: EventTime,
 }
@@ -198,12 +202,29 @@ impl CtrlWheel {
     }
 }
 
-/// Whether the first event of a Control-held sequence is a pinch.
+/// How close to a whole number a delta is a whole number: CSS pixels reach
+/// the page through single precision, and a detent at a page zoom is a
+/// whole number of device pixels only to that precision.
+const WHOLE_TOLERANCE: f64 = 1e-3;
+
+/// Whether `value` is a whole number, to [`WHOLE_TOLERANCE`].
+fn is_whole(value: f64) -> bool {
+    (value - value.round()).abs() <= WHOLE_TOLERANCE
+}
+
+/// Whether the first event of a Control-held sequence is a pinch: a
+/// pixel-mode vertical delta that is a whole number neither of CSS pixels
+/// nor of device pixels. A mouse detent is whole in one of them: at a page
+/// zoom Chromium divides it into fractional CSS pixels (100 at 110% is
+/// 90.909…, 100 device pixels), and an accelerated wheel lands within single
+/// precision of a whole number (4.000244).
 fn classify(step: WheelStep) -> Sequence {
+    let device = step.dy * step.scale;
     if step.mode == DOM_DELTA_PIXEL
         && step.dx == 0.0
         && step.dy.is_finite()
-        && step.dy.fract() != 0.0
+        && !is_whole(step.dy)
+        && !(device.is_finite() && step.scale > 0.0 && is_whole(device))
     {
         Sequence::Pinch
     } else {

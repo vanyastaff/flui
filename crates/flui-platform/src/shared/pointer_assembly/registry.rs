@@ -442,8 +442,25 @@ impl ContactRegistry {
         self.clock.stamp(time, ClockChoice::Coarse)
     }
 
+    /// The open contact `key` names. The reserved contact is the backend's
+    /// one cursor whichever device drives it (a reading may name the mouse
+    /// or none), so it is found by surface and label alone.
     fn find(&self, key: ContactKey) -> Option<usize> {
-        self.contacts.iter().position(|contact| contact.key == key)
+        let reserved = self.reserved == Some(key.contact);
+        self.contacts.iter().position(|contact| {
+            contact.key == key
+                || (reserved
+                    && contact.key.surface == key.surface
+                    && contact.key.contact == key.contact)
+        })
+    }
+
+    /// Whether `surface` has an open contact of `kind`.
+    #[must_use]
+    pub fn has_open_kind(&self, surface: NativeSurface, kind: PointerKind) -> bool {
+        self.contacts
+            .iter()
+            .any(|contact| contact.key.surface == surface && contact.info.kind == kind)
     }
 
     /// The identity of the open contact `contact` of `device` on `surface`.
@@ -897,7 +914,21 @@ impl ContactRegistry {
             index
         };
         if let Some(native) = reading.device {
-            self.devices.admit(native, reading.kind);
+            let admitted = self.devices.admit(native, reading.kind);
+            let contact = &mut self.contacts[index];
+            // Only the reserved contact is found across devices: it carries
+            // the device that drives it now. A reading naming none keeps it.
+            if let Some((device, added)) = admitted
+                && contact.key.device != Some(native)
+            {
+                contact.key.device = Some(native);
+                contact.info = contact.info.with_device(device);
+                if added {
+                    output.push(PlatformInput::Pointer(PointerEvent::DeviceAdded(
+                        PointerDeviceChange::new(device, reading.kind, measured.time),
+                    )));
+                }
+            }
             let used = if self.clock.supports(reading.time, choice) {
                 choice
             } else {

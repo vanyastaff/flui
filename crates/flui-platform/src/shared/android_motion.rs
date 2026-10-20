@@ -209,6 +209,9 @@ pub struct Motion<'a> {
     pub action_button: u32,
     /// `getButtonState`.
     pub buttons: u32,
+    /// `FLAG_CANCELED` (API 33): the pointer an `ACTION_POINTER_UP` lifts
+    /// was cancelled (a rejected palm), not released.
+    pub canceled: bool,
     /// `getMetaState`, as owned modifiers.
     pub modifiers: Modifiers,
     /// `getEventTime`; `None` when it is not a time.
@@ -243,6 +246,26 @@ impl DeviceCapabilities {
     #[must_use]
     pub const fn has(self, axis: u32) -> bool {
         axis < 64 && self.axes & (1_u64 << axis) != 0
+    }
+}
+
+/// Whether an event of `source` doing `action` needs its device's Java query,
+/// given the capabilities `cached` for its device id. A sequence's first
+/// event (a press or a hover entering) queries again, so a device the OS
+/// removed or reconfigured is seen before the sequence it starts; the events
+/// inside a sequence use the cache, since Android cancels an open sequence
+/// when its device is reset. A source the cache was not read for queries.
+#[must_use]
+pub fn needs_device_query(
+    cached: Option<DeviceCapabilities>,
+    source: u32,
+    action: MotionAction,
+) -> bool {
+    match cached {
+        Some(cached) if cached.source == source => {
+            matches!(action, MotionAction::Down | MotionAction::HoverEnter)
+        }
+        _ => true,
     }
 }
 
@@ -557,6 +580,12 @@ impl AndroidMotion {
                 &mut self.contacts,
                 &current(ReadingAction::Cancel(NativeCancel::Platform)),
             ),
+            // The system took the action pointer back (palm rejection): its
+            // sequence ends without a lift a recogniser could count.
+            MotionAction::Up | MotionAction::PointerUp if motion.canceled => decode(
+                &mut self.contacts,
+                &current(ReadingAction::Cancel(NativeCancel::Platform)),
+            ),
             MotionAction::Down | MotionAction::PointerDown => {
                 let button = if kind == PointerKind::Mouse {
                     buttons.iter().next().unwrap_or(PointerButton::PRIMARY)
@@ -673,6 +702,7 @@ impl AndroidMotion {
         let phase = match motion.action {
             MotionAction::Down => GesturePhase::Began,
             MotionAction::Move => GesturePhase::Changed,
+            MotionAction::Up if motion.canceled => GesturePhase::Cancelled,
             MotionAction::Up => GesturePhase::Ended,
             MotionAction::Cancel => GesturePhase::Cancelled,
             // The second finger of a pinch comes and goes inside it.
