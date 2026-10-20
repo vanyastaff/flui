@@ -1,7 +1,10 @@
 //! The closed set of values a description carries, and how a field type maps to one.
 
 use core::fmt;
+use core::marker::PhantomData;
+use core::num::NonZeroU32;
 use core::time::Duration;
+use std::sync::Arc;
 
 use crate::geometry::{Axis, EdgeInsets, Matrix4, Offset, Rect, Size};
 use crate::id::{ElementId, RenderId, SemanticsId};
@@ -49,6 +52,8 @@ pub enum Value<'a> {
     Duration(Duration),
     /// A typed reference to a node of another tree.
     Link(Link),
+    /// An object nodes may share, named by identity.
+    Shared(Shared<'a>),
     /// A type that only has `Debug`. Snapshots count these fields, so the number of untyped
     /// fields is visible and can be driven down.
     Debug(&'a dyn fmt::Debug),
@@ -75,9 +80,95 @@ impl Value<'_> {
             Self::Matrix(_) => "matrix",
             Self::Duration(_) => "duration",
             Self::Link(_) => "link",
+            Self::Shared(_) => "shared",
             Self::Debug(_) => "debug",
             Self::None => "none",
         }
+    }
+}
+
+/// An object several nodes may hold at once, such as a backdrop group, named by identity
+/// rather than by content.
+///
+/// A snapshot numbers these per type in walk order: the first object of a type is `#1`, the
+/// next distinct one `#2`, and every node holding an object already seen repeats its number.
+/// The number depends only on which nodes share what, so equal trees give equal snapshots in
+/// any run, and an address freed and reused between two snapshots cannot make two different
+/// objects look the same.
+#[derive(Clone, Copy)]
+pub struct Shared<'a> {
+    ty: &'static str,
+    key: SharedKey<'a>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SharedKey<'a> {
+    /// The object's address, kept only while the borrow of it lasts.
+    Live(usize, PhantomData<&'a ()>),
+    /// The number a snapshot gave it.
+    Numbered(NonZeroU32),
+}
+
+impl<'a> Shared<'a> {
+    /// The object behind `arc`, named `ty`. Clones of one `Arc` are the same object.
+    #[must_use]
+    pub fn arc<T: ?Sized>(ty: &'static str, arc: &'a Arc<T>) -> Self {
+        Self {
+            ty,
+            key: SharedKey::Live(Arc::as_ptr(arc).cast::<()>().addr(), PhantomData),
+        }
+    }
+
+    pub(super) const fn numbered(ty: &'static str, number: NonZeroU32) -> Self {
+        Self {
+            ty,
+            key: SharedKey::Numbered(number),
+        }
+    }
+
+    /// The type the object is named by.
+    #[must_use]
+    pub const fn ty(&self) -> &'static str {
+        self.ty
+    }
+
+    /// The snapshot's number for the object, or `None` before a snapshot numbered it.
+    #[must_use]
+    pub const fn number(&self) -> Option<NonZeroU32> {
+        match self.key {
+            SharedKey::Numbered(number) => Some(number),
+            SharedKey::Live(..) => None,
+        }
+    }
+
+    pub(super) const fn address(&self) -> Option<usize> {
+        match self.key {
+            SharedKey::Live(address, _) => Some(address),
+            SharedKey::Numbered(_) => None,
+        }
+    }
+}
+
+/// Equal when both name the same live object, or carry the same type and number.
+impl PartialEq for Shared<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.ty == other.ty && self.key == other.key
+    }
+}
+
+/// `BackdropGroup#2` once numbered; the type alone before.
+impl fmt::Display for Shared<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.key {
+            SharedKey::Numbered(number) => write!(f, "{}#{number}", self.ty),
+            SharedKey::Live(..) => f.write_str(self.ty),
+        }
+    }
+}
+
+impl fmt::Debug for Shared<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Shared({self})")
     }
 }
 
@@ -102,6 +193,7 @@ impl PartialEq for Value<'_> {
             (Self::Matrix(a), Self::Matrix(b)) => a == b,
             (Self::Duration(a), Self::Duration(b)) => a == b,
             (Self::Link(a), Self::Link(b)) => a == b,
+            (Self::Shared(a), Self::Shared(b)) => a == b,
             (Self::None, Self::None) => true,
             _ => false,
         }
@@ -129,6 +221,7 @@ impl fmt::Debug for Value<'_> {
 /// | `Matrix` | `identity`, or the 16 entries in column order in brackets |
 /// | `Duration` | `16ms`, `250us` or `40ns`, in the largest exact unit |
 /// | `Link` | the linked node's id, `r12` |
+/// | `Shared` | `BackdropGroup#2`: the type and its number in the snapshot |
 /// | `None` | `none` |
 impl fmt::Display for Value<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -147,6 +240,7 @@ impl fmt::Display for Value<'_> {
             Self::Matrix(matrix) => write_matrix(f, matrix),
             Self::Duration(duration) => write_duration(f, *duration),
             Self::Link(link) => write!(f, "{link}"),
+            Self::Shared(shared) => write!(f, "{shared}"),
             Self::Debug(value) => write!(f, "{value:?}"),
             Self::None => f.write_str("none"),
         }

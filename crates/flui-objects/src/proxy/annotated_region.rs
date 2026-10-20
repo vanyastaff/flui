@@ -22,9 +22,9 @@ pub struct RenderAnnotatedRegion {
 
 impl RenderAnnotatedRegion {
     /// Annotates this box with `value`.
-    pub fn new<T: Any + Send + Sync>(value: Arc<T>) -> Self {
+    pub fn new<T: Any + Send + Sync + fmt::Debug>(value: Arc<T>) -> Self {
         Self {
-            value,
+            value: AnnotationValue::new(value),
             has_child: false,
         }
     }
@@ -37,12 +37,12 @@ impl RenderAnnotatedRegion {
 
     /// Replaces the annotation. A value shared with the current one (the same
     /// `Arc`) is no change; anything else repaints the region.
-    pub fn set_value<T: Any + Send + Sync>(
+    pub fn set_value<T: Any + Send + Sync + fmt::Debug>(
         &mut self,
         value: Arc<T>,
     ) -> flui_rendering::RenderUpdateImpact {
-        let value: AnnotationValue = value;
-        if Arc::ptr_eq(&self.value, &value) {
+        let value = AnnotationValue::new(value);
+        if self.value.ptr_eq(&value) {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.value = value;
@@ -53,7 +53,7 @@ impl RenderAnnotatedRegion {
 impl fmt::Debug for RenderAnnotatedRegion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RenderAnnotatedRegion")
-            .field("value_type", &self.value.as_ref().type_id())
+            .field("value", &self.value)
             .field("has_child", &self.has_child)
             .finish()
     }
@@ -81,7 +81,7 @@ impl RenderBox for RenderAnnotatedRegion {
         if ctx.child_count() == 0 {
             return;
         }
-        ctx.with_annotated_region(Arc::clone(&self.value), |ctx| {
+        ctx.with_annotated_region(self.value.clone(), |ctx| {
             ctx.paint_child();
         });
     }

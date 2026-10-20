@@ -221,3 +221,59 @@ fn backdrop_filters_that_stop_sharing_a_group_diff_apart() {
     let apart = panes(shared, BackdropGroupKey::new());
     assert_ne!(diff(&grouped, &apart, DiffOptions::default()), Vec::new());
 }
+
+/// A snapshot names backdrop groups and annotation payloads by the order it meets them, so
+/// two scenes that share the same way snapshot alike whichever objects they were built from,
+/// and the text shows which layers share.
+///
+/// Fails when a group or payload reads by its address, which differs between the two scenes
+/// and can repeat once an object is freed.
+#[test]
+fn shared_groups_and_payloads_read_by_their_order_in_the_scene() {
+    let bounds = Rect::from_xywh(0.0, 0.0, 40.0, 20.0);
+    let scene = |groups: [&BackdropGroupKey; 3], payload: &Arc<&'static str>| {
+        let mut tree = LayerTree::new(Layer::from(OffsetLayer::zero()));
+        let root = tree.root();
+        for group in groups {
+            tree.push_child(
+                root,
+                Layer::from(
+                    BackdropFilterLayer::new(ImageFilter::blur(4.0), BlendMode::SrcOver, bounds)
+                        .with_group(Some(group.clone())),
+                ),
+            );
+        }
+        for _ in 0..2 {
+            tree.push_child(
+                root,
+                Layer::from(AnnotatedRegionLayer::new(bounds, Arc::clone(payload))),
+            );
+        }
+        snapshot(&tree, SnapshotQuery::default()).expect("a tree has a root")
+    };
+    let (first, second) = (BackdropGroupKey::new(), BackdropGroupKey::new());
+    let before = scene([&first, &first, &second], &Arc::new("toolbar"));
+    let (third, fourth) = (BackdropGroupKey::new(), BackdropGroupKey::new());
+    let after = scene([&third, &third, &fourth], &Arc::new("toolbar"));
+
+    assert_eq!(before, after);
+    let text = before.to_string();
+    let groups: Vec<_> = before
+        .children
+        .iter()
+        .filter_map(|node| node.field("group"))
+        .map(|field| field.value.to_string())
+        .collect();
+    assert_eq!(
+        groups,
+        ["BackdropGroup#1", "BackdropGroup#1", "BackdropGroup#2"],
+        "{text}"
+    );
+    let payloads: Vec<_> = before
+        .children
+        .iter()
+        .filter_map(|node| node.field("instance"))
+        .map(|field| field.value.to_string())
+        .collect();
+    assert_eq!(payloads, ["&str#1", "&str#1"], "{text}");
+}

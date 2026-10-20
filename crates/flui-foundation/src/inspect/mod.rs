@@ -38,7 +38,7 @@ pub use snapshot::{
 };
 pub use tree::{InspectId, InspectTree, Link, Links, NodeView, SceneLayer};
 pub use type_name::{kind_args_of, kind_of};
-pub use value::{Rgba, ToValue, Value};
+pub use value::{Rgba, Shared, ToValue, Value};
 
 /// Derives [`Inspect`] for a struct or an enum.
 ///

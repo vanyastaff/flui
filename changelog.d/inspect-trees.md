@@ -34,7 +34,9 @@
   filter, a shader mask, a texture, a follower's anchors), and a picture a fingerprint of its
   commands, so `diff` sees a changed effect or drawing. An opacity layer reports its blend mode,
   the performance overlay its readout, a backdrop filter the group it samples with, and an
-  annotated region its payload by identity.
+  annotated region its payload's `Debug` text and which payload it is. Groups and payloads are
+  `Shared` values, numbered per type in the order the snapshot meets them (`BackdropGroup#2`),
+  so equal scenes snapshot alike in every run and a freed address cannot alias two objects.
 - `diff` reports bounds that appear or disappear as the new `Change::Bounds`.
 - `SnapshotQuery::max_nodes` is an `Option<NonZeroU32>`: the start node counts toward it, so a
   limit of zero, which no snapshot could honour, cannot be written.
@@ -44,3 +46,6 @@
   and added.
 - `#[derive(Inspect)]` rejects two fields that report under one name, and an enum field that
   reports as `variant`, which names the enum's variant.
+- `flui_layer::AnnotationValue` is a type instead of an alias: it keeps the payload's type name
+  and `Debug` form, with `downcast_ref`, `downcast` and `ptr_eq`. Annotation payloads
+  (`AnnotatedRegionLayer::new`, `RenderAnnotatedRegion::new`) now need `Debug`.

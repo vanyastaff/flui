@@ -3,6 +3,7 @@
 use std::{fmt, hash, sync::Arc};
 
 use flui_foundation::geometry::Rect;
+use flui_foundation::inspect::Shared;
 use flui_painting::paint::{BlendMode, ImageFilter};
 
 #[derive(Debug)]
@@ -33,10 +34,9 @@ impl BackdropGroupKey {
         Self(Arc::new(BackdropGroupMarker))
     }
 
-    /// A number that names this group while any filter holds its key: equal for clones, apart
-    /// for keys alive at once. A key made after this one is dropped may reuse it.
-    pub(crate) fn token(&self) -> u64 {
-        Arc::as_ptr(&self.0).addr() as u64
+    /// The group as a description names it: the same for clones of this key.
+    pub(crate) fn shared(&self) -> Shared<'_> {
+        Shared::arc("BackdropGroup", &self.0)
     }
 }
 

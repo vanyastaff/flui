@@ -9,16 +9,16 @@
 //! one, and otherwise (a filter, shader, annotation, or a clip shape that is not a rectangle) its
 //! `Debug` text. A clip layer also reports how it rasterises its edge, and a picture a fingerprint
 //! of its commands next to their count, so a changed drawing reads apart. A backdrop filter names
-//! its group by a number its siblings in the group share, and an annotated region its payload by
-//! the same kind of number, since the payload is type-erased.
+//! its group as a [`Shared`] object, `BackdropGroup#1`, numbered in the order the snapshot meets
+//! the groups, and an annotated region its payload the same way next to the payload's `Debug` text.
 
 use core::fmt::{self, Write as _};
 use flui_foundation::LayerId;
 use flui_foundation::inspect::{
-    Fields, Inspect, InspectId, InspectTree, Level, Link, Links, NodeView, SceneLayer, Unit, Value,
+    Fields, Inspect, InspectId, InspectTree, Level, Link, Links, NodeView, SceneLayer, Shared,
+    Unit, Value, kind_of,
 };
 use std::hash::{DefaultHasher, Hasher};
-use std::sync::Arc;
 
 use flui_painting::DisplayList;
 use flui_painting::paint::Clip;
@@ -107,7 +107,7 @@ impl Inspect for Layer {
                     "group",
                     layer
                         .group()
-                        .map_or(Value::None, |key| Value::Uint(key.token())),
+                        .map_or(Value::None, |key| Value::Shared(key.shared())),
                 );
             }
             Layer::Leader(layer) => {
@@ -124,11 +124,13 @@ impl Inspect for Layer {
                 out.field("size", &layer.size()).unit(Unit::LogicalPx);
             }
             Layer::AnnotatedRegion(layer) => {
-                // The payload is erased, so it reads by identity: the same `Arc` reads equal, another
-                // one apart, as `find_annotations` would return it.
+                // The payload is type-erased: it reports its `Debug` text, and which value it is
+                // by a number that regions sharing one `Arc` share.
+                let value = layer.value();
+                out.value("value", Value::Debug(value));
                 out.value(
-                    "value",
-                    Value::Uint(Arc::as_ptr(layer.value()).addr() as u64),
+                    "instance",
+                    Value::Shared(Shared::arc(kind_of(value.type_name()), value.erased())),
                 );
                 out.field("sized_by_parent", &layer.is_sized_by_parent());
             }

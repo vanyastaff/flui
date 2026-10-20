@@ -3,12 +3,13 @@
 use core::fmt;
 use core::num::NonZeroU32;
 use core::time::Duration;
+use std::collections::HashMap;
 
 use crate::geometry::{EdgeInsets, Matrix4, Offset, Rect, Size};
 
 use super::fields::{Field, Fields, Inspect, Level, Meta, Seq, Sink, Unit};
 use super::tree::{InspectId, InspectTree, Link, Links};
-use super::value::{Rgba, Value};
+use super::value::{Rgba, Shared, Value};
 
 /// A [`Value`] that owns its data, as a snapshot keeps it.
 #[derive(Clone, Debug, PartialEq)]
@@ -47,6 +48,13 @@ pub enum OwnedValue {
     Duration(Duration),
     /// A typed reference to a node of another tree.
     Link(Link),
+    /// An object nodes may share, by its number in the snapshot.
+    Shared {
+        /// The type the object is named by.
+        ty: &'static str,
+        /// Its number among the objects of its type.
+        number: NonZeroU32,
+    },
     /// A type that only has `Debug`, as its `Debug` text.
     Debug(String),
     /// No value.
@@ -56,9 +64,13 @@ pub enum OwnedValue {
 }
 
 impl OwnedValue {
-    /// An owned copy of `value`.
+    /// An owned copy of `value` alone: shared objects in it are numbered within it.
     #[must_use]
     pub fn from_value(value: Value<'_>) -> Self {
+        Self::numbered(value, &mut Numbering::default())
+    }
+
+    fn numbered(value: Value<'_>, numbering: &mut Numbering) -> Self {
         match value {
             Value::Bool(value) => Self::Bool(value),
             Value::Int(value) => Self::Int(value),
@@ -74,6 +86,10 @@ impl OwnedValue {
             Value::Matrix(matrix) => Self::Matrix(Box::new(*matrix)),
             Value::Duration(duration) => Self::Duration(duration),
             Value::Link(link) => Self::Link(link),
+            Value::Shared(shared) => Self::Shared {
+                ty: shared.ty(),
+                number: numbering.number(shared),
+            },
             Value::Debug(value) => Self::Debug(format!("{value:?}")),
             Value::None => Self::None,
         }
@@ -97,6 +113,7 @@ impl OwnedValue {
             Self::Matrix(matrix) => Value::Matrix(matrix),
             Self::Duration(duration) => Value::Duration(*duration),
             Self::Link(link) => Value::Link(*link),
+            Self::Shared { ty, number } => Value::Shared(Shared::numbered(ty, *number)),
             // The text, so it prints as written rather than quoted.
             Self::Debug(text) => Value::Debug(text),
             Self::None => Value::None,
@@ -247,7 +264,11 @@ pub fn snapshot<T: InspectTree + ?Sized>(
         .or_else(|| tree.root())
         .ok_or(SnapshotError::Empty)?;
     let mut budget = query.max_nodes.map_or(u32::MAX, NonZeroU32::get);
-    let mut node = take(tree, start, &query, &mut budget).ok_or(SnapshotError::Gone(start))?;
+    // One numbering for the whole walk: every node borrowed below stays alive until it ends,
+    // so no two objects numbered here can share an address.
+    let mut numbering = Numbering::default();
+    let mut node =
+        take(tree, start, &query, &mut budget, &mut numbering).ok_or(SnapshotError::Gone(start))?;
     let mut children = tree.children(start);
     let mut depth = 0_u32;
     // The ancestors of `node` being filled, each with its children still to visit.
@@ -257,7 +278,7 @@ pub fn snapshot<T: InspectTree + ?Sized>(
             let descend = query.max_depth.is_none_or(|max| depth < max);
             if descend
                 && budget > 0
-                && let Some(taken) = take(tree, child, &query, &mut budget)
+                && let Some(taken) = take(tree, child, &query, &mut budget, &mut numbering)
             {
                 open.push((node, children, depth));
                 (node, children, depth) = (taken, tree.children(child), depth + 1);
@@ -280,6 +301,7 @@ fn take<T: InspectTree + ?Sized>(
     id: InspectId,
     query: &SnapshotQuery,
     budget: &mut u32,
+    numbering: &mut Numbering,
 ) -> Option<SnapshotNode> {
     let view = tree.node(id)?;
     *budget = budget.saturating_sub(1);
@@ -289,6 +311,7 @@ fn take<T: InspectTree + ?Sized>(
         level: query.level,
         fields: Vec::new(),
         debug_fields: 0,
+        numbering,
     };
     tree.facts(id, &mut Fields::new(&mut sink));
     let facts = core::mem::take(&mut sink.fields);
@@ -307,14 +330,43 @@ fn take<T: InspectTree + ?Sized>(
     })
 }
 
+/// Numbers shared objects per type, in the order a walk meets them.
+#[derive(Default)]
+struct Numbering {
+    numbers: HashMap<(&'static str, usize), NonZeroU32>,
+    last: HashMap<&'static str, NonZeroU32>,
+}
+
+impl Numbering {
+    fn number(&mut self, shared: Shared<'_>) -> NonZeroU32 {
+        let Some(address) = shared.address() else {
+            return shared
+                .number()
+                .expect("BUG: a shared value is either live or numbered");
+        };
+        *self
+            .numbers
+            .entry((shared.ty(), address))
+            .or_insert_with(|| {
+                let next = self.last.get(shared.ty()).map_or(NonZeroU32::MIN, |last| {
+                    last.checked_add(1)
+                        .expect("BUG: a walk takes at most u32::MAX nodes")
+                });
+                self.last.insert(shared.ty(), next);
+                next
+            })
+    }
+}
+
 /// Copies fields at or under its level.
-struct OwnedSink {
+struct OwnedSink<'n> {
     level: Level,
     fields: Vec<OwnedField>,
     debug_fields: u32,
+    numbering: &'n mut Numbering,
 }
 
-impl OwnedSink {
+impl OwnedSink<'_> {
     fn push(&mut self, name: &'static str, value: OwnedValue, meta: Meta<'_>) {
         if matches!(value, OwnedValue::Debug(_)) {
             self.debug_fields = self.debug_fields.saturating_add(1);
@@ -329,17 +381,18 @@ impl OwnedSink {
     }
 }
 
-impl Sink for OwnedSink {
+impl Sink for OwnedSink<'_> {
     fn field(&mut self, field: Field<'_>) {
         if field.meta.level <= self.level {
-            self.push(field.name, OwnedValue::from_value(field.value), field.meta);
+            let value = OwnedValue::numbered(field.value, self.numbering);
+            self.push(field.name, value, field.meta);
         }
     }
 
     fn seq(&mut self, name: &'static str, meta: Meta<'_>, items: &dyn Seq) {
         if meta.level <= self.level {
             let mut values = Vec::new();
-            items.each(&mut |item| values.push(OwnedValue::from_value(item)));
+            items.each(&mut |item| values.push(OwnedValue::numbered(item, self.numbering)));
             self.push(name, OwnedValue::Seq(values), meta);
         }
     }
@@ -412,6 +465,7 @@ from_field! {
     &'a Matrix4 => "matrix", OwnedValue::Matrix(matrix) => matrix.as_ref();
     Duration => "duration", OwnedValue::Duration(duration) => *duration;
     Link => "link", OwnedValue::Link(link) => *link;
+    Shared<'a> => "shared", OwnedValue::Shared { ty, number } => Shared::numbered(ty, *number);
     &'a [OwnedValue] => "seq", OwnedValue::Seq(items) => items.as_slice();
 }
 
