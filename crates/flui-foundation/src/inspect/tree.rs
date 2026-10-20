@@ -182,8 +182,10 @@ pub trait InspectTree {
     /// The children of `id`, in order.
     fn children(&self, id: InspectId) -> impl Iterator<Item = InspectId> + '_;
 
-    /// What the tree knows about `id` that the object does not: lifecycle, dirty flags. Written
-    /// before the object's own fields.
+    /// What the tree knows about `id` that the object does not: lifecycle, dirty flags.
+    ///
+    /// A snapshot keeps these in [`SnapshotNode::facts`](super::SnapshotNode::facts), apart
+    /// from the object's own fields, so a fact may share a name with one of them.
     fn facts(&self, id: InspectId, out: &mut Fields<'_>) {
         let _ = (id, out);
     }

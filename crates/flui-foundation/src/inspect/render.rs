@@ -90,9 +90,9 @@ pub fn style_for(is_terminal: bool) -> &'static dyn Style {
 ///   … 2 more
 /// ```
 ///
-/// The kind and id come first, then the fields at or under `level` (at [`Level::Summary`] a
-/// field equal to its default is left out), then the bounds. Values use their compact,
-/// pinned [`Display`](core::fmt::Display).
+/// The kind and id come first, then the tree's facts and the object's own fields at or under
+/// `level` (at [`Level::Summary`] one equal to its default is left out), then the bounds.
+/// Values use their compact, pinned [`Display`](core::fmt::Display).
 ///
 /// # Errors
 ///
@@ -140,7 +140,7 @@ fn line(
     style.end(Role::Kind, out)?;
     out.write_str(" ")?;
     piece(style, Role::Id, out, format_args!("{}", node.id))?;
-    for field in &node.fields {
+    for field in node.facts.iter().chain(&node.fields) {
         let hidden = field.level > level || (level == Level::Summary && field.is_default());
         if hidden {
             continue;

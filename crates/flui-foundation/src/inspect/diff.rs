@@ -3,7 +3,7 @@
 use crate::geometry::{EdgeInsets, Offset, Rect, Size};
 
 use super::fields::Unit;
-use super::snapshot::{OwnedValue, SnapshotNode};
+use super::snapshot::{OwnedField, OwnedValue, SnapshotNode};
 use super::tree::InspectId;
 
 /// How close two numbers must be to count as equal.
@@ -92,8 +92,20 @@ pub enum Change {
         /// Its size after.
         to: Size,
     },
-    /// A field whose value changed, appeared or disappeared.
+    /// An object's own field whose value changed, appeared or disappeared.
     Field {
+        /// The node.
+        node: NodePath,
+        /// The field.
+        name: &'static str,
+        /// Its value before, `None` when it is new.
+        from: Option<OwnedValue>,
+        /// Its value after, `None` when it is gone.
+        to: Option<OwnedValue>,
+    },
+    /// A fact of the tree's whose value changed, appeared or disappeared. It is compared only
+    /// with the facts, so a field of the same name never stands for it.
+    Fact {
         /// The node.
         node: NodePath,
         /// The field.
@@ -168,36 +180,12 @@ fn compare(
         }
     }
 
-    for field in &before.fields {
-        match after.field(field.name) {
-            Some(other) => {
-                let tolerance = options.tolerance(field.unit.or(other.unit));
-                if !value_close(&field.value, &other.value, tolerance, options.pixels) {
-                    changes.push(Change::Field {
-                        node: path_of(after, path),
-                        name: field.name,
-                        from: Some(field.value.clone()),
-                        to: Some(other.value.clone()),
-                    });
-                }
-            }
-            None => changes.push(Change::Field {
-                node: path_of(after, path),
-                name: field.name,
-                from: Some(field.value.clone()),
-                to: None,
-            }),
-        }
-    }
-    for field in &after.fields {
-        if before.field(field.name).is_none() {
-            changes.push(Change::Field {
-                node: path_of(after, path),
-                name: field.name,
-                from: None,
-                to: Some(field.value.clone()),
-            });
-        }
+    let node = || path_of(after, path);
+    for (part, from, to) in [
+        (Part::Fact, &before.facts, &after.facts),
+        (Part::Field, &before.fields, &after.fields),
+    ] {
+        compare_part(part, from, to, &node, options, changes);
     }
 
     let pairs = pair_children(before, after);
@@ -228,6 +216,70 @@ fn compare(
             path.push(index);
             changes.push(Change::Added(path_of(child, path)));
             path.pop();
+        }
+    }
+}
+
+/// Which of a node's lists a value is in.
+#[derive(Clone, Copy)]
+enum Part {
+    Fact,
+    Field,
+}
+
+impl Part {
+    fn change(
+        self,
+        node: NodePath,
+        name: &'static str,
+        from: Option<OwnedValue>,
+        to: Option<OwnedValue>,
+    ) -> Change {
+        match self {
+            Self::Fact => Change::Fact {
+                node,
+                name,
+                from,
+                to,
+            },
+            Self::Field => Change::Field {
+                node,
+                name,
+                from,
+                to,
+            },
+        }
+    }
+}
+
+/// Compares one list of a node with the same list of its counterpart, matched by name.
+fn compare_part(
+    part: Part,
+    before: &[OwnedField],
+    after: &[OwnedField],
+    node: &dyn Fn() -> NodePath,
+    options: &DiffOptions,
+    changes: &mut Vec<Change>,
+) {
+    for field in before {
+        match after.iter().find(|other| other.name == field.name) {
+            Some(other) => {
+                let tolerance = options.tolerance(field.unit.or(other.unit));
+                if !value_close(&field.value, &other.value, tolerance, options.pixels) {
+                    changes.push(part.change(
+                        node(),
+                        field.name,
+                        Some(field.value.clone()),
+                        Some(other.value.clone()),
+                    ));
+                }
+            }
+            None => changes.push(part.change(node(), field.name, Some(field.value.clone()), None)),
+        }
+    }
+    for field in after {
+        if before.iter().all(|other| other.name != field.name) {
+            changes.push(part.change(node(), field.name, None, Some(field.value.clone())));
         }
     }
 }

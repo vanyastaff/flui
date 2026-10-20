@@ -3,7 +3,8 @@
 //! from before a removal is gone.
 
 use flui_foundation::inspect::{
-    Inspect, Link, OwnedValue, SnapshotError, SnapshotNode, SnapshotQuery, Variant,
+    Change, DiffOptions, Inspect, Link, OwnedValue, SnapshotError, SnapshotNode, SnapshotQuery,
+    Variant, diff,
 };
 use flui_testing::widgets::{LaidOut, lay_out, tight};
 use flui_view::prelude::*;
@@ -103,9 +104,9 @@ fn a_counters_elements_link_to_render_objects_that_link_to_semantics() {
         .find_by_kind("CounterView")
         .unique()
         .expect("one counter");
-    assert_eq!(view.get::<&str>("element"), Ok("StatefulElement"));
+    assert_eq!(view.get_fact::<&str>("element"), Ok("StatefulElement"));
     assert_eq!(
-        view.get::<Variant<'_>>("lifecycle").map(|it| it.name),
+        view.get_fact::<Variant<'_>>("lifecycle").map(|it| it.name),
         Ok("Active")
     );
 
@@ -161,14 +162,14 @@ fn render_facts_read_back_typed() {
         .find(|node| node.kind == "RenderParagraph")
         .expect("a paragraph");
     let size = paragraph
-        .get::<flui_foundation::geometry::Size>("size")
+        .get_fact::<flui_foundation::geometry::Size>("size")
         .expect("a laid-out box has a size");
     assert!(size.width > 0.0 && size.height > 0.0, "{size:?}");
     let rect = paragraph.rect.expect("a laid-out box has a rect");
     assert_eq!((rect.width(), rect.height()), (size.width, size.height));
     assert!(
         paragraph.get::<&[OwnedValue]>("properties").is_ok(),
-        "the render object's own properties follow the facts"
+        "the render object's own properties are its fields, apart from the facts"
     );
 }
 
@@ -183,12 +184,102 @@ fn a_views_inspect_fields_follow_the_element_facts() {
         .unique()
         .expect("one view");
     assert_eq!(labelled.get::<&str>("label"), Ok("hello"));
-    let names: Vec<_> = labelled.fields.iter().map(|field| field.name).collect();
-    assert_eq!(names.first(), Some(&"element"), "facts first: {names:?}");
+    let facts: Vec<_> = labelled.facts.iter().map(|fact| fact.name).collect();
     assert_eq!(
-        names.last(),
-        Some(&"label"),
-        "the view's fields last: {names:?}"
+        facts.first(),
+        Some(&"element"),
+        "the tree's facts: {facts:?}"
+    );
+    let fields: Vec<_> = labelled.fields.iter().map(|field| field.name).collect();
+    assert_eq!(fields, ["label"], "the view's own fields alone");
+    let outline = labelled.to_string();
+    let line = outline.lines().next().unwrap_or_default();
+    assert!(
+        line.starts_with("Labelled v")
+            && line.contains("element=")
+            && line.ends_with("label=\"hello\""),
+        "facts, then the view's fields: {line}"
+    );
+}
+
+/// A view whose configuration names its fields as the element tree's facts.
+#[derive(Clone, StatelessView, Inspect)]
+#[view(inspect)]
+struct Draft {
+    lifecycle: &'static str,
+    dirty: bool,
+}
+
+impl StatelessView for Draft {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        Text::new(self.lifecycle)
+    }
+}
+
+/// A view's field named as one of the element's facts reads as the view's value, the fact reads
+/// through its own accessor, and a diff pairs each with its own kind: an unchanged configuration
+/// is no change, and a changed one is a field change, not a fact's.
+///
+/// Fails when the snapshot keeps facts and fields in one list: `get` then answers the fact, and
+/// the diff compares the view's `lifecycle` with the element's.
+#[test]
+fn a_views_field_named_as_an_element_fact_reads_and_diffs_as_its_own() {
+    let mut app = lay_out(
+        Draft {
+            lifecycle: "draft",
+            dirty: true,
+        },
+        tight(100.0, 100.0),
+    );
+    let before = app.inspect_elements(everything()).expect("mounted");
+    let draft = before.find_by_kind("Draft").unique().expect("one view");
+    assert_eq!(draft.get::<&str>("lifecycle"), Ok("draft"));
+    assert_eq!(draft.get::<bool>("dirty"), Ok(true));
+    assert_eq!(
+        draft.get_fact::<Variant<'_>>("lifecycle").map(|it| it.name),
+        Ok("Active")
+    );
+    assert_eq!(draft.get_fact::<bool>("dirty"), Ok(false));
+
+    let again = app.inspect_elements(everything()).expect("mounted");
+    assert_eq!(
+        diff(&before, &again, DiffOptions::exact()),
+        vec![],
+        "the same tree read twice has no changes"
+    );
+
+    app.pump_widget(Draft {
+        lifecycle: "published",
+        dirty: true,
+    });
+    app.tick();
+    let after = app.inspect_elements(everything()).expect("mounted");
+    let named: Vec<_> = diff(&before, &after, DiffOptions::exact())
+        .into_iter()
+        .filter(|change| {
+            matches!(
+                change,
+                Change::Field {
+                    name: "lifecycle" | "dirty",
+                    ..
+                } | Change::Fact {
+                    name: "lifecycle" | "dirty",
+                    ..
+                }
+            )
+        })
+        .collect();
+    assert!(
+        matches!(
+            named.as_slice(),
+            [Change::Field {
+                name: "lifecycle",
+                from: Some(OwnedValue::Str(from)),
+                to: Some(OwnedValue::Str(to)),
+                ..
+            }] if from == "draft" && to == "published"
+        ),
+        "the view's lifecycle changed, the element's did not: {named:#?}"
     );
 }
 

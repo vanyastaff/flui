@@ -192,7 +192,8 @@ pub trait View: Downcast + DynClone + 'static {
     }
 
     /// Writes this view's configuration for inspection (ADR-0242): what the element tree's
-    /// snapshot shows after the element's own facts. Writes nothing by default.
+    /// snapshot keeps as the node's fields, apart from the element's own facts. Writes nothing by
+    /// default.
     ///
     /// It runs while the snapshot holds the element tree, as `build` runs inside the binding's
     /// build scope, so it describes `self` and must not reach back into the binding: a call to

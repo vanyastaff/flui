@@ -653,9 +653,13 @@ answers `SnapshotError::Gone`. A node's kind is its view's `type_name`, which ev
 own facts (element kind, key, lifecycle, dirtiness, depth, slot) and links the element's render
 object. The view writes only its configuration, through the provided `View::inspect`, which
 `#[view(inspect)]` on the view derives fills from the type's `#[derive(Inspect)]`. The hook is a
-method because stable Rust cannot ask at mount whether `V: Inspect`. Pinned by `flui-testing`'s
-`a_counters_elements_link_to_render_objects_that_link_to_semantics` and
-`an_id_from_before_a_removal_is_gone`.
+method because stable Rust cannot ask at mount whether `V: Inspect`. The snapshot keeps the
+tree's facts (`SnapshotNode::facts`, read with `get_fact`) apart from the view's fields
+(`SnapshotNode::fields`, read with `get`), so a view may name a field `lifecycle` or `dirty`
+without shadowing the element's fact or diffing against it. Pinned by `flui-testing`'s
+`a_counters_elements_link_to_render_objects_that_link_to_semantics`,
+`an_id_from_before_a_removal_is_gone` and
+`a_views_field_named_as_an_element_fact_reads_and_diffs_as_its_own`.
 
 ### The composition-root seam is a hidden module, not a feature
 

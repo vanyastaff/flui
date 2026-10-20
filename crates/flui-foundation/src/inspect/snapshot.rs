@@ -195,7 +195,14 @@ pub struct SnapshotNode {
     pub kind: &'static str,
     /// Its kind's type arguments, for a generic kind.
     pub kind_args: Vec<&'static str>,
-    /// The tree's facts, then the object's own fields, in the order written.
+    /// What the tree knows about the node ([`InspectTree::facts`]), in the order written:
+    /// [`get_fact`](Self::get_fact) reads these.
+    ///
+    /// They are kept apart from [`fields`](Self::fields), so a fact and an object's field of
+    /// the same name never stand for each other.
+    pub facts: Vec<OwnedField>,
+    /// The object's own fields ([`Inspect::inspect`]), in the order written:
+    /// [`get`](Self::get) reads these.
     pub fields: Vec<OwnedField>,
     /// Its committed bounds in its parent's logical coordinates.
     pub rect: Option<Rect>,
@@ -205,7 +212,7 @@ pub struct SnapshotNode {
     pub children: Vec<SnapshotNode>,
     /// Its children left out by the depth or node limit.
     pub omitted_children: u32,
-    /// How many of its fields are [`Value::Debug`] (untyped).
+    /// How many of its facts and fields are [`Value::Debug`] (untyped).
     pub debug_fields: u32,
 }
 
@@ -255,11 +262,13 @@ fn take<T: InspectTree + ?Sized>(
         debug_fields: 0,
     };
     tree.facts(id, &mut Fields::new(&mut sink));
+    let facts = core::mem::take(&mut sink.fields);
     view.object.inspect(&mut Fields::new(&mut sink));
     let mut node = SnapshotNode {
         id,
         kind: view.object.kind(),
         kind_args,
+        facts,
         fields: sink.fields,
         rect: view.rect,
         links: view.links,
@@ -485,20 +494,46 @@ impl<'a> IntoIterator for Matches<'a> {
 }
 
 impl SnapshotNode {
-    /// The field `name`, untyped.
+    /// The object's own field `name`, untyped.
     #[must_use]
     pub fn field(&self, name: &str) -> Option<&OwnedField> {
         self.fields.iter().find(|field| field.name == name)
     }
 
-    /// The field `name` read as `T`: `node.get::<f64>("flex")`.
+    /// The object's own field `name` read as `T`: `node.get::<f64>("flex")`. A fact of the
+    /// same name is not read; [`get_fact`](Self::get_fact) reads that.
     ///
     /// # Errors
     ///
-    /// [`FieldError::Missing`] when the node has no such field, [`FieldError::WrongKind`] when
-    /// it holds another kind of value.
+    /// [`FieldError::Missing`] when the object has no such field, [`FieldError::WrongKind`]
+    /// when it holds another kind of value.
     pub fn get<'a, T: FromField<'a>>(&'a self, name: &str) -> Result<T, FieldError> {
-        let field = self.field(name).ok_or_else(|| FieldError::Missing {
+        self.read(self.field(name), name)
+    }
+
+    /// The tree's fact `name`, untyped.
+    #[must_use]
+    pub fn fact(&self, name: &str) -> Option<&OwnedField> {
+        self.facts.iter().find(|fact| fact.name == name)
+    }
+
+    /// The tree's fact `name` read as `T`: `node.get_fact::<bool>("dirty")`. An object's field
+    /// of the same name is not read; [`get`](Self::get) reads that.
+    ///
+    /// # Errors
+    ///
+    /// [`FieldError::Missing`] when the tree wrote no such fact, [`FieldError::WrongKind`] when
+    /// it holds another kind of value.
+    pub fn get_fact<'a, T: FromField<'a>>(&'a self, name: &str) -> Result<T, FieldError> {
+        self.read(self.fact(name), name)
+    }
+
+    fn read<'a, T: FromField<'a>>(
+        &self,
+        field: Option<&'a OwnedField>,
+        name: &str,
+    ) -> Result<T, FieldError> {
+        let field = field.ok_or_else(|| FieldError::Missing {
             kind: self.kind,
             id: self.id,
             name: name.to_owned(),

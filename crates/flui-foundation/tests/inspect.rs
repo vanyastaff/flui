@@ -730,9 +730,9 @@ RenderFlex r1  0,0 360x48
 "
     );
     assert_eq!(
-        capped.field("attached"),
+        capped.fact("attached"),
         None,
-        "a summary query keeps no debug field"
+        "a summary query keeps no debug fact"
     );
 }
 
@@ -762,7 +762,16 @@ fn a_snapshot_reads_fields_by_type_and_finds_nodes_by_link_and_kind() {
             name: "right".to_owned(),
         })
     );
-    assert_eq!(padding.get::<bool>("attached"), Ok(true));
+    assert_eq!(padding.get_fact::<bool>("attached"), Ok(true));
+    assert_eq!(
+        padding.get::<bool>("attached"),
+        Err(FieldError::Missing {
+            kind: "RenderPadding",
+            id: render_id(2).into(),
+            name: "attached".to_owned(),
+        }),
+        "a fact is not one of the object's fields"
+    );
 
     let help = root
         .find_by_link(Link::Semantics(SemanticsId::new(5)))
@@ -917,6 +926,114 @@ fn the_diff_reports_a_moved_node_with_its_delta_and_ignores_a_sub_tolerance_chan
         2,
         "an exact diff sees the same nudge"
     );
+}
+
+/// The sample with the padding also describing a field named as the tree's fact.
+fn with_attached_field(value: f64) -> Tree {
+    let mut tree = sample(8.0);
+    tree.nodes
+        .get_mut(&render_id(2))
+        .expect("the padding")
+        .0
+        .fields
+        .push(("attached", value, None, None));
+    tree
+}
+
+/// A fact and an object's field of the same name read and diff apart: each accessor reads its
+/// own list, and the diff pairs facts with facts and fields with fields.
+///
+/// Fails when the snapshot puts both in one list, where the first of the two answers for both
+/// and an unchanged field diffs against the fact.
+#[test]
+fn a_fact_and_a_field_of_the_same_name_stay_apart() {
+    let before = whole(&with_attached_field(1.0));
+    let padding = before
+        .find_by_kind("RenderPadding")
+        .unique()
+        .expect("one padding");
+    assert_eq!(padding.get::<f64>("attached"), Ok(1.0));
+    assert_eq!(padding.get_fact::<bool>("attached"), Ok(true));
+    assert_eq!(padding.debug_fields, 0);
+
+    let mut debug = String::new();
+    render(padding, Level::Debug, &Plain, &mut debug).expect("a String accepts writes");
+    assert!(
+        debug.starts_with("RenderPadding r2  attached=true  left=8  attached=1  "),
+        "facts, then fields: {debug}"
+    );
+
+    assert_eq!(
+        diff(
+            &before,
+            &whole(&with_attached_field(1.0)),
+            DiffOptions::exact()
+        ),
+        vec![],
+        "an unchanged field is no change, whatever the fact of its name holds"
+    );
+    let changes = diff(
+        &before,
+        &whole(&with_attached_field(2.0)),
+        DiffOptions::exact(),
+    );
+    assert!(
+        matches!(
+            changes.as_slice(),
+            [Change::Field {
+                name: "attached",
+                from: Some(OwnedValue::Float(1.0)),
+                to: Some(OwnedValue::Float(2.0)),
+                ..
+            }]
+        ),
+        "the field changed and the fact did not: {changes:#?}"
+    );
+
+    // A summary read leaves out the debug-level fact and keeps the field of its name.
+    let summary = snapshot(
+        &with_attached_field(1.0),
+        SnapshotQuery {
+            level: Level::Summary,
+            ..SnapshotQuery::default()
+        },
+    )
+    .expect("the sample has a root");
+    let gone: Vec<_> = diff(&before, &summary, DiffOptions::exact())
+        .into_iter()
+        .filter(|change| {
+            matches!(
+                change,
+                Change::Field {
+                    name: "attached",
+                    ..
+                } | Change::Fact {
+                    name: "attached",
+                    ..
+                }
+            ) && change_path(change) == [0]
+        })
+        .collect();
+    assert!(
+        matches!(
+            gone.as_slice(),
+            [Change::Fact {
+                name: "attached",
+                from: Some(OwnedValue::Bool(true)),
+                to: None,
+                ..
+            }]
+        ),
+        "the fact is gone, the field is not: {gone:#?}"
+    );
+}
+
+/// The path of a field or fact change.
+fn change_path(change: &Change) -> &[usize] {
+    match change {
+        Change::Field { node, .. } | Change::Fact { node, .. } => &node.path,
+        _ => &[],
+    }
 }
 
 #[test]

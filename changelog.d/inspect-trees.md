@@ -23,3 +23,8 @@
   and the scene it was minted in, which `LayerTree::scene` gives and `PipelineOwner` numbers per
   painted frame. A layer id kept from an earlier frame answers `Gone` instead of naming whatever
   holds its slot now, and reads as `l4.37` past the first scene.
+- `flui_foundation::inspect::SnapshotNode` keeps the tree's facts (`facts`, read with `fact` and
+  `get_fact`) apart from the object's own fields (`fields`, read with `field` and `get`), so a
+  view's or render object's field named like a fact (`lifecycle`, `dirty`, `size`) reads as its
+  own value. `diff` compares facts with facts and fields with fields, and reports a changed fact
+  as the new `Change::Fact`.
