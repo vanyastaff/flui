@@ -102,11 +102,9 @@ pub(crate) fn descendant_err_preserves_parent_needs_layout() {
     // remove_shallow also strips the child from parent.children() per
     // its impl, so we have to re-add it manually to simulate the stale
     // link.
-    let padding_node = pipeline
+    pipeline
         .render_tree_mut()
-        .get_mut(padding_id)
-        .expect("padding node must exist");
-    padding_node.add_child(child_id);
+        .append_unlinked_child(padding_id, child_id);
 
     let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
     let result = pipeline.layout_dirty_root(padding_id, constraints);

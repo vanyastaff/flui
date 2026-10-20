@@ -332,7 +332,7 @@ impl<P: Protocol> RenderEntry<P> {
 
     /// Returns a mutable reference to the tree links.
     #[inline]
-    pub fn links_mut(&mut self) -> &mut NodeLinks {
+    pub(crate) fn links_mut(&mut self) -> &mut NodeLinks {
         &mut self.links
     }
 
