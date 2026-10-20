@@ -1,7 +1,7 @@
 ### Added
 
-- `MediaQueryData::view_padding` (the raw OS safe area) with `set_view_padding`, `set_view_insets` and `remove_bottom_view_inset`, which keep `padding`, `view_padding` and `view_insets` consistent.
+- `MediaQueryData::view_padding` (the raw OS safe area) and `MediaQueryData::padding()`, which is computed as `view_padding` minus `view_insets` per edge, clamped at zero. `remove_padding`, `remove_top_padding`, `remove_bottom_padding`, `remove_bottom_view_inset` and `set_padding_bottom` adjust the sources consistently for widgets that consume or report an inset.
 
-### Fixed
+### Changed
 
-- `MediaQueryData::padding` is now the safe area not already covered by `view_insets`, so a `SafeArea` no longer reserves the home-indicator inset above an open keyboard. Code that built `MediaQueryData` with a struct literal and a nonzero `padding` should call `set_view_padding` instead.
+- `MediaQueryData::padding` is no longer a field; read `padding()` and set `view_padding` instead. `SafeArea` and the scaffolds honour `view_insets` once a platform publishes them, so they no longer reserve the home-indicator area above an open keyboard. Nothing in the runtime publishes keyboard `view_insets` yet.

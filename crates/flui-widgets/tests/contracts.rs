@@ -98,6 +98,8 @@ fn reactivity_and_dependencies() {
             ("media_query_fields::a_size_only_change_rebuilds_size_and_whole_readers_only", crate::media_query_fields::a_size_only_change_rebuilds_size_and_whole_readers_only),
             ("media_query_fields::safe_area_reserves_the_home_indicator_only_while_the_keyboard_is_down", crate::media_query_fields::safe_area_reserves_the_home_indicator_only_while_the_keyboard_is_down),
             ("media_query_fields::removing_the_bottom_view_inset_shrinks_view_padding_by_what_it_covered", crate::media_query_fields::removing_the_bottom_view_inset_shrinks_view_padding_by_what_it_covered),
+            ("media_query_fields::padding_is_derived_from_view_padding_and_view_insets", crate::media_query_fields::padding_is_derived_from_view_padding_and_view_insets),
+            ("media_query_fields::consuming_and_overriding_padding_updates_its_sources", crate::media_query_fields::consuming_and_overriding_padding_updates_its_sources),
             ("media_query_fields::a_text_scale_change_relayouts_a_preserved_text_subtree",crate::media_query_fields::a_text_scale_change_relayouts_a_preserved_text_subtree),
             ("directionality_dependency::a_start_aligned_column_depends_on_directionality", crate::directionality_dependency::a_start_aligned_column_depends_on_directionality),
             ("localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl", crate::localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl),

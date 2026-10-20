@@ -301,7 +301,7 @@ impl PendingWindowState {
                         data.device_pixel_ratio = scale;
                     }
                     if let Some(insets) = self.safe_area {
-                        data.set_view_padding(insets);
+                        data.view_padding = insets;
                     }
                     if let Some(brightness) = self.brightness {
                         data.platform_brightness = brightness;

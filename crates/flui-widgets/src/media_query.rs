@@ -14,8 +14,8 @@
 //! These require platform event plumbing (accessibility bridge, IME state)
 //! that lives above this layer.
 
-use flui_foundation::geometry::EdgeInsets;
 use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{EdgeInsets, Edges};
 use flui_platform_api::{Brightness, Locale};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherited_view};
@@ -71,25 +71,17 @@ pub struct MediaQueryData {
     /// `1..=1000`, including for explicitly authored nested providers.
     pub font_weight_adjustment: i32,
 
-    /// Safe-area insets from the window edges reserved by the OS (notch,
-    /// home indicator, status bar), whether or not other system UI covers
-    /// them. Unlike [`padding`](Self::padding) it is not reduced by
-    /// [`view_insets`](Self::view_insets). Update it with
-    /// [`set_view_padding`](Self::set_view_padding) so `padding` follows.
+    /// Safe-area insets reserved by the OS (notch, home indicator, status
+    /// bar), whether or not other system UI covers them. Unlike
+    /// [`padding`](Self::padding) it is not reduced by
+    /// [`view_insets`](Self::view_insets).
     pub view_padding: EdgeInsets,
-
-    /// The part of [`view_padding`](Self::view_padding) that is not already
-    /// covered by [`view_insets`](Self::view_insets), per edge: with the
-    /// keyboard up over the home-indicator area, the bottom value is zero.
-    /// App content avoids these areas, and [`SafeArea`](crate::SafeArea)
-    /// consumes them. Derived: write `view_padding` and `view_insets` through
-    /// their setters rather than this field.
-    pub padding: EdgeInsets,
 
     /// Insets occupied by system UI that fully obscures part of the window,
     /// such as the software keyboard when it is visible. Unlike
-    /// [`padding`](Self::padding), these areas are hidden — not just reserved.
-    /// Update it with [`set_view_insets`](Self::set_view_insets).
+    /// [`padding`](Self::padding), these areas are hidden, not just reserved.
+    /// The runtime does not publish keyboard insets yet; widgets honour the
+    /// value once a platform producer does.
     pub view_insets: EdgeInsets,
 
     /// The OS-level light/dark preference as reported by the platform.
@@ -122,7 +114,6 @@ impl Default for MediaQueryData {
             text_sizing: flui_painting::TextSizing::fixed(),
             font_weight_adjustment: 0,
             view_padding: EdgeInsets::ZERO,
-            padding: EdgeInsets::ZERO,
             view_insets: EdgeInsets::ZERO,
             platform_brightness: Brightness::Light,
             high_contrast: false,
@@ -133,32 +124,59 @@ impl Default for MediaQueryData {
 }
 
 impl MediaQueryData {
-    /// Set the raw OS safe-area insets and re-derive
-    /// [`padding`](Self::padding) from them and the current
-    /// [`view_insets`](Self::view_insets).
-    pub fn set_view_padding(&mut self, view_padding: EdgeInsets) {
-        self.view_padding = view_padding;
-        self.derive_padding();
-    }
-
-    /// Set the insets covered by system UI and re-derive
-    /// [`padding`](Self::padding) so the safe area is not reserved twice.
-    pub fn set_view_insets(&mut self, view_insets: EdgeInsets) {
-        self.view_insets = view_insets;
-        self.derive_padding();
+    /// The part of [`view_padding`](Self::view_padding) that
+    /// [`view_insets`](Self::view_insets) do not already cover, per edge: with
+    /// the keyboard up over the home-indicator area the bottom value is zero.
+    /// App content avoids these areas and [`SafeArea`](crate::SafeArea)
+    /// consumes them. Computed, so it cannot disagree with its sources.
+    #[must_use]
+    pub fn padding(&self) -> EdgeInsets {
+        (self.view_padding - self.view_insets).clamp_non_negative()
     }
 
     /// Mark the bottom view inset as consumed by a descendant that resizes
     /// around it (a scaffold body above the keyboard): the inset becomes zero
-    /// and `view_padding.bottom` shrinks by what the inset covered. `padding`
-    /// already excluded the covered part, so it is unchanged.
+    /// and `view_padding.bottom` shrinks by what the inset covered, leaving
+    /// [`padding`](Self::padding) unchanged.
     pub fn remove_bottom_view_inset(&mut self) {
         self.view_padding.bottom = (self.view_padding.bottom - self.view_insets.bottom).max(0.0);
         self.view_insets.bottom = 0.0;
     }
 
-    fn derive_padding(&mut self) {
-        self.padding = (self.view_padding - self.view_insets).clamp_non_negative();
+    /// Mark the flagged edges of [`padding`](Self::padding) as consumed by a
+    /// descendant that reserves them itself (a `SafeArea`, an app bar): their
+    /// padding becomes zero and `view_padding` shrinks by what was consumed.
+    pub fn remove_padding(&mut self, edges: Edges<bool>) {
+        let padding = self.padding();
+        if edges.top {
+            self.view_padding.top -= padding.top;
+        }
+        if edges.right {
+            self.view_padding.right -= padding.right;
+        }
+        if edges.bottom {
+            self.view_padding.bottom -= padding.bottom;
+        }
+        if edges.left {
+            self.view_padding.left -= padding.left;
+        }
+    }
+
+    /// [`remove_padding`](Self::remove_padding) for the top edge alone.
+    pub fn remove_top_padding(&mut self) {
+        self.remove_padding(Edges::new(true, false, false, false));
+    }
+
+    /// [`remove_padding`](Self::remove_padding) for the bottom edge alone.
+    pub fn remove_bottom_padding(&mut self) {
+        self.remove_padding(Edges::new(false, false, true, false));
+    }
+
+    /// Make the bottom [`padding`](Self::padding) exactly `bottom`, for a
+    /// descendant that reports an area it obstructs itself (a translucent tab
+    /// bar), by raising `view_padding.bottom` above the covered inset.
+    pub fn set_padding_bottom(&mut self, bottom: f64) {
+        self.view_padding.bottom = self.view_insets.bottom + bottom;
     }
 }
 
@@ -271,10 +289,14 @@ impl MediaQuery {
         })
     }
 
-    /// The safe-area padding, depending on `padding` only.
+    /// The safe-area padding, depending on `view_padding` and `view_insets` only.
     #[must_use]
     pub fn padding_of(ctx: &dyn BuildContext) -> Option<EdgeInsets> {
-        Self::depend_on_fields(ctx, MediaQueryData::FIELD_PADDING, |d| d.padding)
+        Self::depend_on_fields(
+            ctx,
+            MediaQueryData::FIELD_VIEW_PADDING | MediaQueryData::FIELD_VIEW_INSETS,
+            MediaQueryData::padding,
+        )
     }
 
     /// The view insets (keyboard), depending on `view_insets` only.

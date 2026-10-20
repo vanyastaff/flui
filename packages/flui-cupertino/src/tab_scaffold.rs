@@ -304,16 +304,16 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
         // entirely obstructed by the keyboard (or another view inset): don't
         // double-pad.
         if !view.resize_to_avoid_bottom_inset || tab_bar_height > media.view_insets.bottom {
-            let bottom_padding = tab_bar_height + media.padding.bottom;
+            let bottom_padding = tab_bar_height + media.padding().bottom;
             if view.tab_bar.opaque(ctx) {
                 // Opaque: directly stop content higher, and the bar's own
                 // height is fully consumed out of the republished padding.
                 content_padding_bottom = bottom_padding;
-                reduced.padding.bottom = 0.0;
+                reduced.remove_bottom_padding();
             } else {
                 // Translucent: content may draw behind the bar; hint the
                 // obstructed area via padding instead of shifting content.
-                reduced.padding.bottom = bottom_padding;
+                reduced.set_padding_bottom(bottom_padding);
             }
         }
 

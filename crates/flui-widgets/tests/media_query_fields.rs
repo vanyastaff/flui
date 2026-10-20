@@ -378,10 +378,42 @@ pub(crate) fn a_build_that_panics_before_reading_keeps_its_dependency() {
 fn keyboard_over_home_indicator(keyboard_bottom: f64) -> MediaQueryData {
     use flui_foundation::geometry::EdgeInsets;
 
-    let mut data = MediaQueryData::default();
-    data.set_view_padding(EdgeInsets::new(0.0, 0.0, 34.0, 0.0));
-    data.set_view_insets(EdgeInsets::new(0.0, 0.0, keyboard_bottom, 0.0));
-    data
+    MediaQueryData {
+        view_padding: EdgeInsets::new(0.0, 0.0, 34.0, 0.0),
+        view_insets: EdgeInsets::new(0.0, 0.0, keyboard_bottom, 0.0),
+        ..MediaQueryData::default()
+    }
+}
+
+/// A literal built from `view_padding` and `view_insets` reports the derived
+/// padding, and it never goes negative.
+pub(crate) fn padding_is_derived_from_view_padding_and_view_insets() {
+    use flui_foundation::geometry::EdgeInsets;
+
+    let data = MediaQueryData {
+        view_padding: EdgeInsets::new(47.0, 0.0, 34.0, 0.0),
+        view_insets: EdgeInsets::new(0.0, 0.0, 20.0, 0.0),
+        ..MediaQueryData::default()
+    };
+    assert_eq!(data.padding(), EdgeInsets::new(47.0, 0.0, 14.0, 0.0));
+
+    let covered = MediaQueryData {
+        view_insets: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
+        ..data
+    };
+    assert_eq!(covered.padding().bottom, 0.0, "clamped, not negative");
+}
+
+/// Consuming or overriding padding keeps `padding()` equal to what the
+/// consumer meant.
+pub(crate) fn consuming_and_overriding_padding_updates_its_sources() {
+    let mut data = keyboard_over_home_indicator(20.0);
+    data.remove_bottom_padding();
+    assert_eq!(data.padding().bottom, 0.0);
+    assert_eq!(data.view_padding.bottom, 20.0, "the covered part stays");
+
+    data.set_padding_bottom(50.0);
+    assert_eq!(data.padding().bottom, 50.0);
 }
 
 /// A keyboard that covers the home-indicator area must leave nothing for a
@@ -425,14 +457,14 @@ pub(crate) fn safe_area_reserves_the_home_indicator_only_while_the_keyboard_is_d
 /// Consuming the bottom view inset keeps all three fields consistent.
 pub(crate) fn removing_the_bottom_view_inset_shrinks_view_padding_by_what_it_covered() {
     let mut data = keyboard_over_home_indicator(20.0);
-    assert_eq!(data.padding.bottom, 14.0);
+    assert_eq!(data.padding().bottom, 14.0);
     data.remove_bottom_view_inset();
     assert_eq!(data.view_insets.bottom, 0.0);
     assert_eq!(data.view_padding.bottom, 14.0);
-    assert_eq!(data.padding.bottom, 14.0);
+    assert_eq!(data.padding().bottom, 14.0);
 
     let mut covered = keyboard_over_home_indicator(300.0);
     covered.remove_bottom_view_inset();
     assert_eq!(covered.view_padding.bottom, 0.0);
-    assert_eq!(covered.padding.bottom, 0.0);
+    assert_eq!(covered.padding().bottom, 0.0);
 }
