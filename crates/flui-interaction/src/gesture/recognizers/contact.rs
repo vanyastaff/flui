@@ -324,7 +324,12 @@ impl PrimaryContact {
             .ok_or(BeginContactError::ArenaClosed)?;
         let (entry, held_out) = self
             .membership
-            .admit_from(pointer, down.feeder(), down.motion_frame())
+            .admit_from(
+                pointer,
+                down.feeder(),
+                down.root_to_local()
+                    .map_or(MotionFrame::IDENTITY, MotionFrame::from_root_to_local),
+            )
             .ok_or(BeginContactError::ArenaClosed)?;
         let contact = Contact {
             snapshot: ContactSnapshot {

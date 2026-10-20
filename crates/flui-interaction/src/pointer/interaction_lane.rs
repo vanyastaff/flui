@@ -365,12 +365,10 @@ impl<'a> PointerDispatch<'a> {
         self
     }
 
-    /// How this target sees displacement, for the ownership table.
-    pub(crate) fn motion_frame(&self) -> crate::gesture::arena::MotionFrame {
+    /// The transform that rewrote the event from the root's space into the
+    /// target's, if the route named one.
+    pub(crate) const fn root_to_local(&self) -> Option<&'a Matrix4> {
         self.root_to_local
-            .map_or(crate::gesture::arena::MotionFrame::IDENTITY, |transform| {
-                crate::gesture::arena::MotionFrame::from_root_to_local(transform)
-            })
     }
 
     /// The route target delivering this dispatch, as an arena admission
