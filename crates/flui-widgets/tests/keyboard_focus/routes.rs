@@ -2,7 +2,7 @@
 //! reach only the route on top, and the back and dismiss keys pop the right
 //! route.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -18,7 +18,8 @@ use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};
 use flui_widgets::interaction::{Actions, ActivateIntent, CallbackAction, Focus};
 use flui_widgets::navigator::{
-    Navigator, NavigatorHandle, NavigatorObserver, PageRoute, PopupRoute, RouteAnimation, RouteId,
+    Navigator, NavigatorHandle, NavigatorObserver, NavigatorRoute, PageRoute, PopupRoute, Route,
+    RouteAnimation, RouteContentBuilder, RouteId, RouteSettings,
 };
 use flui_widgets::{Align, AnimatedBuilder, Column, SizedBox};
 
@@ -380,17 +381,51 @@ pub(crate) fn a_panicking_restored_focus_listener_still_closes_the_route() {
     }
 }
 
-/// An observer that panics at a removal does not keep the removed route's
-/// overlay entry and page from being retired: their captures, whose
-/// destructors panic too, are retained instead of replacing the observer's
-/// failure, which reaches the caller.
-pub(crate) fn a_panicking_observer_keeps_the_removal_failure_first() {
-    struct Bomb;
-    impl Drop for Bomb {
-        fn drop(&mut self) {
-            assert!(std::thread::panicking(), "route capture destructor");
-        }
+/// A capture whose destructor panics unless a panic is already unwinding.
+struct Bomb;
+
+impl Drop for Bomb {
+    fn drop(&mut self) {
+        assert!(std::thread::panicking(), "route capture destructor");
     }
+}
+
+/// A route whose overlay entry's builder alone owns a [`Bomb`]: the route
+/// hands it over when the navigator asks for its content, and counts its
+/// disposals.
+struct BombRoute {
+    settings: RouteSettings,
+    bomb: RefCell<Option<Bomb>>,
+    disposals: Rc<Cell<u32>>,
+}
+
+impl Route for BombRoute {
+    type Output = ();
+
+    fn settings(&self) -> &RouteSettings {
+        &self.settings
+    }
+
+    fn dispose(&mut self) {
+        self.disposals.set(self.disposals.get() + 1);
+    }
+}
+
+impl NavigatorRoute for BombRoute {
+    fn content_builder(&self) -> RouteContentBuilder {
+        let bomb = self.bomb.borrow_mut().take();
+        Rc::new(move |_| {
+            let _held = &bomb;
+            SizedBox::new(40.0, 40.0).into_view().boxed()
+        })
+    }
+}
+
+/// An observer that panics at a removal does not keep the removed route from
+/// being retired: its overlay entry, the last owner of a capture whose
+/// destructor panics too, is retained rather than replacing the observer's
+/// failure, and the route is still disposed.
+pub(crate) fn a_panicking_observer_keeps_the_removal_failure_first() {
     struct PanicsOnRemove;
     impl NavigatorObserver for PanicsOnRemove {
         fn did_remove(&self, _route: RouteId, _previous: Option<RouteId>) {
@@ -400,21 +435,23 @@ pub(crate) fn a_panicking_observer_keeps_the_removal_failure_first() {
     let counts = Rc::new(Cell::new(0));
     let (navigator, mut harness) = home(&counts);
     harness.tick();
-    let bomb = Rc::new(Bomb);
-    drop(navigator.push(PageRoute::<i32>::new(move |_, _, _| {
-        let _held = &bomb;
-        SizedBox::new(40.0, 40.0).into_view().boxed()
-    })));
+    let disposals = Rc::new(Cell::new(0));
+    drop(navigator.push(BombRoute {
+        settings: RouteSettings::default(),
+        bomb: RefCell::new(Some(Bomb)),
+        disposals: Rc::clone(&disposals),
+    }));
     settle(&mut harness);
-    let page = *navigator.route_ids().last().expect("the page is on top");
+    let route = *navigator.route_ids().last().expect("the route is on top");
     navigator.add_observer(Arc::new(PanicsOnRemove));
     harness.swap_root(SizedBox::new(1.0, 1.0));
     settle(&mut harness);
 
-    let payload = catch_unwind(AssertUnwindSafe(|| navigator.remove_route(page)))
+    let payload = catch_unwind(AssertUnwindSafe(|| navigator.remove_route(route)))
         .expect_err("the observer's panic reaches the caller");
     assert_eq!(payload.downcast_ref::<&str>(), Some(&"remove observer"));
-    assert_eq!(navigator.route_ids().len(), 1, "the page is gone");
+    assert_eq!(navigator.route_ids().len(), 1, "the route is gone");
+    assert_eq!(disposals.get(), 1, "and disposed");
 }
 
 /// A nested navigator whose top changed while a dialog covered its page does
