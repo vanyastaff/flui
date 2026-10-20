@@ -73,6 +73,11 @@ pub(crate) struct LoopTurn {
     pub(crate) next_preference_sample: Instant,
 }
 
+/// The longest wait `ALooper_pollOnce` takes: its timeout is `i32` milliseconds,
+/// and `android-activity` converts with `as i32`, so a longer one wraps negative
+/// and waits forever.
+const LOOPER_MAX_WAIT: Duration = Duration::from_millis(i32::MAX as u64);
+
 /// How long `poll_events` may block; `None` blocks until the looper is woken.
 ///
 /// Every producer of work wakes the looper (a window redraw request, the owner
@@ -89,7 +94,7 @@ pub(crate) fn poll_timeout(turn: LoopTurn, now: Instant) -> Option<Duration> {
     if turn.should_render {
         return Some(Duration::ZERO);
     }
-    let until = |deadline: Instant| deadline.saturating_duration_since(now);
+    let until = |deadline: Instant| deadline.saturating_duration_since(now).min(LOOPER_MAX_WAIT);
     if turn.resumed {
         let next = turn
             .wake_deadline
@@ -299,6 +304,11 @@ mod tests {
                 "paused, a timer still ahead",
                 turn(false, false, Some(now + ms(250))),
                 Some(ms(250)),
+            ),
+            (
+                "paused, a timer further ahead than the looper can wait",
+                turn(false, false, Some(now + Duration::from_secs(30 * 24 * 3600))),
+                Some(LOOPER_MAX_WAIT),
             ),
         ] {
             assert_eq!(poll_timeout(turn, now), expected, "{case}");
