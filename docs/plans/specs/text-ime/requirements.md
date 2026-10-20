@@ -232,7 +232,9 @@
 - IME на macOS, Linux, Web, Android, iOS: путь проекции не меняется, сертификации нет (D1 ур. 0).
 - Narrator и UIA `TextPattern` — спека `a11y-native` (зависимость); здесь UIA читает `ValuePattern`.
 - Автовызов сенсорной клавиатуры: Windows вызывает её по UIA `TextPattern`, которого нет.
-- `InputScope`, кроме `IS_PASSWORD`: в Notes нет полей с другим scope.
+- `InputScope` для полей Notes: в Notes нет полей с другим scope. Сам механизм (`TextInputPurpose`
+  в `TextStoreStatus`, `ITfInputScope` для protected-поля и для назначений email, url, phone,
+  number, search) в коде есть и не зависит от Notes.
 - Подчёркивание preedit в высоком контрасте: одно подчёркивание цветом текста (ADR-0030 §6).
 - Undo/redo и «одна сессия — один шаг undo» (ADR-0090 §1): undo-стека нет.
 - Реконверсия, диктовка Win+H, рукописный ввод, встроенные объекты TSF, атрибуты композиции.
