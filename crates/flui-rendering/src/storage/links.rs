@@ -146,9 +146,9 @@ impl NodeLinks {
         self.depth
     }
 
-    /// Sets the depth.
+    /// Sets the depth. Only the render tree's edge primitives write it.
     #[inline]
-    pub fn set_depth(&mut self, depth: u16) {
+    pub(crate) fn set_depth(&mut self, depth: u16) {
         self.depth = depth;
     }
 }
