@@ -677,13 +677,19 @@ fn dispatch_owner_turn_delivery(
     // Window commands queued by application code apply at the start of the
     // turn, before its frame and outside the turn's callback guard: a native
     // call re-enters the window procedure. Where the owner's wake applies them
-    // (every host but Android and iOS), a frame turn leaves them to it: a
-    // frame runs inside the platform's paint callback, which holds back the
-    // resize a command causes, so the frame would draw the old size.
+    // (every host but Android and iOS, once an owner wake is installed), a
+    // frame turn leaves them to it: a frame runs inside the platform's paint
+    // callback, which holds back the resize a command causes, so the frame
+    // would draw the old size. With no wake, the queue asked for a redraw, and
+    // the frame is the turn that applies them.
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let applies = true;
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let applies = !matches!(turn, OwnerTurn::Presentation(_, RuntimeTask::Frame(_)));
+    let applies = !matches!(turn, OwnerTurn::Presentation(_, RuntimeTask::Frame(_)))
+        || APP_RUNTIME.with(|slot| {
+            slot.try_borrow()
+                .map_or(true, |state| state.owner_turn_wake.is_none())
+        });
     if applies {
         apply_queued_window_commands(turn.owner_thread());
     }

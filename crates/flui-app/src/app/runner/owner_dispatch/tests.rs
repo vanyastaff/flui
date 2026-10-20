@@ -1405,6 +1405,13 @@ fn a_frame_turn_leaves_queued_window_commands_to_the_owner_wake() {
         Some("queued"),
         "the owner's wake applies it"
     );
+
+    // With no owner wake the queue asks for a redraw: the frame applies it.
+    let wake = APP_RUNTIME.with(|slot| slot.borrow_mut().owner_turn_wake.take());
+    handle.set_title("by the frame").expect("accepted");
+    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("frame");
+    assert_eq!(window.state().title.as_deref(), Some("by the frame"));
+    APP_RUNTIME.with(|slot| slot.borrow_mut().owner_turn_wake = wake);
     teardown_platform_ui_runtime();
 }
 
