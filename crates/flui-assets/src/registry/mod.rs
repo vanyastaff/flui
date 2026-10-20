@@ -19,6 +19,8 @@ mod bridge;
 #[cfg(feature = "images")]
 mod images;
 #[cfg(feature = "images")]
+mod ordered_slots;
+#[cfg(feature = "images")]
 use bridge::BridgeRuntime;
 #[cfg(feature = "images")]
 pub use images::{ImageLoad, ImageSource};
@@ -162,8 +164,11 @@ impl AssetRegistry {
     /// [`with_decoded_image_budget`](AssetRegistryBuilder::with_decoded_image_budget);
     /// failures are not kept, so a later request retries.
     ///
-    /// Dropping the last [`ImageLoad`] waiting for a load cancels it: the read
-    /// is aborted and a decode that has not started never runs.
+    /// Dropping the last [`ImageLoad`] waiting for a load cancels it: the file
+    /// is read in chunks and stops at the next one (a chunk already being read
+    /// on a blocking thread finishes), and a decode that has not started never
+    /// runs. Freed decode slots go to waiting loads in the order they were
+    /// requested.
     ///
     /// The task spawns onto [`AssetRegistryBuilder::with_runtime_handle`]'s
     /// injected handle if one was supplied at construction; otherwise an
@@ -196,11 +201,7 @@ impl AssetRegistry {
     #[cfg(feature = "images")]
     pub fn load_image_bridged(&self, path: impl Into<Arc<str>>) -> ImageLoad {
         let source = ImageSource::Asset(path.into());
-        self.load_decoded(source, |path| async move {
-            crate::loaders::BytesFileLoader::new("")
-                .load_bytes(path.as_ref())
-                .await
-        })
+        self.load_decoded(source, read_in_chunks)
     }
 
     /// Fetches and decodes an image over HTTP/HTTPS via
@@ -277,6 +278,10 @@ impl AssetRegistry {
         // drops the task inside `spawn`, and the completion's drop then
         // settles the entry on this thread.
         let task = handle.spawn(async move {
+            // Taken before the read starts and held until the decode returns:
+            // reads past admission, and the encoded bytes waiting to decode,
+            // are bounded by count.
+            let _load = completion.images().admit_load(completion.ticket()).await;
             let outcome = match bytes.await {
                 Ok(bytes) => {
                     completion
@@ -478,15 +483,42 @@ impl AssetRegistry {
     }
 }
 
+/// Bytes one blocking read takes of an image file: an abandoned load stops
+/// reading at the next chunk instead of holding a blocking thread for the
+/// whole file.
+#[cfg(feature = "images")]
+const FILE_READ_CHUNK: usize = 256 * 1024;
+
+/// Reads the file at `path` one [`FILE_READ_CHUNK`] per blocking read, so the
+/// future can be dropped between chunks.
+///
+/// `tokio::fs::read` runs the whole `std::fs::read` as one blocking call,
+/// which an abort cannot stop.
+#[cfg(feature = "images")]
+async fn read_in_chunks(path: Arc<str>) -> Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+
+    let failed = |error: std::io::Error| AssetError::LoadFailed {
+        path: path.to_string(),
+        reason: error.to_string(),
+    };
+    let mut file = tokio::fs::File::open(path.as_ref()).await.map_err(failed)?;
+    file.set_max_buf_size(FILE_READ_CHUNK);
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).await.map_err(failed)?;
+    Ok(bytes)
+}
+
 /// Under memory pressure the registry gives back every completed typed-cache
 /// entry, and decoded images by level.
 ///
 /// A typed asset reloads from its source on the next request, and there is no
 /// cheaper half-way to give back, so each level drops the same entries.
-/// Decoded images are kept by recency: moderate pressure trims them to half the
-/// [decoded-image budget](AssetRegistryBuilder::with_decoded_image_budget),
-/// critical pressure drops them all. Handles and images already given out keep
-/// their data, and loads in flight finish into the caches they started with.
+/// Decoded images (`images` feature) are kept by recency: moderate pressure
+/// trims them to half the decoded-image budget
+/// (`AssetRegistryBuilder::with_decoded_image_budget`), critical pressure drops
+/// them all. Handles and images already given out keep their data, and loads
+/// in flight finish into the caches they started with.
 impl ReclaimMemory for AssetRegistry {
     fn reclaim(&self, level: MemoryPressureLevel) {
         self.retire_caches();

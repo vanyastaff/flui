@@ -120,18 +120,20 @@ impl NetworkLoader {
         let Some(second) = response.chunk().await.map_err(|e| read_failed(url, &e))? else {
             return Ok(first.into());
         };
-        let mut body = Vec::with_capacity(first.len() + second.len());
-        for chunk in [first, second] {
-            body.extend_from_slice(&chunk);
+        // Every size is checked before anything is allocated or copied for it:
+        // `first.len() <= MAX_BODY_BYTES` and each later check keeps
+        // `body.len() <= MAX_BODY_BYTES`, so the subtractions cannot wrap.
+        if second.len() > MAX_BODY_BYTES - first.len() {
+            return Err(too_large());
         }
+        let mut body = Vec::with_capacity(first.len() + second.len());
+        body.extend_from_slice(&first);
+        body.extend_from_slice(&second);
         while let Some(chunk) = response.chunk().await.map_err(|e| read_failed(url, &e))? {
-            if body.len() + chunk.len() > MAX_BODY_BYTES {
+            if chunk.len() > MAX_BODY_BYTES - body.len() {
                 return Err(too_large());
             }
             body.extend_from_slice(&chunk);
-        }
-        if body.len() > MAX_BODY_BYTES {
-            return Err(too_large());
         }
         Ok(body)
     }

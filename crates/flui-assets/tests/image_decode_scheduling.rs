@@ -195,3 +195,201 @@ fn abandoned_loads_never_decode_and_do_not_delay_a_live_one() {
         "the live image is kept"
     );
 }
+
+/// Serves one request with `body`, but only once `release` fires; reports when
+/// the request has arrived.
+#[cfg(feature = "network")]
+fn spawn_held_server(
+    body: Vec<u8>,
+) -> (
+    std::net::SocketAddr,
+    std::sync::mpsc::Receiver<()>,
+    std::sync::mpsc::Sender<()>,
+) {
+    use std::io::{Read, Write};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback server binds");
+    let address = listener.local_addr().expect("server has an address");
+    let (arrived_tx, arrived) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("the client connects");
+        // Accepted sockets can inherit nonblocking mode on Windows.
+        stream.set_nonblocking(false).expect("blocking reads");
+        stream.set_read_timeout(Some(BUDGET)).expect("read timeout");
+        let mut request = Vec::new();
+        let mut byte = [0_u8];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).expect("the request arrives");
+            request.push(byte[0]);
+        }
+        let _ = arrived_tx.send(());
+        release_rx
+            .recv_timeout(BUDGET)
+            .expect("the test releases the response");
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .expect("response header writes");
+        stream.write_all(&body).expect("response body writes");
+    });
+    (address, arrived, release)
+}
+
+/// Accepts every connection, reads its request and never answers; counts the
+/// requests that arrived. Runs until `stop` is set.
+#[cfg(feature = "network")]
+fn spawn_silent_server(
+    requests: Arc<AtomicUsize>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) -> std::net::SocketAddr {
+    use std::io::Read;
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback server binds");
+    let address = listener.local_addr().expect("server has an address");
+    listener.set_nonblocking(true).expect("nonblocking accept");
+    std::thread::spawn(move || {
+        // Held, never read again: an answered or closed connection would let
+        // its load finish and free its slot.
+        let mut held_open = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !stop.load(Ordering::SeqCst) && Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).expect("blocking reads");
+                    stream.set_read_timeout(Some(BUDGET)).expect("read timeout");
+                    let mut request = Vec::new();
+                    let mut byte = [0_u8];
+                    while !request.ends_with(b"\r\n\r\n") {
+                        if stream.read_exact(&mut byte).is_err() {
+                            break;
+                        }
+                        request.push(byte[0]);
+                    }
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    held_open.push(stream);
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(2)),
+            }
+        }
+        drop(held_open);
+    });
+    address
+}
+
+/// With one decode thread a registry lets four loads past admission: while a
+/// decode holds its load slot, only three more requests go out, and the next
+/// one starts once that decode returns.
+#[cfg(feature = "network")]
+#[test]
+fn loads_past_admission_are_bounded_by_count() {
+    const BLOCKER: &[u8; 8] = b"FLUIBND0";
+    const SETTLE: Duration = Duration::from_millis(300);
+    let gate = Arc::new(Gate::default());
+    let hook_gate = Arc::clone(&gate);
+    register_signed_png(BLOCKER, "flui-bound-blocker", move || hook_gate.pass());
+    let requests = Arc::new(AtomicUsize::new(0));
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let address = spawn_silent_server(Arc::clone(&requests), Arc::clone(&stop));
+    let files = SignedFiles::new("bound");
+    let registry = AssetRegistryBuilder::new()
+        .with_default_capacity()
+        .with_decode_threads(NonZeroUsize::MIN)
+        .build();
+
+    let blocker = registry.load_image_bridged(files.write(BLOCKER, "blocker.img"));
+    gate.wait_for_decodes(1);
+    let held: Vec<_> = (0..5)
+        .map(|index| registry.load_network_image_bridged(format!("http://{address}/{index}.img")))
+        .collect();
+    std::thread::sleep(SETTLE);
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        3,
+        "the blocker and three requests hold the four load slots"
+    );
+
+    gate.open();
+    let runtime = current_thread();
+    runtime
+        .block_on(async { tokio::time::timeout(BUDGET, blocker).await })
+        .expect("the blocker completes")
+        .expect("the blocker decodes");
+    let deadline = Instant::now() + BUDGET;
+    while requests.load(Ordering::SeqCst) < 4 {
+        assert!(
+            Instant::now() < deadline,
+            "the slot the blocker freed starts the next request"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    std::thread::sleep(SETTLE);
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        4,
+        "one freed slot, one request"
+    );
+    drop(held);
+    stop.store(true, Ordering::SeqCst);
+}
+
+/// With the only decode slot taken, a network load admitted before a file
+/// load decodes first, although the file's bytes were ready long before the
+/// response arrived.
+#[cfg(feature = "network")]
+#[test]
+fn decode_slots_go_in_admission_order_not_read_order() {
+    const BLOCKER: &[u8; 8] = b"FLUIORD0";
+    const NETWORK: &[u8; 8] = b"FLUIORDN";
+    const FILE: &[u8; 8] = b"FLUIORDF";
+    let gate = Arc::new(Gate::default());
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let hook_gate = Arc::clone(&gate);
+    register_signed_png(BLOCKER, "flui-order-blocker", move || hook_gate.pass());
+    for (signature, extension, name) in [
+        (NETWORK, "flui-order-network", "network"),
+        (FILE, "flui-order-file", "file"),
+    ] {
+        let order = Arc::clone(&order);
+        register_signed_png(signature, extension, move || {
+            order.lock().expect("order log").push(name);
+            Ok(())
+        });
+    }
+    let files = SignedFiles::new("order");
+    let registry = AssetRegistryBuilder::new()
+        .with_default_capacity()
+        .with_decode_threads(NonZeroUsize::MIN)
+        .build();
+    let mut response = NETWORK.to_vec();
+    response.extend_from_slice(PNG);
+    let (address, arrived, release) = spawn_held_server(response);
+
+    let blocker = registry.load_image_bridged(files.write(BLOCKER, "blocker.img"));
+    gate.wait_for_decodes(1);
+    let network = registry.load_network_image_bridged(format!("http://{address}/held.img"));
+    arrived.recv_timeout(BUDGET).expect("the request arrives");
+    let file = registry.load_image_bridged(files.write(FILE, "file.img"));
+    // The file's read finishes and it waits for the slot before the response
+    // is even sent; then the network load's bytes arrive and it waits too.
+    std::thread::sleep(Duration::from_millis(100));
+    release.send(()).expect("the server waits for the release");
+    std::thread::sleep(Duration::from_millis(200));
+    gate.open();
+
+    let runtime = current_thread();
+    for load in [blocker, network, file] {
+        let image = runtime
+            .block_on(async { tokio::time::timeout(BUDGET, load).await })
+            .expect("the load completes")
+            .expect("the image decodes");
+        assert_eq!((image.width(), image.height()), (4, 2));
+    }
+    assert_eq!(
+        *order.lock().expect("order log"),
+        ["network", "file"],
+        "the freed slot goes to the load admitted first"
+    );
+}

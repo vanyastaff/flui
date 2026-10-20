@@ -473,16 +473,24 @@ images (ADR-0250).
 
 A request for a source already loading joins that load. Every `ImageLoad`
 waiting on it is a subscriber; when the last one is dropped the pending entry is
-removed, its ticket cancelled and its task aborted, so the read or request stops
-and the decode never starts. The ticket's allocation is the load's identity: a
+removed, its ticket cancelled and its task aborted at its next await. An HTTP
+request is dropped at once. A file is read in 256 KiB chunks, one blocking read
+each, so the read stops at the next chunk; the open and a chunk already on a
+blocking thread cannot be interrupted and finish first. A decode that has not
+started never runs. The ticket's allocation is the load's identity: a
 task finishing after its entry was abandoned or replaced compares tickets and
 leaves the newer entry alone. A task that panics or is dropped by its runtime
 settles its entry from a drop guard, closing its waiters with an error.
 
 Bytes are read on the loading runtime's async workers and decoded on its
 blocking pool, at most `with_decode_threads` at once (half the cores, at most
-four). A host runtime's async workers never run a decode. Permits are taken in
-request order; a load abandoned while it waited for one skips the decode.
+four). A host runtime's async workers never run a decode. Before it reads, a
+load takes one of four load slots per decode thread and holds it until its
+decode returns, so the reads in flight and the encoded bytes waiting to decode
+are bounded by count (each body by `MAX_BODY_BYTES`). Once its bytes are read
+it asks for a decode slot. Both kinds of slot go to the waiting load admitted
+first, not the one whose earlier step finished first. A load abandoned while
+it waited for either skips the decode and frees its load slot.
 
 One mutex guards the cache and the pending map. Senders are completed, aborts
 issued, tasks spawned and evicted pixels freed after it is released: a runtime
@@ -502,7 +510,12 @@ registers real decoder hooks, runs
 task on the host runtime's only worker) and
 `abandoned_loads_never_decode_and_do_not_delay_a_live_one` (one decode thread:
 five loads abandoned behind a running decode never decode, and the live load
-queued after them decodes next).
+queued after them decodes next) and
+`decode_slots_go_in_admission_order_not_read_order` (a network load admitted
+first but read last still decodes before a file load whose read finished first)
+and `loads_past_admission_are_bounded_by_count` (one decode thread: while a
+decode holds its slot only three more requests go out, and the next starts
+when it returns).
 
 `NetworkLoader::new` gives up on a connection after `CONNECT_TIMEOUT` and on a
 silent response after `READ_TIMEOUT`; `load_url` refuses a body over

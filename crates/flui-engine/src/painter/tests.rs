@@ -3920,7 +3920,7 @@ fn trim_evicts_free_buffers_by_level() {
 
 /// Between frames, a moderate trim evicts the image textures the last frame
 /// did not draw and keeps the atlas; a critical one evicts every texture and
-/// empties the atlas, releasing the pixels the cache pinned.
+/// releases the atlas texture, freeing the pixels the cache pinned.
 #[test]
 fn trim_evicts_image_textures_by_level() {
     use crate::texture_cache::TextureKey;
@@ -3977,5 +3977,19 @@ fn trim_evicts_image_textures_by_level() {
             cache.get(&TextureKey::from_image(&hidden)).is_none(),
             "{level:?} evicts a texture the last frame did not draw"
         );
+        assert_eq!(
+            cache.holds_atlas_texture(),
+            level == MemoryPressureLevel::Moderate,
+            "{level:?}: the atlas texture is released under critical pressure only"
+        );
+        if level == MemoryPressureLevel::Critical {
+            cache
+                .load_from_rgba(TextureKey::from_image(&icon), 8, 8, icon.data())
+                .expect("the icon uploads again");
+            assert!(
+                cache.holds_atlas_texture(),
+                "the next small image allocates a fresh atlas"
+            );
+        }
     }
 }

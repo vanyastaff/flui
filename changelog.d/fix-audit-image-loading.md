@@ -25,10 +25,13 @@
 
 ### Fixed
 
-- **`flui-assets`**: dropping the last waiter of a bridged image load aborts it: the read or HTTP
-  request stops and the decode never runs, so abandoned loads no longer delay visible ones.
+- **`flui-assets`**: dropping the last waiter of a bridged image load aborts it: the HTTP request
+  stops, the file read stops at its next chunk and the decode never runs, so abandoned loads no
+  longer delay visible ones. At most four loads per decode thread read or wait to decode at
+  once, and loads are served in the order they were requested.
 - **`flui-assets`**: bridged decodes run on the loading runtime's blocking pool, never on a host
   runtime's async workers.
 - **`flui-assets`**, **`flui-engine`**: memory pressure frees decoded images (in a registered
   asset registry) and GPU image textures, including while frames are stopped: moderate pressure
-  keeps what the last frame drew, critical pressure frees all of it.
+  keeps what the last frame drew, critical pressure frees all of it, including the image atlas's
+  GPU texture.

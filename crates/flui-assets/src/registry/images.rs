@@ -9,19 +9,22 @@
 //!
 //! Every [`ImageLoad`] waiting on a pending load is a subscriber. When the last
 //! one is dropped the pending entry is removed, its [`LoadTicket`] is
-//! cancelled and its task aborted, so an abandoned request stops reading,
-//! stops fetching and never reaches the decoder. A request for the same source
+//! cancelled and its task aborted at its next await: an HTTP request is
+//! dropped at once, a file read stops at its next chunk (a chunk read already
+//! on a blocking thread runs to its end), and a decode that has not started
+//! never runs. A request for the same source
 //! after that starts a fresh load with a fresh ticket. The ticket's allocation
 //! is the load's identity: a task completing after its entry was replaced
 //! compares tickets and leaves the newer entry alone.
 //!
 //! # Decoding never runs on an async worker
 //!
-//! Bytes are read on the runtime's async workers; the decode runs on its
-//! blocking pool behind the registry's decode permits, so a host runtime's
-//! workers keep serving its own tasks while large images decode, and at most
-//! `decode_threads` decodes run at once. A load whose subscribers all left
-//! while it waited for a permit skips the decode.
+//! Bytes are read first; the decode runs on the runtime's blocking pool behind
+//! the registry's decode slots, so a host runtime's workers keep serving its
+//! own tasks while large images decode, and at most `decode_threads` decodes
+//! run at once. A freed slot goes to the waiting load admitted first
+//! ([`OrderedSlots`]), whichever read finished first. A load whose subscribers
+//! all left while it waited for a slot skips the decode.
 //!
 //! # Locking
 //!
@@ -39,9 +42,10 @@ use std::task::{Context, Poll};
 
 use flui_foundation::memory::MemoryPressureLevel;
 use parking_lot::Mutex;
-use tokio::sync::{Semaphore, oneshot};
+use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 
+use super::ordered_slots::{AdmissionOrder, OrderedSlots, Slot};
 use crate::Image;
 use crate::error::{AssetError, Result};
 
@@ -93,9 +97,11 @@ impl ImageSource {
 
 /// The identity of one load attempt, shared by its pending entry, its
 /// subscribers and its task.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct LoadTicket {
     cancelled: AtomicBool,
+    /// Where the load stands in admission order, for its decode slot.
+    order: AdmissionOrder,
 }
 
 impl LoadTicket {
@@ -123,6 +129,8 @@ struct State {
     /// Sum of the pixel bytes in `entries`.
     bytes: usize,
     pending: HashMap<ImageSource, Pending>,
+    /// The admission order the next started load takes.
+    next_order: AdmissionOrder,
 }
 
 impl State {
@@ -145,9 +153,19 @@ pub(crate) struct DecodedImages {
     /// The most pixel bytes `entries` holds; an image larger than this is
     /// handed to its waiters and not kept.
     budget: usize,
-    /// One permit per decode allowed to run at once.
-    permits: Arc<Semaphore>,
+    /// One slot per load allowed past admission at once, held from before its
+    /// read until its decode returns, so encoded bytes waiting to decode are
+    /// bounded by count.
+    loads: Arc<OrderedSlots>,
+    /// One slot per decode allowed to run at once, handed out in admission
+    /// order.
+    decodes: Arc<OrderedSlots>,
 }
+
+/// Loads a registry lets read or wait to decode per decode thread: enough to
+/// keep the decoders fed past a slow read, few enough that the encoded bytes
+/// waiting for them stay bounded.
+pub(crate) const LOADS_PER_DECODE_THREAD: usize = 4;
 
 impl std::fmt::Debug for DecodedImages {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -176,9 +194,13 @@ impl DecodedImages {
                 entries: lru::LruCache::unbounded(),
                 bytes: 0,
                 pending: HashMap::new(),
+                next_order: 0,
             }),
             budget,
-            permits: Arc::new(Semaphore::new(decode_threads.get())),
+            loads: Arc::new(OrderedSlots::new(
+                decode_threads.get().saturating_mul(LOADS_PER_DECODE_THREAD),
+            )),
+            decodes: Arc::new(OrderedSlots::new(decode_threads.get())),
         }
     }
 
@@ -205,7 +227,14 @@ impl DecodedImages {
             drop(state);
             return Admission::Served(ImageLoad::waiting(rx, Arc::clone(self), source, ticket));
         }
-        let ticket = Arc::new(LoadTicket::default());
+        let order = state.next_order;
+        state.next_order = order
+            .checked_add(1)
+            .expect("BUG: a registry admitted 2^64 image loads");
+        let ticket = Arc::new(LoadTicket {
+            cancelled: AtomicBool::new(false),
+            order,
+        });
         state.pending.insert(
             source.clone(),
             Pending {
@@ -336,25 +365,28 @@ impl DecodedImages {
         drop(retired);
     }
 
+    /// Waits for a load slot, behind every waiting load admitted earlier. The
+    /// load holds it from before its read until its decode returns.
+    pub(crate) async fn admit_load(&self, ticket: &LoadTicket) -> Slot {
+        self.loads.acquire(ticket.order).await
+    }
+
     /// Decodes `bytes` on the current runtime's blocking pool once a decode
-    /// permit is free. `None` when every subscriber left before the decode
-    /// started.
+    /// slot is free, behind every waiting load admitted earlier. `None` when
+    /// every subscriber left before the decode started.
     pub(crate) async fn decode(
         &self,
         source: &ImageSource,
         ticket: &Arc<LoadTicket>,
         bytes: Vec<u8>,
     ) -> Option<Result<Image>> {
-        let permit = Arc::clone(&self.permits)
-            .acquire_owned()
-            .await
-            .expect("BUG: the decode semaphore is never closed");
+        let slot = self.decodes.acquire(ticket.order).await;
         let ticket = Arc::clone(ticket);
         let label = Arc::clone(source.label());
         let decoded = tokio::task::spawn_blocking(move || {
             // Held until the decode returns, even if the task awaiting it is
-            // aborted: the permit bounds decodes running, not decodes awaited.
-            let _permit = permit;
+            // aborted: the slot bounds decodes running, not decodes awaited.
+            let _slot = slot;
             if ticket.is_cancelled() {
                 return None;
             }

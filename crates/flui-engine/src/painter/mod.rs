@@ -265,7 +265,7 @@ impl WgpuPainter {
     /// [`Moderate`](MemoryPressureLevel::Moderate) evicts free buffers down to
     /// half the pool's budget and the image textures the last frame did not
     /// draw. [`Critical`](MemoryPressureLevel::Critical) evicts every free
-    /// buffer and every image texture, and resets the glyph and image atlases.
+    /// buffer and every image texture, resets the glyph atlas and releases the image atlas texture.
     /// Call between frames, after the last submit, when every pooled buffer is
     /// free.
     pub(crate) fn reclaim(&mut self, level: MemoryPressureLevel) {
