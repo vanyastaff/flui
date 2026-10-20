@@ -2048,7 +2048,7 @@ impl flui_view::ViewState<CountsMounts> for CountsMountsState {
 /// Setting and clearing `on_tap` (a button being enabled and disabled)
 /// updates the detector in place: the child keeps its state, and a tap
 /// reaches the handler once one is set again.
-pub(crate) fn toggling_on_tap_keeps_the_childs_state() {
+pub(crate) fn toggling_on_tap_keeps_the_child_state() {
     let mounts = Arc::new(AtomicUsize::new(0));
     let taps = Arc::new(AtomicUsize::new(0));
     let detector = |tappable: bool| {
@@ -2068,7 +2068,7 @@ pub(crate) fn toggling_on_tap_keeps_the_childs_state() {
     assert_eq!(
         mounts.load(Ordering::SeqCst),
         1,
-        "the child's state survives every toggle"
+        "the child keeps its state through every toggle"
     );
     laid.dispatch_pointer_down(50.0, 50.0);
     laid.dispatch_pointer_up(50.0, 50.0);
