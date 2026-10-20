@@ -3,7 +3,9 @@
 //! Every observer here only records that something changed and wakes the owner
 //! through the shared [`OwnerSignal`]: the owner's next turn reads
 //! `display_snapshot`, which samples the browser again. None of them runs
-//! owner code, and none reads or writes frame state.
+//! owner code, and none reads or writes frame state. The one exception is a
+//! window's own pixel-ratio watch ([`PixelRatioWatch::for_layout`]), which
+//! brings that window's backing store to the new ratio and runs its callbacks.
 //!
 //! - the page's pixel ratio, through a `(resolution: Xdppx)` media query that
 //!   is armed again after each change ([`crate::shared::dppx_query`]);
@@ -44,12 +46,16 @@ impl DisplayObservers {
     pub(super) fn start(displays: &Arc<WebDisplays>, signal: &Arc<OwnerSignal>) -> Self {
         let active = Rc::new(Cell::new(true));
         let pixel_ratio = displays.features.match_media.map(|proof| {
-            PixelRatioWatch::start(
-                proof,
-                Arc::downgrade(displays),
-                Arc::downgrade(signal),
-                &active,
-            )
+            let displays = Arc::downgrade(displays);
+            let signal = Arc::downgrade(signal);
+            // A new scale is a new snapshot and a new cadence to measure.
+            PixelRatioWatch::start(proof, &active, move || {
+                if let Some(displays) = displays.upgrade() {
+                    displays.invalidate();
+                    displays.restart_estimate();
+                    wake(&signal);
+                }
+            })
         });
         let visibility = visibility_listener(displays, &active);
         let ratio = pixel_ratio.as_ref().map(PixelRatioWatch::handle);
@@ -183,7 +189,7 @@ fn resize_listener(
 type FrameCallback = Closure<dyn FnMut(f64)>;
 
 /// The `(resolution: Xdppx)` query for the ratio now in effect.
-struct PixelRatioWatch {
+pub(super) struct PixelRatioWatch {
     shared: Rc<PixelRatioShared>,
     /// The one JS function every query listens with; it is never replaced, so
     /// the callback that is running can arm its successor without freeing
@@ -196,8 +202,8 @@ struct PixelRatioShared {
     rule: RefCell<DppxWatch>,
     query: RefCell<Option<MediaQueryList>>,
     function: RefCell<Option<js_sys::Function>>,
-    displays: Weak<WebDisplays>,
-    signal: Weak<OwnerSignal>,
+    /// What a changed ratio means to whoever watches it.
+    on_change: Box<dyn Fn()>,
     active: Rc<Cell<bool>>,
     /// The callback that arms again on a frame after an arming that failed; it
     /// is owned here and never replaced while a frame may call it.
@@ -303,35 +309,46 @@ impl PixelRatioShared {
         }
     }
 
-    /// The ratio changed: a new scale is a new snapshot and a new cadence to
-    /// measure.
     fn announce_change(&self) {
-        if let Some(displays) = self.displays.upgrade() {
-            displays.invalidate();
-            displays.restart_estimate();
-            wake(&self.signal);
-        }
+        (self.on_change)();
     }
 }
 
 impl PixelRatioWatch {
+    /// Watch the ratio for a window's layout: `on_change` runs each time it
+    /// changes while `active` holds. A window dragged to a display of another
+    /// scale keeps its CSS box, so neither its `ResizeObserver` nor the
+    /// window's `resize` event reports it. `None` in a browser without media
+    /// queries.
+    pub(super) fn for_layout(
+        active: &Rc<Cell<bool>>,
+        on_change: impl Fn() + 'static,
+    ) -> Option<Self> {
+        let proof = super::features::BrowserFeatures::detect().match_media?;
+        Some(Self::start(proof, active, on_change))
+    }
+
+    /// Arm now if no query is armed (the browser refused the last one), and
+    /// report a change that went unseen meanwhile.
+    pub(super) fn arm_if_unarmed(&self) {
+        self.shared.arm_if_unarmed();
+    }
+
     fn handle(&self) -> std::rc::Weak<PixelRatioShared> {
         Rc::downgrade(&self.shared)
     }
 
     fn start(
         proof: WebFeature<MatchMedia>,
-        displays: Weak<WebDisplays>,
-        signal: Weak<OwnerSignal>,
         active: &Rc<Cell<bool>>,
+        on_change: impl Fn() + 'static,
     ) -> Self {
         let shared = Rc::new(PixelRatioShared {
             proof,
             rule: RefCell::new(DppxWatch::new()),
             query: RefCell::new(None),
             function: RefCell::new(None),
-            displays,
-            signal,
+            on_change: Box::new(on_change),
             active: Rc::clone(active),
             retry: RefCell::new(None),
             retry_frame: Cell::new(None),

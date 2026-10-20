@@ -1283,7 +1283,10 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
 mod x11_window {
     use flui_foundation::geometry::Point;
     use x11rb::{
-        protocol::xproto::{AtomEnum, ConnectionExt as _, MapState, PropMode},
+        connection::Connection as _,
+        protocol::xproto::{
+            AtomEnum, ConnectionExt as _, CreateWindowAux, MapState, PropMode, WindowClass,
+        },
         rust_connection::RustConnection,
         wrapper::ConnectionExt as _,
     };
@@ -1319,6 +1322,27 @@ mod x11_window {
             );
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// Poll (bounded, 5 s) until the visibility reports are exactly
+    /// `expected`, the last of which `is_visible` answers. A report may follow
+    /// a publication on another thread, hence the wait.
+    fn until_reports(
+        window: &Arc<dyn HostWindow>,
+        reports: &Mutex<Vec<bool>>,
+        expected: &[bool],
+        what: &str,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while reports.lock().as_slice() != expected {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {what}; reports {:?}",
+                reports.lock()
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(Some(&window.is_visible()), expected.last(), "{what}");
     }
 
     fn map_state(connection: &RustConnection, id: u32) -> MapState {
@@ -1458,10 +1482,14 @@ mod x11_window {
 
     #[test]
     fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
+        // The suite's tests share one X server (`xvfb-run`'s 1280×1024 screen)
+        // and open their windows within 800×600 of the origin, so this one
+        // stays beyond that, where none of theirs can cover it and make its
+        // visibility reports another test's.
         let opening = WindowOptions::default()
             .with_title("x11-window")
             .with_size(Size::new(320.0, 240.0))
-            .with_position(Some(Point::new(40.0, 60.0)))
+            .with_position(Some(Point::new(840.0, 640.0)))
             .with_reveal(WindowReveal::AfterFirstFrame);
         run_x11_scenario(opening, |window, id, server| {
             // Created hidden, to be shown with the first frame; the window
@@ -1474,6 +1502,21 @@ mod x11_window {
             window.on_state_changed(Box::new(move || {
                 counter.fetch_add(1, Ordering::SeqCst);
             }));
+            // Every visibility report, after the one the window opened with:
+            // an unmapped window has had no visibility event yet.
+            // Each report also checks that the snapshot already says the same.
+            let visibility = Arc::new(Mutex::new(vec![true]));
+            let reported = Arc::clone(&visibility);
+            let observed = Arc::downgrade(&window);
+            window.on_visibility_status_change(Box::new(move |visible| {
+                let published = observed.upgrade().map(|window| window.state().visible);
+                assert_eq!(
+                    published,
+                    Some(visible),
+                    "the snapshot runs behind a report"
+                );
+                reported.lock().push(visible);
+            }));
 
             window.reveal_after_first_frame();
             until_map_state(server, id, MapState::VIEWABLE);
@@ -1481,7 +1524,7 @@ mod x11_window {
             // The position it opened at, and the commands a server carries
             // out without a window manager.
             until_state(&window, "the opening position", |state| {
-                state.outer.position == Some(Point::new(40.0, 60.0))
+                state.outer.position == Some(Point::new(840.0, 640.0))
             });
             window
                 .apply(WindowCommand::SetSize(Size::new(400.0, 300.0)))
@@ -1490,36 +1533,55 @@ mod x11_window {
                 state.content_size == Size::new(400.0, 300.0)
             });
             window
-                .apply(WindowCommand::SetPosition(Point::new(100.0, 120.0)))
+                .apply(WindowCommand::SetPosition(Point::new(860.0, 680.0)))
                 .expect("a desktop window moves");
             until_state(&window, "the new position", |state| {
-                state.outer.position == Some(Point::new(100.0, 120.0))
+                state.outer.position == Some(Point::new(860.0, 680.0))
             });
             window
                 .apply(WindowCommand::SetTitle("renamed".into()))
                 .expect("a title is set");
             assert_eq!(window.state().title.as_deref(), Some("renamed"));
 
+            // Hiding and showing are reported, so a late `Occluded` from
+            // either cannot leave the last report behind what the window
+            // answers.
             window
                 .apply(WindowCommand::Hide)
                 .expect("a desktop window hides");
             until_map_state(server, id, MapState::UNMAPPED);
             assert!(!window.state().visible);
+            until_reports(&window, &visibility, &[true, false], "a report of the hide");
             window
                 .apply(WindowCommand::Show)
                 .expect("a desktop window shows");
             until_map_state(server, id, MapState::VIEWABLE);
             assert!(window.state().visible);
+            until_reports(
+                &window,
+                &visibility,
+                &[true, false, true],
+                "a report of the show",
+            );
 
             // The window manager minimizes the window: winit reports no
             // event, the probe hears of it, and the snapshot follows with
-            // a notification.
+            // a notification. X sends no visibility event for it either, so
+            // the window reports itself hidden from the mode.
             let before = changes.load(Ordering::SeqCst);
             set_window_manager_state(server, id, 3, &["_NET_WM_STATE_HIDDEN"]);
             until_state(&window, "the minimized mode", |state| {
                 state.mode == WindowMode::Minimized
             });
             assert!(changes.load(Ordering::SeqCst) > before, "a notification");
+            assert!(!window.state().visible, "a minimized window is not visible");
+            // The report follows the publication on whichever thread made it.
+            until_reports(
+                &window,
+                &visibility,
+                &[true, false, true, false],
+                "a report of the minimizing",
+            );
             assert_eq!(
                 window.state().normal_geometry.map(|geometry| geometry.size),
                 Some(Size::new(400.0, 300.0)),
@@ -1544,7 +1606,60 @@ mod x11_window {
                 Some(Size::new(400.0, 300.0)),
                 "it returns to the size it had in normal mode"
             );
+            assert!(window.state().visible, "visible again");
+            until_reports(
+                &window,
+                &visibility,
+                &[true, false, true, false, true],
+                "a report of the return",
+            );
+
+            // A window of the test's own covers it: winit reports it occluded.
+            let cover = cover_window(server, (800, 600), (480, 424));
+            until_reports(
+                &window,
+                &visibility,
+                &[true, false, true, false, true, false],
+                "a report of the cover",
+            );
+            // A show of a window that stays mapped keeps its occlusion.
+            window.show().expect("a desktop window shows");
+            assert!(!window.state().visible, "still covered");
+            assert_eq!(*visibility.lock(), [true, false, true, false, true, false]);
+            server.destroy_window(cover).expect("request");
+            server.flush().expect("flush");
+            until_reports(
+                &window,
+                &visibility,
+                &[true, false, true, false, true, false, true],
+                "a report of the uncovering",
+            );
         });
+    }
+
+    /// Map a plain window of `connection`'s own at `at` with `size`, above the
+    /// others; a bare server has no window manager to stack it elsewhere.
+    fn cover_window(connection: &RustConnection, at: (i16, i16), size: (u16, u16)) -> u32 {
+        let root = connection.setup().roots[0].root;
+        let cover = connection.generate_id().expect("an id");
+        connection
+            .create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                cover,
+                root,
+                at.0,
+                at.1,
+                size.0,
+                size.1,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                x11rb::COPY_FROM_PARENT,
+                &CreateWindowAux::new(),
+            )
+            .expect("request");
+        connection.map_window(cover).expect("request");
+        connection.flush().expect("flush");
+        cover
     }
 
     /// A window that opens maximized waits unmapped for its first frame, and

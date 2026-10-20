@@ -118,6 +118,17 @@ pub struct WinitWindow {
     /// minimization then goes unseen until some other event samples it.
     #[cfg(target_os = "linux")]
     minimize_unobserved: AtomicBool,
+    /// Whether the last published snapshot of this X11 window was minimized.
+    /// A window manager minimizes by unmapping, and X sends no visibility
+    /// event for a window that becomes unviewable, so winit raises no
+    /// `Occluded`: the window is hidden from the published mode instead.
+    #[cfg(target_os = "linux")]
+    wm_minimized: AtomicBool,
+    /// Whether winit last reported the window fully covered (`Occluded`).
+    occluded: AtomicBool,
+    /// What `on_visibility_status_change` last reported (at first, what the
+    /// window opened as): a report is raised only when it changes.
+    reported_visible: parking_lot::Mutex<bool>,
 }
 
 /// What the window system lets a program do to `window`: a Wayland surface
@@ -232,9 +243,13 @@ impl WinitWindow {
             x11: std::sync::OnceLock::new(),
             #[cfg(target_os = "linux")]
             minimize_unobserved: AtomicBool::new(false),
+            #[cfg(target_os = "linux")]
+            wm_minimized: AtomicBool::new(false),
             window,
             is_focused: parking_lot::Mutex::new(true),
             is_visible: parking_lot::Mutex::new(options.visible),
+            occluded: AtomicBool::new(false),
+            reported_visible: parking_lot::Mutex::new(options.visible),
             callbacks: crate::shared::WindowCallbacks::new(),
             #[cfg(all(target_os = "linux", feature = "a11y"))]
             accessibility: Arc::new(crate::platforms::linux::UnixAccessibility::new()),
@@ -376,6 +391,12 @@ impl WinitWindow {
         *self.is_visible.lock() = visible;
     }
 
+    /// Record winit's `Occluded`. Kept apart from whether the window is shown,
+    /// so an occlusion event that arrives after a hide cannot show it.
+    pub(super) fn set_occluded(&self, occluded: bool) {
+        self.occluded.store(occluded, Ordering::Release);
+    }
+
     /// The window may differ from its last snapshot: read it again, and raise
     /// `on_state_changed` when the revision grew.
     pub(super) fn refresh_state(&self) {
@@ -397,7 +418,7 @@ impl WinitWindow {
                 title: &title,
                 constraints: *self.constraints.lock(),
                 focused: *self.is_focused.lock(),
-                visible: *self.is_visible.lock(),
+                visible: *self.is_visible.lock() && !self.occluded.load(Ordering::Acquire),
                 display: PlatformWindow::display_id(self),
                 probed_mode: self.probed_mode(),
             },
@@ -419,7 +440,41 @@ impl WinitWindow {
             }
             _ => {}
         }
+        #[cfg(target_os = "linux")]
+        if self.x11.get().is_some() && state.mode == WindowMode::Minimized {
+            state.visible = false;
+        }
         state
+    }
+
+    /// Follow a published snapshot of an X11 window into or out of the
+    /// minimized mode (see `wm_minimized`).
+    #[cfg(target_os = "linux")]
+    fn follow_wm_minimized(&self, state: &WindowState) {
+        if self.x11.get().is_none() {
+            return;
+        }
+        let minimized = state.mode == WindowMode::Minimized;
+        if self.wm_minimized.swap(minimized, Ordering::AcqRel) != minimized {
+            self.report_visibility();
+        }
+    }
+
+    /// Raise `on_visibility_status_change` when [`PlatformWindow::is_visible`]
+    /// answers differently from the last report. Showing and hiding, the
+    /// occlusion events and the minimized mode all change it, in any order, and
+    /// an `Occluded` can repeat what is already known or arrive late. The
+    /// answer is read under the report's lock, so two reporters cannot leave an
+    /// older one last, and the lock is released before the dispatch.
+    pub(super) fn report_visibility(&self) {
+        let (previous, visible) = {
+            let mut reported = self.reported_visible.lock();
+            let visible = PlatformWindow::is_visible(self);
+            (std::mem::replace(&mut *reported, visible), visible)
+        };
+        if previous != visible {
+            self.callbacks.dispatch_visibility_status_change(visible);
+        }
     }
 
     /// Enter `mode`. Leaving fullscreen and minimized first keeps entering a
@@ -507,9 +562,17 @@ impl WinitWindow {
 
     /// Make the window visible, ending a wait for the first frame. Every change
     /// of the native window's visibility is made holding `reveal_pending`, so a
-    /// reveal and a hide from two threads cannot interleave their halves.
+    /// reveal and a hide from two threads cannot interleave their halves. The
+    /// caller publishes the state and reports the visibility once its own
+    /// native work is done, so a callback that hides or minimizes the window
+    /// again is not undone by the rest of a show.
     fn make_visible(&self) {
         let mut pending = self.reveal_pending.lock();
+        if *pending || !*self.is_visible.lock() {
+            // An occlusion belongs to the mapping that ended; X reports the
+            // new one's. A window that stays mapped keeps the one it has.
+            self.occluded.store(false, Ordering::Release);
+        }
         *pending = false;
         self.map_window();
         *self.is_visible.lock() = true;
@@ -528,6 +591,7 @@ impl WinitWindow {
     }
 
     /// Hide the window. A hidden window has no first frame to wait for.
+    /// Like [`Self::make_visible`], the caller publishes and reports.
     fn make_hidden(&self) {
         let mut pending = self.reveal_pending.lock();
         *pending = false;
@@ -662,12 +726,18 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn is_visible(&self) -> bool {
-        *self.is_visible.lock()
+        #[cfg(target_os = "linux")]
+        if self.wm_minimized.load(Ordering::Acquire) {
+            return false;
+        }
+        *self.is_visible.lock() && !self.occluded.load(Ordering::Acquire)
     }
 
     fn state(&self) -> WindowState {
         let published = self.window_state.state_with(|| self.sample());
         if published.changed {
+            #[cfg(target_os = "linux")]
+            self.follow_wm_minimized(&published.state);
             self.callbacks.dispatch_state_changed();
         }
         published.state
@@ -735,7 +805,10 @@ impl PlatformWindow for WinitWindow {
             // `admit` refuses a command this window does not know.
             _ => return Err(WindowCommandError::Unsupported),
         }
+        // The snapshot first, so a visibility report never runs ahead of
+        // `state()`; both after the command's native work.
         self.refresh_state();
+        self.report_visibility();
         Ok(())
     }
 
@@ -750,6 +823,8 @@ impl PlatformWindow for WinitWindow {
         self.make_visible();
         self.window.set_minimized(false);
         self.window.focus_window();
+        self.refresh_state();
+        self.report_visibility();
         Ok(())
     }
 

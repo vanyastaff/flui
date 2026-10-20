@@ -1585,11 +1585,14 @@ impl ApplicationHandler for WinitApp {
                 // delivery rides the xdg-shell v6 `suspended` state (a
                 // compositor-conditional extension); on a compositor that
                 // never sends it, this arm simply never fires, matching
-                // the pre-existing always-visible behavior.
+                // the pre-existing always-visible behavior. X11 sends none
+                // for a window the window manager minimizes, which reads as
+                // hidden from its mode instead, so the report is what
+                // `is_visible` says, and only when that changed.
                 if let Some(ref win) = window {
-                    win.set_visible(!occluded);
+                    win.set_occluded(occluded);
                     win.refresh_state();
-                    win.callbacks().dispatch_visibility_status_change(!occluded);
+                    win.report_visibility();
                 }
             }
             WinitWindowEvent::HoveredFile(path) => {
@@ -1630,7 +1633,7 @@ impl ApplicationHandler for WinitApp {
         // one truncated one (documented winit approximation ceiling).
         self.freeze_completed_drops();
         #[cfg(target_os = "linux")]
-        self.sync_windows_awaiting_display(event_loop);
+        self.sync_unannounced_displays(event_loop);
 
         // Wall-clock wake: consult the registered
         // wake-deadline hook (issue #556 — `flui-app` computes the earliest
@@ -1738,29 +1741,10 @@ impl WinitApp {
             self.platform.resample_displays(event_loop);
         }
         if window.take_display_change() || forced {
+            // The snapshot names the display too: publish it before the hint,
+            // so a move no other event reported still reaches `on_state_changed`.
+            window.refresh_state();
             window.callbacks().dispatch_display_changed();
-        }
-    }
-
-    /// Look again at the display of every window that has none.
-    ///
-    /// A Wayland window is on no output until its first frame enters one, and
-    /// winit reports no event when it does (a `ScaleFactorChanged` only if the
-    /// scale differs). The loop goes idle once the compositor's `enter` has
-    /// been handled, so the check runs there; it costs one lock per window
-    /// that has no display, and nothing for the others.
-    #[cfg(target_os = "linux")]
-    fn sync_windows_awaiting_display(&self, event_loop: &ActiveEventLoop) {
-        let waiting: Vec<_> = self.platform.with_state(|state| {
-            state
-                .windows
-                .values()
-                .filter(|window| window.awaiting_display())
-                .cloned()
-                .collect()
-        });
-        for window in waiting {
-            self.sync_window_display(event_loop, &window, false);
         }
     }
 
@@ -3088,5 +3072,25 @@ mod tests {
         let second_finish = catch_unwind(AssertUnwindSafe(|| app.finish_shutdown()));
         assert!(second_finish.is_ok(), "owner close is idempotent");
         assert_eq!(callback_count.load(Ordering::Relaxed), 1);
+    }
+
+    /// A Wayland window dragged to an output of the same scale raises no winit
+    /// event, so it is looked at again whether or not it has a display; an X11
+    /// window reports moves and is looked at only until it has one.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn idle_display_check_covers_every_wayland_window() {
+        for (wayland, awaiting, looked_at) in [
+            (true, true, true),
+            (true, false, true),
+            (false, true, true),
+            (false, false, false),
+        ] {
+            assert_eq!(
+                super::linux_notices::moves_unannounced(wayland, awaiting),
+                looked_at,
+                "wayland {wayland}, awaiting a display {awaiting}"
+            );
+        }
     }
 }

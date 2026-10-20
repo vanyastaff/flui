@@ -1,11 +1,13 @@
 //! The parts of the winit platform that exist on Linux only: the X11 window
-//! probe, and the system notices (sleep, wake, lock, shutdown, memory
-//! pressure) the logind and kernel sources queue for the owner.
+//! probe, the display check for moves winit does not report, and the system
+//! notices (sleep, wake, lock, shutdown, memory pressure) the logind and kernel
+//! sources queue for the owner.
 
 use std::sync::Arc;
 
 use flui_foundation::panic::FirstPanic;
 use flui_platform_api::{SessionEndAnswer, SessionEndPhase};
+use winit::event_loop::ActiveEventLoop;
 
 use super::{WinitApp, WinitPlatform};
 use crate::platforms::linux::{
@@ -75,6 +77,40 @@ impl WinitApp {
         }
     }
 
+    /// Look again at the display of every window winit may have moved without
+    /// an event.
+    ///
+    /// A Wayland surface enters an output with no winit event: none for its
+    /// first one, and only a `ScaleFactorChanged` for a later one whose scale
+    /// differs, so a window dragged to an output of another refresh rate at
+    /// the same scale would keep the old display. The loop goes idle once the
+    /// compositor's `enter` has been handled, so every Wayland window is
+    /// looked at there, at one monitor lookup each. An X11 window reports a
+    /// move with `Moved`, and only one with no display yet is looked at.
+    pub(super) fn sync_unannounced_displays(&self, event_loop: &ActiveEventLoop) {
+        let wayland = self.platform.displays.is_wayland();
+        let unannounced: Vec<_> = self.platform.with_state(|state| {
+            state
+                .windows
+                .values()
+                .filter(|window| moves_unannounced(wayland, window.awaiting_display()))
+                .cloned()
+                .collect()
+        });
+        for window in unannounced {
+            self.sync_window_display(event_loop, &window, false);
+        }
+    }
+}
+
+/// Whether a Linux window can move to another display without winit saying
+/// so: any Wayland window (see `WinitApp::sync_unannounced_displays`), and an
+/// X11 window only before its first display is known.
+pub(super) fn moves_unannounced(wayland: bool, awaiting_display: bool) -> bool {
+    wayland || awaiting_display
+}
+
+impl WinitApp {
     /// Start listening for sleep, shutdown, lock and memory pressure. A source
     /// that cannot start says so in the log and leaves the others running.
     pub(super) fn start_host_notices(&mut self) {
