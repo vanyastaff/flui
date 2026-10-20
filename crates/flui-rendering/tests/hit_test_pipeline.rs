@@ -722,6 +722,86 @@ impl flui_rendering::traits::RenderBox for PlacedParent {
 /// A failed node gives up its say in expanded areas along with its entries:
 /// an absorbing child it hit before panicking is no barrier any more, so a
 /// neighbour's expanded area still takes a position only that subtree covered.
+/// A 20x20 leaf that never takes a hit.
+#[derive(Debug)]
+struct NeverHit;
+impl flui_foundation::Diagnosticable for NeverHit {}
+
+impl flui_rendering::traits::RenderBox for NeverHit {
+    type Arity = flui_foundation::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
+        Ok(ctx
+            .constraints()
+            .constrain(flui_foundation::geometry::Size::new(20.0, 20.0)))
+    }
+
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {}
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<'_, Self::Arity, Self::ParentData>,
+    ) -> bool {
+        false
+    }
+}
+
+/// An expanded-area re-walk that is rejected discards its path through the
+/// walk: an entry whose metadata panics on drop is retained once the walk
+/// already holds a failure, so the first render-object panic is the one
+/// reported rather than a destructor's.
+pub(crate) fn a_rejected_slop_rewalk_retains_its_entries_behind_an_earlier_panic() {
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let root = owner.insert(Box::new(PlacedParent(vec![
+        Offset::ZERO,
+        Offset::new(45.0, 0.0),
+        Offset::ZERO,
+    ])) as BoxedRenderObject);
+    let bomb = owner
+        .insert_child_render_object(root, Box::new(BombMetadataLeaf))
+        .expect("bomb insert");
+    let slop = owner
+        .insert_child_render_object(
+            root,
+            Box::new(flui_objects::RenderHitSlop::new(
+                flui_foundation::geometry::EdgeInsets::all(10.0),
+                0.0,
+            )),
+        )
+        .expect("slop insert");
+    owner
+        .insert_child_render_object(slop, Box::new(NeverHit))
+        .expect("never-hit insert");
+    owner
+        .insert_child_render_object(root, Box::new(PanicOnHit("first hit test failed")))
+        .expect("panicking insert");
+    let owner = laid_out(owner, root);
+
+    // Over the bomb and the panicking leaf, inside the slop's area only.
+    let mut result = flui_rendering::hit_testing::HitTestResult::new();
+    let walk = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        owner.hit_test(
+            Offset::new(38.0, 10.0),
+            flui_interaction::events::PointerKind::Touch,
+            &mut result,
+        )
+    }));
+    let panic = walk.err().map(|payload| {
+        flui_foundation::panic::payload_text(payload.as_ref())
+            .expect("fixture panics carry text")
+            .to_owned()
+    });
+    let targets: Vec<_> = result.path().iter().map(|entry| entry.target).collect();
+    // The kept path's bomb metadata would panic on drop; it is the caller's.
+    std::mem::forget(result);
+    assert_eq!(panic.as_deref(), Some("first hit test failed"));
+    assert_eq!(targets, vec![bomb, root], "the visual path stands");
+}
+
 pub(crate) fn a_contained_hit_panic_rolls_back_the_barrier_its_subtree_hit() {
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let root = owner.insert(

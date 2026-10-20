@@ -82,7 +82,7 @@ pub(super) struct HitWalk {
     /// The kind of pointer asking, whose minimum target sizes each area.
     kind: PointerKind,
     /// The first render object panic, held until the walk is complete.
-    first_panic: FirstPanic,
+    first_panic: Option<Box<dyn std::any::Any + Send>>,
 }
 
 impl HitWalk {
@@ -92,7 +92,7 @@ impl HitWalk {
             candidates: Vec::new(),
             hit_barrier: false,
             kind,
-            first_panic: FirstPanic::new(),
+            first_panic: None,
         }
     }
 
@@ -102,7 +102,7 @@ impl HitWalk {
             candidates: Vec::new(),
             hit_barrier: false,
             kind,
-            first_panic: FirstPanic::new(),
+            first_panic: None,
         }
     }
 
@@ -125,13 +125,34 @@ impl HitWalk {
     /// Holds a render object's panic for [`Self::finish`]; the node that
     /// raised it counts as a miss.
     pub(super) fn contain_panic(&mut self, payload: Box<dyn std::any::Any + Send>) {
-        self.first_panic.record(payload);
+        FirstPanic::fold(&mut self.first_panic, Some(payload));
+    }
+
+    /// Discards path entries the walk no longer reports — a rejected
+    /// re-walk's, or the visual path an expanded one replaces.
+    ///
+    /// An entry's metadata is user data whose destructor may panic. Until the
+    /// walk holds a failure each entry is dropped with that panic contained
+    /// like a node's; once it holds one, the rest are retained rather than
+    /// run, so a later destructor cannot disturb the failure being reported.
+    pub(super) fn discard(&mut self, entries: impl IntoIterator<Item = HitTestEntry>) {
+        for entry in entries {
+            if self.first_panic.is_some() {
+                std::mem::forget(entry);
+            } else if let Err(payload) =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(entry)))
+            {
+                self.contain_panic(payload);
+            }
+        }
     }
 
     /// Ends the walk: raises the first contained panic, once the path is
     /// complete without the subtrees that panicked.
     pub(super) fn finish(self) {
-        self.first_panic.resume();
+        if let Some(payload) = self.first_panic {
+            std::panic::resume_unwind(payload);
+        }
     }
 
     /// The kind of pointer the walk tests for.
@@ -213,13 +234,15 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let mut candidates = std::mem::take(&mut walk.candidates);
         // Stable: equal distances keep visit order, topmost first.
         candidates.sort_by(|a, b| a.distance.total_cmp(&b.distance));
-        // One scratch path for every re-walk; a rejected one is cleared.
+        // One scratch path for every re-walk; a rejected one is discarded
+        // through the walk, never dropped outright.
         let mut expanded = HitTestResult::new();
         for candidate in candidates {
+            walk.discard(expanded.path_mut().drain(..));
             expanded.clear();
             let mut rewalk = HitWalk::expand(candidate.id, kind);
             let hit = self.hit_test_subtree(root_id, position, &mut expanded, &mut rewalk);
-            if let Some(payload) = rewalk.first_panic.into_payload() {
+            if let Some(payload) = rewalk.first_panic {
                 walk.contain_panic(payload);
             }
             let reached = expanded.iter().any(|entry| entry.target == candidate.id);
@@ -228,11 +251,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             {
                 continue;
             }
-            let path = result.path_mut();
-            path.truncate(base);
-            path.append(expanded.path_mut());
+            walk.discard(result.path_mut().drain(base..));
+            result.path_mut().append(expanded.path_mut());
             return Some(hit);
         }
+        walk.discard(expanded.path_mut().drain(..));
         None
     }
 

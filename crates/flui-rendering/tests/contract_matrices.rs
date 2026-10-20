@@ -232,6 +232,10 @@ fn hit_test_matrix() {
             crate::hit_test_pipeline::a_contained_hit_panic_rolls_back_the_barrier_its_subtree_hit,
         ),
         (
+            "hit_test_pipeline::a_rejected_slop_rewalk_retains_its_entries_behind_an_earlier_panic",
+            crate::hit_test_pipeline::a_rejected_slop_rewalk_retains_its_entries_behind_an_earlier_panic,
+        ),
+        (
             "hit_test_pipeline::default_parent_hit_test_reaches_its_children",
             crate::hit_test_pipeline::default_parent_hit_test_reaches_its_children,
         ),
