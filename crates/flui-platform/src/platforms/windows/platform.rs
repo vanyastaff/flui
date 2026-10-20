@@ -25,21 +25,20 @@ use windows::{
             HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
             Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
             WindowsAndMessaging::{
-                CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
-                DispatchMessageW, GWLP_USERDATA, GetClassNameW, GetClientRect, GetForegroundWindow,
-                GetWindowLongPtrW, GetWindowThreadProcessId, HICON, HTCLIENT, HWND_MESSAGE,
-                IDC_ARROW, ISMEX_NOSEND, InSendMessageEx, IsWindowVisible, MINMAXINFO, MSG,
-                MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW,
+                CS_OWNDC, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+                GWLP_USERDATA, GetClassNameW, GetForegroundWindow, GetWindowLongPtrW,
+                GetWindowThreadProcessId, HICON, HTCLIENT, HWND_MESSAGE, IDC_ARROW, ISMEX_NOSEND,
+                InSendMessageEx, IsWindowVisible, MINMAXINFO, MSG, MWMO_INPUTAVAILABLE,
+                MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW, PostMessageW,
                 PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU, SW_SHOWNORMAL,
-                SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-                TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPOS, WM_CAPTURECHANGED,
-                WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
-                WM_GETMINMAXINFO, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
-                WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN,
-                WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT, WM_SETTINGCHANGE,
-                WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP,
-                WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WNDCLASSW,
+                SetForegroundWindow, SetWindowLongPtrW, TranslateMessage, WINDOW_EX_STYLE,
+                WINDOW_STYLE, WINDOWPOS, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_CREATE,
+                WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_INPUTLANGCHANGE,
+                WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+                WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT,
+                WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT,
+                WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND,
+                WM_SYSKEYDOWN, WM_SYSKEYUP, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WNDCLASSW,
             },
         },
     },
@@ -48,6 +47,7 @@ use windows::{
 
 use super::{
     display::WindowsDisplays,
+    modal_loop::MODAL_DEADLINE_TIMER,
     text_services::TextServices,
     util::{WINDOW_CLASS_NAME, get_x_lparam, get_y_lparam, hiword, load_cursor_style},
     window::{NativeMode, WindowsWindow},
@@ -138,6 +138,13 @@ impl WindowIdentity {
             })
             .expect("BUG: the window identity counter is exhausted");
         Self(std::num::NonZeroU64::new(raw).expect("BUG: an admitted window identity is nonzero"))
+    }
+
+    /// The identity as a posted message's two parameters, its low and high 32
+    /// bits, whole on a 32-bit target too.
+    pub(super) fn halves(self) -> (usize, isize) {
+        let raw = self.0.get();
+        ((raw & 0xFFFF_FFFF) as usize, (raw >> 32) as isize)
     }
 }
 
@@ -382,21 +389,29 @@ pub(super) struct WindowContext {
     /// in its mode, so the first sight of it is already maximized or
     /// fullscreen, not a normal window that jumps.
     pub first_show: std::cell::Cell<super::window_frame::FirstShow>,
-    /// Last surface-visibility value dispatched through
-    /// `WindowCallbacks::dispatch_visibility_status_change` (hidden-surface
-    /// gating). Two message families feed it — `WM_SIZE`
-    /// (minimize/restore) and `WM_SHOWWINDOW` (hide/show) — via the pure
-    /// rules in `crate::shared::visibility`; this cell is the shared edge
-    /// filter that keeps the two from double-dispatching the same state.
-    /// Seeded from the window's ACTUAL creation style
+    /// The window's visibility as the runtime sees it (hidden-surface
+    /// gating): the surface, which `WM_SIZE` (minimize/restore) and
+    /// `WM_SHOWWINDOW` (hide/show) report through the pure rules in
+    /// `crate::shared::visibility`, less a cloak or a locked session. Seeded
+    /// from the window's ACTUAL creation style
     /// (`win32_initial_visibility(GWL_STYLE)`, see its doc) — a decorated
     /// window is created hidden (`false`, and the creation-time
     /// `ShowWindow`'s `WM_SHOWWINDOW` edge flips it), while an undecorated
     /// window is created `WS_POPUP | WS_VISIBLE` (`true`, and no
     /// creation-time edge ever fires). A constant seed would desync the
-    /// filter for one of the two and swallow that window's first real
+    /// edge filter for one of the two and swallow that window's first real
     /// transition.
-    pub last_visibility_dispatched: std::cell::Cell<bool>,
+    pub visibility: super::window_visibility::Visibility,
+    /// The window's subscription to cloak changes.
+    pub cloak_watch: super::window_visibility::CloakWatch,
+    /// Set between `WM_ENTERSIZEMOVE` and `WM_EXITSIZEMOVE`: a live resize,
+    /// whose `WM_SIZE` renders at once.
+    pub in_size_move: std::cell::Cell<bool>,
+    /// The client size, in device pixels, and the scale the last resize
+    /// callback delivered.
+    pub last_resize: std::cell::Cell<Option<(Size<i32>, f64)>>,
+    /// Delivers wake deadlines while a modal loop runs for the window.
+    pub modal_pacing: super::modal_loop::ModalPacing,
     /// High half of a UTF-16 surrogate pair from an out-of-band `WM_CHAR`,
     /// held until its low half arrives in the next message (Windows splits
     /// astral-plane characters across two `WM_CHAR`s). Only the stray-char
@@ -433,8 +448,25 @@ impl WindowContext {
         self.callbacks.dispatch_request_frame();
     }
 
+    /// Tell the window's resize callback its client size, `device` pixels, at
+    /// its current scale.
+    pub(super) fn dispatch_resize(&self, device: Size<i32>) {
+        let scale = self.scale_factor.get();
+        self.last_resize.set(Some((device, scale)));
+        self.callbacks.dispatch_resize(
+            Size::new(
+                super::util::device_to_logical(device.width, scale),
+                super::util::device_to_logical(device.height, scale),
+            ),
+            scale,
+        );
+    }
+
     /// Complete cache updates before callback-capable native/user code.
-    fn update_window_state(&self, update: impl FnOnce(&mut super::window::WindowRecord)) {
+    pub(super) fn update_window_state(
+        &self,
+        update: impl FnOnce(&mut super::window::WindowRecord),
+    ) {
         if let Some(state) = self.window_state.upgrade() {
             update(&mut state.lock());
         }
@@ -491,7 +523,7 @@ impl WindowContext {
 
     /// The window moved on the screen or changed DPI: the focused field's
     /// input method follows it.
-    fn text_layout_moved(&self) {
+    pub(super) fn text_layout_moved(&self) {
         let services = self.text_services.borrow().clone();
         if let Some(services) = services {
             services.window_moved();
@@ -1012,7 +1044,9 @@ impl WindowsPlatform {
                     })?;
 
                     let wc = WNDCLASSW {
-                        style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
+                        // No `CS_HREDRAW`/`CS_VREDRAW`: a flip-model surface is
+                        // presented whole, and `WM_SIZE` asks for the frame itself.
+                        style: CS_OWNDC,
                         lpfnWndProc: Some(Self::window_proc),
                         cbClsExtra: 0,
                         cbWndExtra: 0,
@@ -1157,6 +1191,16 @@ impl WindowsPlatform {
                     {
                         tracing::warn!(%error, "pointer device notifications unavailable");
                     }
+                    // The window hears its session lock and unlock itself;
+                    // `WM_DESTROY` unsubscribes.
+                    if let Err(error) =
+                        windows::Win32::System::RemoteDesktop::WTSRegisterSessionNotification(
+                            hwnd,
+                            windows::Win32::System::RemoteDesktop::NOTIFY_FOR_THIS_SESSION,
+                        )
+                    {
+                        tracing::warn!(%error, "session notifications unavailable: a locked session leaves the window visible");
+                    }
                     tracing::debug!("WM_CREATE for HWND {:?}", hwnd);
                     LRESULT(0)
                 }
@@ -1191,6 +1235,9 @@ impl WindowsPlatform {
 
                 WM_DESTROY => {
                     tracing::debug!("WM_DESTROY for HWND {:?}", hwnd);
+                    let _ = windows::Win32::System::RemoteDesktop::WTSUnRegisterSessionNotification(
+                        hwnd,
+                    );
 
                     if let Some(ctx) = ctx {
                         // Whatever the precision touchpad has open ends as
@@ -1320,16 +1367,43 @@ impl WindowsPlatform {
                 windows::Win32::UI::WindowsAndMessaging::WM_ENTERSIZEMOVE => {
                     if let Some(ctx) = ctx {
                         ctx.pause_touchpad(hwnd);
+                        ctx.in_size_move.set(true);
+                        ctx.enter_modal_loop(hwnd);
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
 
                 windows::Win32::UI::WindowsAndMessaging::WM_EXITSIZEMOVE => {
                     if let Some(ctx) = ctx {
+                        ctx.exit_modal_loop(hwnd);
+                        ctx.in_size_move.set(false);
                         ctx.resume_touchpad();
                         ctx.text_layout_moved();
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+
+                windows::Win32::UI::WindowsAndMessaging::WM_ENTERMENULOOP => {
+                    if let Some(ctx) = ctx {
+                        ctx.enter_modal_loop(hwnd);
+                    }
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+
+                windows::Win32::UI::WindowsAndMessaging::WM_EXITMENULOOP => {
+                    if let Some(ctx) = ctx {
+                        ctx.exit_modal_loop(hwnd);
+                    }
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+
+                windows::Win32::UI::WindowsAndMessaging::WM_TIMER
+                    if wparam.0 == MODAL_DEADLINE_TIMER =>
+                {
+                    if let Some(ctx) = ctx {
+                        ctx.pace_modal_loop(hwnd);
+                    }
+                    LRESULT(0)
                 }
 
                 windows::Win32::UI::WindowsAndMessaging::WM_TIMER
@@ -1356,28 +1430,23 @@ impl WindowsPlatform {
                     let mut ps = PAINTSTRUCT::default();
                     let hdc = BeginPaint(hwnd, &raw mut ps);
                     if !hdc.is_invalid() {
-                        // Skip rendering for minimized windows to save CPU/GPU resources
-                        let should_skip = WindowsWindow::should_skip_render(hwnd);
-                        if should_skip {
-                            tracing::trace!("Skipping render for minimized window");
-                        } else {
-                            // No GDI painting here. This HWND carries a D3D12 flip-model
-                            // swapchain (wgpu-on-DX12 is always flip-model). Per Microsoft,
-                            // GDI and flip model cannot share an HWND: after the first
-                            // `Present1`, GDI updates to the window are dropped, and the
-                            // contention with the compositor produces visible jitter while
-                            // the window is being live-resized. The background comes from the
-                            // wgpu clear pass + the scene, not from a GDI fill (the old
-                            // FillRect was overwritten by the present in the same frame).
-                            if let Some(ctx) = ctx {
-                                // Fire per-window on_request_frame callback
-                                ctx.request_frame();
-
-                                // Also dispatch RedrawRequested to global handlers
-                                ctx.dispatch_event(WindowEvent::RedrawRequested {
-                                    window_id: ctx.window_id,
-                                });
-                            }
+                        // No GDI painting here. This HWND carries a D3D12 flip-model
+                        // swapchain (wgpu-on-DX12 is always flip-model). Per Microsoft,
+                        // GDI and flip model cannot share an HWND: after the first
+                        // `Present1`, GDI updates to the window are dropped, and the
+                        // contention with the compositor produces visible jitter while
+                        // the window is being live-resized. The background comes from the
+                        // wgpu clear pass + the scene, not from a GDI fill.
+                        //
+                        // A minimized window's paint requests its frame too: the
+                        // runtime, told the window is not visible, services its tasks
+                        // and timers without drawing, and a paint dropped here would
+                        // strand the wake that asked for it.
+                        if let Some(ctx) = ctx {
+                            ctx.request_frame();
+                            ctx.dispatch_event(WindowEvent::RedrawRequested {
+                                window_id: ctx.window_id,
+                            });
                         }
                         let _ = EndPaint(hwnd, &raw const ps);
                     }
@@ -1516,41 +1585,23 @@ impl WindowsPlatform {
                             ctx.cancel_pointers(hwnd);
                         }
 
-                        // Hidden-surface gating: minimize/restore is the
-                        // visibility signal Win32 actually delivers (no
-                        // occlusion events exist here), so it must reach
-                        // `dispatch_visibility_status_change` — the wire the
-                        // runtime's `FrameClock` gate and `AppLifecycleState`
+                        // Hidden-surface gating, minimize/restore half: it
+                        // reaches `dispatch_visibility_status_change`, the wire
+                        // the runtime's `FrameClock` gate and `AppLifecycleState`
                         // derivation hang off. Decided by the pure rule in
-                        // `shared::visibility` (host-tested); the cell is the
-                        // edge filter shared with the WM_SHOWWINDOW arm.
+                        // `shared::visibility` (host-tested).
                         if !ctx.visibility_muted.get()
                             && let Some(visible) = crate::shared::visibility::win32_size_visibility(
                                 size_type,
                                 prev_mode.is_minimized(),
                             )
-                            && crate::shared::visibility::visibility_edge(
-                                ctx.last_visibility_dispatched.get(),
-                                visible,
-                            )
-                            .is_some()
                         {
-                            ctx.last_visibility_dispatched.set(visible);
-                            tracing::debug!(
-                                ?visible,
-                                "Window surface visibility changed (WM_SIZE)"
-                            );
-                            ctx.callbacks.dispatch_visibility_status_change(visible);
+                            ctx.report_surface_visibility(visible);
                         }
 
                         // Fire per-window on_resize callback (for all size changes except minimize)
                         if size_type != SIZE_MINIMIZED {
-                            let logical_size = Size::new(
-                                super::util::device_to_logical(width, ctx.scale_factor.get()),
-                                super::util::device_to_logical(height, ctx.scale_factor.get()),
-                            );
-                            ctx.callbacks
-                                .dispatch_resize(logical_size, ctx.scale_factor.get());
+                            ctx.dispatch_resize(size);
                         }
 
                         // Dispatch event to global handlers if any
@@ -1558,23 +1609,21 @@ impl WindowsPlatform {
                             ctx.dispatch_event(event);
                         }
 
-                        // Render synchronously at the new size, in the same WM_SIZE
-                        // message that reconfigured the surface. Win32 does not post a
-                        // WM_PAINT for every WM_SIZE during the modal resize loop, so
-                        // without this the next rendered frame lags ≥1 step behind the
-                        // window size: the compositor stretches the stale frame and
-                        // fixed-position content appears to jitter while dragging the
-                        // border. `dispatch_resize` above already released the renderer
-                        // lock (its closure returned), so this re-locks cleanly; a
-                        // minimized window has nothing to present.
+                        // During a live resize, render synchronously at the new size,
+                        // in the same WM_SIZE that reconfigured the surface: Win32 does
+                        // not post a WM_PAINT for every drag step of the modal loop, so
+                        // the next frame would lag behind the window and the compositor
+                        // would stretch the stale one. Any other resize (a command, a
+                        // mode change, a DPI change) asks for one frame instead, which
+                        // the owner draws after whatever else this turn changes: a
+                        // frame per step of a multi-step change would show its
+                        // intermediate sizes. A minimized window has nothing to present.
                         if size_type != SIZE_MINIMIZED {
-                            // Render synchronously, in the same WM_SIZE message that
-                            // reconfigured the surface, so the new size is presented within
-                            // the modal resize loop instead of waiting for the next WM_PAINT
-                            // (which Windows does not reliably post per drag step).
-                            // `dispatch_resize` above already released the renderer lock, so
-                            // this re-locks cleanly; a minimized window has nothing to present.
-                            ctx.request_frame();
+                            if ctx.in_size_move.get() {
+                                ctx.request_frame();
+                            } else {
+                                ctx.redraw_if_still_owned(hwnd);
+                            }
                         }
                     }
 
@@ -1583,9 +1632,8 @@ impl WindowsPlatform {
 
                 WM_SHOWWINDOW => {
                     // Hidden-surface gating, hide/show half (the
-                    // minimize/restore half lives in the WM_SIZE arm above;
-                    // both share `last_visibility_dispatched` as the edge
-                    // filter). Only `lParam == 0` — a genuine
+                    // minimize/restore half lives in the WM_SIZE arm above).
+                    // Only `lParam == 0` — a genuine
                     // `ShowWindow`-driven `WS_VISIBLE` change — is handled:
                     // the nonzero status values (`SW_PARENTCLOSING`,
                     // `SW_OTHERZOOM`, …) describe sibling/parent effects
@@ -1604,18 +1652,8 @@ impl WindowsPlatform {
                                     shown,
                                     ctx.mode.get().is_minimized(),
                                 )
-                            && crate::shared::visibility::visibility_edge(
-                                ctx.last_visibility_dispatched.get(),
-                                visible,
-                            )
-                            .is_some()
                         {
-                            ctx.last_visibility_dispatched.set(visible);
-                            tracing::debug!(
-                                ?visible,
-                                "Window surface visibility changed (WM_SHOWWINDOW)"
-                            );
-                            ctx.callbacks.dispatch_visibility_status_change(visible);
+                            ctx.report_surface_visibility(visible);
                         }
                     }
                     // DefWindowProc continues the ordinary show/hide
@@ -1652,73 +1690,14 @@ impl WindowsPlatform {
                 }
 
                 WM_DPICHANGED => {
-                    // Extract new DPI from wparam
-                    let new_dpi = hiword(wparam.0 as u32) as f64;
-                    let new_scale = new_dpi / 96.0; // 96 DPI = 1.0 scale
-                    tracing::info!("🔍 DPI Changed: {} (scale: {:.2}x)", new_dpi, new_scale);
-
-                    // Dispatch ScaleFactorChanged event
                     if let Some(ctx) = ctx {
-                        // The display's scale changed, so its snapshot entry did.
-                        ctx.displays.invalidate();
-                        ctx.scale_factor.set(new_scale);
-                        ctx.pointer_registry
-                            .borrow_mut()
-                            .set_click_settings(super::events::click_settings(new_scale));
-                        let mut client = RECT::default();
-                        let client_size = GetClientRect(hwnd, &raw mut client).is_ok().then(|| {
-                            Size::new(
-                                (client.right - client.left) as f64 / new_scale,
-                                (client.bottom - client.top) as f64 / new_scale,
-                            )
-                        });
-                        ctx.update_window_state(|state| {
-                            state.scale_factor = new_scale;
-                            if let Some(size) = client_size {
-                                state.bounds.size = size;
-                            }
-                        });
-                        ctx.publish_window_state(hwnd);
-                        ctx.dispatch_event(WindowEvent::ScaleFactorChanged {
-                            window_id: ctx.window_id,
-                            scale_factor: new_scale,
-                        });
-
-                        // Suggested rect for new DPI
-                        //
-                        // SAFETY: `lparam` carries a pointer to a `RECT`
-                        // supplied by Win32 for `WM_DPICHANGED` specifically
-                        // (documented behavior of this message); the
-                        // null-check guards a caller that violates that
-                        // documented contract, and `rect` is copied out
-                        // (`RECT: Copy`) rather than referenced further.
-                        let suggested_rect = lparam.0 as *const RECT;
-                        if !suggested_rect.is_null() {
-                            let rect = *suggested_rect;
-                            if let Err(error) = SetWindowPos(
-                                hwnd,
-                                None,
-                                rect.left,
-                                rect.top,
-                                rect.right - rect.left,
-                                rect.bottom - rect.top,
-                                SWP_NOZORDER | SWP_NOACTIVATE,
-                            ) {
-                                tracing::warn!(
-                                    ?hwnd,
-                                    ?error,
-                                    "SetWindowPos (DPI-change suggested rect) failed"
-                                );
-                            }
-                        }
-                        // The field's screen rectangles follow the new scale
-                        // and the suggested rectangle.
-                        ctx.text_layout_moved();
-                        // After the state above is current: the hint wakes the
-                        // owner, which samples the snapshot and re-derives.
-                        ctx.callbacks.dispatch_display_changed();
+                        // SAFETY: for this message `lParam` is the address of
+                        // the suggested `RECT` the system owns for the call; the
+                        // null check guards a sender that breaks that contract,
+                        // and the rectangle is copied out (`RECT: Copy`).
+                        let suggested = (lparam.0 as *const RECT).as_ref().copied();
+                        ctx.change_dpi(hwnd, hiword(wparam.0 as u32), suggested);
                     }
-
                     LRESULT(0)
                 }
 
@@ -1744,8 +1723,31 @@ impl WindowsPlatform {
                         }
                         // Position, size and z-order changes all land here.
                         ctx.publish_window_state(hwnd);
+                        // A window shown on another virtual desktop is shown
+                        // cloaked; later changes come through `CloakWatch`.
+                        ctx.refresh_cloaked(hwnd);
                     }
                     result
+                }
+
+                // The window's own subscription (`WM_CREATE`): a locked
+                // session hides every window, whatever its surface.
+                crate::shared::windows_host_messages::WM_WTSSESSION_CHANGE => {
+                    if let Some(ctx) = ctx {
+                        ctx.session_changed(wparam.0, lparam.0);
+                    }
+                    LRESULT(0)
+                }
+
+                // Toggled after the key's dispatch, on a turn of its own (see
+                // `WM_KEYDOWN`).
+                // A handle the window's close let another window reuse is not
+                // the window whose key asked for it.
+                super::window::TOGGLE_FULLSCREEN => {
+                    if ctx.is_some_and(|ctx| ctx.identity.halves() == (wparam.0, lparam.0)) {
+                        WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
+                    }
+                    LRESULT(0)
                 }
 
                 // The title and the style bits (resizable, decorated) are part
@@ -1946,21 +1948,10 @@ impl WindowsPlatform {
                     let vk = wparam.0 as u16;
                     let is_repeat = (lparam.0 & (1 << 30)) != 0;
 
-                    // Check if fullscreen hotkey is pressed (configurable, default F11)
                     if let Some(ctx) = ctx {
                         // Read before the character drain below retrieves
                         // other messages.
                         let time = ctx.message_clock.message_time();
-                        if let Some(hotkey) = ctx.config.fullscreen_hotkey
-                            && vk == hotkey
-                            && !is_repeat
-                        {
-                            tracing::info!(
-                                "Fullscreen hotkey (VK={:#04x}) pressed - toggling fullscreen",
-                                hotkey
-                            );
-                            WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
-                        }
 
                         // Track modifiers.
                         ctx.modifiers.set(super::events::message_modifiers());
@@ -2026,6 +2017,20 @@ impl WindowsPlatform {
                             // Withdrawn with its keydown: the held
                             // characters are dropped here.
                             return LRESULT(0);
+                        }
+                        // The fullscreen hotkey (configurable, default F11) is
+                        // a default the app can prevent. It toggles on a turn
+                        // of its own, as a window command does, not inside
+                        // this message: the resize it causes renders. The
+                        // request names this window, not just its handle.
+                        if ctx.config.fullscreen_hotkey == Some(vk) && !is_repeat {
+                            let (low, high) = ctx.identity.halves();
+                            let _ = PostMessageW(
+                                Some(hwnd),
+                                super::window::TOGGLE_FULLSCREEN,
+                                WPARAM(low),
+                                LPARAM(high),
+                            );
                         }
                         let handled = DefWindowProcW(hwnd, msg, wparam, lparam);
                         restore_translated_sys_chars(hwnd, &held);

@@ -107,6 +107,7 @@ windows = { workspace = true, features = [
     # and pinch (ADR-0217 §4).
     "Win32_Graphics_DirectManipulation",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Accessibility",
     "Win32_UI_Controls",
     "Win32_UI_Shell",
     "Win32_Graphics_Gdi",
