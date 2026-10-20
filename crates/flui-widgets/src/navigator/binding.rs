@@ -371,6 +371,28 @@ struct AwaitingAdoption {
 }
 
 impl RouteRegistries {
+    /// Take the overlay entries of `routes` out of the registry, then remove
+    /// each from its overlay with the registry's lock released: an entry's
+    /// builder may own captures whose `Drop` is user code. Each removal runs,
+    /// and each entry retires, through `recovery`, which holds the first
+    /// failure.
+    pub(crate) fn retire_entries(
+        &self,
+        routes: &[RouteId],
+        recovery: &mut flui_foundation::panic::PanicRecovery,
+    ) {
+        let removed: Vec<OverlayEntry> = {
+            let mut entries = self.entries.lock();
+            routes.iter().filter_map(|id| entries.remove(id)).collect()
+        };
+        for entry in removed {
+            if entry.is_attached() {
+                recovery.run(|| entry.remove());
+            }
+            recovery.retire(entry);
+        }
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             closed: AtomicBool::new(false),

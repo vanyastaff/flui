@@ -550,24 +550,9 @@ impl NavigatorShared {
         deliver(&outcome.notifications, &observers, &mut recovery);
         recovery.retire(observers);
 
-        // 2. Each disposed route's overlay entries, then the route itself. The
-        //    entries leave the registry first and are removed and released
-        //    with its lock dropped: an entry's builder may own captures whose
-        //    `Drop` is user code.
-        let removed: Vec<OverlayEntry> = {
-            let mut entries = self.registries.entries.lock();
-            outcome
-                .disposed
-                .iter()
-                .filter_map(|id| entries.remove(id))
-                .collect()
-        };
-        for entry in removed {
-            if entry.is_attached() {
-                recovery.run(|| entry.remove());
-            }
-            recovery.retire(entry);
-        }
+        // 2. Each disposed route's overlay entries, then the route itself.
+        self.registries
+            .retire_entries(&outcome.disposed, &mut recovery);
         outcome.dispose_routes(&mut recovery);
 
         if outcome.rearrange_overlay {
