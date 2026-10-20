@@ -23,7 +23,7 @@ use crate::{
 
 use super::{
     display::WebDisplays,
-    registration::{CanvasClaim, Registration, effective_focus},
+    registration::{CanvasClaim, CanvasResize, Registration, effective_focus},
 };
 
 /// Web window wrapping a `<canvas>` element
@@ -542,14 +542,16 @@ struct ObservedSize {
 }
 
 impl LayoutSync {
-    /// The `ResizeObserver` reported the canvas, with its device-pixel size
-    /// where the browser gives one: record it for the current layout and
-    /// sync.
-    pub(super) fn observe(&self, device: Option<DeviceSize>) {
-        let observed = device
-            .zip(layout_size(&self.canvas))
-            .map(|(device, layout)| ObservedSize { layout, device });
-        self.observed.set(observed);
+    /// A `ResizeObserver` reported the canvas: a device-pixel report is
+    /// recorded for the current layout, replacing the last one, then the
+    /// window syncs.
+    pub(super) fn observe(&self, report: CanvasResize) {
+        if let CanvasResize::DevicePixels(device) = report {
+            let observed = device
+                .zip(layout_size(&self.canvas))
+                .map(|(device, layout)| ObservedSize { layout, device });
+            self.observed.set(observed);
+        }
         self.sync();
     }
 

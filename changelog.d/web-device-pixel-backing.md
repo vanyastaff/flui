@@ -5,5 +5,7 @@
   store and `physical_size` come from the `ResizeObserver` entry's `devicePixelContentBoxSize`,
   the device pixels the browser snapped the box to, instead of
   `round(CSS size × devicePixelRatio)`, which can be a pixel off and blur or stretch the surface.
-  The Web runner configures the renderer from `physical_size`, so the surface follows. Safari,
+  The Web runner and `run_direct` (every platform) configure the renderer from the window's
+  `physical_size` instead of `size × scale`, so the surface follows. A second observer of the CSS
+  box reports a reflow that leaves the rounded device-pixel box unchanged. Safari,
   and a canvas with any padding (whose window is its padding box), keep the estimate.

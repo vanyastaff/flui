@@ -153,7 +153,8 @@ impl KeyRoute {
 /// `ResizeObserver` on the canvas sees every layout change (a viewport
 /// resize under `100vw`, a container reflow, a style change). Where the
 /// browser observes the device-pixel content box (Chrome, Firefox), a report
-/// carries the exact backing size. A window dragged to a display of another
+/// carries the exact backing size, and a second observer of the CSS box
+/// reports a reflow that leaves the rounded device-pixel box as it was. A window dragged to a display of another
 /// scale moves the device pixel ratio and keeps its CSS box: Safari's CSS-box
 /// observer and the window's `resize` event miss that, and the device-pixel
 /// box misses it while its rounded size stays (a small canvas), so a
@@ -167,7 +168,7 @@ fn register_layout_events(
 ) -> Result<(), crate::OpenWindowError> {
     let sync = Rc::new(window.layout_sync());
     let observer_sync = Rc::clone(&sync);
-    registration.observe(move |device| observer_sync.observe(device))?;
+    registration.observe(move |report| observer_sync.observe(report))?;
     let ratio_sync = Rc::clone(&sync);
     // Owned by the `resize` listener, so the registration's teardown removes
     // the query with it.

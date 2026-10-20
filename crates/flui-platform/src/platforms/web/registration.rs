@@ -37,13 +37,17 @@ export function setCanvasEditor(canvas, token, editor) {
 }
 // Observe the device-pixel content box where the browser has it (Chrome,
 // Firefox); Safari rejects the box, and its content box is observed instead.
+// True when the device-pixel box is.
 export function observeCanvas(observer, canvas) {
     try {
         observer.observe(canvas, { box: 'device-pixel-content-box' });
+        return true;
     } catch {
         observer.observe(canvas);
+        return false;
     }
 }
+export function observeContentBox(observer, canvas) { observer.observe(canvas); }
 // The last entry's device-pixel content box as [width, height]; [] when the
 // entry has none, or when the canvas has any padding, a fraction of a pixel
 // included: the window's size is the padding box (`clientWidth`), which the
@@ -94,6 +98,11 @@ extern "C" {
     fn set_canvas_editor(canvas: &web_sys::HtmlCanvasElement, token: &JsValue, editor: &JsValue);
     #[wasm_bindgen(catch, js_name = observeCanvas)]
     fn observe_canvas(
+        observer: &web_sys::ResizeObserver,
+        canvas: &web_sys::HtmlCanvasElement,
+    ) -> Result<bool, JsValue>;
+    #[wasm_bindgen(catch, js_name = observeContentBox)]
+    fn observe_content_box(
         observer: &web_sys::ResizeObserver,
         canvas: &web_sys::HtmlCanvasElement,
     ) -> Result<(), JsValue>;
@@ -255,10 +264,20 @@ impl Drop for Listener {
     }
 }
 
+/// What a canvas's `ResizeObserver` reported.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum CanvasResize {
+    /// The observed box's device-pixel size, `None` where the browser gives
+    /// none or it measures less than the window (a canvas with padding).
+    DevicePixels(Option<DeviceSize>),
+    /// The CSS content box changed; it says nothing of device pixels.
+    Layout,
+}
+
 struct ResizeSubscription {
     observer: web_sys::ResizeObserver,
     closure: Option<Closure<dyn Fn(JsValue)>>,
-    _body: Rc<dyn Fn(Option<DeviceSize>)>,
+    _body: Rc<dyn Fn(CanvasResize)>,
 }
 
 impl Drop for ResizeSubscription {
@@ -320,7 +339,7 @@ pub(super) struct Registration {
     pub(super) pointers: Rc<RefCell<HashMap<i32, u16>>>,
     canvas: web_sys::HtmlCanvasElement,
     listeners: Vec<Listener>,
-    observer: Option<ResizeSubscription>,
+    observers: Vec<ResizeSubscription>,
     timers: Vec<Rc<DeadlineTimer>>,
     claim: CanvasClaim,
 }
@@ -332,7 +351,7 @@ impl Registration {
             pointers: Rc::default(),
             canvas: canvas.clone(),
             listeners: Vec::new(),
-            observer: None,
+            observers: Vec::new(),
             timers: Vec::new(),
             claim,
         }
@@ -376,25 +395,47 @@ impl Registration {
         Ok(())
     }
 
-    /// Observe the canvas's size; `body` gets each report's device-pixel
-    /// size where the browser gives one. A browser without `ResizeObserver`
-    /// is left to the window's `resize` subscription.
+    /// Observe the canvas's size. Where the browser observes the device-pixel
+    /// box (Chrome, Firefox), a second observer watches the CSS content box:
+    /// each observer reports only a change of its own box, and a reflow can
+    /// move the CSS box while the rounded device-pixel box stays. A browser
+    /// without `ResizeObserver` is left to the window's `resize` subscription.
     pub(super) fn observe(
         &mut self,
-        body: impl Fn(Option<DeviceSize>) + 'static,
+        body: impl Fn(CanvasResize) + 'static,
     ) -> Result<(), OpenWindowError> {
-        let body: Rc<dyn Fn(Option<DeviceSize>)> = Rc::new(body);
-        let weak = Rc::downgrade(&body);
+        let body: Rc<dyn Fn(CanvasResize)> = Rc::new(body);
+        let Some(device) = self.subscribe(&body, |entries| {
+            CanvasResize::DevicePixels(match device_pixel_size(entries)[..] {
+                [width, height] => Some(DeviceSize { width, height }),
+                _ => None,
+            })
+        }) else {
+            return Ok(());
+        };
+        if !observe_canvas(&device, &self.canvas).map_err(backend)? {
+            return Ok(());
+        }
+        match self.subscribe(&body, |_| CanvasResize::Layout) {
+            Some(layout) => observe_content_box(&layout, &self.canvas).map_err(backend),
+            None => Ok(()),
+        }
+    }
+
+    /// A `ResizeObserver` whose entries `report` turns into calls of `body`
+    /// while this registration accepts; `None` in a browser without one.
+    fn subscribe(
+        &mut self,
+        body: &Rc<dyn Fn(CanvasResize)>,
+        report: fn(&JsValue) -> CanvasResize,
+    ) -> Option<web_sys::ResizeObserver> {
+        let weak = Rc::downgrade(body);
         let accepting = Rc::clone(&self.accepting);
         let closure = Closure::<dyn Fn(JsValue)>::new(move |entries: JsValue| {
             if accepting.get()
                 && let Some(body) = weak.upgrade()
             {
-                let device = match device_pixel_size(&entries)[..] {
-                    [width, height] => Some(DeviceSize { width, height }),
-                    _ => None,
-                };
-                body(device);
+                body(report(&entries));
             }
         });
         let observer = match web_sys::ResizeObserver::new(closure.as_ref().unchecked_ref()) {
@@ -406,15 +447,15 @@ impl Registration {
                         "ResizeObserver unavailable; using window resize subscription"
                     );
                 });
-                return Ok(());
+                return None;
             }
         };
-        self.observer = Some(ResizeSubscription {
+        self.observers.push(ResizeSubscription {
             observer: observer.clone(),
             closure: Some(closure),
-            _body: body,
+            _body: Rc::clone(body),
         });
-        observe_canvas(&observer, &self.canvas).map_err(backend)
+        Some(observer)
     }
 
     pub(super) fn fence(&self) {
@@ -462,12 +503,12 @@ impl Drop for Registration {
         for id in pointers.into_keys() {
             crate::shared::panic_boundary::contain_owner_callback(|| owner.release(id));
         }
-        let observer = self.observer.take();
+        let observers = std::mem::take(&mut self.observers);
         let listeners = std::mem::take(&mut self.listeners);
         for timer in std::mem::take(&mut self.timers) {
             timer.cancel();
         }
-        drop(observer);
+        drop(observers);
         for listener in listeners {
             drop(listener);
         }
