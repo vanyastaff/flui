@@ -1873,10 +1873,10 @@ impl PlatformWindow for MockWindow {
 
     fn physical_size(&self) -> Size<i32> {
         let state = self.state.lock();
-        Size::new(
-            (state.size.width * state.scale_factor) as i32,
-            (state.size.height * state.scale_factor) as i32,
-        )
+        flui_foundation::geometry::DevicePixelRatio::new(state.scale_factor)
+            .map_or(Size::new(0, 0), |ratio| {
+                flui_foundation::geometry::device_size(state.size, ratio)
+            })
     }
 
     fn logical_size(&self) -> Size<f64> {

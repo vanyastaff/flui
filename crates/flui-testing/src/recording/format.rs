@@ -15,7 +15,7 @@ use super::dto::{
 
 /// The recording format's major version. It changes only with an
 /// incompatible change; unknown fields are skipped within one version.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Why a recording could not be written, read or replayed.
 #[derive(Debug, thiserror::Error)]

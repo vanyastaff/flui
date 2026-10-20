@@ -598,8 +598,7 @@ impl LayoutSync {
             i32::try_from(backing.width).unwrap_or(i32::MAX),
             i32::try_from(backing.height).unwrap_or(i32::MAX),
         );
-        if let Ok(metrics) = flui_foundation::geometry::WindowMetrics::new(physical, scale_factor)
-        {
+        if let Ok(metrics) = flui_foundation::geometry::WindowMetrics::new(physical, scale_factor) {
             self.callbacks.dispatch_resize(metrics);
         }
         self.callbacks.dispatch_request_frame();
