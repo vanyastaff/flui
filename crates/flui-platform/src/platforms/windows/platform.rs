@@ -26,20 +26,19 @@ use windows::{
             Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
             WindowsAndMessaging::{
                 CS_OWNDC, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-                GWLP_USERDATA, GetClassNameW, GetClientRect, GetForegroundWindow,
-                GetWindowLongPtrW, GetWindowThreadProcessId, HICON, HTCLIENT, HWND_MESSAGE,
-                IDC_ARROW, ISMEX_NOSEND, InSendMessageEx, IsWindowVisible, MINMAXINFO, MSG,
-                MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW,
-                PostMessageW, PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU,
-                SW_SHOWNORMAL, SetForegroundWindow, SetWindowLongPtrW, TranslateMessage,
-                WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPOS, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE,
-                WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO,
-                WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
-                WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-                WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-                WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE,
-                WM_STYLECHANGED, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_WINDOWPOSCHANGED,
-                WM_WINDOWPOSCHANGING, WNDCLASSW,
+                GWLP_USERDATA, GetClassNameW, GetForegroundWindow, GetWindowLongPtrW,
+                GetWindowThreadProcessId, HICON, HTCLIENT, HWND_MESSAGE, IDC_ARROW, ISMEX_NOSEND,
+                InSendMessageEx, IsWindowVisible, MINMAXINFO, MSG, MWMO_INPUTAVAILABLE,
+                MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW, PostMessageW,
+                PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU, SW_SHOWNORMAL,
+                SetForegroundWindow, SetWindowLongPtrW, TranslateMessage, WINDOW_EX_STYLE,
+                WINDOW_STYLE, WINDOWPOS, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_CREATE,
+                WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_INPUTLANGCHANGE,
+                WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+                WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT,
+                WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT,
+                WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND,
+                WM_SYSKEYDOWN, WM_SYSKEYUP, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WNDCLASSW,
             },
         },
     },
@@ -454,7 +453,10 @@ impl WindowContext {
     }
 
     /// Complete cache updates before callback-capable native/user code.
-    fn update_window_state(&self, update: impl FnOnce(&mut super::window::WindowRecord)) {
+    pub(super) fn update_window_state(
+        &self,
+        update: impl FnOnce(&mut super::window::WindowRecord),
+    ) {
         if let Some(state) = self.window_state.upgrade() {
             update(&mut state.lock());
         }
@@ -1661,64 +1663,14 @@ impl WindowsPlatform {
                 }
 
                 WM_DPICHANGED => {
-                    // Extract new DPI from wparam
-                    let new_dpi = hiword(wparam.0 as u32) as f64;
-                    let new_scale = new_dpi / 96.0; // 96 DPI = 1.0 scale
-                    tracing::info!("🔍 DPI Changed: {} (scale: {:.2}x)", new_dpi, new_scale);
-
                     if let Some(ctx) = ctx {
-                        let old_scale = ctx.scale_factor.replace(new_scale);
-                        // The display's scale changed, so its snapshot entry did.
-                        ctx.displays.invalidate();
-                        ctx.pointer_registry
-                            .borrow_mut()
-                            .set_click_settings(super::events::click_settings(new_scale));
-                        // The scale and the rectangle below change together: a
-                        // subscriber sees the window once, at its new size.
-                        let hold = ctx.hold_publishing();
-                        ctx.update_window_state(|state| state.scale_factor = new_scale);
-                        ctx.dispatch_event(WindowEvent::ScaleFactorChanged {
-                            window_id: ctx.window_id,
-                            scale_factor: new_scale,
-                        });
-
                         // SAFETY: for this message `lParam` is the address of
                         // the suggested `RECT` the system owns for the call; the
                         // null check guards a sender that breaks that contract,
                         // and the rectangle is copied out (`RECT: Copy`).
                         let suggested = (lparam.0 as *const RECT).as_ref().copied();
-                        ctx.apply_dpi_rectangle(hwnd, suggested, new_scale / old_scale);
-                        drop(hold);
-                        ctx.publish_window_state(hwnd);
-
-                        // The runtime takes a new scale from a resize. When the
-                        // rectangle kept the client size in device pixels, or
-                        // the move failed, no `WM_SIZE` brought it.
-                        let mut client = RECT::default();
-                        if !ctx.mode.get().is_minimized()
-                            && GetClientRect(hwnd, &raw mut client).is_ok()
-                        {
-                            let size = Size::new(
-                                (client.right - client.left).max(1),
-                                (client.bottom - client.top).max(1),
-                            );
-                            if ctx.last_resize.get() != Some((size, new_scale)) {
-                                ctx.update_window_state(|state| {
-                                    state.bounds.size = Size::new(
-                                        f64::from(size.width) / new_scale,
-                                        f64::from(size.height) / new_scale,
-                                    );
-                                });
-                                ctx.publish_window_state(hwnd);
-                                ctx.dispatch_resize(size);
-                                WindowsWindow::redraw_native(hwnd);
-                            }
-                        }
-                        // After the state above is current: the hint wakes the
-                        // owner, which samples the snapshot and re-derives.
-                        ctx.callbacks.dispatch_display_changed();
+                        ctx.change_dpi(hwnd, hiword(wparam.0 as u32), suggested);
                     }
-
                     LRESULT(0)
                 }
 
@@ -1754,17 +1706,8 @@ impl WindowsPlatform {
                 // The window's own subscription (`WM_CREATE`): a locked
                 // session hides every window, whatever its surface.
                 crate::shared::windows_host_messages::WM_WTSSESSION_CHANGE => {
-                    use crate::shared::windows_host_messages::{HostEvent, HostMessage, classify};
                     if let Some(ctx) = ctx {
-                        match classify(msg, wparam.0, lparam.0) {
-                            HostMessage::Event(HostEvent::SessionLocked) => {
-                                ctx.set_session_locked(true);
-                            }
-                            HostMessage::Event(HostEvent::SessionUnlocked) => {
-                                ctx.set_session_locked(false);
-                            }
-                            _ => {}
-                        }
+                        ctx.session_changed(wparam.0, lparam.0);
                     }
                     LRESULT(0)
                 }

@@ -66,8 +66,20 @@ impl WindowContext {
         self.settle_visibility();
     }
 
+    /// `WM_WTSSESSION_CHANGE`: the session may have locked or unlocked.
+    pub(super) fn session_changed(&self, wparam: usize, lparam: isize) {
+        use crate::shared::windows_host_messages::{
+            HostEvent, HostMessage, WM_WTSSESSION_CHANGE, classify,
+        };
+        match classify(WM_WTSSESSION_CHANGE, wparam, lparam) {
+            HostMessage::Event(HostEvent::SessionLocked) => self.set_session_locked(true),
+            HostMessage::Event(HostEvent::SessionUnlocked) => self.set_session_locked(false),
+            _ => {}
+        }
+    }
+
     /// The session locked (`true`) or unlocked.
-    pub(super) fn set_session_locked(&self, locked: bool) {
+    fn set_session_locked(&self, locked: bool) {
         let occlusion = self.visibility.occlusion.get();
         self.visibility.occlusion.set(Occlusion {
             session_locked: locked,
