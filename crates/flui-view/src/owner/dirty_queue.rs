@@ -1,6 +1,9 @@
 //! The build drain's dirty-element queue.
 
-use std::{cmp::Reverse, collections::BinaryHeap};
+use std::{
+    cmp::Reverse,
+    collections::{BinaryHeap, HashMap},
+};
 
 use flui_foundation::ElementId;
 
@@ -96,5 +99,50 @@ impl DirtyQueue {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.heap.is_empty()
+    }
+}
+
+/// Nearest layout-builder scope per element, for a tree that stays immutable
+/// while the answers live: a walk stops at the first element already answered
+/// and records its answer for every element it passed, so classifying D dirty
+/// elements costs O(D + distinct ancestors), not O(D · depth).
+#[derive(Debug, Default)]
+pub(crate) struct ScopeMemo {
+    answers: HashMap<ElementId, Option<ElementId>>,
+    path: Vec<ElementId>,
+}
+
+impl ScopeMemo {
+    /// Forget every answer, keeping the storage.
+    pub(crate) fn clear(&mut self) {
+        self.answers.clear();
+    }
+
+    /// The nearest element from `element` up (itself included) that
+    /// `is_scope`, following `parent`.
+    pub(crate) fn nearest(
+        &mut self,
+        element: ElementId,
+        is_scope: impl Fn(ElementId) -> bool,
+        mut parent: impl FnMut(ElementId) -> Option<ElementId>,
+    ) -> Option<ElementId> {
+        self.path.clear();
+        let mut cursor = Some(element);
+        let scope = loop {
+            let Some(candidate) = cursor else {
+                break None;
+            };
+            if let Some(&known) = self.answers.get(&candidate) {
+                break known;
+            }
+            self.path.push(candidate);
+            if is_scope(candidate) {
+                break Some(candidate);
+            }
+            cursor = parent(candidate);
+        };
+        self.answers
+            .extend(self.path.drain(..).map(|visited| (visited, scope)));
+        scope
     }
 }

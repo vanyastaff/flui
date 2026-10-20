@@ -247,12 +247,8 @@ pub(crate) struct BuildScopeQueues {
     isolated: HashMap<ElementId, BinaryHeap<Reverse<DirtyElement>>>,
     /// Reused while rerouting after scope removal or tree reparenting.
     scratch: Vec<DirtyElement>,
-    /// Nearest scope per element, valid for one repartition: the tree is
-    /// immutable for its duration, so every element on a walked path shares
-    /// the answer its walk found.
-    scope_memo: HashMap<ElementId, Option<ElementId>>,
-    /// The path of the walk in progress, reused across walks.
-    scope_path: Vec<ElementId>,
+    /// Nearest scope per element, reused by each repartition.
+    scope_memo: super::dirty_queue::ScopeMemo,
 }
 
 /// Per-cause rebuild counters for one `build_scope`, indexed by the
@@ -1179,12 +1175,13 @@ impl BuildOwner {
         live_scopes: &HashSet<ElementId>,
     ) {
         self.collect_partitioned_dirty();
-        let queues = self
-            .build_scope_queues
-            .as_mut()
-            .expect("BUG: repartition creates scoped queues");
-        let mut memo = std::mem::take(&mut queues.scope_memo);
-        let mut path = std::mem::take(&mut queues.scope_path);
+        let mut memo = std::mem::take(
+            &mut self
+                .build_scope_queues
+                .as_mut()
+                .expect("BUG: repartition creates scoped queues")
+                .scope_memo,
+        );
         memo.clear();
         while let Some(mut dirty) = self
             .build_scope_queues
@@ -1197,58 +1194,22 @@ impl BuildOwner {
                 .get(dirty.id())
                 .map_or(0, crate::tree::ElementNode::depth);
             dirty = dirty.at_depth(depth);
-            let scope = Self::memoized_layout_builder_scope(
-                tree,
+            #[cfg(test)]
+            LAYOUT_SCOPE_CLASSIFICATIONS.with(|count| count.set(count.get() + 1));
+            let scope = memo.nearest(
                 dirty.id(),
-                live_scopes,
-                &mut memo,
-                &mut path,
+                |id| live_scopes.contains(&id) && tree.contains(id),
+                |id| {
+                    #[cfg(test)]
+                    LAYOUT_SCOPE_HOPS.with(|count| count.set(count.get() + 1));
+                    tree.get(id).and_then(crate::tree::ElementNode::parent)
+                },
             );
             self.defer_dirty_element(scope, dirty);
         }
-        let queues = self
-            .build_scope_queues
-            .as_mut()
-            .expect("BUG: repartition keeps its scoped queues");
-        queues.scope_memo = memo;
-        queues.scope_path = path;
-    }
-
-    /// [`Self::nearest_layout_builder_scope`] for a tree that stays immutable
-    /// while `memo` lives: a walk stops at the first element already
-    /// answered and records its answer for every element it passed, so
-    /// classifying D dirty elements costs O(D + distinct ancestors), not
-    /// O(D · depth).
-    fn memoized_layout_builder_scope(
-        tree: &ElementTree,
-        element: ElementId,
-        live_scopes: &HashSet<ElementId>,
-        memo: &mut HashMap<ElementId, Option<ElementId>>,
-        path: &mut Vec<ElementId>,
-    ) -> Option<ElementId> {
-        #[cfg(test)]
-        LAYOUT_SCOPE_CLASSIFICATIONS.with(|count| count.set(count.get() + 1));
-        path.clear();
-        let mut cursor = Some(element);
-        let scope = loop {
-            let Some(candidate) = cursor else {
-                break None;
-            };
-            if let Some(&known) = memo.get(&candidate) {
-                break known;
-            }
-            #[cfg(test)]
-            LAYOUT_SCOPE_HOPS.with(|count| count.set(count.get() + 1));
-            path.push(candidate);
-            if live_scopes.contains(&candidate) && tree.contains(candidate) {
-                break Some(candidate);
-            }
-            cursor = tree
-                .get(candidate)
-                .and_then(crate::tree::ElementNode::parent);
-        };
-        memo.extend(path.drain(..).map(|visited| (visited, scope)));
-        scope
+        if let Some(queues) = self.build_scope_queues.as_mut() {
+            queues.scope_memo = memo;
+        }
     }
 
     pub(crate) fn activate_build_target(&mut self, target: BuildScopeTarget) {
