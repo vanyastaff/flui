@@ -496,6 +496,30 @@ fn a_press_released_past_its_timeout_before_the_poll_is_a_long_press() {
     }
 }
 
+/// In an arena no binding drives, a press released before its timeout still
+/// ends its contest: no slot outlives it, and the next press is a fresh
+/// contest that recognizes.
+fn an_early_release_in_a_standalone_arena_ends_its_contest() {
+    let clock = ManualClock::new();
+    let arena = GestureArena::with_clock(Arc::new(clock.clone()));
+    let pressed = Rc::new(Cell::new(0));
+    let p = Rc::clone(&pressed);
+    let recognizer = LongPressGestureRecognizer::builder(arena.clone())
+        .on_long_press(move || p.set(p.get() + 1))
+        .build();
+    let down = press_event(1, Offset::ZERO, 0, false);
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    clock.advance(Duration::from_millis(100));
+    let up = press_event(1, Offset::ZERO, 100_000_000, true);
+    recognizer.handle_event(PointerDispatch::at_root(&up));
+    assert!(arena.is_empty(), "the withdrawn press leaves no contest");
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    clock.advance(Duration::from_millis(600));
+    arena.poll_deadlines();
+    assert_eq!(pressed.get(), 1, "the next press recognizes");
+    recognizer.cancel();
+}
+
 /// A multi-contact tap is a group of contacts down together: two that
 /// never overlap are two taps, not one two-contact tap.
 fn multi_tap_needs_its_contacts_down_together() {
@@ -583,6 +607,10 @@ fn held_press_and_multi_tap_owner_contracts() {
         (
             "release past the timeout before its poll",
             a_press_released_past_its_timeout_before_the_poll_is_a_long_press,
+        ),
+        (
+            "early release in a standalone arena",
+            an_early_release_in_a_standalone_arena_ends_its_contest,
         ),
         (
             "contacts that never overlap",

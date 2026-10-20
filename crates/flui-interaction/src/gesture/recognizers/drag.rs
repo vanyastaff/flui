@@ -171,6 +171,11 @@ impl DragEndDetails {
     /// [`Self::fling_velocity`] carried into presentation space through the
     /// receiving node's transform, so it keeps the drag's axis, threshold and
     /// cap. Cancellation gives zero.
+    ///
+    /// The transform is inferred from the release velocity measured in both
+    /// spaces, since the dispatch does not carry the hit-test transform: the
+    /// mapping is exact for zoom, rotation and translation, and approximate
+    /// under a non-uniform scale or a skew.
     #[must_use]
     pub const fn global_fling_velocity(&self) -> Velocity {
         self.global_fling_velocity

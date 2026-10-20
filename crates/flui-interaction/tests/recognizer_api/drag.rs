@@ -232,6 +232,10 @@ fn axial_fling_limits_read_the_drag_axis() {
     let identity: Transform = |x, y| (x, y);
     // A quarter turn at twice the scale: local x runs along root y.
     let turned: Transform = |x, y| (-2.0 * y, 2.0 * x);
+    // An eighth turn at half the scale. Both are similarities, which the root
+    // fling maps exactly; a non-uniform scale or a skew it only approximates.
+    const EIGHTH: f64 = 0.5 * std::f64::consts::FRAC_1_SQRT_2;
+    let eighth: Transform = |x, y| (EIGHTH * (x - y), EIGHTH * (x + y));
     // A horizontal drag, or a free drag the rails lock onto its horizontal
     // start.
     let horizontal =
@@ -250,7 +254,7 @@ fn axial_fling_limits_read_the_drag_axis() {
         Transform,
         Option<((f64, f64), (f64, f64))>,
     );
-    let rows: [Row; 5] = [
+    let rows: [Row; 6] = [
         (
             "off-axis release",
             horizontal,
@@ -278,6 +282,13 @@ fn axial_fling_limits_read_the_drag_axis() {
             (3000.0, 500.0),
             turned,
             Some(((3000.0, 0.0), (0.0, 6000.0))),
+        ),
+        (
+            "carried through a node turned 45 degrees at half scale",
+            horizontal,
+            (3000.0, 500.0),
+            eighth,
+            Some(((3000.0, 0.0), (EIGHTH * 3000.0, EIGHTH * 3000.0))),
         ),
         (
             "railed free drag",
