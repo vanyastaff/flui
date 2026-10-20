@@ -157,6 +157,12 @@ fn an_edit_made_on_a_superseded_snapshot_is_dropped() {
     );
     let outcome = replay(&store, queued, 2);
     assert_eq!(outcome.get(), Some(Replayed::Stale));
+    // The newer snapshot reached the view as a selection-only update, so the
+    // dropped edit's character is still in the input method's text: the view
+    // must restart on the store's.
+    assert!(Replayed::Stale.restarts_the_view());
+    assert!(Replayed::Refused.restarts_the_view());
+    assert!(!Replayed::Applied.restarts_the_view());
     assert_eq!(store.text(), "xyz");
     let edit = mirror
         .report(2, &state("xyz!", (4, 4), None))

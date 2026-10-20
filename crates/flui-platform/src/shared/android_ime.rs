@@ -10,8 +10,9 @@
 //! reports its state, and [`Mirror::report`] turns the report into one
 //! [`ImeEdit`] against the snapshot it was made on. The owner replays the
 //! edits in order ([`replay_current`]); an edit made on an older snapshot
-//! than the one the owner published last is dropped, because the owner's
-//! newer snapshot is already on its way to the view and resets it. The owner
+//! than the one the owner published last is dropped, and the owner restarts
+//! the view on the store's text, because a newer snapshot that only moved the
+//! selection leaves the dropped edit's text in the input method. The owner
 //! is the authority; the mirror never is.
 //!
 //! Cfg-free plain values over UTF-16, so Linux CI pins them;
@@ -143,6 +144,18 @@ pub enum Replayed {
     /// The store refused a step: the view no longer mirrors the store, and
     /// the owner publishes a new snapshot.
     Refused,
+}
+
+impl Replayed {
+    /// Whether the view must restart on a fresh snapshot of the store. A
+    /// stale edit was dropped after the owner's newer snapshot reached the
+    /// view as a selection-only update, which only tells the input method:
+    /// the character it committed would otherwise stay in its cached text
+    /// while the field never received it.
+    #[must_use]
+    pub const fn restarts_the_view(self) -> bool {
+        !matches!(self, Self::Applied)
+    }
 }
 
 /// Replay `edit` into `session` if it was made on the snapshot the owner
