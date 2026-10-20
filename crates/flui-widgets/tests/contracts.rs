@@ -257,6 +257,7 @@ fn pointer_and_gesture_recognition() {
             ("pointer_vocabulary::viewer_extreme_zoom_reports_the_finite_applied_change", crate::pointer_vocabulary::viewer_extreme_zoom_reports_the_finite_applied_change),
             ("pointer_vocabulary::viewer_page_overflow_and_empty_viewport_recover", crate::pointer_vocabulary::viewer_page_overflow_and_empty_viewport_recover),
             ("interactive_viewer::viewer_keys_pan_and_zoom_from_the_focused_row", crate::interactive_viewer::viewer_keys_pan_and_zoom_from_the_focused_row),
+            ("interactive_viewer::keys_typed_in_a_field_inside_the_viewer_stay_in_the_field", crate::interactive_viewer::keys_typed_in_a_field_inside_the_viewer_stay_in_the_field),
             ("interactive_viewer::viewer_assistive_actions_zoom_and_pan", crate::interactive_viewer::viewer_assistive_actions_zoom_and_pan),
             ("interactive_viewer::viewer_double_tap_zooms_about_the_tap_and_back_out_at_the_maximum", crate::interactive_viewer::viewer_double_tap_zooms_about_the_tap_and_back_out_at_the_maximum),
             ("interactive_viewer::viewer_degenerate_geometry_and_bounds_publish_finite_transforms", crate::interactive_viewer::viewer_degenerate_geometry_and_bounds_publish_finite_transforms),
@@ -1277,6 +1278,14 @@ fn gesture_alternatives() {
             (
                 "gesture_alternatives::every_preset_opens_the_menu_by_its_pointer_trigger",
                 crate::gesture_alternatives::every_preset_opens_the_menu_by_its_pointer_trigger,
+            ),
+            (
+                "gesture_alternatives::the_menu_long_press_waits_for_the_system_setting",
+                crate::gesture_alternatives::the_menu_long_press_waits_for_the_system_setting,
+            ),
+            (
+                "gesture_alternatives::the_revealed_menu_control_follows_focus_and_reading_direction",
+                crate::gesture_alternatives::the_revealed_menu_control_follows_focus_and_reading_direction,
             ),
             (
                 "gesture_alternatives::labels_name_one_action_each",

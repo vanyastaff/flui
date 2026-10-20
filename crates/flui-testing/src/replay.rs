@@ -1001,6 +1001,14 @@ impl VirtualScript {
         }
     }
 
+    /// The pointer activates `button` at `at`: a dwell device's right click
+    /// is [`PointerButton::SECONDARY`].
+    pub fn press_button(self, at: Offset<f64>, button: PointerButton) -> Self {
+        Self {
+            mouse: self.mouse.press_button(at, button),
+        }
+    }
+
     /// The pointer deactivates where it is.
     pub fn release(self) -> Self {
         Self {

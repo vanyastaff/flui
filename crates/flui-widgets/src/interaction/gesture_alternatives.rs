@@ -55,8 +55,8 @@ use crate::localization::{
     BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, WidgetsLocalizations,
 };
 use crate::{
-    Center, ColoredBox, ConstrainedBox, ExcludeSemantics, Flexible, LayoutBuilder, Padding,
-    Positioned, Row, Semantics, SizedBox, Stack,
+    Center, ColoredBox, ConstrainedBox, ExcludeSemantics, Flexible, IgnorePointer, LayoutBuilder,
+    Padding, Positioned, Row, Semantics, SizedBox, Stack,
 };
 use flui_objects::{CrossAxisAlignment, MainAxisSize, StackFit};
 use flui_painting::styling::Color;
@@ -939,10 +939,12 @@ impl fmt::Debug for GestureAlternativesState {
 
 impl GestureAlternativesState {
     /// Acquire the arena, the policy and the writer, in a lifecycle hook.
-    /// Only a menu's long press uses them, and visible controls work outside
-    /// a gesture scope, so there is none outside one.
+    /// Only a menu's long press uses them, but every alternative mounts
+    /// gesture detectors (its controls, its menu's secondary click), so
+    /// mounting outside a gesture scope is the same invariant violation it is
+    /// for them, not a menu that quietly has no long press.
     fn acquire(&mut self, ctx: &dyn LifecycleContext) {
-        self.policy = GesturePolicy::maybe_of(ctx).map(|policy| (policy, ctx.writer_source()));
+        self.policy = Some((GesturePolicy::of(ctx), ctx.writer_source()));
         self.rebuild_hold();
     }
 
@@ -1350,7 +1352,8 @@ impl Action<ShowContextMenuIntent> for OpenMenu {
 /// the row reveals over it: the focus ring while the row itself has focus,
 /// and, for a menu, the control that opens it — the keyboard's and assistive
 /// technology's way to the menu where the platform has no menu key or the
-/// adapter does not route `ShowContextMenu` (ADR-0216 §2).
+/// adapter does not route `ShowContextMenu` (ADR-0216 §2). Once revealed, the
+/// control stays until focus leaves the row, so a pointer may press it too.
 ///
 /// The content is laid out with the row's own constraints and stays the
 /// first child, so revealing either keeps its elements and state; the
@@ -1364,6 +1367,11 @@ struct FocusDecorations {
 
 struct FocusDecorationsState {
     focus_manager: Option<Rc<FocusManager>>,
+    /// Whether the menu control is shown: from when visible focus enters the
+    /// row until focus leaves it. A pointer press clears the visible focus
+    /// before it reaches anything, so a control that hid with the focus ring
+    /// would leave the pointer that pressed it nothing to release on.
+    control_revealed: Cell<bool>,
 }
 
 impl StatefulView for FocusDecorations {
@@ -1372,6 +1380,7 @@ impl StatefulView for FocusDecorations {
     fn create_state(&self) -> Self::State {
         FocusDecorationsState {
             focus_manager: None,
+            control_revealed: Cell::new(false),
         }
     }
 }
@@ -1389,17 +1398,20 @@ impl ViewState<FocusDecorations> for FocusDecorationsState {
     /// and when the input modality changes while the row has focus.
     fn build(&self, view: &FocusDecorations, ctx: &dyn BuildContext) -> impl IntoView {
         let row = Focus::maybe_of(ctx);
-        let visible_in_row = row.as_ref().is_some_and(|row| row.has_focus())
+        let focus_in_row = row.as_ref().is_some_and(|row| row.has_focus());
+        let visible_in_row = focus_in_row
             && self
                 .focus_manager
                 .as_ref()
                 .and_then(|manager| manager.primary_focus())
                 .is_some_and(|primary| primary.has_visible_focus());
+        let revealed = focus_in_row && (visible_in_row || self.control_revealed.get());
+        self.control_revealed.set(revealed);
+        // The ring comes last: it goes with the visible focus while the
+        // control stays, and a layer that goes must not shift the control's
+        // place among the layers, which would rebuild it under the press.
         let mut layers = vec![view.content.clone()];
-        if row.as_ref().is_some_and(|row| row.has_visible_focus()) {
-            layers.push(Positioned::fill(FocusRing::new(SizedBox::expand())).boxed());
-        }
-        if visible_in_row && let Some((label, opener)) = &view.menu_control {
+        if revealed && let Some((label, opener)) = &view.menu_control {
             let opener = Rc::clone(opener);
             let control = control_button(label.clone(), more_glyph(), view.min_target, move |cx| {
                 opener(cx, MenuCause::Control, None);
@@ -1410,6 +1422,11 @@ impl ViewState<FocusDecorations> for FocusDecorationsState {
                 TextDirection::Ltr => trailing.right(0.0),
             };
             layers.push(trailing.boxed());
+        }
+        // The ring only marks the row: a press lands on what it covers.
+        if row.as_ref().is_some_and(|row| row.has_visible_focus()) {
+            let ring = IgnorePointer::new().child(FocusRing::new(SizedBox::expand()));
+            layers.push(Positioned::fill(ring).boxed());
         }
         Stack::new(layers).fit(StackFit::Passthrough)
     }

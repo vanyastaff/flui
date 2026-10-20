@@ -771,13 +771,21 @@ Cocoa Control-letter bindings) is dropped with a `flui::a11y` warning;
 `ShowContextMenuIntent`'s keys are root bindings of `DefaultFocusTraversal`
 (Menu and Shift+F10, none on Apple platforms), and the in-crate
 `gesture_key_collision_table` checks every platform's defaults against the
-reserved table, which only the running platform's mounted tree could reach.
+reserved table, which only the running platform's mounted tree could reach:
+the menu keys and `RefreshIntent`'s keys take nothing reserved, and the keys
+`InteractiveViewer` and `AnchoredDrag` bind themselves (zoom, the anchor
+arrows) take at most what a focused field keeps first, never traversal,
+Escape, Back or closing.
 
-A menu opens on a secondary click, on a touch or pen long press that
+A menu opens on a secondary click (a mouse's, a pen's or a virtual
+pointer's), on a touch or pen long press that
 joins the arena as a `Sequenced` hold, on the menu keys, on `ShowContextMenu`,
-and from a control shown only while keyboard or assistive-technology focus is
-in the row; a mouse has no long press, so a mouse drag of the same row meets
-no competitor. The menu itself is the `MenuSpec`'s presenter. The long press
+and from a control that keyboard or assistive-technology focus in the row
+reveals and that stays until focus leaves the row: a pointer press ends the
+visible focus before it reaches the control, so a control that hid with the
+focus ring could not be pressed. The ring itself takes no pointer input, so
+the row's gesture works with focus in the row. A mouse has no long press, so
+a mouse drag of the same row meets no competitor. The menu itself is the `MenuSpec`'s presenter. The long press
 is one `Sequenced` hold for the row and the long-press drags beneath it: a
 `Draggable` with `DragTrigger::LongPress` under a menu (or whose own commands
 are a menu) joins that hold's successor branch instead of composing a hold of

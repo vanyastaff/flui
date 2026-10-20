@@ -118,13 +118,6 @@ impl GestureArenaScope {
         )
     }
 
-    /// [`Self::of`], or `None` outside a presentation scope.
-    pub(crate) fn maybe_of(ctx: &dyn BuildContext) -> Option<GestureArena> {
-        ctx.get::<ResolvedGestureArenaScope, _>(|scope| {
-            scope.data.arena.with_settings(scope.data.settings.clone())
-        })
-    }
-
     /// The shared arena configured for this scope.
     #[must_use]
     pub fn arena(&self) -> &GestureArena {
@@ -149,14 +142,6 @@ impl GesturePolicy {
             arena: GestureArenaScope::of(ctx),
             settings: GestureArenaScope::settings_of(ctx),
         }
-    }
-
-    /// [`Self::of`], or `None` outside a presentation scope.
-    pub(crate) fn maybe_of(ctx: &dyn BuildContext) -> Option<Self> {
-        GestureArenaScope::maybe_of(ctx).map(|arena| Self {
-            arena,
-            settings: GestureArenaScope::settings_or_default_of(ctx),
-        })
     }
 }
 
