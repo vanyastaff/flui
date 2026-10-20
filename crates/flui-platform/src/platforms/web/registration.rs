@@ -35,26 +35,28 @@ export function isOwnedFocus(canvas, node) {
 export function setCanvasEditor(canvas, token, editor) {
     if (canvas[ownerKey] === token) token.editor = editor;
 }
-// The device-pixel content box where the browser has it (Chrome, Firefox),
-// which also reports a device pixel ratio change. Safari rejects the box; its
-// content box is observed instead. True when the device-pixel box is.
+// Observe the device-pixel content box where the browser has it (Chrome,
+// Firefox); Safari rejects the box, and its content box is observed instead.
 export function observeCanvas(observer, canvas) {
     try {
         observer.observe(canvas, { box: 'device-pixel-content-box' });
-        return true;
     } catch {
         observer.observe(canvas);
-        return false;
     }
 }
 // The last entry's device-pixel content box as [width, height]; [] when the
-// entry has none. The box sizes are logical: a vertical writing mode puts the
-// width in blockSize.
+// entry has none, or when the canvas has padding: the window's size is the
+// padding box (`clientWidth`), which the content box does not measure. The
+// box sizes are logical: a vertical writing mode puts the width in blockSize.
 export function devicePixelSize(entries) {
     const entry = entries[entries.length - 1];
     const box = entry?.devicePixelContentBoxSize?.[0];
     if (!box) return [];
-    const mode = globalThis.getComputedStyle?.(entry.target)?.writingMode ?? '';
+    const content = entry.contentRect;
+    const target = entry.target;
+    if (Math.round(content.width) !== target.clientWidth
+        || Math.round(content.height) !== target.clientHeight) return [];
+    const mode = globalThis.getComputedStyle?.(target)?.writingMode ?? '';
     const vertical = /^(vertical|sideways)/.test(mode);
     const width = vertical ? box.blockSize : box.inlineSize;
     const height = vertical ? box.inlineSize : box.blockSize;
@@ -94,7 +96,7 @@ extern "C" {
     fn observe_canvas(
         observer: &web_sys::ResizeObserver,
         canvas: &web_sys::HtmlCanvasElement,
-    ) -> Result<bool, JsValue>;
+    ) -> Result<(), JsValue>;
     #[wasm_bindgen(js_name = devicePixelSize)]
     fn device_pixel_size(entries: &JsValue) -> Vec<u32>;
     #[wasm_bindgen(catch, js_name = disconnectObserver)]
@@ -375,13 +377,12 @@ impl Registration {
     }
 
     /// Observe the canvas's size; `body` gets each report's device-pixel
-    /// size where the browser gives one. `true` when the browser observes
-    /// the device-pixel box, which reports a device pixel ratio change too;
-    /// `false` when it observes the CSS box or has no `ResizeObserver`.
+    /// size where the browser gives one. A browser without `ResizeObserver`
+    /// is left to the window's `resize` subscription.
     pub(super) fn observe(
         &mut self,
         body: impl Fn(Option<DeviceSize>) + 'static,
-    ) -> Result<bool, OpenWindowError> {
+    ) -> Result<(), OpenWindowError> {
         let body: Rc<dyn Fn(Option<DeviceSize>)> = Rc::new(body);
         let weak = Rc::downgrade(&body);
         let accepting = Rc::clone(&self.accepting);
@@ -405,7 +406,7 @@ impl Registration {
                         "ResizeObserver unavailable; using window resize subscription"
                     );
                 });
-                return Ok(false);
+                return Ok(());
             }
         };
         self.observer = Some(ResizeSubscription {

@@ -229,16 +229,18 @@ export function installResizeObserver(devicePixels) {
     };
     globalThis.ResizeObserver.devicePixels = devicePixels;
 }
-// The page lays the last canvas out at a CSS box of `width`×`height`, which
-// the browser snapped to `deviceWidth`×`deviceHeight` device pixels, and its
-// observers report it; the device size only where the browser has it.
-export function layOutCanvas(width, height, deviceWidth, deviceHeight) {
+// The page lays the last canvas out at a padding box of `width`×`height`
+// whose content box, `padding` CSS pixels in on every side, the browser
+// snapped to `deviceWidth`×`deviceHeight` device pixels, and its observers
+// report it; the device size only where the browser has it.
+export function layOutCanvas(width, height, deviceWidth, deviceHeight, padding = 0) {
     lastCanvas.clientWidth = width;
     lastCanvas.clientHeight = height;
+    const content = { width: width - 2 * padding, height: height - 2 * padding };
     const entry = {
         target: lastCanvas,
-        contentRect: { width, height },
-        contentBoxSize: [{ inlineSize: width, blockSize: height }],
+        contentRect: content,
+        contentBoxSize: [{ inlineSize: content.width, blockSize: content.height }],
     };
     if (globalThis.ResizeObserver.devicePixels) {
         entry.devicePixelContentBoxSize = [{ inlineSize: deviceWidth, blockSize: deviceHeight }];
@@ -324,6 +326,14 @@ extern "C" {
     fn install_resize_observer(device_pixels: bool);
     #[wasm_bindgen(js_name = layOutCanvas)]
     fn lay_out_canvas(width: u32, height: u32, device_width: u32, device_height: u32);
+    #[wasm_bindgen(js_name = layOutCanvas)]
+    fn lay_out_padded_canvas(
+        width: u32,
+        height: u32,
+        device_width: u32,
+        device_height: u32,
+        padding: u32,
+    );
     #[wasm_bindgen(js_name = pixelRatioListeners)]
     fn pixel_ratio_listeners() -> i32;
     #[wasm_bindgen(js_name = setHidden)]
@@ -1212,16 +1222,21 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
     let (window, resized) = open_recorded_window(&running);
     assert_eq!(
         pixel_ratio_listeners(),
-        1,
-        "the device-pixel box reports a ratio change; only the display source watches the ratio"
+        2,
+        "the display source's and the window's"
     );
+
+    // A ratio change that leaves the rounded device-pixel box as it was (a
+    // small canvas) brings no observer entry; the window's own watch sees it.
+    set_pixel_ratio(1.5);
+    settle().await;
+    assert_eq!(window.scale_factor(), 1.5, "the watch synced the window");
+    assert_eq!(canvas_backing_size(), [450, 225]);
 
     // At 1.5× the browser snaps a 301×150 box to 451×225 device pixels,
     // where `round(301 × 1.5)` would be 452.
-    set_pixel_ratio(1.5);
     lay_out_canvas(301, 150, 451, 225);
     settle().await;
-    assert_eq!(window.scale_factor(), 1.5);
     assert_eq!(
         canvas_backing_size(),
         [451, 225],
@@ -1232,13 +1247,24 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
         [451, 225],
         "the surface is the store"
     );
-    assert_eq!(*resized.lock().expect("resizes"), [1.5]);
+    assert_eq!(*resized.lock().expect("resizes"), [1.5, 1.5]);
 
     // A `resize` event in the same layout keeps the reported size.
     fire_window_resize();
     settle().await;
     assert_eq!(canvas_backing_size(), [451, 225]);
-    assert_eq!(resized.lock().expect("resizes").len(), 1, "nothing changed");
+    assert_eq!(resized.lock().expect("resizes").len(), 2, "nothing changed");
+
+    // With 10px of padding the window is the 301×150 padding box, and the
+    // device-pixel box measures only the 281×130 content inside it.
+    lay_out_padded_canvas(301, 150, 421, 195, 10);
+    settle().await;
+    assert_eq!(
+        canvas_backing_size(),
+        [452, 225],
+        "the padding box's estimate, not the content box"
+    );
+    assert_eq!(physical_size(&window), [452, 225]);
 
     drop(window);
     running.quit();
