@@ -704,6 +704,7 @@ ignored-paths = [
     "tests/fixtures/ios_safe_area.rs",
     "tests/fixtures/resident_app.rs",
     "tests/ui/thread_boundary/*.rs",
+    "tests/ui/unstable_input/*.rs",
 ]
 
 [lints]
@@ -1029,7 +1030,8 @@ path = "tests/agent_workflow.rs"
 required-features = ["testing", "material"]
 
 # UI-runtime-bound handles refuse `std::thread::spawn` (compile-fail fixtures under
-# `tests/ui/thread_boundary/`). Its own binary, a member of nextest's
+# `tests/ui/thread_boundary/`), and the facade hides the unstable input vocabulary
+# without `unstable-input` (`tests/ui/unstable_input/`). Its own binary, a member of nextest's
 # `trybuild` group, so the slow rustc runs never hold the ordinary suite.
 [[test]]
 name = "thread_boundary_ui"
