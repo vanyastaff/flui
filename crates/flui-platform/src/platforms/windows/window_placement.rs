@@ -186,14 +186,20 @@ impl super::platform::WindowContext {
     /// closed the window: the handle may by then name a window opened in its
     /// place, which this context's slot no longer is.
     pub(super) fn redraw_if_still_owned(&self, hwnd: HWND) {
+        if self.still_owns(hwnd) {
+            super::window::WindowsWindow::redraw_native(hwnd);
+        }
+    }
+
+    /// Whether `hwnd` is still this context's window: a callback that closed
+    /// it may have let a window opened in its place take the handle.
+    fn still_owns(&self, hwnd: HWND) -> bool {
         use windows::Win32::UI::WindowsAndMessaging::{GWLP_USERDATA, GetWindowLongPtrW};
 
         // SAFETY: a pointer-sized read of the window's userdata slot; nothing
         // is dereferenced.
         let slot = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
-        if slot == std::ptr::from_ref(self) as isize {
-            super::window::WindowsWindow::redraw_native(hwnd);
-        }
+        slot == std::ptr::from_ref(self) as isize
     }
 
     /// `WM_DPICHANGED`: the window is now at `dpi`, and the system suggests
@@ -217,6 +223,11 @@ impl super::platform::WindowContext {
             window_id: self.window_id,
             scale_factor: new_scale,
         });
+        // The handler may have closed the window: its rectangle, resize and
+        // frame are then not for whatever window has the handle now.
+        if !self.still_owns(hwnd) {
+            return;
+        }
         self.apply_dpi_rectangle(hwnd, suggested, new_scale / old_scale);
         drop(hold);
         self.publish_window_state(hwnd);
