@@ -176,7 +176,10 @@ impl RuntimeServices {
             data_transfer,
             process_nonce,
         } = host;
-        let scheduler = UpdateScheduler::new();
+        // Frame times come from `clock`, so the scheduler measures frames on it.
+        let scheduler = flui_scheduler::SchedulerBuilder::new()
+            .clock(clock.clone())
+            .build();
         Self {
             owner_frame: OwnerFrame::new(&scheduler)
                 .expect("BUG: a fresh scheduler has no owner frame"),

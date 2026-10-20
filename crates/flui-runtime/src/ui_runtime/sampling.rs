@@ -149,6 +149,7 @@ impl<'runtime> PresentationSampling<'runtime> {
 
     fn admit(&mut self, runtime: &UiRuntime) {
         let presentation = self.presentation;
+        presentation.release_redraw_poke();
         if presentation.closing_requested.get() {
             self.admission = Admission::None;
             return;
@@ -471,6 +472,7 @@ impl UiRuntime {
             .map(PresentationSampling::new)
             .collect();
         for operation in &mut sampling {
+            let constraints = self.root_constraints(operation.presentation(), constraints);
             operation.sample(self, constraints, raw, now);
         }
         // The runtime's drags are not any one presentation's; their deadlines

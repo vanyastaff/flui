@@ -5,7 +5,7 @@
 //!
 //! ## Foundation Unification
 //!
-//! All scheduler ID types (`FrameId`, `TaskId`, `CallbackId`) are
+//! The callback and task ID types (`TaskId`, `CallbackId`) are
 //! aliases for `flui_foundation::Id<T>` with the corresponding marker from
 //! `flui_foundation::markers`. This eliminates the previous parallel
 //! `TypedId<M>` system.
@@ -32,7 +32,7 @@ use std::{
 // Re-exports from flui-foundation
 // =============================================================================
 
-pub use flui_foundation::{FrameCallbackId, FrameId, Id, Identifier, Marker, TaskId, markers};
+pub use flui_foundation::{FrameCallbackId, Id, Identifier, Marker, TaskId, markers};
 
 /// UpdateScheduler callback ID - alias for `FrameCallbackId` from foundation.
 ///

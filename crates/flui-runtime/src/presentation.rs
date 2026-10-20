@@ -8,7 +8,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
 use flui_animation::{FrameTick, MotionClock, Vsync};
@@ -26,8 +26,9 @@ use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::{
-    AsyncDriver, ClockSource, FrameClock, PresentationFrameError, PresentationFrameScope,
-    UpdateScheduler, input_to_present_histogram, produce_to_present_histogram,
+    AsyncDriver, ClockSource, FrameClock, FramePhaseDurations, PresentationFrameError,
+    PresentationFrameScope, UpdateScheduler, frame_pace, input_to_present_histogram,
+    produce_to_present_histogram,
 };
 use flui_semantics::platform::PlatformAccessibility;
 use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
@@ -40,7 +41,6 @@ use web_time::{Duration, Instant};
 use crate::epoch::{FrameCommitState, TreeRevision};
 use crate::frame_failure::SegmentPhase;
 use crate::held_input::HeldPointerQueue;
-use crate::performance_stats::PerformanceStats;
 use crate::renderer_binding::RenderingBinding;
 use crate::semantics_host::SemanticsHost;
 use crate::ui_runtime::text_preparation::TextPreparation;
@@ -321,11 +321,16 @@ impl ContentPlacement {
     }
 }
 
+/// What a segment probe runs, handed the presentation whose segment entered
+/// the probed phase.
+#[cfg(test)]
+type SegmentProbeCallback = Box<dyn Fn(&PresentationState)>;
+
 /// Phase-addressed frame fault injection used by the containment tests.
 #[cfg(test)]
 struct SegmentProbe {
     phase: SegmentPhase,
-    callback: Box<dyn Fn()>,
+    callback: SegmentProbeCallback,
 }
 
 /// Direct owner of mutable UI state scoped to one presentation.
@@ -462,12 +467,9 @@ pub struct PresentationState {
     /// retry dirties this presentation on every attempt and would otherwise
     /// spin at the fallback pace indefinitely.
     not_shown_streak: Cell<u32>,
-    /// Performance-overlay state. `Some` IS the enable flag: the rolling
-    /// frame-time window only exists while the overlay is on, so "enabled
-    /// but no stats" is unrepresentable and a disabled overlay costs one
-    /// `RefCell` borrow and a `None` check per frame. Moved here from the
-    /// retired `AppBinding` — per-window stats, not a process-wide concern.
-    performance_overlay: RefCell<Option<PerformanceStats>>,
+    /// Whether the performance overlay is drawn. Its numbers come from the
+    /// clock's frame history, which is kept either way.
+    performance_overlay: Cell<bool>,
     /// This presentation's own wake-only redraw mark (ADR-0043 §3's pump
     /// segment). Set alongside the UI runtime's own coalesced `needs_redraw` flag
     /// by every presentation-scoped operation that isn't otherwise
@@ -481,6 +483,14 @@ pub struct PresentationState {
     /// (`Self::has_pending_work`) — see `UiRuntime::draw_frame_entered`'s
     /// per-presentation loop.
     redraw_pending: Cell<bool>,
+    /// How many times [`Self::redraw_pending`] was marked, so the frame tail
+    /// can tell a mark raised during the frame from one left by an earlier pump.
+    redraw_requests: Cell<u64>,
+    /// [`Self::redraw_requests`] when the current frame began.
+    redraw_requests_watched: Cell<u64>,
+    /// Set by the first platform redraw request this presentation makes for
+    /// the next frame; reopened when a pump samples the presentation.
+    redraw_poked: Arc<AtomicBool>,
     /// This presentation's controller registry. Handles share owner-local state;
     /// the presentation keeps its driver binding for its whole lifetime.
     vsync: Vsync,
@@ -518,6 +528,9 @@ pub struct PresentationState {
     /// `None` here, never a stale span latched by an earlier pump this
     /// presentation was the one to produce.
     last_segment_span: Cell<Option<(Instant, Instant)>>,
+    /// How long this presentation's most recent segment spent building,
+    /// laying out and painting; recorded with [`Self::last_segment_span`].
+    segment_phases: Cell<FramePhaseDurations>,
     /// Latest terminal (`Painted` or `Errored`) tree revision.
     tree_revision: Cell<TreeRevision>,
     /// Latest tree revision acknowledged by a successful submit verdict.
@@ -827,10 +840,18 @@ impl PresentationState {
         // presentations still needs this addressed secondary wake. It is gated
         // on `ensure_visual_update`'s return so it fires only when the
         // scheduler actually accepted the demand.
+        //
+        // One poke per frame, not one per mark: a hundred state changes before
+        // the next frame make one platform request. The latch reopens when the
+        // next pump samples this presentation (`release_redraw_poke`), and a
+        // demand the scheduler declined does not close it.
         let scheduler = capabilities.scheduler.frame_waker();
         let redraw_window = Arc::downgrade(&window);
+        let redraw_poked = Arc::new(AtomicBool::new(false));
+        let poked = Arc::clone(&redraw_poked);
         let request_frame = Arc::new(move || {
             if scheduler.ensure_visual_update()
+                && !poked.swap(true, Ordering::AcqRel)
                 && let Some(window) = redraw_window.upgrade()
             {
                 window.request_redraw();
@@ -940,13 +961,17 @@ impl PresentationState {
             frames_rendered: Cell::new(0),
             frames_dropped: Cell::new(0),
             not_shown_streak: Cell::new(0),
-            performance_overlay: RefCell::new(None),
+            performance_overlay: Cell::new(false),
             redraw_pending: Cell::new(false),
+            redraw_requests: Cell::new(0),
+            redraw_requests_watched: Cell::new(0),
             vsync,
             animation_retirement: RefCell::new(None),
             motion_clock: RefCell::new(MotionClock::new()),
             clock: frame_clock,
+            redraw_poked,
             last_segment_span: Cell::new(None),
+            segment_phases: Cell::new(FramePhaseDurations::default()),
             tree_revision: Cell::new(TreeRevision::ZERO),
             presented_revision: Cell::new(TreeRevision::ZERO),
             frame_failure_streak: Cell::new(0),
@@ -1057,13 +1082,17 @@ impl PresentationState {
             frames_rendered: Cell::new(0),
             frames_dropped: Cell::new(0),
             not_shown_streak: Cell::new(0),
-            performance_overlay: RefCell::new(None),
+            performance_overlay: Cell::new(false),
             redraw_pending: Cell::new(false),
+            redraw_requests: Cell::new(0),
+            redraw_requests_watched: Cell::new(0),
             vsync: Vsync::new(),
             animation_retirement: RefCell::new(None),
             motion_clock: RefCell::new(MotionClock::new()),
             clock: FrameClock::new(),
+            redraw_poked: Arc::new(AtomicBool::new(false)),
             last_segment_span: Cell::new(None),
+            segment_phases: Cell::new(FramePhaseDurations::default()),
             tree_revision: Cell::new(TreeRevision::ZERO),
             presented_revision: Cell::new(TreeRevision::ZERO),
             frame_failure_streak: Cell::new(0),
@@ -1311,8 +1340,16 @@ impl PresentationState {
     /// THIS presentation's clock — a pump in which this presentation's own
     /// segment did NOT run must see `None`, never a stale span this same
     /// presentation latched on an earlier pump.
-    pub(crate) fn take_last_segment_span(&self) -> Option<(Instant, Instant)> {
-        self.last_segment_span.take()
+    pub(crate) fn take_last_segment_span(&self) -> Option<(Instant, Instant, FramePhaseDurations)> {
+        self.last_segment_span
+            .take()
+            .map(|(start, end)| (start, end, self.segment_phases.get()))
+    }
+
+    /// Record how long this presentation's segment spent building, laying
+    /// out and painting so far; [`Self::take_last_segment_span`] reports it.
+    pub(crate) fn record_segment_phases(&self, phases: FramePhaseDurations) {
+        self.segment_phases.set(phases);
     }
 
     /// The exact focus tree owned by this presentation.
@@ -1479,6 +1516,28 @@ impl PresentationState {
     /// [`Self::redraw_pending`]'s field doc.
     pub(crate) fn mark_redraw_pending(&self) {
         self.redraw_pending.set(true);
+        self.redraw_requests
+            .set(self.redraw_requests.get().wrapping_add(1));
+    }
+
+    /// Let the next demand poke this presentation's window again: the pump
+    /// sampling it is the frame the previous poke asked for.
+    pub(crate) fn release_redraw_poke(&self) {
+        self.redraw_poked.store(false, Ordering::Release);
+    }
+
+    /// Remember how many redraw marks this presentation has had, so the frame
+    /// tail can tell a mark raised during the frame from an older one.
+    pub(crate) fn watch_redraw_requests(&self) {
+        self.redraw_requests_watched.set(self.redraw_requests.get());
+    }
+
+    /// Whether this presentation's redraw bit is set by a mark made since
+    /// [`Self::watch_redraw_requests`]: a request raised after its segment
+    /// took the bit, which the next frame must serve.
+    pub(crate) fn redraw_requested_since_watch(&self) -> bool {
+        self.redraw_pending.get()
+            && self.redraw_requests.get() != self.redraw_requests_watched.get()
     }
 
     /// Read-and-clear this presentation's wake-only redraw bit — called at
@@ -1670,7 +1729,11 @@ impl PresentationState {
     /// Install (or clear) the segment fault-injection probe. See
     /// [`Self::segment_probe`]'s field doc.
     #[cfg(test)]
-    pub(crate) fn set_segment_probe(&self, phase: SegmentPhase, probe: Option<Box<dyn Fn()>>) {
+    pub(crate) fn set_segment_probe(
+        &self,
+        phase: SegmentPhase,
+        probe: Option<SegmentProbeCallback>,
+    ) {
         let _prev = std::mem::replace(
             &mut *self.segment_probe.borrow_mut(),
             probe.map(|callback| SegmentProbe { phase, callback }),
@@ -1694,7 +1757,7 @@ impl PresentationState {
         if let Some(probe) = self.segment_probe.borrow().as_ref()
             && probe.phase == phase
         {
-            (probe.callback)();
+            (probe.callback)(self);
         }
     }
 
@@ -1724,11 +1787,10 @@ impl PresentationState {
         self.flush_count.get()
     }
 
-    /// Turn the performance overlay on or off. Enabling starts a fresh
-    /// rolling window, so toggling it at runtime does not report frame times
-    /// from before the toggle.
+    /// Turn the performance overlay on or off. It reads the clock's recent
+    /// frame history, the same window its latency percentiles come from.
     pub(crate) fn set_performance_overlay(&self, enabled: bool) {
-        *self.performance_overlay.borrow_mut() = enabled.then(PerformanceStats::default);
+        self.performance_overlay.set(enabled);
     }
 
     /// Record this frame and append the overlay layer to `layer_tree`.
@@ -1753,15 +1815,13 @@ impl PresentationState {
         layer_tree: &mut LayerTree,
         text: &flui_rendering::TextContextHandle,
     ) {
-        let mut slot = self.performance_overlay.borrow_mut();
-        let Some(stats) = slot.as_mut() else {
+        if !self.performance_overlay.get() {
             return;
-        };
+        }
         let root = layer_tree.root();
 
-        stats.record_frame();
-
         let snapshots = self.clock.frames_since(None);
+        let pace = frame_pace(&snapshots);
         let present_p99 = produce_to_present_histogram(&snapshots)
             .p99()
             .map_or_else(|| "n/a".to_owned(), format_millis);
@@ -1777,8 +1837,8 @@ impl PresentationState {
             self.frames_dropped(),
         );
         let sample = PerformanceSample {
-            fps: stats.fps(),
-            frame_time_ms: stats.avg_frame_time_ms(),
+            fps: pace.frames_per_second,
+            frame_time_ms: pace.frame_work.as_secs_f64() * 1000.0,
             diagnostic_line: Some(&diagnostic_line),
         };
 

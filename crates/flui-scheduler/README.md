@@ -119,19 +119,23 @@ is still available as a separate queue, without authority over an owner's frame.
 ### Frame Budget Management
 
 ```rust
-use flui_scheduler::{FrameBudget, BudgetPolicy};
+use std::num::NonZeroU32;
 
-let mut budget = FrameBudget::new(60); // 60fps target duration
+use flui_scheduler::{BudgetPolicy, FrameBudget, Instant, Milliseconds};
+
+let mut budget = FrameBudget::new(NonZeroU32::new(60).expect("60 is non-zero"));
 budget.set_policy(BudgetPolicy::SkipIdle);
 
-budget.reset(); // Start new frame
+// Instants come from the clock your frames are stamped with.
+let start = Instant::now();
+budget.reset(start); // Start new frame
 
 // Record phase times
-budget.record_build_time(5.0);
-budget.record_layout_time(3.0);
-budget.record_paint_time(4.0);
+budget.record_build_duration(Milliseconds::new(5.0));
+budget.record_layout_duration(Milliseconds::new(3.0));
+budget.record_paint_duration(Milliseconds::new(4.0));
 
-if budget.is_over_budget() {
+if budget.is_over_budget(Instant::now()) {
     println!("Frame is over budget!");
 }
 
@@ -206,14 +210,14 @@ use flui_scheduler::duration::FrameDuration;
 
 // Fluent builder for FrameBudget
 let budget = FrameBudgetBuilder::new()
-    .target_fps(120)
+    .target_fps(std::num::NonZeroU32::new(120).expect("120 is non-zero"))
     .build();
 
 // Builder for UpdateScheduler. `target_fps` only labels the seeded
 // `FrameBudget`'s stats (see `UpdateScheduler::new`'s doc) — it has no
 // effect on frame gating, which `drive_frame`'s own `deadline` controls.
 let scheduler = SchedulerBuilder::new()
-    .target_fps(60)
+    .target_fps(std::num::NonZeroU32::new(60).expect("60 is non-zero"))
     .build();
 ```
 
