@@ -76,7 +76,7 @@ pub use refresh_indicator::{
     RefreshController, RefreshIndicator, RefreshIndicatorPhase, RefreshIndicatorState,
     RefreshIndicatorStyle, RefreshIntent,
 };
-pub use scroll_controller::ScrollController;
+pub use scroll_controller::{InvalidExtents, ScrollController};
 pub use scroll_owner::SharedSnapPolicy;
 pub use scroll_physics::{
     BouncingScrollPhysics, ClampingScrollPhysics, ScrollMetrics, ScrollPhysics, SharedScrollPhysics,

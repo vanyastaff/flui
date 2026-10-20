@@ -45,7 +45,7 @@ const DEFAULT_THUMB_WIDTH_PX: f64 = 6.0;
 ///
 /// ```rust,ignore
 /// let controller = ScrollController::new();
-/// controller.update_dimensions(400.0, 0.0, 800.0);
+/// controller.update_dimensions(400.0, 0.0, 800.0)?;
 ///
 /// Scrollbar::new()
 ///     .controller(controller.clone())

@@ -113,6 +113,23 @@ pub(super) enum PendingScrollCommand {
     Cancel,
 }
 
+/// Extents [`ScrollController::update_dimensions`] refuses: a value that is
+/// not finite, a negative viewport length, or a minimum past the maximum.
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+#[error(
+    "scroll extents must be finite, ordered and over a viewport length of at least zero: \
+     viewport {viewport_dimension}, min {min_scroll_extent}, max {max_scroll_extent}"
+)]
+#[non_exhaustive]
+pub struct InvalidExtents {
+    /// The refused viewport length.
+    pub viewport_dimension: f64,
+    /// The refused smallest extent.
+    pub min_scroll_extent: f64,
+    /// The refused largest extent.
+    pub max_scroll_extent: f64,
+}
+
 #[derive(Default)]
 struct CommandSlot {
     pending: Option<PendingScrollCommand>,
@@ -399,8 +416,8 @@ impl ScrollController {
         recovery.finish();
     }
 
-    /// Update the scroll extents and viewport dimension, then unconditionally
-    /// notify listeners exactly once.
+    /// Update the scroll extents and viewport dimension, then notify
+    /// listeners exactly once, changed or not.
     ///
     /// This is the explicit, out-of-frame extent write for callers that
     /// don't route through `RenderViewport`'s own layout (tests, and manual
@@ -424,12 +441,43 @@ impl ScrollController {
     /// * `max_scroll_extent` — largest reachable pixel value without
     ///   overscroll (≥ `min_scroll_extent`; equal when the content fits in the
     ///   viewport and scrolling is a no-op).
+    ///
+    /// # Errors
+    ///
+    /// [`InvalidExtents`] when a value is not finite, the viewport length is
+    /// negative or `min_scroll_extent > max_scroll_extent`; the position is
+    /// left as it was and nothing is notified.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_widgets::ScrollController;
+    ///
+    /// let controller = ScrollController::new();
+    /// controller.update_dimensions(300.0, 0.0, 700.0)?;
+    /// assert_eq!(controller.max_scroll_extent(), 700.0);
+    /// assert!(controller.update_dimensions(300.0, 700.0, 0.0).is_err());
+    /// assert_eq!(controller.max_scroll_extent(), 700.0);
+    /// # Ok::<(), flui_widgets::InvalidExtents>(())
+    /// ```
     pub fn update_dimensions(
         &self,
         viewport_dimension_pixels: f64,
         min_scroll_extent: f64,
         max_scroll_extent: f64,
-    ) {
+    ) -> Result<(), InvalidExtents> {
+        let valid = viewport_dimension_pixels.is_finite()
+            && viewport_dimension_pixels >= 0.0
+            && min_scroll_extent.is_finite()
+            && max_scroll_extent.is_finite()
+            && min_scroll_extent <= max_scroll_extent;
+        if !valid {
+            return Err(InvalidExtents {
+                viewport_dimension: viewport_dimension_pixels,
+                min_scroll_extent,
+                max_scroll_extent,
+            });
+        }
         let mut position = self.position.clone();
         // Both write straight into the shared state (and clamp `pixels` to
         // the new range, same as before); `flush_now` below is what makes
@@ -437,6 +485,7 @@ impl ScrollController {
         let _ = position.apply_viewport_dimension(viewport_dimension_pixels);
         let _ = position.apply_content_dimensions(min_scroll_extent, max_scroll_extent);
         self.position.flush_now();
+        Ok(())
     }
 
     /// The shared [`ScrollPosition`] backing this controller.
@@ -679,7 +728,9 @@ mod tests {
         // the watchdog channel crosses threads.
         std::thread::spawn(move || {
             let controller = ScrollController::new();
-            controller.update_dimensions(300.0, 0.0, 500.0);
+            controller
+                .update_dimensions(300.0, 0.0, 500.0)
+                .expect("ordered extents");
             let fling = fling_stub();
 
             // Establish a genuine RUNNING state FIRST, before any listener/hook
