@@ -9,7 +9,8 @@
 //! one, and otherwise (a filter, shader, annotation, or a clip shape that is not a rectangle) its
 //! `Debug` text. A clip layer also reports how it rasterises its edge, and a picture a fingerprint
 //! of its commands next to their count, so a changed drawing reads apart. A backdrop filter names
-//! its group by a number its siblings in the group share.
+//! its group by a number its siblings in the group share, and an annotated region its payload by
+//! the same kind of number, since the payload is type-erased.
 
 use core::fmt::{self, Write as _};
 use flui_foundation::LayerId;
@@ -17,6 +18,7 @@ use flui_foundation::inspect::{
     Fields, Inspect, InspectId, InspectTree, Level, Link, Links, NodeView, SceneLayer, Unit, Value,
 };
 use std::hash::{DefaultHasher, Hasher};
+use std::sync::Arc;
 
 use flui_painting::DisplayList;
 use flui_painting::paint::Clip;
@@ -122,7 +124,12 @@ impl Inspect for Layer {
                 out.field("size", &layer.size()).unit(Unit::LogicalPx);
             }
             Layer::AnnotatedRegion(layer) => {
-                out.value("value", Value::Debug(layer.value()));
+                // The payload is erased, so it reads by identity: the same `Arc` reads equal, another
+                // one apart, as `find_annotations` would return it.
+                out.value(
+                    "value",
+                    Value::Uint(Arc::as_ptr(layer.value()).addr() as u64),
+                );
                 out.field("sized_by_parent", &layer.is_sized_by_parent());
             }
         }

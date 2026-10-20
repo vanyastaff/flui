@@ -33,7 +33,8 @@
   Every layer variant reports the parameters that change what it paints (a colour or image
   filter, a shader mask, a texture, a follower's anchors), and a picture a fingerprint of its
   commands, so `diff` sees a changed effect or drawing. An opacity layer reports its blend mode,
-  the performance overlay its readout, and a backdrop filter the group it samples with.
+  the performance overlay its readout, a backdrop filter the group it samples with, and an
+  annotated region its payload by identity.
 - `diff` reports bounds that appear or disappear as the new `Change::Bounds`.
 - `SnapshotQuery::max_nodes` is an `Option<NonZeroU32>`: the start node counts toward it, so a
   limit of zero, which no snapshot could honour, cannot be written.

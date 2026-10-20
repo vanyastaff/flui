@@ -1,13 +1,15 @@
 //! A layer snapshot reads each layer's own fields.
 
+use std::sync::Arc;
+
 use flui_foundation::geometry::{Offset, Point, RRect, RSuperellipse, Rect};
 use flui_foundation::inspect::{
     DiffOptions, Level, Plain, SnapshotQuery, Variant, diff, render, snapshot,
 };
 use flui_layer::{
-    BackdropFilterLayer, BackdropGroupKey, ClipPathLayer, ClipRRectLayer, ClipRectLayer,
-    ClipSuperellipseLayer, ColorFilterLayer, FollowerLayer, ImageFilterLayer, Layer, LayerLink,
-    LayerTree, OffsetLayer, OpacityLayer, PictureLayer,
+    AnnotatedRegionLayer, BackdropFilterLayer, BackdropGroupKey, ClipPathLayer, ClipRRectLayer,
+    ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer, FollowerLayer, ImageFilterLayer, Layer,
+    LayerLink, LayerTree, OffsetLayer, OpacityLayer, PictureLayer,
 };
 use flui_painting::paint::{BlendMode, Clip, ColorFilter, ImageFilter, Path};
 use flui_painting::styling::Color;
@@ -111,13 +113,19 @@ fn diamond() -> Path {
 #[test]
 fn layers_that_differ_only_in_their_effect_diff_apart() {
     let link = LayerLink::new();
-    let pairs: [(&str, Layer, Layer); 5] = [
+    let bounds = Rect::from_xywh(0.0, 0.0, 40.0, 20.0);
+    let pairs: [(&str, Layer, Layer); 6] = [
         (
             "Opacity",
             OpacityLayer::with_blend(0.5, Offset::ZERO, BlendMode::SrcOver).into(),
             OpacityLayer::with_blend(0.5, Offset::ZERO, BlendMode::Src).into(),
         ),
         ("Picture", filled(Color::RED), filled(Color::BLUE)),
+        (
+            "AnnotatedRegion",
+            AnnotatedRegionLayer::new(bounds, Arc::new("old")).into(),
+            AnnotatedRegionLayer::new(bounds, Arc::new("new")).into(),
+        ),
         (
             "ColorFilter",
             ColorFilterLayer::new(ColorFilter::grayscale()).into(),
