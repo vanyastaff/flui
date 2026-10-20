@@ -99,25 +99,44 @@ impl DismissDirection {
         }
     }
 
-    /// Whether a row dismissible in `self` may go out toward `side`, one of
-    /// the four single sides.
-    fn allows(self, side: Self) -> bool {
-        self == side
-            || matches!(
-                (self, side),
-                (Self::Horizontal, Self::StartToEnd | Self::EndToStart)
-                    | (Self::Vertical, Self::Up | Self::Down)
-            )
+    /// Whether a row dismissible in `self` may go out toward `side`.
+    #[must_use]
+    pub fn contains(self, side: DismissSide) -> bool {
+        matches!(
+            (self, side),
+            (Self::Horizontal | Self::StartToEnd, DismissSide::StartToEnd)
+                | (Self::Horizontal | Self::EndToStart, DismissSide::EndToStart)
+                | (Self::Vertical | Self::Up, DismissSide::Up)
+                | (Self::Vertical | Self::Down, DismissSide::Down)
+        )
     }
+}
 
-    /// The direction a signed offset points on `axis`.
-    fn of_offset(axis: Axis, offset: f64) -> Self {
+/// The side a [`Dismissible`] went out toward: one of the four a
+/// [`DismissDirection`] can allow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DismissSide {
+    /// Out with the reading direction (to the right in LTR, to the left in
+    /// RTL).
+    StartToEnd,
+    /// Out against the reading direction (to the left in LTR, to the right
+    /// in RTL).
+    EndToStart,
+    /// Out upward.
+    Up,
+    /// Out downward.
+    Down,
+}
+
+impl DismissSide {
+    /// The side a signed offset points to on `axis`; `None` at rest.
+    fn of_offset(axis: Axis, offset: f64) -> Option<Self> {
         match (axis, offset) {
-            (_, 0.0) => Self::None,
-            (Axis::Horizontal, offset) if offset > 0.0 => Self::StartToEnd,
-            (Axis::Horizontal, _) => Self::EndToStart,
-            (Axis::Vertical, offset) if offset > 0.0 => Self::Down,
-            (Axis::Vertical, _) => Self::Up,
+            (_, 0.0) => None,
+            (Axis::Horizontal, offset) if offset > 0.0 => Some(Self::StartToEnd),
+            (Axis::Horizontal, _) => Some(Self::EndToStart),
+            (Axis::Vertical, offset) if offset > 0.0 => Some(Self::Down),
+            (Axis::Vertical, _) => Some(Self::Up),
         }
     }
 }
@@ -196,7 +215,7 @@ impl DismissThresholdError {
 
 /// Fired when the [`Dismissible`] has been dismissed, after any resize
 /// collapse has finished (or immediately, if `resize_duration` is `None`).
-pub type DismissDirectionCallback = Rc<dyn Fn(&mut EventCx<'_>, DismissDirection)>;
+pub type DismissSideCallback = Rc<dyn Fn(&mut EventCx<'_>, DismissSide)>;
 
 /// Fired on every drag/threshold-state change while a [`Dismissible`] is
 /// being dragged.
@@ -208,8 +227,8 @@ type ResizeCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct DismissUpdateDetails {
-    /// The direction the dismissible is currently being dragged toward.
-    pub direction: DismissDirection,
+    /// The side the dismissible is currently out toward; `None` back at rest.
+    pub side: Option<DismissSide>,
     /// Whether the dismiss threshold is reached as of this delivery.
     pub reached: bool,
     /// Whether the dismiss threshold was reached as of the *previous*
@@ -229,7 +248,7 @@ pub struct Dismissible {
     background: Option<BoxedView>,
     secondary_background: Option<BoxedView>,
     on_resize: Option<ResizeCallback>,
-    on_dismissed: Option<DismissDirectionCallback>,
+    on_dismissed: Option<DismissSideCallback>,
     on_update: Option<DismissUpdateCallback>,
     direction: DismissDirection,
     resize_duration: Option<Duration>,
@@ -271,7 +290,7 @@ impl Dismissible {
     }
 
     /// A widget shown instead of [`Self::background`] while dragging toward
-    /// [`DismissDirection::EndToStart`] or [`DismissDirection::Up`]. Only
+    /// [`DismissSide::EndToStart`] or [`DismissSide::Up`]. Only
     /// meaningful once `background` is set.
     #[must_use]
     pub fn secondary_background(mut self, secondary_background: impl IntoView) -> Self {
@@ -295,10 +314,10 @@ impl Dismissible {
     #[must_use]
     pub fn on_dismissed<R: EventOutcome>(
         mut self,
-        on_dismissed: impl Fn(&mut EventCx<'_>, DismissDirection) -> R + 'static,
+        on_dismissed: impl Fn(&mut EventCx<'_>, DismissSide) -> R + 'static,
     ) -> Self {
-        self.on_dismissed = Some(Rc::new(move |cx, direction| {
-            on_dismissed(cx, direction).report();
+        self.on_dismissed = Some(Rc::new(move |cx, side| {
+            on_dismissed(cx, side).report();
         }));
         self
     }
@@ -376,8 +395,8 @@ struct DismissConfig {
 }
 
 impl DismissConfig {
-    fn threshold(&self, direction: DismissDirection) -> f64 {
-        self.thresholds.of(direction)
+    fn threshold(&self, side: DismissSide) -> f64 {
+        self.thresholds.of(side)
     }
 
     /// The stops and the release policy for a row `extent` long.
@@ -394,10 +413,10 @@ impl DismissConfig {
         let (positive, negative) = self.direction.sides();
         let side = |allowed: bool, sign: f64| {
             let out = out.filter(|_| allowed)?;
-            let direction = DismissDirection::of_offset(axis, sign);
+            let side = DismissSide::of_offset(axis, sign).expect("BUG: a stop sign is not zero");
             Some(Side {
                 out,
-                threshold: self.threshold(direction),
+                threshold: self.threshold(side),
             })
         };
         let snap = ThresholdSnap {
@@ -429,30 +448,29 @@ impl Default for DismissThresholds {
 }
 
 impl DismissThresholds {
-    const SIDES: [DismissDirection; 4] = [
-        DismissDirection::StartToEnd,
-        DismissDirection::EndToStart,
-        DismissDirection::Up,
-        DismissDirection::Down,
+    const SIDES: [DismissSide; 4] = [
+        DismissSide::StartToEnd,
+        DismissSide::EndToStart,
+        DismissSide::Up,
+        DismissSide::Down,
     ];
 
     /// Set `threshold` on every side `direction` allows.
     fn set(&mut self, direction: DismissDirection, threshold: DismissThreshold) {
         for (side, slot) in Self::SIDES.iter().zip(&mut self.0) {
-            if direction.allows(*side) {
+            if direction.contains(*side) {
                 *slot = threshold;
             }
         }
     }
 
-    /// The fraction a release toward the side `direction` must pass; the
-    /// default for a direction that is not one side.
-    fn of(self, direction: DismissDirection) -> f64 {
-        Self::SIDES
+    /// The fraction a release toward `side` must pass.
+    fn of(self, side: DismissSide) -> f64 {
+        let slot = Self::SIDES
             .iter()
-            .position(|side| *side == direction)
-            .map_or(DismissThreshold::DEFAULT, |side| self.0[side])
-            .get()
+            .position(|candidate| *candidate == side)
+            .expect("BUG: SIDES names every side");
+        self.0[slot].get()
     }
 }
 
@@ -517,7 +535,7 @@ impl SnapPolicy for ThresholdSnap {
 #[derive(Clone)]
 struct DismissCallbacks {
     resize: Option<ResizeCallback>,
-    dismissed: Option<DismissDirectionCallback>,
+    dismissed: Option<DismissSideCallback>,
     update: Option<DismissUpdateCallback>,
 }
 
@@ -533,7 +551,7 @@ impl From<&Dismissible> for DismissCallbacks {
 
 enum DismissEvent {
     Resize,
-    Dismissed(DismissDirection),
+    Dismissed(DismissSide),
     Update(DismissUpdateDetails),
 }
 
@@ -590,11 +608,11 @@ impl DismissEvents {
         if progress == last {
             return;
         }
-        let direction = DismissDirection::of_offset(axis, offset);
-        let reached = progress > config.thresholds.of(direction);
+        let side = DismissSide::of_offset(axis, offset);
+        let reached = side.is_some_and(|side| progress > config.thresholds.of(side));
         self.delivered.set((progress, reached));
         self.defer(DismissEvent::Update(DismissUpdateDetails {
-            direction,
+            side,
             reached,
             previous_reached,
             progress,
@@ -613,12 +631,12 @@ impl DismissEvents {
                     callback(cx);
                 }
             }
-            DismissEvent::Dismissed(direction) => {
+            DismissEvent::Dismissed(side) => {
                 if let Some(command) = command {
                     let _ = command.perform(cx);
                 }
                 if let Some(callback) = callbacks.dismissed {
-                    callback(cx, direction);
+                    callback(cx, side);
                 }
             }
             DismissEvent::Update(details) => {
@@ -661,7 +679,7 @@ enum ResizeCompletion {
 #[derive(Default)]
 struct Collapse {
     /// The direction the row went out in, once it did.
-    dismissed: Cell<Option<DismissDirection>>,
+    dismissed: Cell<Option<DismissSide>>,
     size_prior: Cell<Option<Size>>,
     controller: RefCell<Option<DrivenController>>,
     listener: Cell<Option<ListenerId>>,
@@ -853,16 +871,16 @@ impl DismissibleState {
                 return;
             };
             let sign = if stop == Stop::LeadingOut { 1.0 } else { -1.0 };
-            let direction = DismissDirection::of_offset(axis, sign);
+            let side = DismissSide::of_offset(axis, sign).expect("BUG: a stop sign is not zero");
             let resize = config.resize;
-            collapse.dismissed.set(Some(direction));
+            collapse.dismissed.set(Some(side));
             match (resize, geometry.size()) {
                 (Some(duration), Some(size)) => {
                     let vsync = vsync.borrow().clone();
                     collapse.start(duration, vsync.as_ref(), &rebuild, size, &events, &collapse);
                     rebuild.schedule(flui_view::RebuildReason::AnimationTick);
                 }
-                _ => events.dispatch(DismissEvent::Dismissed(direction)),
+                _ => events.dispatch(DismissEvent::Dismissed(side)),
             }
         })
     }
@@ -964,7 +982,7 @@ impl ViewState<Dismissible> for DismissibleState {
                     .get()
                     .expect("BUG: a collapse starts from the row's committed size");
                 let background = match self.collapse.dismissed.get() {
-                    Some(DismissDirection::EndToStart | DismissDirection::Up) => view
+                    Some(DismissSide::EndToStart | DismissSide::Up) => view
                         .secondary_background
                         .clone()
                         .or_else(|| view.background.clone()),

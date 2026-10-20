@@ -300,7 +300,7 @@ pub use semantics::{
 };
 pub use stack::{IndexedStack, Positioned, Stack};
 pub use swipe::{
-    DismissDirection, DismissDirectionCallback, DismissThreshold, DismissThresholdError,
+    DismissDirection, DismissSide, DismissSideCallback, DismissThreshold, DismissThresholdError,
     DismissUpdateCallback, DismissUpdateDetails, Dismissible, DismissibleState, SwipeAction,
     SwipeActions, SwipeActionsError, SwipeActionsState, SwipeAlternative, SwipeEdge,
 };

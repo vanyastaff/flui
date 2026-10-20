@@ -224,7 +224,7 @@ mod measured {
         DropCommands as _, DropHover as _, DropTarget as _, PasteTextIntent as _,
     };
     use flui_sdk::widgets::{
-        DismissDirection as _, DismissDirectionCallback as _, DismissThreshold as _,
+        DismissDirection as _, DismissSide as _, DismissSideCallback as _, DismissThreshold as _,
         DismissThresholdError as _, DismissUpdateCallback as _, DismissUpdateDetails as _,
         Dismissible as _, DismissibleState as _, SwipeAction as _, SwipeActions as _,
         SwipeActionsError as _, SwipeActionsState as _, SwipeAlternative as _, SwipeEdge as _,
