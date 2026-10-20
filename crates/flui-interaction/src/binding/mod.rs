@@ -1724,6 +1724,10 @@ impl GestureBinding {
                         pointer_id = ?oldest.pointer.id,
                         "simultaneous-pointer cap reached: cancelling the oldest contact"
                     );
+                    // The cancellation's callbacks cannot admit a contact for
+                    // the pointer this Down is admitting: it would be replaced
+                    // below without its terminal.
+                    let _incoming = self.contacts.try_retire(pointer_id);
                     let cleanup = self.supersede(oldest.pointer.id);
                     RoutePanic::preserve_first(
                         &mut first_panic,
