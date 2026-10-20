@@ -466,6 +466,9 @@ impl PipelineOwner<Idle> {
         }
 
         for &root_id in &token.roots {
+            // The destination edge was written while the batch was detached;
+            // the subtree takes the depth of its new position.
+            self.render_tree.rederive_subtree_depth(root_id);
             if let Some(root) = self.render_tree.get(root_id) {
                 root.clear_needs_layout();
                 root.clear_needs_compositing_bits_update();

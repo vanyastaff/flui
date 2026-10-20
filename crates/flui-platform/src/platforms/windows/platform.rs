@@ -78,6 +78,9 @@ mod wake_deadline;
 use wake_deadline::{DeadlineArm, DeadlineDelivery, DeadlineQuery, WakeDeadlineHook};
 pub(super) use wake_deadline::{FrameCount, ModalDelivery};
 
+#[path = "platform/pointer_messages.rs"]
+mod pointer_messages;
+
 #[path = "platform/keystroke_queue.rs"]
 mod keystroke_queue;
 use keystroke_queue::{
@@ -347,7 +350,7 @@ pub(super) struct WindowContext {
     pub last_size: std::cell::Cell<Size<i32>>,
     /// Window configuration (hotkeys, debouncing, etc.)
     pub config: WindowConfiguration,
-    /// Is mouse hovering over this window? (T034)
+    /// Whether the mouse is over this window; see [`Self::set_hovered`].
     pub is_hovered: std::cell::Cell<bool>,
     /// The system appearance last applied to this window's chrome and
     /// reported to `on_appearance_changed`.
@@ -355,7 +358,7 @@ pub(super) struct WindowContext {
     /// Whether the title bar follows the system theme; `false` once the app
     /// chose it through `WindowsWindowExt::set_dark_mode` or `set_theme`.
     pub chrome_follows_system: std::cell::Cell<bool>,
-    /// Current keyboard modifiers (T035)
+    /// Current keyboard modifiers.
     pub modifiers: std::cell::Cell<flui_platform_api::Modifiers>,
     /// Cursor selected by this exact window's presentation.
     pub cursor: std::cell::Cell<CursorIcon>,
@@ -516,6 +519,15 @@ impl WindowContext {
         self.publish_hold
             .set(self.publish_hold.get().saturating_add(1));
         PublishHold(&self.publish_hold)
+    }
+
+    /// The window moved on the screen or changed DPI: the focused field's
+    /// input method follows it.
+    pub(super) fn text_layout_moved(&self) {
+        let services = self.text_services.borrow().clone();
+        if let Some(services) = services {
+            services.window_moved();
+        }
     }
 
     /// Dispatch a window event to the platform-level handler.
@@ -1366,6 +1378,7 @@ impl WindowsPlatform {
                         ctx.exit_modal_loop(hwnd);
                         ctx.in_size_move.set(false);
                         ctx.resume_touchpad();
+                        ctx.text_layout_moved();
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
@@ -1565,6 +1578,12 @@ impl WindowsPlatform {
                         // Update state
                         ctx.mode.set(new_mode);
                         ctx.publish_window_state(hwnd);
+                        // A minimised window sees no release of what was held
+                        // in it. After the mode is published, so input code
+                        // reads the window as minimised.
+                        if size_type == SIZE_MINIMIZED {
+                            ctx.cancel_pointers(hwnd);
+                        }
 
                         // Hidden-surface gating, minimize/restore half: it
                         // reaches `dispatch_visibility_status_change`, the wire
@@ -1664,6 +1683,7 @@ impl WindowsPlatform {
                             );
                         });
                         ctx.publish_window_state(hwnd);
+                        ctx.text_layout_moved();
                     }
 
                     LRESULT(0)
@@ -1775,12 +1795,8 @@ impl WindowsPlatform {
                             dwHoverTime: 0,
                         };
                         let _ = TrackMouseEvent(&raw mut tme);
-
-                        // Track hover state (T034)
-                        ctx.is_hovered.set(true);
-
-                        // Dispatch hover enter (will be cleared on WM_MOUSELEAVE)
-                        ctx.callbacks.dispatch_hover_status_change(true);
+                        // Cleared by WM_MOUSELEAVE.
+                        ctx.set_hovered(true);
 
                         let events = super::events::mouse_move_input(
                             &ctx.pointer_registry,
@@ -1871,20 +1887,7 @@ impl WindowsPlatform {
                 | windows::Win32::UI::WindowsAndMessaging::WM_POINTERLEAVE
                 | windows::Win32::UI::WindowsAndMessaging::WM_POINTERCAPTURECHANGED => {
                     if let Some(ctx) = ctx {
-                        let events = super::events::native_pointer_input(
-                            hwnd,
-                            msg,
-                            (wparam.0 & 0xffff) as u32,
-                            ctx.scale_factor.get(),
-                            &ctx.message_clock,
-                            &ctx.pointer_registry,
-                        );
-                        for event in events {
-                            let deliver = ctx.pointer_registry.borrow().delivers(&event);
-                            if deliver {
-                                ctx.callbacks.dispatch_input(event);
-                            }
-                        }
+                        ctx.pointer_message(hwnd, msg, wparam);
                     }
                     // Consume the native route: DefWindowProc would promote it
                     // to a second legacy mouse event.
@@ -1893,45 +1896,7 @@ impl WindowsPlatform {
 
                 windows::Win32::UI::WindowsAndMessaging::WM_POINTERDEVICECHANGE => {
                     if let Some(ctx) = ctx {
-                        use flui_platform_api::pointer::PointerEvent;
-                        let device = super::events::native_device(lparam);
-                        let time = flui_platform_api::EventTime::from_nanos(
-                            ctx.message_clock.message_time(),
-                        );
-                        let mut events = Vec::new();
-                        if wparam.0 == windows::Win32::UI::WindowsAndMessaging::PDC_REMOVAL as usize
-                        {
-                            let (ended, removed) = ctx
-                                .pointer_registry
-                                .borrow_mut()
-                                .remove_device(device, time);
-                            events.extend(ended.into_iter().map(|(_, input)| input));
-                            events.extend(removed.map(|change| {
-                                crate::traits::PlatformInput::Pointer(PointerEvent::DeviceRemoved(
-                                    change,
-                                ))
-                            }));
-                        } else if wparam.0
-                            == windows::Win32::UI::WindowsAndMessaging::PDC_ARRIVAL as usize
-                            && let Some(kind) = super::events::native_device_kind(
-                                windows::Win32::Foundation::HANDLE(
-                                    lparam.0 as *mut core::ffi::c_void,
-                                ),
-                            )
-                        {
-                            let added = ctx
-                                .pointer_registry
-                                .borrow_mut()
-                                .add_device(device, kind, time);
-                            events.extend(added.map(|change| {
-                                crate::traits::PlatformInput::Pointer(PointerEvent::DeviceAdded(
-                                    change,
-                                ))
-                            }));
-                        }
-                        for event in events {
-                            ctx.callbacks.dispatch_input(event);
-                        }
+                        ctx.pointer_device_changed(wparam, lparam);
                     }
                     LRESULT(0)
                 }
@@ -1984,7 +1949,11 @@ impl WindowsPlatform {
                     let is_repeat = (lparam.0 & (1 << 30)) != 0;
 
                     if let Some(ctx) = ctx {
-                        // Track modifiers (T035)
+                        // Read before the character drain below retrieves
+                        // other messages.
+                        let time = ctx.message_clock.message_time();
+
+                        // Track modifiers.
                         ctx.modifiers.set(super::events::message_modifiers());
 
                         // Merge the fully-translated character(s) for this
@@ -2035,7 +2004,7 @@ impl WindowsPlatform {
                         use super::events::key_down_event;
                         let event = {
                             let mut held = ctx.held_dead_keys.borrow_mut();
-                            key_down_event(wparam, lparam, stroke, &mut held)
+                            key_down_event(wparam, lparam, stroke, &mut held, time)
                         };
                         let result = ctx.callbacks.dispatch_input(event);
                         // A callback can close this window and create another
@@ -2073,13 +2042,14 @@ impl WindowsPlatform {
 
                 WM_KEYUP | WM_SYSKEYUP => {
                     if let Some(ctx) = ctx {
-                        // Track modifiers (T035)
+                        let time = ctx.message_clock.message_time();
+                        // Track modifiers.
                         ctx.modifiers.set(super::events::message_modifiers());
 
                         use super::events::key_up_event;
                         let event = {
                             let mut held = ctx.held_dead_keys.borrow_mut();
-                            key_up_event(wparam, lparam, &mut held)
+                            key_up_event(wparam, lparam, &mut held, time)
                         };
                         let result = ctx.callbacks.dispatch_input(event);
                         if result.default_prevented
@@ -2110,7 +2080,8 @@ impl WindowsPlatform {
                         ctx.pending_high_surrogate.set(pending);
                         if let Some(text) = text {
                             use super::events::stray_char_event;
-                            ctx.callbacks.dispatch_input(stray_char_event(text));
+                            let time = ctx.message_clock.message_time();
+                            ctx.callbacks.dispatch_input(stray_char_event(text, time));
                         }
                     }
                     LRESULT(0)
@@ -2140,6 +2111,7 @@ impl WindowsPlatform {
 
                     if let Some(ctx) = ctx {
                         ctx.update_window_state(|state| state.focused = false);
+                        ctx.cancel_pointers(hwnd);
                         ctx.publish_window_state(hwnd);
                         // Fire per-window on_active_status_change callback
                         ctx.callbacks.dispatch_active_status_change(false);
@@ -2154,13 +2126,10 @@ impl WindowsPlatform {
                     LRESULT(0)
                 }
 
-                // T025: Mouse hover tracking — WM_MOUSELEAVE (0x02A3)
+                // WM_MOUSELEAVE (0x02A3), requested by WM_MOUSEMOVE.
                 0x02A3 => {
                     if let Some(ctx) = ctx {
-                        // Track hover state (T034)
-                        ctx.is_hovered.set(false);
-
-                        ctx.callbacks.dispatch_hover_status_change(false);
+                        ctx.set_hovered(false);
                     }
                     LRESULT(0)
                 }
@@ -2186,7 +2155,7 @@ impl WindowsPlatform {
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
 
-                // T046: Keyboard layout change
+                // Keyboard layout change
                 WM_INPUTLANGCHANGE => {
                     if let Some(ctx) = ctx {
                         ctx.dispatch_keyboard_layout_change();

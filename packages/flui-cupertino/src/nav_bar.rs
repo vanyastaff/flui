@@ -211,7 +211,7 @@ impl StatelessView for CupertinoNavigationBar {
             .background_color
             .unwrap_or_else(|| theme.bar_background_color())
             .resolve(ctx);
-        let top_inset = MediaQuery::maybe_of(ctx).map_or(0.0, |data| data.padding.top);
+        let top_inset = MediaQuery::maybe_of(ctx).map_or(0.0, |data| data.padding().top);
 
         let mut layers: Vec<BoxedView> = Vec::new();
         if let Some(middle) = &self.middle {

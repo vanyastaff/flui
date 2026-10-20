@@ -244,6 +244,8 @@ impl super::platform::WindowContext {
                 self.redraw_if_still_owned(hwnd);
             }
         }
+        // The field's screen rectangles follow the new scale and rectangle.
+        self.text_layout_moved();
         // After the state above is current: the hint wakes the owner, which
         // samples the snapshot and re-derives.
         self.callbacks.dispatch_display_changed();

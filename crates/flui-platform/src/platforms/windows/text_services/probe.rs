@@ -174,6 +174,9 @@ impl TextStore for LateLayoutStore {
         self.observer.replace(observer.clone());
         self.inner.set_observer(observer);
     }
+    fn screen_moved(&self) {
+        self.inner.screen_moved();
+    }
 }
 
 impl LateLayoutStore {

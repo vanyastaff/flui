@@ -1241,7 +1241,7 @@ fn clamp_axis(taken: f64, offered: f64) -> f64 {
 mod tests {
     //! Steady-state dispatch allocates nothing (ADR-0209 §7). The chain and
     //! the owner are private seams; a thread-local counting allocator
-    //! measures one owner's drag steps through a participant.
+    //! measures one owner's drag steps through a chain of participants.
 
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::cell::Cell;
@@ -1311,19 +1311,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn steady_state_dispatch_allocates_nothing() {
+    /// A vertical scroll owner over `max` pixels of content, below `parent`,
+    /// with the fling controller that must outlive it.
+    fn owner(
+        max: f64,
+        parent: Option<Rc<ChainNode>>,
+    ) -> (Rc<ScrollOwner>, ScrollController, impl Sized) {
         let controller = ScrollController::new();
-        controller.update_dimensions(300.0, 0.0, 100_000.0);
+        controller.update_dimensions(300.0, 0.0, max);
         let fling = AnimationController::builder(Duration::from_millis(1))
             .unbounded()
             .build_on(None);
-        let connection: Rc<dyn NestedScrollConnection> = Rc::new(Nibbler);
-        let parent = Rc::new(ChainNode::new(
-            Participant::Connection(Rc::downgrade(&connection)),
-            None,
-            super::PlaneSource::default(),
-        ));
         let owner = ScrollOwner::new(
             OwnerConfig {
                 controller: controller.clone(),
@@ -1333,25 +1331,77 @@ mod tests {
                 axis: Axis::Vertical,
                 reversed: false,
                 overscroll: OverscrollBehavior::Auto,
-                parent: Some(parent),
+                parent,
             },
             Rc::new(OwnerEnv::default()),
         );
-        let sequence = IdMint::<InputSequenceId>::new()
-            .next()
-            .expect("a fresh mint issues");
-        owner.begin_contact(Some(sequence), PointerKind::Touch, None);
-        for _ in 0..4 {
-            owner.drag(Vec2::new(0.0, 3.0), Point::new(0.0, 0.0));
+        (owner, controller, fling)
+    }
+
+    fn node(participant: Participant, parent: Option<Rc<ChainNode>>) -> Rc<ChainNode> {
+        Rc::new(ChainNode::new(
+            participant,
+            parent,
+            super::PlaneSource::default(),
+        ))
+    }
+
+    /// A drag step through three links above the leaf (a connection, a
+    /// scrollable, a connection) allocates nothing: while the leaf moves and
+    /// the step's remainder stops there, and once the leaf is at its edge and
+    /// the remainder climbs the chain to the outer scrollable.
+    #[test]
+    fn steady_state_dispatch_through_several_links_allocates_nothing() {
+        const STEPS: u32 = 64;
+        // Each connection takes a pixel of every 3 px step before the leaf:
+        // the leaf moves 1 px, or, with no room, leaves it to the outer list.
+        for (leaf_extent, leaf_moves) in [(100_000.0, true), (0.0, false)] {
+            let top: Rc<dyn NestedScrollConnection> = Rc::new(Nibbler);
+            let near: Rc<dyn NestedScrollConnection> = Rc::new(Nibbler);
+            let (outer, outer_controller, _outer_fling) = owner(100_000.0, None);
+            let chain = node(
+                Participant::Connection(Rc::downgrade(&near)),
+                Some(node(
+                    Participant::Scrollable(Rc::downgrade(&outer)),
+                    Some(node(Participant::Connection(Rc::downgrade(&top)), None)),
+                )),
+            );
+            let (leaf, leaf_controller, _leaf_fling) = owner(leaf_extent, Some(chain));
+            let sequence = IdMint::<InputSequenceId>::new()
+                .next()
+                .expect("a fresh mint issues");
+            leaf.begin_contact(Some(sequence), PointerKind::Touch, None);
+            for _ in 0..4 {
+                leaf.drag(Vec2::new(0.0, 3.0), Point::new(0.0, 0.0));
+            }
+            let moved = |controller: &ScrollController| controller.pixels();
+            let (leaf_before, outer_before) = (moved(&leaf_controller), moved(&outer_controller));
+            let control = allocations();
+            drop(std::hint::black_box(Box::new(0_u8)));
+            assert!(allocations() > control, "the allocator counts");
+            let before = allocations();
+            for _ in 0..STEPS {
+                leaf.drag(Vec2::new(0.0, 3.0), Point::new(0.0, 0.0));
+            }
+            assert_eq!(
+                allocations() - before,
+                0,
+                "leaf extent {leaf_extent}: a step allocates nothing"
+            );
+            let (leaf_moved, outer_moved) = (
+                moved(&leaf_controller) - leaf_before,
+                moved(&outer_controller) - outer_before,
+            );
+            let expected = if leaf_moves {
+                (f64::from(STEPS), 0.0)
+            } else {
+                (0.0, f64::from(STEPS))
+            };
+            assert_eq!(
+                (leaf_moved, outer_moved),
+                expected,
+                "leaf extent {leaf_extent}: the step's pixels went where the chain sends them"
+            );
         }
-        let control = allocations();
-        drop(std::hint::black_box(Box::new(0_u8)));
-        assert!(allocations() > control, "the allocator counts");
-        let before = allocations();
-        for _ in 0..64 {
-            owner.drag(Vec2::new(0.0, 3.0), Point::new(0.0, 0.0));
-        }
-        assert_eq!(allocations() - before, 0, "a step allocates nothing");
-        assert_eq!(controller.pixels(), 68.0 * 2.0, "each step moved the leaf");
     }
 }

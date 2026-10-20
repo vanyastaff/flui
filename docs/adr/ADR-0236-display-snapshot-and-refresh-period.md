@@ -4,6 +4,8 @@
 - **Date:** 2026-10-17
 - **Superseded-by:** [ADR-0244](ADR-0244-os-version-floors-and-gates.md), decision 9's version and
   capability check style only; the Android refresh-rate hint it describes remains in force.
+- **Superseded-by:** [ADR-0249](ADR-0249-the-android-loop-blocks-until-woken.md), decision 7's Android
+  idle poll only: the Android loop blocks until woken.
 - **Amends:** [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md) decision 2 only: where
   the fallback period comes from. The fallback deadline, its 0.95 factor and the rest of the
   decision are unchanged.

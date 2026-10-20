@@ -139,16 +139,6 @@ impl ElementBuildContext {
         self.is_building = building;
     }
 
-    /// Get a reference to the tree.
-    pub fn tree(&self) -> &Arc<RwLock<ElementTree>> {
-        &self.tree
-    }
-
-    /// Get a reference to the owner.
-    pub fn build_owner(&self) -> &Arc<RwLock<BuildOwner>> {
-        &self.owner
-    }
-
     /// Nearest in-scope `InheritedElement` of view type `type_id`, in **O(1)**.
     ///
     /// Shared helper for `depend_on_inherited` and `get_inherited`;
