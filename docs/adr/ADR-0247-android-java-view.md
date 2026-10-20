@@ -61,7 +61,9 @@ handwriting, and brings Gradle and AppCompat with it. The research note compares
    edit, or batch of edits, the view reports its state; it becomes one ordered edit against the
    snapshot it was made on, which the owner replays into the store under an asynchronous lock.
    An edit made on a snapshot older than the latest one published is dropped, because that
-   snapshot already resets the view, and a step the store refuses publishes a new snapshot. A
+   snapshot supersedes it, and the owner restarts the input method on the store's text (a newer
+   snapshot that only moved the selection would leave the dropped edit's text in it). A step the
+   store refuses restarts it the same way. A
    protected field is mirrored as one bullet per code unit. Android hands every key to the input
    method before native code, so a key that reaches FLUI while the input method composes is one
    it passed on, and arrives marked `ImeComposition::Active`. The editor action arrives as Enter

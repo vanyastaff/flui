@@ -263,6 +263,8 @@ public final class FluiView extends View {
                 && compositionEnd == reportedCompositionEnd) {
             return;
         }
+        boolean moved = !text.equals(reportedText) || selectionStart != reportedSelectionStart
+                || selectionEnd != reportedSelectionEnd;
         reportedText = text;
         reportedSelectionStart = selectionStart;
         reportedSelectionEnd = selectionEnd;
@@ -271,11 +273,14 @@ public final class FluiView extends View {
         reportedGeneration = generation;
         nativeImeState(handle, text, selectionStart, selectionEnd, compositionStart,
                 compositionEnd, generation);
-        // The input method's own edit moved the selection or the composition: the
+        // The input method's own edit changed the text or moved the selection: the
         // contract is that the editor says so, and the suggestion and
-        // autocorrect-revert state of some keyboards depends on it.
-        inputMethods.updateSelection(this, selectionStart, selectionEnd, compositionStart,
-                compositionEnd);
+        // autocorrect-revert state of some keyboards depends on it. A report that
+        // only moved the composing region changed neither, and must not be echoed.
+        if (moved) {
+            inputMethods.updateSelection(this, selectionStart, selectionEnd, compositionStart,
+                    compositionEnd);
+        }
     }
 
     void editorAction(int action) {

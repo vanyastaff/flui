@@ -10,8 +10,9 @@
 //! reports its state, and [`Mirror::report`] turns the report into one
 //! [`ImeEdit`] against the snapshot it was made on. The owner replays the
 //! edits in order ([`replay_current`]); an edit made on an older snapshot
-//! than the one the owner published last is dropped, because the owner's
-//! newer snapshot is already on its way to the view and resets it. The owner
+//! than the one the owner published last is dropped, and the owner restarts
+//! the view on the store's text, because a newer snapshot that only moved the
+//! selection leaves the dropped edit's text in the input method. The owner
 //! is the authority; the mirror never is.
 //!
 //! Cfg-free plain values over UTF-16, so Linux CI pins them;
