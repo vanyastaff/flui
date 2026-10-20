@@ -537,6 +537,7 @@ fn scroll_physics_and_activity() {
             ("scroll::scroll_latches_are_source_local_and_device_removal_releases", crate::scroll::scroll_latches_are_source_local_and_device_removal_releases),
             ("scroll::a_remaining_touch_continues_scroll_without_an_intermediate_fling", crate::scroll::a_remaining_touch_continues_scroll_without_an_intermediate_fling as fn()),
             ("scroll::notched_wheel_accumulates_distance_and_eases_out_in_150ms", crate::scroll::notched_wheel_accumulates_distance_and_eases_out_in_150ms),
+            ("scroll::a_click_during_wheel_easing_taps_and_a_press_on_a_fling_catches_it", crate::scroll::a_click_during_wheel_easing_taps_and_a_press_on_a_fling_catches_it),
             ("scroll::precise_and_unknown_wheels_interrupt_synthetic_motion_once", crate::scroll::precise_and_unknown_wheels_interrupt_synthetic_motion_once),
             ("scroll::replacing_or_unmounting_a_scrollable_retires_its_notched_motion", crate::scroll::replacing_or_unmounting_a_scrollable_retires_its_notched_motion),
             ("scroll::dragging_interrupts_notched_motion_and_windows_progress_independently", crate::scroll::dragging_interrupts_notched_motion_and_windows_progress_independently),
@@ -551,6 +552,9 @@ fn scroll_physics_and_activity() {
             ("scroll::bouncing_upper_edge_preserves_outward_direction", crate::scroll::bouncing_upper_edge_preserves_outward_direction as fn()),
             ("scroll::bouncing_stationary_input_preserves_overscroll", crate::scroll::bouncing_stationary_input_preserves_overscroll as fn()),
             ("scroll::bouncing_inward_motion_and_crossing_respect_the_new_edge", crate::scroll::bouncing_inward_motion_and_crossing_respect_the_new_edge as fn()),
+            ("scroll::bouncing_resistance_stiffens_toward_the_viewport_length", crate::scroll::bouncing_resistance_stiffens_toward_the_viewport_length as fn()),
+            ("scroll::unordered_extents_are_refused_and_bound_nothing", crate::scroll::unordered_extents_are_refused_and_bound_nothing as fn()),
+            ("scroll::clamping_release_past_an_edge_returns_to_it", crate::scroll::clamping_release_past_an_edge_returns_to_it as fn()),
             ("scroll::a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook", crate::scroll::a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook as fn()),
             ("scroll::a_same_position_scrollable_rebuild_preserves_motion", crate::scroll::a_same_position_scrollable_rebuild_preserves_motion as fn()),
             ("scroll::retiring_one_scrollable_preserves_a_later_owners_jump_hook", crate::scroll::retiring_one_scrollable_preserves_a_later_owners_jump_hook as fn()),
@@ -614,6 +618,26 @@ fn scroll_physics_and_activity() {
             (
                 "scroll::clamping_fling_into_the_edge_rests_on_it",
                 crate::scroll::clamping_fling_into_the_edge_rests_on_it,
+            ),
+            (
+                "scroll::a_fling_rests_on_the_end_the_measured_rows_give",
+                crate::scroll::a_fling_rests_on_the_end_the_measured_rows_give,
+            ),
+            (
+                "scroll::a_snap_rests_on_its_target_when_the_end_clamps_the_offset",
+                crate::scroll::a_snap_rests_on_its_target_when_the_end_clamps_the_offset,
+            ),
+            (
+                "scroll::a_rebuilt_run_keeps_the_mode_its_release_started_in",
+                crate::scroll::a_rebuilt_run_keeps_the_mode_its_release_started_in,
+            ),
+            (
+                "scroll::a_rebuilt_run_keeps_the_physics_its_release_started_with",
+                crate::scroll::a_rebuilt_run_keeps_the_physics_its_release_started_with,
+            ),
+            (
+                "scroll::a_rebuild_taken_over_by_its_physics_stops_the_obsolete_run",
+                crate::scroll::a_rebuild_taken_over_by_its_physics_stops_the_obsolete_run,
             ),
         ],
     );
@@ -1139,6 +1163,7 @@ fn nested_scroll_channel() {
             ("nested_scroll::a_new_chain_above_keeps_the_leaf_run", crate::nested_scroll::a_new_chain_above_keeps_the_leaf_run),
             ("nested_scroll::participant_panic_consumes_all_and_next_sequence_recovers", crate::nested_scroll::participant_panic_consumes_all_and_next_sequence_recovers),
             ("nested_scroll::a_contact_that_ends_without_release_names_why", crate::nested_scroll::a_contact_that_ends_without_release_names_why),
+            ("nested_scroll::a_release_taken_over_by_reentrant_code_still_ends_its_sequence", crate::nested_scroll::a_release_taken_over_by_reentrant_code_still_ends_its_sequence),
             ("nested_scroll::contained_scrollable_keeps_its_remainder", crate::nested_scroll::contained_scrollable_keeps_its_remainder),
             ("nested_scroll::snap_policy_targets", crate::nested_scroll::snap_policy_targets),
             ("interactive_viewer::photo_in_pager_hands_pan_remainder_to_pager", crate::interactive_viewer::photo_in_pager_hands_pan_remainder_to_pager),

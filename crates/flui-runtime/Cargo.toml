@@ -67,7 +67,7 @@ parking_lot = { workspace = true }
 # `SpawnError`'s messages.
 thiserror = { workspace = true }
 tracing = { workspace = true }
-# The cross-platform clock `PerformanceStats` samples (std's `Instant` panics
+# The cross-platform clock the runtime stamps frames with (std's `Instant` panics
 # on wasm32).
 web-time = { workspace = true }
 

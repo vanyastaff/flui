@@ -29,7 +29,7 @@
 use flui_foundation::PresentationId;
 use web_time::{Duration, Instant};
 
-use crate::frame::FrameId;
+use crate::frame::{FrameId, FramePhase};
 
 /// How many routed input events one produced frame can carry attribution
 /// for, before `InputEpochs::push` (crate-private) starts overwriting its own oldest
@@ -255,6 +255,38 @@ pub struct FrameSnapshot {
     pub present_outcome: PresentOutcome,
     /// Every routed input event coalesced into this frame.
     pub input_epochs: InputEpochs,
+    /// How long the segment's build, layout and paint took.
+    pub phases: FramePhaseDurations,
+}
+
+/// How long one presentation's segment spent building, laying out and
+/// painting (paint includes compositing and freezing the scene).
+///
+/// The fourth stage, [`FramePhase::Composite`] — submitting, rasterizing and
+/// presenting — is the span from the segment's end to
+/// [`FrameSnapshot::submit_at`], so [`FrameSnapshot::phase_duration`] derives
+/// it rather than storing it twice.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FramePhaseDurations {
+    /// Rebuilding dirty views.
+    pub build: Duration,
+    /// Laying out the render tree.
+    pub layout: Duration,
+    /// Painting, compositing and freezing the scene.
+    pub paint: Duration,
+}
+
+impl FramePhaseDurations {
+    /// The durations of a segment's build, layout and paint.
+    #[must_use]
+    pub const fn new(build: Duration, layout: Duration, paint: Duration) -> Self {
+        Self {
+            build,
+            layout,
+            paint,
+        }
+    }
 }
 
 impl FrameSnapshot {
@@ -263,6 +295,36 @@ impl FrameSnapshot {
     pub fn segment_span(&self) -> Duration {
         self.segment_end
             .saturating_duration_since(self.segment_start)
+    }
+
+    /// How long this frame spent in `phase`; zero for [`FramePhase::Idle`].
+    #[must_use]
+    pub fn phase_duration(&self, phase: FramePhase) -> Duration {
+        match phase {
+            FramePhase::Idle => Duration::ZERO,
+            FramePhase::Build => self.phases.build,
+            FramePhase::Layout => self.phases.layout,
+            FramePhase::Paint => self.phases.paint,
+            FramePhase::Composite => self.submit_at.saturating_duration_since(self.segment_end),
+        }
+    }
+
+    /// The phase that took longest, when the frame's work — its segment plus
+    /// its submit — took longer than `budget`; `None` for a frame on time.
+    #[must_use]
+    pub fn over_budget_phase(&self, budget: Duration) -> Option<FramePhase> {
+        let work = self.submit_at.saturating_duration_since(self.segment_start);
+        if work <= budget {
+            return None;
+        }
+        [
+            FramePhase::Build,
+            FramePhase::Layout,
+            FramePhase::Paint,
+            FramePhase::Composite,
+        ]
+        .into_iter()
+        .max_by_key(|phase| self.phase_duration(*phase))
     }
 
     /// (submit − arrival) latency for every coalesced input, paired with

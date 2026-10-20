@@ -539,24 +539,6 @@ pub fn logical_render_root_tracks_replacement_and_build_recovery() {
     }
 }
 
-pub fn a_zero_capacity_performance_window_retains_no_frame_samples() {
-    let mut disabled = flui_runtime::performance_stats::PerformanceStats::new(0);
-    let mut enabled = flui_runtime::performance_stats::PerformanceStats::new(1);
-    disabled.record_frame();
-    enabled.record_frame();
-    // The API samples the platform clock, rather than accepting a test clock.
-    // A nonzero interval distinguishes disabled retention from a zero-duration frame.
-    std::thread::sleep(std::time::Duration::from_millis(2));
-    disabled.record_frame();
-    enabled.record_frame();
-    assert_eq!(disabled.avg_frame_time_ms(), 0.0);
-    assert_eq!(disabled.fps(), 0.0);
-    assert!(enabled.avg_frame_time_ms() > 0.0);
-    assert!(enabled.fps() > 0.0);
-    disabled.record_frame();
-    assert_eq!(disabled.avg_frame_time_ms(), 0.0);
-}
-
 /// A reused probe follows the new owning UI runtime rather than its released signal.
 pub fn a_signal_probe_reads_and_writes_its_current_mount_after_remount() {
     let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
