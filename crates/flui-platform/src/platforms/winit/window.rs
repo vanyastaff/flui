@@ -463,9 +463,9 @@ impl WinitWindow {
     /// Raise `on_visibility_status_change` when [`PlatformWindow::is_visible`]
     /// answers differently from the last report. Showing and hiding, the
     /// occlusion events and the minimized mode all change it, in any order, and
-    /// an `Occluded` can repeat what is already known or arrive late. The answer is read under the report's
-    /// lock, so two reporters cannot leave an older one last, and the lock is
-    /// released before the dispatch.
+    /// an `Occluded` can repeat what is already known or arrive late. The
+    /// answer is read under the report's lock, so two reporters cannot leave an
+    /// older one last, and the lock is released before the dispatch.
     pub(super) fn report_visibility(&self) {
         let (previous, visible) = {
             let mut reported = self.reported_visible.lock();
