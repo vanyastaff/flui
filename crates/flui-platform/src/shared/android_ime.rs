@@ -24,11 +24,10 @@ use flui_platform_api::text_store::{
     Utf16Offset, Utf16Range,
 };
 
+use super::ime_text::document_text;
 use super::web_text::diff;
 
-/// What a protected field's text reads as in the mirror: one bullet per code
-/// unit, so the input method's offsets still land where they do in the field.
-pub const PROTECTED_UNIT: char = '\u{2022}';
+pub use super::ime_text::PROTECTED_UNIT;
 
 /// `InputConnection.CURSOR_UPDATE_IMMEDIATE`: send the cursor once, now.
 pub const CURSOR_UPDATE_IMMEDIATE: i32 = 1;
@@ -69,15 +68,9 @@ impl Snapshot {
     /// The store as `session` reads it, published as `generation`.
     #[must_use]
     pub fn read(session: &dyn TextStoreRead, generation: u32) -> Self {
-        let len = session.document_len();
-        let whole =
-            Utf16Range::new(Utf16Offset::ZERO, len).expect("BUG: the whole document is a range");
-        let text = session
-            .text(whole)
-            .unwrap_or_else(|_| std::iter::repeat_n(PROTECTED_UNIT, len.get()).collect());
         Self {
             generation,
-            text,
+            text: document_text(session),
             selection: session.selection(),
             composition: session.composition().map(|composition| composition.range),
         }

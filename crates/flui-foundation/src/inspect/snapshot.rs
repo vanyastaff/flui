@@ -234,8 +234,9 @@ pub struct SnapshotNode {
     pub debug_fields: u32,
 }
 
-/// Why a snapshot has no node to start from.
+/// Why a snapshot could not be taken.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum SnapshotError {
     /// The tree has no root.
     #[error("the tree is empty")]
@@ -243,7 +244,17 @@ pub enum SnapshotError {
     /// The start node is not in the tree: it was removed, or its slot holds a newer node.
     #[error("{0} is gone")]
     Gone(InspectId),
+    /// The tree's owner is in the middle of something further up this thread's stack (named
+    /// here, such as `building`), so the snapshot was asked for from inside it: from a `build`,
+    /// an `inspect` or a callback. Ask again once that has returned.
+    #[error("the tree is busy {0}")]
+    Busy(&'static str),
 }
+
+/// The fact a snapshot records on a node whose [`Inspect::inspect`] panicked: the panic's
+/// message, or `"opaque panic"` for a payload without one. The fields written before the
+/// panic are kept, and the walk goes on to the next node.
+pub const INSPECT_FAILED: &str = "inspect_failed";
 
 /// Takes an owned snapshot of `tree` from the query's start node.
 ///
@@ -314,8 +325,22 @@ fn take<T: InspectTree + ?Sized>(
         numbering,
     };
     tree.facts(id, &mut Fields::new(&mut sink));
-    let facts = core::mem::take(&mut sink.fields);
-    view.object.inspect(&mut Fields::new(&mut sink));
+    let mut facts = core::mem::take(&mut sink.fields);
+    // An object's `inspect` is user code; its panic is this node's, not the snapshot's.
+    let inspected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        view.object.inspect(&mut Fields::new(&mut sink));
+    }));
+    if let Err(payload) = inspected {
+        let message = crate::panic::payload_text(&*payload).unwrap_or("opaque panic");
+        facts.push(OwnedField {
+            name: INSPECT_FAILED,
+            value: OwnedValue::Str(message.to_owned()),
+            level: Level::Summary,
+            unit: None,
+            default: None,
+        });
+        crate::panic::retain_opaque_payload(payload);
+    }
     Some(SnapshotNode {
         id,
         kind: view.object.kind(),

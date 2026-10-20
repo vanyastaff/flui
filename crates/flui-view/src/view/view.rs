@@ -196,8 +196,10 @@ pub trait View: Downcast + DynClone + 'static {
     /// default.
     ///
     /// It runs while the snapshot holds the element tree, as `build` runs inside the binding's
-    /// build scope, so it describes `self` and must not reach back into the binding: a call to
-    /// `WidgetsBinding::with_element_tree_mut` from here deadlocks.
+    /// build scope, so it describes `self`. A reach back into the binding fails rather than
+    /// waits: a nested snapshot answers `SnapshotError::Busy`, `with_element_tree_mut` panics,
+    /// and a panic here is recorded on this node as
+    /// [`INSPECT_FAILED`](flui_foundation::inspect::INSPECT_FAILED) while the walk goes on.
     ///
     /// A view that derives [`Inspect`](flui_foundation::inspect::Inspect) forwards to it:
     ///

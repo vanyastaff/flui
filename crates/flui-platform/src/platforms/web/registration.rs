@@ -194,6 +194,7 @@ impl Drop for CanvasClaim {
 pub(super) struct Listener {
     target: web_sys::EventTarget,
     kind: &'static str,
+    capture: bool,
     closure: Option<Closure<dyn Fn(web_sys::Event)>>,
     // The JS wrapper has only a Weak reference. Even a refused detach cannot
     // retain application captures or invoke the retired body.
@@ -211,6 +212,18 @@ impl Listener {
         accepting: &Rc<Cell<bool>>,
         body: impl Fn(web_sys::Event) + 'static,
     ) -> Result<Self, OpenWindowError> {
+        Self::install_in_phase(target, kind, accepting, false, body)
+    }
+
+    /// [`Self::install`] in the capture phase when `capture` holds, which
+    /// sees the events of descendants that do not bubble (`scroll`).
+    pub(super) fn install_in_phase(
+        target: &web_sys::EventTarget,
+        kind: &'static str,
+        accepting: &Rc<Cell<bool>>,
+        capture: bool,
+        body: impl Fn(web_sys::Event) + 'static,
+    ) -> Result<Self, OpenWindowError> {
         let body: Rc<dyn Fn(web_sys::Event)> = Rc::new(body);
         let weak = Rc::downgrade(&body);
         let accepting = Rc::clone(accepting);
@@ -223,11 +236,13 @@ impl Listener {
         });
         let options = web_sys::AddEventListenerOptions::new();
         options.set_passive(false);
+        options.set_capture(capture);
         // Own the token before calling the host: a replaced add method might
         // install a listener and then throw. Dropping it still attempts removal.
         let listener = Self {
             target: target.clone(),
             kind,
+            capture,
             closure: Some(closure),
             _body: body,
         };
@@ -252,10 +267,11 @@ impl Drop for Listener {
         let Some(closure) = self.closure.take() else {
             return;
         };
-        if let Err(error) = self
-            .target
-            .remove_event_listener_with_callback(self.kind, closure.as_ref().unchecked_ref())
-        {
+        if let Err(error) = self.target.remove_event_listener_with_callback_and_bool(
+            self.kind,
+            closure.as_ref().unchecked_ref(),
+            self.capture,
+        ) {
             // A host-replaced removal method can leave JS referring to this
             // function. Transfer the weak-only wrapper to wasm-bindgen's GC
             // lifetime instead of invalidating a still-referenced trampoline.

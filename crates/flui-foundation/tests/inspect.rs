@@ -11,10 +11,10 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Rect, Size};
 use flui_foundation::inspect::{
-    Change, DiffOptions, Field, FieldError, Fields, Inspect, InspectId, InspectTree, Level, Link,
-    Links, MatchError, Meta, NodePath, NodeView, OwnedValue, Plain, Rgba, SceneLayer, Seq, Shared,
-    Sink, SnapshotError, SnapshotNode, SnapshotQuery, ToValue, Unit, Value, Variant, diff,
-    kind_args_of, kind_of, render, snapshot,
+    Change, DiffOptions, Field, FieldError, Fields, INSPECT_FAILED, Inspect, InspectId,
+    InspectTree, Level, Link, Links, MatchError, Meta, NodePath, NodeView, OwnedValue, Plain, Rgba,
+    SceneLayer, Seq, Shared, Sink, SnapshotError, SnapshotNode, SnapshotQuery, ToValue, Unit,
+    Value, Variant, diff, kind_args_of, kind_of, render, snapshot,
 };
 use flui_foundation::{ElementId, LayerId, RenderId, SemanticsId};
 
@@ -553,6 +553,8 @@ struct Node {
     kind: &'static str,
     fields: Vec<(&'static str, f64, Option<Unit>, Option<f64>)>,
     text: Option<&'static str>,
+    /// Panics after writing its fields, as a broken description does.
+    panics: bool,
 }
 
 impl Inspect for Node {
@@ -573,6 +575,7 @@ impl Inspect for Node {
         if let Some(text) = self.text {
             out.field("text", text);
         }
+        assert!(!self.panics, "{} cannot describe itself", self.kind);
     }
 }
 
@@ -627,7 +630,12 @@ fn node(
     fields: Vec<(&'static str, f64, Option<Unit>, Option<f64>)>,
     text: Option<&'static str>,
 ) -> Node {
-    Node { kind, fields, text }
+    Node {
+        kind,
+        fields,
+        text,
+        panics: false,
+    }
 }
 
 /// `r1` RenderFlex(r2 RenderPadding(r3 RenderParagraph "Save"), r4 RenderParagraph "Cancel",
@@ -1252,4 +1260,39 @@ fn a_const_generic_kind_reports_its_value() {
     };
     assert_eq!(args(&Columns::<2> { gap: 8.0 }), ["2"]);
     assert_eq!(args(&Columns::<3> { gap: 8.0 }), ["3"]);
+}
+
+/// A node whose description panics keeps the fields it wrote and records the panic as a fact,
+/// and the walk goes on to its children and siblings.
+///
+/// Fails without the containment: the panic escapes `snapshot` and no snapshot is taken.
+#[test]
+fn a_panicking_description_is_recorded_on_its_node_and_the_walk_goes_on() {
+    let mut tree = sample(8.0);
+    tree.nodes
+        .get_mut(&render_id(2))
+        .expect("the sample has r2")
+        .0
+        .panics = true;
+    let root = whole(&tree);
+
+    let padding = root
+        .find_by_link(Link::Render(render_id(2)))
+        .expect("r2 is still taken");
+    assert_eq!(
+        padding.get_fact::<&str>(INSPECT_FAILED),
+        Ok("RenderPadding cannot describe itself")
+    );
+    assert_eq!(
+        padding.get::<f64>("left"),
+        Ok(8.0),
+        "written before the panic"
+    );
+    assert_eq!(padding.children.len(), 1, "its child is still taken");
+    assert_eq!(root.children.len(), 3, "its siblings are still taken");
+    assert_eq!(
+        root.fact(INSPECT_FAILED),
+        None,
+        "only the node that panicked records it"
+    );
 }
