@@ -852,6 +852,7 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
 #[cfg(test)]
 mod collision_tests {
     use super::{ReservedKey, ShowContextMenuIntent, SingleActivator, reserved_key};
+    use flui_foundation::geometry::Axis;
     use flui_platform_api::TargetPlatform;
     use flui_platform_api::keyboard::NamedKey;
 
@@ -882,6 +883,45 @@ mod collision_tests {
                 apple,
                 "{platform:?}: only Apple platforms have no menu key"
             );
+
+            // A widget's command keys bind through its command, which drops
+            // a reserved one: each must survive on every platform.
+            for key in crate::scroll::refresh_keys(platform) {
+                assert_eq!(
+                    reserved_key(platform, &key),
+                    None,
+                    "{platform:?}: the refresh key {key:?} takes nothing reserved"
+                );
+            }
+            // A widget's own keys answer only what bubbles past a focused
+            // field, which keeps its typing and caret keys
+            // (`keys_typed_in_a_field_inside_the_viewer_stay_in_the_field`);
+            // traversal, Escape, Back and closing they never take.
+            let own_keys = crate::scroll::zoom_keys(platform)
+                .into_iter()
+                .map(|(key, _)| key)
+                .chain(
+                    [
+                        (Axis::Vertical, false),
+                        (Axis::Horizontal, false),
+                        (Axis::Horizontal, true),
+                    ]
+                    .into_iter()
+                    .flat_map(|(axis, rtl)| {
+                        let (next, previous) = crate::scroll::anchor_keys(axis, rtl);
+                        [
+                            SingleActivator::named(next),
+                            SingleActivator::named(previous),
+                        ]
+                    }),
+                );
+            for key in own_keys {
+                let reserved = reserved_key(platform, &key);
+                assert!(
+                    matches!(reserved, None | Some(ReservedKey::TextEditing)),
+                    "{platform:?}: the widget key {key:?} takes {reserved:?}"
+                );
+            }
         }
 
         let command = |key: &str| SingleActivator::character(key).control();

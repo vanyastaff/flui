@@ -562,19 +562,17 @@ pub(super) fn dispatch_platform_ui_runtime(
 /// Apply the commands application code queued for its windows, when this is the
 /// owner thread and no owner callback is running. Applying one may re-enter the
 /// window procedure, so it never runs inside user code: a call from inside a
-/// callback leaves the queue for the next turn that starts idle.
+/// callback leaves the queue for the next turn that starts idle, and asks for it.
 pub(super) fn apply_queued_window_commands(owner_thread: std::thread::ThreadId) {
     if std::thread::current().id() != owner_thread {
         return;
     }
-    let Some((queues, host)) = APP_RUNTIME.with(|slot| {
-        slot.try_borrow()
-            .ok()
-            .map(|state| (state.window_commands.clone(), state.installed_host.clone()))
-    }) else {
-        return;
-    };
+    let (queues, host) = APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        (state.window_commands.clone(), state.installed_host.clone())
+    });
     if host.logical().in_callback() {
+        queues.defer();
         return;
     }
     queues.apply_pending();

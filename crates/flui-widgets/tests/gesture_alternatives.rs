@@ -206,6 +206,71 @@ pub(crate) fn dismissible_with_a_context_menu() {
     ));
 }
 
+/// After Tab reveals a menu row's control at its trailing edge, the first
+/// pointer press elsewhere in the row hides it, so a swipe that then starts
+/// where it was swipes the row away and opens no menu.
+pub(crate) fn a_press_off_the_revealed_control_frees_the_trailing_edge() {
+    let menu = StateHandle::new(None);
+    let mailbox = StateHandle::new(Mailbox {
+        inbox: vec!["Alice", "Bob"],
+        archived: Vec::new(),
+    });
+    let mut laid = lay_out(
+        Inbox {
+            rows: Rows::Menu,
+            mailbox: mailbox.clone(),
+            menu: menu.clone(),
+        },
+        tight(400.0, 300.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    let tab = flui_platform_api::keyboard::KeyEvent::new(
+        flui_platform_api::keyboard::KeyState::Down,
+        flui_platform_api::keyboard::Key::Named(NamedKey::Tab),
+        flui_platform_api::keyboard::Code::Unidentified,
+        flui_platform_api::EventTime::from_nanos(0),
+    );
+    let _ = laid.focus_manager().dispatch_key_event(&tab);
+    laid.pump();
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let control = tree
+        .find_by_role_and_label(Role::Button, "Actions for Alice")
+        .unwrap_or_else(|error| {
+            panic!("Tab reveals Alice's control: {error}\n{}", tree.describe())
+        });
+    let bounds = tree.window_bounds(&control).expect("control bounds");
+    let start = Offset::new(
+        f64::midpoint(bounds.x0, bounds.x1),
+        f64::midpoint(bounds.y0, bounds.y1),
+    );
+    let click = MouseScript::new("click on the row")
+        .press(Offset::new(200.0, start.dy))
+        .wait(Duration::from_millis(16))
+        .release()
+        .build()
+        .expect("the click releases its button");
+    laid.replay(&click);
+    laid.pump();
+    assert!(
+        laid.a11y_tree()
+            .expect("semantics enabled")
+            .find_by_role_and_label(Role::Button, "Actions for Alice")
+            .is_err(),
+        "a press beside the control hides it"
+    );
+    laid.replay(&PointerScript::swipe(start, Offset::new(20.0, start.dy)));
+    for _ in 0..120 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(
+        mailbox.with(|mailbox| mailbox.inbox.clone()),
+        ["Bob"],
+        "the swipe from where the control was dismisses Alice"
+    );
+    assert!(menu.with(Option::is_none), "and opens no menu");
+}
+
 /// Which single-pointer alternative the swipe rows offer.
 #[derive(Clone, Copy, Debug)]
 enum SwipeRows {
@@ -722,6 +787,191 @@ pub(crate) fn every_preset_opens_the_menu_by_its_pointer_trigger() {
     }
 }
 
+/// A menu's long press waits as long as the user's long-press setting (the
+/// operating system's accessibility floor) says, not the preset's shorter
+/// timeout: a hold that the preset alone would take opens nothing.
+pub(crate) fn the_menu_long_press_waits_for_the_system_setting() {
+    let setting = Duration::from_millis(1_500);
+    for (hold, opens) in [
+        (Duration::from_millis(1_400), false),
+        (setting + Duration::from_millis(50), true),
+    ] {
+        let menu = StateHandle::new(None);
+        let mailbox = StateHandle::new(Mailbox {
+            inbox: vec!["Alice"],
+            archived: Vec::new(),
+        });
+        let mut laid = lay_out(
+            Inbox {
+                rows: Rows::Menu,
+                mailbox,
+                menu: menu.clone(),
+            },
+            tight(400.0, 300.0),
+        );
+        laid.set_system_preferences(
+            flui_platform_api::SystemPreferences::default().with_gestures(
+                flui_platform_api::GesturePreferences::default().with_long_press_timeout(setting),
+            ),
+        );
+        laid.pump();
+        let press = TouchScript::new("hold")
+            .down(1, Offset::new(200.0, 25.0))
+            .wait(hold)
+            .up(1)
+            .build()
+            .expect("the hold lifts its finger");
+        laid.replay(&press);
+        laid.pump_for(Duration::from_millis(16));
+        assert_eq!(
+            menu.with(Option::is_some),
+            opens,
+            "a {hold:?} hold under a {setting:?} setting"
+        );
+    }
+}
+
+/// How focus enters a menu row.
+#[derive(Clone, Copy, Debug)]
+enum RowFocus {
+    Tab,
+    Assistive,
+}
+
+/// The control a menu row reveals appears for keyboard and for assistive
+/// focus alike, inside the row at its trailing edge (the left one
+/// right-to-left), stays when a pointer then presses the row, and goes when
+/// focus leaves the row.
+pub(crate) fn the_revealed_menu_control_follows_focus_and_reading_direction() {
+    for (entry, direction) in [
+        (RowFocus::Tab, TextDirection::Ltr),
+        (RowFocus::Tab, TextDirection::Rtl),
+        (RowFocus::Assistive, TextDirection::Ltr),
+        (RowFocus::Assistive, TextDirection::Rtl),
+    ] {
+        let case = format!("{entry:?} / {direction:?}");
+        let alternatives = GestureAlternatives::new(Alternative::ContextMenu(MenuSpec::new(
+            GestureCommand::new("Delete Alice", Delete("Alice")),
+            |_cx, _request| {},
+        )))
+        .expect("one labelled command")
+        .target("Alice");
+        let mut laid = lay_out(
+            Directionality::new(
+                direction,
+                alternatives.child(
+                    Semantics::new()
+                        .container(true)
+                        .label("Alice")
+                        .child(SizedBox::new(300.0, 50.0)),
+                ),
+            ),
+            tight(400.0, 300.0),
+        );
+        laid.enable_semantics();
+        laid.pump();
+        match entry {
+            RowFocus::Tab => {
+                let tab = flui_platform_api::keyboard::KeyEvent::new(
+                    flui_platform_api::keyboard::KeyState::Down,
+                    flui_platform_api::keyboard::Key::Named(NamedKey::Tab),
+                    flui_platform_api::keyboard::Code::Unidentified,
+                    flui_platform_api::EventTime::from_nanos(0),
+                );
+                let _ = laid.focus_manager().dispatch_key_event(&tab);
+            }
+            RowFocus::Assistive => {
+                let tree = laid.a11y_tree().expect("semantics enabled");
+                let row = tree
+                    .nodes()
+                    .find(|node| node.supports_action(Action::ShowContextMenu))
+                    .unwrap_or_else(|| panic!("{case}: the row\n{}", tree.describe()));
+                laid.invoke_semantics_action(flui_testing::ActionRequest {
+                    action: Action::Focus,
+                    target_tree: flui_testing::TreeId::ROOT,
+                    target_node: row.id(),
+                    data: None,
+                })
+                .unwrap_or_else(|error| panic!("{case}: the row takes assistive focus: {error}"));
+            }
+        }
+        laid.pump();
+        laid.pump();
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        let control = tree
+            .find_by_role_and_label(Role::Button, "Actions for Alice")
+            .unwrap_or_else(|error| panic!("{case}: revealed: {error}\n{}", tree.describe()));
+        let control = tree.window_bounds(&control).expect("control bounds");
+        let content = tree.find_by_label("Alice").expect("the content");
+        let row = tree.window_bounds(&content).expect("row bounds");
+        assert!(
+            control.x0 >= row.x0
+                && control.x1 <= row.x1
+                && control.y0 >= row.y0
+                && control.y1 <= row.y1,
+            "{case}: the control {control:?} lies inside the row {row:?}"
+        );
+        let trailing = match direction {
+            TextDirection::Rtl => control.x0 == row.x0,
+            TextDirection::Ltr => control.x1 == row.x1,
+        };
+        assert!(
+            trailing,
+            "{case}: the control {control:?} sits at the row's trailing edge {row:?}"
+        );
+
+        let revealed = |laid: &crate::common::LaidOut| {
+            laid.a11y_tree()
+                .expect("semantics enabled")
+                .find_by_role_and_label(Role::Button, "Actions for Alice")
+                .is_ok()
+        };
+        let beside = match direction {
+            TextDirection::Rtl => Offset::new(row.x1 - 20.0, row.y0 + 20.0),
+            TextDirection::Ltr => Offset::new(row.x0 + 20.0, row.y0 + 20.0),
+        };
+        let press = MouseScript::new("press on the row")
+            .press(beside)
+            .wait(Duration::from_millis(16))
+            .release()
+            .build()
+            .expect("one whole press");
+        laid.replay(&press);
+        laid.pump();
+        assert!(
+            revealed(&laid),
+            "{case}: a pointer press in the row keeps the control"
+        );
+        let manager = laid.focus_manager();
+        let row_node = manager.primary_focus().expect("the row has the focus");
+        manager.unfocus();
+        laid.pump();
+        assert!(
+            !revealed(&laid),
+            "{case}: focus leaving the row hides the control"
+        );
+
+        // Revealed again, then within one frame focus leaves the row and a
+        // pointer puts it back: the leaving counted, so nothing reveals it.
+        let _ = manager.dispatch_key_event(&flui_platform_api::keyboard::KeyEvent::new(
+            flui_platform_api::keyboard::KeyState::Down,
+            flui_platform_api::keyboard::Key::Named(NamedKey::Tab),
+            flui_platform_api::keyboard::Code::Unidentified,
+            flui_platform_api::EventTime::from_nanos(0),
+        ));
+        laid.pump();
+        assert!(revealed(&laid), "{case}: Tab reveals the control again");
+        manager.unfocus();
+        manager.note_pointer_input();
+        let _ = row_node.request_focus();
+        laid.pump();
+        assert!(
+            !revealed(&laid),
+            "{case}: focus that left and came back by pointer within a frame reveals nothing"
+        );
+    }
+}
+
 /// Within one row a label names one action, so two commands may not share
 /// one, and an empty label names none. A key performs one command too.
 pub(crate) fn labels_name_one_action_each() {
@@ -1020,10 +1270,20 @@ pub(crate) fn the_revealed_menu_control_draws_its_glyph_on_its_own_surface() {
         |_cx, _request| {},
     )))
     .expect("one labelled command");
+    // A ring in colours nothing else paints, to find its bands among the ops.
+    let ring = flui_widgets::FocusRingStyle {
+        outer: Color::rgb(200, 0, 0),
+        inner: Color::rgb(0, 200, 0),
+        outer_width: 2.0,
+        inner_width: 1.0,
+    };
     let mut laid = lay_out(
-        DefaultTextStyle::new(
-            TextStyle::default().with_color(Color::WHITE),
-            alternatives.child(SizedBox::new(300.0, 50.0)),
+        flui_widgets::DefaultFocusRingStyle::new(
+            ring,
+            DefaultTextStyle::new(
+                TextStyle::default().with_color(Color::WHITE),
+                alternatives.child(SizedBox::new(300.0, 50.0)),
+            ),
         ),
         tight(400.0, 300.0),
     );
@@ -1036,6 +1296,34 @@ pub(crate) fn the_revealed_menu_control_draws_its_glyph_on_its_own_surface() {
     );
     let _ = laid.focus_manager().dispatch_key_event(&tab);
     laid.pump();
+    // The row's ring is painted behind the control: every band before the
+    // glyph's surface, so no stroke crosses the control.
+    let ops: Vec<(Option<(f64, f64)>, Color)> = laid
+        .draw_ops()
+        .into_iter()
+        .filter_map(|command| match command.op {
+            DrawOp::Rect { rect, paint } => {
+                Some((Some((rect.width(), rect.height())), paint.color))
+            }
+            DrawOp::RRect { paint, .. }
+            | DrawOp::DRRect { paint, .. }
+            | DrawOp::Path { paint, .. }
+            | DrawOp::Line { paint, .. } => Some((None, paint.color)),
+            _ => None,
+        })
+        .collect();
+    let surface = ops
+        .iter()
+        .position(|op| *op == (Some((26.0, 11.0)), Color::WHITE))
+        .expect("the glyph's surface is painted");
+    let last_band = ops
+        .iter()
+        .rposition(|(_, colour)| *colour == ring.outer || *colour == ring.inner)
+        .expect("Tab shows the row's ring");
+    assert!(
+        last_band < surface,
+        "the ring's last band (op {last_band}) paints before the control (op {surface})"
+    );
     // Each filled rectangle, in paint order: its size and colour.
     let rects: Vec<((f64, f64), Color)> = laid
         .draw_ops()

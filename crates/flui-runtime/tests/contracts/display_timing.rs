@@ -309,6 +309,32 @@ fn shared_frame_budget_uses_the_shortest_period() {
     }
 }
 
+fn a_hidden_window_does_not_set_the_shared_frame_budget() {
+    // A minimised window on a fast display is not produced for, so the frames
+    // of the visible window beside it are judged by the visible window's period.
+    let rig = rig();
+    let hidden = rig
+        .owner
+        .prepare_presentation(rig.address, crate::owner_publication::window())
+        .expect("second presentation");
+    let hidden = rig.owner.publication(hidden).expect("publish").commit();
+    let hidden = rig
+        .owner
+        .presentation_dispatcher(hidden)
+        .expect("second window");
+    rig.deliver_to(&rig.window, Some(rig.display(2, Some(SMOOTH_PERIOD_US))));
+    rig.deliver_to(&hidden, Some(rig.display(1, Some(8_333))));
+    assert_eq!(
+        hidden.observe(WindowObservation::Visibility(false), &rig.effects),
+        Ok(InputOutcome::Handled)
+    );
+    assert_eq!(
+        rig.janky_after_a_frame_that_ran(FRAME_RUNTIME),
+        0,
+        "the hidden window's faster display does not judge the visible window's frame"
+    );
+}
+
 fn frame_aligned_resampling_window_follows_the_display_period() {
     let rig = rig();
     let window_of = |rig: &Rig| rig.read(|runtime, _| runtime.gestures().sampling_clock().period());
@@ -396,6 +422,10 @@ fn display_timing_contract() {
             (
                 "shared_frame_budget_uses_the_shortest_period",
                 shared_frame_budget_uses_the_shortest_period as fn(),
+            ),
+            (
+                "a_hidden_window_does_not_set_the_shared_frame_budget",
+                a_hidden_window_does_not_set_the_shared_frame_budget as fn(),
             ),
             (
                 "frame_aligned_resampling_window_follows_the_display_period",

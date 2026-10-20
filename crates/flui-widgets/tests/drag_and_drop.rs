@@ -407,21 +407,57 @@ fn custom_action(laid: &mut LaidOut, label: &str) {
     .expect("the custom action is delivered");
 }
 
-/// Press the visible control labelled `label` with a mouse.
-fn press_control(laid: &mut LaidOut, label: &str) {
-    let center = laid
+/// The pointer a visible control is pressed with.
+#[derive(Clone, Copy, Debug)]
+enum Pointer {
+    Mouse,
+    Finger,
+    /// A dwell or switch device reporting a pointer of its own.
+    Virtual,
+}
+
+/// Press the visible control labelled `label` with `pointer`, after checking
+/// that it is drawn at least the touch minimum target square.
+fn press_control(laid: &mut LaidOut, label: &str, pointer: Pointer) {
+    let bounds = laid
         .a11y_tree()
         .and_then(|tree| {
             let node = tree.find_by_role_and_label(Role::Button, label).ok()?;
-            let bounds = tree.window_bounds(&node)?;
-            Some((
-                f64::midpoint(bounds.x0, bounds.x1),
-                f64::midpoint(bounds.y0, bounds.y1),
-            ))
+            tree.window_bounds(&node)
         })
         .unwrap_or_else(|| panic!("no control {label:?}"));
-    laid.dispatch_pointer_down(center.0, center.1);
-    laid.dispatch_pointer_up(center.0, center.1);
+    let min_target = flui_interaction::GestureSettings::default().min_target();
+    assert!(
+        bounds.x1 - bounds.x0 >= min_target && bounds.y1 - bounds.y0 >= min_target,
+        "the control {label:?} is {bounds:?}, under the {min_target} minimum target"
+    );
+    let at = flui_foundation::geometry::Offset::new(
+        f64::midpoint(bounds.x0, bounds.x1),
+        f64::midpoint(bounds.y0, bounds.y1),
+    );
+    let wait = Duration::from_millis(16);
+    let press = match pointer {
+        Pointer::Mouse => flui_testing::MouseScript::new("mouse press")
+            .press(at)
+            .wait(wait)
+            .release()
+            .build(),
+        Pointer::Finger => flui_testing::TouchScript::new("touch press")
+            .down(1, at)
+            .wait(wait)
+            .up(1)
+            .build(),
+        Pointer::Virtual => flui_testing::replay::VirtualScript::new(
+            "virtual press",
+            flui_platform_api::DeviceId::try_from(7_u64).expect("a nonzero device id"),
+        )
+        .press(at)
+        .wait(wait)
+        .release()
+        .build(),
+    }
+    .expect("the press releases its contact");
+    laid.replay(&press);
 }
 
 fn settle(laid: &mut LaidOut) {
@@ -906,9 +942,16 @@ pub(crate) fn a_long_press_trigger_lifts_after_the_hold() {
 }
 
 /// Matrix row: `Draggable` and `DropTarget`. Alice reaches Done by the
-/// pointer drag, by assistive technology's Cut and Paste custom actions, by
-/// the cut and paste keys, and by the visible Cut and Paste controls, each
-/// leaving the board the drag leaves; Escape after a cut moves nothing.
+/// pointer drag, by assistive technology's Cut and Paste custom actions (also
+/// under reduced motion, within two frames), by the cut and paste keys, and by
+/// the visible Cut and Paste controls, each at least the minimum target and
+/// pressed with a mouse, a finger and a virtual pointer, each leaving the
+/// board the drag leaves; Escape after a cut moves nothing.
+///
+/// A transfer is two commands on two widgets, a cut on the source and a paste
+/// on the target, so no one subject's command reaches the drag's effect alone
+/// and `assert_gesture_alternatives` cannot take it; the row drives the same
+/// paths across the pair.
 pub(crate) fn draggable_and_drop_target_by_every_path() {
     let reference = {
         let shared = shared();
@@ -920,7 +963,7 @@ pub(crate) fn draggable_and_drop_target_by_every_path() {
     };
     assert_eq!(reference, moved_alice(), "the gesture moves Alice");
     type Path = fn(&mut LaidOut);
-    let paths: [(&str, Path); 4] = [
+    let paths: [(&str, Path); 6] = [
         ("assistive technology", |laid| {
             custom_action(laid, "Cut Alice");
             custom_action(laid, "Paste into Done");
@@ -931,9 +974,17 @@ pub(crate) fn draggable_and_drop_target_by_every_path() {
             focus_row(laid, "Paste into Done");
             press(laid, &chord("v"));
         }),
-        ("visible controls", |laid| {
-            press_control(laid, "Cut Alice");
-            press_control(laid, "Paste into Done");
+        ("visible controls pressed with a mouse", |laid| {
+            press_control(laid, "Cut Alice", Pointer::Mouse);
+            press_control(laid, "Paste into Done", Pointer::Mouse);
+        }),
+        ("visible controls pressed with a finger", |laid| {
+            press_control(laid, "Cut Alice", Pointer::Finger);
+            press_control(laid, "Paste into Done", Pointer::Finger);
+        }),
+        ("visible controls pressed with a virtual pointer", |laid| {
+            press_control(laid, "Cut Alice", Pointer::Virtual);
+            press_control(laid, "Paste into Done", Pointer::Virtual);
         }),
         ("Escape after a cut", |laid| {
             focus_row(laid, "Cut Alice");
@@ -955,6 +1006,26 @@ pub(crate) fn draggable_and_drop_target_by_every_path() {
             reference.clone()
         };
         assert_eq!(shared.board(), expected, "by {name}");
+    }
+    // Under reduced motion, the user's setting or an animator duration scale
+    // of 0, assistive technology's transfer settles within two frames.
+    for motion in [
+        flui_platform_api::MotionPreference::Reduce,
+        flui_platform_api::MotionPreference::from_duration_scale(0.0)
+            .expect("a zero duration scale is a valid observation"),
+    ] {
+        let shared = shared();
+        let mut laid = mount(&shared);
+        laid.set_system_preferences(
+            flui_platform_api::SystemPreferences::default().with_motion(motion),
+        );
+        laid.enable_semantics();
+        laid.pump();
+        custom_action(&mut laid, "Cut Alice");
+        custom_action(&mut laid, "Paste into Done");
+        laid.pump_for(Duration::from_millis(16));
+        laid.pump_for(Duration::from_millis(16));
+        assert_eq!(shared.board(), reference, "under {motion:?}");
     }
 }
 
