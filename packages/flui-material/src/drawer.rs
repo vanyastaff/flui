@@ -778,8 +778,8 @@ impl ViewState<DrawerController> for DrawerControllerState {
 
         let media_query = MediaQuery::of(ctx);
         let side_inset = match view.alignment {
-            DrawerAlignment::Start => media_query.padding.left,
-            DrawerAlignment::End => media_query.padding.right,
+            DrawerAlignment::Start => media_query.padding().left,
+            DrawerAlignment::End => media_query.padding().right,
         };
         let drag_area_width = view.edge_drag_width.unwrap_or(EDGE_DRAG_WIDTH + side_inset);
 

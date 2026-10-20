@@ -142,16 +142,16 @@ impl StatelessView for CupertinoPageScaffold {
             // The bar's preferred height plus the ambient top inset — always
             // the "fully obstructing" branch, see the module docs' deferred
             // list.
-            let top_padding = self.navigation_bar_preferred_height + media.padding.top;
+            let top_padding = self.navigation_bar_preferred_height + media.padding().top;
             let bottom_padding = if self.resize_to_avoid_bottom_inset {
                 media.view_insets.bottom
             } else {
                 0.0
             };
             let mut reduced = media;
-            reduced.padding.top = 0.0;
+            reduced.remove_top_padding();
             if self.resize_to_avoid_bottom_inset {
-                reduced.view_insets.bottom = 0.0;
+                reduced.remove_bottom_view_inset();
             }
             MediaQuery::new(
                 reduced,
@@ -161,7 +161,7 @@ impl StatelessView for CupertinoPageScaffold {
             .boxed()
         } else if self.resize_to_avoid_bottom_inset {
             let mut reduced = media.clone();
-            reduced.view_insets.bottom = 0.0;
+            reduced.remove_bottom_view_inset();
             MediaQuery::new(
                 reduced,
                 Padding::new(EdgeInsets::only_bottom(media.view_insets.bottom))

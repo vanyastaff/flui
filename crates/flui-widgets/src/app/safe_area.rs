@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use flui_foundation::geometry::EdgeInsets;
+use flui_foundation::geometry::{EdgeInsets, Edges};
 use flui_view::prelude::StatelessView;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
@@ -126,7 +126,7 @@ impl StatelessView for SafeArea {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         // Effective inset per edge: max(toggle ? media_side : 0, minimum_side).
         let mut media = MediaQuery::of(ctx);
-        let media_padding = media.padding;
+        let media_padding = media.padding();
 
         let effective_left = if self.left {
             media_padding.left.max(self.minimum.left)
@@ -157,18 +157,7 @@ impl StatelessView for SafeArea {
             effective_bottom,
             effective_left,
         );
-        if self.left {
-            media.padding.left = 0.0;
-        }
-        if self.top {
-            media.padding.top = 0.0;
-        }
-        if self.right {
-            media.padding.right = 0.0;
-        }
-        if self.bottom {
-            media.padding.bottom = 0.0;
-        }
+        media.remove_padding(Edges::new(self.top, self.right, self.bottom, self.left));
         Padding::new(insets).child(MediaQuery::new(media, self.child.clone()))
     }
 }
