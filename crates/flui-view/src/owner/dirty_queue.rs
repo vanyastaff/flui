@@ -65,6 +65,19 @@ impl DirtyQueue {
         self.heap.pop().map(|Reverse(dirty)| dirty)
     }
 
+    /// Re-key every entry to `depth_of` its id, in place: the heap keeps its
+    /// allocation and each entry its queue order.
+    pub(crate) fn rekey(&mut self, mut depth_of: impl FnMut(ElementId) -> usize) {
+        if self.heap.is_empty() {
+            return;
+        }
+        let mut entries = std::mem::take(&mut self.heap).into_vec();
+        for Reverse(dirty) in &mut entries {
+            dirty.depth = depth_of(dirty.id);
+        }
+        self.heap = BinaryHeap::from(entries);
+    }
+
     /// Remove every entry, keeping the order counter.
     pub(crate) fn take_entries(&mut self) -> impl Iterator<Item = DirtyElement> + use<> {
         std::mem::take(&mut self.heap)

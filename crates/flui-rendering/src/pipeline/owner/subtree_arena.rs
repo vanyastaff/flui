@@ -52,10 +52,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_foundation::RenderId;
 use flui_foundation::panic::{payload_text, retain_opaque_payload};
-use parking_lot::Mutex;
 #[cfg(any(test, feature = "testing"))]
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
+use std::cell::RefCell;
 
 #[cfg(any(test, feature = "testing"))]
 use crate::testing::parent_data::ParentDataSeed;
@@ -169,22 +169,18 @@ pub(super) struct SubtreeArena<'tree> {
     /// decides what to build.  Drained in `layout_dirty_root` and moved into
     /// `PipelineOwner::pending_child_requests` for the binding layer, which
     /// services it between layout passes of the same frame's fixpoint.
-    /// `Mutex`, not `RefCell`: at the time this shipped, the layout-child
-    /// closure required `&SubtreeArena: Send + Sync` (no longer true after
-    /// the `PipelineCell` port dropped that bound -- `SubtreeArena` itself
-    /// is `!Send + !Sync` now, transitively via its `NodePtr`s; see the pin
-    /// in `tests`). Downgrading to `RefCell` now that nothing requires the
-    /// lock is a follow-up, not done here.
-    pending_child_requests: Mutex<Vec<(flui_foundation::RenderId, usize)>>,
+    /// A `RefCell`, like every sink here: the arena is `!Send + !Sync`
+    /// (see the pin in `tests`), and no borrow is held across user code.
+    pending_child_requests: RefCell<Vec<(flui_foundation::RenderId, usize)>>,
     /// Retain-band signals from element-owned slivers.
     ///
     /// Each entry is `(sliver_id, cache_first, cache_last)` — the `[first,
     /// last)` band the sliver retained this pass.  Drained after the walk
     /// (after `pending_child_requests`, after `drop(arena)`) and moved into
     /// `PipelineOwner::pending_retain_bands` for the binding layer.  Same
-    /// `Mutex` discipline as the other sinks.  Empty unless an element-owned
+    /// `RefCell` discipline as the other sinks.  Empty unless an element-owned
     /// sliver (`RenderSliverList`) completed layout this frame.
-    pending_retain_bands: Mutex<Vec<(flui_foundation::RenderId, usize, usize)>>,
+    pending_retain_bands: RefCell<Vec<(flui_foundation::RenderId, usize, usize)>>,
     /// Ids of the repaint BOUNDARIES this walk actually laid out.
     ///
     /// Recorded once the short-circuit has declined to fire, so a boundary
@@ -202,8 +198,8 @@ pub(super) struct SubtreeArena<'tree> {
     /// not tell which ones layout had skipped. Over-queueing is safe but costs
     /// exactly the repaints a retaining paint pass exists to avoid.
     ///
-    /// Same `Mutex` discipline and post-walk drain as the sinks above.
-    laid_out: Mutex<Vec<flui_foundation::RenderId>>,
+    /// Same `RefCell` discipline and post-walk drain as the sinks above.
+    laid_out: RefCell<Vec<flui_foundation::RenderId>>,
     /// How many nodes this walk actually laid out, boundary or not.
     ///
     /// Bumped at the same record sites as [`Self::laid_out`], so a node the
@@ -231,7 +227,7 @@ pub(super) struct SubtreeArena<'tree> {
     /// [`Self::note_layout_success`] accepts it alongside nodes with
     /// open (not yet poisoned) failure records.  Per-walk scratch: dies
     /// with the arena, no drain.
-    poison_retries: Mutex<FxHashSet<flui_foundation::RenderId>>,
+    poison_retries: RefCell<FxHashSet<flui_foundation::RenderId>>,
     /// Descendant layout AND intrinsic-measurement failures swallowed by
     /// the layout-child / intrinsic-child callbacks during this walk:
     /// `(direct layout parent, failed node, kind, attempt)` tuples,
@@ -240,9 +236,9 @@ pub(super) struct SubtreeArena<'tree> {
     /// The callbacks must return a geometry / measured value, so the
     /// typed error cannot propagate through `perform_layout`; this sink
     /// carries the failure identity to `layout_dirty_root`, which feeds
-    /// the poison counters after the walk.  Same `Mutex` discipline as
+    /// the poison counters after the walk.  Same `RefCell` discipline as
     /// the other sinks.  Empty unless a descendant errored this walk.
-    layout_failures: Mutex<
+    layout_failures: RefCell<
         Vec<(
             flui_foundation::RenderId,
             flui_foundation::RenderId,
@@ -254,7 +250,7 @@ pub(super) struct SubtreeArena<'tree> {
     /// failure records — the only successes the poison table needs (a
     /// success clears the record).  Filtered at record time so the sink
     /// stays empty in the common all-healthy case.
-    layout_successes: Mutex<Vec<flui_foundation::RenderId>>,
+    layout_successes: RefCell<Vec<flui_foundation::RenderId>>,
     /// Every degradation event of this walk: a layout that failed and handed
     /// its caller a stand-in, or a poisoned node that served one.
     ///
@@ -311,15 +307,15 @@ impl<'tree> SubtreeArena<'tree> {
             by_id,
             #[cfg(any(test, feature = "testing"))]
             parent_data_seeds,
-            pending_child_requests: Mutex::new(Vec::new()),
-            pending_retain_bands: Mutex::new(Vec::new()),
-            laid_out: Mutex::new(Vec::new()),
+            pending_child_requests: RefCell::new(Vec::new()),
+            pending_retain_bands: RefCell::new(Vec::new()),
+            laid_out: RefCell::new(Vec::new()),
             laid_out_count: std::cell::Cell::new(0),
             layout_poison,
             text,
-            poison_retries: Mutex::new(FxHashSet::default()),
-            layout_failures: Mutex::new(Vec::new()),
-            layout_successes: Mutex::new(Vec::new()),
+            poison_retries: RefCell::new(FxHashSet::default()),
+            layout_failures: RefCell::new(Vec::new()),
+            layout_successes: RefCell::new(Vec::new()),
             degradation_events: std::sync::atomic::AtomicU64::new(0),
             _lifetime: PhantomData,
         }
@@ -374,7 +370,7 @@ impl<'tree> SubtreeArena<'tree> {
     /// `layout_dirty_root` AFTER `drop(arena)` so no `NodePtr` alias is
     /// live.
     pub(super) fn take_pending_child_requests(&self) -> Vec<(flui_foundation::RenderId, usize)> {
-        std::mem::take(&mut *self.pending_child_requests.lock())
+        std::mem::take(&mut *self.pending_child_requests.borrow_mut())
     }
 
     /// Takes the retain-band signals recorded by element-owned slivers
@@ -389,12 +385,12 @@ impl<'tree> SubtreeArena<'tree> {
     pub(super) fn take_pending_retain_bands(
         &self,
     ) -> Vec<(flui_foundation::RenderId, usize, usize)> {
-        std::mem::take(&mut *self.pending_retain_bands.lock())
+        std::mem::take(&mut *self.pending_retain_bands.borrow_mut())
     }
 
     /// Drains the ids this walk actually laid out — see [`Self::laid_out`].
     pub(super) fn take_laid_out(&self) -> Vec<flui_foundation::RenderId> {
-        std::mem::take(&mut *self.laid_out.lock())
+        std::mem::take(&mut *self.laid_out.borrow_mut())
     }
 
     /// Drains how many nodes this walk laid out — see [`Self::laid_out_count`].
@@ -436,9 +432,12 @@ impl<'tree> SubtreeArena<'tree> {
         if err.is_recoverable_layout_error() {
             return;
         }
-        self.layout_failures
-            .lock()
-            .push((parent, failed, LayoutFailureKind::of(err), attempt));
+        self.layout_failures.borrow_mut().push((
+            parent,
+            failed,
+            LayoutFailureKind::of(err),
+            attempt,
+        ));
         // Every failure recorded here handed its caller a stand-in size,
         // geometry or intrinsic — the walk continues on a value this pass
         // did not compute.
@@ -455,9 +454,9 @@ impl<'tree> SubtreeArena<'tree> {
     /// the same callback `Ok` arm, and this filter is what keeps that
     /// stand-in from being misread as a recovery.
     fn note_layout_success(&self, id: RenderId) {
-        let retried = self.poison_retries.lock().contains(&id);
+        let retried = self.poison_retries.borrow_mut().contains(&id);
         if retried || self.layout_poison.has_open_failures(id) {
-            self.layout_successes.lock().push(id);
+            self.layout_successes.borrow_mut().push(id);
         }
     }
 
@@ -473,7 +472,7 @@ impl<'tree> SubtreeArena<'tree> {
         LayoutFailureKind,
         Option<ErasedConstraints>,
     )> {
-        std::mem::take(&mut *self.layout_failures.lock())
+        std::mem::take(&mut *self.layout_failures.borrow_mut())
     }
 
     /// Takes the descendant layout successes recorded during this walk
@@ -481,7 +480,7 @@ impl<'tree> SubtreeArena<'tree> {
     /// [`Self::note_layout_success`]).  Called by `layout_dirty_root`
     /// after the walk.
     pub(super) fn take_layout_successes(&self) -> Vec<flui_foundation::RenderId> {
-        std::mem::take(&mut *self.layout_successes.lock())
+        std::mem::take(&mut *self.layout_successes.borrow_mut())
     }
 
     // =========================================================================
@@ -919,7 +918,7 @@ unsafe fn layout_subtree_borrowed_impl(
                 return Ok(stand_in());
             }
             Some(FailedAttempt::Layout(_)) => {
-                arena.poison_retries.lock().insert(id);
+                arena.poison_retries.borrow_mut().insert(id);
             }
             Some(FailedAttempt::IntrinsicOnly) => return Ok(stand_in()),
             None => {} // unreachable: is_poisoned implies a record
@@ -1042,7 +1041,7 @@ unsafe fn layout_subtree_borrowed_impl(
     // that genuinely entered layout.
     arena.note_laid_out();
     if is_repaint_boundary {
-        arena.laid_out.lock().push(id);
+        arena.laid_out.borrow_mut().push(id);
     }
     // A fresh generation for this pass. Children this node lays out are
     // stamped with it at commit; children it skips keep the previous value and
@@ -1810,7 +1809,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                 return Ok(stand_in());
             }
             Some(FailedAttempt::Layout(_)) => {
-                arena.poison_retries.lock().insert(id);
+                arena.poison_retries.borrow_mut().insert(id);
             }
             Some(FailedAttempt::IntrinsicOnly) => return Ok(stand_in()),
             None => {} // unreachable: is_poisoned implies a record
@@ -1860,7 +1859,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     // sliver content.
     arena.note_laid_out();
     if is_repaint_boundary {
-        arena.laid_out.lock().push(id);
+        arena.laid_out.borrow_mut().push(id);
     }
     // A fresh generation for this pass. Children this node lays out are
     // stamped with it at commit; children it skips keep the previous value and
@@ -2236,7 +2235,7 @@ mod tests {
     // `PipelineCell::with_mut`'s reentry panic: a documented strengthening,
     // not a parity break. The two pins below are the primary evidence for
     // this: `SubtreeArena` for the aggregate (every field, including the
-    // `Mutex` sinks), `NodePtr` for the raw pointer itself (so a future
+    // `RefCell` sinks), `NodePtr` for the raw pointer itself (so a future
     // field addition that tried to re-derive `Send`/`Sync` some other way
     // would be caught at the type it actually touches). Both types are
     // private to this crate, so the externally observable half of this
