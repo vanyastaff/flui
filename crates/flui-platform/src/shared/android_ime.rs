@@ -145,6 +145,18 @@ pub enum Replayed {
     Refused,
 }
 
+impl Replayed {
+    /// Whether the view must restart on a fresh snapshot of the store. A
+    /// stale edit was dropped after the owner's newer snapshot reached the
+    /// view as a selection-only update, which only tells the input method:
+    /// the character it committed would otherwise stay in its cached text
+    /// while the field never received it.
+    #[must_use]
+    pub const fn restarts_the_view(self) -> bool {
+        !matches!(self, Self::Applied)
+    }
+}
+
 /// Replay `edit` into `session` if it was made on the snapshot the owner
 /// published last (`published`).
 pub fn replay_current(edit: &ImeEdit, published: u32, session: &mut dyn TextStoreEdit) -> Replayed {

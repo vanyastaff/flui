@@ -271,6 +271,11 @@ public final class FluiView extends View {
         reportedGeneration = generation;
         nativeImeState(handle, text, selectionStart, selectionEnd, compositionStart,
                 compositionEnd, generation);
+        // The input method's own edit moved the selection or the composition: the
+        // contract is that the editor says so, and the suggestion and
+        // autocorrect-revert state of some keyboards depends on it.
+        inputMethods.updateSelection(this, selectionStart, selectionEnd, compositionStart,
+                compositionEnd);
     }
 
     void editorAction(int action) {

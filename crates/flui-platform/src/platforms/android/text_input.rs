@@ -31,8 +31,8 @@ use flui_platform_api::text_store::{
 use jni::{JValue, jni_sig, jni_str};
 
 use crate::shared::android_ime::{
-    CURSOR_UPDATE_IMMEDIATE, CURSOR_UPDATE_MONITOR, ImeEdit, Replayed, Snapshot, cursor_anchor,
-    editor_info, replay_current,
+    CURSOR_UPDATE_IMMEDIATE, CURSOR_UPDATE_MONITOR, ImeEdit, Snapshot, cursor_anchor, editor_info,
+    replay_current,
 };
 use crate::shared::os_version::Since;
 use crate::shared::os_version::android::{AndroidApi, StylusHandwriting};
@@ -217,8 +217,9 @@ impl AndroidTextInput {
         let status = self.status(&*store);
         let grant = LockGrant::read_write(move |session| {
             let outcome = replay_current(&edit, published.get(), session);
-            if outcome == Replayed::Refused {
-                // The store refused a step: the mirror no longer matches it.
+            if outcome.restarts_the_view() {
+                // The store refused a step, or the edit was dropped as stale:
+                // the input method's text no longer matches the store's.
                 let generation = Self::next_generation(&published);
                 publish(
                     &view,
