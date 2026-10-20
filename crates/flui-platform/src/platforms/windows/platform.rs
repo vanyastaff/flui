@@ -453,13 +453,9 @@ impl WindowContext {
     pub(super) fn dispatch_resize(&self, device: Size<i32>) {
         let scale = self.scale_factor.get();
         self.last_resize.set(Some((device, scale)));
-        self.callbacks.dispatch_resize(
-            Size::new(
-                super::util::device_to_logical(device.width, scale),
-                super::util::device_to_logical(device.height, scale),
-            ),
-            scale,
-        );
+        if let Ok(metrics) = flui_foundation::geometry::WindowMetrics::new(device, scale) {
+            self.callbacks.dispatch_resize(metrics);
+        }
     }
 
     /// Complete cache updates before callback-capable native/user code.

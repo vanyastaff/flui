@@ -133,10 +133,7 @@ impl From<flui_runtime::owner::DispatchError> for DispatchError {
     )
 )]
 pub(in crate::app) enum RuntimeEvent {
-    Resized {
-        size: flui_foundation::geometry::Size<f64>,
-        scale_factor: f64,
-    },
+    Resized(flui_foundation::geometry::WindowMetrics),
     /// Window focus changed (winit's `WindowEvent::Focused`, or the
     /// equivalent per-backend signal; same source as the deleted `Active`
     /// variant this one replaces). Feeds the `(visible, focused)` ->
@@ -238,9 +235,7 @@ impl RuntimeEvent {
                     .frame_dispatcher(address)?
                     .surface_restored(host.effects());
             }
-            Self::Resized { size, scale_factor } => {
-                WindowObservation::Metrics { size, scale_factor }
-            }
+            Self::Resized(metrics) => WindowObservation::Metrics(metrics),
             Self::SafeAreaChanged(insets) => WindowObservation::SafeArea(insets),
             Self::WindowFocus(focused) => WindowObservation::Focus(focused),
             Self::WindowVisibility(visible) => WindowObservation::Visibility(visible),

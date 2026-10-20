@@ -204,12 +204,12 @@ fn main() {
 
     // Register resize callback
     let gpu_for_resize = Arc::downgrade(&gpu);
-    window.on_resize(Box::new(move |size, scale_factor| {
+    window.on_resize(Box::new(move |metrics| {
         let Some(gpu) = gpu_for_resize.upgrade() else {
             return;
         };
-        let width = (size.width * scale_factor) as u32;
-        let height = (size.height * scale_factor) as u32;
+        let width = metrics.physical().width.unsigned_abs();
+        let height = metrics.physical().height.unsigned_abs();
         gpu.lock().unwrap().resize(width, height);
     }));
 

@@ -532,7 +532,7 @@ fn a_state_read_inside_a_callback_never_sees_a_half_made_change() {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let log = Arc::clone(&seen);
     let reader = Arc::clone(&window);
-    window.on_resize(Box::new(move |_, _| {
+    window.on_resize(Box::new(move |_| {
         log.lock().expect("log").push(reader.state().revision);
     }));
     apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
@@ -725,7 +725,7 @@ fn a_show_asked_for_while_a_hidden_window_is_restored_is_kept() {
     let events = record_visibility(&window);
     // The app answers the restore's resize by showing the window.
     let inner = Arc::clone(&window);
-    window.on_resize(Box::new(move |_, _| {
+    window.on_resize(Box::new(move |_| {
         let _ = inner.apply(WindowCommand::Show);
     }));
     apply(&window, WindowCommand::SetMode(WindowMode::Normal));
@@ -902,7 +902,8 @@ fn a_dpi_change_that_keeps_the_client_size_still_delivers_the_scale() {
     settle();
     let resizes = Arc::new(std::sync::Mutex::new(Vec::new()));
     let log = Arc::clone(&resizes);
-    window.on_resize(Box::new(move |_, scale| {
+    window.on_resize(Box::new(move |metrics| {
+        let scale = metrics.scale().get();
         log.lock().expect("log").push(scale);
     }));
     // The window keeps the rectangle it has, so no `WM_SIZE` follows.

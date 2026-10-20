@@ -1131,10 +1131,10 @@ fn finish_open_secondary_window(
 
     install_input_wiring(owner_dispatch, window.as_ref());
 
-    window.on_resize(Box::new(move |size, scale_factor| {
+    window.on_resize(Box::new(move |metrics| {
         let _ = dispatch_platform_ui_runtime(
             owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::Resized { size, scale_factor }),
+            RuntimeTask::Event(RuntimeEvent::Resized(metrics)),
         );
     }));
 
@@ -1348,7 +1348,7 @@ mod tests {
                                             flui_runtime::sink::SubmitVerdict::Presented
                                         }),
                                         prelude: None,
-                                        resize: Some(Box::new(move |_, _| {
+                                        resize: Some(Box::new(move |_| {
                                             observed.set(Some(retained.load(Ordering::Acquire)));
                                             if matches!(case, InstallCase::ClosedDuringInitialization | InstallCase::ClosedDuringInitializationThenPanic) {
                                                 closing_window.close();
@@ -1361,10 +1361,13 @@ mod tests {
                                     },
                                 ))
                                 .expect("driver");
-                            prepared.observe(WindowObservation::Metrics {
-                                size: flui_foundation::geometry::Size::new(20.0, 30.0),
-                                scale_factor: 1.0,
-                            });
+                            prepared.observe(WindowObservation::Metrics(
+                                flui_foundation::geometry::WindowMetrics::from_logical(
+                                    flui_foundation::geometry::Size::new(20.0, 30.0),
+                                    1.0,
+                                )
+                                .expect("valid metrics"),
+                            ));
                             let receipt = prepared.submit();
                             assert!(
                                 receipt.outcome().is_none(),

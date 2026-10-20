@@ -76,8 +76,7 @@ fn shared_preparation_survives_checkout_and_publishes_after_return() {
         fn resize_surface(
             &self,
             _: flui_foundation::PresentationAddress,
-            _: flui_foundation::geometry::Size<f64>,
-            _: f64,
+            _: flui_foundation::geometry::WindowMetrics,
         ) {
         }
         fn retire_presentation(
@@ -196,8 +195,7 @@ fn shutdown_withdraws_admission_before_leased_runtime_retires() {
         fn resize_surface(
             &self,
             _: flui_foundation::PresentationAddress,
-            _: flui_foundation::geometry::Size<f64>,
-            _: f64,
+            _: flui_foundation::geometry::WindowMetrics,
         ) {
         }
         fn retire_presentation(
@@ -302,8 +300,7 @@ fn failed_frame_preserves_cross_runtime_fifo_for_the_next_opportunity() {
         fn resize_surface(
             &self,
             _: flui_foundation::PresentationAddress,
-            _: flui_foundation::geometry::Size<f64>,
-            _: f64,
+            _: flui_foundation::geometry::WindowMetrics,
         ) {
         }
         fn retire_presentation(
@@ -423,8 +420,7 @@ fn bounded_opportunities_preserve_every_frame_when_waking_fails() {
         fn resize_surface(
             &self,
             _: flui_foundation::PresentationAddress,
-            _: flui_foundation::geometry::Size<f64>,
-            _: f64,
+            _: flui_foundation::geometry::WindowMetrics,
         ) {
         }
         fn retire_presentation(
@@ -535,8 +531,7 @@ fn nested_native_callbacks_share_one_delivery_budget() {
         fn resize_surface(
             &self,
             _: flui_foundation::PresentationAddress,
-            _: flui_foundation::geometry::Size<f64>,
-            _: f64,
+            _: flui_foundation::geometry::WindowMetrics,
         ) {
         }
         fn retire_presentation(
@@ -657,8 +652,7 @@ fn runtime_background_work_shares_frame_order_without_an_extra_frame() {
         fn resize_surface(
             &self,
             _: flui_foundation::PresentationAddress,
-            _: flui_foundation::geometry::Size<f64>,
-            _: f64,
+            _: flui_foundation::geometry::WindowMetrics,
         ) {
         }
         fn retire_presentation(
@@ -826,8 +820,7 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
         fn resize_surface(
             &self,
             _: PresentationAddress,
-            _: flui_foundation::geometry::Size<f64>,
-            _: f64,
+            _: flui_foundation::geometry::WindowMetrics,
         ) {
         }
         fn frame(&self, _: PresentationAddress, runtime: &mut UiRuntime) {
@@ -971,10 +964,9 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
         fn resize_surface(
             &self,
             address: PresentationAddress,
-            size: flui_foundation::geometry::Size<f64>,
-            scale: f64,
+            metrics: flui_foundation::geometry::WindowMetrics,
         ) {
-            self.0.resize_surface(address, size, scale);
+            self.0.resize_surface(address, metrics);
         }
         fn frame(&self, address: PresentationAddress, runtime: &mut UiRuntime) {
             self.0.frame(address, runtime);

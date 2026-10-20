@@ -69,13 +69,7 @@ impl OwnerEffects for Effects {
     ) {
         panic!("no pending install");
     }
-    fn resize_surface(
-        &self,
-        _: PresentationAddress,
-        _: flui_foundation::geometry::Size<f64>,
-        _: f64,
-    ) {
-    }
+    fn resize_surface(&self, _: PresentationAddress, _: flui_foundation::geometry::WindowMetrics) {}
     fn frame(&self, _: PresentationAddress, runtime: &mut UiRuntime) {
         let at = self.frame_at.take().expect("a frame was asked for");
         let outcome = runtime.pump(&mut SampledClock(at), &mut Sink);

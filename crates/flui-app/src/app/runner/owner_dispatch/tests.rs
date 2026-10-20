@@ -260,7 +260,7 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                 let installation = prepare_platform_ui_runtime(runtime, Arc::clone(&window));
                 let dispatcher = installation.dispatcher();
                 installation
-                    .submit_web(test_resize_driver(|_, _| {}), &shared)
+                    .submit_web(test_resize_driver(|_| {}), &shared)
                     .expect("publish initialization");
                 assert_eq!(
                     observe_runtime(dispatcher, |runtime| runtime.scheduler().lifecycle_state()),
@@ -868,7 +868,7 @@ fn carried_work_shares_one_callback_budget_across_runtimes() {
 }
 
 fn test_resize_driver(
-    resize: impl FnMut(flui_foundation::geometry::Size<f64>, f64) + 'static,
+    resize: impl FnMut(flui_foundation::geometry::WindowMetrics) + 'static,
 ) -> super::super::frame_driver::FrameDriver {
     use super::super::frame_driver::{FrameDriver, TestFrameDriver};
     FrameDriver::Test(TestFrameDriver {
@@ -903,7 +903,7 @@ fn native_keyboard_cannot_overtake_queued_window_changes_and_keys() {
         install_input_wiring(dispatcher, window.as_ref());
         let resize_trace = Rc::clone(&trace);
         installation
-            .frame_driver(test_resize_driver(move |_, _| {
+            .frame_driver(test_resize_driver(move |_| {
                 resize_trace.borrow_mut().push("resize");
             }))
             .expect("prepare resize driver");
@@ -926,10 +926,9 @@ fn native_keyboard_cannot_overtake_queued_window_changes_and_keys() {
                 for width in [810.0, 820.0] {
                     dispatch_platform_ui_runtime(
                         dispatcher,
-                        RuntimeTask::Event(RuntimeEvent::Resized {
-                            size: flui_foundation::geometry::Size::new(width, 600.0),
-                            scale_factor: 1.0,
-                        }),
+                        RuntimeTask::Event(RuntimeEvent::Resized(window_metrics(
+                            width, 600.0, 1.0,
+                        ))),
                     )
                     .expect("resize");
                     if width == 810.0 {
@@ -1912,10 +1911,9 @@ fn resized_rescales_only_the_addressed_presentation() {
 
     dispatch_platform_ui_runtime(
         secondary,
-        RuntimeTask::Event(RuntimeEvent::Resized {
-            size: flui_foundation::geometry::Size::new(640.0, 480.0),
-            scale_factor: rescaled,
-        }),
+        RuntimeTask::Event(RuntimeEvent::Resized(window_metrics(
+            640.0, 480.0, rescaled,
+        ))),
     )
     .expect("the secondary presentation is live");
 
@@ -1943,10 +1941,11 @@ fn resizing_a_secondary_leaves_the_primary_surface_alone() {
 
     let surface = Rc::new(Cell::new((800_u32, 600_u32)));
     let applied = Rc::clone(&surface);
-    let driver = test_resize_driver(move |size, scale_factor| {
+    let driver = test_resize_driver(move |metrics| {
+        let physical = metrics.physical();
         applied.set((
-            (size.width * scale_factor) as u32,
-            (size.height * scale_factor) as u32,
+            physical.width.unsigned_abs(),
+            physical.height.unsigned_abs(),
         ));
     });
     let (primary, _clear_guard) = install_ui_runtime_a_with_driver(Some(driver));
@@ -1972,10 +1971,7 @@ fn resizing_a_secondary_leaves_the_primary_surface_alone() {
 
     dispatch_platform_ui_runtime(
         secondary,
-        RuntimeTask::Event(RuntimeEvent::Resized {
-            size: flui_foundation::geometry::Size::new(320.0, 200.0),
-            scale_factor: 2.5,
-        }),
+        RuntimeTask::Event(RuntimeEvent::Resized(window_metrics(320.0, 200.0, 2.5))),
     )
     .expect("the secondary presentation is live");
     assert_eq!(
@@ -1991,10 +1987,7 @@ fn resizing_a_secondary_leaves_the_primary_surface_alone() {
 
     dispatch_platform_ui_runtime(
         primary,
-        RuntimeTask::Event(RuntimeEvent::Resized {
-            size: flui_foundation::geometry::Size::new(500.0, 400.0),
-            scale_factor: 2.0,
-        }),
+        RuntimeTask::Event(RuntimeEvent::Resized(window_metrics(500.0, 400.0, 2.0))),
     )
     .expect("the primary presentation is live");
     assert_eq!(
@@ -2006,6 +1999,34 @@ fn resizing_a_secondary_leaves_the_primary_surface_alone() {
     teardown_platform_ui_runtime();
 }
 
+/// The surface is configured with the device pixels the platform reported, not with
+/// `logical × scale` truncated back to pixels (115 px at 1.75 is 65.71… logical, and
+/// truncating the product gave 114).
+#[cfg(not(target_os = "ios"))]
+fn resize_reaches_the_surface_in_the_pixels_the_platform_reported() {
+    use std::{cell::Cell, rc::Rc};
+
+    let surface = Rc::new(Cell::new((0_u32, 0_u32)));
+    let applied = Rc::clone(&surface);
+    let driver = test_resize_driver(move |metrics| {
+        let physical = metrics.physical();
+        applied.set((
+            physical.width.unsigned_abs(),
+            physical.height.unsigned_abs(),
+        ));
+    });
+    let (primary, _clear_guard) = install_ui_runtime_a_with_driver(Some(driver));
+    let reported = flui_foundation::geometry::WindowMetrics::new(
+        flui_foundation::geometry::DeviceSize::new(115, 201),
+        1.75,
+    )
+    .expect("valid window metrics");
+    dispatch_platform_ui_runtime(primary, RuntimeTask::Event(RuntimeEvent::Resized(reported)))
+        .expect("the primary presentation is live");
+    assert_eq!(surface.get(), (115, 201));
+
+    teardown_platform_ui_runtime();
+}
 /// Installs UI runtime A under `ExitPolicy::OnLastWindowClosed` with a quit
 /// counter, and returns the parked re-evaluation handle with them.
 ///
@@ -2705,6 +2726,11 @@ fn owner_dispatch_matrix() {
                 "resizing_a_secondary_leaves_the_primary_surface_alone",
                 resizing_a_secondary_leaves_the_primary_surface_alone as fn(),
             ),
+            #[cfg(not(target_os = "ios"))]
+            (
+                "resize_reaches_the_surface_in_the_pixels_the_platform_reported",
+                resize_reaches_the_surface_in_the_pixels_the_platform_reported as fn(),
+            ),
             (
                 "closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits",
                 closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits as fn(),
@@ -2755,3 +2781,12 @@ fn owner_dispatch_matrix() {
 // ========================================================================
 // Close-request veto (issue #558)
 // ========================================================================
+
+/// A window's metrics from a logical size and scale, as a platform reports them.
+fn window_metrics(width: f64, height: f64, scale: f64) -> flui_foundation::geometry::WindowMetrics {
+    flui_foundation::geometry::WindowMetrics::from_logical(
+        flui_foundation::geometry::Size::new(width, height),
+        scale,
+    )
+    .expect("valid window metrics")
+}

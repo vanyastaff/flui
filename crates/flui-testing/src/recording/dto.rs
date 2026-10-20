@@ -13,7 +13,7 @@ use std::num::{NonZeroU8, NonZeroU32, NonZeroU64};
 use std::sync::Arc;
 
 use flui_foundation::DataTransferId;
-use flui_foundation::geometry::{DevicePixelRatio, EdgeInsets, Point, Size};
+use flui_foundation::geometry::{DevicePixelRatio, EdgeInsets, Point, Size, WindowMetrics};
 use flui_interaction::gesture::{OneEuroTuning, VelocityEstimator};
 use flui_interaction::{
     GestureDisposition, GestureProfiles, GestureSettings, GestureValues, RemainderHandoff,
@@ -1684,9 +1684,10 @@ impl From<ExecutionDto> for WindowExecutionState {
 #[derive(Debug, Serialize, Deserialize)]
 enum WindowObservationDto {
     #[serde(rename = "metrics")]
+    /// The drawable area in device pixels and its pixel ratio.
     Metrics {
-        width: f64,
-        height: f64,
+        width: i32,
+        height: i32,
         scale_factor: f64,
     },
     #[serde(rename = "focus")]
@@ -1729,10 +1730,10 @@ impl TryFrom<&WindowObservation> for WindowObservationDto {
 
     fn try_from(observation: &WindowObservation) -> Result<Self> {
         Ok(match *observation {
-            WindowObservation::Metrics { size, scale_factor } => Self::Metrics {
-                width: size.width,
-                height: size.height,
-                scale_factor,
+            WindowObservation::Metrics(metrics) => Self::Metrics {
+                width: metrics.physical().width,
+                height: metrics.physical().height,
+                scale_factor: metrics.scale().get(),
             },
             WindowObservation::Focus(focused) => Self::Focus(focused),
             WindowObservation::Visibility(visible) => Self::Visibility(visible),
@@ -1772,10 +1773,13 @@ impl TryFrom<WindowObservationDto> for WindowObservation {
                 width,
                 height,
                 scale_factor,
-            } => Self::Metrics {
-                size: Size::new(width, height),
-                scale_factor,
-            },
+            } => Self::Metrics(
+                WindowMetrics::new(
+                    flui_foundation::geometry::DeviceSize::new(width, height),
+                    scale_factor,
+                )
+                .map_err(invalid)?,
+            ),
             WindowObservationDto::Focus(focused) => Self::Focus(focused),
             WindowObservationDto::Visibility(visible) => Self::Visibility(visible),
             WindowObservationDto::Execution(state) => Self::Execution(state.into()),

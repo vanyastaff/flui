@@ -78,13 +78,7 @@ impl OwnerEffects for Effects {
         panic!("no pending installation");
     }
 
-    fn resize_surface(
-        &self,
-        _: PresentationAddress,
-        _: flui_foundation::geometry::Size<f64>,
-        _: f64,
-    ) {
-    }
+    fn resize_surface(&self, _: PresentationAddress, _: flui_foundation::geometry::WindowMetrics) {}
 
     fn frame(&self, _: PresentationAddress, runtime: &mut UiRuntime) {
         self.frames.set(self.frames.get() + 1);
@@ -282,13 +276,7 @@ impl OwnerEffects for PendingDeadlineEffects {
     fn cancel_install(&self, _: InstallToken, _: RecoveryState) {
         panic!("no pending installation");
     }
-    fn resize_surface(
-        &self,
-        _: PresentationAddress,
-        _: flui_foundation::geometry::Size<f64>,
-        _: f64,
-    ) {
-    }
+    fn resize_surface(&self, _: PresentationAddress, _: flui_foundation::geometry::WindowMetrics) {}
     fn frame(&self, _: PresentationAddress, runtime: &mut UiRuntime) {
         // Like the native driver, drain inside the owner lease before reading
         // the public pending gate. No other dirty or scheduled work opens it.
@@ -1085,13 +1073,7 @@ impl OwnerEffects for CompletionEffects {
     fn cancel_install(&self, _: InstallToken, _: RecoveryState) {
         panic!("no pending installation");
     }
-    fn resize_surface(
-        &self,
-        _: PresentationAddress,
-        _: flui_foundation::geometry::Size<f64>,
-        _: f64,
-    ) {
-    }
+    fn resize_surface(&self, _: PresentationAddress, _: flui_foundation::geometry::WindowMetrics) {}
     fn frame(&self, address: PresentationAddress, runtime: &mut UiRuntime) {
         self.frame_effects.frame(address, runtime);
     }

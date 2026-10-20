@@ -477,19 +477,9 @@ impl OwnerEffects for Effects {
                     )
                     .expect("queued preferences");
                 for observation in [
-                    WindowObservation::Metrics {
-                        size: Size::new(width - 10.0, 100.0),
-                        scale_factor: 1.5,
-                    },
+                    WindowObservation::Metrics(crate::window_metrics(width - 10.0, 100.0, 1.5)),
                     WindowObservation::Brightness(brightness),
-                    WindowObservation::Metrics {
-                        size: Size::new(width, 100.0),
-                        scale_factor: 2.0,
-                    },
-                    WindowObservation::Metrics {
-                        size: Size::new(999.0, 999.0),
-                        scale_factor: f64::NAN,
-                    },
+                    WindowObservation::Metrics(crate::window_metrics(width, 100.0, 2.0)),
                 ] {
                     target.observe(observation, self).expect("queued state");
                 }
@@ -519,14 +509,21 @@ impl OwnerEffects for Effects {
     ) {
         panic!("no pending install");
     }
-    fn resize_surface(&self, address: PresentationAddress, size: Size<f64>, scale_factor: f64) {
+    fn resize_surface(
+        &self,
+        address: PresentationAddress,
+        metrics: flui_foundation::geometry::WindowMetrics,
+    ) {
         assert_eq!(address, self.address);
         assert!(!self.fail_resize.replace(false), "native resize failure");
-        self.native_sizes.borrow_mut().push((size, scale_factor));
+        self.native_sizes
+            .borrow_mut()
+            .push((metrics.logical(), metrics.scale().get()));
         self.trace.borrow_mut().push("native resize");
+        let physical = metrics.physical();
         self.size.set((
-            (size.width * scale_factor) as u32,
-            (size.height * scale_factor) as u32,
+            physical.width.unsigned_abs(),
+            physical.height.unsigned_abs(),
         ));
     }
     fn retire_presentation(&self, _: PresentationAddress, _: Option<PresentationAddress>) {}
@@ -654,10 +651,7 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         .presentation_dispatcher(address)
         .expect("window authority")
         .observe(
-            WindowObservation::Metrics {
-                size: Size::new(200.0, 100.0),
-                scale_factor: 2.0,
-            },
+            WindowObservation::Metrics(crate::window_metrics(200.0, 100.0, 2.0)),
             &effects,
         )
         .expect("resize");
@@ -727,26 +721,6 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         frames
             .deliver(crate::VSYNC, &effects)
             .expect("frame after rejection");
-        assert_eq!(
-            observed.borrow().last(),
-            Some(&(Size::new(200.0, 100.0), 1.0))
-        );
-        let native_calls = effects.native_sizes.borrow().len();
-        owner
-            .presentation_dispatcher(address)
-            .expect("window authority")
-            .observe(
-                WindowObservation::Metrics {
-                    size: Size::new(999.0, 999.0),
-                    scale_factor: invalid,
-                },
-                &effects,
-            )
-            .expect("discard invalid metrics");
-        frames
-            .deliver(crate::VSYNC, &effects)
-            .expect("frame after invalid metrics");
-        assert_eq!(effects.native_sizes.borrow().len(), native_calls);
         assert_eq!(
             observed.borrow().last(),
             Some(&(Size::new(200.0, 100.0), 1.0))
@@ -2137,10 +2111,7 @@ fn gesture_values_follow_the_presentation_display() {
     move_to(3, geometry(2.0, 2.0));
     target
         .observe(
-            WindowObservation::Metrics {
-                size: Size::new(800.0, 600.0),
-                scale_factor: 2.0,
-            },
+            WindowObservation::Metrics(crate::window_metrics(800.0, 600.0, 2.0)),
             &effects,
         )
         .expect("moved to a denser display");
@@ -2416,7 +2387,7 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
     }));
     let sent = || window.sent.lock().expect("sent regions").clone();
     assert_eq!(sent(), [1], "the frame handed off one exclusion region");
-    runtime.apply_window_observation(address, WindowObservation::Moved, &|_, _| {});
+    runtime.apply_window_observation(address, WindowObservation::Moved, &|_| {});
     assert_eq!(
         sent(),
         [1, 1],
@@ -2428,7 +2399,7 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
         .panic_display
         .store(true, std::sync::atomic::Ordering::Relaxed);
     let moved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        runtime.apply_window_observation(address, WindowObservation::Moved, &|_, _| {});
+        runtime.apply_window_observation(address, WindowObservation::Moved, &|_| {});
     }));
     assert!(moved.is_err(), "the refresh failure resumes");
     assert_eq!(
@@ -2457,7 +2428,7 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
     }
     fail_next_regions();
     let moved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        runtime.apply_window_observation(address, WindowObservation::State, &|_, _| {});
+        runtime.apply_window_observation(address, WindowObservation::State, &|_| {});
     }));
     assert!(moved.is_err(), "the backend's failure resumes");
     assert_eq!(
@@ -2467,7 +2438,7 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
     );
     assert_eq!(*rows.borrow(), ["Moved"], "the recording kept the move");
 
-    runtime.apply_window_observation(address, WindowObservation::Moved, &|_, _| {});
+    runtime.apply_window_observation(address, WindowObservation::Moved, &|_| {});
     assert_eq!(
         sent(),
         [1, 1, 1, 1, 1],
@@ -2644,10 +2615,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unavailable);
     target
         .observe(
-            WindowObservation::Metrics {
-                size: Size::new(800.0, 600.0),
-                scale_factor: 2.0,
-            },
+            WindowObservation::Metrics(crate::window_metrics(800.0, 600.0, 2.0)),
             &effects,
         )
         .expect("accepted new DPI");
@@ -3905,16 +3873,10 @@ fn resize_failure_preserves_other_batched_window_state() {
             for observation in [
                 WindowObservation::Brightness(Brightness::Light),
                 WindowObservation::SafeArea(EdgeInsets::all(3.0)),
-                WindowObservation::Metrics {
-                    size: Size::new(100.0, 100.0),
-                    scale_factor: 1.5,
-                },
+                WindowObservation::Metrics(crate::window_metrics(100.0, 100.0, 1.5)),
                 WindowObservation::Brightness(Brightness::Dark),
                 WindowObservation::SafeArea(EdgeInsets::all(12.0)),
-                WindowObservation::Metrics {
-                    size: Size::new(200.0, 100.0),
-                    scale_factor: 2.0,
-                },
+                WindowObservation::Metrics(crate::window_metrics(200.0, 100.0, 2.0)),
             ] {
                 target
                     .observe(observation, &effects)
@@ -3988,10 +3950,7 @@ fn resize_failure_preserves_other_batched_window_state() {
         );
         target
             .observe(
-                WindowObservation::Metrics {
-                    size: Size::new(300.0, 100.0),
-                    scale_factor: 1.5,
-                },
+                WindowObservation::Metrics(crate::window_metrics(300.0, 100.0, 1.5)),
                 &effects,
             )
             .expect("a later resize still works");
@@ -4137,10 +4096,9 @@ fn pointer_stream_and_keyboard_survive_interleaved_resize() {
                     for width in [800.0 + index as f64, 900.0 + index as f64] {
                         target
                             .observe(
-                                WindowObservation::Metrics {
-                                    size: Size::new(width, 600.0),
-                                    scale_factor: 1.0,
-                                },
+                                WindowObservation::Metrics(crate::window_metrics(
+                                    width, 600.0, 1.0,
+                                )),
                                 &effects,
                             )
                             .expect("pending resize");

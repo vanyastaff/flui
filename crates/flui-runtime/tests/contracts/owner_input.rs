@@ -224,8 +224,7 @@ impl OwnerEffects for Effects {
     fn resize_surface(
         &self,
         _: flui_foundation::PresentationAddress,
-        _: flui_foundation::geometry::Size<f64>,
-        _: f64,
+        _: flui_foundation::geometry::WindowMetrics,
     ) {
         self.trace.borrow_mut().push("resize");
     }
@@ -344,10 +343,9 @@ fn queued_resize_and_input_remain_ordered_across_native_callbacks() {
             effects
                 .input
                 .observe(
-                    flui_runtime::owner::WindowObservation::Metrics {
-                        size: flui_foundation::geometry::Size::new(width, 600.0),
-                        scale_factor: 1.0,
-                    },
+                    flui_runtime::owner::WindowObservation::Metrics(crate::window_metrics(
+                        width, 600.0, 1.0,
+                    )),
                     &effects,
                 )
                 .expect("metrics");
@@ -409,7 +407,6 @@ fn reentrant_keyboard_is_queued_until_the_frame_returns() {
 }
 
 fn pending_metrics_do_not_cross_ordered_operations() {
-    use flui_foundation::geometry::Size;
     use flui_runtime::owner::{RuntimeOperation, WindowObservation};
 
     for barrier in [
@@ -436,10 +433,8 @@ fn pending_metrics_do_not_cross_ordered_operations() {
                     .deliver(crate::VSYNC, &effects)
                     .expect("consume callback budget");
             }
-            let metrics = |width| WindowObservation::Metrics {
-                size: Size::new(width, 600.0),
-                scale_factor: 1.0,
-            };
+            let metrics =
+                |width| WindowObservation::Metrics(crate::window_metrics(width, 600.0, 1.0));
             effects
                 .input
                 .observe(metrics(800.0), &effects)

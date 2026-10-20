@@ -2725,7 +2725,8 @@ impl MacOSWindow {
 
             // Notify per-window callbacks
             self.publish_state();
-            self.callbacks.dispatch_resize(new_size, scale as f64);
+            self.callbacks
+                .dispatch_logical_resize(new_size, scale as f64);
 
             tracing::debug!("Window resized to {}x{}", new_size.width, new_size.height);
         }
@@ -2920,7 +2921,7 @@ impl MacOSWindow {
 
             // A scale change invalidates layout: notify as a resize
             if changed {
-                self.callbacks.dispatch_resize(size, new_scale);
+                self.callbacks.dispatch_logical_resize(size, new_scale);
             }
             if moved || changed {
                 self.callbacks.dispatch_display_changed();

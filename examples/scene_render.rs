@@ -235,9 +235,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Register resize callback
     let renderer_resize = Arc::clone(&renderer);
-    window.on_resize(Box::new(move |size, scale_factor| {
-        let w = (size.width * scale_factor) as u32;
-        let h = (size.height * scale_factor) as u32;
+    window.on_resize(Box::new(move |metrics| {
+        let w = metrics.physical().width.unsigned_abs();
+        let h = metrics.physical().height.unsigned_abs();
         renderer_resize.lock().unwrap().resize(w, h);
     }));
 

@@ -1189,7 +1189,8 @@ fn open_recorded_window(running: &Running) -> (Arc<dyn HostWindow>, Arc<Mutex<Ve
     };
     let resized = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&resized);
-    window.on_resize(Box::new(move |_, scale| {
+    window.on_resize(Box::new(move |metrics| {
+        let scale = metrics.scale().get();
         seen.lock().expect("resizes").push(scale);
     }));
     (window, resized)

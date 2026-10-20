@@ -1696,7 +1696,7 @@ impl MockWindow {
             state.scale_factor
         };
         self.publish_state();
-        self.callbacks.dispatch_resize(size, scale);
+        self.callbacks.dispatch_logical_resize(size, scale);
     }
 
     /// Simulate the user (or the OS) moving the window to `position`, outer
@@ -1719,7 +1719,7 @@ impl MockWindow {
             state.scale_factor = scale_factor;
             state.size
         };
-        self.callbacks.dispatch_resize(size, scale_factor);
+        self.callbacks.dispatch_logical_resize(size, scale_factor);
     }
 
     /// Simulate focus change for testing.
@@ -1873,10 +1873,10 @@ impl PlatformWindow for MockWindow {
 
     fn physical_size(&self) -> Size<i32> {
         let state = self.state.lock();
-        Size::new(
-            (state.size.width * state.scale_factor) as i32,
-            (state.size.height * state.scale_factor) as i32,
-        )
+        flui_foundation::geometry::DevicePixelRatio::new(state.scale_factor)
+            .map_or(Size::new(0, 0), |ratio| {
+                flui_foundation::geometry::device_size(state.size, ratio)
+            })
     }
 
     fn logical_size(&self) -> Size<f64> {
@@ -1993,7 +1993,7 @@ impl PlatformWindow for MockWindow {
         };
         self.publish_state();
         if let Some((size, scale)) = resized {
-            self.callbacks.dispatch_resize(size, scale);
+            self.callbacks.dispatch_logical_resize(size, scale);
         }
         Ok(())
     }

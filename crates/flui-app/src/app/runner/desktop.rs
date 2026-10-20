@@ -259,10 +259,10 @@ where
 
     // 7. Register resize callback -> typed Resized event; the applier
     // installed above (not this closure) actually touches the renderer.
-    window.on_resize(Box::new(move |size, scale_factor| {
+    window.on_resize(Box::new(move |metrics| {
         let _ = dispatch_platform_ui_runtime(
             owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::Resized { size, scale_factor }),
+            RuntimeTask::Event(RuntimeEvent::Resized(metrics)),
         );
     }));
 
@@ -377,10 +377,9 @@ where
     // source must not sit on defaults until the first live resize —
     // on the web backend no resize observer exists, so a default
     // would be permanent there.
-    installation.observe(flui_runtime::owner::WindowObservation::Metrics {
-        size: window.logical_size(),
-        scale_factor: window.scale_factor(),
-    });
+    if let Ok(metrics) = window.metrics() {
+        installation.observe(flui_runtime::owner::WindowObservation::Metrics(metrics));
+    }
 
     // 9. Store the window in AppRuntime's redraw-poke slot — BEFORE
     // marking the lifecycle Resumed or requesting the initial redraw.
@@ -484,11 +483,12 @@ impl DesktopFrameDriver {
         super::host::with_owner_platform(|owner| owner.activate(false));
         tracing::info!("Desktop platform initialized with callbacks");
     }
-    pub(super) fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
+    pub(super) fn resize(&mut self, metrics: flui_foundation::geometry::WindowMetrics) {
         let resize = self.lane.lock().resize_hook();
+        let physical = metrics.physical();
         resize.apply(
-            (size.width * scale_factor) as u32,
-            (size.height * scale_factor) as u32,
+            physical.width.unsigned_abs(),
+            physical.height.unsigned_abs(),
         );
     }
     pub(super) fn wake(

@@ -44,8 +44,7 @@ pub trait OwnerEffects {
     fn resize_surface(
         &self,
         address: PresentationAddress,
-        size: flui_foundation::geometry::Size<f64>,
-        scale_factor: f64,
+        metrics: flui_foundation::geometry::WindowMetrics,
     );
     /// Invoke the concrete driver installed for this exact surface binding.
     fn frame(&self, address: PresentationAddress, runtime: &mut UiRuntime);

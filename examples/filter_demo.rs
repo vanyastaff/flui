@@ -227,9 +227,9 @@ fn main() {
 
     // Resize callback: update the renderer's surface dimensions.
     let renderer_for_resize = Arc::clone(&renderer);
-    window.on_resize(Box::new(move |new_size, scale_factor| {
-        let surface_width = (new_size.width * scale_factor) as u32;
-        let surface_height = (new_size.height * scale_factor) as u32;
+    window.on_resize(Box::new(move |metrics| {
+        let surface_width = metrics.physical().width.unsigned_abs();
+        let surface_height = metrics.physical().height.unsigned_abs();
         renderer_for_resize
             .lock()
             .unwrap()

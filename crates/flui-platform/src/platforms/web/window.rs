@@ -594,8 +594,13 @@ impl LayoutSync {
         }
         apply_backing_size(&self.canvas, backing);
         self.publisher.publish();
-        self.callbacks
-            .dispatch_resize(Size::new(width, height), scale_factor);
+        let physical = flui_foundation::geometry::DeviceSize::new(
+            i32::try_from(backing.width).unwrap_or(i32::MAX),
+            i32::try_from(backing.height).unwrap_or(i32::MAX),
+        );
+        if let Ok(metrics) = flui_foundation::geometry::WindowMetrics::new(physical, scale_factor) {
+            self.callbacks.dispatch_resize(metrics);
+        }
         self.callbacks.dispatch_request_frame();
     }
 }
@@ -775,7 +780,7 @@ impl PlatformWindow for WebWindow {
     fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
         self.install_callback(&self.callbacks.on_request_frame, callback);
     }
-    fn on_resize(&self, callback: Box<dyn FnMut(Size<f64>, f64) + Send>) {
+    fn on_resize(&self, callback: Box<dyn FnMut(flui_foundation::geometry::WindowMetrics) + Send>) {
         self.install_callback(&self.callbacks.on_resize, callback);
     }
     fn on_state_changed(&self, callback: Box<dyn FnMut() + Send>) {

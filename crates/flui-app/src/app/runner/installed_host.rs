@@ -384,10 +384,9 @@ impl OwnerEffects for HostState {
     fn resize_surface(
         &self,
         address: PresentationAddress,
-        size: flui_foundation::geometry::Size<f64>,
-        scale_factor: f64,
+        metrics: flui_foundation::geometry::WindowMetrics,
     ) {
-        self.native.resize(address, size, scale_factor);
+        self.native.resize(address, metrics);
     }
 
     fn frame(&self, address: PresentationAddress, runtime: &mut UiRuntime) {

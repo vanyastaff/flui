@@ -1417,12 +1417,11 @@ impl ApplicationHandler for WinitApp {
                 // Dispatch per-window resize callback
                 if let Some(ref win) = window {
                     let scale = win.scale_factor();
-                    let logical = Size::new(
-                        physical_size.width as f64 / scale,
-                        physical_size.height as f64 / scale,
-                    );
                     win.refresh_state();
-                    win.callbacks().dispatch_resize(logical, scale);
+                    if let Ok(metrics) = flui_foundation::geometry::WindowMetrics::new(size, scale)
+                    {
+                        win.callbacks().dispatch_resize(metrics);
+                    }
                     self.sync_window_display(event_loop, win, false);
                 }
 

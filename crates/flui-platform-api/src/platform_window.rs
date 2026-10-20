@@ -9,7 +9,7 @@
 use std::{any::Any, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::{InvalidMetrics, Point, Size, WindowMetrics};
 
 use crate::keyboard::Modifiers;
 use crate::{
@@ -221,6 +221,12 @@ pub trait PlatformWindow: Send + Sync {
 
     /// Get the scale factor (DPI scaling)
     fn scale_factor(&self) -> f64;
+
+    /// The drawable area and scale the window reports now, or why it is not a drawable area
+    /// (a minimised window's zero size, a scale that is not finite and positive).
+    fn metrics(&self) -> Result<WindowMetrics, InvalidMetrics> {
+        WindowMetrics::new(self.physical_size(), self.scale_factor())
+    }
 
     /// Query gesture geometry for this presentation's native coordinate context.
     ///
@@ -584,8 +590,10 @@ pub trait PlatformWindow: Send + Sync {
 
     /// Register a callback for window resize events
     ///
-    /// Called with the new logical size and current scale factor.
-    fn on_resize(&self, callback: Box<dyn FnMut(Size<f64>, f64) + Send>) {
+    /// Called with the window's new [`WindowMetrics`]: its drawable area in device pixels and
+    /// the ratio to logical pixels. A report that is not a drawable area (a zero size, a
+    /// non-finite scale) is never delivered.
+    fn on_resize(&self, callback: Box<dyn FnMut(WindowMetrics) + Send>) {
         let _ = callback;
     }
 

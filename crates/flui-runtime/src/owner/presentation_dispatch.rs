@@ -5,7 +5,7 @@ use std::rc::{Rc, Weak};
 use crate::ui_runtime::UiRuntime;
 use flui_foundation::{
     PresentationAddress,
-    geometry::{EdgeInsets, Size},
+    geometry::{EdgeInsets, WindowMetrics},
 };
 use flui_interaction::InputSurface;
 use flui_platform_api::{Brightness, PlatformInput, WindowDisplay, WindowExecutionState};
@@ -38,13 +38,8 @@ impl DisplayUpdate {
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub enum WindowObservation {
-    /// Logical content size and device-pixel ratio changed together.
-    Metrics {
-        /// Logical content size.
-        size: Size<f64>,
-        /// Device pixels per logical pixel.
-        scale_factor: f64,
-    },
+    /// The drawable area and its device-pixel ratio changed together.
+    Metrics(WindowMetrics),
     /// Keyboard focus changed.
     Focus(bool),
     /// Visibility or occlusion changed.
@@ -84,8 +79,8 @@ impl WindowObservation {
         address: PresentationAddress,
         effects: &dyn OwnerEffects,
     ) {
-        runtime.apply_window_observation(address, self, &|size, scale| {
-            effects.resize_surface(address, size, scale);
+        runtime.apply_window_observation(address, self, &|metrics| {
+            effects.resize_surface(address, metrics);
         });
     }
 }
@@ -138,7 +133,7 @@ impl UiRuntime {
         &self,
         address: PresentationAddress,
         observation: WindowObservation,
-        resize_surface: &dyn Fn(Size<f64>, f64),
+        resize_surface: &dyn Fn(WindowMetrics),
     ) {
         match PendingWindowState::from_observation(observation) {
             Ok(pending) => pending.apply(self, address, resize_surface),
@@ -193,7 +188,7 @@ impl UiRuntime {
 /// operation. Never merged across another window or an ordered event.
 #[derive(Default)]
 pub(super) struct PendingWindowState {
-    metrics: Option<(Size<f64>, f64)>,
+    metrics: Option<WindowMetrics>,
     safe_area: Option<EdgeInsets>,
     brightness: Option<Brightness>,
     /// The newest display update; an update to "unknown" is still an update.
@@ -201,11 +196,9 @@ pub(super) struct PendingWindowState {
 }
 
 impl PendingWindowState {
-    fn metrics(size: Size<f64>, scale: f64) -> Self {
+    fn metrics(metrics: WindowMetrics) -> Self {
         Self {
-            // Reject before coalescing so a bad observation cannot replace
-            // an accepted resize still awaiting delivery.
-            metrics: (scale.is_finite() && scale > 0.0).then_some((size, scale)),
+            metrics: Some(metrics),
             ..Self::default()
         }
     }
@@ -231,9 +224,7 @@ impl PendingWindowState {
             WindowObservation::Hover(inside) => Err(OrderedObservation::Hover(inside)),
             WindowObservation::Moved => Err(OrderedObservation::Moved),
             WindowObservation::State => Err(OrderedObservation::State),
-            WindowObservation::Metrics { size, scale_factor } => {
-                Ok(Self::metrics(size, scale_factor))
-            }
+            WindowObservation::Metrics(metrics) => Ok(Self::metrics(metrics)),
             WindowObservation::SafeArea(insets) => Ok(Self {
                 safe_area: Some(insets),
                 ..Self::default()
@@ -262,7 +253,7 @@ impl PendingWindowState {
         mut self,
         runtime: &UiRuntime,
         address: PresentationAddress,
-        resize_surface: &dyn Fn(Size<f64>, f64),
+        resize_surface: &dyn Fn(WindowMetrics),
     ) {
         let recording = runtime.begin_recorded_input();
         let id = address.presentation_id;
@@ -271,10 +262,10 @@ impl PendingWindowState {
         // display the presentation holds (see `UiRuntime::apply_window_display`).
         let redraw =
             self.metrics.is_some() || self.safe_area.is_some() || self.brightness.is_some();
-        if let Some((size, scale)) = self.metrics {
+        if let Some(metrics) = self.metrics {
             first = catch_unwind(AssertUnwindSafe(|| {
-                resize_surface(size, scale);
-                runtime.set_pipeline_device_pixel_ratio_for(id, scale);
+                resize_surface(metrics);
+                runtime.set_pipeline_device_pixel_ratio_for(id, metrics.scale().get());
             }))
             .err();
             if first.is_some() {
@@ -296,9 +287,9 @@ impl PendingWindowState {
         let failure = catch_unwind(AssertUnwindSafe(|| {
             if let Some(source) = runtime.media_query_for(id) {
                 source.update(|data| {
-                    if let Some((size, scale)) = self.metrics {
-                        data.size = size;
-                        data.device_pixel_ratio = scale;
+                    if let Some(metrics) = self.metrics {
+                        data.size = metrics.logical();
+                        data.device_pixel_ratio = metrics.scale().get();
                     }
                     if let Some(insets) = self.safe_area {
                         data.view_padding = insets;
@@ -336,8 +327,7 @@ impl PendingWindowState {
         }
         if recording {
             let applied = [
-                self.metrics
-                    .map(|(size, scale_factor)| WindowObservation::Metrics { size, scale_factor }),
+                self.metrics.map(WindowObservation::Metrics),
                 self.safe_area.map(WindowObservation::SafeArea),
                 self.brightness.map(WindowObservation::Brightness),
                 // A display update is not recorded: its `DisplayId` names a
@@ -630,7 +620,7 @@ mod tests {
                     ui_runtime_id: runtime.id(),
                     presentation_id: secondary,
                 },
-                &|_, _| {},
+                &|_| {},
             );
 
         assert_eq!(runtime.take_redraw_pending_for_test(secondary), Some(true));

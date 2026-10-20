@@ -296,8 +296,7 @@ fn close_fences_new_work_but_preserves_earlier_frames_and_the_surviving_runtime(
         fn resize_surface(
             &self,
             _: flui_foundation::PresentationAddress,
-            _: flui_foundation::geometry::Size<f64>,
-            _: f64,
+            _: flui_foundation::geometry::WindowMetrics,
         ) {
         }
         fn retire_presentation(
@@ -441,8 +440,7 @@ fn native_close_failure_preserves_first_error_and_does_not_restore_the_runtime()
         fn resize_surface(
             &self,
             _: flui_foundation::PresentationAddress,
-            _: flui_foundation::geometry::Size<f64>,
-            _: f64,
+            _: flui_foundation::geometry::WindowMetrics,
         ) {
         }
         fn retire_presentation(
