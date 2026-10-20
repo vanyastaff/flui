@@ -1232,3 +1232,24 @@ fn a_shared_default_is_numbered_with_the_snapshot() {
     assert!(second.is_default(), "{second:?}");
     assert!(!root.field("first").expect("reported").is_default());
 }
+
+#[derive(Inspect)]
+struct Columns<const N: usize> {
+    gap: f64,
+}
+
+/// A kind with a const parameter reports its value, so `Columns<2>` and `Columns<3>` are
+/// different kinds to `diff`.
+///
+/// Fails when only type parameters are reported, which leaves a const-generic kind with no
+/// arguments.
+#[test]
+fn a_const_generic_kind_reports_its_value() {
+    let args = |object: &dyn Inspect| {
+        let mut args = Vec::new();
+        object.kind_args(&mut |arg| args.push(arg));
+        args
+    };
+    assert_eq!(args(&Columns::<2> { gap: 8.0 }), ["2"]);
+    assert_eq!(args(&Columns::<3> { gap: 8.0 }), ["3"]);
+}

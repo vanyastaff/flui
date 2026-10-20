@@ -248,10 +248,16 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     for bound in bounds {
         where_clause.predicates.push(parse_quote!(#bound));
     }
-    let kind_args = (!type_params.is_empty()).then(|| {
+    // Every argument the concrete type spells, const values included, as `type_name` writes it.
+    let generic_args = input
+        .generics
+        .params
+        .iter()
+        .any(|param| matches!(param, GenericParam::Type(_) | GenericParam::Const(_)));
+    let kind_args = generic_args.then(|| {
         quote! {
             fn kind_args(&self, args: &mut dyn ::core::ops::FnMut(&'static str)) {
-                #( args(::core::any::type_name::<#type_params>()); )*
+                #runtime::kind_args_of(::core::any::type_name::<Self>(), args);
             }
         }
     });
