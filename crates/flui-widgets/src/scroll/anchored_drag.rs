@@ -387,7 +387,9 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
         let offset = anchors.offset(initial).ok_or(AnchorsError::Missing)?;
         let (min, max) = anchors.extent();
         let scroll = ScrollController::with_initial_scroll_offset(offset);
-        scroll.update_dimensions(max - min, min, max);
+        scroll
+            .update_dimensions(max - min, min, max)
+            .expect("BUG: anchors are sorted, finite and within MAX_ANCHOR_OFFSET");
         let inner = Rc::new_cyclic(|this: &Weak<Inner<K>>| {
             let this = this.clone();
             let activity = scroll.position().add_activity_listener(Rc::new(move || {
@@ -478,7 +480,10 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
             owner.set_snap(Some(policy));
         }
         drop(outgoing);
-        inner.scroll.update_dimensions(max - min, min, max);
+        inner
+            .scroll
+            .update_dimensions(max - min, min, max)
+            .expect("BUG: anchors are sorted, finite and within MAX_ANCHOR_OFFSET");
         let dragging = owner
             .as_ref()
             .is_some_and(|owner| owner.contact().is_some());

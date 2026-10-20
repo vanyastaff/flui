@@ -260,7 +260,9 @@ pub(crate) fn terminal_scroll_motion_uses_the_admitted_fling_profile() {
     };
     let source = flui_interaction::gesture::GestureSettingsSource::new(profile(50.0, 300.0));
     let controller = ScrollController::new();
-    controller.update_dimensions(300.0, 0.0, 4700.0);
+    controller
+        .update_dimensions(300.0, 0.0, 4700.0)
+        .expect("ordered extents");
     let child = Scrollable::new()
         .controller(controller.clone())
         .child(SizedBox::new(300.0, 5000.0))
@@ -346,7 +348,9 @@ pub(crate) fn terminal_scroll_motion_uses_the_admitted_fling_profile() {
 pub(crate) fn scrollable_drag_up_increases_scroll_offset() {
     let controller = ScrollController::new();
     // 300px viewport, 800px content → 500px scroll extent.
-    controller.update_dimensions(300.0, 0.0, 500.0);
+    controller
+        .update_dimensions(300.0, 0.0, 500.0)
+        .expect("ordered extents");
 
     let physics: SharedScrollPhysics = Arc::new(ClampingScrollPhysics::default());
     let widget = Scrollable::new()
@@ -383,7 +387,9 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
     use flui_testing::PointerPhase;
 
     let controller = ScrollController::new();
-    controller.update_dimensions(300.0, 0.0, 4700.0);
+    controller
+        .update_dimensions(300.0, 0.0, 4700.0)
+        .expect("ordered extents");
     let widget = Scrollable::new()
         .controller(controller.clone())
         .child(SizedBox::new(300.0, 5000.0));
@@ -505,7 +511,9 @@ fn exercise_fling_registry(migrate: bool) {
     let controller = ScrollController::new();
     // Large extent prevents the fling from hitting the boundary on the first
     // frame — we want to observe forward motion, not clamping.
-    controller.update_dimensions(300.0, 0.0, 4700.0);
+    controller
+        .update_dimensions(300.0, 0.0, 4700.0)
+        .expect("ordered extents");
 
     let vsync = Vsync::new();
     let widget = Scrollable::new()
@@ -582,7 +590,9 @@ fn exercise_fling_registry(migrate: bool) {
 pub(crate) fn bouncing_physics_fling_springs_back_after_overscroll() {
     let controller = ScrollController::new();
     let max_extent = 500.0_f64;
-    controller.update_dimensions(300.0, 0.0, max_extent);
+    controller
+        .update_dimensions(300.0, 0.0, max_extent)
+        .expect("ordered extents");
 
     let physics: SharedScrollPhysics = Arc::new(BouncingScrollPhysics::new());
     let vsync = Vsync::new();
@@ -676,7 +686,9 @@ fn assert_scroll_retarget_preserves_velocity(target: fn(f64) -> f64) {
 /// Jumping cancels before another frame can publish the displaced run's value.
 pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
     let controller = ScrollController::new();
-    controller.update_dimensions(300.0, 0.0, 4700.0);
+    controller
+        .update_dimensions(300.0, 0.0, 4700.0)
+        .expect("ordered extents");
 
     let vsync = Vsync::new();
     let widget = Scrollable::new()
@@ -777,7 +789,9 @@ pub(crate) fn replacing_pending_scroll_motion_delivers_and_recovers_after_user_f
             [(false, false), (true, false), (false, true), (true, true)]
         {
             let controller = ScrollController::new();
-            controller.update_dimensions(300.0, 0.0, 4700.0);
+            controller
+                .update_dimensions(300.0, 0.0, 4700.0)
+                .expect("ordered extents");
             let drops = Arc::new(AtomicUsize::new(0));
             controller.animate_to(
                 100.0,
@@ -959,7 +973,9 @@ pub(crate) fn retiring_scroll_curves_preserves_newer_reentrant_commands() {
         for outer_jumps in [false, true] {
             for newer_jumps in [false, true] {
                 let controller = ScrollController::new();
-                controller.update_dimensions(300.0, 0.0, 4700.0);
+                controller
+                    .update_dimensions(300.0, 0.0, 4700.0)
+                    .expect("ordered extents");
                 let drops = Arc::new(AtomicUsize::new(0));
                 let content = || {
                     Scrollable::new()
@@ -1036,7 +1052,9 @@ pub(crate) fn scrollbar_thumb_stays_inside_short_tracks_and_drag_remains_bounded
 
 fn assert_scrollbar_track(height: f64) {
     let controller = ScrollController::new();
-    controller.update_dimensions(height, 0.0, 900.0);
+    controller
+        .update_dimensions(height, 0.0, 900.0)
+        .expect("ordered extents");
     let mut laid = lay_out(
         Scrollbar::new()
             .controller(controller.clone())
@@ -1179,7 +1197,9 @@ pub(crate) fn dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_ti
 /// the run settles. The signal a floating header's snap trigger keys on.
 pub(crate) fn scroll_activity_tracks_the_whole_gesture_lifecycle() {
     let controller = ScrollController::new();
-    controller.update_dimensions(300.0, 0.0, 4700.0);
+    controller
+        .update_dimensions(300.0, 0.0, 4700.0)
+        .expect("ordered extents");
     let position = controller.position();
 
     let vsync = Vsync::new();
@@ -1238,8 +1258,12 @@ pub(crate) fn scroll_activity_tracks_the_whole_gesture_lifecycle() {
 /// filler], inner content = 300×1000, so the inner can travel 0..=800 and
 /// the outer 0..=4700.
 fn nested_scrollables(outer: &ScrollController, inner: &ScrollController, vsync: Vsync) -> LaidOut {
-    outer.update_dimensions(300.0, 0.0, 4700.0);
-    inner.update_dimensions(200.0, 0.0, 800.0);
+    outer
+        .update_dimensions(300.0, 0.0, 4700.0)
+        .expect("ordered extents");
+    inner
+        .update_dimensions(200.0, 0.0, 800.0)
+        .expect("ordered extents");
 
     let inner_scrollable = Scrollable::new()
         .controller(inner.clone())
@@ -1433,7 +1457,9 @@ pub(crate) fn shift_wheel_scrolls_the_horizontal_axis() {
     use flui_interaction::events::Modifiers;
 
     let laid_out = |axis: Axis, scroll: &ScrollController| {
-        scroll.update_dimensions(300.0, 0.0, 700.0);
+        scroll
+            .update_dimensions(300.0, 0.0, 700.0)
+            .expect("ordered extents");
         lay_out(
             Scrollable::new()
                 .scroll_direction(axis)
@@ -1480,14 +1506,50 @@ fn assert_bounce(current: f64, proposed: f64, expected: f64) {
     );
 }
 
+// Expected values integrate the resistance `0.52 · (1 − overscroll / 300)²`
+// over the pull: `0.52·p·s² / (1 + 0.52·p·s / 300)`, `s = 1 − overscroll / 300`.
+
 pub(crate) fn bouncing_lower_edge_preserves_outward_direction() {
-    assert_bounce(0.0, -100.0, -52.0);
-    assert_bounce(-52.0, -62.0, -57.2);
+    assert_bounce(0.0, -100.0, -44.318_181_818_181_82);
+    assert_bounce(-52.0, -62.0, -55.503_365_114_974_76);
 }
 
 pub(crate) fn bouncing_upper_edge_preserves_outward_direction() {
-    assert_bounce(100.0, 200.0, 152.0);
-    assert_bounce(152.0, 162.0, 157.2);
+    assert_bounce(100.0, 200.0, 144.318_181_818_181_8);
+    assert_bounce(152.0, 162.0, 155.503_365_114_974_8);
+}
+
+/// The rubber band stiffens as the overscroll grows: a 1200 px pull from
+/// the edge of a 600 px viewport moves the content about 306 px out, not
+/// 624, no pull however long carries it a viewport's length out, and a pull
+/// split over many events lands where one event carrying it all does.
+pub(crate) fn bouncing_resistance_stiffens_toward_the_viewport_length() {
+    use flui_widgets::{ScrollMetrics, ScrollPhysics};
+    let physics = BouncingScrollPhysics::new();
+    let pull = |from: f64, by: f64| {
+        physics.apply_boundary_conditions(&ScrollMetrics::new(from, 0.0, 1000.0, 600.0), from - by)
+    };
+    let whole = pull(0.0, 1200.0);
+    assert!(
+        (whole + 305.882_352_941_176_5).abs() < 1e-9,
+        "one 1200 px pull: {whole}"
+    );
+    let split = (0..12).fold(0.0, |at, _| pull(at, 100.0));
+    assert!(
+        (split - whole).abs() < 1e-9,
+        "twelve 100 px pulls {split} land where one 1200 px pull {whole} does"
+    );
+    let far = pull(0.0, 1e12);
+    assert!(
+        far > -600.0 && far < -599.0,
+        "an endless pull nears the viewport's length: {far}"
+    );
+    let past =
+        physics.apply_boundary_conditions(&ScrollMetrics::new(1000.0, 0.0, 1000.0, 600.0), 2200.0);
+    assert!(
+        (past - 1_305.882_352_941_177).abs() < 1e-9,
+        "the upper edge resists alike: {past}"
+    );
 }
 
 pub(crate) fn bouncing_stationary_input_preserves_overscroll() {
@@ -1498,8 +1560,8 @@ pub(crate) fn bouncing_stationary_input_preserves_overscroll() {
 pub(crate) fn bouncing_inward_motion_and_crossing_respect_the_new_edge() {
     assert_bounce(-52.0, -42.0, -42.0);
     assert_bounce(152.0, 142.0, 142.0);
-    assert_bounce(-52.0, 120.0, 110.4);
-    assert_bounce(152.0, -20.0, -10.4);
+    assert_bounce(-52.0, 120.0, 110.051_546_391_752_6);
+    assert_bounce(152.0, -20.0, -10.051_546_391_752_58);
 }
 
 fn animated_scroll_content(scroll: &ScrollController, vsync: &Vsync) -> impl flui_view::View {
@@ -2147,6 +2209,65 @@ pub(crate) fn notched_wheel_accumulates_distance_and_eases_out_in_150ms() {
     );
 }
 
+/// A click while a notched wheel's easing runs reaches the content as a tap
+/// and the easing goes on to its destination; a press while a released
+/// fling coasts catches it instead: the fling stops and the content sees no
+/// tap (ADR-0208 rule 4).
+pub(crate) fn a_click_during_wheel_easing_taps_and_a_press_on_a_fling_catches_it() {
+    use flui_platform_api::pointer::ScrollPrecision::Notched;
+    use flui_widgets::GestureDetector;
+    let scroll = ScrollController::new();
+    let vsync = Vsync::new();
+    let taps = Rc::new(Cell::new(0_u32));
+    let tapped = Rc::clone(&taps);
+    let mut laid = crate::common::lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            Scrollable::new().controller(scroll.clone()).child(
+                GestureDetector::new()
+                    .behavior(flui_widgets::HitTestBehavior::Opaque)
+                    .on_tap(move |_| tapped.set(tapped.get() + 1))
+                    .child(SizedBox::new(300.0, 5000.0)),
+            ),
+        ),
+        tight(300.0, 300.0),
+        vsync,
+    );
+    dispatch_typed_wheel(&laid, Notched, 100.0);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(50));
+    let easing = scroll.pixels();
+    assert!(easing > 0.0 && easing < 100.0, "the easing runs: {easing}");
+    laid.dispatch_pointer_down(150.0, 150.0);
+    laid.dispatch_pointer_up(150.0, 150.0);
+    laid.pump_for(Duration::from_millis(16));
+    assert_eq!(taps.get(), 1, "the click reaches the content");
+    laid.pump_for(Duration::from_millis(200));
+    assert_eq!(
+        scroll.pixels(),
+        100.0,
+        "the easing goes on to its destination"
+    );
+
+    laid.dispatch_pointer_down(150.0, 250.0);
+    laid.dispatch_pointer_move(150.0, 180.0);
+    laid.dispatch_pointer_move(150.0, 150.0);
+    laid.dispatch_pointer_up(150.0, 150.0);
+    laid.pump_for(Duration::from_millis(16));
+    laid.pump_for(Duration::from_millis(16));
+    let coasting = scroll.pixels();
+    laid.pump_for(Duration::from_millis(16));
+    assert!(scroll.pixels() > coasting, "the fling coasts");
+    laid.dispatch_pointer_down(150.0, 150.0);
+    let caught = scroll.pixels();
+    laid.dispatch_pointer_up(150.0, 150.0);
+    for _ in 0..10 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(taps.get(), 1, "the press that catches the fling is no tap");
+    assert_eq!(scroll.pixels(), caught, "the press stops the fling");
+}
+
 pub(crate) fn a_notched_wheel_run_migrates_with_its_accepted_destination() {
     use flui_platform_api::pointer::ScrollPrecision::Notched;
     let scroll = ScrollController::new();
@@ -2303,18 +2424,19 @@ pub(crate) fn dragging_interrupts_notched_motion_and_windows_progress_independen
         grabbed > 0.0 && grabbed < 100.0,
         "the grabbed motion is live"
     );
-    // The press holds the motion (ADR-0208 rule 4), so the drag wins the
-    // contact from the hold on its slop and moves the content from there.
+    // A wheel's easing is no motion a press catches: the press does not
+    // hold it, and the drag that takes the contact past its slop stops the
+    // easing where it shows and moves the content from there.
     laid.dispatch_pointer_down(150.0, 200.0);
     laid.dispatch_pointer_move(150.0, 180.0);
-    assert_eq!(
-        scroll.pixels(),
-        grabbed,
-        "the press held the displayed position"
+    let started = scroll.pixels();
+    assert!(
+        started >= grabbed,
+        "the drag starts from the displayed position: {started} from {grabbed}"
     );
     laid.dispatch_pointer_move(150.0, 170.0);
     let dragged = scroll.pixels();
-    assert!(dragged > grabbed, "drag starts from the displayed position");
+    assert!(dragged > started, "and moves the content");
     laid.dispatch_pointer_cancel();
     laid.pump_for(Duration::from_millis(200));
     assert_eq!(
@@ -2605,7 +2727,9 @@ pub(crate) fn scroll_fling_rest_scales_with_device_pixel_ratio() {
     use flui_widgets::{ScrollMetrics, ScrollPhysics};
 
     let controller = ScrollController::new();
-    controller.update_dimensions(300.0, 0.0, 4700.0);
+    controller
+        .update_dimensions(300.0, 0.0, 4700.0)
+        .expect("ordered extents");
     let recording = Arc::new(RecordingPhysics::default());
     let physics: SharedScrollPhysics = recording.clone();
     let widget = Scrollable::new()
@@ -2668,12 +2792,97 @@ pub(crate) fn inverted_extents_do_not_fling() {
     }
 }
 
+/// Extents that are unordered, NaN, infinite or over a negative viewport are
+/// refused at the controller and leave the position as it was; physics handed
+/// such metrics bound nothing instead of panicking.
+pub(crate) fn unordered_extents_are_refused_and_bound_nothing() {
+    use flui_widgets::{ScrollMetrics, ScrollPhysics};
+
+    let controller = ScrollController::new();
+    controller
+        .update_dimensions(300.0, 0.0, 500.0)
+        .expect("ordered extents");
+    for (viewport, min, max) in [
+        (300.0, 300.0, 100.0),
+        (300.0, f64::NAN, 100.0),
+        (300.0, 0.0, f64::INFINITY),
+        (f64::NAN, 0.0, 100.0),
+        (-1.0, 0.0, 100.0),
+    ] {
+        let refused = controller.update_dimensions(viewport, min, max);
+        assert!(refused.is_err(), "({viewport}, {min}, {max}) is refused");
+        assert_eq!(
+            (
+                controller.viewport_dimension_pixels(),
+                controller.min_scroll_extent(),
+                controller.max_scroll_extent()
+            ),
+            (300.0, 0.0, 500.0),
+            "a refusal keeps the extents"
+        );
+    }
+    controller.jump_to(700.0);
+    assert_eq!(
+        controller.pixels(),
+        500.0,
+        "a jump still clamps to the kept range"
+    );
+
+    let physics: [&dyn ScrollPhysics; 2] =
+        [&ClampingScrollPhysics::new(), &BouncingScrollPhysics::new()];
+    for metrics in [
+        ScrollMetrics::new(50.0, 100.0, 0.0, 300.0),
+        ScrollMetrics::new(50.0, f64::NAN, 100.0, 300.0),
+    ] {
+        for physics in physics {
+            assert_eq!(
+                physics.apply_boundary_conditions(&metrics, 70.0),
+                70.0,
+                "{physics:?} under {metrics:?} bounds nothing"
+            );
+        }
+        assert_eq!(
+            metrics.page(1.0),
+            50.0 / 300.0,
+            "{metrics:?}: the page of the pixels"
+        );
+    }
+}
+
+/// A clamping release from past an edge, where content that shrank under
+/// the offset leaves it, returns to the edge at any velocity, below the
+/// fling threshold and moving outward alike, without passing it.
+pub(crate) fn clamping_release_past_an_edge_returns_to_it() {
+    use flui_widgets::{ScrollMetrics, ScrollPhysics};
+    for velocity in [0.0, 30.0, 3000.0] {
+        let simulation = ClampingScrollPhysics::new()
+            .create_ballistic_simulation(&ScrollMetrics::new(600.0, 0.0, 500.0, 300.0), velocity)
+            .expect("a return to the edge");
+        let mut time = 0.0;
+        while !simulation.is_done(time) {
+            assert!(
+                simulation.x(time) >= 500.0 - 0.5,
+                "at {velocity} px/s the return stays out of the range: {} at {time}",
+                simulation.x(time)
+            );
+            time += 1.0 / 60.0;
+            assert!(time < 10.0, "at {velocity} px/s the return comes to rest");
+        }
+        assert!(
+            (simulation.x(time) - 500.0).abs() <= 0.5,
+            "rests on the edge"
+        );
+    }
+}
+
 /// A fling inside the range that friction carries past the edge overscrolls,
 /// then springs back and rests exactly on the edge.
 pub(crate) fn bouncing_fling_into_the_edge_overscrolls_and_returns() {
     let controller = ScrollController::new();
     let max_extent = 500.0_f64;
-    controller.update_dimensions(300.0, 0.0, max_extent);
+    controller
+        .update_dimensions(300.0, 0.0, max_extent)
+        .expect("ordered extents");
     let physics: SharedScrollPhysics = Arc::new(BouncingScrollPhysics::new());
     let widget = Scrollable::new()
         .controller(controller.clone())
@@ -2707,7 +2916,9 @@ pub(crate) fn bouncing_fling_into_the_edge_overscrolls_and_returns() {
 pub(crate) fn clamping_fling_into_the_edge_rests_on_it() {
     let max_extent = 500.0_f64;
     let controller = ScrollController::new();
-    controller.update_dimensions(300.0, 0.0, max_extent);
+    controller
+        .update_dimensions(300.0, 0.0, max_extent)
+        .expect("ordered extents");
     let mut laid = fling_scoped(
         Scrollable::new()
             .controller(controller.clone())
@@ -2728,6 +2939,72 @@ pub(crate) fn clamping_fling_into_the_edge_rests_on_it() {
     }
     assert_eq!(furthest, max_extent, "never passes the edge");
     assert_eq!(controller.pixels(), max_extent, "rests on the edge");
+}
+
+/// A fling down a lazy list whose first rows are taller than the rest: the
+/// list estimates its end from the tall rows, the end moves in as the short
+/// ones are measured while the list coasts, and the fling, under either
+/// physics, rests on the end the measured rows give, never in the blank
+/// space past it. Clamping never passes the end; bouncing may overscroll it
+/// and comes back.
+pub(crate) fn a_fling_rests_on_the_end_the_measured_rows_give() {
+    let physics: [(SharedScrollPhysics, bool); 2] = [
+        (Arc::new(ClampingScrollPhysics::new()), false),
+        (Arc::new(BouncingScrollPhysics::new()), true),
+    ];
+    for (physics, bounces) in physics {
+        let controller = ScrollController::new();
+        let list = Scrollable::new()
+            .controller(controller.clone())
+            .physics(physics.clone())
+            .viewport_builder(Rc::new(|position| {
+                // 20 rows of 120 and 40 of 40: 4000 px over a 300 px viewport.
+                flui_widgets::ListView::builder(60, 50.0, |index| {
+                    (index < 60).then(|| {
+                        SizedBox::new(300.0, if index < 20 { 120.0 } else { 40.0 }).boxed()
+                    })
+                })
+                .position(position)
+                .boxed()
+            }));
+        let mut laid = fling_scoped(list, Vsync::new(), tight(300.0, 300.0));
+        laid.pump_for(Duration::from_millis(16));
+        let estimated = controller.max_scroll_extent();
+        assert!(
+            estimated > 3700.0,
+            "{physics:?}: the tall rows overestimate the end: {estimated}"
+        );
+        laid.dispatch_pointer_down(150.0, 290.0);
+        laid.dispatch_pointer_move(150.0, 200.0);
+        laid.dispatch_pointer_move(150.0, 100.0);
+        laid.dispatch_pointer_move(150.0, 10.0);
+        laid.dispatch_pointer_up(150.0, 10.0);
+        for frame in 0..300 {
+            laid.pump_for(Duration::from_millis(16));
+            if !bounces {
+                assert!(
+                    controller.pixels() <= controller.max_scroll_extent(),
+                    "{physics:?}: frame {frame} at {} is past the end {}",
+                    controller.pixels(),
+                    controller.max_scroll_extent()
+                );
+            }
+        }
+        assert_eq!(
+            controller.max_scroll_extent(),
+            3700.0,
+            "{physics:?}: the measured end"
+        );
+        assert_eq!(
+            controller.pixels(),
+            3700.0,
+            "{physics:?}: the fling rests on it"
+        );
+        assert!(
+            !controller.position().is_scrolling(),
+            "{physics:?}: and ends"
+        );
+    }
 }
 
 /// A scrollable rebuilt with a fresh physics value every frame, as a build

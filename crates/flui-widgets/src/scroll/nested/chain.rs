@@ -1314,7 +1314,9 @@ mod tests {
     #[test]
     fn steady_state_dispatch_allocates_nothing() {
         let controller = ScrollController::new();
-        controller.update_dimensions(300.0, 0.0, 100_000.0);
+        controller
+            .update_dimensions(300.0, 0.0, 100_000.0)
+            .expect("ordered extents");
         let fling = AnimationController::builder(Duration::from_millis(1))
             .unbounded()
             .build_on(None);

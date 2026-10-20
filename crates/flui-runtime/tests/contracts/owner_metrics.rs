@@ -1689,7 +1689,9 @@ fn native_fling_profile_controls_real_scroll_inertia() {
     )
     .expect("native geometry runtime");
     let controller = flui_widgets::ScrollController::new();
-    controller.update_dimensions(300.0, 0.0, 4700.0);
+    controller
+        .update_dimensions(300.0, 0.0, 4700.0)
+        .expect("ordered extents");
     runtime
         .attach_root_widget_with_size(
             &flui_widgets::Scrollable::new()
