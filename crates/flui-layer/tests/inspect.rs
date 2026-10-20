@@ -114,7 +114,7 @@ fn diamond() -> Path {
 fn layers_that_differ_only_in_their_effect_diff_apart() {
     let link = LayerLink::new();
     let bounds = Rect::from_xywh(0.0, 0.0, 40.0, 20.0);
-    let pairs: [(&str, Layer, Layer); 6] = [
+    let pairs: [(&str, Layer, Layer); 7] = [
         (
             "Opacity",
             OpacityLayer::with_blend(0.5, Offset::ZERO, BlendMode::SrcOver).into(),
@@ -125,6 +125,11 @@ fn layers_that_differ_only_in_their_effect_diff_apart() {
             "AnnotatedRegion",
             AnnotatedRegionLayer::new(bounds, Arc::new("old")).into(),
             AnnotatedRegionLayer::new(bounds, Arc::new("new")).into(),
+        ),
+        (
+            "AnnotatedRegion type",
+            AnnotatedRegionLayer::new(bounds, Arc::new(Vec::<u8>::new())).into(),
+            AnnotatedRegionLayer::new(bounds, Arc::new(Vec::<u16>::new())).into(),
         ),
         (
             "ColorFilter",

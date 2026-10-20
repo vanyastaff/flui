@@ -16,7 +16,7 @@ use core::fmt::{self, Write as _};
 use flui_foundation::LayerId;
 use flui_foundation::inspect::{
     Fields, Inspect, InspectId, InspectTree, Level, Link, Links, NodeView, SceneLayer, Shared,
-    Unit, Value, kind_of,
+    Unit, Value,
 };
 use std::hash::{DefaultHasher, Hasher};
 
@@ -130,7 +130,7 @@ impl Inspect for Layer {
                 out.value("value", Value::Debug(value));
                 out.value(
                     "instance",
-                    Value::Shared(Shared::arc(kind_of(value.type_name()), value.erased())),
+                    Value::Shared(Shared::arc(value.type_name(), value.erased())),
                 );
                 out.field("sized_by_parent", &layer.is_sized_by_parent());
             }

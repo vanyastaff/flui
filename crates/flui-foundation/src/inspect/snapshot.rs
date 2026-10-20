@@ -376,7 +376,9 @@ impl OwnedSink<'_> {
             value,
             level: meta.level,
             unit: meta.unit,
-            default: meta.default.map(OwnedValue::from_value),
+            default: meta
+                .default
+                .map(|value| OwnedValue::numbered(value, self.numbering)),
         });
     }
 }

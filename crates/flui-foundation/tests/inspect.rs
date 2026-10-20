@@ -12,9 +12,9 @@ use std::time::Duration;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Rect, Size};
 use flui_foundation::inspect::{
     Change, DiffOptions, Field, FieldError, Fields, Inspect, InspectId, InspectTree, Level, Link,
-    Links, MatchError, Meta, NodePath, NodeView, OwnedValue, Plain, Rgba, SceneLayer, Seq, Sink,
-    SnapshotError, SnapshotNode, SnapshotQuery, ToValue, Unit, Value, Variant, diff, kind_args_of,
-    kind_of, render, snapshot,
+    Links, MatchError, Meta, NodePath, NodeView, OwnedValue, Plain, Rgba, SceneLayer, Seq, Shared,
+    Sink, SnapshotError, SnapshotNode, SnapshotQuery, ToValue, Unit, Value, Variant, diff,
+    kind_args_of, kind_of, render, snapshot,
 };
 use flui_foundation::{ElementId, LayerId, RenderId, SemanticsId};
 
@@ -1174,4 +1174,61 @@ fn a_type_name_spells_its_kind_and_type_arguments() {
         kind_args_of(type_name, &mut |arg| seen.push(arg));
         assert_eq!(seen, args, "{type_name}");
     }
+}
+
+/// A one-node tree whose node holds two shared objects of one type, the second also its
+/// field's default.
+struct Holders {
+    first: std::sync::Arc<u8>,
+    second: std::sync::Arc<u8>,
+}
+
+impl Inspect for Holders {
+    fn kind(&self) -> &'static str {
+        "Holders"
+    }
+
+    fn inspect(&self, out: &mut Fields<'_>) {
+        out.value("first", Value::Shared(Shared::arc("Slot", &self.first)));
+        out.value("second", Value::Shared(Shared::arc("Slot", &self.second)))
+            .default_value(Value::Shared(Shared::arc("Slot", &self.second)));
+    }
+}
+
+impl InspectTree for Holders {
+    type Node = Self;
+
+    fn root(&self) -> Option<InspectId> {
+        Some(InspectId::from(render_id(1)))
+    }
+
+    fn node(&self, id: InspectId) -> Option<NodeView<'_, Self>> {
+        (id == InspectId::from(render_id(1))).then_some(NodeView {
+            object: self,
+            rect: None,
+            links: Links::default(),
+        })
+    }
+
+    fn children(&self, _: InspectId) -> impl Iterator<Item = InspectId> + '_ {
+        core::iter::empty()
+    }
+}
+
+/// A shared field's default is numbered with the rest of the snapshot, so a field that holds
+/// its default reads as default even when an earlier object of its type took `#1`.
+///
+/// Fails when the default is numbered on its own, which makes it `Slot#1` against the
+/// field's `Slot#2`.
+#[test]
+fn a_shared_default_is_numbered_with_the_snapshot() {
+    let holders = Holders {
+        first: std::sync::Arc::new(1),
+        second: std::sync::Arc::new(2),
+    };
+    let root = snapshot(&holders, SnapshotQuery::default()).expect("one root");
+    let second = root.field("second").expect("reported");
+    assert_eq!(second.value.to_string(), "Slot#2");
+    assert!(second.is_default(), "{second:?}");
+    assert!(!root.field("first").expect("reported").is_default());
 }
