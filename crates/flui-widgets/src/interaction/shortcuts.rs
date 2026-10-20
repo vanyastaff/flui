@@ -215,6 +215,11 @@ impl SingleActivator {
     /// layout is Ctrl+C. Only a Control or Meta activator qualifies, and only
     /// when the layout produced a non-ASCII character, so a layout that has
     /// the letter (AZERTY, Dvorak) keeps matching by what the key produced.
+    ///
+    /// [`overlaps`](Self::overlaps) cannot see this branch: which character a
+    /// layout puts on a physical key is not known from the activators alone,
+    /// so Ctrl+C beside Ctrl+с is not reported as a duplicate, and the first
+    /// match wins. The Latin chord already covers that layout.
     fn matches_latin_position(&self, event: &KeyEvent) -> bool {
         let Key::Character(produced) = &event.key else {
             return false;

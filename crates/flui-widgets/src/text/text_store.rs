@@ -317,7 +317,7 @@ impl EditableTextStore {
             return;
         }
         let doc = self.read_doc();
-        if self.with_layout(&doc, |_, _| Ok(())).is_ok() {
+        if self.viewport().is_ok() && self.with_layout(&doc, |_, _| Ok(())).is_ok() {
             self.layout_owed.set(false);
             self.layout_changed();
         }
@@ -637,17 +637,24 @@ impl EditableTextStore {
 
     /// The allocated field box, independently of the shaped line's extent.
     fn viewport(&self) -> Result<Rect, TextStoreError> {
-        let pipeline = self.pipeline.as_ref().ok_or(TextStoreError::NoLayout)?;
-        let anchor = self.inner_anchor.get().ok_or(TextStoreError::NoLayout)?;
-        pipeline
-            .try_with_layout(|owner| {
-                let tree = owner.render_tree();
-                let editable = *tree.children(anchor).first()?;
-                let size = tree.get(editable)?.size()?;
-                Some(Rect::from_origin_size(Point::ZERO, size))
-            })
-            .flatten()
-            .ok_or(TextStoreError::NoLayout)
+        let measured = self
+            .pipeline
+            .as_ref()
+            .zip(self.inner_anchor.get())
+            .and_then(|(pipeline, anchor)| {
+                pipeline
+                    .try_with_layout(|owner| {
+                        let tree = owner.render_tree();
+                        let editable = *tree.children(anchor).first()?;
+                        let size = tree.get(editable)?.size()?;
+                        Some(Rect::from_origin_size(Point::ZERO, size))
+                    })
+                    .flatten()
+            });
+        measured.ok_or_else(|| {
+            self.layout_owed.set(true);
+            TextStoreError::NoLayout
+        })
     }
 }
 
