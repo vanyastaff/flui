@@ -47,6 +47,7 @@ type PressCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 #[derive(Clone, StatelessView)]
 pub struct RawButton {
     on_press: Option<PressCallback>,
+    identifier: Option<std::sync::Arc<str>>,
     child: BoxedView,
 }
 
@@ -65,6 +66,7 @@ impl RawButton {
     pub fn new(child: impl IntoView) -> Self {
         Self {
             on_press: None,
+            identifier: None,
             child: child.into_view().boxed(),
         }
     }
@@ -78,6 +80,14 @@ impl RawButton {
         R: EventOutcome,
     {
         self.on_press = Some(event_callback(callback));
+        self
+    }
+
+    /// Name the button's node for tests and automation (ADR-0240); see
+    /// [`Semantics::identifier`]. Never announced.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
+        self.identifier = Some(identifier.into());
         self
     }
 }
@@ -162,6 +172,7 @@ impl StatelessView for RawButton {
             .container(true)
             .role(crate::SemanticsRole::Button)
             .enabled(enabled)
+            .identifier_if(self.identifier.as_ref())
             .child(detector)
     }
 }

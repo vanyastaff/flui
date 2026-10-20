@@ -631,6 +631,23 @@ cross-thread handoff is the AccessKit `TreeUpdate`. `SemanticsAttributes` is the
 consumers read and write a node through `SemanticsConfiguration`'s accessors. A selection-only annotation still reaches the
 platform (`a_selection_only_annotation_reaches_the_platform`).
 
+### The identifier names only the node its own configuration forms
+
+**Rule.** [ADR-0240](../../docs/adr/ADR-0240-semantics-identifier.md)'s identifier is published as
+AccessKit `author_id` and as the wire `Node.identifier`, and never as text. Setting it neither marks
+the configuration annotated nor makes it a boundary, and `absorb` never takes it: a configuration
+with only an identifier contributes nothing, and one absorbed into an ancestor or a
+`MergeSemantics` loses it while the receiver keeps its own. A widget names its node where the node
+is formed: a container `Semantics`, `MergeSemantics::identifier`, or a control whose own
+configuration is the outermost of its parts.
+
+**Why.** An identifier that annotated or split nodes would change the tree, and so what a screen
+reader says, by adding a test id; one carried upward would name a node with another node's id, and
+a merged parent would collect its children's.
+
+**Test.** `the_identifier_is_exported_unannounced_unmerged_and_no_boundary` in
+`tests/identifier.rs`; the `identifier` row of `every_published_attribute_reads_through_the_consumer`.
+
 ## Numeric and directional input
 
 ADR-0124 distinguishes expand/collapse from activation and numeric setters from

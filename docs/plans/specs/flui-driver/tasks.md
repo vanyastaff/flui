@@ -1,10 +1,10 @@
 # flui-driver: tasks
 
-- **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782) and FD4 (#1796) have
-  merged; FD31 is in review; FD2 is next. `interaction/completeness`
-  has merged (#1733), so the IC tasks are unblocked. `flui run --agent` and `flui mcp` exist on
-  the ADR-0095 endpoint (#1769); the tasks that replace that endpoint and `flui mcp` start from
-  them.
+- **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796) and
+  FD31 (#1804) have merged; FD2 is in review (the semantics identifier, see its card's evidence);
+  FD3 is next. `interaction/completeness` has merged (#1733), so the IC tasks are unblocked.
+  `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
+  that endpoint and `flui mcp` start from them.
 - **Date:** 2026-10-17
 - **Design:** [design.md](design.md); requirements: [requirements.md](requirements.md); ADRs:
   [ADR-0238](../../../adr/ADR-0238-flui-driver-protocol.md),
@@ -160,6 +160,40 @@ graph LR
   - a table test covers export, not-announced, not-merged and no-boundary;
   - on W, UIA reads the value as `AutomationId` (a row added to the existing `windows-a11y` check
     until FD11 replaces it).
+- **Evidence (2026-10-20):**
+  - The identifier is an `Option<Arc<str>>` attribute. Setting it marks nothing annotated and makes
+    no boundary, and `absorb` never takes it, so it names only the node its own configuration
+    forms; an identifier alone contributes nothing, and a merged parent keeps its own
+    (`flui-semantics` ARCHITECTURE.md, "The identifier names only the node its own configuration
+    forms"). Translation sets AccessKit `author_id`; the agent read fills `Node.identifier` from it
+    and leaves `automation_id` to OS backends.
+  - Widgets name the node where it forms: `Semantics::identifier` (on a container),
+    `MergeSemantics::identifier` (new `RenderMergeSemantics::set_identifier`), `RawButton`,
+    `Disclosure` (through its header's merge), `EditableText`, `RawTextField`; Material's
+    `ButtonStyleButton` family, `IconButton`, `Checkbox`, `Switch`, `Radio`, `Chip`,
+    `FilterChip`, `TextField`; `CupertinoButton`, whose button semantics moved above its gesture
+    detector so its own configuration forms the node.
+  - `Slider` has no `identifier` builder: its node is formed by the `Focus` above its semantics,
+    which absorbs them. It needs its semantics to wrap the focus first.
+  - ADR-0240 §3's normalization of an equal `automation_id` does not exist yet: `flui-protocol`
+    has no ADR-0095 §4 projection, and `desktop-mcp` reads UIA into its own node type. It lands
+    with the locator work (FD3) or the OS lanes.
+  - Tests:
+    - `flui-semantics`'s `semantics_it`:
+      `identifier::the_identifier_is_exported_unannounced_unmerged_and_no_boundary`, a table of
+      export (`author_id`, wire `identifier`), not announced (adapter and wire), not merged
+      (label without identifier, merged parent keeps its own) and no boundary; the `identifier`
+      row of `every_published_attribute_reads_through_the_consumer`;
+    - `flui-rendering`'s `semantics_assembly_matrix`:
+      `an_identifier_names_only_the_node_its_configuration_forms`, through assembly;
+    - `flui-widgets`' `semantics_translation_and_routing`:
+      `controls_publish_their_identifier_on_the_node_they_form`;
+    - `flui-material`'s `action_component_contracts`:
+      `material_controls_publish_their_identifier`;
+    - `flui-cupertino`'s `component_contracts`: `button_publishes_its_identifier`.
+  - `windows-a11y` requires the probe's Increment button (`.identifier("increment")`) to report
+    that `AutomationId` before invoking it. Written on Linux and not compiled for Windows here: it
+    still needs a run of `cargo xtask device windows-a11y` on Windows.
 
 ### FD3. Locator and actionability
 

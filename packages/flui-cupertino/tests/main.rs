@@ -79,6 +79,10 @@ fn component_contracts() {
             button::tap_callback_writes_a_signal_and_rebuilds_its_reader,
         ),
         (
+            "button::button publishes its identifier",
+            button::button_publishes_its_identifier,
+        ),
+        (
             "button::an active press fade migrates and retires",
             button::an_active_button_press_fade_migrates_and_retires,
         ),

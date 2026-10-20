@@ -570,6 +570,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         hint: _,
         tooltip: _,
         placeholder: _,
+        identifier: _,
         heading_level: _,
         text_direction: _,
         scroll_position: _,
@@ -659,6 +660,12 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
     }
     if let Some(placeholder) = &data.attrs.placeholder {
         node.set_placeholder(placeholder.as_str());
+    }
+    // The author's identifier (ADR-0240): adapters map `author_id` to UI
+    // Automation's `AutomationId`, `AXIdentifier` and AT-SPI's accessible id,
+    // none of which a screen reader speaks.
+    if let Some(identifier) = &data.attrs.identifier {
+        node.set_author_id(&**identifier);
     }
     // AccessKit's level is zero-based where `aria-level` is one-based.
     if let Some(level) = data.attrs.heading_level {

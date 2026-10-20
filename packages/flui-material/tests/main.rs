@@ -127,6 +127,10 @@ fn action_component_contracts() {
             elevated_button::elevated_button_with_text_child_announces_one_labelled_button_node,
         ),
         (
+            "elevated_button::material controls publish their identifier",
+            elevated_button::material_controls_publish_their_identifier,
+        ),
+        (
             "elevated_button::widget level style wins over the elevated button theme",
             elevated_button::widget_level_style_wins_over_the_elevated_button_theme,
         ),

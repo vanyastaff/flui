@@ -708,6 +708,29 @@ impl SemanticsConfiguration {
         self.attributes.placeholder.as_deref()
     }
 
+    /// Sets the stable identifier tests and automation select this node by
+    /// (ADR-0240), published as AccessKit `author_id`: UI Automation's
+    /// `AutomationId`, macOS `AXIdentifier`, AT-SPI's accessible id.
+    ///
+    /// It is never announced, and it is not semantic payload: setting it
+    /// marks nothing annotated and makes no boundary, so adding one never
+    /// changes the tree's shape or what a screen reader says. It names only
+    /// the node this configuration forms itself, as a boundary or as an
+    /// explicit child. A configuration that forms none (absorbed into an
+    /// ancestor, merged by `MergeSemantics`, or contributing nothing) publishes
+    /// no identifier: [`absorb`](Self::absorb) never carries one upward, so a
+    /// merged parent keeps its own. Name a node by setting the identifier where
+    /// its boundary is declared.
+    pub fn set_identifier(&mut self, identifier: impl Into<Arc<str>>) {
+        self.attributes.identifier = Some(identifier.into());
+    }
+
+    /// Returns the stable identifier, if the author set one.
+    #[inline]
+    pub fn identifier(&self) -> Option<&str> {
+        self.attributes.identifier.as_deref()
+    }
+
     // ========================================================================
     // Text Direction
     // ========================================================================
@@ -1191,6 +1214,8 @@ impl SemanticsConfiguration {
             hint: _,
             tooltip: _,
             placeholder: _,
+            // Never crosses into another node, so two never compete.
+            identifier: _,
             text_direction: _,
             custom_actions: _,
             tags: _,
@@ -1274,6 +1299,7 @@ impl SemanticsConfiguration {
     ///   none.
     /// - **Tags, anchors, relations** — union.
     /// - **Label / hint** — concatenate, text-direction aware.
+    /// - **Identifier** — never absorbed: the receiver keeps its own (ADR-0240).
     /// - **Everything else** — first wins: the receiver keeps what it has.
     ///
     /// `blocks_user_actions` on the *parent* is unchanged by absorb —
@@ -1318,6 +1344,9 @@ impl SemanticsConfiguration {
             hint,
             tooltip,
             placeholder,
+            // Never carried upward (ADR-0240): the identifier names only the
+            // node its own configuration forms, and a merged parent keeps its own.
+            identifier: _,
             text_direction,
             custom_actions: _,
             tags,
@@ -1503,6 +1532,7 @@ impl std::fmt::Debug for SemanticsConfiguration {
             .field("label", &self.attributes.label)
             .field("value", &self.attributes.value)
             .field("hint", &self.attributes.hint)
+            .field("identifier", &self.attributes.identifier)
             .field("actions", &self.actions.keys().collect::<Vec<_>>())
             .finish_non_exhaustive()
     }

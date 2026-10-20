@@ -2278,3 +2278,175 @@ pub(crate) fn a_diagnostic_is_reported_outside_the_pipeline_checkout() {
     );
     PIPELINE.with(|cell| *cell.borrow_mut() = None);
 }
+
+// ===========================================================================
+// Identifier (ADR-0240): the node a control forms carries its author's id
+// ===========================================================================
+
+/// The published node whose `author_id` is `identifier`, if exactly one is.
+fn identified_node<'a>(
+    tree: &'a flui_testing::A11yTree,
+    identifier: &str,
+) -> Option<flui_testing::A11yNode<'a>> {
+    let mut matches = tree
+        .nodes()
+        .filter(|node| node.raw().author_id() == Some(identifier));
+    let first = matches.next()?;
+    matches.next().is_none().then_some(first)
+}
+
+/// `root` mounted alone, semantics on, one frame pumped.
+fn identifier_tree(root: impl View) -> flui_testing::A11yTree {
+    let mut laid = lay_out(root, loose(200.0));
+    laid.enable_semantics();
+    laid.pump();
+    laid.a11y_tree()
+        .expect("semantics enabled before the frame")
+}
+
+/// Every control that builds its own semantics publishes the identifier its
+/// author gave it on the node it forms, under the role it announces, and never
+/// in what it announces; a wrapper that forms no node, and a node a merge
+/// absorbs, publish none.
+pub(crate) fn controls_publish_their_identifier_on_the_node_they_form() {
+    use flui_view::{BoxedView, ViewExt as _};
+    use flui_widgets::{
+        Column, Disclosure, ExpansionState, RawButton, RawTextField, Text, TextEditingController,
+    };
+
+    struct Row {
+        control: &'static str,
+        identifier: &'static str,
+        role: Option<flui_testing::a11y::Role>,
+        view: fn() -> BoxedView,
+    }
+    let rows = [
+        Row {
+            control: "Semantics",
+            identifier: "panel",
+            role: None,
+            view: || {
+                Semantics::new()
+                    .container(true)
+                    .label("Panel")
+                    .identifier("panel")
+                    .child(SizedBox::new(40.0, 20.0))
+                    .boxed()
+            },
+        },
+        Row {
+            control: "MergeSemantics",
+            identifier: "merged",
+            role: None,
+            view: || {
+                MergeSemantics::new()
+                    .identifier("merged")
+                    .child(
+                        Semantics::new()
+                            .container(true)
+                            .label("Inner")
+                            .identifier("absorbed")
+                            .child(SizedBox::new(40.0, 20.0)),
+                    )
+                    .boxed()
+            },
+        },
+        Row {
+            control: "RawButton",
+            identifier: "send",
+            role: Some(flui_testing::a11y::Role::Button),
+            view: || {
+                RawButton::new(Text::new("Send"))
+                    .on_press(|_cx| {})
+                    .identifier("send")
+                    .boxed()
+            },
+        },
+        Row {
+            control: "Disclosure",
+            identifier: "details",
+            role: Some(flui_testing::a11y::Role::Button),
+            view: || {
+                Disclosure::new(
+                    ExpansionState::Collapsed,
+                    Text::new("Details"),
+                    Text::new("Body"),
+                )
+                .on_changed(|_cx, _state| {})
+                .identifier("details")
+                .boxed()
+            },
+        },
+        Row {
+            control: "RawTextField",
+            identifier: "query",
+            role: Some(flui_testing::a11y::Role::TextInput),
+            view: || {
+                RawTextField::new(TextEditingController::new())
+                    .identifier("query")
+                    .boxed()
+            },
+        },
+    ];
+
+    let mut failed = Vec::new();
+    for row in &rows {
+        let tree = identifier_tree((row.view)());
+        let Some(node) = identified_node(&tree, row.identifier) else {
+            failed.push(format!(
+                "{}: no one node carries it\n{}",
+                row.control,
+                tree.describe()
+            ));
+            continue;
+        };
+        if row.role.is_some_and(|role| node.role() != role) {
+            failed.push(format!("{}: on a {:?} node", row.control, node.role()));
+        }
+        let announced = [
+            node.label(),
+            node.value(),
+            node.raw().description(),
+            node.raw().tooltip(),
+        ];
+        if announced
+            .iter()
+            .flatten()
+            .any(|text| text.contains(row.identifier))
+        {
+            failed.push(format!("{}: announced: {announced:?}", row.control));
+        }
+    }
+
+    // A merge keeps its own identifier and drops its descendant's.
+    let merged = identifier_tree((rows[1].view)());
+    if identified_node(&merged, "absorbed").is_some() {
+        failed.push(format!(
+            "MergeSemantics: carried a merged descendant's identifier\n{}",
+            merged.describe()
+        ));
+    }
+
+    // A wrapper that forms no node of its own publishes no identifier and
+    // changes nothing about the tree.
+    let inner = || {
+        Semantics::new()
+            .container(true)
+            .label("Inner")
+            .child(SizedBox::new(40.0, 20.0))
+    };
+    let plain = identifier_tree(Column::new((inner().boxed(),)));
+    let wrapped = identifier_tree(Column::new((Semantics::new()
+        .identifier("ghost")
+        .child(inner())
+        .boxed(),)));
+    if identified_node(&wrapped, "ghost").is_some() || wrapped.describe() != plain.describe() {
+        failed.push(format!(
+            "a non-boundary wrapper: changed the tree\n{}\nvs\n{}",
+            wrapped.describe(),
+            plain.describe()
+        ));
+    }
+
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}

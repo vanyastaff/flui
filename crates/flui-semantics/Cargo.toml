@@ -10,6 +10,8 @@ repository.workspace = true
 description = "Semantics tree for FLUI accessibility - part of 5-tree architecture"
 keywords = ["ui", "accessibility", "semantics", "a11y", "screen-reader"]
 categories = ["gui", "accessibility"]
+# Integration tests are modules of one binary, declared in tests/main.rs.
+autotests = false
 
 # Dev-only files a `cargo package --list` sweep found leaking into the
 # published archive (internal architecture docs, criterion benches, etc.):
@@ -69,6 +71,10 @@ serde_json = { workspace = true }
 
 # Cost of a semantics-enabled frame as a function of tree size — the number the
 # pipeline's scalability work has to beat.
+[[test]]
+name = "semantics_it"
+path = "tests/main.rs"
+
 [[bench]]
 name = "publish_cost"
 harness = false

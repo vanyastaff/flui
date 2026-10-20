@@ -45,6 +45,8 @@ mod roles;
 /// What the counter template shows, and so what a screen reader must speak.
 pub(super) const PROMPT: &str = "You have pushed the button this many times:";
 pub(super) const INCREMENT: &str = "Increment";
+/// The identifier `a11y_probe` gives the button (ADR-0240).
+const INCREMENT_ID: &str = "increment";
 
 /// How long the count gets to advance after an action.
 pub(super) const ADVANCE_WITHIN: Duration = Duration::from_secs(5);
@@ -135,6 +137,21 @@ fn drive(session: &mut Session) -> anyhow::Result<bool> {
     let button = &uia::find(&before, BUTTON, INCREMENT)
         .expect("BUG: window_with_button returns only a window whose tree holds the button")
         .element;
+    // ADR-0240: the identifier the probe gives the button reaches UI
+    // Automation as its `AutomationId` (AccessKit's `author_id`).
+    // SAFETY: `button` is a live element of this session's client, on its
+    // COM thread; the property takes no arguments.
+    let automation_id = unsafe { button.CurrentAutomationId() }
+        .map(|id| id.to_string())
+        .unwrap_or_default();
+    if automation_id != INCREMENT_ID {
+        println!(
+            "FAIL: the button's AutomationId is {automation_id:?}, not its identifier \
+             {INCREMENT_ID:?}"
+        );
+        return Ok(false);
+    }
+    println!("UIA AutomationId: {INCREMENT_ID:?}");
     // SAFETY: `button` is a live element of this session's client, on its
     // COM thread.
     let invoked =
