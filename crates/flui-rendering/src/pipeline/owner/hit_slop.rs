@@ -38,6 +38,7 @@
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Offset, Size};
+use flui_foundation::panic::FirstPanic;
 use flui_interaction::events::PointerKind;
 
 use crate::hit_testing::{HitTestEntry, HitTestResult};
@@ -62,9 +63,10 @@ struct SlopCandidate {
     distance: f64,
 }
 
-/// Per-walk slop state, threaded through the box and sliver walks.
+/// Per-walk state, threaded through the box and sliver walks: the expanded
+/// areas the walk passed and the first panic a render object raised.
 #[derive(Debug)]
-pub(super) struct SlopWalk {
+pub(super) struct HitWalk {
     pass: SlopPass,
     /// In visit order: the topmost candidate first.
     candidates: Vec<SlopCandidate>,
@@ -72,15 +74,18 @@ pub(super) struct SlopWalk {
     hit_barrier: bool,
     /// The kind of pointer asking, whose minimum target sizes each area.
     kind: PointerKind,
+    /// The first render object panic, held until the walk is complete.
+    first_panic: FirstPanic,
 }
 
-impl SlopWalk {
+impl HitWalk {
     pub(super) const fn visual(kind: PointerKind) -> Self {
         Self {
             pass: SlopPass::Visual,
             candidates: Vec::new(),
             hit_barrier: false,
             kind,
+            first_panic: FirstPanic::new(),
         }
     }
 
@@ -90,7 +95,20 @@ impl SlopWalk {
             candidates: Vec::new(),
             hit_barrier: false,
             kind,
+            first_panic: FirstPanic::new(),
         }
+    }
+
+    /// Holds a render object's panic for [`Self::finish`]; the node that
+    /// raised it counts as a miss.
+    pub(super) fn contain_panic(&mut self, payload: Box<dyn std::any::Any + Send>) {
+        self.first_panic.record(payload);
+    }
+
+    /// Ends the walk: raises the first contained panic, once the path is
+    /// complete without the subtrees that panicked.
+    pub(super) fn finish(self) {
+        self.first_panic.resume();
     }
 
     /// The kind of pointer the walk tests for.
@@ -155,26 +173,32 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Re-walks for the best slop candidate the visual walk recorded and, when
     /// one may take the position, replaces the visual path from `base` on with
     /// its path. Returns the re-walk's hit flag, or `None` to keep the visual
-    /// result.
+    /// result. A panic in a re-walk is contained in `walk` like one in the
+    /// visual walk.
     pub(super) fn resolve_hit_slop(
         &self,
         root_id: RenderId,
         position: Offset,
         result: &mut HitTestResult,
         base: usize,
-        walk: SlopWalk,
+        walk: &mut HitWalk,
     ) -> Option<bool>
     where
         Phase: Sync,
     {
         let kind = walk.kind;
-        let mut candidates = walk.candidates;
+        let mut candidates = std::mem::take(&mut walk.candidates);
         // Stable: equal distances keep visit order, topmost first.
         candidates.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+        // One scratch path for every re-walk; a rejected one is cleared.
+        let mut expanded = HitTestResult::new();
         for candidate in candidates {
-            let mut expanded = HitTestResult::new();
-            let mut walk = SlopWalk::expand(candidate.id, kind);
-            let hit = self.hit_test_subtree(root_id, position, &mut expanded, &mut walk);
+            expanded.clear();
+            let mut rewalk = HitWalk::expand(candidate.id, kind);
+            let hit = self.hit_test_subtree(root_id, position, &mut expanded, &mut rewalk);
+            if let Some(payload) = rewalk.first_panic.into_payload() {
+                walk.contain_panic(payload);
+            }
             let reached = expanded.iter().any(|entry| entry.target == candidate.id);
             if !reached
                 || !self.slop_may_take(&result.path()[base..], expanded.path(), candidate.id)

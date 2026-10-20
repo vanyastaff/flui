@@ -411,7 +411,7 @@ pub struct HitTestResult {
     /// Path of hit entries (most specific first).
     path: Vec<HitTestEntry>,
 
-    /// Global transform stack.
+    /// Global transform stack; empty is the identity.
     transforms: Vec<Matrix4>,
 
     /// Local transform parts (optimization - not globalized yet).
@@ -456,11 +456,13 @@ impl HitTestResult {
         }
     }
 
-    /// Creates an empty hit test result.
-    pub fn new() -> Self {
+    /// Creates an empty hit test result. Allocates nothing: an empty
+    /// transform stack is the identity.
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             path: Vec::new(),
-            transforms: vec![Matrix4::identity()],
+            transforms: Vec::new(),
             local_transforms: Vec::new(),
         }
     }
@@ -539,9 +541,7 @@ impl HitTestResult {
 
     /// Pops the last transform from the stack.
     pub fn pop_transform(&mut self) {
-        if !self.local_transforms.is_empty() {
-            self.local_transforms.pop();
-        } else if self.transforms.len() > 1 {
+        if self.local_transforms.pop().is_none() {
             self.transforms.pop();
         }
     }
@@ -625,13 +625,27 @@ impl HitTestResult {
         F: FnOnce(&mut Self) -> R,
     {
         let inverse = transform.try_inverse()?;
+        Some(self.with_inverse_transform(inverse, f))
+    }
+
+    /// Runs `f` with `inverse` — a paint transform's inverse the caller has
+    /// already computed — pushed verbatim, and pops it before returning.
+    ///
+    /// For a walk that inverts a level's transform once and needs the inverse
+    /// itself too (to map the position into the child's space). Depth is
+    /// restored on return and unwind, as for
+    /// [`with_paint_transform`](Self::with_paint_transform).
+    pub fn with_inverse_transform<F, R>(&mut self, inverse: Matrix4, f: F) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
         let depth = self.transforms.len() + self.local_transforms.len();
         self.push_transform(inverse);
         let guard = TransformGuard {
             result: self,
             depth,
         };
-        Some(f(&mut *guard.result))
+        f(&mut *guard.result)
     }
 
     /// Returns the number of entries.
@@ -666,7 +680,6 @@ impl HitTestResult {
     pub fn clear(&mut self) {
         self.path.clear();
         self.transforms.clear();
-        self.transforms.push(Matrix4::identity());
         self.local_transforms.clear();
     }
 

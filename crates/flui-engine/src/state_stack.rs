@@ -631,16 +631,22 @@ impl GpuStateStack {
     /// the same value from the stored slots; a lane added to one belongs in the
     /// other.
     pub(super) fn resolve_rrect_clip(&self, rrect: RRect, hard: bool) -> ResolvedClip {
+        // Fitted by the same normalization `RRect::contains` and the clip
+        // chain's mask apply, so the slot starts from the shape hit testing
+        // answers for.
+        let rrect = rrect.normalized();
         let rect = rrect.rect;
 
         // LOCAL bounds and radii — exactly what the caller asked for. The
         // mapping below is what places them; see `current_clip_inv`.
         //
-        // This slot carries ONE radius per corner, so a caller's own
-        // elliptical corner still has to collapse. That is now the only
-        // approximation left here: a corner made elliptical by a non-uniform
-        // CTM stays circular in this space and the mapping produces the
-        // ellipse, which is exact.
+        // This slot carries ONE radius per corner, and its distance function
+        // picks a corner by quadrant, so an elliptical corner collapses and a
+        // radius past half the box is capped. The clip chain's mask carries
+        // both axes and decides coverage for a clip layer
+        // (`rrect_hit_testing_matches_the_mask_with_oversized_and_elliptical_radii`).
+        // A corner made elliptical by a non-uniform CTM stays circular in
+        // this space and the mapping produces the ellipse, which is exact.
         let max_radius = (rect.width() * 0.5).min(rect.height() * 0.5).max(0.0);
         let collapse = |rx: f32, ry: f32| rx.max(ry).min(max_radius as f32);
 

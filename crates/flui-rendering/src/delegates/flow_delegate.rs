@@ -102,9 +102,9 @@ pub trait FlowDelegate: Debug {
     ///
     /// Must be a pure function of `self` and the context's allocated size
     /// and child sizes: `RenderFlow` replays this call against a non-drawing
-    /// context for hit testing, coordinate conversion and semantic child
-    /// selection. A delegate that consults external mutable state or
-    /// randomness here will make paint and hit-test silently disagree —
+    /// context for coordinate conversion and semantic child selection, while
+    /// hit testing reads what paint recorded. A delegate that consults external mutable state or
+    /// randomness here will make paint and those queries silently disagree —
     /// the same implicit purity assumption [`Self::should_repaint`] and
     /// [`Self::should_relayout`] already rely on.
     ///
@@ -156,25 +156,21 @@ pub trait FlowDelegate: Debug {
 ///
 /// Carries a delegate's [`FlowDelegate::paint_children`] call through to
 /// either a live [`PaintCx`] (real paint — [`Self::for_paint`]) or a
-/// recording-only replay with nowhere to draw (hit-test — [`Self::for_replay`]).
-/// `RenderFlow::paint` and `RenderFlow::hit_test` are both `&self`, so
-/// there is nowhere on the render object to cache "what transform did
-/// paint assign to child N" for hit-test to read back later. Hit-test
-/// instead re-invokes
-/// [`FlowDelegate::paint_children`] a second time against a `for_replay`
-/// context: same recorded `(index -> transform)` data, no live [`PaintCx`]
-/// to draw into.
+/// recording-only replay with nowhere to draw ([`Self::for_replay`]). Both
+/// modes record the same `(paint order, index -> transform)` data: paint's
+/// record is what `RenderFlow` hit-tests, and a replay answers semantics and
+/// coordinate queries, which also run before the first paint.
 pub struct FlowPaintingContext<'ctx, 'cx> {
     size: Size,
     child_sizes: &'ctx [Size],
     /// `Some` in paint mode (drives the real paint pipeline); `None`
-    /// during a hit-test replay (recording only, nothing is drawn).
+    /// during a replay (recording only, nothing is drawn).
     live: Option<&'ctx mut PaintCx<'cx, Variable>>,
     /// Child indices in the order `paint_child` was called. Hit-testing walks
     /// this in reverse (top-most painted first).
     paint_order: &'ctx mut Vec<usize>,
     /// Every child's most recently recorded transform, indexed by child
-    /// index. Recorded in both modes so hit-test's replay pass produces
+    /// index. Recorded in both modes so a replay pass produces
     /// the identical data paint's real pass would have.
     transforms: &'ctx mut Vec<Option<Matrix4>>,
     /// Per-child dup-paint guard: no child may be painted twice in one
@@ -221,7 +217,7 @@ impl<'ctx, 'cx> FlowPaintingContext<'ctx, 'cx> {
         }
     }
 
-    /// Builds a replay-only context for hit-testing: records the same
+    /// Builds a replay-only context: records the same
     /// `(paint_order, transforms)` a real paint pass would have produced,
     /// but draws nothing (there is no live [`PaintCx`] to draw into).
     pub fn for_replay(

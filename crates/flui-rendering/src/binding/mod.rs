@@ -24,6 +24,30 @@ use crate::{
 };
 
 // ============================================================================
+// ViewHitTest
+// ============================================================================
+
+/// How a view answered [`RendererBinding::hit_test_in_view`].
+#[derive(Debug)]
+#[must_use = "a busy tree or a contained panic is lost if the answer is dropped"]
+pub enum ViewHitTest {
+    /// The walk ran; the result holds its path.
+    ///
+    /// A render object whose hit test panicked counted as a miss, and the
+    /// first such payload is here for the caller to resume once the event
+    /// has been delivered to the path.
+    Answered {
+        /// The first contained render-object panic, if any.
+        panic: Option<Box<dyn std::any::Any + Send>>,
+    },
+    /// The tree cannot answer now — its layout is withdrawn (before the
+    /// first complete frame, or after a failed one) or a frame phase has it
+    /// checked out. The result is untouched: an empty path here would claim
+    /// that nothing is under the position.
+    TreeBusy,
+}
+
+// ============================================================================
 // RendererBinding
 // ============================================================================
 
@@ -101,13 +125,16 @@ pub trait RendererBinding {
     /// The `view_id` selects the presentation's render tree before its
     /// render objects perform protocol-specific hit testing; `kind` is the
     /// pointer asking, whose minimum target expanded hit areas follow.
+    ///
+    /// The answer says whether the tree could be asked at all; see
+    /// [`ViewHitTest`].
     fn hit_test_in_view(
         &self,
         result: &mut HitTestResult,
         position: flui_foundation::geometry::Offset,
         kind: flui_interaction::events::PointerKind,
         view_id: u64,
-    );
+    ) -> ViewHitTest;
 
     // ========================================================================
     // Pipeline owner tree

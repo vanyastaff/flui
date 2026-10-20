@@ -24,7 +24,7 @@ use crate::{
 
 use super::{
     LayoutPremise, PipelineOwner,
-    hit_slop::{SlopWalk, expanded_probes},
+    hit_slop::{HitWalk, expanded_probes},
     subtree_arena::ensure_stack,
 };
 
@@ -776,6 +776,15 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// (`hit_slop` module docs). A tree without slop pays one `None` hook call
     /// per visited box. `kind` is the pointer asking: an expanded area sizes its
     /// minimum target for that kind of pointer (ADR-0207 §6, ADR-0212).
+    ///
+    /// # Panics
+    ///
+    /// A render object's hit test is user code. One that panics counts as a
+    /// miss — its subtree adds no entry and blocks nothing below — and the
+    /// walk goes on. Once the path is complete, the first such panic resumes
+    /// here, so `result` already holds every other hit; a caller that
+    /// catches it delivers the event to that path and reports the panic
+    /// afterwards.
     pub fn hit_test(
         &self,
         position: Offset,
@@ -793,13 +802,15 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return false;
         };
         let base = result.len();
-        let mut walk = SlopWalk::visual(kind);
-        let hit = self.hit_test_subtree(root_id, position, result, &mut walk);
-        if !walk.has_candidates() {
-            return hit;
+        let mut walk = HitWalk::visual(kind);
+        let mut hit = self.hit_test_subtree(root_id, position, result, &mut walk);
+        if walk.has_candidates() {
+            hit = self
+                .resolve_hit_slop(root_id, position, result, base, &mut walk)
+                .unwrap_or(hit);
         }
-        self.resolve_hit_slop(root_id, position, result, base, walk)
-            .unwrap_or(hit)
+        walk.finish();
+        hit
     }
 
     pub(super) fn hit_test_subtree(
@@ -807,12 +818,16 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         id: RenderId,
         position: Offset,
         result: &mut crate::hit_testing::HitTestResult,
-        walk: &mut SlopWalk,
+        walk: &mut HitWalk,
     ) -> bool
     where
         Phase: Sync,
     {
-        ensure_stack(|| self.hit_test_subtree_impl(id, position, result, walk))
+        ensure_stack(|| {
+            contain_node(result, walk, |result, walk| {
+                self.hit_test_subtree_impl(id, position, result, walk)
+            })
+        })
     }
 
     /// Body of [`Self::hit_test_subtree`]; split out so every
@@ -822,7 +837,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         id: RenderId,
         position: Offset,
         result: &mut crate::hit_testing::HitTestResult,
-        walk: &mut SlopWalk,
+        walk: &mut HitWalk,
     ) -> bool
     where
         Phase: Sync,
@@ -857,7 +872,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 self.last_follower_offsets.get(&id).copied()
             };
 
-        let children: Vec<RenderId> = node.children().to_vec();
+        // Borrowed, not copied: the walk only reads the tree.
+        let children = node.children();
         // The generation this node's last layout stamped onto the children it
         // laid out; anything else was not part of that pass.
         let parent_generation = node.layout_generation();
@@ -886,6 +902,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // commutes (pure translations). A transform without an admitted finite
         // inverse refuses this subtree before any descendant can publish an
         // entry; its forward matrix is never used as a substitute (ADR-0113).
+        //
+        // The walk inverts it ONCE: the same inverse localizes the entries
+        // and maps the position, so the node's `hit_test` receives its
+        // position already in the transformed (child) space and no object
+        // re-derives or re-inverts its own matrix.
         let hit_transform = render_object.hit_test_transform(own_size);
         // A resolved follower offset rides the SAME transform-stack
         // lifecycle as `hit_test_transform` (flui-rendering ARCHITECTURE.md, follower hit-testing) — the same
@@ -894,20 +915,16 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // `Matrix4` (exact and lossless — the composer only ever
         // shifts coordinate space via translation). Pushed as the inverse
         // translation for the same reason as `hit_test_transform` above.
-
-        // Shift the position handed into this node's own subtree by the
-        // resolved offset — the SAME position-shift pattern `hit_child`
-        // below already applies for ordinary child offsets, applied here
-        // by the WALK rather than the object: `RenderFollowerLayer::hit_test`
+        //
+        // The position handed into this node's own subtree is shifted by the
+        // resolved offset in `hit_follower` below — the SAME position-shift
+        // pattern `hit_child` applies for ordinary child offsets, applied by
+        // the WALK rather than the object: `RenderFollowerLayer::hit_test`
         // stays a plain structural forward (flui-rendering ARCHITECTURE.md, follower hit-testing).
-        let position = match follower_offset {
-            Some(r) => position - r,
-            None => position,
-        };
         let slop_area = render_object.hit_slop_area(own_size, walk.kind());
 
         let hit_node = |result: &mut crate::hit_testing::HitTestResult,
-                        walk: &mut SlopWalk,
+                        walk: &mut HitWalk,
                         position: Offset| {
             let mut hit_child = |index: usize,
                                  override_pos: Option<Offset>,
@@ -1034,7 +1051,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // A node with an expanded area hit-tests visually unless this is the
         // walk that expands it; then it is probed inside its own bounds so its
         // child's path is built (`hit_slop` module docs).
-        let visit = |result: &mut crate::hit_testing::HitTestResult, walk: &mut SlopWalk| {
+        let visit = |result: &mut crate::hit_testing::HitTestResult,
+                     walk: &mut HitWalk,
+                     position: Offset| {
             let Some(area) = slop_area else {
                 return hit_node(result, walk, position);
             };
@@ -1054,19 +1073,27 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             }
             hit
         };
-        let mut hit_follower =
-            |result: &mut crate::hit_testing::HitTestResult| match follower_offset {
+        let mut hit_follower = |result: &mut crate::hit_testing::HitTestResult,
+                                position: Offset| {
+            match follower_offset {
                 Some(offset) => result
-                    .with_paint_offset(offset, |result| visit(result, walk))
+                    .with_paint_offset(offset, |result| visit(result, walk, position - offset))
                     .unwrap_or(false),
-                None => visit(result, walk),
-            };
-        match hit_transform {
-            Some(transform) => result
-                .with_paint_transform(transform, hit_follower)
-                .unwrap_or(false),
-            None => hit_follower(result),
-        }
+                None => visit(result, walk, position),
+            }
+        };
+        let Some(transform) = hit_transform else {
+            return hit_follower(result, position);
+        };
+        let Some(inverse) = transform.try_inverse() else {
+            return false;
+        };
+        let Some((x, y)) = inverse.unproject_to_plane(position.dx, position.dy) else {
+            // The position's ray never meets the child's plane: nothing of
+            // the child is under it.
+            return false;
+        };
+        result.with_inverse_transform(inverse, |result| hit_follower(result, Offset::new(x, y)))
     }
 
     fn sliver_hit_position_from_offset(node: &RenderNode, position: Offset) -> MainAxisPosition {
@@ -1219,12 +1246,16 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         id: RenderId,
         position: MainAxisPosition,
         result: &mut crate::hit_testing::HitTestResult,
-        walk: &mut SlopWalk,
+        walk: &mut HitWalk,
     ) -> bool
     where
         Phase: Sync,
     {
-        ensure_stack(|| self.hit_test_sliver_subtree_impl(id, position, result, walk))
+        ensure_stack(|| {
+            contain_node(result, walk, |result, walk| {
+                self.hit_test_sliver_subtree_impl(id, position, result, walk)
+            })
+        })
     }
 
     fn hit_test_sliver_subtree_impl(
@@ -1232,7 +1263,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         id: RenderId,
         position: MainAxisPosition,
         result: &mut crate::hit_testing::HitTestResult,
-        walk: &mut SlopWalk,
+        walk: &mut HitWalk,
     ) -> bool
     where
         Phase: Sync,
@@ -1256,7 +1287,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         {
             return false;
         }
-        let children: Vec<RenderId> = node.children().to_vec();
+        let children = node.children();
         let parent_generation = node.layout_generation();
         let render_object = entry.render_object();
         // Absolute paint size from RenderState — threaded into
@@ -2164,4 +2195,29 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 /// dependency on `flui-semantics` (layer 3).
 fn no_op_semantics_update_callback() -> flui_semantics::SemanticsUpdateCallback {
     std::sync::Arc::new(|_update: &flui_semantics::TreeUpdate| {})
+}
+
+/// Visits one node of a hit walk with its user code contained.
+///
+/// Every hook the walk calls on a node — `hit_test_transform`, the expanded
+/// area, `hit_test` itself (path clippers, flow delegates), the entry's
+/// targets — is user code. A panic in any of them makes the node a miss: what
+/// its subtree added to the path is dropped (driver and context scopes restore
+/// their transforms on unwind), it blocks nothing below, and the payload waits
+/// in `walk` until the path is complete. A descendant's panic is contained at
+/// the descendant, so its ancestors still decide for themselves.
+fn contain_node(
+    result: &mut crate::hit_testing::HitTestResult,
+    walk: &mut HitWalk,
+    visit: impl FnOnce(&mut crate::hit_testing::HitTestResult, &mut HitWalk) -> bool,
+) -> bool {
+    let mark = result.len();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| visit(result, walk))) {
+        Ok(hit) => hit,
+        Err(payload) => {
+            result.path_mut().truncate(mark);
+            walk.contain_panic(payload);
+            false
+        }
+    }
 }

@@ -6679,6 +6679,50 @@ fn harness_clip_rrect_wraps_child() {
     assert_eq!(run.box_geometry(run.root()), Size::new(40.0, 40.0));
 }
 
+/// A pill whose radius is far past its height hit-tests the pill it paints:
+/// the radii shrink to fit (100 → 10 on a 200x20 box), so the whole straight
+/// run takes hits and only the rounded ends cut. Taken literally, the radius
+/// would leave nothing but the centre column hittable.
+///
+/// At `Clip::None` the clip neither paints nor clips semantics, so it does not
+/// clip hits either: the corner a clip would cut reaches the child.
+fn harness_clip_rrect_pill_hit_tests_the_painted_radius() {
+    use flui_painting::styling::{BorderRadius, BorderRadiusExt as _};
+
+    let pill = |behavior| {
+        RenderTester::mount(
+            box_node(
+                RenderClipRRect::new(behavior).with_border_radius(BorderRadius::circular(100.0)),
+            )
+            .child(box_node(RenderColoredBox::red(200.0, 20.0)).label("child")),
+        )
+        .with_constraints(loose(400.0))
+        .run_frame()
+    };
+
+    let run = pill(Clip::AntiAlias);
+    assert_eq!(run.box_geometry(run.root()), Size::new(200.0, 20.0));
+    let child = run.id("child");
+    for (x, y) in [(50.0, 10.0), (150.0, 2.0), (100.0, 18.0), (5.0, 10.0)] {
+        assert!(
+            run.hit(x, y).contains(&child),
+            "({x}, {y}) is inside the painted pill"
+        );
+    }
+    for (x, y) in [(0.5, 0.5), (199.5, 19.5), (1.0, 3.0)] {
+        assert!(
+            !run.hit(x, y).contains(&child),
+            "({x}, {y}) is outside the pill's rounded end"
+        );
+    }
+
+    let run = pill(Clip::None);
+    assert!(
+        run.hit(0.5, 0.5).contains(&run.id("child")),
+        "an unclipped pill's child takes the corner it paints"
+    );
+}
+
 /// A superellipse clip paints its own layer and hit-tests the drawn curve,
 /// which is fuller than a circular corner of the same radius: (4.5, 4.5) is
 /// kept, though a rounded rectangle would cut it, and (1, 1) is cut.
@@ -9814,6 +9858,38 @@ fn harness_flow_accessible_bounds_follow_clip_without_layout() {
     }
 }
 
+/// A flow is hit where it painted its children, not where its delegate would
+/// paint them now: a delegate that changed and notified hits at the old
+/// transform until the repaint lands, then at the new one.
+fn harness_flow_hits_where_it_painted_until_it_repaints() {
+    let delegate = SemanticFlowDelegate {
+        selected: Rc::new(Cell::new(0)),
+        x: Rc::new(Cell::new(0.0)),
+        notifier: Rc::new(flui_foundation::ChangeNotifier::new()),
+    };
+    let mut run = RenderTester::mount(
+        box_node(RenderFlow::new(Rc::new(delegate.clone())))
+            .child(box_node(RenderColoredBox::red(20.0, 40.0)).label("first"))
+            .child(box_node(RenderColoredBox::blue(20.0, 40.0)).label("second")),
+    )
+    .with_size(Size::new(40.0, 40.0))
+    .run_frame();
+    let first = run.id("first");
+    assert!(run.hit(5.0, 20.0).contains(&first), "painted at x = 0");
+    assert!(!run.hit(25.0, 20.0).contains(&first));
+
+    delegate.x.set(20.0);
+    delegate.notifier.notify_listeners();
+    assert!(
+        run.hit(5.0, 20.0).contains(&first),
+        "still on screen at x = 0 until the repaint"
+    );
+
+    run.pump();
+    assert!(!run.hit(5.0, 20.0).contains(&first), "repainted at x = 20");
+    assert!(run.hit(25.0, 20.0).contains(&first));
+}
+
 fn harness_flow_only_announces_presented_children_after_repaint_and_replacement() {
     use flui_rendering::semantics::{ActionCall, SemanticsActionRequest};
     let delegate = SemanticFlowDelegate {
@@ -11854,17 +11930,34 @@ impl RenderBox for LaysOutFirstN {
             constraints.constrain(Size::new(100.0, 100.0))
         })
     }
+}
 
-    fn hit_test(
-        &self,
-        _ctx: &mut flui_rendering::context::BoxHitTestContext<
-            '_,
-            flui_foundation::Variable,
-            flui_rendering::parent_data::BoxParentData,
-        >,
-    ) -> bool {
-        false
-    }
+/// A child dropped from a later layout pass takes no hits at the rect it
+/// held. Two frames: a child never laid out has size zero and is missed
+/// whatever the gate does, so only one that was laid out and then dropped —
+/// keeping its old offset and size — tells the gate apart.
+fn harness_placed_generation_gate_excludes_a_dropped_child_from_hits() {
+    let mut run = RenderTester::mount(
+        box_node(LaysOutFirstN { laid_out: 2 })
+            .label("host")
+            .child(box_node(RenderColoredBox::red(40.0, 20.0)).label("kept"))
+            .child(box_node(RenderColoredBox::blue(40.0, 20.0)).label("dropped")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    let (host, dropped) = (run.root(), run.id("dropped"));
+    assert!(
+        run.hit(10.0, 30.0).contains(&dropped),
+        "precondition: the second child is hit while it is laid out"
+    );
+
+    run.update::<LaysOutFirstN>(host, |object| object.laid_out = 1);
+    let run = run.run_frame_again();
+    assert!(
+        !run.hit(10.0, 30.0).contains(&dropped),
+        "a child this pass did not lay out takes no hit at its old rect"
+    );
+    assert!(run.hit(10.0, 10.0).contains(&run.id("kept")));
 }
 
 /// A child dropped from a later layout pass contributes no semantics.
@@ -12469,6 +12562,10 @@ fn family_clips_and_effects() {
             ("clip_rect_self_describes", harness_clip_rect_self_describes),
             ("clip_rrect_wraps_child", harness_clip_rrect_wraps_child),
             (
+                "clip_rrect_pill_hit_tests_the_painted_radius",
+                harness_clip_rrect_pill_hit_tests_the_painted_radius,
+            ),
+            (
                 "clip_rsuperellipse_hit_tests_the_drawn_curve",
                 harness_clip_rsuperellipse_hit_tests_the_drawn_curve,
             ),
@@ -12794,6 +12891,10 @@ fn family_semantics() {
                 harness_placed_generation_gate_excludes_a_dropped_child_from_semantics,
             ),
             (
+                "placed_generation_gate_excludes_a_dropped_child_from_hits",
+                harness_placed_generation_gate_excludes_a_dropped_child_from_hits,
+            ),
+            (
                 "theater_offstage_from_the_first_pass_publishes_no_semantics",
                 harness_theater_offstage_from_the_first_pass_publishes_no_semantics,
             ),
@@ -12932,6 +13033,10 @@ fn family_wrap_flow_table() {
             (
                 "flow_degenerate_transform_is_never_hit_but_siblings_still_are",
                 harness_flow_degenerate_transform_is_never_hit_but_siblings_still_are,
+            ),
+            (
+                "flow_hits_where_it_painted_until_it_repaints",
+                harness_flow_hits_where_it_painted_until_it_repaints,
             ),
             (
                 "table_grid_lays_out_each_cell_at_its_exact_offset_and_size",

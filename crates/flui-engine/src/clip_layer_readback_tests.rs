@@ -242,11 +242,9 @@ fn the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary() {
 
 /// Hit testing reads the drawn shape: with asymmetric radii larger than the
 /// sides, `RSuperellipse::contains` normalizes them exactly as the clip
-/// chain's mask and the per-draw SDF do, so every pixel clear of the boundary
-/// agrees with the GPU — for an unbounded fill and an instanced rect, in both
-/// in-place modes.
+/// chain's mask and the per-draw SDF do.
 fn superellipse_hit_testing_matches_the_mask_with_oversized_radii() {
-    use flui_foundation::geometry::{Point, RSuperellipse, Radius};
+    use flui_foundation::geometry::{RSuperellipse, Radius};
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
@@ -258,13 +256,82 @@ fn superellipse_hit_testing_matches_the_mask_with_oversized_radii() {
         Radius::new(side * 0.75, side),
         Radius::ZERO,
     );
+    assert_clip_reads_back_as(
+        &renderer,
+        "superellipse",
+        |builder, behavior| {
+            builder.push_clip_superellipse(shape, behavior);
+        },
+        |point| shape.contains(point),
+        (1_000, 50),
+    );
+}
+
+/// Hit testing reads the drawn rounded rect: `RRect::contains` answers for the
+/// shape the clip paints when the radii overflow the sides (a pill whose
+/// radius exceeds its height, a corner wider than half the box) and when the
+/// corners are elliptical (an oval drawn as a rounded rect).
+fn rrect_hit_testing_matches_the_mask_with_oversized_and_elliptical_radii() {
+    use flui_foundation::geometry::{RRect, Radius};
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let side = f64::from(SIDE as f32);
+    let cases = [
+        (
+            "pill",
+            RRect::from_rect_circular(Rect::from_xywh(0.0, 16.0, side, 32.0), 200.0),
+            (600, 100),
+        ),
+        (
+            "wide corner",
+            RRect::from_rect_and_corners(
+                Rect::from_xywh(0.0, 0.0, side, side),
+                Radius::circular(side * 0.875),
+                Radius::circular(side * 0.125),
+                Radius::ZERO,
+                Radius::ZERO,
+            ),
+            (1_000, 100),
+        ),
+        (
+            "oval",
+            RRect::from_rect_elliptical(Rect::from_xywh(0.0, 16.0, side, 32.0), side * 0.5, 16.0),
+            (600, 100),
+        ),
+    ];
+    for (name, rrect, minimums) in cases {
+        assert_clip_reads_back_as(
+            &renderer,
+            name,
+            |builder, behavior| {
+                builder.push_clip_rrect(rrect, behavior);
+            },
+            |point| rrect.contains(point),
+            minimums,
+        );
+    }
+}
+
+/// Every pixel clear of the boundary reads back as `inside` says: the fill is
+/// kept inside the clip `push_clip` installs and the red backdrop survives
+/// outside it — for an unbounded fill and an instanced rect, in both in-place
+/// modes. A point whose 3x3 neighbourhood disagrees is skipped, since sample
+/// coverage is fractional there.
+fn assert_clip_reads_back_as(
+    renderer: &HeadlessRenderer,
+    shape_name: &str,
+    push_clip: impl Fn(&mut SceneBuilder, Clip),
+    inside: impl Fn(flui_foundation::geometry::Point<f64>) -> bool,
+    (min_kept, min_cut): (usize, usize),
+) {
+    use flui_foundation::geometry::Point;
+    let side = f64::from(SIDE as f32);
     for behavior in [Clip::AntiAlias, Clip::HardEdge] {
         for fill_name in ["paint", "rect"] {
             let tree = inside_a_clip(
                 behavior,
-                |builder, behavior| {
-                    builder.push_clip_superellipse(shape, behavior);
-                },
+                |builder, behavior| push_clip(builder, behavior),
                 |canvas| {
                     if fill_name == "paint" {
                         fill_everything(canvas);
@@ -279,15 +346,14 @@ fn superellipse_hit_testing_matches_the_mask_with_oversized_radii() {
             let frame = renderer
                 .render_layer_tree(&tree, (SIDE, SIDE))
                 .expect("the headless capture path must rasterize the scene");
-            let inside =
-                |x: i64, y: i64| shape.contains(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+            let inside_at = |x: i64, y: i64| inside(Point::new(x as f64 + 0.5, y as f64 + 0.5));
             let (mut kept, mut cut) = (0_usize, 0_usize);
             for y in 1..i64::from(SIDE) - 1 {
                 for x in 1..i64::from(SIDE) - 1 {
-                    let here = inside(x, y);
+                    let here = inside_at(x, y);
                     let unanimous = (-1..=1)
                         .flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
-                        .all(|(dx, dy)| inside(x + dx, y + dy) == here);
+                        .all(|(dx, dy)| inside_at(x + dx, y + dy) == here);
                     if !unanimous {
                         continue;
                     }
@@ -296,24 +362,25 @@ fn superellipse_hit_testing_matches_the_mask_with_oversized_radii() {
                         kept += 1;
                         assert!(
                             pixel[1] > 128 && pixel[0] < 64,
-                            "{behavior:?} {fill_name}: ({x}, {y}) inside, got {pixel:?}"
+                            "{shape_name} {behavior:?} {fill_name}: ({x}, {y}) inside, got {pixel:?}"
                         );
                     } else {
                         cut += 1;
                         assert!(
                             pixel[0] > 200 && pixel[1] < 64,
-                            "{behavior:?} {fill_name}: ({x}, {y}) outside, got {pixel:?}"
+                            "{shape_name} {behavior:?} {fill_name}: ({x}, {y}) outside, got {pixel:?}"
                         );
                     }
                 }
             }
             assert!(
-                kept > 1_000 && cut > 50,
-                "{behavior:?} {fill_name}: kept {kept}, cut {cut}"
+                kept > min_kept && cut > min_cut,
+                "{shape_name} {behavior:?} {fill_name}: kept {kept}, cut {cut}"
             );
         }
     }
 }
+
 /// An unbounded green fill — the shape `RenderPhysicalModel` emits.
 ///
 /// That render object is the mode's only production consumer, and its fill goes
@@ -591,6 +658,7 @@ fn clip_layers_read_back_as_the_clip_contract_specifies() {
     a_clip_rect_layer_clips_its_content_and_its_absence_does_not();
     the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary();
     superellipse_hit_testing_matches_the_mask_with_oversized_radii();
+    rrect_hit_testing_matches_the_mask_with_oversized_and_elliptical_radii();
     a_path_clip_lets_through_what_lies_inside_the_box_but_outside_the_shape();
     an_empty_clip_path_clips_everything();
     a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings();

@@ -8,7 +8,7 @@ use crate::presentation::PresentationState;
 use flui_foundation::PresentationId;
 use flui_foundation::geometry::Size;
 use flui_layer::Scene;
-use flui_rendering::binding::RendererBinding as _;
+use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::{DemandKind, FrameSnapshot, Instant, PresentOutcome};
@@ -923,19 +923,37 @@ impl UiRuntime {
             // Hover holds while a scroll is latched (ADR-0208 rule 6).
             .filter(|presentation| !presentation.gestures().is_hover_frozen())
         {
+            let hit_panic = std::cell::Cell::new(None);
             let refresh = catch_unwind(AssertUnwindSafe(|| {
                 presentation
                     .gestures()
                     .mouse_tracker()
                     .update_all_devices(|position, kind| {
                         let mut result = flui_interaction::pointer::HitTestResult::new();
-                        presentation
+                        // A committed frame has published its layout, so the
+                        // tree answers; a render object's panic is a miss and
+                        // reported after the refresh.
+                        if let ViewHitTest::Answered { panic } = presentation
                             .renderer()
-                            .hit_test_in_view(&mut result, position, kind, 0);
+                            .hit_test_in_view(&mut result, position, kind, 0)
+                        {
+                            let mut held = hit_panic.take();
+                            super::input::preserve_first_input_panic(
+                                &mut held,
+                                panic,
+                                "frame ambient hover hit test",
+                            );
+                            hit_panic.set(held);
+                        }
                         result
                     });
             }))
             .err();
+            super::input::preserve_first_input_panic(
+                &mut hover_panic,
+                hit_panic.into_inner(),
+                "frame ambient hover hit test",
+            );
             super::input::preserve_first_input_panic(
                 &mut hover_panic,
                 refresh,

@@ -140,7 +140,9 @@ pin initial, single-failure, competing-failure and subsequent-operation paths.
 
 ### Flow accessibility follows presentation without owning another geometry cache
 
-Flow's pure replay selects presented children and supplies their transforms.
+Flow's pure replay selects presented children and supplies their transforms;
+hit testing reads the record of the last paint instead (ADR-0224's amendment,
+`harness_flow_hits_where_it_painted_until_it_repaints`).
 `FlowPaintingContext::paint_child_with_opacity` records continuous group opacity
 through the ordinary fragment recorder. Its zero-opacity call occupies the slot
 but omits presentation, input and accessibility; partial opacity keeps child
@@ -275,7 +277,8 @@ delivered value. Exhaustion preserves the last sample permanently. The
 private recovery cases `failed_mark_retries`,
 `newer_generation_wins_in_either_commit_order` and
 `restoring_a_delivered_value_while_a_newer_one_is_in_flight_still_marks` pin
-these obligations. A hit visit retains its selected sample independently.
+these obligations. A hit visit reads the sample once, in `hit_test_transform`:
+the walk maps both the position and the entries through that one matrix.
 
 The facade's `a_slide_tick_moves_pixels_without_rebuilding` also drives a
 mounted `SlideTransition` through identity-to-layer and retained-layer ticks.
@@ -586,6 +589,17 @@ The GPU consumers are `render_image_scaled_cover` and
 bounded layout and recorded paint for every fit at tiny scales, and
 `harness_image_placement_slices_and_repeats_in_logical_units` pins a mounted
 2x slice and logical-size repetition.
+
+### Rounded clips hit the shape they paint
+
+`RenderClipRRect` hit-tests with `RRect::contains`, which fits oversized radii
+by `RRect::normalized` — the CSS/Skia factor the engine's clip mask applies — so
+a `BorderRadius::circular(100)` pill on a 200x20 box takes hits along its whole
+straight run (`harness_clip_rrect_pill_hit_tests_the_painted_radius`; the
+engine row `rrect_hit_testing_matches_the_mask_with_oversized_and_elliptical_radii`
+reads oversized and elliptical corners back from the GPU against the same
+`contains`). At `Clip::None` a clip paints nothing and reports no accessible
+clip, so it clips no hits either.
 
 ### Superellipse clips and backdrop groups
 

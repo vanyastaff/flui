@@ -7,24 +7,26 @@
 //! by paint-time [`FlowDelegate::paint_children`] transforms, so moving
 //! children costs a repaint, not a relayout.
 //!
-//! # Hit-testing without mutable paint state
+//! # Hit-testing what was painted
 //!
-//! FLUI's `RenderBox::paint`/`hit_test` are both `&self`, so there is nowhere
-//! to cache "what transform did paint assign to child N" for hit-test to read
-//! later. Instead [`RenderFlow::hit_test`]
-//! **replay** [`FlowDelegate::paint_children`] a second time against a
-//! non-drawing [`FlowPaintingContext::for_replay`] context that only
-//! records `(paint_order, transforms)` — legitimate because
-//! `paint_children` is contractually a pure function of the delegate's own
-//! state plus child sizes (the same assumption `should_repaint`/
-//! `should_relayout` already rely on). This costs one extra O(children)
-//! delegate call per hit-test, not per frame.
+//! [`RenderBox::paint`] records the `(paint_order, transforms)` the delegate
+//! chose into a per-node record, and [`RenderFlow::hit_test`] walks that
+//! record: a hit lands on the child where it is on screen, runs no delegate
+//! code and allocates nothing. A delegate whose state changed since the last
+//! paint (its repaint listenable marks paint) is hit where it still shows
+//! until the repaint lands. Before the first paint nothing is on screen, and
+//! nothing is hit.
 //!
-//! # ParentData
+//! The record lives in the render object, not in parent data: it is the
+//! flow's own paint output, read only by the flow. `RenderFlow` uses plain
+//! [`BoxParentData`].
 //!
-//! Nothing needs caching from paint, since the delegate is replayed instead,
-//! so there is nothing to add to parent data — `RenderFlow` uses plain
-//! [`BoxParentData`], a deliberate simplification, not an oversight.
+//! Semantics and coordinate mapping replay [`FlowDelegate::paint_children`]
+//! against a non-drawing [`FlowPaintingContext::for_replay`] context instead
+//! — legitimate because `paint_children` is contractually a pure function of
+//! the delegate's own state plus child sizes (the same assumption
+//! `should_repaint`/`should_relayout` already rely on), and a coordinate
+//! query has to answer before the first paint too.
 //!
 //! # Repaint listenable
 //!
@@ -36,7 +38,7 @@
 //! # Coordinate mapping
 //!
 //! `apply_paint_transform` replays `paint_children` to recover the child's
-//! paint matrix, the way `hit_test` does; the transform-to and
+//! paint matrix; the transform-to and
 //! local-to-global queries live on `PipelineOwner`, because a FLUI render
 //! object has no parent link.
 //!
@@ -48,6 +50,7 @@
 //! opacity omits the child from presentation, hit-testing and semantics;
 //! partial opacity retains geometry and input without relayout.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_foundation::Variable;
@@ -66,11 +69,32 @@ use flui_rendering::{
 
 use crate::subscription::RenderSubscription;
 
+/// What one [`FlowDelegate::paint_children`] call presented: the children in
+/// paint order and each child's transform (`None` when it was not painted).
+#[derive(Debug, Default)]
+struct FlowPresentation {
+    order: Vec<usize>,
+    transforms: Vec<Option<Matrix4>>,
+    /// The painting context's double-paint guard, kept for its storage.
+    painted: Vec<bool>,
+}
+
+impl FlowPresentation {
+    /// Empties the record for a pass over `children`, keeping its storage.
+    fn reset(&mut self, children: usize) {
+        self.order.clear();
+        self.transforms.clear();
+        self.transforms.resize(children, None);
+        self.painted.clear();
+        self.painted.resize(children, false);
+    }
+}
+
 /// Positions children with paint-time transform matrices chosen by a
 /// [`FlowDelegate`], rather than layout-time offsets.
 ///
 /// See the module docs for why this needs no custom parent data and how
-/// hit-testing works without mutable paint state.
+/// hit-testing reads what paint presented.
 // NOT `Clone`: holds live per-node lifecycle state (a `LocalRenderInvalidationHandle` bound to
 // its `RenderId` + a repaint-`Listenable` subscription id). Cloning would
 // duplicate an id the clone does not own — move-only, like `RenderCustomPaint`
@@ -84,6 +108,9 @@ pub struct RenderFlow {
     /// [`FlowPaintingContext`] the child sizes without touching the
     /// (layout-only) child-layout context again.
     child_sizes: Vec<Size>,
+    /// What the last completed [`RenderBox::paint`] presented, read by
+    /// [`RenderBox::hit_test`]. Its storage is reused paint after paint.
+    painted: RefCell<FlowPresentation>,
     /// Self-dirty handle, held between [`RenderBox::attach`] and
     /// [`RenderBox::detach`] so the delegate's repaint `Listenable` can mark
     /// this node needing paint (ADR-0013). `None` while detached.
@@ -100,6 +127,7 @@ impl RenderFlow {
             delegate,
             clip_behavior: Clip::HardEdge,
             child_sizes: Vec::new(),
+            painted: RefCell::new(FlowPresentation::default()),
             render_invalidation_handle: None,
             delegate_listener: None,
         }
@@ -352,25 +380,29 @@ impl RenderBox for RenderFlow {
         // The clip (when any) is reported through `paint_effects` above and
         // opened by the pipeline around this whole fragment; only the
         // delegate's per-child transform scopes are recorded here.
-        let n = self.child_sizes.len();
-        let (mut painted, mut paint_order, mut transforms) =
-            (vec![false; n], Vec::with_capacity(n), vec![None; n]);
-        let mut flow_ctx = FlowPaintingContext::for_paint(
-            ctx,
-            &self.child_sizes,
-            &mut paint_order,
-            &mut transforms,
-            &mut painted,
-        );
+        //
+        // The record is taken out for the delegate call, so no borrow is held
+        // while user code runs; a delegate that panics leaves it empty, and an
+        // unpainted flow takes no hits.
+        let mut record = self.painted.take();
+        record.reset(self.child_sizes.len());
+        let FlowPresentation {
+            order,
+            transforms,
+            painted,
+        } = &mut record;
+        let mut flow_ctx =
+            FlowPaintingContext::for_paint(ctx, &self.child_sizes, order, transforms, painted);
         self.delegate.paint_children(&mut flow_ctx);
+        *self.painted.borrow_mut() = record;
     }
 
     /// Multiplies in the transform the delegate painted the child under.
     ///
     /// **The default would be wrong here.** A flow paints each child under a
     /// per-child transform scope chosen by the delegate, not at its committed
-    /// offset. FLUI caches no per-child transform (see the module docs), so this
-    /// replays `paint_children` exactly as `hit_test` does.
+    /// offset. A coordinate query must answer before the first paint too (see
+    /// the module docs), so this replays `paint_children`.
     ///
     /// A child the delegate never painted contributes no transform and leaves
     /// the matrix alone.
@@ -397,15 +429,14 @@ impl RenderBox for RenderFlow {
             return false;
         }
 
-        // Side-effect-free replay of the SAME delegate call `paint` made —
-        // see the module docs for why this stands in for a paint-time
-        // transform cache.
-        let (paint_order, transforms) = self.replay_presentation(ctx.own_size());
+        // What the last paint presented — see the module docs. Only `paint`
+        // writes the record, and it cannot run during a hit test.
+        let record = self.painted.borrow();
 
         let position = *ctx.position();
         // Reverse paint order = top-most-painted-first.
-        for &index in paint_order.iter().rev() {
-            let Some(transform) = transforms[index] else {
+        for &index in record.order.iter().rev() {
+            let Some(transform) = record.transforms.get(index).copied().flatten() else {
                 continue;
             };
             // A degenerate (non-invertible) transform means nothing of

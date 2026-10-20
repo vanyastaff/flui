@@ -382,37 +382,14 @@ impl RenderBox for RenderTransform {
         // is ill-defined, so only the child decides. A scale(2) child visually
         // covering 80×80 must be hittable across that whole area even
         // though this node's laid-out size is 40×40.
-        if !self.has_child {
-            return false;
-        }
-        if !self.transform_hit_tests {
-            // The child is hit where it was LAID OUT, not where it paints
-            // (`transform_hit_tests: false`). A degenerate matrix does
-            // not disqualify the child here either: nothing is being
-            // inverted, so there is nothing to be singular.
-            return ctx.hit_test_child(0, *ctx.position());
-        }
-        let Some(inverse) = self.effective_transform(ctx.own_size()).try_inverse() else {
-            // A degenerate (non-invertible) matrix collapses the subtree
-            // to zero visual area: nothing is visible, nothing is hit.
-            return false;
-        };
-        let local_pos = ctx.position();
-        let Some((tx, ty)) = inverse.unproject_to_plane(local_pos.dx, local_pos.dy) else {
-            return false;
-        };
-        // Transform symmetry: the child sees the SAME point the paint
-        // matrix mapped — forward the inverse-transformed position, not
-        // the original one. (The pre-fix shape passed the untransformed
-        // position; the inverse was used only for a bounds gate, so any
-        // scaled/rotated child hit-tested at the wrong local point.)
-
-        // The pipeline pushes the INVERSE of hit_test_transform() onto
-        // HitTestResult before calling hit_test_raw (HitTestResult composes
-        // the global-to-local mapping from each level's own inverse), so
-        // child entries capture the correct accumulated transform.
-        // No push/pop needed here.
-        ctx.hit_test_child(0, Offset::new(tx, ty))
+        //
+        // The position is already where the child sits: with
+        // `transform_hit_tests` the walk inverted `hit_test_transform` once,
+        // mapped the position through it and pushed it onto the result (a
+        // degenerate matrix refused the subtree before this call — zero
+        // visual area, nothing hit). Without it the child is hit where it
+        // was LAID OUT, and the position is the untransformed one.
+        self.has_child && ctx.hit_test_child(0, *ctx.position())
     }
 
     fn skip_paint(&self) -> bool {

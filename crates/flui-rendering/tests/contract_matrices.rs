@@ -220,6 +220,14 @@ fn hit_test_matrix() {
             "hit_test_pipeline::caught_zero_offset_driver_node_scope_restores_hit_coordinates",
             crate::hit_test_pipeline::caught_zero_offset_driver_node_scope_restores_hit_coordinates,
         ),
+        (
+            "hit_test_pipeline::default_parent_hit_test_reaches_its_children",
+            crate::hit_test_pipeline::default_parent_hit_test_reaches_its_children,
+        ),
+        (
+            "hit_test_pipeline::a_panicking_hit_test_is_a_miss_and_the_first_panic_resumes_after_the_path",
+            crate::hit_test_pipeline::a_panicking_hit_test_is_a_miss_and_the_first_panic_resumes_after_the_path,
+        ),
     ];
     crate::run_table(cases);
 }

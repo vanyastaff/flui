@@ -63,6 +63,8 @@ pub struct HitTestContext<'ctx, P: Protocol, A: Arity, PD: ParentData> {
     /// (its hit gate is driver-owned). 2B field dedup: render objects no
     /// longer cache their own size.
     own_size: Size,
+    /// How many children the walk can visit for this node.
+    child_count: usize,
     /// Whether this render object should be appended to the global hit-test
     /// path even when its `hit_test` return value keeps sibling traversal open.
     self_hit_entry_registered: bool,
@@ -115,8 +117,24 @@ where
         Self {
             inner,
             own_size,
+            child_count: 0,
             self_hit_entry_registered: false,
         }
+    }
+
+    /// Sets how many children the walk can visit for this node (zero unless
+    /// set, as for a leaf).
+    #[must_use]
+    pub fn with_child_count(mut self, child_count: usize) -> Self {
+        self.child_count = child_count;
+        self
+    }
+
+    /// How many children the walk can visit for this node: the valid
+    /// indices for [`Self::hit_test_child`] and
+    /// [`Self::hit_test_child_at_layout_offset`].
+    pub fn child_count(&self) -> usize {
+        self.child_count
     }
 
     // ════════════════════════════════════════════════════════════════════════

@@ -565,7 +565,7 @@ where
     fn hit_test_raw(
         &self,
         position: crate::protocol::ProtocolPosition<SliverProtocol>,
-        _child_count: usize,
+        child_count: usize,
         size: flui_foundation::geometry::Size,
         hit_child: &mut dyn FnMut(
             usize,
@@ -580,7 +580,8 @@ where
             crate::protocol::SliverHitTestCtx::<T::Arity, T::ParentData>::with_child_callback(
                 position, hit_child,
             );
-        let mut ctx = crate::context::SliverHitTestContext::new(inner, size);
+        let mut ctx =
+            crate::context::SliverHitTestContext::new(inner, size).with_child_count(child_count);
         let blocks_below = T::hit_test(self, &mut ctx);
         HitTestOutcome::new(
             ctx.self_hit_entry_registered() || blocks_below,
