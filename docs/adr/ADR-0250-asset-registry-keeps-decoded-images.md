@@ -44,8 +44,10 @@ an async worker, and sent the result down a oneshot. Five defects followed from 
    from a drop guard and closes its waiters.
 3. **Decodes run on the loading runtime's blocking pool behind slots.** The decode runs in
    `spawn_blocking`, at most `with_decode_threads` at once (half the cores, at most four). A
-   host's async workers never decode. Before reading, a load takes one of four load slots per
-   decode thread and holds it until its decode returns, which bounds the reads in flight and
+   host's async workers never decode. At admission, on the calling thread and under the lock
+   that assigns its order, a load reserves one of four load slots per decode thread, so a task
+   that first runs late keeps its place; the task waits for that reservation before reading and
+   holds the slot until its decode returns, which bounds the reads in flight and
    the encoded bytes waiting to decode by count; each is bounded by size too, a response body
    and an image file alike at 256 MiB, refused before more than that is buffered. Once its
    bytes are read it asks for a decode

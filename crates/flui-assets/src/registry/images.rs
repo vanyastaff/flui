@@ -47,7 +47,7 @@ use parking_lot::Mutex;
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 
-use super::ordered_slots::{AdmissionOrder, OrderedSlots, Slot};
+use super::ordered_slots::{AdmissionOrder, OrderedSlots, Reservation};
 use crate::Image;
 use crate::error::{AssetError, Result};
 
@@ -185,8 +185,10 @@ impl std::fmt::Debug for DecodedImages {
 pub(crate) enum Admission {
     /// The request was served or joined a load already in flight.
     Served(ImageLoad),
-    /// The request starts a load: spawn it with [`DecodedImages::attach`].
-    Start(ImageLoad, Arc<LoadTicket>),
+    /// The request starts a load: spawn it with [`DecodedImages::attach`]. The
+    /// reservation is its load slot, taken at admission; the task holds it
+    /// from before its read until its decode returns.
+    Start(ImageLoad, Arc<LoadTicket>, Reservation),
 }
 
 impl DecodedImages {
@@ -246,10 +248,15 @@ impl DecodedImages {
                 task: None,
             },
         );
+        // Reserved under the lock that assigned `order`, so load slots follow
+        // admission order however late each task first runs. The slot queue's
+        // lock never takes this one, so the nesting cannot invert.
+        let load_slot = self.loads.reserve(order);
         drop(state);
         Admission::Start(
             ImageLoad::waiting(rx, Arc::clone(self), source, Arc::clone(&ticket)),
             ticket,
+            load_slot,
         )
     }
 
@@ -365,12 +372,6 @@ impl DecodedImages {
             state.trim_to(limit, &mut retired);
         }
         drop(retired);
-    }
-
-    /// Waits for a load slot, behind every waiting load admitted earlier. The
-    /// load holds it from before its read until its decode returns.
-    pub(crate) async fn admit_load(&self, ticket: &LoadTicket) -> Slot {
-        self.loads.acquire(ticket.order).await
     }
 
     /// Decodes `bytes` on the current runtime's blocking pool once a decode

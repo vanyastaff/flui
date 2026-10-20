@@ -257,9 +257,9 @@ impl AssetRegistry {
         F: FnOnce(Arc<str>) -> Fut,
         Fut: std::future::Future<Output = Result<Vec<u8>>> + Send + 'static,
     {
-        let (load, ticket) = match self.decoded_images.admit(source.clone()) {
+        let (load, ticket, load_slot) = match self.decoded_images.admit(source.clone()) {
             images::Admission::Served(load) => return load,
-            images::Admission::Start(load, ticket) => (load, ticket),
+            images::Admission::Start(load, ticket, load_slot) => (load, ticket, load_slot),
         };
         let completion =
             images::Completion::new(Arc::clone(&self.decoded_images), source.clone(), ticket);
@@ -279,10 +279,11 @@ impl AssetRegistry {
         // drops the task inside `spawn`, and the completion's drop then
         // settles the entry on this thread.
         let task = handle.spawn(async move {
-            // Taken before the read starts and held until the decode returns:
+            // Reserved at admission, granted before the read starts and held
+            // until the decode returns:
             // reads past admission, and the encoded bytes waiting to decode,
             // are bounded by count.
-            let _load = completion.images().admit_load(completion.ticket()).await;
+            let _load = load_slot.granted().await;
             let outcome = match bytes.await {
                 Ok(bytes) => {
                     completion

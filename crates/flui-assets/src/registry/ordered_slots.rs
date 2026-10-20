@@ -1,9 +1,9 @@
 //! A bounded set of slots, each freed one handed to the earliest-admitted
 //! waiter.
 //!
-//! A registry keeps two: load slots, which a load holds from before its read
-//! until its decode returns, and decode slots, which it holds while it
-//! decodes. Loads reach each queue in whatever order their earlier steps
+//! A registry keeps two: load slots, which a load reserves at admission
+//! ([`OrderedSlots::reserve`]) and holds from before its read until its decode
+//! returns, and decode slots, which it holds while it decodes. Loads reach each queue in whatever order their earlier steps
 //! finish; [`OrderedSlots`] orders the waiters by admission instead.
 //!
 //! The queue is work-conserving: it orders only loads that are waiting. A free
@@ -58,7 +58,7 @@ impl Ord for Waiter {
     }
 }
 
-/// The right to run one decode; dropping it frees the slot for the next
+/// One slot held; dropping it frees the slot for the next
 /// waiter.
 pub(crate) struct Slot {
     queue: Option<Arc<OrderedSlots>>,
@@ -68,6 +68,25 @@ impl Drop for Slot {
     fn drop(&mut self) {
         if let Some(queue) = self.queue.take() {
             OrderedSlots::release(&queue);
+        }
+    }
+}
+
+/// A slot taken, or a place held in the queue for one. Dropping it gives the
+/// slot back or gives up the place.
+pub(crate) enum Reservation {
+    Granted(Slot),
+    Queued(oneshot::Receiver<Slot>),
+}
+
+impl Reservation {
+    /// The slot, once the queue reaches this reservation.
+    pub(crate) async fn granted(self) -> Slot {
+        match self {
+            Self::Granted(slot) => slot,
+            Self::Queued(rx) => rx
+                .await
+                .expect("BUG: a queued waiter is only dropped after it is handed a slot"),
         }
     }
 }
@@ -84,24 +103,24 @@ impl OrderedSlots {
 
     /// Waits for a slot, behind every waiter admitted before `order`.
     pub(crate) async fn acquire(self: &Arc<Self>, order: AdmissionOrder) -> Slot {
-        let slot = {
-            let mut state = self.state.lock();
-            if state.free > 0 && state.waiting.is_empty() {
-                state.free -= 1;
-                None
-            } else {
-                let (tx, rx) = oneshot::channel();
-                state.waiting.push(Waiter { order, slot: tx });
-                Some(rx)
-            }
-        };
-        match slot {
-            None => Slot {
+        self.reserve(order).granted().await
+    }
+
+    /// Takes a free slot, or a place in the queue, now, on the calling
+    /// thread. A caller that reserves at admission, under the lock that
+    /// assigns `order`, holds its place however late its task first runs.
+    pub(crate) fn reserve(self: &Arc<Self>, order: AdmissionOrder) -> Reservation {
+        let mut state = self.state.lock();
+        if state.free > 0 && state.waiting.is_empty() {
+            state.free -= 1;
+            drop(state);
+            Reservation::Granted(Slot {
                 queue: Some(Arc::clone(self)),
-            },
-            Some(rx) => rx
-                .await
-                .expect("BUG: a queued waiter is only dropped after it is handed a slot"),
+            })
+        } else {
+            let (tx, rx) = oneshot::channel();
+            state.waiting.push(Waiter { order, slot: tx });
+            Reservation::Queued(rx)
         }
     }
 

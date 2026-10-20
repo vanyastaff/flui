@@ -484,8 +484,10 @@ settles its entry from a drop guard, closing its waiters with an error.
 
 Bytes are read on the loading runtime's async workers and decoded on its
 blocking pool, at most `with_decode_threads` at once (half the cores, at most
-four). A host runtime's async workers never run a decode. Before it reads, a
-load takes one of four load slots per decode thread and holds it until its
+four). A host runtime's async workers never run a decode. At admission, on the
+calling thread and under the lock that assigns its order, a
+load reserves one of four load slots per decode thread; its task waits for
+that reservation before it reads and holds the slot until its
 decode returns, so the reads in flight and the encoded bytes waiting to decode
 are bounded by count, and each by size: a response body by `MAX_BODY_BYTES`, a
 file by the same 256 MiB (`an_oversized_file_is_refused_before_it_is_read`),
