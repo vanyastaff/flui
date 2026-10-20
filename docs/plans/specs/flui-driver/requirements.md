@@ -239,7 +239,7 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
   errors, generated from one method table. None can do what the others cannot.
 - **R28a.** MCP lists a **core tool set** by default, 13 tools enough to launch, read,
   locate, act, type, wait, capture and audit a screen. The other methods are grouped into capability sets the client
-  enables with `--caps <group>`: `input`, `inspect`, `pixels`, `record`, `perf`, `audit`,
+  enables with `--caps <group>`: `session` (attach, capabilities, window placement, frame and settle waits, the animation clock), `input`, `inspect`, `pixels`, `record`, `perf`, `audit`,
   `explore`, `vision`, `layout`. Every method stays reachable from MCP; tiering only changes what is listed by
   default, so a model does not choose among 50 tools. `--tools` and `--exclude-tools` filter by
   name. A test measures the token size of the listed schemas, since context cost is the point of

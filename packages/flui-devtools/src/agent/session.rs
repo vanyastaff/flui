@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use flui_protocol::{
-    ActionRequest, ElementId, ErrorCode, PROTOCOL_VERSION, ReadQuery, Retry, WindowId,
+    ActionRequest, ElementId, ErrorCode, ProtocolVersion, ReadQuery, Retry, WindowId,
 };
 use flui_sdk::view::dev_agent::{AgentAnswer, AgentFault, HandleKind};
 use interprocess::local_socket::Stream;
@@ -15,6 +15,11 @@ use serde_json::{Value, json};
 use super::MAX_LINE;
 use super::endpoint::{POLL, Shared};
 use super::registry::Lookup;
+
+/// The schema this endpoint answers in: ADR-0095's `windows`, `read`, `act` and `motion`
+/// operations, which protocol 0.5 renamed into its method table. The driver agent that serves
+/// 0.5 replaces this endpoint, so it keeps saying 0.4 rather than claim methods it lacks.
+const ENDPOINT_PROTOCOL: ProtocolVersion = ProtocolVersion::new(0, 4);
 
 /// How long a reply may take to leave before the connection is dropped.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -44,7 +49,7 @@ pub(super) fn serve(stream: Stream, shared: &Shared) {
         tracing::debug!("agent connection refused: no valid hello");
         return;
     }
-    let welcome = json!({ "hello": { "protocol": PROTOCOL_VERSION.to_string() } });
+    let welcome = json!({ "hello": { "protocol": ENDPOINT_PROTOCOL.to_string() } });
     if connection.write_line(&welcome, shared).is_err() {
         return;
     }

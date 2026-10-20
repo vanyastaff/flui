@@ -1,0 +1,6364 @@
+{
+  "$defs": {
+    "ActOutcome": {
+      "properties": {
+        "effect": {
+          "$ref": "#/$defs/Effect"
+        },
+        "element": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ElementRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JournalSpan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "readback_failed": {
+          "type": "boolean"
+        },
+        "snapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SnapshotReading"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "via": {
+          "$ref": "#/$defs/InputPath"
+        }
+      },
+      "required": [
+        "via",
+        "effect"
+      ],
+      "type": "object"
+    },
+    "ActParams": {
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ActionName"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/Snapshot"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "target",
+        "action"
+      ],
+      "type": "object"
+    },
+    "ActionName": {
+      "oneOf": [
+        {
+          "const": "invoke",
+          "type": "string"
+        },
+        {
+          "const": "toggle",
+          "type": "string"
+        },
+        {
+          "const": "set_value",
+          "type": "string"
+        },
+        {
+          "const": "select",
+          "type": "string"
+        },
+        {
+          "const": "focus",
+          "type": "string"
+        },
+        {
+          "const": "expand",
+          "type": "string"
+        },
+        {
+          "const": "collapse",
+          "type": "string"
+        },
+        {
+          "const": "scroll_into_view",
+          "type": "string"
+        }
+      ]
+    },
+    "ActionSequence": {
+      "properties": {
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/InputSource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "sources"
+      ],
+      "type": "object"
+    },
+    "Actionability": {
+      "properties": {
+        "attached": {
+          "type": "boolean"
+        },
+        "covered_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "point": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogicalPoint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "receives": {
+          "type": "boolean"
+        },
+        "rect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogicalRect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "$ref": "#/$defs/TreeRevision"
+        },
+        "stable": {
+          "type": "boolean"
+        },
+        "visible": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "attached",
+        "visible",
+        "stable",
+        "enabled",
+        "receives",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "ActionabilityCheck": {
+      "oneOf": [
+        {
+          "const": "attached",
+          "type": "string"
+        },
+        {
+          "const": "visible",
+          "type": "string"
+        },
+        {
+          "const": "stable",
+          "type": "string"
+        },
+        {
+          "const": "enabled",
+          "type": "string"
+        },
+        {
+          "const": "receives",
+          "type": "string"
+        }
+      ]
+    },
+    "ActionabilityParams": {
+      "properties": {
+        "element": {
+          "$ref": "#/$defs/ElementRef"
+        },
+        "point": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogicalPoint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "element"
+      ],
+      "type": "object"
+    },
+    "AppInfo": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "pid": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "target"
+      ],
+      "type": "object"
+    },
+    "AttachParams": {
+      "properties": {
+        "endpoint": {
+          "type": "string"
+        },
+        "input": {
+          "$ref": "#/$defs/InputPolicy"
+        },
+        "token_file": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "endpoint",
+        "token_file"
+      ],
+      "type": "object"
+    },
+    "AuditFinding": {
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "node": {
+          "$ref": "#/$defs/ElementRef"
+        },
+        "rule": {
+          "$ref": "#/$defs/AuditRule"
+        }
+      },
+      "required": [
+        "rule",
+        "node",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "AuditParams": {
+      "properties": {
+        "rules": {
+          "items": {
+            "$ref": "#/$defs/AuditRule"
+          },
+          "type": "array"
+        },
+        "window": {
+          "$ref": "#/$defs/WindowId"
+        }
+      },
+      "required": [
+        "window"
+      ],
+      "type": "object"
+    },
+    "AuditReport": {
+      "properties": {
+        "checked": {
+          "items": {
+            "$ref": "#/$defs/AuditRule"
+          },
+          "type": "array"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/AuditFinding"
+          },
+          "type": "array"
+        },
+        "not_checked": {
+          "items": {
+            "$ref": "#/$defs/NotChecked"
+          },
+          "type": "array"
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict"
+        }
+      },
+      "required": [
+        "verdict",
+        "checked"
+      ],
+      "type": "object"
+    },
+    "AuditRule": {
+      "oneOf": [
+        {
+          "const": "unnamed",
+          "type": "string"
+        },
+        {
+          "const": "focus_order",
+          "type": "string"
+        },
+        {
+          "const": "target_size",
+          "type": "string"
+        },
+        {
+          "const": "no_alternative",
+          "type": "string"
+        },
+        {
+          "const": "alternative_differs",
+          "type": "string"
+        }
+      ]
+    },
+    "BlobRef": {
+      "properties": {
+        "bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "media": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "bytes",
+        "media"
+      ],
+      "type": "object"
+    },
+    "Capabilities": {
+      "properties": {
+        "captures": {
+          "items": {
+            "$ref": "#/$defs/CaptureSource"
+          },
+          "type": "array"
+        },
+        "isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Isolation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "methods": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "paths": {
+          "items": {
+            "$ref": "#/$defs/InputPath"
+          },
+          "type": "array"
+        },
+        "pointers": {
+          "items": {
+            "$ref": "#/$defs/PointerDevice"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "paths",
+        "pointers",
+        "captures",
+        "methods"
+      ],
+      "type": "object"
+    },
+    "CaptureMeta": {
+      "properties": {
+        "blob": {
+          "$ref": "#/$defs/BlobRef"
+        },
+        "frame": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "height": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogicalRect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scale": {
+          "format": "double",
+          "type": "number"
+        },
+        "source": {
+          "$ref": "#/$defs/CaptureSource"
+        },
+        "width": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "source",
+        "width",
+        "height",
+        "scale",
+        "blob"
+      ],
+      "type": "object"
+    },
+    "CaptureParams": {
+      "properties": {
+        "region": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogicalRect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "window": {
+          "$ref": "#/$defs/WindowId"
+        }
+      },
+      "required": [
+        "window"
+      ],
+      "type": "object"
+    },
+    "CaptureSource": {
+      "oneOf": [
+        {
+          "const": "presented",
+          "type": "string"
+        },
+        {
+          "const": "rendered",
+          "type": "string"
+        },
+        {
+          "const": "os",
+          "type": "string"
+        }
+      ]
+    },
+    "ChangedField": {
+      "oneOf": [
+        {
+          "const": "name",
+          "type": "string"
+        },
+        {
+          "const": "value",
+          "type": "string"
+        },
+        {
+          "const": "description",
+          "type": "string"
+        },
+        {
+          "const": "state",
+          "type": "string"
+        },
+        {
+          "const": "actions",
+          "type": "string"
+        },
+        {
+          "const": "bounds",
+          "type": "string"
+        }
+      ]
+    },
+    "Checked": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "const": "mixed"
+        }
+      ]
+    },
+    "CloseParams": {
+      "properties": {
+        "keep_app": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Closed": {
+      "properties": {
+        "exit": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Condition": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "appears": {
+              "$ref": "#/$defs/Locator"
+            }
+          },
+          "required": [
+            "appears"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "gone": {
+              "$ref": "#/$defs/Locator"
+            }
+          },
+          "required": [
+            "gone"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "matches": {
+              "properties": {
+                "expect": {
+                  "$ref": "#/$defs/Expectation"
+                },
+                "locator": {
+                  "$ref": "#/$defs/Locator"
+                }
+              },
+              "required": [
+                "locator",
+                "expect"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "matches"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "settled",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "frames": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "frames"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "event": {
+              "$ref": "#/$defs/EventFilter"
+            }
+          },
+          "required": [
+            "event"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "all": {
+              "items": {
+                "$ref": "#/$defs/Condition"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "all"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "any": {
+              "items": {
+                "$ref": "#/$defs/Condition"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "any"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DeviceClass": {
+      "oneOf": [
+        {
+          "const": "mouse",
+          "type": "string"
+        },
+        {
+          "const": "touch",
+          "type": "string"
+        },
+        {
+          "const": "pen",
+          "type": "string"
+        },
+        {
+          "const": "trackpad",
+          "type": "string"
+        },
+        {
+          "const": "keyboard",
+          "type": "string"
+        },
+        {
+          "const": "ime",
+          "type": "string"
+        }
+      ]
+    },
+    "Direction": {
+      "oneOf": [
+        {
+          "const": "up",
+          "type": "string"
+        },
+        {
+          "const": "down",
+          "type": "string"
+        },
+        {
+          "const": "left",
+          "type": "string"
+        },
+        {
+          "const": "right",
+          "type": "string"
+        }
+      ]
+    },
+    "Distribution": {
+      "properties": {
+        "max": {
+          "format": "double",
+          "type": "number"
+        },
+        "p50": {
+          "format": "double",
+          "type": "number"
+        },
+        "p90": {
+          "format": "double",
+          "type": "number"
+        },
+        "p95": {
+          "format": "double",
+          "type": "number"
+        },
+        "p99": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "p50",
+        "p90",
+        "p95",
+        "p99",
+        "max"
+      ],
+      "type": "object"
+    },
+    "DragParams": {
+      "properties": {
+        "force": {
+          "type": "boolean"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/Snapshot"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "to": {
+          "$ref": "#/$defs/Target"
+        },
+        "via": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "target",
+        "to"
+      ],
+      "type": "object"
+    },
+    "Effect": {
+      "properties": {
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/EffectKind"
+        },
+        "sent": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "total": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EffectUnit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "EffectKind": {
+      "oneOf": [
+        {
+          "const": "ran",
+          "type": "string"
+        },
+        {
+          "const": "may_have_run",
+          "type": "string"
+        },
+        {
+          "const": "partial",
+          "type": "string"
+        },
+        {
+          "const": "incidental",
+          "type": "string"
+        }
+      ]
+    },
+    "EffectUnit": {
+      "oneOf": [
+        {
+          "const": "event",
+          "type": "string"
+        },
+        {
+          "const": "tick",
+          "type": "string"
+        },
+        {
+          "const": "character",
+          "type": "string"
+        },
+        {
+          "const": "chord",
+          "type": "string"
+        }
+      ]
+    },
+    "ElementId": {
+      "pattern": "^e[1-9][0-9]*$",
+      "type": "string"
+    },
+    "ElementRef": {
+      "pattern": "^w[1-9][0-9]*/e[1-9][0-9]*$",
+      "type": "string"
+    },
+    "Empty": {
+      "type": "object"
+    },
+    "ErrorCode": {
+      "oneOf": [
+        {
+          "const": "invalid_argument",
+          "type": "string"
+        },
+        {
+          "const": "not_supported",
+          "type": "string"
+        },
+        {
+          "const": "busy",
+          "type": "string"
+        },
+        {
+          "const": "not_found",
+          "type": "string"
+        },
+        {
+          "const": "unknown_handle",
+          "type": "string"
+        },
+        {
+          "const": "gone",
+          "type": "string"
+        },
+        {
+          "const": "disabled",
+          "type": "string"
+        },
+        {
+          "const": "action_unsupported",
+          "type": "string"
+        },
+        {
+          "const": "not_foreground",
+          "type": "string"
+        },
+        {
+          "const": "focus_elsewhere",
+          "type": "string"
+        },
+        {
+          "const": "outside_target",
+          "type": "string"
+        },
+        {
+          "const": "timeout",
+          "type": "string"
+        },
+        {
+          "const": "input_held",
+          "type": "string"
+        },
+        {
+          "const": "shutting_down",
+          "type": "string"
+        },
+        {
+          "const": "ambiguous",
+          "type": "string"
+        },
+        {
+          "const": "not_actionable",
+          "type": "string"
+        },
+        {
+          "const": "stale",
+          "type": "string"
+        },
+        {
+          "const": "version",
+          "type": "string"
+        },
+        {
+          "const": "platform",
+          "type": "string"
+        }
+      ]
+    },
+    "ErrorObject": {
+      "properties": {
+        "app": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProtocolVersion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "candidates": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "capability": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProtocolVersion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "covered_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Effect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exit": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "failed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionabilityCheck"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "handle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HandleKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "retry": {
+          "$ref": "#/$defs/Retry"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retry"
+      ],
+      "type": "object"
+    },
+    "Event": {
+      "oneOf": [
+        {
+          "properties": {
+            "event": {
+              "const": "frame",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/FrameEvent"
+            }
+          },
+          "required": [
+            "event",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "event": {
+              "const": "input",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/InputEvent"
+            }
+          },
+          "required": [
+            "event",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "event": {
+              "const": "semantics",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/SemanticsEvent"
+            }
+          },
+          "required": [
+            "event",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "event": {
+              "const": "window",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/WindowEvent"
+            }
+          },
+          "required": [
+            "event",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "event": {
+              "const": "gap",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/GapEvent"
+            }
+          },
+          "required": [
+            "event",
+            "params"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EventFilter": {
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/EventKind"
+        },
+        "window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WindowId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "EventKind": {
+      "oneOf": [
+        {
+          "const": "frame",
+          "type": "string"
+        },
+        {
+          "const": "input",
+          "type": "string"
+        },
+        {
+          "const": "semantics",
+          "type": "string"
+        },
+        {
+          "const": "window",
+          "type": "string"
+        },
+        {
+          "const": "gap",
+          "type": "string"
+        }
+      ]
+    },
+    "Expectation": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/TextMatch"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "value": {
+              "$ref": "#/$defs/TextMatch"
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "$ref": "#/$defs/StateFilter"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "count": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "count"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "focused",
+          "type": "string"
+        }
+      ]
+    },
+    "FrameEvent": {
+      "properties": {
+        "frame": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "presented": {
+          "type": "boolean"
+        },
+        "time_us": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "window": {
+          "$ref": "#/$defs/WindowId"
+        }
+      },
+      "required": [
+        "window",
+        "frame",
+        "presented"
+      ],
+      "type": "object"
+    },
+    "FramePhase": {
+      "oneOf": [
+        {
+          "const": "input",
+          "type": "string"
+        },
+        {
+          "const": "build",
+          "type": "string"
+        },
+        {
+          "const": "layout",
+          "type": "string"
+        },
+        {
+          "const": "paint",
+          "type": "string"
+        },
+        {
+          "const": "semantics",
+          "type": "string"
+        },
+        {
+          "const": "commit",
+          "type": "string"
+        },
+        {
+          "const": "submit",
+          "type": "string"
+        }
+      ]
+    },
+    "FrameSample": {
+      "properties": {
+        "frame": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ms": {
+          "format": "double",
+          "type": "number"
+        },
+        "phases": {
+          "items": {
+            "$ref": "#/$defs/PhaseTime"
+          },
+          "type": "array"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "frame",
+        "ms"
+      ],
+      "type": "object"
+    },
+    "FramesParams": {
+      "properties": {
+        "frames": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "window": {
+          "$ref": "#/$defs/WindowId"
+        }
+      },
+      "required": [
+        "window",
+        "frames"
+      ],
+      "type": "object"
+    },
+    "GapEvent": {
+      "properties": {
+        "missed": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "missed"
+      ],
+      "type": "object"
+    },
+    "HandleKind": {
+      "oneOf": [
+        {
+          "const": "element",
+          "type": "string"
+        },
+        {
+          "const": "window",
+          "type": "string"
+        },
+        {
+          "const": "process",
+          "type": "string"
+        },
+        {
+          "const": "subscription",
+          "type": "string"
+        }
+      ]
+    },
+    "Hello": {
+      "properties": {
+        "client": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "protocol": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "token",
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "HelloReply": {
+      "properties": {
+        "app": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AppInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "capabilities": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Capabilities"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "protocol": {
+          "$ref": "#/$defs/ProtocolVersion"
+        }
+      },
+      "required": [
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "ImeAction": {
+      "oneOf": [
+        {
+          "properties": {
+            "cursor": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "set_composition",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "commit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "cancel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "InputEvent": {
+      "properties": {
+        "entry": {
+          "$ref": "#/$defs/JournalEntry"
+        },
+        "window": {
+          "$ref": "#/$defs/WindowId"
+        }
+      },
+      "required": [
+        "window",
+        "entry"
+      ],
+      "type": "object"
+    },
+    "InputKind": {
+      "oneOf": [
+        {
+          "const": "pointer_down",
+          "type": "string"
+        },
+        {
+          "const": "pointer_move",
+          "type": "string"
+        },
+        {
+          "const": "pointer_up",
+          "type": "string"
+        },
+        {
+          "const": "pointer_cancel",
+          "type": "string"
+        },
+        {
+          "const": "scroll",
+          "type": "string"
+        },
+        {
+          "const": "gesture",
+          "type": "string"
+        },
+        {
+          "const": "key_down",
+          "type": "string"
+        },
+        {
+          "const": "key_up",
+          "type": "string"
+        },
+        {
+          "const": "text",
+          "type": "string"
+        },
+        {
+          "const": "composition",
+          "type": "string"
+        }
+      ]
+    },
+    "InputParams": {
+      "properties": {
+        "actions": {
+          "$ref": "#/$defs/ActionSequence"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/Snapshot"
+        },
+        "via": {
+          "$ref": "#/$defs/InputPolicy"
+        },
+        "window": {
+          "$ref": "#/$defs/WindowId"
+        }
+      },
+      "required": [
+        "window",
+        "actions"
+      ],
+      "type": "object"
+    },
+    "InputPath": {
+      "oneOf": [
+        {
+          "const": "semantic",
+          "type": "string"
+        },
+        {
+          "const": "synthetic",
+          "type": "string"
+        },
+        {
+          "const": "os",
+          "type": "string"
+        }
+      ]
+    },
+    "InputPolicy": {
+      "properties": {
+        "prefer": {
+          "$ref": "#/$defs/InputPath"
+        },
+        "require": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "InputSource": {
+      "oneOf": [
+        {
+          "properties": {
+            "actions": {
+              "items": {
+                "$ref": "#/$defs/PointerAction"
+              },
+              "type": "array"
+            },
+            "device": {
+              "$ref": "#/$defs/PointerDevice"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "pointer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "actions"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "actions": {
+              "items": {
+                "$ref": "#/$defs/WheelAction"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "wheel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "actions"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "actions": {
+              "items": {
+                "$ref": "#/$defs/KeyAction"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "keys",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "actions"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "actions": {
+              "items": {
+                "$ref": "#/$defs/ImeAction"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "ime",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "actions"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "actions": {
+              "items": {
+                "$ref": "#/$defs/TrackpadAction"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "trackpad",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "actions"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "InspectField": {
+      "properties": {
+        "default": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InspectValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "level": {
+          "$ref": "#/$defs/InspectLevel"
+        },
+        "name": {
+          "type": "string"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InspectUnit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/InspectValue"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "type": "object"
+    },
+    "InspectLevel": {
+      "oneOf": [
+        {
+          "const": "summary",
+          "type": "string"
+        },
+        {
+          "const": "detail",
+          "type": "string"
+        },
+        {
+          "const": "debug",
+          "type": "string"
+        }
+      ]
+    },
+    "InspectNode": {
+      "properties": {
+        "children": {
+          "items": {
+            "$ref": "#/$defs/InspectNode"
+          },
+          "type": "array"
+        },
+        "debug_fields": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/InspectField"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "kind_args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "links": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "omitted_children": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogicalRect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "InspectParams": {
+      "properties": {
+        "level": {
+          "$ref": "#/$defs/InspectLevel"
+        },
+        "max_depth": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_nodes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "root": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "window": {
+          "$ref": "#/$defs/WindowId"
+        }
+      },
+      "required": [
+        "window"
+      ],
+      "type": "object"
+    },
+    "InspectReading": {
+      "properties": {
+        "count": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "roots": {
+          "items": {
+            "$ref": "#/$defs/InspectNode"
+          },
+          "type": "array"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "roots",
+        "count",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "InspectUnit": {
+      "oneOf": [
+        {
+          "const": "logical_px",
+          "type": "string"
+        },
+        {
+          "const": "device_px",
+          "type": "string"
+        },
+        {
+          "const": "seconds",
+          "type": "string"
+        },
+        {
+          "const": "degrees",
+          "type": "string"
+        },
+        {
+          "const": "radians",
+          "type": "string"
+        },
+        {
+          "const": "fraction",
+          "type": "string"
+        }
+      ]
+    },
+    "InspectValue": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "bool",
+              "type": "string"
+            },
+            "value": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "int",
+              "type": "string"
+            },
+            "value": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "uint",
+              "type": "string"
+            },
+            "value": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "float",
+              "type": "string"
+            },
+            "value": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "str",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "variant",
+              "type": "string"
+            },
+            "value": {
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "ty": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ty",
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "size",
+              "type": "string"
+            },
+            "value": {
+              "properties": {
+                "height": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "width": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "width",
+                "height"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "offset",
+              "type": "string"
+            },
+            "value": {
+              "properties": {
+                "dx": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "dy": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "dx",
+                "dy"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "rect",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/LogicalRect"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "color",
+              "type": "string"
+            },
+            "value": {
+              "properties": {
+                "alpha": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "blue": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "green": {
+                  "format": "float",
+                  "type": "number"
+                },
+                "red": {
+                  "format": "float",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "red",
+                "green",
+                "blue",
+                "alpha"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "edge_insets",
+              "type": "string"
+            },
+            "value": {
+              "properties": {
+                "bottom": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "left": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "right": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "top": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "top",
+                "right",
+                "bottom",
+                "left"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "matrix",
+              "type": "string"
+            },
+            "value": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 16,
+              "minItems": 16,
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "duration",
+              "type": "string"
+            },
+            "value": {
+              "properties": {
+                "nanos": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "nanos"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "link",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "debug",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "seq",
+              "type": "string"
+            },
+            "value": {
+              "items": {
+                "$ref": "#/$defs/InspectValue"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Isolation": {
+      "oneOf": [
+        {
+          "const": "in_process",
+          "type": "string"
+        },
+        {
+          "const": "shared",
+          "type": "string"
+        },
+        {
+          "const": "sandbox",
+          "type": "string"
+        },
+        {
+          "const": "second_session",
+          "type": "string"
+        },
+        {
+          "const": "xvfb",
+          "type": "string"
+        },
+        {
+          "const": "seat",
+          "type": "string"
+        },
+        {
+          "const": "virtual_machine",
+          "type": "string"
+        },
+        {
+          "const": "emulator",
+          "type": "string"
+        },
+        {
+          "const": "simulator",
+          "type": "string"
+        },
+        {
+          "const": "headless_browser",
+          "type": "string"
+        },
+        {
+          "const": "device",
+          "type": "string"
+        }
+      ]
+    },
+    "Journal": {
+      "properties": {
+        "dropped": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/JournalEntry"
+          },
+          "type": "array"
+        },
+        "span": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JournalSpan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "type": "object"
+    },
+    "JournalEntry": {
+      "properties": {
+        "at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogicalPoint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "device": {
+          "$ref": "#/$defs/DeviceClass"
+        },
+        "injected": {
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/InputKind"
+        },
+        "seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "time_us": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "device",
+        "kind",
+        "time_us"
+      ],
+      "type": "object"
+    },
+    "JournalParams": {
+      "properties": {
+        "max_entries": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "since": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "window": {
+          "$ref": "#/$defs/WindowId"
+        }
+      },
+      "required": [
+        "window"
+      ],
+      "type": "object"
+    },
+    "JournalSpan": {
+      "properties": {
+        "from": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "to": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "KeyAction": {
+      "oneOf": [
+        {
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "type": {
+              "const": "down",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "key"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "type": {
+              "const": "up",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "key"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "duration_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "pause",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Latency": {
+      "properties": {
+        "input_delay": {
+          "$ref": "#/$defs/Distribution"
+        },
+        "presentation_delay": {
+          "$ref": "#/$defs/Distribution"
+        },
+        "processing": {
+          "$ref": "#/$defs/Distribution"
+        },
+        "total": {
+          "$ref": "#/$defs/Distribution"
+        }
+      },
+      "required": [
+        "total",
+        "input_delay",
+        "processing",
+        "presentation_delay"
+      ],
+      "type": "object"
+    },
+    "LaunchParams": {
+      "properties": {
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "artifact": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "input": {
+          "$ref": "#/$defs/InputPolicy"
+        },
+        "isolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Isolation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "LocateParams": {
+      "properties": {
+        "locator": {
+          "$ref": "#/$defs/Locator"
+        },
+        "max_matches": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "locator"
+      ],
+      "type": "object"
+    },
+    "Locator": {
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextMatch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "has": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Locator"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "identifier": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextMatch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pick": {
+          "$ref": "#/$defs/Pick"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Role"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/StateFilter"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextMatch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WindowId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "within": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Locator"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "LogicalPoint": {
+      "properties": {
+        "x": {
+          "format": "double",
+          "type": "number"
+        },
+        "y": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "LogicalRect": {
+      "properties": {
+        "height": {
+          "format": "double",
+          "type": "number"
+        },
+        "width": {
+          "format": "double",
+          "type": "number"
+        },
+        "x": {
+          "format": "double",
+          "type": "number"
+        },
+        "y": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "LogicalSize": {
+      "properties": {
+        "height": {
+          "format": "double",
+          "type": "number"
+        },
+        "width": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "LongPressParams": {
+      "properties": {
+        "duration_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "force": {
+          "type": "boolean"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/Snapshot"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "via": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "Match": {
+      "properties": {
+        "element": {
+          "$ref": "#/$defs/ElementRef"
+        },
+        "node": {
+          "$ref": "#/$defs/Node"
+        },
+        "revision": {
+          "$ref": "#/$defs/TreeRevision"
+        }
+      },
+      "required": [
+        "element",
+        "revision",
+        "node"
+      ],
+      "type": "object"
+    },
+    "Matches": {
+      "properties": {
+        "matches": {
+          "items": {
+            "$ref": "#/$defs/Match"
+          },
+          "type": "array"
+        },
+        "truncated": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "matches"
+      ],
+      "type": "object"
+    },
+    "MotionParams": {
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/MotionRequest",
+          "default": {}
+        },
+        "window": {
+          "$ref": "#/$defs/WindowId"
+        }
+      },
+      "required": [
+        "window"
+      ],
+      "type": "object"
+    },
+    "MotionRequest": {
+      "properties": {
+        "rate": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "step_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "MotionState": {
+      "properties": {
+        "rate": {
+          "format": "double",
+          "type": "number"
+        },
+        "time_ms": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "rate",
+        "time_ms"
+      ],
+      "type": "object"
+    },
+    "Node": {
+      "properties": {
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/ActionName"
+          },
+          "type": "array"
+        },
+        "automation_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "checked": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Checked"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "children": {
+          "items": {
+            "$ref": "#/$defs/Node"
+          },
+          "type": "array"
+        },
+        "children_unread": {
+          "type": "boolean"
+        },
+        "class_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disabled": {
+          "type": "boolean"
+        },
+        "expanded": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "focusable": {
+          "type": "boolean"
+        },
+        "focused": {
+          "type": "boolean"
+        },
+        "gone": {
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/ElementId"
+        },
+        "identifier": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "native_role": {
+          "type": "string"
+        },
+        "omitted_children": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "$ref": "#/$defs/Role"
+        },
+        "selected": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "surface_rect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WindowId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "native_role"
+      ],
+      "type": "object"
+    },
+    "NodeChange": {
+      "properties": {
+        "changed": {
+          "items": {
+            "$ref": "#/$defs/ChangedField"
+          },
+          "type": "array"
+        },
+        "node": {
+          "$ref": "#/$defs/Node"
+        }
+      },
+      "required": [
+        "node",
+        "changed"
+      ],
+      "type": "object"
+    },
+    "NotChecked": {
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "rule": {
+          "$ref": "#/$defs/AuditRule"
+        }
+      },
+      "required": [
+        "rule",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "Observation": {
+      "properties": {
+        "count": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "matched": {
+          "items": {
+            "$ref": "#/$defs/Node"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "$ref": "#/$defs/TreeRevision"
+        }
+      },
+      "required": [
+        "revision",
+        "count"
+      ],
+      "type": "object"
+    },
+    "PerfBudget": {
+      "properties": {
+        "max_dropped": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "p95_frame_time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeLimit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "p95_input_to_present": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeLimit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "PerfExpectParams": {
+      "properties": {
+        "budgets": {
+          "items": {
+            "$ref": "#/$defs/TargetBudget"
+          },
+          "type": "array"
+        },
+        "reports": {
+          "items": {
+            "$ref": "#/$defs/PerfReport"
+          },
+          "type": "array"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "budgets",
+        "reports"
+      ],
+      "type": "object"
+    },
+    "PerfReport": {
+      "properties": {
+        "dropped": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "frame_time": {
+          "$ref": "#/$defs/Distribution"
+        },
+        "frames": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input_to_present": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Latency"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "janky": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "refresh_period_ms": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "worst": {
+          "items": {
+            "$ref": "#/$defs/FrameSample"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "frames",
+        "frame_time"
+      ],
+      "type": "object"
+    },
+    "PerfStartParams": {
+      "properties": {
+        "jank_multiplier": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "window": {
+          "$ref": "#/$defs/WindowId"
+        },
+        "worst": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "window"
+      ],
+      "type": "object"
+    },
+    "PerfVerdict": {
+      "properties": {
+        "median": {
+          "$ref": "#/$defs/PerfReport"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict"
+        }
+      },
+      "required": [
+        "verdict",
+        "median"
+      ],
+      "type": "object"
+    },
+    "PhaseTime": {
+      "properties": {
+        "ms": {
+          "format": "double",
+          "type": "number"
+        },
+        "phase": {
+          "$ref": "#/$defs/FramePhase"
+        }
+      },
+      "required": [
+        "phase",
+        "ms"
+      ],
+      "type": "object"
+    },
+    "Pick": {
+      "oneOf": [
+        {
+          "const": "strict",
+          "type": "string"
+        },
+        {
+          "const": "first",
+          "type": "string"
+        },
+        {
+          "const": "last",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "nth": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "nth"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PinchParams": {
+      "properties": {
+        "force": {
+          "type": "boolean"
+        },
+        "scale": {
+          "format": "double",
+          "type": "number"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/Snapshot"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "via": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "target",
+        "scale"
+      ],
+      "type": "object"
+    },
+    "Placement": {
+      "properties": {
+        "focused": {
+          "type": "boolean"
+        },
+        "position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogicalPoint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scale": {
+          "format": "double",
+          "type": "number"
+        },
+        "size": {
+          "$ref": "#/$defs/LogicalSize"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "window": {
+          "$ref": "#/$defs/WindowId"
+        }
+      },
+      "required": [
+        "window",
+        "size",
+        "scale",
+        "visible",
+        "focused"
+      ],
+      "type": "object"
+    },
+    "PointerAction": {
+      "oneOf": [
+        {
+          "properties": {
+            "button": {
+              "$ref": "#/$defs/PointerButton"
+            },
+            "pressure": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "down",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "button": {
+              "$ref": "#/$defs/PointerButton"
+            },
+            "type": {
+              "const": "up",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "duration_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pressure": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "to": {
+              "$ref": "#/$defs/LogicalPoint"
+            },
+            "type": {
+              "const": "move",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "to"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "cancel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "duration_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "pause",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PointerButton": {
+      "oneOf": [
+        {
+          "const": "primary",
+          "type": "string"
+        },
+        {
+          "const": "secondary",
+          "type": "string"
+        },
+        {
+          "const": "middle",
+          "type": "string"
+        },
+        {
+          "const": "back",
+          "type": "string"
+        },
+        {
+          "const": "forward",
+          "type": "string"
+        }
+      ]
+    },
+    "PointerDevice": {
+      "oneOf": [
+        {
+          "const": "mouse",
+          "type": "string"
+        },
+        {
+          "const": "touch",
+          "type": "string"
+        },
+        {
+          "const": "pen",
+          "type": "string"
+        }
+      ]
+    },
+    "PressKeysParams": {
+      "properties": {
+        "force": {
+          "type": "boolean"
+        },
+        "keys": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/Snapshot"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Target"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "via": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WindowId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "keys"
+      ],
+      "type": "object"
+    },
+    "ProtocolVersion": {
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "type": "string"
+    },
+    "ReadParams": {
+      "properties": {
+        "query": {
+          "$ref": "#/$defs/ReadQuery",
+          "default": {}
+        },
+        "window": {
+          "$ref": "#/$defs/WindowId"
+        }
+      },
+      "required": [
+        "window"
+      ],
+      "type": "object"
+    },
+    "ReadQuery": {
+      "properties": {
+        "max_depth": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_nodes": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "root": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ElementId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Rect": {
+      "properties": {
+        "height": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "width": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "x": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "y": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "Released": {
+      "properties": {
+        "keys": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pointers": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pointers",
+        "keys"
+      ],
+      "type": "object"
+    },
+    "Retry": {
+      "oneOf": [
+        {
+          "const": "never",
+          "type": "string"
+        },
+        {
+          "const": "soon",
+          "type": "string"
+        },
+        {
+          "const": "when_appears",
+          "type": "string"
+        }
+      ]
+    },
+    "Role": {
+      "oneOf": [
+        {
+          "const": "button",
+          "type": "string"
+        },
+        {
+          "const": "check_box",
+          "type": "string"
+        },
+        {
+          "const": "radio_button",
+          "type": "string"
+        },
+        {
+          "const": "switch",
+          "type": "string"
+        },
+        {
+          "const": "combo_box",
+          "type": "string"
+        },
+        {
+          "const": "text_input",
+          "type": "string"
+        },
+        {
+          "const": "password_input",
+          "type": "string"
+        },
+        {
+          "const": "link",
+          "type": "string"
+        },
+        {
+          "const": "image",
+          "type": "string"
+        },
+        {
+          "const": "label",
+          "type": "string"
+        },
+        {
+          "const": "list",
+          "type": "string"
+        },
+        {
+          "const": "list_item",
+          "type": "string"
+        },
+        {
+          "const": "menu",
+          "type": "string"
+        },
+        {
+          "const": "menu_bar",
+          "type": "string"
+        },
+        {
+          "const": "menu_item",
+          "type": "string"
+        },
+        {
+          "const": "progress_indicator",
+          "type": "string"
+        },
+        {
+          "const": "scroll_bar",
+          "type": "string"
+        },
+        {
+          "const": "slider",
+          "type": "string"
+        },
+        {
+          "const": "spin_button",
+          "type": "string"
+        },
+        {
+          "const": "status",
+          "type": "string"
+        },
+        {
+          "const": "tab_list",
+          "type": "string"
+        },
+        {
+          "const": "tab",
+          "type": "string"
+        },
+        {
+          "const": "toolbar",
+          "type": "string"
+        },
+        {
+          "const": "tooltip",
+          "type": "string"
+        },
+        {
+          "const": "tree",
+          "type": "string"
+        },
+        {
+          "const": "tree_item",
+          "type": "string"
+        },
+        {
+          "const": "group",
+          "type": "string"
+        },
+        {
+          "const": "grid",
+          "type": "string"
+        },
+        {
+          "const": "row",
+          "type": "string"
+        },
+        {
+          "const": "cell",
+          "type": "string"
+        },
+        {
+          "const": "grid_cell",
+          "type": "string"
+        },
+        {
+          "const": "column_header",
+          "type": "string"
+        },
+        {
+          "const": "row_header",
+          "type": "string"
+        },
+        {
+          "const": "table",
+          "type": "string"
+        },
+        {
+          "const": "document",
+          "type": "string"
+        },
+        {
+          "const": "window",
+          "type": "string"
+        },
+        {
+          "const": "dialog",
+          "type": "string"
+        },
+        {
+          "const": "pane",
+          "type": "string"
+        },
+        {
+          "const": "title_bar",
+          "type": "string"
+        },
+        {
+          "const": "splitter",
+          "type": "string"
+        },
+        {
+          "const": "heading",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "type": "string"
+        }
+      ]
+    },
+    "ScrollIntoViewParams": {
+      "properties": {
+        "force": {
+          "type": "boolean"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/Snapshot"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "via": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "ScrollUnit": {
+      "oneOf": [
+        {
+          "const": "pixel",
+          "type": "string"
+        },
+        {
+          "const": "line",
+          "type": "string"
+        }
+      ]
+    },
+    "SemanticsEvent": {
+      "properties": {
+        "revision": {
+          "$ref": "#/$defs/TreeRevision"
+        },
+        "window": {
+          "$ref": "#/$defs/WindowId"
+        }
+      },
+      "required": [
+        "window",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "SessionInfo": {
+      "properties": {
+        "app": {
+          "$ref": "#/$defs/AppInfo"
+        },
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities"
+        },
+        "protocol": {
+          "$ref": "#/$defs/ProtocolVersion"
+        },
+        "windows": {
+          "items": {
+            "$ref": "#/$defs/WindowId"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "protocol",
+        "app",
+        "windows",
+        "capabilities"
+      ],
+      "type": "object"
+    },
+    "SettledParams": {
+      "properties": {
+        "timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "window": {
+          "$ref": "#/$defs/WindowId"
+        }
+      },
+      "required": [
+        "window"
+      ],
+      "type": "object"
+    },
+    "Snapshot": {
+      "oneOf": [
+        {
+          "const": "none",
+          "type": "string"
+        },
+        {
+          "const": "delta",
+          "type": "string"
+        },
+        {
+          "const": "full",
+          "type": "string"
+        }
+      ]
+    },
+    "SnapshotDelta": {
+      "properties": {
+        "appeared": {
+          "items": {
+            "$ref": "#/$defs/Node"
+          },
+          "type": "array"
+        },
+        "changed": {
+          "items": {
+            "$ref": "#/$defs/NodeChange"
+          },
+          "type": "array"
+        },
+        "from": {
+          "$ref": "#/$defs/TreeRevision"
+        },
+        "gone": {
+          "items": {
+            "$ref": "#/$defs/ElementRef"
+          },
+          "type": "array"
+        },
+        "to": {
+          "$ref": "#/$defs/TreeRevision"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "SnapshotReading": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "delta": {
+              "$ref": "#/$defs/SnapshotDelta"
+            }
+          },
+          "required": [
+            "delta"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "full": {
+              "$ref": "#/$defs/Tree"
+            }
+          },
+          "required": [
+            "full"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "StateFilter": {
+      "properties": {
+        "checked": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Checked"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "expanded": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "focused": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "selected": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "SubscribeParams": {
+      "properties": {
+        "events": {
+          "items": {
+            "$ref": "#/$defs/EventFilter"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "events"
+      ],
+      "type": "object"
+    },
+    "Subscription": {
+      "properties": {
+        "subscription": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "subscription"
+      ],
+      "type": "object"
+    },
+    "SwipeParams": {
+      "properties": {
+        "direction": {
+          "$ref": "#/$defs/Direction"
+        },
+        "distance": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "force": {
+          "type": "boolean"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/Snapshot"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "velocity": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "via": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "target",
+        "direction"
+      ],
+      "type": "object"
+    },
+    "TapParams": {
+      "properties": {
+        "button": {
+          "$ref": "#/$defs/PointerButton"
+        },
+        "force": {
+          "type": "boolean"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/Snapshot"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "via": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "Target": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "element": {
+              "$ref": "#/$defs/ElementRef"
+            }
+          },
+          "required": [
+            "element"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "locator": {
+              "$ref": "#/$defs/Locator"
+            }
+          },
+          "required": [
+            "locator"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "point": {
+              "properties": {
+                "at": {
+                  "$ref": "#/$defs/LogicalPoint"
+                },
+                "window": {
+                  "$ref": "#/$defs/WindowId"
+                }
+              },
+              "required": [
+                "window",
+                "at"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "point"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TargetBudget": {
+      "properties": {
+        "budget": {
+          "$ref": "#/$defs/PerfBudget"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "budget"
+      ],
+      "type": "object"
+    },
+    "TextMatch": {
+      "oneOf": [
+        {
+          "properties": {
+            "ignore_case": {
+              "type": "boolean"
+            },
+            "match": {
+              "const": "exact",
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "match",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "ignore_case": {
+              "type": "boolean"
+            },
+            "match": {
+              "const": "contains",
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "match",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "ignore_case": {
+              "type": "boolean"
+            },
+            "match": {
+              "const": "prefix",
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "match",
+            "text"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TimeLimit": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ms": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "ms"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "periods": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "periods"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TrackpadAction": {
+      "oneOf": [
+        {
+          "properties": {
+            "at": {
+              "$ref": "#/$defs/LogicalPoint"
+            },
+            "type": {
+              "const": "begin",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "at"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "scale": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": {
+              "const": "pinch",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "scale"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "degrees": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": {
+              "const": "rotate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "degrees"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "dx": {
+              "format": "double",
+              "type": "number"
+            },
+            "dy": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": {
+              "const": "pan",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "dx",
+            "dy"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "end",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "duration_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "pause",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Tree": {
+      "properties": {
+        "count": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "protocol": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProtocolVersion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TreeRevision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "roots": {
+          "items": {
+            "$ref": "#/$defs/Node"
+          },
+          "type": "array"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "roots",
+        "count",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "TreeRevision": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "TypeTextParams": {
+      "properties": {
+        "force": {
+          "type": "boolean"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/Snapshot"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "text": {
+          "type": "string"
+        },
+        "timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "via": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "target",
+        "text"
+      ],
+      "type": "object"
+    },
+    "UnsettledCause": {
+      "properties": {
+        "count": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "due_in_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/UnsettledReason"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    "UnsettledReason": {
+      "oneOf": [
+        {
+          "const": "needs_redraw",
+          "type": "string"
+        },
+        {
+          "const": "frame_scheduled",
+          "type": "string"
+        },
+        {
+          "const": "pending_work",
+          "type": "string"
+        },
+        {
+          "const": "transient_callbacks",
+          "type": "string"
+        },
+        {
+          "const": "timer",
+          "type": "string"
+        },
+        {
+          "const": "image_loads",
+          "type": "string"
+        }
+      ]
+    },
+    "Verdict": {
+      "oneOf": [
+        {
+          "const": "pass",
+          "type": "string"
+        },
+        {
+          "const": "fail",
+          "type": "string"
+        },
+        {
+          "const": "cannot_verify",
+          "type": "string"
+        }
+      ]
+    },
+    "WaitOutcome": {
+      "properties": {
+        "frames": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observation": {
+          "$ref": "#/$defs/Observation"
+        },
+        "satisfied": {
+          "type": "boolean"
+        },
+        "unsettled": {
+          "items": {
+            "$ref": "#/$defs/UnsettledCause"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "satisfied",
+        "frames",
+        "observation"
+      ],
+      "type": "object"
+    },
+    "WaitParams": {
+      "properties": {
+        "condition": {
+          "$ref": "#/$defs/Condition"
+        },
+        "max_frames": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "window": {
+          "$ref": "#/$defs/WindowId"
+        }
+      },
+      "required": [
+        "window",
+        "condition"
+      ],
+      "type": "object"
+    },
+    "WheelAction": {
+      "oneOf": [
+        {
+          "properties": {
+            "at": {
+              "$ref": "#/$defs/LogicalPoint"
+            },
+            "delta_x": {
+              "format": "double",
+              "type": "number"
+            },
+            "delta_y": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": {
+              "const": "scroll",
+              "type": "string"
+            },
+            "unit": {
+              "$ref": "#/$defs/ScrollUnit"
+            }
+          },
+          "required": [
+            "type",
+            "at"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "duration_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "pause",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WindowEvent": {
+      "properties": {
+        "opened": {
+          "type": "boolean"
+        },
+        "window": {
+          "$ref": "#/$defs/WindowId"
+        }
+      },
+      "required": [
+        "window",
+        "opened"
+      ],
+      "type": "object"
+    },
+    "WindowId": {
+      "pattern": "^w[1-9][0-9]*$",
+      "type": "string"
+    },
+    "WindowList": {
+      "properties": {
+        "windows": {
+          "items": {
+            "$ref": "#/$defs/WindowId"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "windows"
+      ],
+      "type": "object"
+    },
+    "WindowParams": {
+      "properties": {
+        "window": {
+          "$ref": "#/$defs/WindowId"
+        }
+      },
+      "required": [
+        "window"
+      ],
+      "type": "object"
+    }
+  },
+  "ActionRequest": {
+    "$defs": {
+      "ActionName": {
+        "oneOf": [
+          {
+            "const": "invoke",
+            "type": "string"
+          },
+          {
+            "const": "toggle",
+            "type": "string"
+          },
+          {
+            "const": "set_value",
+            "type": "string"
+          },
+          {
+            "const": "select",
+            "type": "string"
+          },
+          {
+            "const": "focus",
+            "type": "string"
+          },
+          {
+            "const": "expand",
+            "type": "string"
+          },
+          {
+            "const": "collapse",
+            "type": "string"
+          },
+          {
+            "const": "scroll_into_view",
+            "type": "string"
+          }
+        ]
+      },
+      "ElementId": {
+        "pattern": "^e[1-9][0-9]*$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "action": {
+        "$ref": "#/$defs/ActionName"
+      },
+      "element": {
+        "$ref": "#/$defs/ElementId"
+      },
+      "value": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "element",
+      "action"
+    ],
+    "title": "ActionRequest",
+    "type": "object"
+  },
+  "ErrorCode": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "oneOf": [
+      {
+        "const": "invalid_argument",
+        "type": "string"
+      },
+      {
+        "const": "not_supported",
+        "type": "string"
+      },
+      {
+        "const": "busy",
+        "type": "string"
+      },
+      {
+        "const": "not_found",
+        "type": "string"
+      },
+      {
+        "const": "unknown_handle",
+        "type": "string"
+      },
+      {
+        "const": "gone",
+        "type": "string"
+      },
+      {
+        "const": "disabled",
+        "type": "string"
+      },
+      {
+        "const": "action_unsupported",
+        "type": "string"
+      },
+      {
+        "const": "not_foreground",
+        "type": "string"
+      },
+      {
+        "const": "focus_elsewhere",
+        "type": "string"
+      },
+      {
+        "const": "outside_target",
+        "type": "string"
+      },
+      {
+        "const": "timeout",
+        "type": "string"
+      },
+      {
+        "const": "input_held",
+        "type": "string"
+      },
+      {
+        "const": "shutting_down",
+        "type": "string"
+      },
+      {
+        "const": "ambiguous",
+        "type": "string"
+      },
+      {
+        "const": "not_actionable",
+        "type": "string"
+      },
+      {
+        "const": "stale",
+        "type": "string"
+      },
+      {
+        "const": "version",
+        "type": "string"
+      },
+      {
+        "const": "platform",
+        "type": "string"
+      }
+    ],
+    "title": "ErrorCode"
+  },
+  "MotionRequest": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "rate": {
+        "format": "double",
+        "type": [
+          "number",
+          "null"
+        ]
+      },
+      "step_ms": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      }
+    },
+    "title": "MotionRequest",
+    "type": "object"
+  },
+  "MotionState": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "rate": {
+        "format": "double",
+        "type": "number"
+      },
+      "time_ms": {
+        "format": "double",
+        "type": "number"
+      }
+    },
+    "required": [
+      "rate",
+      "time_ms"
+    ],
+    "title": "MotionState",
+    "type": "object"
+  },
+  "Node": {
+    "$defs": {
+      "ActionName": {
+        "oneOf": [
+          {
+            "const": "invoke",
+            "type": "string"
+          },
+          {
+            "const": "toggle",
+            "type": "string"
+          },
+          {
+            "const": "set_value",
+            "type": "string"
+          },
+          {
+            "const": "select",
+            "type": "string"
+          },
+          {
+            "const": "focus",
+            "type": "string"
+          },
+          {
+            "const": "expand",
+            "type": "string"
+          },
+          {
+            "const": "collapse",
+            "type": "string"
+          },
+          {
+            "const": "scroll_into_view",
+            "type": "string"
+          }
+        ]
+      },
+      "Checked": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "const": "mixed"
+          }
+        ]
+      },
+      "ElementId": {
+        "pattern": "^e[1-9][0-9]*$",
+        "type": "string"
+      },
+      "Rect": {
+        "properties": {
+          "height": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "width": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "x": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "y": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "type": "object"
+      },
+      "Role": {
+        "oneOf": [
+          {
+            "const": "button",
+            "type": "string"
+          },
+          {
+            "const": "check_box",
+            "type": "string"
+          },
+          {
+            "const": "radio_button",
+            "type": "string"
+          },
+          {
+            "const": "switch",
+            "type": "string"
+          },
+          {
+            "const": "combo_box",
+            "type": "string"
+          },
+          {
+            "const": "text_input",
+            "type": "string"
+          },
+          {
+            "const": "password_input",
+            "type": "string"
+          },
+          {
+            "const": "link",
+            "type": "string"
+          },
+          {
+            "const": "image",
+            "type": "string"
+          },
+          {
+            "const": "label",
+            "type": "string"
+          },
+          {
+            "const": "list",
+            "type": "string"
+          },
+          {
+            "const": "list_item",
+            "type": "string"
+          },
+          {
+            "const": "menu",
+            "type": "string"
+          },
+          {
+            "const": "menu_bar",
+            "type": "string"
+          },
+          {
+            "const": "menu_item",
+            "type": "string"
+          },
+          {
+            "const": "progress_indicator",
+            "type": "string"
+          },
+          {
+            "const": "scroll_bar",
+            "type": "string"
+          },
+          {
+            "const": "slider",
+            "type": "string"
+          },
+          {
+            "const": "spin_button",
+            "type": "string"
+          },
+          {
+            "const": "status",
+            "type": "string"
+          },
+          {
+            "const": "tab_list",
+            "type": "string"
+          },
+          {
+            "const": "tab",
+            "type": "string"
+          },
+          {
+            "const": "toolbar",
+            "type": "string"
+          },
+          {
+            "const": "tooltip",
+            "type": "string"
+          },
+          {
+            "const": "tree",
+            "type": "string"
+          },
+          {
+            "const": "tree_item",
+            "type": "string"
+          },
+          {
+            "const": "group",
+            "type": "string"
+          },
+          {
+            "const": "grid",
+            "type": "string"
+          },
+          {
+            "const": "row",
+            "type": "string"
+          },
+          {
+            "const": "cell",
+            "type": "string"
+          },
+          {
+            "const": "grid_cell",
+            "type": "string"
+          },
+          {
+            "const": "column_header",
+            "type": "string"
+          },
+          {
+            "const": "row_header",
+            "type": "string"
+          },
+          {
+            "const": "table",
+            "type": "string"
+          },
+          {
+            "const": "document",
+            "type": "string"
+          },
+          {
+            "const": "window",
+            "type": "string"
+          },
+          {
+            "const": "dialog",
+            "type": "string"
+          },
+          {
+            "const": "pane",
+            "type": "string"
+          },
+          {
+            "const": "title_bar",
+            "type": "string"
+          },
+          {
+            "const": "splitter",
+            "type": "string"
+          },
+          {
+            "const": "heading",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "type": "string"
+          }
+        ]
+      },
+      "WindowId": {
+        "pattern": "^w[1-9][0-9]*$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "actions": {
+        "items": {
+          "$ref": "#/$defs/ActionName"
+        },
+        "type": "array"
+      },
+      "automation_id": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "checked": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Checked"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "children": {
+        "items": {
+          "$ref": "#"
+        },
+        "type": "array"
+      },
+      "children_unread": {
+        "type": "boolean"
+      },
+      "class_name": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "description": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "disabled": {
+        "type": "boolean"
+      },
+      "expanded": {
+        "type": [
+          "boolean",
+          "null"
+        ]
+      },
+      "focusable": {
+        "type": "boolean"
+      },
+      "focused": {
+        "type": "boolean"
+      },
+      "gone": {
+        "type": "boolean"
+      },
+      "id": {
+        "$ref": "#/$defs/ElementId"
+      },
+      "identifier": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "name": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "native_role": {
+        "type": "string"
+      },
+      "omitted_children": {
+        "format": "uint",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "rect": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Rect"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "role": {
+        "$ref": "#/$defs/Role"
+      },
+      "selected": {
+        "type": [
+          "boolean",
+          "null"
+        ]
+      },
+      "surface_rect": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Rect"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "value": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "window": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WindowId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "role",
+      "native_role"
+    ],
+    "title": "Node",
+    "type": "object"
+  },
+  "ReadQuery": {
+    "$defs": {
+      "ElementId": {
+        "pattern": "^e[1-9][0-9]*$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "max_depth": {
+        "format": "uint",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "max_nodes": {
+        "format": "uint",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "root": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ElementId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "title": "ReadQuery",
+    "type": "object"
+  },
+  "Retry": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "oneOf": [
+      {
+        "const": "never",
+        "type": "string"
+      },
+      {
+        "const": "soon",
+        "type": "string"
+      },
+      {
+        "const": "when_appears",
+        "type": "string"
+      }
+    ],
+    "title": "Retry"
+  },
+  "Tree": {
+    "$defs": {
+      "ActionName": {
+        "oneOf": [
+          {
+            "const": "invoke",
+            "type": "string"
+          },
+          {
+            "const": "toggle",
+            "type": "string"
+          },
+          {
+            "const": "set_value",
+            "type": "string"
+          },
+          {
+            "const": "select",
+            "type": "string"
+          },
+          {
+            "const": "focus",
+            "type": "string"
+          },
+          {
+            "const": "expand",
+            "type": "string"
+          },
+          {
+            "const": "collapse",
+            "type": "string"
+          },
+          {
+            "const": "scroll_into_view",
+            "type": "string"
+          }
+        ]
+      },
+      "Checked": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "const": "mixed"
+          }
+        ]
+      },
+      "ElementId": {
+        "pattern": "^e[1-9][0-9]*$",
+        "type": "string"
+      },
+      "Node": {
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/$defs/ActionName"
+            },
+            "type": "array"
+          },
+          "automation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checked": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Checked"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "children": {
+            "items": {
+              "$ref": "#/$defs/Node"
+            },
+            "type": "array"
+          },
+          "children_unread": {
+            "type": "boolean"
+          },
+          "class_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "expanded": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "focusable": {
+            "type": "boolean"
+          },
+          "focused": {
+            "type": "boolean"
+          },
+          "gone": {
+            "type": "boolean"
+          },
+          "id": {
+            "$ref": "#/$defs/ElementId"
+          },
+          "identifier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "native_role": {
+            "type": "string"
+          },
+          "omitted_children": {
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "rect": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Rect"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "role": {
+            "$ref": "#/$defs/Role"
+          },
+          "selected": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "surface_rect": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Rect"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "window": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/WindowId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "native_role"
+        ],
+        "type": "object"
+      },
+      "ProtocolVersion": {
+        "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+        "type": "string"
+      },
+      "Rect": {
+        "properties": {
+          "height": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "width": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "x": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "y": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "type": "object"
+      },
+      "Role": {
+        "oneOf": [
+          {
+            "const": "button",
+            "type": "string"
+          },
+          {
+            "const": "check_box",
+            "type": "string"
+          },
+          {
+            "const": "radio_button",
+            "type": "string"
+          },
+          {
+            "const": "switch",
+            "type": "string"
+          },
+          {
+            "const": "combo_box",
+            "type": "string"
+          },
+          {
+            "const": "text_input",
+            "type": "string"
+          },
+          {
+            "const": "password_input",
+            "type": "string"
+          },
+          {
+            "const": "link",
+            "type": "string"
+          },
+          {
+            "const": "image",
+            "type": "string"
+          },
+          {
+            "const": "label",
+            "type": "string"
+          },
+          {
+            "const": "list",
+            "type": "string"
+          },
+          {
+            "const": "list_item",
+            "type": "string"
+          },
+          {
+            "const": "menu",
+            "type": "string"
+          },
+          {
+            "const": "menu_bar",
+            "type": "string"
+          },
+          {
+            "const": "menu_item",
+            "type": "string"
+          },
+          {
+            "const": "progress_indicator",
+            "type": "string"
+          },
+          {
+            "const": "scroll_bar",
+            "type": "string"
+          },
+          {
+            "const": "slider",
+            "type": "string"
+          },
+          {
+            "const": "spin_button",
+            "type": "string"
+          },
+          {
+            "const": "status",
+            "type": "string"
+          },
+          {
+            "const": "tab_list",
+            "type": "string"
+          },
+          {
+            "const": "tab",
+            "type": "string"
+          },
+          {
+            "const": "toolbar",
+            "type": "string"
+          },
+          {
+            "const": "tooltip",
+            "type": "string"
+          },
+          {
+            "const": "tree",
+            "type": "string"
+          },
+          {
+            "const": "tree_item",
+            "type": "string"
+          },
+          {
+            "const": "group",
+            "type": "string"
+          },
+          {
+            "const": "grid",
+            "type": "string"
+          },
+          {
+            "const": "row",
+            "type": "string"
+          },
+          {
+            "const": "cell",
+            "type": "string"
+          },
+          {
+            "const": "grid_cell",
+            "type": "string"
+          },
+          {
+            "const": "column_header",
+            "type": "string"
+          },
+          {
+            "const": "row_header",
+            "type": "string"
+          },
+          {
+            "const": "table",
+            "type": "string"
+          },
+          {
+            "const": "document",
+            "type": "string"
+          },
+          {
+            "const": "window",
+            "type": "string"
+          },
+          {
+            "const": "dialog",
+            "type": "string"
+          },
+          {
+            "const": "pane",
+            "type": "string"
+          },
+          {
+            "const": "title_bar",
+            "type": "string"
+          },
+          {
+            "const": "splitter",
+            "type": "string"
+          },
+          {
+            "const": "heading",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "type": "string"
+          }
+        ]
+      },
+      "TreeRevision": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "WindowId": {
+        "pattern": "^w[1-9][0-9]*$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "count": {
+        "format": "uint",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "protocol": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ProtocolVersion"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "revision": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TreeRevision"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "roots": {
+        "items": {
+          "$ref": "#/$defs/Node"
+        },
+        "type": "array"
+      },
+      "truncated": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "roots",
+      "count",
+      "truncated"
+    ],
+    "title": "Tree",
+    "type": "object"
+  },
+  "envelope": {
+    "ErrorObject": {
+      "$ref": "#/$defs/ErrorObject"
+    },
+    "Event": {
+      "$ref": "#/$defs/Event"
+    },
+    "Hello": {
+      "$ref": "#/$defs/Hello"
+    },
+    "HelloReply": {
+      "$ref": "#/$defs/HelloReply"
+    }
+  },
+  "methods": {
+    "audit.a11y": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/AuditReport"
+      },
+      "params": {
+        "$ref": "#/$defs/AuditParams"
+      },
+      "served_by": "agent",
+      "tier": "audit"
+    },
+    "audit.screen": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/AuditReport"
+      },
+      "params": {
+        "$ref": "#/$defs/AuditParams"
+      },
+      "served_by": "driver",
+      "tier": "core"
+    },
+    "capture.presented": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/CaptureMeta"
+      },
+      "params": {
+        "$ref": "#/$defs/CaptureParams"
+      },
+      "served_by": "agent",
+      "tier": "core"
+    },
+    "capture.rendered": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/CaptureMeta"
+      },
+      "params": {
+        "$ref": "#/$defs/CaptureParams"
+      },
+      "served_by": "agent",
+      "tier": "pixels"
+    },
+    "element.actionability": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/Actionability"
+      },
+      "params": {
+        "$ref": "#/$defs/ActionabilityParams"
+      },
+      "served_by": "agent",
+      "tier": "input"
+    },
+    "element.double_tap": {
+      "effect": "acts",
+      "output": {
+        "$ref": "#/$defs/ActOutcome"
+      },
+      "params": {
+        "$ref": "#/$defs/TapParams"
+      },
+      "served_by": "driver",
+      "tier": "input"
+    },
+    "element.drag_to": {
+      "effect": "acts",
+      "output": {
+        "$ref": "#/$defs/ActOutcome"
+      },
+      "params": {
+        "$ref": "#/$defs/DragParams"
+      },
+      "served_by": "driver",
+      "tier": "input"
+    },
+    "element.fling": {
+      "effect": "acts",
+      "output": {
+        "$ref": "#/$defs/ActOutcome"
+      },
+      "params": {
+        "$ref": "#/$defs/SwipeParams"
+      },
+      "served_by": "driver",
+      "tier": "input"
+    },
+    "element.long_press": {
+      "effect": "acts",
+      "output": {
+        "$ref": "#/$defs/ActOutcome"
+      },
+      "params": {
+        "$ref": "#/$defs/LongPressParams"
+      },
+      "served_by": "driver",
+      "tier": "input"
+    },
+    "element.pinch": {
+      "effect": "acts",
+      "output": {
+        "$ref": "#/$defs/ActOutcome"
+      },
+      "params": {
+        "$ref": "#/$defs/PinchParams"
+      },
+      "served_by": "driver",
+      "tier": "input"
+    },
+    "element.press_keys": {
+      "effect": "acts",
+      "output": {
+        "$ref": "#/$defs/ActOutcome"
+      },
+      "params": {
+        "$ref": "#/$defs/PressKeysParams"
+      },
+      "served_by": "driver",
+      "tier": "core"
+    },
+    "element.scroll_into_view": {
+      "effect": "acts",
+      "output": {
+        "$ref": "#/$defs/ActOutcome"
+      },
+      "params": {
+        "$ref": "#/$defs/ScrollIntoViewParams"
+      },
+      "served_by": "driver",
+      "tier": "core"
+    },
+    "element.swipe": {
+      "effect": "acts",
+      "output": {
+        "$ref": "#/$defs/ActOutcome"
+      },
+      "params": {
+        "$ref": "#/$defs/SwipeParams"
+      },
+      "served_by": "driver",
+      "tier": "input"
+    },
+    "element.tap": {
+      "effect": "acts",
+      "output": {
+        "$ref": "#/$defs/ActOutcome"
+      },
+      "params": {
+        "$ref": "#/$defs/TapParams"
+      },
+      "served_by": "driver",
+      "tier": "core"
+    },
+    "element.type_text": {
+      "effect": "acts",
+      "output": {
+        "$ref": "#/$defs/ActOutcome"
+      },
+      "params": {
+        "$ref": "#/$defs/TypeTextParams"
+      },
+      "served_by": "driver",
+      "tier": "core"
+    },
+    "events.subscribe": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/Subscription"
+      },
+      "params": {
+        "$ref": "#/$defs/SubscribeParams"
+      },
+      "served_by": "agent",
+      "tier": "record"
+    },
+    "events.unsubscribe": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/Empty"
+      },
+      "params": {
+        "$ref": "#/$defs/Subscription"
+      },
+      "served_by": "agent",
+      "tier": "record"
+    },
+    "input.inject": {
+      "effect": "acts",
+      "output": {
+        "$ref": "#/$defs/ActOutcome"
+      },
+      "params": {
+        "$ref": "#/$defs/InputParams"
+      },
+      "served_by": "agent",
+      "tier": "input"
+    },
+    "input.journal": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/Journal"
+      },
+      "params": {
+        "$ref": "#/$defs/JournalParams"
+      },
+      "served_by": "agent",
+      "tier": "input"
+    },
+    "input.perform": {
+      "effect": "acts",
+      "output": {
+        "$ref": "#/$defs/ActOutcome"
+      },
+      "params": {
+        "$ref": "#/$defs/InputParams"
+      },
+      "served_by": "driver",
+      "tier": "input"
+    },
+    "input.release": {
+      "effect": "acts",
+      "output": {
+        "$ref": "#/$defs/Released"
+      },
+      "params": {
+        "$ref": "#/$defs/WindowParams"
+      },
+      "served_by": "agent",
+      "tier": "input"
+    },
+    "inspect.layers": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/InspectReading"
+      },
+      "params": {
+        "$ref": "#/$defs/InspectParams"
+      },
+      "served_by": "agent",
+      "tier": "inspect"
+    },
+    "inspect.render": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/InspectReading"
+      },
+      "params": {
+        "$ref": "#/$defs/InspectParams"
+      },
+      "served_by": "agent",
+      "tier": "inspect"
+    },
+    "inspect.widgets": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/InspectReading"
+      },
+      "params": {
+        "$ref": "#/$defs/InspectParams"
+      },
+      "served_by": "agent",
+      "tier": "inspect"
+    },
+    "motion.set": {
+      "effect": "acts",
+      "output": {
+        "$ref": "#/$defs/MotionState"
+      },
+      "params": {
+        "$ref": "#/$defs/MotionParams"
+      },
+      "served_by": "agent",
+      "tier": "session"
+    },
+    "perf.expect": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/PerfVerdict"
+      },
+      "params": {
+        "$ref": "#/$defs/PerfExpectParams"
+      },
+      "served_by": "driver",
+      "tier": "perf"
+    },
+    "perf.start": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/Empty"
+      },
+      "params": {
+        "$ref": "#/$defs/PerfStartParams"
+      },
+      "served_by": "agent",
+      "tier": "perf"
+    },
+    "perf.stop": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/PerfReport"
+      },
+      "params": {
+        "$ref": "#/$defs/WindowParams"
+      },
+      "served_by": "agent",
+      "tier": "perf"
+    },
+    "semantics.act": {
+      "effect": "acts",
+      "output": {
+        "$ref": "#/$defs/ActOutcome"
+      },
+      "params": {
+        "$ref": "#/$defs/ActParams"
+      },
+      "served_by": "agent",
+      "tier": "core"
+    },
+    "semantics.locate": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/Matches"
+      },
+      "params": {
+        "$ref": "#/$defs/LocateParams"
+      },
+      "served_by": "agent",
+      "tier": "core"
+    },
+    "semantics.read": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/Tree"
+      },
+      "params": {
+        "$ref": "#/$defs/ReadParams"
+      },
+      "served_by": "agent",
+      "tier": "core"
+    },
+    "session.attach": {
+      "effect": "acts",
+      "output": {
+        "$ref": "#/$defs/SessionInfo"
+      },
+      "params": {
+        "$ref": "#/$defs/AttachParams"
+      },
+      "served_by": "driver",
+      "tier": "session"
+    },
+    "session.capabilities": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/Capabilities"
+      },
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "served_by": "driver",
+      "tier": "session"
+    },
+    "session.close": {
+      "effect": "destructive",
+      "output": {
+        "$ref": "#/$defs/Closed"
+      },
+      "params": {
+        "$ref": "#/$defs/CloseParams"
+      },
+      "served_by": "driver",
+      "tier": "core"
+    },
+    "session.launch": {
+      "effect": "acts",
+      "output": {
+        "$ref": "#/$defs/SessionInfo"
+      },
+      "params": {
+        "$ref": "#/$defs/LaunchParams"
+      },
+      "served_by": "driver",
+      "tier": "core"
+    },
+    "wait.frames": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/WaitOutcome"
+      },
+      "params": {
+        "$ref": "#/$defs/FramesParams"
+      },
+      "served_by": "agent",
+      "tier": "session"
+    },
+    "wait.settled": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/WaitOutcome"
+      },
+      "params": {
+        "$ref": "#/$defs/SettledParams"
+      },
+      "served_by": "agent",
+      "tier": "session"
+    },
+    "wait.until": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/WaitOutcome"
+      },
+      "params": {
+        "$ref": "#/$defs/WaitParams"
+      },
+      "served_by": "agent",
+      "tier": "core"
+    },
+    "window.placement": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/Placement"
+      },
+      "params": {
+        "$ref": "#/$defs/WindowParams"
+      },
+      "served_by": "agent",
+      "tier": "session"
+    },
+    "windows.list": {
+      "effect": "read_only",
+      "output": {
+        "$ref": "#/$defs/WindowList"
+      },
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "served_by": "agent",
+      "tier": "core"
+    }
+  }
+}

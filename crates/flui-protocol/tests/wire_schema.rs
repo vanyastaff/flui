@@ -12,8 +12,9 @@ use std::path::{Path, PathBuf};
 
 use flui_protocol::version::BREAKING;
 use flui_protocol::{
-    ActionRequest, ErrorCode, MotionRequest, MotionState, Node, PROTOCOL_VERSION, ProtocolVersion,
-    ReadQuery, Retry, Tree,
+    ActionRequest, ErrorCode, ErrorObject, Event, Hello, HelloReply, METHODS, MethodEffect,
+    MotionRequest, MotionState, Node, PROTOCOL_VERSION, ProtocolVersion, ReadQuery, Retry,
+    ServedBy, Tier, Tree,
 };
 use serde_json::Value;
 
@@ -25,10 +26,16 @@ fn golden_path(version: ProtocolVersion) -> PathBuf {
     schema_dir().join(format!("protocol-{version}.json"))
 }
 
-/// The schema of every type an agent reads or sends, keyed by type, without
-/// its prose: a reworded doc comment is not a schema change. Only a schema's
+/// The schema of every type an agent reads or sends, without its prose: a
+/// reworded doc comment is not a schema change. Only a schema's
 /// `description` annotation is prose; a property named `description` is a
 /// field and stays.
+///
+/// The types ADR-0080 published stand alone, keyed by type, as every version
+/// before 0.5 published them. Since 0.5 the method table is there too: each
+/// method's side, effect class, tier and the references of its parameters and
+/// output, into one `$defs` shared by every method, the error object, the
+/// hello and the events.
 fn current_schema() -> Value {
     fn strip_prose(value: &mut Value) {
         match value {
@@ -53,6 +60,42 @@ fn current_schema() -> Value {
         strip_prose(&mut value);
         value
     }
+    let mut generator = schemars::generate::SchemaSettings::draft2020_12().into_generator();
+    let mut envelope = serde_json::Map::new();
+    envelope.insert(
+        "ErrorObject".into(),
+        of(generator.subschema_for::<ErrorObject>()),
+    );
+    envelope.insert("Event".into(), of(generator.subschema_for::<Event>()));
+    envelope.insert("Hello".into(), of(generator.subschema_for::<Hello>()));
+    envelope.insert(
+        "HelloReply".into(),
+        of(generator.subschema_for::<HelloReply>()),
+    );
+    let mut methods = serde_json::Map::new();
+    macro_rules! method_rows {
+        ($(
+            $(#[$meta:meta])*
+            $ty:ident = $name:literal, $served:ident, $effect:ident, $tier:ident,
+                $params:ty => $output:ty;
+        )+) => {$(
+            methods.insert($name.to_owned(), serde_json::json!({
+                "served_by": ServedBy::$served.name(),
+                "effect": MethodEffect::$effect.name(),
+                "tier": Tier::$tier.name(),
+                "params": of(generator.subschema_for::<$params>()),
+                "output": of(generator.subschema_for::<$output>()),
+            }));
+        )+};
+    }
+    flui_protocol::for_each_method!(method_rows);
+    assert_eq!(
+        methods.keys().map(String::as_str).collect::<Vec<_>>(),
+        METHODS.iter().map(|row| row.name).collect::<Vec<_>>(),
+        "the schema describes every method of the table"
+    );
+    let mut definitions = Value::Object(generator.take_definitions(true));
+    strip_prose(&mut definitions);
     serde_json::json!({
         "ActionRequest": of(schemars::schema_for!(ActionRequest)),
         "ErrorCode": of(schemars::schema_for!(ErrorCode)),
@@ -62,6 +105,9 @@ fn current_schema() -> Value {
         "ReadQuery": of(schemars::schema_for!(ReadQuery)),
         "Retry": of(schemars::schema_for!(Retry)),
         "Tree": of(schemars::schema_for!(Tree)),
+        "envelope": envelope,
+        "methods": methods,
+        "$defs": definitions,
     })
 }
 
@@ -145,13 +191,19 @@ impl Surface {
         }
         let mut out = Self::default();
         walk(schema, "", &mut out);
+        if let Some(Value::Object(methods)) = schema.get("methods") {
+            for name in methods.keys() {
+                out.strings.insert(format!("/methods={name}"));
+            }
+        }
         out
     }
 }
 
-/// What makes `newer` not additive to `older`: a property or enumerated string
-/// it lost, or a field it made required.
-fn additivity_violations(older: &Value, newer: &Value) -> Vec<String> {
+/// What makes `newer` not additive to `older`: a property, enumerated string or
+/// method it lost, or a field it made required in a type `older` had. A method
+/// `renamed` lists, old name then new, may go.
+fn additivity_violations(older: &Value, newer: &Value, renamed: &[(&str, &str)]) -> Vec<String> {
     let (old, new) = (Surface::of(older), Surface::of(newer));
     let lost = |a: &BTreeSet<String>, b: &BTreeSet<String>, what: &str| {
         a.difference(b)
@@ -159,16 +211,27 @@ fn additivity_violations(older: &Value, newer: &Value) -> Vec<String> {
             .collect::<Vec<_>>()
     };
     let mut out = lost(&old.properties, &new.properties, "property");
-    out.extend(lost(&old.strings, &new.strings, "name"));
+    out.extend(
+        lost(&old.strings, &new.strings, "name")
+            .into_iter()
+            .filter(|violation| {
+                !renamed.iter().any(|(from, to)| {
+                    violation.ends_with(&format!("/methods={from}"))
+                        && new.strings.contains(&format!("/methods={to}"))
+                })
+            }),
+    );
     out.extend(
         new.required
             .difference(&old.required)
             .filter(|path| {
-                let root = path
+                // The type the field is required in: the path up to `required`, or up to the
+                // first erased index, whichever comes first.
+                let owner: Vec<&str> = path
                     .split('/')
-                    .nth(1)
-                    .expect("schema paths have a type root");
-                older.get(root).is_some()
+                    .take_while(|segment| *segment != "required" && *segment != "*")
+                    .collect();
+                older.pointer(&owner.join("/")).is_some()
             })
             .map(|item| format!("field made required: {item}")),
     );
@@ -200,30 +263,36 @@ fn every_published_schema_is_additive_to_the_next() {
         let [(older, older_path), (newer, newer_path)] = pair else {
             unreachable!("windows(2) yields pairs");
         };
-        if BREAKING.iter().any(|(v, _)| v == newer) {
-            continue;
-        }
-        let violations = additivity_violations(&read_schema(older_path), &read_schema(newer_path));
+        let renamed = BREAKING
+            .iter()
+            .find(|change| change.version == *newer)
+            .map_or(&[][..], |change| change.renamed);
+        let violations =
+            additivity_violations(&read_schema(older_path), &read_schema(newer_path), renamed);
         assert!(
             violations.is_empty(),
-            "protocol {newer} is not additive to {older}; list it in BREAKING with its ADR, or \
-             restore:\n{}",
+            "protocol {newer} is not additive to {older}; list what it renamed in BREAKING with \
+             its ADR, or restore:\n{}",
             violations.join("\n")
         );
     }
 }
 
-/// The additivity check itself, against a schema changed the three ways it
-/// must refuse, and one way it must allow.
+/// The additivity check itself, against a schema changed the ways it must
+/// refuse (a field or method removed, a name respelled, a field made required)
+/// and the ways it must allow (a new field, type or definition, a listed rename).
 #[test]
 fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_required_one() {
     let older = current_schema();
-    assert_eq!(additivity_violations(&older, &older), [] as [String; 0]);
+    assert_eq!(
+        additivity_violations(&older, &older, &[]),
+        [] as [String; 0]
+    );
 
     let mut added = older.clone();
     added["Node"]["properties"]["tooltip"] = serde_json::json!({"type": "string"});
     assert!(
-        additivity_violations(&older, &added).is_empty(),
+        additivity_violations(&older, &added, &[]).is_empty(),
         "a new optional field is additive"
     );
 
@@ -234,7 +303,7 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
         "required": ["result"],
     });
     assert!(
-        additivity_violations(&older, &added_type).is_empty(),
+        additivity_violations(&older, &added_type, &[]).is_empty(),
         "a new response type does not change existing requests or replies"
     );
 
@@ -244,7 +313,7 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
         .expect("Node has properties")
         .remove("focusable");
     assert_eq!(
-        additivity_violations(&older, &removed),
+        additivity_violations(&older, &removed, &[]),
         ["property removed: /Node/properties/focusable"]
     );
 
@@ -255,11 +324,11 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
     )
     .expect("still JSON");
     assert!(
-        additivity_violations(&older, &respelled)
+        additivity_violations(&older, &respelled, &[])
             .iter()
             .any(|v| v.starts_with("name removed:") && v.ends_with("=shutting_down")),
         "{:?}",
-        additivity_violations(&older, &respelled)
+        additivity_violations(&older, &respelled, &[])
     );
 
     let mut required = older.clone();
@@ -268,18 +337,53 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
         .expect("Node has required fields")
         .push(serde_json::json!("name"));
     assert_eq!(
-        additivity_violations(&older, &required),
+        additivity_violations(&older, &required, &[]),
         ["field made required: /Node/required/name"]
+    );
+
+    let mut new_definition = older.clone();
+    new_definition["$defs"]["NewParams"] = serde_json::json!({
+        "type": "object",
+        "properties": {"window": {"type": "string"}},
+        "required": ["window"],
+    });
+    assert!(
+        additivity_violations(&older, &new_definition, &[]).is_empty(),
+        "a new method's parameters do not change an existing method"
+    );
+
+    let mut renamed = older.clone();
+    let methods = renamed["methods"]
+        .as_object_mut()
+        .expect("the schema has a method table");
+    let row = methods
+        .remove("windows.list")
+        .expect("windows.list is a method");
+    methods.insert("windows.enumerate".into(), row);
+    assert_eq!(
+        additivity_violations(&older, &renamed, &[]),
+        ["name removed: /methods=windows.list"],
+        "a method renamed without a BREAKING entry is a removal"
+    );
+    assert!(
+        additivity_violations(&older, &renamed, &[("windows.list", "windows.enumerate")])
+            .is_empty(),
+        "a rename BREAKING lists may go"
+    );
+    assert_eq!(
+        additivity_violations(&older, &renamed, &[("windows.list", "windows.all")]),
+        ["name removed: /methods=windows.list"],
+        "a rename to a method that does not exist is still a removal"
     );
 }
 
 /// An inspected tree in its wire spelling: values tagged by kind, defaults of the node
 /// (no kind arguments, summary level, nothing omitted) left out, and the JSON read back to
-/// the same snapshot. Not yet in a published schema: it joins the next version's golden.
+/// the same snapshot. Published since 0.5, as the output of the `inspect.*` methods.
 #[test]
 fn an_inspect_snapshot_keeps_its_wire_spelling() {
     use flui_protocol::{
-        InspectField, InspectLevel, InspectNode, InspectRect, InspectUnit, InspectValue,
+        InspectField, InspectLevel, InspectNode, InspectUnit, InspectValue, LogicalRect,
     };
 
     let mut padding = InspectField::new(
@@ -300,7 +404,7 @@ fn an_inspect_snapshot_keeps_its_wire_spelling() {
     text.links.push("s4".into());
     let mut root = InspectNode::new("r12", "RenderPadding");
     root.fields = vec![attached, padding];
-    root.rect = Some(InspectRect {
+    root.rect = Some(LogicalRect {
         x: 8.0,
         y: 8.0,
         width: 344.0,

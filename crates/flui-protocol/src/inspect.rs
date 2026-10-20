@@ -7,6 +7,8 @@
 //! render, `l` layer, `s` semantics) and the node's slot, with `.N` for a generation past the
 //! first (`r12`, `v3.2`).
 
+use crate::geometry::LogicalRect;
+
 vocabulary! {
     /// How much detail a field is.
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -52,21 +54,6 @@ vocabulary! {
     }
 }
 
-/// A logical rectangle: origin and size.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct InspectRect {
-    /// Left edge.
-    pub x: f64,
-    /// Top edge.
-    pub y: f64,
-    /// Width.
-    pub width: f64,
-    /// Height.
-    pub height: f64,
-}
-
 /// One field's value: `{"type": "size", "value": {"width": 360, "height": 48}}`.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(
@@ -109,7 +96,7 @@ pub enum InspectValue {
         dy: f64,
     },
     /// A logical rectangle.
-    Rect(InspectRect),
+    Rect(LogicalRect),
     /// A colour: straight-alpha sRGB channels in `0.0..=1.0`.
     Color {
         /// Red.
@@ -160,7 +147,10 @@ pub struct InspectField {
     /// Its value.
     pub value: InspectValue,
     /// How much detail it is; left out at `summary`.
-    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "is_summary"))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "crate::skip::is_default")
+    )]
     pub level: InspectLevel,
     /// What it measures.
     #[cfg_attr(
@@ -217,7 +207,7 @@ pub struct InspectNode {
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
     )]
-    pub rect: Option<InspectRect>,
+    pub rect: Option<LogicalRect>,
     /// Handles of its counterparts in the other trees.
     #[cfg_attr(
         feature = "serde",
@@ -231,10 +221,16 @@ pub struct InspectNode {
     )]
     pub children: Vec<InspectNode>,
     /// Children left out by a depth or node limit.
-    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "is_zero"))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "crate::skip::is_default")
+    )]
     pub omitted_children: u32,
     /// How many of its fields are [`InspectValue::Debug`].
-    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "is_zero"))]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "crate::skip::is_default")
+    )]
     pub debug_fields: u32,
 }
 
@@ -256,20 +252,66 @@ impl InspectNode {
     }
 }
 
-#[cfg(feature = "serde")]
-#[expect(
-    clippy::trivially_copy_pass_by_ref,
-    reason = "serde's skip_serializing_if passes the field by reference"
-)]
-fn is_zero(count: &u32) -> bool {
-    *count == 0
+/// `inspect.widgets`, `inspect.render` and `inspect.layers`: a snapshot of one of a window's
+/// trees, or of a subtree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct InspectParams {
+    /// The window.
+    pub window: crate::tree::WindowId,
+    /// Under this node (`r12`, `v3.2`) instead of from the tree's root.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub root: Option<String>,
+    /// Levels below the root to read.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub max_depth: Option<u32>,
+    /// Nodes to report at most.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub max_nodes: Option<u32>,
+    /// The most detailed fields to include.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "crate::skip::is_default")
+    )]
+    pub level: InspectLevel,
 }
 
-#[cfg(feature = "serde")]
-#[expect(
-    clippy::trivially_copy_pass_by_ref,
-    reason = "serde's skip_serializing_if passes the field by reference"
-)]
-fn is_summary(level: &InspectLevel) -> bool {
-    *level == InspectLevel::Summary
+impl InspectParams {
+    /// The whole tree of `window`, summary fields only.
+    #[must_use]
+    pub fn new(window: crate::tree::WindowId) -> Self {
+        Self {
+            window,
+            root: None,
+            max_depth: None,
+            max_nodes: None,
+            level: InspectLevel::Summary,
+        }
+    }
+}
+
+/// What an inspection answers.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct InspectReading {
+    /// The tree's roots, or the subtree asked for.
+    pub roots: Vec<InspectNode>,
+    /// Nodes reported.
+    pub count: u32,
+    /// Whether the depth or node budget left anything out; each cut node counts its
+    /// `omitted_children`.
+    pub truncated: bool,
 }
