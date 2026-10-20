@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-19 · **Last updated:** 2026-10-19 · **Change:** minor (version map; version floor row; the interaction and display work merged with the window and page lifecycle, Linux included; summary recounted) ·
+> **Last reviewed:** 2026-10-19 · **Last updated:** 2026-10-19 · **Change:** minor (version map; version floor row; the interaction and display work merged with the window and page lifecycle, Linux included; summary recounted; Web browser gesture suppression) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -45,7 +45,7 @@ Counted over every row of the core and system-service sections.
 | X11 | winit (fallback) | 8 | 28 | 33 | 25 | 2 | 31% | no |
 | iOS | UIKit (native) | 7 | 19 | 40 | 30 | 0 | 25% | no |
 | Android | android-activity (native) | 14 | 21 | 32 | 29 | 0 | 37% | no |
-| Web | wasm canvas (native) | 7 | 23 | 30 | 35 | 1 | 30% | no |
+| Web | wasm canvas (native) | 7 | 24 | 29 | 35 | 1 | 31% | no |
 | Headless | test double | 39 | 1 | 50 | 6 | 0 | 44% | — |
 
 ## Core
@@ -119,7 +119,7 @@ Counted over every row of the core and system-service sections.
 | Keyboard layout and its changes | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Web hard-codes `en-US` | 4–6 |
 | Cursor shapes | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | 🟡 | ✅ | No iPad pointer styles or Android `PointerIcon`; no custom image or hide-until-move | 3–5 |
 | System back and history | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android predictive back (from targetSdk 36, `KEYCODE_BACK` isn't delivered), the iOS edge swipe, the Web History and Navigation APIs | 10–16 |
-| Browser gesture suppression | — | — | — | — | — | — | ❌ | — | No `touch-action` or `overscroll-behavior` on the canvas | 1 |
+| Browser gesture suppression | — | — | — | — | — | — | 🟡 | — | The canvas sets `touch-action: none` inline, so a page's stylesheet cannot hand touch panning and zooming back to the browser; `device web-gallery`'s trusted touch swipes, drags and pinches in headless Chrome kept their pointers. `overscroll-behavior` is not set on the canvas or the page; never run in Safari or on a phone | 1 |
 | Input device availability | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Per-window `InputCapabilities` with `Availability` (native, emulated, unavailable) and the devices present, as an initial snapshot then ordered changes; headless and winit report presence changes, the other backends only their initial table so far; none ran on its environment | 0–1 |
 
 ### Text input
@@ -260,3 +260,4 @@ exists yet.
 | 2026-10-19 | minor | The interaction work merged with the version floor row: the summary recounted from the merged tables as (✅ + ½ 🟡) / (✅ + 🟡 + ❌ + ❔), 60 ✅ and 176 🟡 over 496 applicable cells of the seven user environments, ~30% |
 | 2026-10-19 | minor | The Linux window lifecycle merged into the interaction work: the summary recounted the same way, 60 ✅ and 186 🟡 over 496 applicable cells, ~31% |
 | 2026-10-19 | minor | The "Version floor" row links the [version map](version-map.md) generated from `platform-support.toml`, and the Android `minSdk` is packaged from that file; nothing is checked at start, so the cells stay ❌ |
+| 2026-10-19 | minor | Web browser gesture suppression ❌ to 🟡: the canvas has set `touch-action: none` since the interaction work, which the row missed; no `overscroll-behavior`, and only headless Chrome has run it. Web 7 ✅, 24 🟡, 29 ❌ is 31%; overall 60 ✅ and 187 🟡 over 496 cells, still ~31% |

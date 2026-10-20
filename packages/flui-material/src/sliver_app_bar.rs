@@ -377,7 +377,7 @@ impl StatelessView for SliverAppBar {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         // Snapshot the inset at build time — the delegate's extent getters
         // are context-free, exactly why `topPadding` is passed in.
-        let top_padding = MediaQuery::maybe_of(ctx).map_or(0.0, |data| data.padding.top);
+        let top_padding = MediaQuery::maybe_of(ctx).map_or(0.0, |data| data.padding().top);
         let (min_extent, max_extent) = extents(&ExtentInputs {
             toolbar_height: self.toolbar_height,
             bottom_height: self.bottom_height,
