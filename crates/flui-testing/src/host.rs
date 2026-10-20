@@ -1067,7 +1067,7 @@ impl HeadlessHost {
         // recording sees as the `Metrics` row it is.
         let size = self.window_of(window).size;
         // A scale that makes no metrics is refused, as the runner refuses it.
-        let Some(metrics) =
+        let Ok(metrics) =
             flui_foundation::geometry::WindowMetrics::from_logical(size, scale_factor)
         else {
             return;

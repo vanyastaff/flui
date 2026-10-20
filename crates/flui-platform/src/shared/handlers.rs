@@ -1529,10 +1529,8 @@ impl WindowCallbacks {
     /// non-finite size, a non-positive or non-finite scale) is not delivered.
     pub fn dispatch_logical_resize(&self, size: Size<f64>, scale_factor: f64) {
         match WindowMetrics::from_logical(size, scale_factor) {
-            Some(metrics) => self.dispatch_resize(metrics),
-            None => {
-                tracing::debug!(?size, scale_factor, "resize report makes no window metrics");
-            }
+            Ok(metrics) => self.dispatch_resize(metrics),
+            Err(reason) => tracing::debug!(%reason, "resize report dropped"),
         }
     }
 
@@ -1699,7 +1697,7 @@ impl WindowCallbacks {
         if self.lifecycle_closed.load(Ordering::SeqCst) {
             return;
         }
-        let Some(metrics) = WindowMetrics::from_logical(size, scale) else {
+        let Ok(metrics) = WindowMetrics::from_logical(size, scale) else {
             return;
         };
         // Latched on `lifecycle_closed`, deliberately not the `cleared` flag

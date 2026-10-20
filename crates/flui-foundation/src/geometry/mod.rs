@@ -106,7 +106,7 @@ pub use traits::{
 };
 pub use transform::Transform;
 pub use vector::{Vec2, vec2};
-pub use window_metrics::WindowMetrics;
+pub use window_metrics::{InvalidMetrics, WindowMetrics};
 
 /// A point on the device-pixel grid.
 pub type DevicePoint = Point<i32>;

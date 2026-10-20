@@ -1418,8 +1418,7 @@ impl ApplicationHandler for WinitApp {
                 if let Some(ref win) = window {
                     let scale = win.scale_factor();
                     win.refresh_state();
-                    if let Some(metrics) =
-                        flui_foundation::geometry::WindowMetrics::new(size, scale)
+                    if let Ok(metrics) = flui_foundation::geometry::WindowMetrics::new(size, scale)
                     {
                         win.callbacks().dispatch_resize(metrics);
                     }

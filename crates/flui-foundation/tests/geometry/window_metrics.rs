@@ -1,7 +1,7 @@
 //! `WindowMetrics`: a drawable area is at least a pixel in each extent at a finite, positive
 //! ratio, and the device size a platform reports comes back unchanged.
 
-use flui_foundation::geometry::{DeviceSize, Size, WindowMetrics};
+use flui_foundation::geometry::{DeviceSize, InvalidMetrics, Size, WindowMetrics};
 
 fn physical_size_survives_a_fractional_scale() {
     // 115 / 1.75 = 65.714…; truncating the logical size back to pixels gave 114.
@@ -22,47 +22,74 @@ fn from_logical_rounds_each_extent_to_the_nearest_pixel() {
     assert_eq!(metrics.physical(), DeviceSize::new(100, 101));
 }
 
-fn a_report_that_is_not_a_drawable_area_makes_no_metrics() {
-    let rows: [(&str, Option<WindowMetrics>); 9] = [
-        (
-            "zero width",
-            WindowMetrics::new(DeviceSize::new(0, 10), 1.0),
-        ),
-        (
-            "zero height",
-            WindowMetrics::new(DeviceSize::new(10, 0), 1.0),
-        ),
+type Row = (
+    &'static str,
+    Result<WindowMetrics, InvalidMetrics>,
+    fn(&InvalidMetrics) -> bool,
+);
+
+fn a_report_that_is_not_a_drawable_area_names_its_cause() {
+    let size = DeviceSize::new;
+    let rows: [Row; 11] = [
+        ("zero width", WindowMetrics::new(size(0, 10), 1.0), |e| {
+            matches!(
+                e,
+                InvalidMetrics::EmptyExtent {
+                    width: 0,
+                    height: 10
+                }
+            )
+        }),
+        ("zero height", WindowMetrics::new(size(10, 0), 1.0), |e| {
+            matches!(e, InvalidMetrics::EmptyExtent { .. })
+        }),
         (
             "negative width",
-            WindowMetrics::new(DeviceSize::new(-1, 10), 1.0),
+            WindowMetrics::new(size(-1, 10), 1.0),
+            |e| matches!(e, InvalidMetrics::EmptyExtent { width: -1, .. }),
         ),
-        (
-            "zero scale",
-            WindowMetrics::new(DeviceSize::new(10, 10), 0.0),
-        ),
+        ("zero scale", WindowMetrics::new(size(10, 10), 0.0), |e| {
+            matches!(e, InvalidMetrics::InvalidScale(_))
+        }),
         (
             "negative scale",
-            WindowMetrics::new(DeviceSize::new(10, 10), -2.0),
+            WindowMetrics::new(size(10, 10), -2.0),
+            |e| matches!(e, InvalidMetrics::InvalidScale(_)),
         ),
         (
             "nan scale",
-            WindowMetrics::new(DeviceSize::new(10, 10), f64::NAN),
+            WindowMetrics::new(size(10, 10), f64::NAN),
+            |e| matches!(e, InvalidMetrics::InvalidScale(_)),
         ),
         (
             "nan logical",
             WindowMetrics::from_logical(Size::new(f64::NAN, 10.0), 1.0),
+            |e| matches!(e, InvalidMetrics::NonFiniteSize { .. }),
         ),
         (
             "infinite logical",
             WindowMetrics::from_logical(Size::new(10.0, f64::INFINITY), 1.0),
+            |e| matches!(e, InvalidMetrics::NonFiniteSize { .. }),
         ),
         (
             "logical below a pixel",
             WindowMetrics::from_logical(Size::new(0.4, 10.0), 1.0),
+            |e| matches!(e, InvalidMetrics::EmptyExtent { width: 0, .. }),
+        ),
+        (
+            "logical beyond device pixels",
+            WindowMetrics::from_logical(Size::new(3.0e9, 10.0), 1.0),
+            |e| matches!(e, InvalidMetrics::Overflow { .. }),
+        ),
+        (
+            "scale beyond device pixels",
+            WindowMetrics::from_logical(Size::new(1.0e6, 10.0), 1.0e6),
+            |e| matches!(e, InvalidMetrics::Overflow { .. }),
         ),
     ];
-    for (what, metrics) in rows {
-        assert_eq!(metrics, None, "{what}");
+    for (what, metrics, cause) in rows {
+        let error = metrics.expect_err(what);
+        assert!(cause(&error), "{what}: {error:?}");
     }
 }
 
@@ -82,8 +109,8 @@ fn window_metrics_contract() {
             from_logical_rounds_each_extent_to_the_nearest_pixel,
         ),
         (
-            "a report that is not a drawable area makes no metrics",
-            a_report_that_is_not_a_drawable_area_makes_no_metrics,
+            "a report that is not a drawable area names its cause",
+            a_report_that_is_not_a_drawable_area_names_its_cause,
         ),
     ]);
 }

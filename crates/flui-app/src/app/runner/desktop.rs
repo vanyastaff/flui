@@ -377,7 +377,7 @@ where
     // source must not sit on defaults until the first live resize —
     // on the web backend no resize observer exists, so a default
     // would be permanent there.
-    if let Some(metrics) = window.metrics() {
+    if let Ok(metrics) = window.metrics() {
         installation.observe(flui_runtime::owner::WindowObservation::Metrics(metrics));
     }
 

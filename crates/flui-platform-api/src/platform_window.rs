@@ -9,7 +9,7 @@
 use std::{any::Any, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Point, Size, WindowMetrics};
+use flui_foundation::geometry::{InvalidMetrics, Point, Size, WindowMetrics};
 
 use crate::keyboard::Modifiers;
 use crate::{
@@ -222,9 +222,9 @@ pub trait PlatformWindow: Send + Sync {
     /// Get the scale factor (DPI scaling)
     fn scale_factor(&self) -> f64;
 
-    /// The drawable area and scale the window reports now, or `None` while it is not a
-    /// drawable area (a minimised window's zero size, a scale that is not finite and positive).
-    fn metrics(&self) -> Option<WindowMetrics> {
+    /// The drawable area and scale the window reports now, or why it is not a drawable area
+    /// (a minimised window's zero size, a scale that is not finite and positive).
+    fn metrics(&self) -> Result<WindowMetrics, InvalidMetrics> {
         WindowMetrics::new(self.physical_size(), self.scale_factor())
     }
 

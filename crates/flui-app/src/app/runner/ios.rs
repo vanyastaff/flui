@@ -480,7 +480,7 @@ where
         focused,
         visible,
     });
-    if let Some(metrics) = window.metrics() {
+    if let Ok(metrics) = window.metrics() {
         installation.observe(flui_runtime::owner::WindowObservation::Metrics(metrics));
     }
 

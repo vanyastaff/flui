@@ -347,7 +347,7 @@ impl WindowInstall {
         self.observe_window_state();
         // Observers precede the snapshot. Keep redraw ownership published
         // before lifecycle reconciliation can synchronously request a frame.
-        let metrics = window.metrics().map(WindowObservation::Metrics);
+        let metrics = window.metrics().ok().map(WindowObservation::Metrics);
         let snapshot = WindowObservation::Snapshot {
             execution: window.execution_state(),
             focused: window.is_focused(),

@@ -498,7 +498,7 @@ where
             focused: window.is_focused(),
             visible: window.is_visible(),
         });
-        if let Some(metrics) = window.metrics() {
+        if let Ok(metrics) = window.metrics() {
             installation.observe(flui_runtime::owner::WindowObservation::Metrics(metrics));
         }
         APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));

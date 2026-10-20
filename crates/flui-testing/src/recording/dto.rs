@@ -1778,11 +1778,7 @@ impl TryFrom<WindowObservationDto> for WindowObservation {
                     flui_foundation::geometry::DeviceSize::new(width, height),
                     scale_factor,
                 )
-                .ok_or_else(|| {
-                    invalid(format_args!(
-                        "window metrics {width}x{height} at {scale_factor}"
-                    ))
-                })?,
+                .map_err(invalid)?,
             ),
             WindowObservationDto::Focus(focused) => Self::Focus(focused),
             WindowObservationDto::Visibility(visible) => Self::Visibility(visible),
