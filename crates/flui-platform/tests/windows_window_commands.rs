@@ -1057,6 +1057,10 @@ fn a_locked_session_or_a_cloak_hides_a_shown_window() {
     let events = record_visibility(&window);
     send(&window, WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK as usize, 1);
     assert_eq!(*events.lock().expect("log"), [false]);
+    assert!(
+        !window.is_visible(),
+        "a runtime that first reads the window now must not see it visible"
+    );
     send(
         &window,
         WM_WTSSESSION_CHANGE,
@@ -1064,6 +1068,7 @@ fn a_locked_session_or_a_cloak_hides_a_shown_window() {
         1,
     );
     assert_eq!(*events.lock().expect("log"), [false, true]);
+    assert!(window.is_visible());
 
     let cloak = |on: bool| {
         let value = BOOL::from(on);

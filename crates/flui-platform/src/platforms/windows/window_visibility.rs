@@ -42,13 +42,25 @@ pub(super) struct Visibility {
 }
 
 impl Visibility {
-    /// A window the runtime starts out being told is `visible`.
-    pub(super) fn new(visible: bool) -> Self {
+    /// A window whose surface starts out `surface`, in a session that is
+    /// locked now or not. The runtime's first reading
+    /// (`PlatformWindow::is_visible`) leaves out the occlusion.
+    pub(super) fn new(surface: bool) -> Self {
+        let occlusion = Occlusion {
+            cloaked: false,
+            session_locked: session_locked_now(),
+        };
         Self {
-            surface: Cell::new(visible),
-            occlusion: Cell::new(Occlusion::default()),
-            reported: Cell::new(visible),
+            surface: Cell::new(surface),
+            occlusion: Cell::new(occlusion),
+            reported: Cell::new(surface && !occlusion.session_locked),
         }
+    }
+
+    /// Whether something hides the window whatever its surface.
+    pub(super) fn occluded(&self) -> bool {
+        let occlusion = self.occlusion.get();
+        occlusion.cloaked || occlusion.session_locked
     }
 
     fn visible(&self) -> bool {
@@ -118,6 +130,43 @@ impl WindowContext {
             self.callbacks.dispatch_visibility_status_change(visible);
         }
     }
+}
+
+/// Whether the session this process runs in is locked: a window opened while
+/// it is gets no lock message. Unknown counts as unlocked.
+fn session_locked_now() -> bool {
+    use windows::Win32::System::RemoteDesktop::{
+        WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTS_SESSIONSTATE_LOCK, WTSFreeMemory,
+        WTSINFOEXW, WTSQuerySessionInformationW, WTSSessionInfoEx,
+    };
+
+    let mut buffer = windows::core::PWSTR::null();
+    let mut bytes = 0_u32;
+    // SAFETY: both out-parameters are live locals; on success the system
+    // allocates `buffer`, freed below with `WTSFreeMemory`.
+    let queried = unsafe {
+        WTSQuerySessionInformationW(
+            Some(WTS_CURRENT_SERVER_HANDLE),
+            WTS_CURRENT_SESSION,
+            WTSSessionInfoEx,
+            &raw mut buffer,
+            &raw mut bytes,
+        )
+    };
+    if queried.is_err() || buffer.is_null() {
+        return false;
+    }
+    let locked = (bytes as usize >= size_of::<WTSINFOEXW>()).then(|| {
+        // SAFETY: for `WTSSessionInfoEx` the buffer holds a `WTSINFOEXW`, at
+        // least as many bytes as checked above, read without assuming the
+        // allocation's alignment; level 1 is the union's only member.
+        let info = unsafe { std::ptr::read_unaligned(buffer.0.cast::<WTSINFOEXW>()) };
+        info.Level == 1
+            && unsafe { info.Data.WTSInfoExLevel1 }.SessionFlags as u32 == WTS_SESSIONSTATE_LOCK
+    });
+    // SAFETY: the buffer the query allocated, freed once.
+    unsafe { WTSFreeMemory(buffer.0.cast()) };
+    locked.unwrap_or(false)
 }
 
 /// The window's subscription to the cloak changes of its thread's windows;

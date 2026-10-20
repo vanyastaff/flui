@@ -1872,7 +1872,13 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn is_visible(&self) -> bool {
+        // A locked session or a cloak hides a shown window. Off the owner
+        // thread only the shown state is known.
         self.state.lock().visible
+            && !super::platform::with_window_context(self.hwnd, "is_visible", |ctx| {
+                ctx.visibility.occluded()
+            })
+            .unwrap_or(false)
     }
 
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
