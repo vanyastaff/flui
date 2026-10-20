@@ -22,9 +22,11 @@
 //! Bytes are read first; the decode runs on the runtime's blocking pool behind
 //! the registry's decode slots, so a host runtime's workers keep serving its
 //! own tasks while large images decode, and at most `decode_threads` decodes
-//! run at once. A freed slot goes to the waiting load admitted first
-//! ([`OrderedSlots`]), whichever read finished first. A load whose subscribers
-//! all left while it waited for a slot skips the decode.
+//! run at once. Load slots are granted in admission order; a decode slot goes
+//! to the earliest-admitted load whose bytes are ready ([`OrderedSlots`]), and
+//! a load still fetching holds none, so the decoder never idles behind a slow
+//! read. A load whose subscribers all left while it waited for a slot skips
+//! the decode.
 //!
 //! # Locking
 //!
@@ -372,7 +374,8 @@ impl DecodedImages {
     }
 
     /// Decodes `bytes` on the current runtime's blocking pool once a decode
-    /// slot is free, behind every waiting load admitted earlier. `None` when
+    /// slot is free, behind every load admitted earlier that is also waiting
+    /// with its bytes; loads still fetching are not waited for. `None` when
     /// every subscriber left before the decode started.
     pub(crate) async fn decode(
         &self,

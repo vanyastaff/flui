@@ -252,7 +252,7 @@ impl TextureCache {
     }
 
     /// Whether the atlas's GPU texture is allocated.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "testing"))]
     pub(crate) fn holds_atlas_texture(&self) -> bool {
         self.atlas.is_some()
     }

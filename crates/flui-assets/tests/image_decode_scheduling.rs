@@ -335,12 +335,15 @@ fn loads_past_admission_are_bounded_by_count() {
     stop.store(true, Ordering::SeqCst);
 }
 
-/// With the only decode slot taken, a network load admitted before a file
-/// load decodes first, although the file's bytes were ready long before the
-/// response arrived.
+/// With one decode thread, a decode slot goes to the earliest-admitted load
+/// whose bytes are ready. With the decoder free, a file load decodes while a
+/// network load admitted before it still waits for its response: the decoder
+/// does not idle behind a slow fetch. With both waiting behind a running
+/// decode, the earlier-admitted network load goes first, although the file's
+/// bytes were ready long before the response arrived.
 #[cfg(feature = "network")]
 #[test]
-fn decode_slots_go_in_admission_order_not_read_order() {
+fn decode_slots_go_to_the_earliest_admitted_ready_load() {
     const BLOCKER: &[u8; 8] = b"FLUIORD0";
     const NETWORK: &[u8; 8] = b"FLUIORDN";
     const FILE: &[u8; 8] = b"FLUIORDF";
@@ -365,6 +368,30 @@ fn decode_slots_go_in_admission_order_not_read_order() {
         .build();
     let mut response = NETWORK.to_vec();
     response.extend_from_slice(PNG);
+    let runtime = current_thread();
+    let finish = |load: flui_assets::ImageLoad| {
+        let image = runtime
+            .block_on(async { tokio::time::timeout(BUDGET, load).await })
+            .expect("the load completes")
+            .expect("the image decodes");
+        assert_eq!((image.width(), image.height()), (4, 2));
+    };
+
+    // A ready load does not wait for an earlier one still fetching.
+    let (address, arrived, release) = spawn_held_server(response.clone());
+    let fetching = registry.load_network_image_bridged(format!("http://{address}/slow.img"));
+    arrived.recv_timeout(BUDGET).expect("the request arrives");
+    finish(registry.load_image_bridged(files.write(FILE, "ready.img")));
+    assert_eq!(
+        *order.lock().expect("order log"),
+        ["file"],
+        "the ready file decodes while the earlier network load still fetches"
+    );
+    release.send(()).expect("the server waits for the release");
+    finish(fetching);
+    order.lock().expect("order log").clear();
+
+    // With both ready and waiting, the earlier admission wins.
     let (address, arrived, release) = spawn_held_server(response);
 
     let blocker = registry.load_image_bridged(files.write(BLOCKER, "blocker.img"));
@@ -379,17 +406,12 @@ fn decode_slots_go_in_admission_order_not_read_order() {
     std::thread::sleep(Duration::from_millis(200));
     gate.open();
 
-    let runtime = current_thread();
     for load in [blocker, network, file] {
-        let image = runtime
-            .block_on(async { tokio::time::timeout(BUDGET, load).await })
-            .expect("the load completes")
-            .expect("the image decodes");
-        assert_eq!((image.width(), image.height()), (4, 2));
+        finish(load);
     }
     assert_eq!(
         *order.lock().expect("order log"),
         ["network", "file"],
-        "the freed slot goes to the load admitted first"
+        "the freed slot goes to the waiting load admitted first"
     );
 }

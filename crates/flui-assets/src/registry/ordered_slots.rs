@@ -1,10 +1,15 @@
-//! A bounded set of slots handed out in admission order.
+//! A bounded set of slots, each freed one handed to the earliest-admitted
+//! waiter.
 //!
 //! A registry keeps two: load slots, which a load holds from before its read
 //! until its decode returns, and decode slots, which it holds while it
 //! decodes. Loads reach each queue in whatever order their earlier steps
-//! finish; [`OrderedSlots`] hands a freed slot to the waiting load that was
-//! admitted first instead, so a load requested earlier is not overtaken.
+//! finish; [`OrderedSlots`] orders the waiters by admission instead.
+//!
+//! The queue is work-conserving: it orders only loads that are waiting. A free
+//! slot goes to whoever asks while no one waits, so a load still fetching its
+//! bytes reserves no decode slot, and a ready load admitted after it decodes
+//! first rather than leaving the decoder idle behind a slow response.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -16,8 +21,8 @@ use tokio::sync::oneshot;
 /// A load's place in admission order: lower is earlier.
 pub(crate) type AdmissionOrder = u64;
 
-/// Hands out at most `slots` [`Slot`]s, each freed slot to the earliest
-/// admitted waiter.
+/// Hands out at most `slots` [`Slot`]s: a free one to any caller while none
+/// waits, each freed one to the earliest-admitted waiter.
 pub(crate) struct OrderedSlots {
     state: Mutex<QueueState>,
 }

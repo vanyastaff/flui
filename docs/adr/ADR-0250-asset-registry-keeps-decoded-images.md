@@ -47,8 +47,11 @@ an async worker, and sent the result down a oneshot. Five defects followed from 
    host's async workers never decode. Before reading, a load takes one of four load slots per
    decode thread and holds it until its decode returns, which bounds the reads in flight and
    the encoded bytes waiting to decode by count. Once its bytes are read it asks for a decode
-   slot. Both go to the waiting load admitted first, so a load requested earlier but read
-   later is not overtaken. A stalled request holds its load slot until the loader's read
+   slot. Load slots are granted in admission order. A decode slot goes to the earliest-admitted
+   load whose bytes are ready, and a load still fetching holds none: the decoder is
+   work-conserving, so a ready load admitted later decodes rather than waiting idle behind a
+   slow response. Strict admission order would let one stalled request block every visible
+   image behind it. A stalled request holds its load slot until the loader's read
    timeout or its cancellation. Priority among live loads is admission order: an image
    scrolled out of a lazy list unmounts and cancels, so the loads left waiting are the
    mounted ones.
@@ -83,7 +86,7 @@ an async worker, and sent the result down a oneshot. Five defects followed from 
   open while a waiter remains, closed by the last drop).
 - `bridged_decodes_leave_a_host_runtimes_async_workers_free`,
   `abandoned_loads_never_decode_and_do_not_delay_a_live_one`,
-  `decode_slots_go_in_admission_order_not_read_order` and
+  `decode_slots_go_to_the_earliest_admitted_ready_load` and
   `loads_past_admission_are_bounded_by_count`, in the `image_decode_scheduling` target,
   through real decoder hooks.
 - `trim_evicts_image_textures_by_level` (renderer textures by level, between frames).

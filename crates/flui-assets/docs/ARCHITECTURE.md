@@ -488,9 +488,13 @@ four). A host runtime's async workers never run a decode. Before it reads, a
 load takes one of four load slots per decode thread and holds it until its
 decode returns, so the reads in flight and the encoded bytes waiting to decode
 are bounded by count (each body by `MAX_BODY_BYTES`). Once its bytes are read
-it asks for a decode slot. Both kinds of slot go to the waiting load admitted
-first, not the one whose earlier step finished first. A load abandoned while
-it waited for either skips the decode and frees its load slot.
+it asks for a decode slot. Load slots are granted in admission order. A decode
+slot goes to the earliest-admitted load whose bytes are ready; a load still
+fetching holds none, so a ready load admitted later decodes first rather than
+leaving the decoder idle behind a slow response. Strict admission order would
+be head-of-line blocking: one stalled request would stop every visible image
+behind it. A load abandoned while it waited for either slot skips the decode
+and frees its load slot.
 
 One mutex guards the cache and the pending map. Senders are completed, aborts
 issued, tasks spawned and evicted pixels freed after it is released: a runtime
@@ -511,8 +515,9 @@ task on the host runtime's only worker) and
 `abandoned_loads_never_decode_and_do_not_delay_a_live_one` (one decode thread:
 five loads abandoned behind a running decode never decode, and the live load
 queued after them decodes next) and
-`decode_slots_go_in_admission_order_not_read_order` (a network load admitted
-first but read last still decodes before a file load whose read finished first)
+`decode_slots_go_to_the_earliest_admitted_ready_load` (with the decoder free,
+a file load decodes while an earlier network load still fetches; with both
+waiting behind a running decode, the earlier-admitted network load goes first)
 and `loads_past_admission_are_bounded_by_count` (one decode thread: while a
 decode holds its slot only three more requests go out, and the next starts
 when it returns).

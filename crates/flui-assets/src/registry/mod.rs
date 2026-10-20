@@ -167,8 +167,9 @@ impl AssetRegistry {
     /// Dropping the last [`ImageLoad`] waiting for a load cancels it: the file
     /// is read in chunks and stops at the next one (a chunk already being read
     /// on a blocking thread finishes), and a decode that has not started never
-    /// runs. Freed decode slots go to waiting loads in the order they were
-    /// requested.
+    /// runs. Loads start reading in the order they were requested, up to four
+    /// per decode thread; a decode slot goes to the earliest-requested load
+    /// whose bytes are ready, never held for one still fetching.
     ///
     /// The task spawns onto [`AssetRegistryBuilder::with_runtime_handle`]'s
     /// injected handle if one was supplied at construction; otherwise an
