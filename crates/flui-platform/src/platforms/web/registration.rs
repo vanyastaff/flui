@@ -45,19 +45,19 @@ export function observeCanvas(observer, canvas) {
     }
 }
 // The last entry's device-pixel content box as [width, height]; [] when the
-// entry has none, or when the canvas has padding: the window's size is the
-// padding box (`clientWidth`), which the content box does not measure. The
-// box sizes are logical: a vertical writing mode puts the width in blockSize.
+// entry has none, or when the canvas has any padding, a fraction of a pixel
+// included: the window's size is the padding box (`clientWidth`), which the
+// content box does not measure. The box sizes are logical: a vertical writing
+// mode puts the width in blockSize.
 export function devicePixelSize(entries) {
     const entry = entries[entries.length - 1];
     const box = entry?.devicePixelContentBoxSize?.[0];
     if (!box) return [];
-    const content = entry.contentRect;
-    const target = entry.target;
-    if (Math.round(content.width) !== target.clientWidth
-        || Math.round(content.height) !== target.clientHeight) return [];
-    const mode = globalThis.getComputedStyle?.(target)?.writingMode ?? '';
-    const vertical = /^(vertical|sideways)/.test(mode);
+    const style = globalThis.getComputedStyle?.(entry.target);
+    if (!style) return [];
+    const sides = [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft];
+    if (sides.some(side => parseFloat(side) !== 0)) return [];
+    const vertical = /^(vertical|sideways)/.test(style.writingMode ?? '');
     const width = vertical ? box.blockSize : box.inlineSize;
     const height = vertical ? box.inlineSize : box.blockSize;
     const valid = size => Number.isInteger(size) && size > 0;

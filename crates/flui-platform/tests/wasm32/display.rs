@@ -76,6 +76,7 @@ class FakeCanvas extends EventTarget {
         this.width = 300;
         this.height = 150;
         this.ownerDocument = document;
+        this.padding = 0;
     }
     getRootNode() { return document; }
     contains(node) { return node === this; }
@@ -89,6 +90,7 @@ export function installDisplayProbe(windowManagement) {
         'Window', 'matchMedia', 'requestAnimationFrame', 'cancelAnimationFrame',
         'devicePixelRatio', 'screen', 'document', 'navigator', 'getScreenDetails',
         'HTMLCanvasElement', 'addEventListener', 'removeEventListener', 'ResizeObserver',
+        'getComputedStyle',
     ];
     const descriptors = names.map(name => Object.getOwnPropertyDescriptor(globalThis, name));
     const previous = Object.getPrototypeOf(globalThis);
@@ -141,6 +143,13 @@ export function installDisplayProbe(windowManagement) {
     document.createElement = () => (lastCanvas = new FakeCanvas());
     define('document', document);
     define('HTMLCanvasElement', FakeCanvas);
+    define('getComputedStyle', element => {
+        const padding = `${element.padding ?? 0}px`;
+        return {
+            paddingTop: padding, paddingRight: padding, paddingBottom: padding, paddingLeft: padding,
+            writingMode: 'horizontal-tb',
+        };
+    });
     windowListeners = [];
     define('addEventListener', (name, callback) => { windowListeners.push({ name, callback }); });
     define('removeEventListener', (name, callback) => {
@@ -236,6 +245,7 @@ export function installResizeObserver(devicePixels) {
 export function layOutCanvas(width, height, deviceWidth, deviceHeight, padding = 0) {
     lastCanvas.clientWidth = width;
     lastCanvas.clientHeight = height;
+    lastCanvas.padding = padding;
     const content = { width: width - 2 * padding, height: height - 2 * padding };
     const entry = {
         target: lastCanvas,
@@ -332,7 +342,7 @@ extern "C" {
         height: u32,
         device_width: u32,
         device_height: u32,
-        padding: u32,
+        padding: f64,
     );
     #[wasm_bindgen(js_name = pixelRatioListeners)]
     fn pixel_ratio_listeners() -> i32;
@@ -1255,9 +1265,10 @@ async fn web_window_backing_store_is_the_device_pixel_size_the_browser_reports()
     assert_eq!(canvas_backing_size(), [451, 225]);
     assert_eq!(resized.lock().expect("resizes").len(), 2, "nothing changed");
 
-    // With 10px of padding the window is the 301×150 padding box, and the
-    // device-pixel box measures only the 281×130 content inside it.
-    lay_out_padded_canvas(301, 150, 421, 195, 10);
+    // With 0.2px of padding the window is the 301×150 padding box, and the
+    // device-pixel box measures only the 300.6×149.6 content inside it, a
+    // difference rounding to the CSS pixel would hide.
+    lay_out_padded_canvas(301, 150, 450, 224, 0.2);
     settle().await;
     assert_eq!(
         canvas_backing_size(),
