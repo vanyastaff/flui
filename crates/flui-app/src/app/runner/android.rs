@@ -3,7 +3,7 @@ use flui_view::{StatelessView, View};
 
 use super::device_recovery::{new_device_recovery_backoff, pump_with_device_recovery};
 use super::frame_pacing::{
-    BACKGROUNDED_PUMP_PACE, FallbackGate, WakeAction, frame_is_dirty, wake_action,
+    BackgroundPace, FallbackGate, WakeAction, frame_is_dirty, keeps_frame_gate_open, wake_action,
 };
 use super::host::{APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, with_owner_platform};
 use super::owner_dispatch::{
@@ -145,20 +145,27 @@ where
         let surface_recreation_retry = Arc::new(SurfaceRecreationRetry::new());
         let surface_retry_for_callback = Arc::clone(&surface_recreation_retry);
 
+        // 0b-3. The bound on backgrounded pumps: a deadline the wake hook
+        // reports, not a sleep on the loop thread.
+        let background_pace = Arc::new(BackgroundPace::default());
+
         // The existing owner wake carries runtime deadlines as well as device
-        // and surface recovery. Geometry refresh is owner work even while a
-        // hidden presentation cannot produce frames.
+        // and surface recovery and the background pace. Geometry refresh is
+        // owner work even while a hidden presentation cannot produce frames.
         owner_platform_installed(|owner| {
             let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
             let surface_recreation_retry = Arc::clone(&surface_recreation_retry);
+            let background_pace = Arc::clone(&background_pace);
             owner.shared().set_wake_deadline_hook(Box::new(move || {
-                super::host::merge_wake_deadlines(
+                [
                     APP_RUNTIME.with(|slot| slot.borrow().next_wake()),
-                    super::host::merge_wake_deadlines(
-                        device_recovery_backoff.next_attempt_at(),
-                        surface_recreation_retry.next_attempt_at(),
-                    ),
-                )
+                    device_recovery_backoff.next_attempt_at(),
+                    surface_recreation_retry.next_attempt_at(),
+                    background_pace.next_wake(),
+                ]
+                .into_iter()
+                .flatten()
+                .min()
             }));
         });
 
@@ -300,6 +307,7 @@ where
                 hot_reload,
                 device_recovery_backoff,
                 surface_recreation_retry,
+                background_pace,
             },
         ))?;
         let binding = frame.binding;
@@ -543,6 +551,7 @@ pub(super) struct AndroidFrameDriver {
     hot_reload: crate::app::hot_reload::ScenePlugin,
     device_recovery_backoff: std::sync::Arc<super::device_recovery::DeviceRecoveryBackoff>,
     surface_recreation_retry: std::sync::Arc<SurfaceRecreationRetry>,
+    background_pace: std::sync::Arc<BackgroundPace>,
 }
 
 impl AndroidFrameDriver {
@@ -619,9 +628,9 @@ impl AndroidFrameDriver {
                 ui_runtime.needs_redraw(),
                 has_pending,
                 retry_deadline,
-                // Android's wake-deadline hook carries only the retry
-                // deadlines, so no fallback deferral exists to consult
-                // (ADR-0058): its backgrounded pump sleeps.
+                // Android paces only its backgrounded pump
+                // (`BackgroundPace`): a rendering wake has no fallback
+                // deferral to consult (ADR-0058).
                 FallbackGate::default(),
             );
             let scheduler = ui_runtime.scheduler();
@@ -660,21 +669,32 @@ impl AndroidFrameDriver {
             (action, now)
         });
 
+        if action != WakeAction::PumpBackground {
+            self.background_pace.clear();
+        }
         match action {
             WakeAction::Skip => return,
             WakeAction::PumpBackground => {
+                // A wake before the pace deadline does not pump; the
+                // deadline, reported through the wake hook, brings the next.
+                if !self.background_pace.admit(now) {
+                    return;
+                }
                 // Frames disabled: service owner commands, async tasks, and
                 // input deadlines without animation or a visual frame. See
                 // `UiRuntime::pump_background` for the latch-first order.
                 ui_runtime.pump_background();
-                // Unconditional throttle: a self-re-arming task has
-                // no vsync/present call to bound it here either, and
-                // this arm has no gate-open signal to make the pace
-                // conditional the way desktop's does — see
-                // `BACKGROUNDED_PUMP_PACE`'s doc. Android keeps the
-                // sleep the desktop path dropped (ADR-0058): its frame
-                // source has no wake-deadline hook to arm instead.
-                std::thread::sleep(BACKGROUNDED_PUMP_PACE);
+                // A self-re-arming task has no vsync or present to bound it
+                // here, so work that asks for another wake defers the next
+                // pump by a pace (ADR-0058). A deadline, not a sleep: the
+                // loop thread keeps delivering input and lifecycle events.
+                if keeps_frame_gate_open(
+                    ui_runtime.needs_redraw(),
+                    ui_runtime.scheduler().is_frame_scheduled(),
+                    ui_runtime.has_pending_work(),
+                ) {
+                    self.background_pace.defer(web_time::Instant::now());
+                }
                 return;
             }
             WakeAction::Render => {}
@@ -697,8 +717,8 @@ impl AndroidFrameDriver {
         // territory at the backoff's one-second cap. The
         // deadline is carried by the wake hook wired at step 0c
         // instead: this backend has no `ControlFlow::WaitUntil`,
-        // so `AndroidPlatform::run`'s own ~16 ms idle poll
-        // consults the hook every iteration and forces a
+        // so `AndroidPlatform::run`'s poll blocks no longer than
+        // the hook's deadline and forces a
         // dispatch once the deadline is due (`flui-platform`'s
         // `platforms/android/mod.rs`).
         if pump_with_device_recovery(ui_runtime, lane_frame, device_recovery_backoff, now).is_none()
