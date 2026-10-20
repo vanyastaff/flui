@@ -77,15 +77,6 @@ image = { workspace = true, optional = true }
 # `NetworkImage`'s async resolution (`ImageProvider::resolve_async`).
 # Optional: only the `asset-images`/`network-images` features pull it in.
 flui-assets = { path = "../flui-assets", version = "=0.2.0-dev", optional = true }
-# In-flight image-load coalescing (`image::decode_cache`): `Shared` lets two
-# `Image` widgets mounted with the same provider key await ONE load. `alloc`
-# only — no executor, no I/O, no proc-macros (see the workspace-level comment
-# on why this is the one place the `futures-core`-only policy isn't enough).
-futures-util = { workspace = true, optional = true }
-# Count-bounded LRU backing the same decode cache — no time-based eviction,
-# unlike `flui-assets`' own moka byte-loader cache. See
-# `crate::image::decode_cache`'s module doc.
-lru = { workspace = true, optional = true }
 # `EditableText` is a text store an input method pulls from: it implements
 # the `TextStore` contract and converts offsets with its `utf16` helper
 # (ADR-0090). The contract crate, so this links no OS backend (ADR-0082).
@@ -128,8 +119,7 @@ flui-testing = { path = "../flui-testing" }
 flui-widgets = { path = ".", features = ["testing"] }
 # Shared Arc<RwLock<PipelineOwner>> in the headless layout harness.
 parking_lot = { workspace = true }
-# `#[tokio::test]` for the `image::decode_cache` coalescing unit tests
-# (`asset-images` feature) and the async `Image` widget integration tests.
+# The async `Image` widget integration tests (`asset-images` feature).
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 # `#[derive(Routable)]`: the pass and compile-fail suite (`tests/routable_ui.rs`)
 # and the round-trip property test (`tests/routable_derive.rs`).
@@ -197,12 +187,12 @@ images = ["dep:image"]
 # Async, `flui-assets`-backed asset-file image loading: `AssetImage` resolves
 # through an injected `Arc<flui_assets::AssetRegistry>` on a background tokio
 # runtime, decoded via the same `image` crate `images` activates. Pulls in
-# `flui-assets` (with its own `images` feature), plus `futures-util`/`lru` for
-# the decode cache and load-coalescing engine (`image::decode_cache`).
-asset-images = ["dep:flui-assets", "flui-assets/images", "images", "dep:futures-util", "dep:lru"]
+# `flui-assets` (with its own `images` feature), whose registry keeps the
+# decoded images and coalesces their loads.
+asset-images = ["dep:flui-assets", "flui-assets/images", "images"]
 # Async network image loading: rewires `NetworkImage::resolve_async` through
 # `flui-assets`' `NetworkLoader` (reqwest). Implies `asset-images` — both
-# share the same decode cache, coalescing engine, and background runtime.
+# share the registry's decoded-image cache and background runtime.
 network-images = ["asset-images", "flui-assets/network"]
 # Serialization of the value types the widgets take, in each crate that owns some.
 serde = [
@@ -252,7 +242,6 @@ globals = [
     { item = "overlay::entry::OverlayEntryId::counter::COUNTER", grant = "ADR-0097", class = "counter", reason = "Overlay entry identities, advanced by try_update with a permanent exhaustion sentinel" },
     { item = "motion::switcher::DEFAULT_LAYOUT_BUILDER", grant = "ADR-0097", class = "immutable", reason = "the shared default layout builder, so an unchanged default compares equal across rebuilds" },
     { item = "motion::switcher::DEFAULT_TRANSITION_BUILDER", grant = "ADR-0097", class = "immutable", reason = "the shared default transition builder, so an unchanged default compares equal across rebuilds" },
-    { item = "image::decode_cache::CACHE", exit = "ADR-0097", reason = "the process-wide decoded-image cache; it becomes UI runtime-owned" },
     { item = "navigator::navigator::NAVIGATOR_COMMAND_TARGETS", exit = "ADR-0093", reason = "the owner thread's navigator command routing table" },
 ]
 

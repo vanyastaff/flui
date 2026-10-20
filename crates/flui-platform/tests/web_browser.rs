@@ -87,6 +87,32 @@ export function tiltedPen(x, y, tiltX, tiltY) {
         button: 0, buttons: 0, clientX: x, clientY: y,
     }));
 }
+// A pointer event of `pointerType` at the canvas: [defaultPrevented, reachedAncestor, timeStamp].
+export function pointerAt(type, pointerId, pointerType, button, buttons, x, y) {
+    return dispatch(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId, pointerType, isPrimary: true,
+        button, buttons, pressure: buttons ? 0.5 : 0, clientX: x, clientY: y,
+    }));
+}
+// A Control-held primary mouse press or release at the canvas (macOS's
+// secondary click).
+export function controlClick(type, x, y) {
+    canvas().dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse', isPrimary: true,
+        button: 0, buttons: type === 'pointerdown' ? 1 : 0, ctrlKey: true, clientX: x, clientY: y,
+    }));
+}
+export function contextMenu(button, ctrlKey) {
+    return dispatch(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button, ctrlKey }));
+}
+// The page losing the OS focus (Alt+Tab).
+export function pageBlur() { window.dispatchEvent(new FocusEvent('blur')); }
+// The page hidden (another tab), or shown again.
+export function hidePage(hidden) {
+    if (hidden) Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    else delete document.hidden;
+    document.dispatchEvent(new Event('visibilitychange'));
+}
 export function sleep(millis) { return new Promise(resolve => setTimeout(resolve, millis)); }
 let drag;
 // A drag over the canvas: string representations [[type, data]], files
@@ -187,6 +213,24 @@ extern "C" {
     #[wasm_bindgen(js_name = tiltedPen)]
     fn tilted_pen(x: f64, y: f64, tilt_x: f64, tilt_y: f64);
     fn sleep(millis: u32) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = pointerAt)]
+    fn pointer_at(
+        kind: &str,
+        id: i32,
+        pointer_type: &str,
+        button: i16,
+        buttons: u16,
+        x: f64,
+        y: f64,
+    ) -> Vec<f64>;
+    #[wasm_bindgen(js_name = contextMenu)]
+    fn context_menu(button: i16, ctrl: bool) -> Vec<f64>;
+    #[wasm_bindgen(js_name = controlClick)]
+    fn control_click(kind: &str, x: f64, y: f64);
+    #[wasm_bindgen(js_name = pageBlur)]
+    fn page_blur();
+    #[wasm_bindgen(js_name = hidePage)]
+    fn hide_page(hidden: bool);
     #[wasm_bindgen(js_name = beginDrag)]
     fn begin_drag(strings: &str, files: &str, effect_allowed: &str);
     #[wasm_bindgen(js_name = dragAt)]
@@ -592,6 +636,226 @@ fn webkit_gesture_events_reach_the_application_as_a_pan_zoom() {
     assert!(
         (rotation - core::f64::consts::FRAC_PI_2).abs() < 1e-9,
         "{steps:?}"
+    );
+}
+
+/// The pointer events as verbs with their kind and pointer id.
+fn pointer_verbs(events: &[PointerEvent]) -> Vec<String> {
+    events
+        .iter()
+        .map(|event| match event {
+            PointerEvent::Enter(signal) => {
+                format!(
+                    "enter {:?} {}",
+                    signal.pointer.kind,
+                    signal.pointer.id.get()
+                )
+            }
+            PointerEvent::Leave(signal) => {
+                format!(
+                    "leave {:?} {}",
+                    signal.pointer.kind,
+                    signal.pointer.id.get()
+                )
+            }
+            PointerEvent::Move(movement) => format!(
+                "move {:?} {}",
+                movement.pointer.kind,
+                movement.pointer.id.get()
+            ),
+            PointerEvent::Down(press) => {
+                format!("down {:?} {}", press.pointer.kind, press.pointer.id.get())
+            }
+            PointerEvent::Up(release) => {
+                format!("up {:?} {}", release.pointer.kind, release.pointer.id.get())
+            }
+            PointerEvent::Cancel(cancel) => format!(
+                "cancel {:?} {} {:?}",
+                cancel.pointer.kind,
+                cancel.pointer.id.get(),
+                cancel.reason
+            ),
+            PointerEvent::Scroll(scroll) => {
+                format!(
+                    "scroll {:?} {}",
+                    scroll.pointer.kind,
+                    scroll.pointer.id.get()
+                )
+            }
+            PointerEvent::PanZoom(gesture) => format!("panzoom {}", gesture.pointer().id.get()),
+            other => format!("{other:?}"),
+        })
+        .collect()
+}
+
+/// A page that loses the OS focus (Alt+Tab) or is hidden mid-press may never
+/// see the release: the press is cancelled then, so the next press is a
+/// press and not a button the window still holds.
+#[wasm_bindgen_test]
+fn a_press_the_page_loses_is_cancelled() {
+    let window = CanvasWindow::open();
+    pointer_at("pointerdown", 1, "mouse", 0, 1, 40.0, 30.0);
+    page_blur();
+    pointer_at("pointerdown", 1, "mouse", 0, 1, 40.0, 30.0);
+    assert_eq!(
+        pointer_verbs(&window.pointer_events()),
+        ["down Mouse 1", "cancel Mouse 1 FocusLost", "down Mouse 1"]
+    );
+    pointer_at("pointerup", 1, "mouse", 0, 0, 40.0, 30.0);
+    window.pointer_events();
+    pointer_at("pointerdown", 5, "touch", 0, 1, 40.0, 30.0);
+    hide_page(true);
+    hide_page(false);
+    pointer_at("pointerdown", 5, "touch", 0, 1, 40.0, 30.0);
+    let verbs = pointer_verbs(&window.pointer_events());
+    let [first, cancel, again] = verbs.as_slice() else {
+        panic!("a touch, its cancel and a new touch: {verbs:?}");
+    };
+    assert!(first.starts_with("down Touch") && again.starts_with("down Touch"));
+    assert!(cancel.starts_with("cancel Touch") && cancel.ends_with("FocusLost"));
+}
+
+/// A wheel event is the mouse's: it scrolls as the pointer the mouse's own
+/// events carry, never as the identity a touch or pen took.
+#[wasm_bindgen_test]
+fn a_wheel_scrolls_as_the_mouse_and_never_as_a_touch() {
+    let window = CanvasWindow::open();
+    pointer_at("pointerdown", 2, "touch", 0, 1, 40.0, 30.0);
+    pointer_at("pointerup", 2, "touch", 0, 0, 40.0, 30.0);
+    pointer_at("pointermove", 1, "mouse", -1, 0, 50.0, 30.0);
+    wheel(false, 0, 0.0, 40.0, 50.0, 30.0);
+    let verbs = pointer_verbs(&window.pointer_events());
+    let touch = verbs
+        .iter()
+        .find(|verb| verb.starts_with("down Touch"))
+        .expect("a touch");
+    let mouse = verbs
+        .iter()
+        .find(|verb| verb.starts_with("move Mouse"))
+        .expect("the mouse");
+    let scroll = verbs
+        .iter()
+        .find(|verb| verb.starts_with("scroll"))
+        .expect("a scroll");
+    assert_eq!(scroll, &mouse.replacen("move", "scroll", 1), "{verbs:?}");
+    assert_ne!(
+        touch.rsplit(' ').next(),
+        scroll.rsplit(' ').next(),
+        "{verbs:?}"
+    );
+}
+
+/// A mouse or pen over the canvas enters and leaves it; a pen that leaves
+/// is out of range and its contact ends, so the next pen in range is a new
+/// contact.
+#[wasm_bindgen_test]
+fn a_hovering_pen_ends_where_it_leaves() {
+    let window = CanvasWindow::open();
+    pointer_at("pointerenter", 7, "pen", -1, 0, 40.0, 30.0);
+    pointer_at("pointermove", 7, "pen", -1, 0, 42.0, 30.0);
+    pointer_at("pointerleave", 7, "pen", -1, 0, 42.0, 30.0);
+    pointer_at("pointerenter", 8, "pen", -1, 0, 40.0, 30.0);
+    pointer_at("pointerenter", 1, "mouse", -1, 0, 40.0, 30.0);
+    pointer_at("pointerleave", 1, "mouse", -1, 0, 40.0, 30.0);
+    let verbs = pointer_verbs(&window.pointer_events());
+    let pen = |verb: &str| {
+        verbs
+            .iter()
+            .filter(|seen| seen.starts_with(verb) && seen.contains("Pen"))
+            .count()
+    };
+    assert_eq!(
+        (pen("enter"), pen("move"), pen("leave")),
+        (2, 1, 1),
+        "{verbs:?}"
+    );
+    assert_ne!(verbs[0], verbs[3], "a new pen is a new contact: {verbs:?}");
+    assert_eq!(&verbs[4..], ["enter Mouse 1", "leave Mouse 1"]);
+    // The page losing focus ends what is still over the canvas, the second
+    // pen, and not the mouse that already left: one leave per enter.
+    page_blur();
+    let after = pointer_verbs(&window.pointer_events());
+    assert_eq!(after.len(), 1, "{after:?}");
+    assert!(after[0].starts_with("leave Pen"), "{after:?}");
+}
+
+/// WebKit on a touch screen reports a two-finger pinch as gesture events
+/// beside the touches the application already has: they are left to the
+/// touches, so the application does not scale twice.
+#[wasm_bindgen_test]
+fn a_touch_pinch_is_delivered_once() {
+    let window = CanvasWindow::open();
+    pointer_at("pointerdown", 2, "touch", 0, 1, 40.0, 30.0);
+    pointer_at("pointerdown", 3, "touch", 0, 1, 60.0, 30.0);
+    gesture("gesturestart", 1.0, 0.0, 50.0, 30.0);
+    gesture("gesturechange", 2.0, 0.0, 50.0, 30.0);
+    gesture("gestureend", 2.0, 0.0, 50.0, 30.0);
+    let verbs = pointer_verbs(&window.pointer_events());
+    assert!(
+        verbs.iter().all(|verb| !verb.starts_with("panzoom")),
+        "{verbs:?}"
+    );
+    assert_eq!(verbs.len(), 2, "the two touches: {verbs:?}");
+}
+
+/// The browser's context menu over the canvas is answered as the application
+/// answered the secondary press that opened it; one no press opened (the
+/// menu key) stays the application's.
+#[wasm_bindgen_test]
+fn the_context_menu_is_answered_as_its_secondary_press() {
+    let window = CanvasWindow::open();
+    for (propagate, prevent) in [(true, false), (true, true), (false, false), (false, true)] {
+        window.answer(propagate, prevent);
+        pointer_at("pointerdown", 1, "mouse", 2, 2, 40.0, 30.0);
+        let menu = dispatched(&context_menu(2, false));
+        pointer_at("pointerup", 1, "mouse", 2, 0, 40.0, 30.0);
+        assert_eq!(
+            (menu.prevented, menu.reached_ancestor),
+            (prevent, propagate),
+            "a press answered propagate={propagate} prevent={prevent}"
+        );
+    }
+    // macOS opens it from a Control-held primary click: that press answers
+    // it, as a secondary one does.
+    window.answer(false, false);
+    control_click("pointerdown", 40.0, 30.0);
+    let menu = dispatched(&context_menu(0, true));
+    control_click("pointerup", 40.0, 30.0);
+    assert_eq!(
+        (menu.prevented, menu.reached_ancestor),
+        (false, false),
+        "a Control-held click's menu"
+    );
+    window.answer(true, false);
+    assert!(
+        dispatched(&context_menu(0, false)).prevented,
+        "the menu key"
+    );
+}
+
+/// A page hidden mid-press ends the press before its visibility is
+/// reported, so a callback that closes the window on it does not leave the
+/// press without its end.
+#[wasm_bindgen_test]
+fn a_hidden_page_ends_its_presses_before_a_visibility_callback_closes_it() {
+    let window = CanvasWindow::open();
+    let closing = Arc::clone(&window.window);
+    window
+        .window
+        .on_visibility_status_change(Box::new(move |visible| {
+            if !visible {
+                closing.close();
+            }
+        }));
+    pointer_at("pointerdown", 5, "touch", 0, 1, 40.0, 30.0);
+    hide_page(true);
+    hide_page(false);
+    let verbs = pointer_verbs(&window.pointer_events());
+    assert!(
+        verbs
+            .last()
+            .is_some_and(|verb| verb.starts_with("cancel Touch") && verb.ends_with("FocusLost")),
+        "{verbs:?}"
     );
 }
 

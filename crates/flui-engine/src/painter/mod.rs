@@ -263,10 +263,13 @@ impl WgpuPainter {
     /// Give back GPU memory the next frames can rebuild, for `level`.
     ///
     /// [`Moderate`](MemoryPressureLevel::Moderate) evicts free buffers down to
-    /// half the pool's budget. [`Critical`](MemoryPressureLevel::Critical)
-    /// evicts every free buffer and resets the glyph atlas. Call between
-    /// frames, after the last submit, when every pooled buffer is free.
+    /// half the pool's budget and the image textures the last frame did not
+    /// draw. [`Critical`](MemoryPressureLevel::Critical) evicts every free
+    /// buffer and every image texture, resets the glyph atlas and releases the image atlas texture.
+    /// Call between frames, after the last submit, when every pooled buffer is
+    /// free.
     pub(crate) fn reclaim(&mut self, level: MemoryPressureLevel) {
+        self.resources.texture_cache_mut().reclaim(level);
         if level == MemoryPressureLevel::Moderate {
             self.resources
                 .buffer_pool_mut()

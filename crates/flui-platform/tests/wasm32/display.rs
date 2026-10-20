@@ -36,6 +36,7 @@ let mainScreen;
 let sideScreen;
 let everScreens = [];
 let windowListeners = [];
+let lastCanvas;
 
 // An event target that counts the listeners it really holds, and removes one
 // only when that very function was added.
@@ -134,7 +135,7 @@ export function installDisplayProbe(windowManagement) {
     document.title = '';
     document.body = { appendChild() {} };
     document.getElementById = () => null;
-    document.createElement = () => new FakeCanvas();
+    document.createElement = () => (lastCanvas = new FakeCanvas());
     define('document', document);
     define('HTMLCanvasElement', FakeCanvas);
     windowListeners = [];
@@ -203,6 +204,8 @@ export function refuseNextQueries(count) { failQueries = count; }
 export function fireWindowResize() {
     for (const entry of windowListeners.slice()) if (entry.name === 'resize') entry.callback(new Event('resize'));
 }
+// The backing store of the canvas the page made last: [width, height].
+export function canvasBackingSize() { return [lastCanvas.width, lastCanvas.height]; }
 export function windowResizeListeners() { return windowListeners.filter(entry => entry.name === 'resize').length; }
 export function pixelRatioListeners() { return ratioQueries.reduce((sum, query) => sum + query.listenerCount(), 0); }
 export function setHidden(value) {
@@ -274,6 +277,8 @@ extern "C" {
     fn fire_window_resize();
     #[wasm_bindgen(js_name = windowResizeListeners)]
     fn window_resize_listeners() -> usize;
+    #[wasm_bindgen(js_name = canvasBackingSize)]
+    fn canvas_backing_size() -> Vec<u32>;
     #[wasm_bindgen(js_name = pixelRatioListeners)]
     fn pixel_ratio_listeners() -> i32;
     #[wasm_bindgen(js_name = setHidden)]
@@ -1089,4 +1094,54 @@ async fn web_screen_change_keeps_the_period_while_the_current_screen_is_known() 
     assert!(near(primary_period(&running.snapshot()), 6.944));
     running.quit();
     settle().await;
+}
+
+#[wasm_bindgen_test]
+async fn web_window_backing_store_follows_a_pixel_ratio_change_without_a_resize() {
+    install_probe("none");
+    let _probe = Probe;
+    let running = Running::start();
+    settle().await;
+    let window = {
+        let owner = running.owner.borrow();
+        match owner
+            .as_ref()
+            .expect("owner")
+            .open_window(WindowOptions::default())
+            .expect("window")
+        {
+            WindowOpen::Ready(window) => window,
+            WindowOpen::Pending(_) => panic!("a Web window opens at once"),
+        }
+    };
+    let resized = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = Arc::clone(&resized);
+    window.on_resize(Box::new(move |_, scale| {
+        seen.lock().expect("resizes").push(scale);
+    }));
+    assert_eq!(window.scale_factor(), 1.0);
+    assert_eq!(canvas_backing_size(), [300, 150], "the 300×150 box at 1×");
+    assert_eq!(
+        pixel_ratio_listeners(),
+        2,
+        "the display source's and the window's"
+    );
+
+    // The window is dragged to a display of twice the density: its CSS box
+    // stays, so no `ResizeObserver` entry and no `resize` event arrive.
+    set_pixel_ratio(2.0);
+    settle().await;
+    assert_eq!(window.scale_factor(), 2.0, "the window follows the ratio");
+    assert_eq!(
+        canvas_backing_size(),
+        [600, 300],
+        "one texel per device pixel"
+    );
+    assert_eq!(*resized.lock().expect("resizes"), [2.0]);
+    assert_eq!(pixel_ratio_listeners(), 2, "both queries were armed again");
+
+    drop(window);
+    running.quit();
+    settle().await;
+    assert_eq!(pixel_ratio_listeners(), 0, "quit removes both queries");
 }

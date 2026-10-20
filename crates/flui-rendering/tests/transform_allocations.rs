@@ -1,4 +1,5 @@
-//! Process-isolated allocator witness for public committed transform queries.
+//! Process-isolated allocator witness for warm committed transform queries
+//! and hit tests.
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},
@@ -97,4 +98,106 @@ fn committed_transform_queries_reuse_ancestry_storage() {
             "warm transform queries allocate at depth {depth}"
         );
     }
+}
+
+/// Places child `i` at `(i * 50, 0)`.
+#[derive(Debug)]
+struct RowFlowDelegate;
+
+impl flui_rendering::delegates::FlowDelegate for RowFlowDelegate {
+    fn get_size(&self, constraints: BoxConstraints) -> Size {
+        constraints.biggest()
+    }
+
+    fn get_constraints_for_child(
+        &self,
+        _index: usize,
+        constraints: BoxConstraints,
+    ) -> BoxConstraints {
+        BoxConstraints::loose(constraints.biggest())
+    }
+
+    fn paint_children(&self, context: &mut flui_rendering::delegates::FlowPaintingContext<'_, '_>) {
+        for index in 0..context.child_count() {
+            context.paint_child(
+                index,
+                flui_foundation::geometry::Matrix4::translation(index as f64 * 50.0, 0.0, 0.0),
+            );
+        }
+    }
+
+    fn should_relayout(&self, _old: &dyn flui_rendering::delegates::FlowDelegate) -> bool {
+        false
+    }
+
+    fn should_repaint(&self, _old: &dyn flui_rendering::delegates::FlowDelegate) -> bool {
+        false
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// A pointer moving over a painted tree hit-tests it without allocating: the
+/// walk borrows each node's children, a flow reads what it painted, and a
+/// result cleared between moves keeps its storage — through a flow, a
+/// padding, a transform and a row of boxes.
+#[test]
+fn warm_hit_tests_reuse_their_result_storage() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::PointerKind;
+    use flui_objects::{RenderFlex, RenderFlow, RenderTransform};
+    use flui_rendering::hit_testing::HitTestResult;
+
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let root =
+        owner.set_root_render_object(Box::new(RenderFlow::new(std::rc::Rc::new(RowFlowDelegate))));
+    owner
+        .insert_child_render_object(root, Box::new(RenderColoredBox::red(40.0, 40.0)))
+        .expect("first flow child attaches");
+    let padding = owner
+        .insert_child_render_object(root, Box::new(RenderPadding::all(1.0)))
+        .expect("padding attaches");
+    let transform = owner
+        .insert_child_render_object(
+            padding,
+            Box::new(
+                RenderTransform::scale(2.0, 2.0).with_alignment(flui_painting::Alignment::TOP_LEFT),
+            ),
+        )
+        .expect("transform attaches");
+    let row = owner
+        .insert_child_render_object(transform, Box::new(RenderFlex::row()))
+        .expect("row attaches");
+    let mut leaf = None;
+    for _ in 0..4 {
+        leaf = Some(
+            owner
+                .insert_child_render_object(row, Box::new(RenderColoredBox::red(10.0, 10.0)))
+                .expect("row child attaches"),
+        );
+    }
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(400.0, 400.0))));
+    let (owner, frame) = owner.run_frame();
+    frame.expect("the tree paints");
+
+    // The last row box, scaled 2x from the padding's corner at (51, 1).
+    let position = Offset::new(51.0 + 2.0 * 35.0, 1.0 + 2.0 * 5.0);
+    let mut result = HitTestResult::new();
+    assert!(owner.hit_test(position, PointerKind::Mouse, &mut result));
+    assert_eq!(
+        result.path().first().map(|entry| entry.target),
+        leaf,
+        "the position is over the last row box"
+    );
+
+    let before = ALLOCATIONS.with(Cell::get);
+    for _ in 0..32 {
+        black_box(HitTestResult::new());
+        result.clear();
+        black_box(owner.hit_test(black_box(position), PointerKind::Mouse, &mut result));
+    }
+    let requests = ALLOCATIONS.with(Cell::get) - before;
+    assert_eq!(requests, 0, "warm hit tests allocate");
 }

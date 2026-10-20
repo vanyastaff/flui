@@ -413,13 +413,13 @@ and requeues nothing, so the stale capture is grafted and the update is gone for
 now evicts the capture alongside the flag, which also closes the pre-existing detached-subtree
 case it had only been warning about.
 
-**Unasserted:** no test pins this. That covers the paint gate, the hit-test gate and the capture
-eviction; the semantics gate is pinned by
+**Pinned:** the hit-test gate by
+`harness_placed_generation_gate_excludes_a_dropped_child_from_hits` and the semantics gate by
 `harness_placed_generation_gate_excludes_a_dropped_child_from_semantics`
-(`crates/flui-objects/tests/render_object_harness.rs`). A test for any of the three needs **two
-frames**: a child never laid out at all has size zero and paints nothing
-regardless, so a single-frame version passes with the gate removed. `FrameRun::run_frame_again`
-exists for it.
+(`crates/flui-objects/tests/render_object_harness.rs`). **Unasserted:** the paint gate and the
+capture eviction. A test for any of them needs **two frames**: a child never laid out at all has
+size zero and paints nothing regardless, so a single-frame version passes with the gate removed.
+`FrameRun::run_frame_again` exists for it.
 
 ### A composited-layer update patches the enclosing capture; no node is promoted to a boundary
 
@@ -1097,7 +1097,7 @@ Isolation is deliberately strict: a panic in `paint_effects` (`PoisonPhase::Pain
 
 **Accepted trade-off:** `AssertUnwindSafe` is documented inline at each wrapper. The render object's internal state may be torn after a panic; the pipeline treats the node as poisoned and lets the caller drop or replace it. Process-level safety is preserved; the render tree itself is not corrupted.
 
-**Note:** `hit_test_raw` is part of the `RenderObject<P>` trait, but the current pipeline owner does not invoke it directly -- hit testing is dispatched at the `RenderView` layer outside the frame pipeline. The catch_unwind helper around hit_test will land when hit testing is wired through the pipeline.
+Hit testing runs outside the frame pipeline and isolates per node instead: `PipelineOwner::hit_test` visits every node inside one `catch_unwind` (`contain_node` in [`src/pipeline/owner/accessors.rs`](src/pipeline/owner/accessors.rs)) covering all of its user hooks — `hit_test_transform`, the expanded area, `hit_test` itself (path clippers, flow delegates), the entry's targets. A node that panics is a miss: what its subtree added is dropped, it blocks nothing below, and its siblings and ancestors still decide. The first payload is held until the path is complete, then resumed from `hit_test`, so `result` already holds every other hit; later payloads are retained. `RendererBinding::hit_test_in_view` catches that resume and returns it in `ViewHitTest::Answered`, and the runtime delivers the event to the path before reporting it. A tree whose layout is withdrawn or checked out answers `ViewHitTest::TreeBusy` rather than an empty path. Pinned by `a_panicking_hit_test_is_a_miss_and_the_first_panic_resumes_after_the_path` (`hit_test_matrix`) and `a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic` (`flui-runtime`'s `owner_input_contract`). A pointer Down that finds the tree busy is still admitted with an empty route; refusing it belongs to the gesture binding's contact admission.
 
 ### Phase ORDERING lives in the type system; one runtime COMPLETENESS gate remains
 
@@ -1596,11 +1596,24 @@ These deep-dives stay as companion documents (not under the per-crate template d
 ### Hit traversal refuses transforms without a computed finite inverse
 
 At both node-hook and context-child boundaries the pipeline maps failed
-`HitTestResult::with_paint_transform` admission to a miss (ADR-0113). It never
+`Matrix4::try_inverse` admission to a miss (ADR-0113). It never
 uses the forward matrix as a substitute for the inverse. Refusal occurs before
 the descendant callback, so the rejected subtree contributes no entries and
 cannot block a healthy sibling. Successful scopes keep their existing unwind
 restoration.
+
+At the node hook the walk inverts `hit_test_transform` once: the inverse goes
+onto the result (`HitTestResult::with_inverse_transform`) and maps the
+position, so the node's `hit_test` receives its position in the transformed
+space. `RenderTransform`, `RenderContainer`, `RenderRotatedBox` and
+`RenderAnimatedTransform` hit-test that position directly and invert nothing;
+an animated transform reads its sample once per visit, in `hit_test_transform`.
+
+The default `RenderBox::hit_test` follows the arity: a leaf is hit inside its
+own size, and anything that can have children is hit only through one, tested
+topmost first at its layout offset — a parent that keeps the default neither
+swallows its children's hits nor claims its empty space
+(`default_parent_hit_test_reaches_its_children`).
 
 The public `hit_test_matrix` rows in `tests/hit_test_pipeline.rs` include
 `nested_tiny_transforms_emit_the_correct_local_hit_point` (real nested

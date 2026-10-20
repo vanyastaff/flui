@@ -1682,6 +1682,16 @@ impl FocusNode {
         }
     }
 
+    /// Drop the first-focus intents of scopes rooted inside `node`.
+    fn forget_pending_first_focus_subtree(node: &Rc<FocusNode>) {
+        if let Some(scope) = node.as_scope() {
+            scope.pending_first_focus.set(false);
+        }
+        for child in node.children() {
+            Self::forget_pending_first_focus_subtree(&child);
+        }
+    }
+
     /// Retry first-focus intents whose scope contains this node.
     fn fulfill_pending_first_focus_ancestors(&self) {
         if let Some(scope) = self.as_scope() {
@@ -2149,6 +2159,21 @@ impl FocusScopeNode {
             }
         }
         None
+    }
+
+    /// Drop the first-focus intents still waiting in the scopes inside this
+    /// one, which [`set_first_focus`](Self::set_first_focus) on this scope is
+    /// about to supersede.
+    ///
+    /// A route a closing one uncovers restores the focus it remembers; a
+    /// nested navigator's route pushed while it was covered asked for the
+    /// first focus too, and would otherwise take it the moment the route
+    /// becomes focusable again. Intents left in place are fulfilled when an
+    /// enclosing node allows its descendants focus again.
+    pub fn supersede_inner_first_focus(&self) {
+        for child in self.inner.children() {
+            FocusNode::forget_pending_first_focus_subtree(&child);
+        }
     }
 
     /// Attach an unbound subtree below this scope.

@@ -15,7 +15,7 @@ use ui_events::keyboard::KeyboardEvent;
 use crate::{
     shared::android_motion::{
         AndroidMotion, Axes, DeviceCapabilities, DeviceDiscovery, Motion, MotionAction,
-        PointerFacts, Tool, axis,
+        PointerFacts, Tool, axis, needs_device_query,
     },
     shared::keyboard_adapter::keyboard_input,
     shared::pointer_assembly::NativeCancel,
@@ -30,6 +30,8 @@ const AXIS_GESTURE_SCROLL_Y_DISTANCE: u32 = 51;
 const AXIS_GESTURE_PINCH_SCALE_FACTOR: u32 = 52;
 /// `AXIS_GESTURE_SWIPE_FINGER_COUNT` (API 34).
 const AXIS_GESTURE_SWIPE_FINGER_COUNT: u32 = 53;
+/// `MotionEvent.FLAG_CANCELED` (API 33).
+const FLAG_CANCELED: u32 = 0x20;
 
 #[derive(Clone)]
 pub(crate) struct CachedDevice {
@@ -51,6 +53,8 @@ pub(crate) enum DeviceReading {
 /// Query Java's capability metadata before entering the owner-local state guard.
 /// InputManager replaces its cached Java object when a device is reconfigured.
 /// JNI object identity avoids descriptors (which can be duplicated) and hidden APIs.
+/// For a move the cached reading stands ([`needs_device_query`]): the
+/// per-event attach and lookup would run at the touch sample rate.
 pub(crate) fn motion_device(
     app: &android_activity::AndroidApp,
     event: &android_activity::input::MotionEvent<'_>,
@@ -58,6 +62,18 @@ pub(crate) fn motion_device(
 ) -> DeviceReading {
     use jni::{JValue, JavaVM, jni_sig, jni_str};
 
+    if let Some(cached) = cached.as_ref()
+        && !needs_device_query(
+            Some(cached.capabilities),
+            u32::from(event.source()),
+            action(event.action()),
+        )
+    {
+        return DeviceReading::Present {
+            cached: cached.clone(),
+            replaced: false,
+        };
+    }
     // SAFETY: AndroidApp owns the running Android VM for its entire lifetime.
     // JavaVM is a borrowed VM handle; constructing it does not destroy the VM.
     #[expect(
@@ -199,6 +215,7 @@ impl AndroidInputState {
             action_index: event.pointer_index(),
             action_button: u32::from(event.action_button()),
             buttons: event.button_state().0,
+            canceled: event.flags().0 & FLAG_CANCELED != 0,
             modifiers: owned_modifiers(event.meta_state()),
             time: u64::try_from(event.event_time())
                 .ok()

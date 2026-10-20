@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-16
+- **Amended:** 2026-10-19 (hit testing reads the paint record)
 - **Related:** [ADR-0223](ADR-0223-authored-semantics-regions.md),
   [ADR-0190](ADR-0190-owner-local-render-invalidation.md)
 
@@ -68,3 +69,16 @@ The public objects harness rows
 observe clipping, initial omission, repaint-driven selection, stale action
 refusal, delegate replacement and declarative reading order under reversed
 paint order through the actual rendering pipeline.
+
+## Amendment (2026-10-19): hit testing reads the paint record
+
+Flow no longer replays its delegate for hit testing. Paint records the
+presentation it drew — paint order and per-child transforms — in storage the
+render object reuses from paint to paint, and hit testing walks that record.
+A replay per pointer move ran the delegate and built three vectors each time,
+and it answered for the delegate's current state, which after a notify is not
+yet on screen; the record answers for what is. Before the first paint nothing
+is presented and nothing is hit. Semantics selection and coordinate conversion
+still replay as decided above: they must answer before a paint, and selection
+runs right after one. `harness_flow_hits_where_it_painted_until_it_repaints`
+pins the hit between a notify and the repaint it schedules.

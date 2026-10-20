@@ -583,8 +583,13 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
 
     /// Returns the transform matrix for hit testing.
     ///
-    /// If `Some(matrix)`, the hit-test pipeline pushes this transform
-    /// onto the `HitTestResult` stack before recursing into children.
+    /// If `Some(matrix)` — the forward, paint-direction matrix — the hit
+    /// walk inverts it once: the inverse goes onto the `HitTestResult`
+    /// stack for every entry this node and its subtree add, and maps the
+    /// position, so this node's `hit_test` already receives its position
+    /// in the transformed space and never inverts the matrix itself. A
+    /// matrix without an admitted inverse, or one whose plane the position's
+    /// ray misses, refuses the subtree before `hit_test` runs (ADR-0113).
     /// Default: `None` (no transform — uses identity).
     fn hit_test_transform(
         &self,

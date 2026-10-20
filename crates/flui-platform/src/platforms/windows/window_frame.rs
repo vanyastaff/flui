@@ -137,17 +137,15 @@ impl super::platform::WindowContext {
     /// from the window, not from the mode asked for: a launcher can choose the
     /// first show state.
     pub(super) fn end_first_show(&self, minimized: bool) {
-        if minimized && self.last_visibility_dispatched.replace(false) {
-            self.callbacks.dispatch_visibility_status_change(false);
+        if minimized {
+            self.report_surface_visibility(false);
         }
     }
 
     /// Tell the runtime the window's real visibility if what it was told after
     /// a muted restore disagrees with it (a show that came in meanwhile).
     pub(super) fn reconcile_visibility(&self, visible: bool) {
-        if self.last_visibility_dispatched.replace(visible) != visible {
-            self.callbacks.dispatch_visibility_status_change(visible);
-        }
+        self.report_surface_visibility(visible);
     }
 
     /// Note that the app asked for the window to be shown, so a restore that

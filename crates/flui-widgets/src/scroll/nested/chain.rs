@@ -1318,7 +1318,9 @@ mod tests {
         parent: Option<Rc<ChainNode>>,
     ) -> (Rc<ScrollOwner>, ScrollController, impl Sized) {
         let controller = ScrollController::new();
-        controller.update_dimensions(300.0, 0.0, max);
+        controller
+            .update_dimensions(300.0, 0.0, max)
+            .expect("ordered extents");
         let fling = AnimationController::builder(Duration::from_millis(1))
             .unbounded()
             .build_on(None);

@@ -467,47 +467,75 @@ impl RRect {
         )
     }
 
-    /// Whether `point` lies inside the rounded rectangle: inside the base
-    /// rect, and — where it falls in a corner's radius box — inside that
-    /// corner's ellipse. A corner with a zero radius on either axis is a
-    /// square corner.
+    /// Returns a copy whose corner radii fit the rectangle, as it is drawn.
+    ///
+    /// Where two radii along one edge add up to more than that edge, every
+    /// radius shrinks by the same factor, keeping each corner's x/y ratio —
+    /// the CSS and Skia rule, so a `BorderRadius::circular(100)` on a 200x20
+    /// box is the 10-radius pill it paints as. Radii that already fit are
+    /// returned unchanged.
+    #[must_use]
+    pub fn normalized(&self) -> Self {
+        self.scale_radii(radii_fit_factor(
+            [
+                self.top_left,
+                self.top_right,
+                self.bottom_right,
+                self.bottom_left,
+            ],
+            self.width(),
+            self.height(),
+        ))
+    }
+
+    /// Whether `point` lies inside the rounded rectangle as it is drawn:
+    /// inside the base rect, and — where it falls in a corner's radius box —
+    /// inside that corner's ellipse, with the radii [normalized] to the
+    /// rectangle. A corner with a zero radius on either axis is a square
+    /// corner.
+    ///
+    /// [normalized]: Self::normalized
     #[must_use]
     pub fn contains(&self, point: Point<f64>) -> bool {
         if !self.rect.contains(point) {
             return false;
         }
+        let shape = self.normalized();
         let (x, y) = (point.x, point.y);
         let (left, top, right, bottom) = (self.left(), self.top(), self.right(), self.bottom());
         // Each corner: (its ellipse centre, its radii, whether `point` is in
-        // its radius box). Only the box `point` falls in can exclude it.
+        // its radius box). A box `point` falls in excludes it when it lies
+        // outside that corner's ellipse; normalized radii keep boxes on one
+        // edge apart, but two diagonal corners' boxes can still overlap, so
+        // every box is consulted.
         let corners = [
             (
-                self.top_left,
+                shape.top_left,
                 left,
                 top,
-                x < left + self.top_left.x,
-                y < top + self.top_left.y,
+                x < left + shape.top_left.x,
+                y < top + shape.top_left.y,
             ),
             (
-                self.top_right,
+                shape.top_right,
                 right,
                 top,
-                x > right - self.top_right.x,
-                y < top + self.top_right.y,
+                x > right - shape.top_right.x,
+                y < top + shape.top_right.y,
             ),
             (
-                self.bottom_right,
+                shape.bottom_right,
                 right,
                 bottom,
-                x > right - self.bottom_right.x,
-                y > bottom - self.bottom_right.y,
+                x > right - shape.bottom_right.x,
+                y > bottom - shape.bottom_right.y,
             ),
             (
-                self.bottom_left,
+                shape.bottom_left,
                 left,
                 bottom,
-                x < left + self.bottom_left.x,
-                y > bottom - self.bottom_left.y,
+                x < left + shape.bottom_left.x,
+                y > bottom - shape.bottom_left.y,
             ),
         ];
         for (radius, edge_x, edge_y, in_x, in_y) in corners {
@@ -522,7 +550,9 @@ impl RRect {
             };
             let cy = if edge_y == top { top + ry } else { bottom - ry };
             let (nx, ny) = ((x - cx) / rx, (y - cy) / ry);
-            return nx * nx + ny * ny <= 1.0;
+            if nx * nx + ny * ny > 1.0 {
+                return false;
+            }
         }
         true
     }
@@ -560,6 +590,32 @@ impl RRect {
             Radius::lerp(a.bottom_left, b.bottom_left, t),
         )
     }
+}
+
+/// The one factor every rounded shape scales its radii by to fit a
+/// `width` x `height` box: the largest `k <= 1` for which each edge's two
+/// radii sum to at most that edge.
+///
+/// Radii are `[top_left, top_right, bottom_right, bottom_left]`. The factor is
+/// computed without summing the radii first, so finite radii whose sum would
+/// overflow still fit. A non-positive pair leaves its edge unconstrained.
+pub(crate) fn radii_fit_factor(
+    [top_left, top_right, bottom_right, bottom_left]: [Radius<f64>; 4],
+    width: f64,
+    height: f64,
+) -> f64 {
+    let fitting = |a: f64, b: f64, extent: f64| {
+        let maximum = a.max(b);
+        if maximum <= 0.0 {
+            1.0
+        } else {
+            ((extent / maximum) / (a / maximum + b / maximum)).min(1.0)
+        }
+    };
+    fitting(top_left.x, top_right.x, width)
+        .min(fitting(bottom_left.x, bottom_right.x, width))
+        .min(fitting(top_left.y, bottom_left.y, height))
+        .min(fitting(top_right.y, bottom_right.y, height))
 }
 
 // ============================================================================

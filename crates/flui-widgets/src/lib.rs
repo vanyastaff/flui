@@ -188,12 +188,12 @@ pub use icon::{Icon, IconData, IconTheme, IconThemeData};
 pub use image::AssetImage;
 #[cfg(feature = "asset-images")]
 pub use image::ImageState;
+#[cfg(feature = "network-images")]
+pub use image::NetworkImage;
 pub use image::{
     DirectImageProvider, FileImage, Image, ImageCacheKey, ImageProvider, ImageProviderError,
     MemoryImage, Texture, TextureState,
 };
-#[cfg(feature = "network-images")]
-pub use image::{NetworkImage, NetworkImageKey};
 pub use interaction::{
     AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, ActivationPressIntent,
     Alternative, AlternativeKind, AnimatedCrossFade, AnimatedCrossFadeState, BackIntent,
@@ -275,8 +275,8 @@ pub use scroll::{
     AnchorsError, AnimatedGrid, AnimatedList, BouncingScrollPhysics, ClampingScrollPhysics,
     CollapsingHeader, CollapsingHeaderState, CustomScrollView, DraggableAnchors,
     DraggableAnchorsBuilder, FlingHandoff, FlingStep, GridView, HeaderExtents, HeaderExtentsError,
-    HeaderOrder, InvalidSliverCrossAxisExtent, InvalidViewportFraction, InvalidWheelScrollDistance,
-    ListView, NestedScroll, NestedScrollConnection, NestedScrollState,
+    HeaderOrder, InvalidExtents, InvalidSliverCrossAxisExtent, InvalidViewportFraction,
+    InvalidWheelScrollDistance, ListView, NestedScroll, NestedScrollConnection, NestedScrollState,
     OverScrollHeaderStretchConfiguration, OverscrollBehavior, PageController, PageSnap, PageView,
     PageViewState, RefreshController, RefreshIndicator, RefreshIndicatorPhase,
     RefreshIndicatorState, RefreshIndicatorStyle, RefreshIntent, ScrollCause, ScrollController,

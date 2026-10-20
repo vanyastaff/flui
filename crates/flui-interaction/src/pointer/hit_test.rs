@@ -411,7 +411,7 @@ pub struct HitTestResult {
     /// Path of hit entries (most specific first).
     path: Vec<HitTestEntry>,
 
-    /// Global transform stack.
+    /// Global transform stack; empty is the identity.
     transforms: Vec<Matrix4>,
 
     /// Local transform parts (optimization - not globalized yet).
@@ -624,13 +624,27 @@ impl HitTestResult {
         F: FnOnce(&mut Self) -> R,
     {
         let inverse = transform.try_inverse()?;
+        Some(self.with_inverse_transform(inverse, f))
+    }
+
+    /// Runs `f` with `inverse` — a paint transform's inverse the caller has
+    /// already computed — pushed verbatim, and pops it before returning.
+    ///
+    /// For a walk that inverts a level's transform once and needs the inverse
+    /// itself too (to map the position into the child's space). Depth is
+    /// restored on return and unwind, as for
+    /// [`with_paint_transform`](Self::with_paint_transform).
+    pub fn with_inverse_transform<F, R>(&mut self, inverse: Matrix4, f: F) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
         let depth = self.transforms.len() + self.local_transforms.len();
         self.push_transform(inverse);
         let guard = TransformGuard {
             result: self,
             depth,
         };
-        Some(f(&mut *guard.result))
+        f(&mut *guard.result)
     }
 
     /// Returns the number of entries.

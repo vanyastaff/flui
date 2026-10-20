@@ -196,6 +196,25 @@ impl WakeShared {
         self.wake_delivery
             .request(|| fresh, || self.request_frame.lock().clone());
     }
+
+    /// [`Self::request_frame`] from a task's [`Waker`], which never panics:
+    /// it runs on whatever thread completed the future (an IO worker, another
+    /// executor's task), where an unwind would kill unrelated work and reach
+    /// no one the owner hears from. A panicking hook is logged, marks the
+    /// owner's execution as failed, and leaves the demand pending, so the next
+    /// wake retries it.
+    fn request_frame_from_waker(&self, fresh: bool) {
+        let delivery =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.request_frame(fresh)));
+        if let Err(payload) = delivery {
+            tracing::error!(
+                "the frame wake hook panicked under a task wake; the demand stays pending for \
+                 the next wake"
+            );
+            // Its destructor may panic too; the owner's failure signal is set.
+            flui_foundation::panic::retain_opaque_payload(payload);
+        }
+    }
 }
 
 /// The UI runtime's task set: owner-local, reached through [`AsyncDriver`]'s
@@ -639,7 +658,7 @@ impl Wake for TaskWaker {
         if fresh {
             shared.ready.lock().push(self.id);
         }
-        shared.request_frame(fresh);
+        shared.request_frame_from_waker(fresh);
     }
 }
 

@@ -738,26 +738,11 @@ impl RenderBox for RenderContainer {
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        // `ctx.position()` is still in this node's parent space. The pipeline
-        // records the inverse of `hit_test_transform` on the *result entry*
-        // (so later coordinate mapping can walk back), but it does not rewrite
-        // the incoming position — invert here, the same way
-        // `hit_test_child_at_offset` does, before the margin gate and the
-        // child / decoration / color tests which all live untransformed.
-        let position = match self.transform {
-            Some(matrix) => {
-                let Some(inverse) = matrix.try_inverse() else {
-                    // Degenerate: zero visual area, nothing to hit.
-                    return false;
-                };
-                let local = ctx.position();
-                let Some((dx, dy)) = inverse.unproject_to_plane(local.dx, local.dy) else {
-                    return false;
-                };
-                Offset::new(dx, dy)
-            }
-            None => *ctx.position(),
-        };
+        // The walk inverted `hit_test_transform` once and mapped the position
+        // through it (refusing a degenerate matrix before this call), so the
+        // margin gate and the child / decoration / color tests below all read
+        // it in the untransformed box they live in.
+        let position = *ctx.position();
 
         let size = ctx.own_size();
         let inside = position.dx >= 0.0

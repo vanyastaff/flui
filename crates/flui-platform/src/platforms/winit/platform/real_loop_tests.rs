@@ -16,7 +16,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -978,6 +978,52 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     struct ExitObserver {
         inner: WinitApp,
         exiting: Arc<AtomicBool>,
+        /// Set just before the close. From then on every owner wake is
+        /// preceded, in its loop turn, by a pointer move the translation
+        /// holds; one of those turns runs the close, whichever wake carries
+        /// it.
+        move_before_close: Arc<AtomicBool>,
+        /// Whether the input callback is registered.
+        registered: bool,
+        /// The moves held before a wake, one per wake.
+        injected: Arc<AtomicUsize>,
+        /// What the window's input callback saw: its moves, and each
+        /// capability snapshot by whether it reports a mouse present.
+        seen: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl ExitObserver {
+        /// Register the window's input callback on the owner thread, as an
+        /// application does, so its capability snapshot is delivered and
+        /// input is not held behind it.
+        fn register(&mut self, host: &crate::platforms::winit::window::WinitWindow) {
+            if std::mem::replace(&mut self.registered, true) {
+                return;
+            }
+            let seen = Arc::clone(&self.seen);
+            crate::traits::PlatformWindow::on_input(
+                host,
+                Box::new(move |input| {
+                    use flui_platform_api::input_capabilities::PointerKindSet;
+                    match input {
+                        crate::traits::PlatformInput::Pointer(
+                            flui_platform_api::pointer::PointerEvent::Move(_),
+                        ) => seen.lock().push("move"),
+                        crate::traits::PlatformInput::Capabilities(capabilities) => {
+                            seen.lock().push(
+                                if capabilities.present().contains(PointerKindSet::MOUSE) {
+                                    "mouse present"
+                                } else {
+                                    "no mouse"
+                                },
+                            );
+                        }
+                        _ => {}
+                    }
+                    crate::DispatchEventResult::resolved(false, true)
+                }),
+            );
+        }
     }
 
     impl ApplicationHandler for ExitObserver {
@@ -995,6 +1041,35 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
         }
 
         fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
+            let (window, host) = self.inner.platform.with_state(|state| {
+                (
+                    state.window_id_map.keys().next().copied(),
+                    state.windows.values().next().cloned(),
+                )
+            });
+            if self.move_before_close.load(Ordering::SeqCst)
+                && let (Some(window), Some(host)) = (window, host)
+            {
+                self.register(&host);
+                let moved = |x: f64| WinitWindowEvent::CursorMoved {
+                    device_id: winit::event::DeviceId::dummy(),
+                    position: winit::dpi::PhysicalPosition::new(x, 8.0),
+                };
+                if self.injected.load(Ordering::SeqCst) == 0 {
+                    // The device a held move came from is announced while
+                    // the move is held.
+                    self.inner.window_event(event_loop, window, moved(10.0));
+                    self.injected.fetch_add(1, Ordering::SeqCst);
+                    self.inner.device_event(
+                        event_loop,
+                        winit::event::DeviceId::dummy(),
+                        winit::event::DeviceEvent::Added,
+                    );
+                }
+                // The move held when this wake runs.
+                self.inner.window_event(event_loop, window, moved(12.0));
+                self.injected.fetch_add(1, Ordering::SeqCst);
+            }
             self.inner.user_event(event_loop, ());
         }
 
@@ -1032,6 +1107,9 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
         .expect("first install succeeds");
 
     let exiting = Arc::new(AtomicBool::new(false));
+    let move_before_close = Arc::new(AtomicBool::new(false));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let injected = Arc::new(AtomicUsize::new(0));
     let callback_dropped = Arc::new(AtomicBool::new(false));
     let close_thread: Arc<Mutex<Option<thread::ThreadId>>> = Arc::new(Mutex::new(None));
     // Parked here so the drop flag cannot be this Arc's own drop.
@@ -1044,6 +1122,9 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     let callback_dropped_for_worker = Arc::clone(&callback_dropped);
     let close_thread_for_worker = Arc::clone(&close_thread);
     let kept_window_for_worker = Arc::clone(&kept_window);
+    let move_before_close_for_worker = Arc::clone(&move_before_close);
+    let injected_for_worker = Arc::clone(&injected);
+    let poke = event_loop.create_proxy();
     let worker = thread::spawn(move || {
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             wait_for_running(&platform_for_worker);
@@ -1069,6 +1150,17 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
                 *close_thread_for_callback.lock() = Some(thread::current().id());
             }));
             let _prev = kept_window_for_worker.lock().replace(Arc::clone(&window));
+
+            // Every owner wake from here on holds a pointer move first; one
+            // armed wake has run before the close is posted, so the wake
+            // that runs the close is an armed one by construction.
+            move_before_close_for_worker.store(true, Ordering::SeqCst);
+            let _ = poke.send_event(());
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while injected_for_worker.load(Ordering::SeqCst) == 0 {
+                assert!(Instant::now() < deadline, "an armed wake ran");
+                thread::sleep(Duration::from_millis(1));
+            }
 
             // The programmatic close, from a thread that is NOT the
             // owner — the hardest case for the teardown's thread rules.
@@ -1120,11 +1212,32 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
             self_close_route: SelfCloseRoute::default(),
         },
         exiting,
+        move_before_close,
+        registered: false,
+        injected: Arc::clone(&injected),
+        seen: Arc::clone(&seen),
     };
     event_loop
         .run_app(&mut app)
         .expect("event loop runs to completion");
     worker.join().expect("worker thread does not panic");
+
+    let seen = seen.lock().clone();
+    let injected = injected.load(Ordering::SeqCst);
+    assert!(injected > 0, "a wake ran the close after it was armed");
+    assert_eq!(
+        seen.iter().filter(|seen| **seen == "move").count(),
+        injected,
+        "every pointer move held before a wake reaches the window, the one held \
+         when that wake's control request closes the window included: {seen:?}"
+    );
+    let first_move = seen.iter().position(|seen| *seen == "move");
+    assert_eq!(
+        first_move.and_then(|at| seen[..at].last().copied()),
+        Some("mouse present"),
+        "the mouse a held move reveals is present before the move, even when its \
+         device is announced while the move is held: {seen:?}"
+    );
 
     assert_eq!(
         *close_thread.lock(),
@@ -1170,7 +1283,10 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
 mod x11_window {
     use flui_foundation::geometry::Point;
     use x11rb::{
-        protocol::xproto::{AtomEnum, ConnectionExt as _, MapState, PropMode},
+        connection::Connection as _,
+        protocol::xproto::{
+            AtomEnum, ConnectionExt as _, CreateWindowAux, MapState, PropMode, WindowClass,
+        },
         rust_connection::RustConnection,
         wrapper::ConnectionExt as _,
     };
@@ -1206,6 +1322,27 @@ mod x11_window {
             );
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// Poll (bounded, 5 s) until the visibility reports are exactly
+    /// `expected`, the last of which `is_visible` answers. A report may follow
+    /// a publication on another thread, hence the wait.
+    fn until_reports(
+        window: &Arc<dyn HostWindow>,
+        reports: &Mutex<Vec<bool>>,
+        expected: &[bool],
+        what: &str,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while reports.lock().as_slice() != expected {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {what}; reports {:?}",
+                reports.lock()
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(Some(&window.is_visible()), expected.last(), "{what}");
     }
 
     fn map_state(connection: &RustConnection, id: u32) -> MapState {
@@ -1345,10 +1482,14 @@ mod x11_window {
 
     #[test]
     fn x11_window_takes_commands_and_publishes_what_the_server_holds() {
+        // The suite's tests share one X server (`xvfb-run`'s 1280×1024 screen)
+        // and open their windows within 800×600 of the origin, so this one
+        // stays beyond that, where none of theirs can cover it and make its
+        // visibility reports another test's.
         let opening = WindowOptions::default()
             .with_title("x11-window")
             .with_size(Size::new(320.0, 240.0))
-            .with_position(Some(Point::new(40.0, 60.0)))
+            .with_position(Some(Point::new(840.0, 640.0)))
             .with_reveal(WindowReveal::AfterFirstFrame);
         run_x11_scenario(opening, |window, id, server| {
             // Created hidden, to be shown with the first frame; the window
@@ -1361,6 +1502,21 @@ mod x11_window {
             window.on_state_changed(Box::new(move || {
                 counter.fetch_add(1, Ordering::SeqCst);
             }));
+            // Every visibility report, after the one the window opened with:
+            // an unmapped window has had no visibility event yet.
+            // Each report also checks that the snapshot already says the same.
+            let visibility = Arc::new(Mutex::new(vec![true]));
+            let reported = Arc::clone(&visibility);
+            let observed = Arc::downgrade(&window);
+            window.on_visibility_status_change(Box::new(move |visible| {
+                let published = observed.upgrade().map(|window| window.state().visible);
+                assert_eq!(
+                    published,
+                    Some(visible),
+                    "the snapshot runs behind a report"
+                );
+                reported.lock().push(visible);
+            }));
 
             window.reveal_after_first_frame();
             until_map_state(server, id, MapState::VIEWABLE);
@@ -1368,7 +1524,7 @@ mod x11_window {
             // The position it opened at, and the commands a server carries
             // out without a window manager.
             until_state(&window, "the opening position", |state| {
-                state.outer.position == Some(Point::new(40.0, 60.0))
+                state.outer.position == Some(Point::new(840.0, 640.0))
             });
             window
                 .apply(WindowCommand::SetSize(Size::new(400.0, 300.0)))
@@ -1377,36 +1533,55 @@ mod x11_window {
                 state.content_size == Size::new(400.0, 300.0)
             });
             window
-                .apply(WindowCommand::SetPosition(Point::new(100.0, 120.0)))
+                .apply(WindowCommand::SetPosition(Point::new(860.0, 680.0)))
                 .expect("a desktop window moves");
             until_state(&window, "the new position", |state| {
-                state.outer.position == Some(Point::new(100.0, 120.0))
+                state.outer.position == Some(Point::new(860.0, 680.0))
             });
             window
                 .apply(WindowCommand::SetTitle("renamed".into()))
                 .expect("a title is set");
             assert_eq!(window.state().title.as_deref(), Some("renamed"));
 
+            // Hiding and showing are reported, so a late `Occluded` from
+            // either cannot leave the last report behind what the window
+            // answers.
             window
                 .apply(WindowCommand::Hide)
                 .expect("a desktop window hides");
             until_map_state(server, id, MapState::UNMAPPED);
             assert!(!window.state().visible);
+            until_reports(&window, &visibility, &[true, false], "a report of the hide");
             window
                 .apply(WindowCommand::Show)
                 .expect("a desktop window shows");
             until_map_state(server, id, MapState::VIEWABLE);
             assert!(window.state().visible);
+            until_reports(
+                &window,
+                &visibility,
+                &[true, false, true],
+                "a report of the show",
+            );
 
             // The window manager minimizes the window: winit reports no
             // event, the probe hears of it, and the snapshot follows with
-            // a notification.
+            // a notification. X sends no visibility event for it either, so
+            // the window reports itself hidden from the mode.
             let before = changes.load(Ordering::SeqCst);
             set_window_manager_state(server, id, 3, &["_NET_WM_STATE_HIDDEN"]);
             until_state(&window, "the minimized mode", |state| {
                 state.mode == WindowMode::Minimized
             });
             assert!(changes.load(Ordering::SeqCst) > before, "a notification");
+            assert!(!window.state().visible, "a minimized window is not visible");
+            // The report follows the publication on whichever thread made it.
+            until_reports(
+                &window,
+                &visibility,
+                &[true, false, true, false],
+                "a report of the minimizing",
+            );
             assert_eq!(
                 window.state().normal_geometry.map(|geometry| geometry.size),
                 Some(Size::new(400.0, 300.0)),
@@ -1431,7 +1606,60 @@ mod x11_window {
                 Some(Size::new(400.0, 300.0)),
                 "it returns to the size it had in normal mode"
             );
+            assert!(window.state().visible, "visible again");
+            until_reports(
+                &window,
+                &visibility,
+                &[true, false, true, false, true],
+                "a report of the return",
+            );
+
+            // A window of the test's own covers it: winit reports it occluded.
+            let cover = cover_window(server, (800, 600), (480, 424));
+            until_reports(
+                &window,
+                &visibility,
+                &[true, false, true, false, true, false],
+                "a report of the cover",
+            );
+            // A show of a window that stays mapped keeps its occlusion.
+            window.show().expect("a desktop window shows");
+            assert!(!window.state().visible, "still covered");
+            assert_eq!(*visibility.lock(), [true, false, true, false, true, false]);
+            server.destroy_window(cover).expect("request");
+            server.flush().expect("flush");
+            until_reports(
+                &window,
+                &visibility,
+                &[true, false, true, false, true, false, true],
+                "a report of the uncovering",
+            );
         });
+    }
+
+    /// Map a plain window of `connection`'s own at `at` with `size`, above the
+    /// others; a bare server has no window manager to stack it elsewhere.
+    fn cover_window(connection: &RustConnection, at: (i16, i16), size: (u16, u16)) -> u32 {
+        let root = connection.setup().roots[0].root;
+        let cover = connection.generate_id().expect("an id");
+        connection
+            .create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                cover,
+                root,
+                at.0,
+                at.1,
+                size.0,
+                size.1,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                x11rb::COPY_FROM_PARENT,
+                &CreateWindowAux::new(),
+            )
+            .expect("request");
+        connection.map_window(cover).expect("request");
+        connection.flush().expect("flush");
+        cover
     }
 
     /// A window that opens maximized waits unmapped for its first frame, and

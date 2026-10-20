@@ -1299,12 +1299,15 @@ impl ViewState<Scrollable> for ScrollableState {
                     DragAutoscrollAnchor::new(Rc::clone(&self.autoscroll), Child::some(gestures))
                         .boxed()
                 });
-            // A press joins as a hold only while the scrollable moves.
+            // A press joins as a hold only while motion it catches moves the
+            // scrollable: a wheel's easing goes on under a click, which
+            // reaches the content.
             let listener = match &self.hold {
                 Some(hold) => {
-                    let moving = fling_controller;
+                    let (moving, catching) = (fling_controller, Rc::clone(&owner));
                     listener.recognizer_when(hold, move |dispatch| {
                         moving.is_animating()
+                            && catching.catchable()
                             && match dispatch.local {
                                 PointerEvent::Down(down) => {
                                     devices == PointerKindSet::all()
@@ -1727,9 +1730,10 @@ fn anchored_key_target(
     Some(next_snap_target(position, snap, toward_end == reversed))
 }
 
-/// Service a command `controller` queued through the owner serving it. With
-/// none yet, the command waits: the build that creates the owner services
-/// it.
+/// Service a command `controller` queued through the owner serving it, and
+/// rebuild its release run when the notify brought new content extents (the
+/// flush after a layout). With no owner yet, the command waits: the build
+/// that creates the owner services it.
 fn service_pending_command(
     owner: &RefCell<Option<Rc<ScrollOwner>>>,
     controller: &ScrollController,
@@ -1738,6 +1742,7 @@ fn service_pending_command(
     if let Some(owner) = current
         && owner.controller().position().ptr_eq(&controller.position())
     {
+        owner.follow_content_extents();
         owner.service_pending_command();
     }
 }

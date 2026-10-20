@@ -401,6 +401,10 @@ fn wake_debt_and_signal_write_matrix() {
             ("signal_write_routing::an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt", signal_write_routing::an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt as fn()),
             ("redraw_wake_routing::a_cross_thread_frame_request_reaches_the_ui_runtimes_platform_wake", redraw_wake_routing::a_cross_thread_frame_request_reaches_the_ui_runtimes_platform_wake as fn()),
             ("redraw_wake_routing::frame_waker_wakes_the_ui_runtime_from_a_worker", redraw_wake_routing::frame_waker_wakes_the_ui_runtime_from_a_worker as fn()),
+            ("redraw_wake_routing::a_redraw_requested_after_its_segment_survives_the_frame", redraw_wake_routing::a_redraw_requested_after_its_segment_survives_the_frame as fn()),
+            ("redraw_wake_routing::a_mark_after_the_pipeline_requests_the_next_frame", redraw_wake_routing::a_mark_after_the_pipeline_requests_the_next_frame as fn()),
+            ("redraw_wake_routing::many_frame_requests_before_a_frame_poke_the_window_once", redraw_wake_routing::many_frame_requests_before_a_frame_poke_the_window_once as fn()),
+            ("redraw_wake_routing::a_secondary_presentation_is_laid_out_at_its_own_size", redraw_wake_routing::a_secondary_presentation_is_laid_out_at_its_own_size as fn()),
             ("addressed_input_routing::panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake", addressed_input_routing::panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake as fn()),
             #[cfg(feature = "hot-reload")]
             ("hot_reload_recovery::failed_reload_wake_rearms_the_accepted_tail", hot_reload_recovery::failed_reload_wake_rearms_the_accepted_tail as fn()),
@@ -438,6 +442,7 @@ fn ui_runtime_and_presentation_isolation_matrix() {
             ("addressed_input_routing::an_unfocused_snapshot_forgets_held_keys", addressed_input_routing::an_unfocused_snapshot_forgets_held_keys as fn()),
             ("addressed_input_routing::a_sibling_gaining_focus_forgets_held_keys", addressed_input_routing::a_sibling_gaining_focus_forgets_held_keys as fn()),
             ("addressed_input_routing::a_sibling_snapshot_forgets_held_keys", addressed_input_routing::a_sibling_snapshot_forgets_held_keys as fn()),
+            ("addressed_input_routing::a_panicking_key_cancel_still_moves_window_focus", addressed_input_routing::a_panicking_key_cancel_still_moves_window_focus as fn()),
             ("async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach", async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach as fn()),
             ("closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical", closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical as fn()),
             ("closing_one_presentation_is_invisible_to_siblings::presentation_close_retirement_failures_preserve_focus_ime_and_siblings", closing_one_presentation_is_invisible_to_siblings::presentation_close_retirement_failures_preserve_focus_ime_and_siblings as fn()),

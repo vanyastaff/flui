@@ -199,6 +199,8 @@ pub use crate::cache::{
 pub use crate::core::{Asset, AssetMetadata};
 pub use crate::error::{AssetError, Result};
 pub use crate::registry::{AssetRegistry, AssetRegistryBuilder, HasCapacity, NoCapacity};
+#[cfg(feature = "images")]
+pub use crate::registry::{ImageLoad, ImageSource};
 pub use crate::types::{
     AssetHandle, AssetHandleCore, AssetHandleExt, AssetKey, FontData, LoadState,
 };

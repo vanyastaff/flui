@@ -158,7 +158,7 @@ pub mod prelude {
     pub use crate::{
         RenderUpdateImpact,
         binding::{
-            RendererBinding, debug_dump_layer_tree, debug_dump_pipeline_owner_tree,
+            RendererBinding, ViewHitTest, debug_dump_layer_tree, debug_dump_pipeline_owner_tree,
             debug_dump_render_tree, debug_dump_semantics_tree,
         },
         parent_data::{

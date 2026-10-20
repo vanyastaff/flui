@@ -408,8 +408,10 @@ while an embedder whose callback declines lets the page scroll.
 
 A trackpad pinch reaches Chromium and Firefox pages as Control-held wheel
 events and WebKit pages as `gesture*` events (`shared::web_pinch`). A
-Control-held sequence is classified by its first event (a fractional pixel
-`deltaY` with no `deltaX` is a pinch, anything else a scroll) and each step
+Control-held sequence is classified by its first event (a pixel `deltaY` with
+no `deltaX` that is a whole number neither of CSS pixels nor of device pixels
+is a pinch, anything else a scroll: a mouse detent at a page zoom is
+fractional CSS pixels but whole device pixels) and each step
 continues the sequence as its first was. The step factor inverts Chromium's
 `-100 · ln(scale)` encoding. Control is stripped from the pinch's modifiers,
 since the browser synthesizes it. The End is a deadline on the event
@@ -422,17 +424,36 @@ neither the application nor `preventDefault`, so the browser zooms the page.
 The capability is `Emulated` where ctrl+wheel is the source and `Native` where
 `GestureEvent` exists. WebKit's cumulative scale and degrees become per-step
 factors and clockwise radians; web-sys has no `GestureEvent`, so the crate
-binds its getters. A pen whose browser reports only `tiltX`/`tiltY` (Pointer
+binds its getters. A gesture that starts while a touch is open is left to the
+touches: WebKit on a touch screen reports a two-finger pinch both ways. A pen
+whose browser reports only `tiltX`/`tiltY` (Pointer
 Events 2) keeps them as tilt planes, read through fractional getters.
+
+The mouse is one contact whatever `pointerId` an engine gives it (1 in
+Chromium and WebKit, 0 in Gecko), reserved pointer identity one, and a wheel
+event, which names no pointer, scrolls as that pointer; touches and pens take
+identities from two. A mouse or pen entering or leaving the canvas outside a
+press is an `Enter` or `Leave`, and a pen that leaves is out of range and its
+contact ends. When the page loses the OS focus (`blur` at the window) or is
+hidden, every open sequence is cancelled with `FocusLost` and its capture
+released: the browser may never deliver its release. The browser's context
+menu is answered as the application answered the secondary press that opened
+it; one no secondary press opened (the menu key) is prevented.
 
 `web_pinch_table` pins the decoders in Linux CI. `tests/web_browser.rs` runs
 in headless Chrome through `cargo xtask device web-input`:
 `a_wheel_scroll_is_answered_with_its_dispatch_result`,
 `a_ctrl_wheel_pinch_reaches_the_application_as_a_pan_zoom` (End from the
 timer, stamped with the deadline), `a_refused_pinch_is_left_to_the_browser`,
-`webkit_gesture_events_reach_the_application_as_a_pan_zoom` and
+`webkit_gesture_events_reach_the_application_as_a_pan_zoom`,
+`a_touch_pinch_is_delivered_once`, `a_press_the_page_loses_is_cancelled`,
+`a_wheel_scrolls_as_the_mouse_and_never_as_a_touch`,
+`a_hovering_pen_ends_where_it_leaves`,
+`the_context_menu_is_answered_as_its_secondary_press` and
 `a_pen_reporting_only_tilt_planes_keeps_its_orientation`. Those events are
-constructed, not trusted: no trackpad, Safari or page zoom has run.
+constructed, not trusted: no trackpad, Safari or page zoom has run
+(`a_mouse_detent_at_a_page_zoom_stays_a_scroll` pins Chromium's documented
+zoomed detent in the decoder).
 
 ### Web drag and drop is HTML drag and drop, answered in its events
 
@@ -1519,11 +1540,15 @@ workspace's `Cargo.lock`, not recalled.
 
 **Trade-off:** the cached display follows the window across screens and backing
 changes. A mode change that leaves the window where it is (a user switching
-refresh rate in System Settings) is **not** observed yet: this backend observes no
-screen-parameters notification, so the new period is picked up the next time the
-host samples the snapshot (a move, a resize or another owner wake) rather than
-immediately. Named rather than assumed away — it is unobservable on the single
-fixed-mode display this was measured on.
+refresh rate in System Settings) is observed too: `ScreenObserver`
+(`platforms/macos/display.rs`) marks the snapshot stale on
+`NSApplicationDidChangeScreenParametersNotification` and wakes the owner, and the
+host derives every window's display again on that wake. What stays open is a
+display whose current mode reports 0 Hz, which some built-in panels do: its period
+is unknown and the host paces at its 60 Hz default, because the
+`CVDisplayLinkGetNominalOutputVideoRefreshPeriod` fallback winit takes is not
+written ([gaps](../../docs/gaps.md), entry 4). Neither a live refresh switch nor
+such a panel ran: the display this was measured on has one fixed mode.
 
 **Replacement coverage:** the arithmetic is free-standing and AppKit-free
 (`RefreshPeriod::from_hz`, reached through `shared::display_period`), pinned by
@@ -2254,14 +2279,16 @@ match, or a window with no monitor, has no display.
 **What reaches the window.** `Moved`, `ScaleFactorChanged` and `Resized` ask
 the window whether its display changed. A change of the monitor list needs no
 event of its own: the thread wakes the owner and the host derives every window's
-display from the new snapshot. Two Wayland gaps are named. A window is on no
-output until its first frame enters one, and winit reports no event for that, so
-a window without a display is looked at again each time the loop goes idle
-(`about_to_wait`), which follows the compositor's `enter`. And winit reports
-nothing when a window crosses to another output of equal scale, so a refresh
-rate that differs between two same-scale outputs is followed only at the next
-event of the kinds above; the `wl_surface.enter` events that would tell belong
-to winit's connection.
+display from the new snapshot. On Wayland winit reports no event when a window
+enters an output: none for its first (a window is on no output until its first
+frame enters one), and only a `ScaleFactorChanged` for a later one of another
+scale, so a window moved to an output of equal scale but another refresh rate
+would keep the old one. Every Wayland window is therefore asked its monitor again
+each time the loop goes idle (`about_to_wait`, `sync_unannounced_displays`),
+which follows the compositor's `enter`; a change publishes the window's state
+and then raises the display hint. An X11 window reports moves with `Moved`, so
+only one with no display yet is looked at there. The `wl_surface.enter` events
+themselves belong to winit's connection.
 
 **What was not run.** The pure rows run on every host. The thread is tested
 against a scripted session on Linux (`display_thread_contract`: change, wake,
@@ -2334,7 +2361,10 @@ processes on one directory are left to the dated native run.
 Backends copy each native event into a plain `shared::pointer_assembly::NativeReading`
 (no `windows::*`, `objc2`, JNI or DOM type) and `decode` it against a
 `ContactRegistry` (ADR-0217 §3). The registry keys a contact by surface, device
-label and contact label; mints pointer and device identities in order and refuses
+label and contact label, except the backend's reserved contact (a mouse on
+Win32, AppKit and the Web, the Pencil on UIKit), which is one cursor whichever
+device drives it: a reading naming another device or none moves it and it
+carries the device that drove it last; mints pointer and device identities in order and refuses
 permanently after the last; keeps a mouse's contact for the life of its device on
 the surface; returns a lifted pen to hovering on the same identity until the
 platform's leave, so its `Enter` and `Leave` pair up (a touch ends at `Up` or a
@@ -2359,7 +2389,8 @@ nothing per event once contacts are open; a coalesced batch allocates the
 vocabulary's sample buffer.
 
 `pointer_assembly_contracts` in `tests/pointer_assembly.rs` pins label reuse after
-Up, primary admission, the mouse cursor's identity and cancellation, the pen
+Up, primary admission, the mouse cursor's identity and cancellation, the
+reserved contact across devices (`the_reserved_contact_is_one_cursor_across_devices`), the pen
 contact rule, a lifted pen's hover until its leave, an entered touch's leave at its end, the originating reading, device hot-plug, identity exhaustion, click
 counting across the OS interval and rectangle, gesture accumulation including the
 session end, move batching, undecodable and orphan readings, a press before any
@@ -2376,6 +2407,33 @@ scroll on every backend, winit's `PanGesture` included; a pinch's translation is
 its focal point, which every `Update` refreshes (ADR-0217 §4;
 `two_finger_pan_is_phased_scroll_on_every_backend`,
 `pan_zoom_carries_only_scale_and_rotation`, `winit_pan_gesture_is_a_phased_scroll`).
+
+### The winit translation makes up for what winit reports alike on every session
+
+`platforms/winit/events.rs` decides what winit's shared shapes hide
+(`session_quirks_translate_to_one_grammar`):
+
+- A winit device id is labelled per kind of input (cursor, touch, trackpad
+  gesture): Wayland gives every pointer and touch event one id and X11 the
+  master device's, so a mouse and a touchscreen behind one id are two devices
+  of known kind, both present, rather than one of mixed kind that reports
+  none. `DeviceEvent::Removed` retires every label of the id.
+- winit 0.30 drops the protocol's event time, so every reading is stamped at
+  dispatch. A move is held until the next event: a move of the same contact
+  replaces it, anything else (another window event, an owner wake that may
+  close its window, the end of the loop turn at `about_to_wait`) delivers it
+  first (`programmatic_close_runs_the_full_teardown_and_exits_the_loop` holds a
+  move across a close request). The moves a late turn dispatches back to back are then
+  one move, and velocity never sees their microsecond spacing.
+- On X11, winit reports a `CursorMoved` on the master device at the first
+  touch's position before its press and moves; a held move that any event of
+  a touch at that position follows (its lift and cancel included) is dropped,
+  so nothing hovers under the finger. A
+  fractional `LineDelta` is a touchpad's smooth scrolling and is precise; it
+  carries no phases.
+- On Wayland, a leave with a button held cancels the mouse's sequence: the
+  compositor that took the pointer sends no release. On X11 the implicit grab
+  keeps delivering the sequence after a leave, and it continues.
 
 ### Android motion events decode through a cfg-free translation
 
@@ -2412,6 +2470,16 @@ the translation's own:
   trackpad gestures. (`a_touchpad_pinch_is_pan_zoom_about_its_cursor`,
   `a_touchpad_scroll_is_phased_from_its_cursor`,
   `touchpad_clicks_swipes_and_touches_stay_what_they_are`.)
+- A pointer lifted with `FLAG_CANCELED` (API 33: the system rejected a palm)
+  is cancelled, not released, so a tap under it never accepts
+  (`a_cancelled_pointer_up_is_a_cancel_not_a_lift`).
+
+The Java device query (`InputDevice.getDevice` and its motion ranges) runs
+for every event but a move (`ACTION_MOVE`, `ACTION_HOVER_MOVE`, the events at
+the sample rate), for a device id the cache does not hold, or for a source it
+was not read for: a device the OS reset or removed is seen at the press that
+starts a sequence and at the lift, exit or cancel that ends it (a reset
+cancels its sequences) (`the_device_is_queried_for_every_event_but_a_move`).
 
 Android has no counterpart to `PointerRevision`: a `MotionEvent` carries no
 estimated properties to revise, so the backend never emits `Revise`.

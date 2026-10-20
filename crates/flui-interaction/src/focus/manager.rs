@@ -876,13 +876,28 @@ impl FocusManager {
     }
 
     /// Move focus geometrically within its policy group and scope boundaries.
+    ///
+    /// With nothing focused, or a scope holding primary focus while it waits
+    /// for its first eligible descendant, there is no position to move from:
+    /// the direction enters that scope (the root when nothing is focused) in
+    /// traversal order, Down and Right at its first node and Up and Left at
+    /// its last, so the first arrow or D-pad press brings focus in.
     pub fn focus_in_direction(&self, direction: super::FocusDirection) -> bool {
+        use super::FocusDirection;
         if self.closed.get() {
             return false;
         }
         self.settle_orphaned_focus();
-        let Some(current) = self.primary_focus() else {
-            return false;
+        let primary = self.primary_focus();
+        let parked = primary.as_ref().and_then(|node| node.as_scope());
+        let Some(current) = primary.filter(|_| parked.is_none()) else {
+            let scope = parked.unwrap_or_else(|| Rc::clone(&self.root_scope));
+            let order = match direction {
+                FocusDirection::Down | FocusDirection::Right => TraversalDirection::Forward,
+                FocusDirection::Up | FocusDirection::Left => TraversalDirection::Backward,
+            };
+            let step = super::traversal::linear_step(self, None, &scope, order);
+            return FocusScopeNode::perform_with_manager(self, step);
         };
         let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
         let step = failure

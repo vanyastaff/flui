@@ -192,10 +192,17 @@ impl Notification {
 /// production call site, and it runs after `history.lock()` is released — which is
 /// the whole point: an observer holds a `NavigatorHandle` and would otherwise
 /// deadlock on `parking_lot::Mutex` the moment it read the stack it was told about.
-pub(crate) fn deliver(notifications: &[Notification], observers: &[Arc<dyn NavigatorObserver>]) {
+///
+/// An observer that panics does not keep the others from hearing: `recovery`
+/// holds the first failure.
+pub(crate) fn deliver(
+    notifications: &[Notification],
+    observers: &[Arc<dyn NavigatorObserver>],
+    recovery: &mut flui_foundation::panic::PanicRecovery,
+) {
     for notification in notifications {
         for observer in observers {
-            notification.notify(observer.as_ref());
+            recovery.run(|| notification.notify(observer.as_ref()));
         }
     }
 }

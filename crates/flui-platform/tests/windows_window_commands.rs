@@ -14,26 +14,35 @@
 
 use std::sync::{
     Arc,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::{
-    HostWindow, Platform as _, SizeConstraints, WindowCommand, WindowGeometry, WindowMode,
-    WindowOptions, WindowReveal, WindowState, WindowsPlatform, platforms::windows::WindowsWindow,
+    DispatchEventResult, HostWindow, Platform as _, SizeConstraints, WindowCommand,
+    WindowCommandError, WindowGeometry, WindowMode, WindowOptions, WindowReveal, WindowState,
+    WindowsPlatform, platforms::windows::WindowsWindow,
 };
 use windows::Win32::{
-    Foundation::{HWND, RECT},
-    Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow},
-    UI::WindowsAndMessaging::{
-        DispatchMessageW, GWL_STYLE, GetWindowLongPtrW, GetWindowRect, IsIconic, IsWindowVisible,
-        IsZoomed, MSG, PM_REMOVE, PeekMessageW, SW_RESTORE, SWP_NOACTIVATE, SWP_NOMOVE,
-        SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
-        TranslateMessage, WS_CAPTION, WS_MAXIMIZEBOX, WS_THICKFRAME,
+    Foundation::{HWND, LPARAM, RECT, WPARAM},
+    Graphics::{
+        Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute},
+        Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow},
+    },
+    UI::{
+        Input::KeyboardAndMouse::{VK_ESCAPE, VK_F11},
+        WindowsAndMessaging::{
+            DispatchMessageW, GWL_STYLE, GetWindowLongPtrW, GetWindowRect, IsIconic,
+            IsWindowVisible, IsZoomed, MSG, PM_REMOVE, PeekMessageW, PostMessageW, SC_MOVE,
+            SW_MINIMIZE, SW_RESTORE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SendMessageW,
+            SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage,
+            WM_DPICHANGED, WM_KEYDOWN, WM_SYSCOMMAND, WM_WTSSESSION_CHANGE, WS_CAPTION,
+            WS_MAXIMIZEBOX, WS_THICKFRAME, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+        },
     },
 };
-use windows::core::w;
+use windows::core::{BOOL, w};
 
 const CONTENT: Size<f64> = Size::new(640.0, 480.0);
 
@@ -833,6 +842,272 @@ fn a_style_the_system_changes_reaches_the_snapshot() {
     assert!(!window.state().resizable);
 }
 
+// --- frames, scale and visibility ----------------------------------------
+
+/// Count the window's frame requests from here on.
+fn count_frames(window: &Arc<dyn HostWindow>) -> Arc<AtomicUsize> {
+    let frames = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&frames);
+    window.on_request_frame(Box::new(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+    }));
+    frames
+}
+
+/// Run what the thread has queued for a while.
+fn settle() {
+    let _ = pump_until(Duration::from_millis(150), || false);
+}
+
+fn send(window: &Arc<dyn HostWindow>, message: u32, wparam: usize, lparam: isize) {
+    // SAFETY: a message to the live window on its own thread; a pointer in
+    // `lparam` is the caller's live local.
+    unsafe {
+        SendMessageW(
+            hwnd_of(window),
+            message,
+            Some(WPARAM(wparam)),
+            Some(LPARAM(lparam)),
+        )
+    };
+}
+
+/// A `WM_DPICHANGED` for `dpi` that suggests `suggested`.
+fn dpi_changed(window: &Arc<dyn HostWindow>, dpi: usize, suggested: RECT) {
+    send(
+        window,
+        WM_DPICHANGED,
+        (dpi << 16) | dpi,
+        (&raw const suggested) as isize,
+    );
+}
+
+fn a_task_woken_while_minimized_gets_its_frame() {
+    let platform = platform();
+    let window = open(&platform, options());
+    // SAFETY: a plain call on the live window.
+    let _ = unsafe { ShowWindow(hwnd_of(&window), SW_MINIMIZE) };
+    settle();
+    let frames = count_frames(&window);
+    window.request_redraw();
+    assert!(
+        pump_until(Duration::from_secs(1), || frames.load(Ordering::SeqCst) > 0),
+        "Win32 paints no minimized window: the wake must reach its frame another way"
+    );
+}
+
+fn a_dpi_change_that_keeps_the_client_size_still_delivers_the_scale() {
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    let resizes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = Arc::clone(&resizes);
+    window.on_resize(Box::new(move |_, scale| {
+        log.lock().expect("log").push(scale);
+    }));
+    // The window keeps the rectangle it has, so no `WM_SIZE` follows.
+    dpi_changed(&window, 144, rect(&window));
+    assert_eq!(*resizes.lock().expect("log"), [1.5]);
+    assert!(near(window.scale_factor(), 1.5));
+    dpi_changed(&window, 96, rect(&window));
+    assert_eq!(
+        *resizes.lock().expect("log"),
+        [1.5, 1.0],
+        "delivered once each"
+    );
+}
+
+fn a_fullscreen_window_covers_its_monitor_through_a_dpi_change() {
+    let platform = platform();
+    let window = open(&platform, options());
+    let normal = rect(&window);
+    apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+    assert!(covers_its_monitor(&window));
+    let monitor = monitor_rect(&window);
+    let half = RECT {
+        right: monitor.left + (monitor.right - monitor.left) / 2,
+        bottom: monitor.top + (monitor.bottom - monitor.top) / 2,
+        ..monitor
+    };
+    dpi_changed(&window, 144, half);
+    assert!(
+        covers_its_monitor(&window),
+        "the suggestion is for a window, not for a monitor"
+    );
+    apply(&window, WindowCommand::SetMode(WindowMode::Normal));
+    let restored = rect(&window);
+    let width = restored.right - restored.left;
+    let wanted = f64::from(normal.right - normal.left) * 1.5;
+    assert!(
+        (f64::from(width) - wanted).abs() <= 3.0,
+        "returns {width} wide, not the {wanted} the new scale makes of it"
+    );
+}
+
+fn geometry_win32_cannot_hold_is_refused() {
+    let platform = platform();
+    let window = open(&platform, options());
+    let before = window.state();
+    for command in [
+        WindowCommand::SetSize(Size::new(1.0e10, 100.0)),
+        WindowCommand::SetSize(Size::new(100.0, 1.0e10)),
+        WindowCommand::SetPosition(Point::new(1.0e12, 0.0)),
+        WindowCommand::SetPosition(Point::new(0.0, -1.0e12)),
+    ] {
+        assert_eq!(
+            window.apply(command.clone()),
+            Err(WindowCommandError::InvalidGeometry),
+            "{command:?}"
+        );
+    }
+    let after = window.state();
+    assert_eq!(after.content_size, before.content_size);
+    assert_eq!(after.outer, before.outer);
+}
+
+fn press_f11(window: &Arc<dyn HostWindow>) {
+    // F11's scan code is 0x57.
+    send(window, WM_KEYDOWN, usize::from(VK_F11.0), 0x0057_0001);
+}
+
+fn the_fullscreen_hotkey_waits_for_the_app_to_let_its_key_through() {
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    // A toggle request that names another window (one whose handle this
+    // window reuses) is not this window's.
+    // SAFETY: a post to the live window; the parameters are plain values.
+    let _ = unsafe {
+        PostMessageW(
+            Some(hwnd_of(&window)),
+            windows::Win32::UI::WindowsAndMessaging::WM_APP + 3,
+            WPARAM(0),
+            LPARAM(0),
+        )
+    };
+    settle();
+    assert_ne!(window.state().mode, WindowMode::Fullscreen);
+
+    window.on_input(Box::new(|_| DispatchEventResult::resolved(false, true)));
+    press_f11(&window);
+    settle();
+    assert_ne!(
+        window.state().mode,
+        WindowMode::Fullscreen,
+        "the app prevented it"
+    );
+
+    window.on_input(Box::new(|_| DispatchEventResult::resolved(true, false)));
+    press_f11(&window);
+    assert_ne!(
+        window.state().mode,
+        WindowMode::Fullscreen,
+        "not inside the key's own message"
+    );
+    assert!(pump_until(Duration::from_secs(1), || {
+        window.state().mode == WindowMode::Fullscreen
+    }));
+}
+
+fn a_resize_outside_a_live_resize_asks_for_one_frame_after_it() {
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    let frames = count_frames(&window);
+    apply(&window, WindowCommand::SetSize(Size::new(600.0, 420.0)));
+    apply(&window, WindowCommand::SetSize(Size::new(620.0, 440.0)));
+    assert_eq!(
+        frames.load(Ordering::SeqCst),
+        0,
+        "no frame at an intermediate size"
+    );
+    assert!(pump_until(Duration::from_secs(1), || frames
+        .load(Ordering::SeqCst)
+        > 0));
+    settle();
+    assert_eq!(frames.load(Ordering::SeqCst), 1);
+}
+
+fn deadlines_are_delivered_while_the_window_is_moved() {
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    platform.set_wake_deadline_hook(Box::new(|| Some(Instant::now())));
+    let frames = count_frames(&window);
+    let address = hwnd_of(&window).0 as isize;
+    let moved = Arc::new(AtomicBool::new(false));
+    let done = Arc::clone(&moved);
+    let ender = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        while !done.load(Ordering::SeqCst) {
+            // SAFETY: a post to a window of this process; one that is gone
+            // fails the call.
+            let _ = unsafe {
+                PostMessageW(
+                    Some(HWND(address as *mut _)),
+                    WM_KEYDOWN,
+                    WPARAM(usize::from(VK_ESCAPE.0)),
+                    LPARAM(0x0001_0001),
+                )
+            };
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    });
+    // The keyboard move loop, modal until the escape above ends it.
+    send(&window, WM_SYSCOMMAND, SC_MOVE as usize, 0);
+    moved.store(true, Ordering::SeqCst);
+    ender.join().expect("the ending thread");
+    let during = frames.load(Ordering::SeqCst);
+    assert!(
+        during >= 5,
+        "{during} frames in the 300 ms the move loop ran"
+    );
+}
+
+fn a_locked_session_or_a_cloak_hides_a_shown_window() {
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    let events = record_visibility(&window);
+    send(&window, WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK as usize, 1);
+    assert_eq!(*events.lock().expect("log"), [false]);
+    assert!(
+        !window.is_visible(),
+        "a runtime that first reads the window now must not see it visible"
+    );
+    send(
+        &window,
+        WM_WTSSESSION_CHANGE,
+        WTS_SESSION_UNLOCK as usize,
+        1,
+    );
+    assert_eq!(*events.lock().expect("log"), [false, true]);
+    assert!(window.is_visible());
+
+    let cloak = |on: bool| {
+        let value = BOOL::from(on);
+        // SAFETY: `value` is a live `BOOL`, the size `DWMWA_CLOAK` reads.
+        unsafe {
+            DwmSetWindowAttribute(
+                hwnd_of(&window),
+                DWMWA_CLOAK,
+                (&raw const value).cast(),
+                std::mem::size_of::<BOOL>() as u32,
+            )
+        }
+        .expect("the window cloaks");
+    };
+    cloak(true);
+    assert!(pump_until(Duration::from_secs(1), || {
+        events.lock().expect("log").len() == 3
+    }));
+    cloak(false);
+    assert!(pump_until(Duration::from_secs(1), || {
+        events.lock().expect("log").len() == 4
+    }));
+    assert_eq!(*events.lock().expect("log"), [false, true, false, true]);
+}
+
 #[test]
 fn native_window_commands() {
     let cases: &[(&str, fn())] = &[
@@ -1004,6 +1279,38 @@ fn native_window_commands() {
         (
             "a_style_the_system_changes_reaches_the_snapshot",
             a_style_the_system_changes_reaches_the_snapshot,
+        ),
+        (
+            "a_task_woken_while_minimized_gets_its_frame",
+            a_task_woken_while_minimized_gets_its_frame,
+        ),
+        (
+            "a_dpi_change_that_keeps_the_client_size_still_delivers_the_scale",
+            a_dpi_change_that_keeps_the_client_size_still_delivers_the_scale,
+        ),
+        (
+            "a_fullscreen_window_covers_its_monitor_through_a_dpi_change",
+            a_fullscreen_window_covers_its_monitor_through_a_dpi_change,
+        ),
+        (
+            "geometry_win32_cannot_hold_is_refused",
+            geometry_win32_cannot_hold_is_refused,
+        ),
+        (
+            "the_fullscreen_hotkey_waits_for_the_app_to_let_its_key_through",
+            the_fullscreen_hotkey_waits_for_the_app_to_let_its_key_through,
+        ),
+        (
+            "a_resize_outside_a_live_resize_asks_for_one_frame_after_it",
+            a_resize_outside_a_live_resize_asks_for_one_frame_after_it,
+        ),
+        (
+            "deadlines_are_delivered_while_the_window_is_moved",
+            deadlines_are_delivered_while_the_window_is_moved,
+        ),
+        (
+            "a_locked_session_or_a_cloak_hides_a_shown_window",
+            a_locked_session_or_a_cloak_hides_a_shown_window,
         ),
     ];
     crate::run_table("native_window_commands", cases);

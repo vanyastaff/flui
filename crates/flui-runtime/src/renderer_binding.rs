@@ -33,7 +33,7 @@ use std::{
 
 use flui_foundation::geometry::Offset;
 use flui_rendering::{
-    binding::RendererBinding,
+    binding::{RendererBinding, ViewHitTest},
     hit_testing::HitTestResult,
     pipeline::{PipelineCell, PipelineOwner, TextContextHandle},
     view::{RenderView, ViewConfiguration},
@@ -588,7 +588,7 @@ impl RendererBinding for RenderingBinding {
         position: Offset,
         kind: flui_interaction::events::PointerKind,
         _view_id: u64,
-    ) {
+    ) -> ViewHitTest {
         // Hits route through the REAL render tree (the pipeline
         // owner's), not the per-view registry — the registry views
         // are bare metric holders with no children, so testing them
@@ -602,9 +602,21 @@ impl RendererBinding for RenderingBinding {
         // logical pixels too, so the position passes through unscaled
         // — dividing by the DPR here would shrink every hit a second
         // time on scaled displays.
-        let _ = self
-            .root_pipeline_owner
-            .try_with_layout(|owner| owner.hit_test(position, kind, result));
+        //
+        // A render object's panic surfaces only after the walk completed the
+        // path without it (`PipelineOwner::hit_test`); it is caught here so
+        // the caller can deliver to that path first.
+        let walk = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.root_pipeline_owner
+                .try_with_layout(|owner| owner.hit_test(position, kind, result))
+        }));
+        match walk {
+            Ok(Some(_hit)) => ViewHitTest::Answered { panic: None },
+            Ok(None) => ViewHitTest::TreeBusy,
+            Err(payload) => ViewHitTest::Answered {
+                panic: Some(payload),
+            },
+        }
     }
 
     // ---- RendererBinding proper ----
