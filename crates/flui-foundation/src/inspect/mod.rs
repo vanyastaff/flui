@@ -10,10 +10,10 @@
 //!
 //! From a tree walk come:
 //!
-//! - an owned [`SnapshotNode`] ([`snapshot`]) that tests read by type
+//! - an owned [`SnapshotNode`] ([`snapshot()`]) that tests read by type
 //!   ([`SnapshotNode::get`], [`SnapshotNode::find_by_link`], [`SnapshotNode::find_by_kind`]);
-//! - a structural [`diff`] whose tolerances come from each field's [`Unit`];
-//! - one human outline ([`render`]), coloured by role only on a terminal without `NO_COLOR`.
+//! - a structural [`diff()`] whose tolerances come from each field's [`Unit`];
+//! - one human outline ([`render()`]), coloured by role only on a terminal without `NO_COLOR`.
 //!
 //! `#[derive(Inspect)]` writes the trait for a struct or an enum; see the derive's
 //! documentation for its attributes.
