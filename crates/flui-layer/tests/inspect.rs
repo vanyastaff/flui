@@ -1,11 +1,15 @@
 //! A layer snapshot reads each layer's own fields.
 
 use flui_foundation::geometry::{Point, RRect, RSuperellipse, Rect};
-use flui_foundation::inspect::{SnapshotQuery, Variant, snapshot};
-use flui_layer::{
-    ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, Layer, LayerTree,
+use flui_foundation::inspect::{
+    DiffOptions, Level, Plain, SnapshotQuery, Variant, diff, render, snapshot,
 };
-use flui_painting::paint::{Clip, Path};
+use flui_layer::{
+    ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer,
+    FollowerLayer, ImageFilterLayer, Layer, LayerLink, LayerTree, OffsetLayer,
+};
+use flui_painting::paint::{BlendMode, Clip, ColorFilter, ImageFilter, Path};
+use flui_painting::styling::Color;
 
 /// Builds a clip layer of one kind around `rect`.
 type MakeClip = fn(Rect, Clip) -> Layer;
@@ -96,4 +100,75 @@ fn diamond() -> Path {
     path.line_to(Point::new(0.0, 10.0));
     path.close();
     path
+}
+
+/// A layer whose effect changes snapshots apart from the one before, so `diff` reports it.
+///
+/// Fails when a variant reports nothing about its effect and two such layers read alike.
+#[test]
+fn layers_that_differ_only_in_their_effect_diff_apart() {
+    let link = LayerLink::new();
+    let pairs: [(&str, Layer, Layer); 3] = [
+        (
+            "ColorFilter",
+            ColorFilterLayer::new(ColorFilter::grayscale()).into(),
+            ColorFilterLayer::new(ColorFilter::mode(Color::BLUE, BlendMode::SrcOver)).into(),
+        ),
+        (
+            "ImageFilter",
+            ImageFilterLayer::new(ImageFilter::blur(2.0)).into(),
+            ImageFilterLayer::new(ImageFilter::blur(8.0)).into(),
+        ),
+        (
+            "Follower",
+            FollowerLayer::new(link).into(),
+            FollowerLayer::new(link)
+                .with_show_when_unlinked(false)
+                .into(),
+        ),
+    ];
+    for (kind, before, after) in pairs {
+        let before =
+            snapshot(&LayerTree::new(before), SnapshotQuery::default()).expect("a tree has a root");
+        let after =
+            snapshot(&LayerTree::new(after), SnapshotQuery::default()).expect("a tree has a root");
+        assert!(
+            !diff(&before, &after, DiffOptions::default()).is_empty(),
+            "{kind}: {before} and {after} read alike"
+        );
+    }
+}
+
+/// A chain far deeper than the thread's stack would hold a frame per level snapshots, renders,
+/// diffs, clones, compares and drops.
+///
+/// Fails, by overflowing the stack, when any of those walks recurses per level.
+#[test]
+fn a_deep_layer_chain_snapshots_without_recursion() {
+    const DEPTH: usize = 30_000;
+    let mut tree = LayerTree::new(Layer::from(OffsetLayer::zero()));
+    let mut tip = tree.root();
+    for _ in 1..DEPTH {
+        tip = tree.push_child(tip, Layer::from(OffsetLayer::zero()));
+    }
+    let root = snapshot(&tree, SnapshotQuery::default()).expect("a tree has a root");
+    assert_eq!(root.iter().count(), DEPTH);
+    let mut lines = Lines(0);
+    render(&root, Level::Summary, &Plain, &mut lines).expect("counting never fails");
+    assert_eq!(lines.0, DEPTH);
+    let copy = root.clone();
+    // Not `assert_eq!`: a failure would print the chain through the recursive `Debug`.
+    let equal = copy == root;
+    assert!(equal, "a copy compares equal");
+    assert_eq!(diff(&root, &copy, DiffOptions::default()), Vec::new());
+}
+
+/// Counts the lines written to it and keeps nothing.
+struct Lines(usize);
+
+impl core::fmt::Write for Lines {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        self.0 += text.matches('\n').count();
+        Ok(())
+    }
 }

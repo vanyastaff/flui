@@ -187,7 +187,7 @@ impl Default for SnapshotQuery {
 }
 
 /// One node of an owned snapshot.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub struct SnapshotNode {
     /// The node's id in its tree.
     pub id: InspectId,
@@ -229,6 +229,10 @@ pub enum SnapshotError {
 
 /// Takes an owned snapshot of `tree` from the query's start node.
 ///
+/// The walk keeps its own stack, so a deep chain costs no Rust stack; so do the snapshot's own
+/// walks ([`iter`](SnapshotNode::iter), [`diff`](super::diff), [`render`](super::render)) and
+/// its clone, comparison and drop.
+///
 /// # Errors
 ///
 /// [`SnapshotError::Empty`] for a tree with no root and no start node asked for, and
@@ -242,13 +246,37 @@ pub fn snapshot<T: InspectTree + ?Sized>(
         .or_else(|| tree.root())
         .ok_or(SnapshotError::Empty)?;
     let mut budget = query.max_nodes.unwrap_or(u32::MAX);
-    take(tree, start, 0, &query, &mut budget).ok_or(SnapshotError::Gone(start))
+    let mut node = take(tree, start, &query, &mut budget).ok_or(SnapshotError::Gone(start))?;
+    let mut children = tree.children(start);
+    let mut depth = 0_u32;
+    // The ancestors of `node` being filled, each with its children still to visit.
+    let mut open = Vec::new();
+    loop {
+        if let Some(child) = children.next() {
+            let descend = query.max_depth.is_none_or(|max| depth < max);
+            if descend
+                && budget > 0
+                && let Some(taken) = take(tree, child, &query, &mut budget)
+            {
+                open.push((node, children, depth));
+                (node, children, depth) = (taken, tree.children(child), depth + 1);
+            } else {
+                node.omitted_children = node.omitted_children.saturating_add(1);
+            }
+            continue;
+        }
+        let Some((mut parent, rest, parent_depth)) = open.pop() else {
+            return Ok(node);
+        };
+        parent.children.push(node);
+        (node, children, depth) = (parent, rest, parent_depth);
+    }
 }
 
+/// The node `id` without its children, or `None` when the tree has no such node.
 fn take<T: InspectTree + ?Sized>(
     tree: &T,
     id: InspectId,
-    depth: u32,
     query: &SnapshotQuery,
     budget: &mut u32,
 ) -> Option<SnapshotNode> {
@@ -264,7 +292,7 @@ fn take<T: InspectTree + ?Sized>(
     tree.facts(id, &mut Fields::new(&mut sink));
     let facts = core::mem::take(&mut sink.fields);
     view.object.inspect(&mut Fields::new(&mut sink));
-    let mut node = SnapshotNode {
+    Some(SnapshotNode {
         id,
         kind: view.object.kind(),
         kind_args,
@@ -275,19 +303,7 @@ fn take<T: InspectTree + ?Sized>(
         children: Vec::new(),
         omitted_children: 0,
         debug_fields: sink.debug_fields,
-    };
-    let descend = query.max_depth.is_none_or(|max| depth < max);
-    for child in tree.children(id) {
-        if descend
-            && *budget > 0
-            && let Some(child) = take(tree, child, depth + 1, query, budget)
-        {
-            node.children.push(child);
-            continue;
-        }
-        node.omitted_children = node.omitted_children.saturating_add(1);
-    }
-    Some(node)
+    })
 }
 
 /// Copies fields at or under its level.
@@ -578,5 +594,82 @@ impl SnapshotNode {
     #[must_use]
     pub fn total_debug_fields(&self) -> u64 {
         self.iter().map(|node| u64::from(node.debug_fields)).sum()
+    }
+}
+
+impl SnapshotNode {
+    /// This node with no children, as a deep walk copies it one level at a time.
+    fn shallow(&self) -> Self {
+        Self {
+            id: self.id,
+            kind: self.kind,
+            kind_args: self.kind_args.clone(),
+            facts: self.facts.clone(),
+            fields: self.fields.clone(),
+            rect: self.rect,
+            links: self.links,
+            children: Vec::new(),
+            omitted_children: self.omitted_children,
+            debug_fields: self.debug_fields,
+        }
+    }
+
+    /// Whether the two nodes are equal apart from their children.
+    fn shallow_eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.kind == other.kind
+            && self.kind_args == other.kind_args
+            && self.facts == other.facts
+            && self.fields == other.fields
+            && self.rect == other.rect
+            && self.links == other.links
+            && self.children.len() == other.children.len()
+            && self.omitted_children == other.omitted_children
+            && self.debug_fields == other.debug_fields
+    }
+}
+
+/// Copies one level at a time with its own stack, so a deep snapshot costs no Rust stack.
+impl Clone for SnapshotNode {
+    fn clone(&self) -> Self {
+        let (mut node, mut children) = (self.shallow(), self.children.iter());
+        // The ancestors of `node` being filled, each with its children still to copy.
+        let mut open = Vec::new();
+        loop {
+            if let Some(child) = children.next() {
+                open.push((node, children));
+                (node, children) = (child.shallow(), child.children.iter());
+                continue;
+            }
+            let Some((mut parent, rest)) = open.pop() else {
+                return node;
+            };
+            parent.children.push(node);
+            (node, children) = (parent, rest);
+        }
+    }
+}
+
+/// Compares one level at a time with its own stack, so a deep snapshot costs no Rust stack.
+impl PartialEq for SnapshotNode {
+    fn eq(&self, other: &Self) -> bool {
+        let mut pending = vec![(self, other)];
+        while let Some((a, b)) = pending.pop() {
+            if !a.shallow_eq(b) {
+                return false;
+            }
+            pending.extend(a.children.iter().zip(&b.children));
+        }
+        true
+    }
+}
+
+/// Frees the children with its own stack, so a deep snapshot costs no Rust stack.
+impl Drop for SnapshotNode {
+    fn drop(&mut self) {
+        let mut pending = core::mem::take(&mut self.children);
+        while let Some(mut node) = pending.pop() {
+            pending.append(&mut node.children);
+        }
     }
 }

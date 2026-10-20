@@ -28,3 +28,7 @@
   view's or render object's field named like a fact (`lifecycle`, `dirty`, `size`) reads as its
   own value. `diff` compares facts with facts and fields with fields, and reports a changed fact
   as the new `Change::Fact`.
+- `snapshot`, and a `SnapshotNode`'s `render`, `diff`, clone, comparison and drop, keep their own
+  stack, so a tree as deep as a long layer chain snapshots without overflowing the thread's stack.
+  Every layer variant reports the parameters that change what it paints (a colour or image
+  filter, a shader mask, a texture, a follower's anchors), so `diff` sees a changed effect.

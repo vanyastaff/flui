@@ -139,7 +139,7 @@ impl Change {
 pub fn diff(before: &SnapshotNode, after: &SnapshotNode, options: DiffOptions) -> Vec<Change> {
     let mut changes = Vec::new();
     if before.kind == after.kind {
-        compare(before, after, &mut Vec::new(), &options, &mut changes);
+        compare(before, after, &options, &mut changes);
     } else {
         changes.push(Change::Removed(path_of(before, &[])));
         changes.push(Change::Added(path_of(after, &[])));
@@ -155,10 +155,99 @@ fn path_of(node: &SnapshotNode, path: &[usize]) -> NodePath {
     }
 }
 
+/// What the diff walk does next.
+enum Step<'a> {
+    /// Compare a matched pair, the `index`th child of the node at the current path.
+    Enter {
+        before: &'a SnapshotNode,
+        after: &'a SnapshotNode,
+        index: usize,
+    },
+    /// Report a child left unmatched, whose path was taken when its parent was compared.
+    Report(Change),
+    /// Leave the pair entered last.
+    Leave,
+}
+
+/// Compares `before` with `after` and every matched pair below them, with its own stack so a
+/// deep snapshot costs no Rust stack. Changes come in the order a recursive walk gives: a
+/// node's own, then its matched children's subtrees, then its removed and its added children.
 fn compare(
     before: &SnapshotNode,
     after: &SnapshotNode,
-    path: &mut Vec<usize>,
+    options: &DiffOptions,
+    changes: &mut Vec<Change>,
+) {
+    let mut path = Vec::new();
+    compare_node(before, after, &path, options, changes);
+    let mut steps = children_steps(before, after, &path);
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Enter {
+                before,
+                after,
+                index,
+            } => {
+                path.push(index);
+                compare_node(before, after, &path, options, changes);
+                steps.push(Step::Leave);
+                let mut below = children_steps(before, after, &path);
+                steps.append(&mut below);
+            }
+            Step::Report(change) => changes.push(change),
+            Step::Leave => {
+                path.pop();
+            }
+        }
+    }
+}
+
+/// The steps for the children of the pair at `path`, last to run first.
+fn children_steps<'a>(
+    before: &'a SnapshotNode,
+    after: &'a SnapshotNode,
+    path: &[usize],
+) -> Vec<Step<'a>> {
+    let pairs = pair_children(before, after);
+    let mut matched_before = vec![false; before.children.len()];
+    let mut matched_after = vec![false; after.children.len()];
+    for &(old, new) in &pairs {
+        matched_before[old] = true;
+        matched_after[new] = true;
+    }
+    let child_path = |index: usize| [path, &[index]].concat();
+    let mut steps = Vec::new();
+    for (index, child) in after.children.iter().enumerate().rev() {
+        if !matched_after[index] {
+            steps.push(Step::Report(Change::Added(path_of(
+                child,
+                &child_path(index),
+            ))));
+        }
+    }
+    for (index, child) in before.children.iter().enumerate().rev() {
+        if !matched_before[index] {
+            steps.push(Step::Report(Change::Removed(path_of(
+                child,
+                &child_path(index),
+            ))));
+        }
+    }
+    for &(old, new) in pairs.iter().rev() {
+        steps.push(Step::Enter {
+            before: &before.children[old],
+            after: &after.children[new],
+            index: new,
+        });
+    }
+    steps
+}
+
+/// The changes to the pair at `path` itself: its bounds, facts and fields.
+fn compare_node(
+    before: &SnapshotNode,
+    after: &SnapshotNode,
+    path: &[usize],
     options: &DiffOptions,
     changes: &mut Vec<Change>,
 ) {
@@ -186,37 +275,6 @@ fn compare(
         (Part::Field, &before.fields, &after.fields),
     ] {
         compare_part(part, from, to, &node, options, changes);
-    }
-
-    let pairs = pair_children(before, after);
-    let mut matched_before = vec![false; before.children.len()];
-    let mut matched_after = vec![false; after.children.len()];
-    for &(old, new) in &pairs {
-        matched_before[old] = true;
-        matched_after[new] = true;
-        path.push(new);
-        compare(
-            &before.children[old],
-            &after.children[new],
-            path,
-            options,
-            changes,
-        );
-        path.pop();
-    }
-    for (index, child) in before.children.iter().enumerate() {
-        if !matched_before[index] {
-            path.push(index);
-            changes.push(Change::Removed(path_of(child, path)));
-            path.pop();
-        }
-    }
-    for (index, child) in after.children.iter().enumerate() {
-        if !matched_after[index] {
-            path.push(index);
-            changes.push(Change::Added(path_of(child, path)));
-            path.pop();
-        }
     }
 }
 

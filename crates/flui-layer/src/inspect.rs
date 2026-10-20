@@ -4,10 +4,10 @@
 //! are minted per frame, so a layer of the next frame's tree is a different node even when it
 //! paints the same thing, and an id kept from an earlier scene is gone here. A layer that a
 //! repaint boundary originated links to that boundary's render object. Its rect is the rectangle
-//! the layer defines in its own coordinates, for the variants that define one. A clip layer adds
-//! how it rasterises the edge and, when its shape is not a rectangle, the exact shape as its
-//! `Debug` text, since the inspect model has no value for a rounded rectangle, path or
-//! superellipse.
+//! the layer defines in its own coordinates, for the variants that define one. Every variant
+//! reports the parameters that change what it paints: a typed value where the inspect model has
+//! one, and otherwise (a filter, shader, annotation, or a clip shape that is not a rectangle) its
+//! `Debug` text. A clip layer also reports how it rasterises its edge.
 
 use flui_foundation::LayerId;
 use flui_foundation::inspect::{
@@ -54,7 +54,58 @@ impl Inspect for Layer {
             Layer::Picture(layer) => {
                 out.field("commands", &layer.picture().len());
             }
-            _ => {}
+            Layer::Canvas(layer) => {
+                out.field("commands", &layer.display_list().len());
+            }
+            Layer::Texture(layer) => {
+                out.value("texture_id", Value::Debug(&layer.texture_id()));
+                out.field("opacity", &layer.opacity()).unit(Unit::Fraction);
+                out.field("frozen", &layer.is_frozen());
+                out.value("filter_quality", Value::Debug(&layer.filter_quality()));
+            }
+            Layer::PlatformView(layer) => {
+                out.value("view_id", Value::Debug(&layer.view_id()));
+                out.value(
+                    "hit_test_behavior",
+                    Value::Debug(&layer.hit_test_behavior()),
+                );
+            }
+            Layer::PerformanceOverlay(layer) => {
+                out.value("options", Value::Debug(&layer.options()));
+            }
+            Layer::ColorFilter(layer) => {
+                out.value("color_filter", Value::Debug(&layer.color_filter()));
+            }
+            Layer::ImageFilter(layer) => {
+                out.value("filter", Value::Debug(layer.filter()));
+                out.field("offset", &layer.offset()).unit(Unit::LogicalPx);
+            }
+            Layer::ShaderMask(layer) => {
+                out.value("shader", Value::Debug(layer.shader()));
+                out.value("blend_mode", Value::Debug(&layer.blend_mode()));
+            }
+            Layer::BackdropFilter(layer) => {
+                out.value("filter", Value::Debug(layer.filter()));
+                out.value("blend_mode", Value::Debug(&layer.blend_mode()));
+                out.value("group", Value::Debug(&layer.group()));
+            }
+            Layer::Leader(layer) => {
+                out.value("link", Value::Debug(&layer.link()));
+                out.field("offset", &layer.offset()).unit(Unit::LogicalPx);
+            }
+            Layer::Follower(layer) => {
+                out.value("link", Value::Debug(&layer.link()));
+                out.field("target_offset", &layer.target_offset())
+                    .unit(Unit::LogicalPx);
+                out.field("show_when_unlinked", &layer.show_when_unlinked());
+                out.value("leader_anchor", Value::Debug(&layer.leader_anchor()));
+                out.value("follower_anchor", Value::Debug(&layer.follower_anchor()));
+                out.field("size", &layer.size()).unit(Unit::LogicalPx);
+            }
+            Layer::AnnotatedRegion(layer) => {
+                out.value("value", Value::Debug(layer.value()));
+                out.field("sized_by_parent", &layer.is_sized_by_parent());
+            }
         }
     }
 }
