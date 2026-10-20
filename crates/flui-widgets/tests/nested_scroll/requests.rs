@@ -547,7 +547,10 @@ pub(crate) fn a_jump_feedback_loop_is_bounded_and_keeps_its_target() {
         landed - 100.0 + 1.0,
         "each landed jump is a sequence"
     );
-    scene.controller.update_dimensions(300.0, 0.0, 700.0);
+    scene
+        .controller
+        .update_dimensions(300.0, 0.0, 700.0)
+        .expect("ordered extents");
     assert_eq!(
         scene.controller.pixels(),
         landed + 1.0,
