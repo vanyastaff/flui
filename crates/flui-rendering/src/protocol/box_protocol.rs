@@ -1640,7 +1640,9 @@ pub struct BoxHitTestCtx<'ctx, A: Arity, P: ParentData> {
     /// Live recursion into the pipeline's hit-test walk. `None` in
     /// leaf test fixtures — child tests then report a miss.
     child_callback: Option<HitTestChildCallback<'ctx>>,
-    transform_stack: Vec<Matrix4>,
+    /// Inline for the one or two levels a hit visit pushes, so a
+    /// transformed child costs no allocation.
+    transform_stack: smallvec::SmallVec<[Matrix4; 2]>,
     /// Cached composition of `transform_stack` in push-order. Kept in
     /// sync with the stack via `push_transform` (multiply in) and
     /// `pop_transform` (full re-fold over the truncated stack).
@@ -1668,7 +1670,7 @@ impl<'ctx, A: Arity, P: ParentData> BoxHitTestCtx<'ctx, A, P> {
             position,
             result: BoxHitTestResult::new(),
             child_callback: None,
-            transform_stack: Vec::new(),
+            transform_stack: smallvec::SmallVec::new(),
             composed_transform: Matrix4::IDENTITY,
             _phantom: std::marker::PhantomData,
         }
@@ -1682,7 +1684,7 @@ impl<'ctx, A: Arity, P: ParentData> BoxHitTestCtx<'ctx, A, P> {
             position,
             result: BoxHitTestResult::new(),
             child_callback: Some(callback),
-            transform_stack: Vec::new(),
+            transform_stack: smallvec::SmallVec::new(),
             composed_transform: Matrix4::IDENTITY,
             _phantom: std::marker::PhantomData,
         }

@@ -9,7 +9,7 @@ use flui_interaction::{InputSurface, PointerEvent};
 use flui_platform_api::keyboard::KeyState;
 use flui_platform_api::pointer::{ButtonChange, PointerButton};
 use flui_platform_api::{DragDropEvent, EventTime, PlatformInput};
-use flui_rendering::binding::RendererBinding as _;
+use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_scheduler::AppLifecycleState;
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -489,19 +489,35 @@ impl UiRuntime {
                 );
                 let clock = presentation.clock();
                 clock.stamp_input_epoch(clock.now());
+                let mut hit_panic = None;
                 let dispatch = Self::dispatch_after_pending_motion(presentation, || {
                     self.drag
                         .deliver(presentation.id(), drag_drop_event, &mut |position, kind| {
                             let mut result = flui_interaction::pointer::HitTestResult::new();
-                            presentation.renderer().hit_test_in_view(
+                            // A busy tree answers nothing rather than "over
+                            // nothing", which would make every receiver leave.
+                            match presentation.renderer().hit_test_in_view(
                                 &mut result,
                                 position,
                                 kind,
                                 0,
-                            );
-                            Some(result.path().to_vec())
+                            ) {
+                                ViewHitTest::Answered { panic } => {
+                                    preserve_first_input_panic(
+                                        &mut hit_panic,
+                                        panic,
+                                        "drag-and-drop hit test",
+                                    );
+                                    Some(result.path().to_vec())
+                                }
+                                ViewHitTest::TreeBusy => None,
+                            }
                         });
                 });
+                // The hit test ran before the receivers it found were told.
+                let mut first = hit_panic;
+                preserve_first_input_panic(&mut first, dispatch.err(), "drag-and-drop delivery");
+                let dispatch = first.map_or(Ok(()), Err);
                 self.finish_addressed_input_dispatch(presentation, dispatch);
                 Applied::default()
             }
@@ -558,6 +574,9 @@ impl UiRuntime {
             })
             .flatten();
         let mut sequence = None;
+        // A render object that panicked in the hit test is a miss there; its
+        // panic is reported once the event reached the rest of the path.
+        let mut hit_panic = None;
         let routing_panic = catch_unwind(AssertUnwindSafe(|| {
             let outcome =
                 presentation
@@ -566,9 +585,15 @@ impl UiRuntime {
                         let mut result = flui_interaction::pointer::HitTestResult::new();
                         let offset =
                             flui_foundation::geometry::Offset::new(position.dx, position.dy);
-                        presentation
+                        match presentation
                             .renderer()
-                            .hit_test_in_view(&mut result, offset, kind, 0);
+                            .hit_test_in_view(&mut result, offset, kind, 0)
+                        {
+                            ViewHitTest::Answered { panic } => hit_panic = panic,
+                            ViewHitTest::TreeBusy => {
+                                tracing::debug!("pointer hit test found the render tree busy");
+                            }
+                        }
                         if !result.is_empty() {
                             tracing::debug!(hits = result.len(), "Hit test found targets");
                         }
@@ -597,6 +622,7 @@ impl UiRuntime {
         });
 
         let mut first_panic = modality_panic;
+        preserve_first_input_panic(&mut first_panic, hit_panic, "pointer hit test");
         preserve_first_input_panic(&mut first_panic, routing_panic, "pointer routing");
         preserve_first_input_panic(
             &mut first_panic,
