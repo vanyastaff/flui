@@ -146,6 +146,91 @@ fn a_release_settles_on_a_page() {
     }
 }
 
+/// A pager is a leaf of the nested scroll channel and its page snap settles
+/// through it: a connection above it hears the drag's steps, the release,
+/// then the settle onto the page as the same sequence's `SideEffect` steps,
+/// and the end once the page is reached.
+#[test]
+fn a_page_view_settles_onto_its_page_through_the_channel() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use flui_widgets::{NestedScroll, ScrollCause, ScrollEndReason};
+
+    use crate::nested_scroll::{Probe, Seen};
+
+    for device in [Device::Touch, Device::Mouse] {
+        let controller = PageController::new();
+        let probe = Probe::new();
+        let connection = probe.connection();
+        let pager = PageView::new(pages(3), pager_alternatives()).controller(controller.clone());
+        let (mut laid, _vsync) = mount_tree(|vsync| {
+            VsyncScope::new(vsync, NestedScroll::new(connection, pager)).boxed()
+        });
+        let released_at = Rc::new(Cell::new(f64::NAN));
+        {
+            let (released_at, controller) = (Rc::clone(&released_at), controller.clone());
+            probe.set_observe(move |seen| {
+                if matches!(seen, Seen::Released(_)) {
+                    released_at.set(controller.position().extents_snapshot().pixels);
+                }
+            });
+        }
+        laid.replay(&slow_drag(device, at(280.0, 150.0), at(80.0, 150.0)));
+        settle(&mut laid);
+        let landed = controller.position().extents_snapshot().pixels;
+        assert!(
+            near(landed, PAGE),
+            "{device:?}: on the next page, at {landed}"
+        );
+
+        let started = probe.started();
+        assert_eq!(
+            started.len(),
+            1,
+            "{device:?}: one sequence: {:?}",
+            probe.seen()
+        );
+        let sequence = started[0];
+        assert_eq!(
+            probe.ended(),
+            vec![(sequence, ScrollEndReason::Released)],
+            "{device:?}: it ends once, released"
+        );
+        let released = released_at.get();
+        assert!(
+            released > 0.0 && released < landed - 1.0,
+            "{device:?}: the drag left the pager short of the page, at {released}"
+        );
+        let seen = probe.seen();
+        let lift = seen
+            .iter()
+            .position(|seen| matches!(seen, Seen::Released(_)))
+            .expect("the contact was released");
+        let settle_steps: Vec<_> = seen[lift..]
+            .iter()
+            .filter_map(|seen| match seen {
+                Seen::Pre(step) => Some(*step),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !settle_steps.is_empty()
+                && settle_steps
+                    .iter()
+                    .all(|step| step.sequence == sequence && step.cause == ScrollCause::SideEffect),
+            "{device:?}: the snap settles in the release's sequence: {settle_steps:?}"
+        );
+        let settled: f64 = settle_steps.iter().map(|step| step.available.x).sum();
+        assert!(
+            (settled - (landed - released)).abs() < 0.5,
+            "{device:?}: the settle's steps carry it from the release to the page: \
+             {settled} of {}",
+            landed - released
+        );
+    }
+}
+
 #[test]
 fn a_page_view_turns_pages_with_the_scroll_keys() {
     let controller = PageController::new();

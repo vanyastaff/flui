@@ -263,6 +263,12 @@ impl ScrollController {
     /// interactive behaviour is desired. This keeps the controller
     /// physics-agnostic (it is equally useful for programmatic jumps, physics
     /// updates, and animation-driven ticks).
+    ///
+    /// It is a raw write below the nested scroll channel: no
+    /// [`NestedScrollConnection`](super::NestedScrollConnection) is offered
+    /// it, and it starts no sequence. A scroll the
+    /// chain should share goes through [`jump_to`](Self::jump_to) or
+    /// [`animate_to`](Self::animate_to).
     pub fn set_pixels(&self, pixels: f64) {
         self.position.set_pixels(pixels);
     }

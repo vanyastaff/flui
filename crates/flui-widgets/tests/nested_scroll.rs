@@ -43,6 +43,7 @@ pub(crate) enum Seen {
 }
 
 type PreHook = Box<dyn Fn(&ScrollStep) -> Vec2>;
+type PostHook = Box<dyn Fn(&ScrollStep) -> Vec2>;
 type EndHook = Box<dyn Fn()>;
 type Observer = Box<dyn Fn(&Seen)>;
 
@@ -52,6 +53,8 @@ type Observer = Box<dyn Fn(&Seen)>;
 pub(crate) struct Probe {
     seen: RefCell<Vec<Seen>>,
     pre: RefCell<Option<PreHook>>,
+    /// Answers `post_scroll` in place of `takes_remainder`.
+    post: RefCell<Option<PostHook>>,
     on_end: RefCell<Option<EndHook>>,
     /// Told of every call once it is recorded, from inside the callout.
     observe: RefCell<Option<Observer>>,
@@ -91,6 +94,21 @@ impl Probe {
 
     fn set_pre(&self, hook: impl Fn(&ScrollStep) -> Vec2 + 'static) {
         *self.pre.borrow_mut() = Some(Box::new(hook));
+    }
+
+    fn set_post(&self, hook: impl Fn(&ScrollStep) -> Vec2 + 'static) {
+        *self.post.borrow_mut() = Some(Box::new(hook));
+    }
+
+    /// The remainders offered to `post_scroll`.
+    fn posts(&self) -> Vec<ScrollStep> {
+        self.seen()
+            .into_iter()
+            .filter_map(|seen| match seen {
+                Seen::Post(step) => Some(step),
+                _ => None,
+            })
+            .collect()
     }
 
     pub(crate) fn take(&self) -> Vec<Seen> {
@@ -156,6 +174,9 @@ impl NestedScrollConnection for Probe {
 
     fn post_scroll(&self, step: &ScrollStep, _consumed_by_child: Vec2) -> Vec2 {
         self.record(Seen::Post(*step));
+        if let Some(hook) = self.post.borrow().as_ref() {
+            return hook(step);
+        }
         if self.takes_remainder.get() {
             step.available
         } else {
@@ -907,7 +928,8 @@ pub(crate) fn channel_latch_ends_exactly_when_binding_mints_a_new_sequence() {
 /// the deadline moves it on, every participant hears the end exactly once,
 /// a panic in one of them or the leaf's removal neither loses nor repeats
 /// it, the next packet starts a new sequence, and a phased trackpad pan
-/// ends with its end phase.
+/// ends with its end phase or, left open, at the longer phased idle time.
+/// A contact held still past both idle times ends only when it lifts.
 pub(crate) fn an_idle_wheel_sequence_ends_at_its_latch_deadline() {
     let idle = GestureSettings::default().contactless_latch_idle();
     let wheel = || {
@@ -1042,6 +1064,59 @@ pub(crate) fn an_idle_wheel_sequence_ends_at_its_latch_deadline() {
         vec![(pan[0], ScrollEndReason::Released)],
         "the end phase ends the pan's sequence"
     );
+
+    // A phased pan whose end phase never comes ends at the longer phased
+    // idle time, not at the wheel's.
+    let phased = GestureSettings::default().phased_latch_idle();
+    assert!(phased > idle, "the phased idle time is the longer one");
+    probe.take();
+    laid.replay(
+        &TrackpadScript::new("pan without its end phase", at(150.0, 150.0))
+            .unended_pan(Offset::new(0.0, 40.0), 4, SAMPLE)
+            .build()
+            .expect("a pan left open"),
+    );
+    let open = probe.started();
+    assert_eq!(open.len(), 1, "the open pan is a sequence");
+    pump(&mut laid, idle + SAMPLE);
+    assert_eq!(
+        probe.ended(),
+        Vec::new(),
+        "past the wheel's idle time the open pan is still live"
+    );
+    pump(&mut laid, phased.saturating_sub(idle));
+    assert_eq!(
+        probe.ended(),
+        vec![(open[0], ScrollEndReason::Released)],
+        "it ends at the phased idle time, with no input"
+    );
+
+    // A contact held still past both idle times stays one sequence: only
+    // its lift ends it.
+    for device in DEVICES {
+        probe.take();
+        let mut points = line(at(150.0, 250.0), at(150.0, 200.0), 4);
+        let rest = *points.last().expect("a drag has an end");
+        points.push(rest);
+        laid.replay(&drag(device, &points, SAMPLE, phased * 2));
+        settle(&mut laid);
+        let contact = probe.started();
+        assert_eq!(contact.len(), 1, "{device:?}: the contact is one sequence");
+        assert_eq!(
+            probe.ended(),
+            vec![(contact[0], ScrollEndReason::Released)],
+            "{device:?}: it ends once"
+        );
+        let seen = probe.seen();
+        let lifted = seen
+            .iter()
+            .position(|seen| matches!(seen, Seen::Released(_)));
+        let ended = seen.iter().position(|seen| matches!(seen, Seen::Ended(..)));
+        assert!(
+            lifted.is_some() && lifted < ended,
+            "{device:?}: at its lift, not at an idle time while held: {seen:?}"
+        );
+    }
 }
 
 /// A fling the inner list cannot carry goes to the middle list and on to
@@ -1789,6 +1864,60 @@ pub(crate) fn participant_result_is_clamped() {
             0.0,
             "{device:?}: infinite"
         );
+
+        // The same for `post_scroll`: a list at its top leaves a drag toward
+        // the start to `near`, and what `near` is taken to have consumed
+        // shows in what is left for `far` above it.
+        let left_above = |answer: fn(Vec2) -> Vec2| {
+            let (controller, near, far, vsync) = (
+                ScrollController::new(),
+                Probe::new(),
+                Probe::new(),
+                Vsync::new(),
+            );
+            let mut laid = mounted(panic_tree(&controller, &near, &far, &vsync), vsync);
+            near.set_post(move |step| answer(step.available));
+            laid.replay(&slow(device, at(150.0, 100.0), at(150.0, 250.0)));
+            settle(&mut laid);
+            assert_eq!(
+                controller.pixels(),
+                0.0,
+                "{device:?}: the list stays at its top"
+            );
+            assert!(
+                far.posts()
+                    .iter()
+                    .all(|step| step.available.x.is_finite() && step.available.y.is_finite()),
+                "{device:?}: nothing above sees a value that is not finite: {:?}",
+                far.seen()
+            );
+            far.posts().iter().map(|step| step.available.y).sum::<f64>()
+        };
+        let taken_nothing = left_above(|_| Vec2::ZERO);
+        assert!(
+            taken_nothing < -100.0,
+            "{device:?}: the baseline remainder reaches the far participant, {taken_nothing}"
+        );
+        assert_eq!(
+            left_above(|offered| Vec2::ZERO - offered),
+            taken_nothing,
+            "{device:?}: post_scroll, wrong sign"
+        );
+        assert_eq!(
+            left_above(|_| Vec2::new(f64::NAN, f64::NAN)),
+            taken_nothing,
+            "{device:?}: post_scroll, NaN"
+        );
+        assert_eq!(
+            left_above(|offered| Vec2::new(offered.x * 10.0, offered.y * 10.0)),
+            0.0,
+            "{device:?}: post_scroll, larger than offered"
+        );
+        assert_eq!(
+            left_above(|_| Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY)),
+            0.0,
+            "{device:?}: post_scroll, infinite"
+        );
     }
 }
 
@@ -1909,6 +2038,86 @@ pub(crate) fn a_participant_cannot_dispatch_input_into_its_own_chain() {
             "{device:?}: outside a participant the key scrolls"
         );
     }
+    a_participant_cannot_dispatch_an_assistive_scroll_into_its_own_chain();
+}
+
+/// The same for an assistive scroll action on the list sent from inside a
+/// drag step: the list moves exactly as far as the drag alone moves it, no
+/// sequence of the action enters the chain, and the action scrolls once
+/// sent from outside.
+fn a_participant_cannot_dispatch_an_assistive_scroll_into_its_own_chain() {
+    use flui_testing::a11y::{Action, ActionRequest, Role, TreeId};
+    fn scroll_down(laid: &LaidOut) {
+        let view = laid
+            .a11y_tree()
+            .expect("published semantics")
+            .find_all(Role::ScrollView)
+            .first()
+            .expect("the list is a scroll view")
+            .id();
+        laid.invoke_semantics_action(ActionRequest {
+            action: Action::ScrollDown,
+            target_tree: TreeId::ROOT,
+            target_node: view,
+            data: None,
+        })
+        .expect("the request resolves");
+    }
+    // The same drag with and without the participant's action.
+    let mut baseline = None;
+    for from_inside in [false, true] {
+        let (controller, probe, vsync) = (ScrollController::new(), Probe::new(), Vsync::new());
+        let mut laid = mounted(requests::list_under(&probe, &controller, &vsync), vsync);
+        laid.enable_semantics();
+        laid.tick();
+        let laid = Rc::new(RefCell::new(laid));
+        let (sender, steps, sent) = (Rc::clone(&laid), Cell::new(0), Rc::new(Cell::new(false)));
+        let was_sent = Rc::clone(&sent);
+        probe.set_pre(move |step| {
+            if from_inside && step.cause == ScrollCause::UserInput {
+                steps.set(steps.get() + 1);
+                if steps.get() == 3 {
+                    scroll_down(&sender.borrow());
+                    was_sent.set(true);
+                }
+            }
+            Vec2::ZERO
+        });
+        {
+            let laid = laid.borrow();
+            laid.dispatch_pointer_down(150.0, 250.0);
+            for point in line(at(150.0, 250.0), at(150.0, 150.0), 10)
+                .into_iter()
+                .skip(1)
+            {
+                laid.dispatch_pointer_move_after(point.dx, point.dy, SAMPLE);
+            }
+            laid.dispatch_pointer_move_after(150.0, 150.0, Duration::from_millis(300));
+            laid.dispatch_pointer_up(150.0, 150.0);
+        }
+        settle(&mut laid.borrow_mut());
+        let dragged = controller.pixels();
+        let Some(baseline) = baseline else {
+            baseline = Some(dragged);
+            *probe.pre.borrow_mut() = None;
+            continue;
+        };
+        assert!(sent.get(), "the participant sent the action");
+        assert_eq!(dragged, baseline, "only the drag moved the list");
+        assert_eq!(
+            probe.started().len(),
+            1,
+            "no sequence of its own entered the chain: {:?}",
+            probe.seen()
+        );
+        *probe.pre.borrow_mut() = None;
+        scroll_down(&laid.borrow());
+        settle(&mut laid.borrow_mut());
+        assert!(
+            controller.pixels() > dragged,
+            "outside a participant the action scrolls"
+        );
+    }
 }
 
 /// A participant that panics consumes the whole step, leaves the sequence
@@ -2002,8 +2211,210 @@ pub(crate) fn participant_panic_consumes_all_and_next_sequence_recovers() {
                 "{device:?}: it is offered steps again"
             );
         }
+        a_panic_in_post_scroll_consumes_the_remainder(device);
         caught::a_panic_above_a_caught_ancestor_keeps_its_settle(device);
     }
+}
+
+/// A contact that ends without a release ends its sequence with the reason
+/// it did (ADR-0209 §1): a cancelled drag ends `Cancelled`, and a press that
+/// stopped a moving list whose contact the pager's drag then took ends
+/// `ArenaLost`. Either way the participant hears the end once, never
+/// `released`, and the next drag is a sequence like any other.
+pub(crate) fn a_contact_that_ends_without_release_names_why() {
+    // Cancelled: touch only, a mouse press cannot be cancelled.
+    let (controller, probe, vsync) = (ScrollController::new(), Probe::new(), Vsync::new());
+    let tree = VsyncScope::new(
+        vsync.clone(),
+        NestedScroll::new(probe.connection(), list(&controller)),
+    )
+    .boxed();
+    let mut laid = mounted(tree, vsync);
+    let mut script = TouchScript::new("drag, then cancel").down(1, at(150.0, 250.0));
+    for point in line(at(150.0, 250.0), at(150.0, 150.0), 8)
+        .into_iter()
+        .skip(1)
+    {
+        script = script.wait(SAMPLE).move_to(1, point);
+    }
+    let script = script
+        .wait(SAMPLE)
+        .cancel(1)
+        .build()
+        .expect("one cancelled contact");
+    laid.replay(&script);
+    settle(&mut laid);
+    let sequence = probe.started();
+    assert_eq!(sequence.len(), 1, "the drag is one sequence");
+    assert_eq!(
+        probe.ended(),
+        vec![(sequence[0], ScrollEndReason::Cancelled)],
+        "a cancelled drag ends its sequence cancelled"
+    );
+    assert!(
+        !probe
+            .seen()
+            .iter()
+            .any(|seen| matches!(seen, Seen::Released(_))),
+        "and is never released: {:?}",
+        probe.seen()
+    );
+
+    // ArenaLost: a probe between the list and the pager hears the list's
+    // sequences only.
+    for device in DEVICES {
+        let (pager, list_controller, top, inner, vsync) = (
+            ScrollController::new(),
+            ScrollController::new(),
+            Probe::new(),
+            Probe::new(),
+            Vsync::new(),
+        );
+        let pages = Row::new(vec![
+            SizedBox::new(300.0, 300.0)
+                .child(NestedScroll::new(
+                    inner.connection(),
+                    list(&list_controller),
+                ))
+                .boxed(),
+            SizedBox::new(300.0, 300.0).boxed(),
+            SizedBox::new(300.0, 300.0).boxed(),
+        ]);
+        let tree = VsyncScope::new(
+            vsync.clone(),
+            NestedScroll::new(
+                top.connection(),
+                Scrollable::new()
+                    .controller(pager.clone())
+                    .scroll_direction(Axis::Horizontal)
+                    .child(pages),
+            ),
+        )
+        .boxed();
+        let mut laid = mounted(tree, vsync);
+        laid.replay(&fling(device, at(150.0, 250.0), at(150.0, 100.0)));
+        laid.pump_for(SAMPLE);
+        laid.pump_for(SAMPLE);
+        let moving = list_controller.pixels();
+        laid.pump_for(SAMPLE);
+        assert!(
+            list_controller.pixels() > moving,
+            "{device:?}: the list still flings"
+        );
+        inner.take();
+        laid.replay(&slow(device, at(200.0, 150.0), at(40.0, 150.0)));
+        settle(&mut laid);
+        assert!(
+            pager.pixels() > 100.0,
+            "{device:?}: the pager's drag took the contact, at {}",
+            pager.pixels()
+        );
+        let held = inner.started();
+        assert_eq!(
+            held.len(),
+            1,
+            "{device:?}: the press began a sequence on the moving list: {:?}",
+            inner.seen()
+        );
+        let (held_ends, fling_ends): (Vec<_>, Vec<_>) = inner
+            .ended()
+            .into_iter()
+            .partition(|(id, _)| *id == held[0]);
+        assert_eq!(
+            held_ends,
+            vec![(held[0], ScrollEndReason::ArenaLost)],
+            "{device:?}: which ends arena-lost once the pager takes the contact"
+        );
+        assert!(
+            fling_ends
+                .iter()
+                .all(|(_, reason)| *reason == ScrollEndReason::Preempted),
+            "{device:?}: the press stopped the fling: {fling_ends:?}"
+        );
+        assert!(
+            !inner
+                .seen()
+                .iter()
+                .any(|seen| matches!(seen, Seen::Released(_))),
+            "{device:?}: and is never released: {:?}",
+            inner.seen()
+        );
+
+        inner.take();
+        pager.jump_to(0.0);
+        laid.tick();
+        laid.replay(&slow(device, at(150.0, 250.0), at(150.0, 150.0)));
+        settle(&mut laid);
+        let next = inner.started();
+        assert_eq!(next.len(), 1, "{device:?}: the next drag is a sequence");
+        assert_eq!(
+            inner.ended(),
+            vec![(next[0], ScrollEndReason::Released)],
+            "{device:?}: released as usual"
+        );
+    }
+}
+
+/// A participant that panics in `post_scroll` consumes the whole remainder:
+/// nothing reaches the participant above it, it leaves the sequence with
+/// `Cancelled` while the others finish it, and it takes part again in the
+/// next sequence.
+fn a_panic_in_post_scroll_consumes_the_remainder(device: Device) {
+    let (controller, near, far, vsync) = (
+        ScrollController::new(),
+        Probe::new(),
+        Probe::new(),
+        Vsync::new(),
+    );
+    let mut laid = mounted(panic_tree(&controller, &near, &far, &vsync), vsync);
+    let armed = Rc::new(Cell::new(true));
+    let trigger = Rc::clone(&armed);
+    near.set_post(move |_| {
+        assert!(!trigger.replace(false), "post_scroll failure");
+        Vec2::ZERO
+    });
+    let toward_the_top = || slow(device, at(150.0, 100.0), at(150.0, 250.0));
+    let failures = replay_contained(&mut laid, &toward_the_top());
+    settle(&mut laid);
+    assert_eq!(
+        failures,
+        vec!["post_scroll failure".to_owned()],
+        "{device:?}: the failure resumes, once"
+    );
+    let sequence = far.started()[0];
+    assert_eq!(
+        near.ended(),
+        vec![(sequence, ScrollEndReason::Cancelled)],
+        "{device:?}: the panicking participant leaves the sequence"
+    );
+    assert_eq!(
+        far.ended(),
+        vec![(sequence, ScrollEndReason::Released)],
+        "{device:?}: the others finish it"
+    );
+    assert_eq!(
+        near.posts().len(),
+        1,
+        "{device:?}: a closed link is offered no further remainder"
+    );
+    assert_eq!(
+        far.posts(),
+        Vec::new(),
+        "{device:?}: the failed participant consumed the remainder: {:?}",
+        far.seen()
+    );
+
+    near.take();
+    far.take();
+    assert!(
+        replay_contained(&mut laid, &toward_the_top()).is_empty(),
+        "{device:?}: the next sequence runs clean"
+    );
+    settle(&mut laid);
+    assert!(
+        near.posts().len() > 1,
+        "{device:?}: the participant is offered remainders again"
+    );
 }
 
 fn panic_tree(
