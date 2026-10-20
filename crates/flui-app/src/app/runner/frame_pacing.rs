@@ -170,11 +170,7 @@ pub(super) fn frame_is_dirty(
 /// spin at full CPU speed re-processing the same leftover work on every
 /// rapid re-wake instead of being bounded like any other no-present,
 /// gate-open frame.
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
+#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
 pub(super) fn keeps_frame_gate_open(
     needs_redraw: bool,
     frame_scheduled: bool,
@@ -184,11 +180,62 @@ pub(super) fn keeps_frame_gate_open(
 }
 
 /// The pace a BACKGROUNDED pump (frames disabled) is bounded to on the mobile
-/// backends, whose frame sources have no wake-deadline hook to arm instead —
-/// see `bootstrap_android`'s and `bootstrap_ios`'s `PumpBackground` arms. Desktop
-/// no longer sleeps on the loop thread at all (ADR-0058, [`FallbackWake`]).
-#[cfg(any(target_os = "android", target_os = "ios"))]
+/// backends. Android arms it as a deadline ([`BackgroundPace`]); iOS, whose
+/// frame source has no wake-deadline hook yet, still sleeps it in
+/// `bootstrap_ios`'s `PumpBackground` arm. Desktop does not sleep on the loop
+/// thread at all (ADR-0058, [`FallbackWake`]).
+#[cfg(any(target_os = "android", target_os = "ios", test))]
 pub(super) const BACKGROUNDED_PUMP_PACE: std::time::Duration = std::time::Duration::from_millis(16);
+
+/// The bound on backgrounded pumps (frames disabled) as a deadline instead of
+/// a sleep on the loop thread, for a backend whose wake-deadline hook brings
+/// the loop back: a pump that leaves work asking for another wake defers the
+/// next pump by [`BACKGROUNDED_PUMP_PACE`], and the loop keeps delivering
+/// input and lifecycle events meanwhile.
+///
+/// One-shot, like [`FallbackWake`]: the wake the deadline brings consumes it,
+/// so a deadline source that is never served cannot keep reporting a past
+/// instant.
+#[cfg(any(target_os = "android", test))]
+#[derive(Debug, Default)]
+pub(super) struct BackgroundPace {
+    deadline: parking_lot::Mutex<Option<web_time::Instant>>,
+}
+
+#[cfg(any(target_os = "android", test))]
+impl BackgroundPace {
+    /// Whether a wake at `now` may pump: not while an armed deadline lies
+    /// ahead. A deadline that has passed is consumed by the wake reading it.
+    pub(super) fn admit(&self, now: web_time::Instant) -> bool {
+        let mut deadline = self.deadline.lock();
+        match *deadline {
+            Some(at) if now < at => false,
+            Some(_) => {
+                *deadline = None;
+                true
+            }
+            None => true,
+        }
+    }
+
+    /// A pump at `now` left work that asks for another wake: the next pump
+    /// waits until one pace later.
+    pub(super) fn defer(&self, now: web_time::Instant) {
+        *self.deadline.lock() = Some(now + BACKGROUNDED_PUMP_PACE);
+    }
+
+    /// Frames are enabled again: no pump is deferred any more, and a deadline
+    /// left armed would be reported as due on every wake with nothing to
+    /// consume it.
+    pub(super) fn clear(&self) {
+        *self.deadline.lock() = None;
+    }
+
+    /// The armed deadline, for the wake-deadline hook.
+    pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
+        *self.deadline.lock()
+    }
+}
 
 /// How much of the display period the fallback wake waits after the last
 /// present. Slightly under a full period on purpose: on a stack whose
@@ -549,5 +596,51 @@ mod desktop_pacing_tests {
                 ),
             ],
         );
+    }
+}
+
+#[cfg(test)]
+mod background_pace_tests {
+    use web_time::Instant;
+
+    use super::{BACKGROUNDED_PUMP_PACE, BackgroundPace};
+
+    /// A backgrounded pump that leaves work defers the next one by a pace
+    /// instead of sleeping, and the wake the deadline brings consumes it.
+    #[test]
+    fn a_background_pump_defers_the_next_by_one_pace() {
+        let pace = BackgroundPace::default();
+        let start = Instant::now();
+        assert!(pace.admit(start), "nothing armed: the first pump runs");
+        assert_eq!(pace.next_wake(), None);
+
+        pace.defer(start);
+        let deadline = start + BACKGROUNDED_PUMP_PACE;
+        assert_eq!(
+            pace.next_wake(),
+            Some(deadline),
+            "the hook reports the pace"
+        );
+        assert!(
+            !pace.admit(start + BACKGROUNDED_PUMP_PACE / 2),
+            "a wake before the pace does not pump"
+        );
+        assert_eq!(
+            pace.next_wake(),
+            Some(deadline),
+            "and leaves the deadline armed"
+        );
+
+        assert!(pace.admit(deadline), "the wake the deadline brings pumps");
+        assert_eq!(
+            pace.next_wake(),
+            None,
+            "and consumes the deadline, so a past instant is never reported again"
+        );
+
+        pace.defer(deadline);
+        pace.clear();
+        assert_eq!(pace.next_wake(), None, "frames enabled again drop the pace");
+        assert!(pace.admit(deadline));
     }
 }

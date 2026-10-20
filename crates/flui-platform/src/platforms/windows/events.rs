@@ -19,7 +19,8 @@
 //!   still delivers its release (at client coordinates outside the client
 //!   rectangle, sign-extended by `get_x_lparam`). A capture taken away while
 //!   a button is held ends the sequence with a cancel
-//!   ([`capture_changed_input`]).
+//!   ([`capture_changed_input`]). That is the legacy `WM_*BUTTON*` route; on
+//!   the `WM_POINTER` route the system captures the pointer for its press.
 //! - Mouse samples retain the retrieved message's generation time, rebased
 //!   onto the shared monotonic epoch before any reentrant callbacks run.
 //!   `WM_POINTER*` readings are stamped from their performance count when
@@ -33,7 +34,7 @@ use flui_platform_api::{
     pointer::{PenTool, PointerButton, PointerButtons, PointerKind},
 };
 use windows::Win32::{
-    Foundation::{HWND, LPARAM, POINT, WPARAM},
+    Foundation::{HWND, LPARAM, POINT, RECT, WPARAM},
     Graphics::Gdi::ScreenToClient,
     System::{
         SystemInformation::GetTickCount64,
@@ -74,6 +75,10 @@ use crate::shared::pointer_assembly::{
 /// The owner snapshots a sample before callback-capable native or user calls.
 pub(super) struct MessageClock {
     native: NativeClock,
+    /// The latest stamp the window delivered, coarse or precise: a message
+    /// stamp never precedes it. A key in the same system tick as a
+    /// `WM_POINTER` sample before it reads an earlier millisecond tick than
+    /// that sample's performance count.
     last_ns: std::cell::Cell<u64>,
 }
 
@@ -140,6 +145,46 @@ impl MessageClock {
         self.last_ns.set(stamp);
         stamp
     }
+
+    /// Raise the floor to the latest stamp `inputs` carry: pointer readings
+    /// stamped from their performance count, which a later message's coarse
+    /// stamp must not precede.
+    pub(super) fn observe(&self, inputs: &[PlatformInput]) {
+        let latest = inputs
+            .iter()
+            .filter_map(PlatformInput::as_pointer)
+            .filter_map(pointer_time)
+            .map(EventTime::as_nanos)
+            .max();
+        if let Some(latest) = latest {
+            self.last_ns.set(self.last_ns.get().max(latest));
+        }
+    }
+}
+
+/// When `event` happened; `None` for a revision, whose time names the
+/// reading it replaces.
+fn pointer_time(event: &flui_platform_api::pointer::PointerEvent) -> Option<EventTime> {
+    use flui_platform_api::pointer::{ButtonChange, PointerEvent};
+    Some(match event {
+        PointerEvent::Down(press) | PointerEvent::ButtonChange(ButtonChange::Pressed(press)) => {
+            press.sample.time
+        }
+        PointerEvent::Up(release) | PointerEvent::ButtonChange(ButtonChange::Released(release)) => {
+            release.sample.time
+        }
+        PointerEvent::Move(movement) => movement.current().time,
+        PointerEvent::Cancel(cancel) => cancel.time,
+        PointerEvent::Enter(signal)
+        | PointerEvent::Leave(signal)
+        | PointerEvent::ScrollInertiaCancel(signal) => signal.time,
+        PointerEvent::Scroll(scroll) => scroll.time,
+        PointerEvent::PanZoom(pan_zoom) => pan_zoom.time,
+        PointerEvent::PenSqueeze(squeeze) => squeeze.time,
+        PointerEvent::DeviceAdded(change) | PointerEvent::DeviceRemoved(change) => change.time,
+        // A revision names the reading it replaces; the vocabulary may grow.
+        _ => return None,
+    })
 }
 
 // Native queue clocks cannot be advanced through a consumer API. These rows
@@ -215,6 +260,32 @@ mod message_clock_contract {
             first.stamp_at(150, 200),
             second.stamp_at(150, 200),
             "independent windows share the process epoch"
+        );
+    }
+
+    /// A message stamped from its millisecond tick after a pointer reading
+    /// stamped from its performance count, in the same system tick, is not
+    /// placed before that reading.
+    #[test]
+    fn a_coarse_stamp_never_precedes_a_delivered_precise_one() {
+        use flui_platform_api::EventTime;
+        use flui_platform_api::pointer::{
+            CancelReason, PointerCancel, PointerEvent, PointerId, PointerInfo, PointerKind,
+        };
+        let clock = MessageClock::anchored(100, None, 1_000_000);
+        let precise = PointerEvent::Cancel(PointerCancel::new(
+            PointerInfo::new(
+                PointerId::new(std::num::NonZeroU64::MIN),
+                PointerKind::Touch,
+            ),
+            EventTime::from_nanos(25_400_000),
+            CancelReason::Platform,
+        ));
+        clock.observe(&[crate::traits::PlatformInput::Pointer(precise)]);
+        assert_eq!(
+            [clock.stamp_at(110, 200), clock.stamp_at(130, 200)],
+            [25_400_000, 31_000_000],
+            "floored to the reading, then the tick again once it is later"
         );
     }
 }
@@ -301,10 +372,11 @@ pub(super) fn click_settings(scale: f64) -> Option<ClickSettings> {
 }
 
 /// One native pointer packet, copied out of the OS before any callback runs.
+/// A pen's carries its device's himetric mapping, when it could be read.
 #[derive(Clone, Copy)]
 enum PointerPacket {
     Pointer(POINTER_INFO),
-    Pen(POINTER_PEN_INFO),
+    Pen(POINTER_PEN_INFO, Option<HimetricMap>),
     Touch(POINTER_TOUCH_INFO),
 }
 
@@ -312,9 +384,76 @@ impl PointerPacket {
     fn info(self) -> POINTER_INFO {
         match self {
             Self::Pointer(info) => info,
-            Self::Pen(info) => info.pointerInfo,
+            Self::Pen(info, _) => info.pointerInfo,
             Self::Touch(info) => info.pointerInfo,
         }
+    }
+
+    /// The packet's raw screen position in device pixels. A pen reports its
+    /// position in himetric units, finer than a pixel at its 120–240 Hz, and
+    /// it is mapped through its device's rectangles; every other packet, or
+    /// a pen whose mapping is missing or disagrees with the pixel the system
+    /// reported, has the integer pixel.
+    fn screen_position(self) -> (f64, f64) {
+        let pixel = self.info().ptPixelLocationRaw;
+        let whole = (f64::from(pixel.x), f64::from(pixel.y));
+        match self {
+            Self::Pen(pen, Some(map)) => map
+                .to_screen(pen.pointerInfo.ptHimetricLocationRaw)
+                .filter(|(x, y)| (x - whole.0).abs() <= 1.0 && (y - whole.1).abs() <= 1.0)
+                .unwrap_or(whole),
+            Self::Pointer(_) | Self::Pen(_, None) | Self::Touch(_) => whole,
+        }
+    }
+}
+
+/// How a pointer device's himetric coordinates map onto the screen
+/// (`GetPointerDeviceRects`): its own rectangle and the display rectangle it
+/// covers, in screen pixels.
+#[derive(Clone, Copy)]
+struct HimetricMap {
+    device: RECT,
+    display: RECT,
+}
+
+impl HimetricMap {
+    /// `device`'s mapping now; `None` when the system cannot report it.
+    fn of(device: windows::Win32::Foundation::HANDLE) -> Option<Self> {
+        use windows::Win32::UI::Input::Pointer::GetPointerDeviceRects;
+        let mut map = Self {
+            device: RECT::default(),
+            display: RECT::default(),
+        };
+        // SAFETY: both out pointers address fields of a live local; the
+        // system refuses a stale or invented device handle.
+        unsafe { GetPointerDeviceRects(device, &raw mut map.device, &raw mut map.display) }.ok()?;
+        Some(map)
+    }
+
+    /// The screen pixel position of `himetric`, linearly between the two
+    /// rectangles; `None` for an empty rectangle.
+    fn to_screen(self, himetric: POINT) -> Option<(f64, f64)> {
+        let axis =
+            |value: i32, (from_start, from_end): (i32, i32), (to_start, to_end): (i32, i32)| {
+                let from = f64::from(from_end) - f64::from(from_start);
+                let to = f64::from(to_end) - f64::from(to_start);
+                (from > 0.0 && to > 0.0).then(|| {
+                    f64::from(to_start) + (f64::from(value) - f64::from(from_start)) * to / from
+                })
+            };
+        let (device, display) = (self.device, self.display);
+        Some((
+            axis(
+                himetric.x,
+                (device.left, device.right),
+                (display.left, display.right),
+            )?,
+            axis(
+                himetric.y,
+                (device.top, device.bottom),
+                (display.top, display.bottom),
+            )?,
+        ))
     }
 }
 
@@ -342,10 +481,11 @@ fn pointer_reading(
         },
     };
     let native = packet.info();
+    let screen = packet.screen_position();
     let flags = native.pointerFlags.0;
     let mut sensors = RawSensors::default();
     let kind = match packet {
-        PointerPacket::Pen(pen) => {
+        PointerPacket::Pen(pen, _) => {
             if pen.penMask & PEN_MASK_PRESSURE != 0 {
                 sensors.pressure = Some(f64::from(pen.pressure) / 1024.0);
             }
@@ -432,8 +572,8 @@ fn pointer_reading(
     )
     .on(SURFACE)
     .at(
-        f64::from(native.ptPixelLocationRaw.x) + f64::from(client_offset.x),
-        f64::from(native.ptPixelLocationRaw.y) + f64::from(client_offset.y),
+        screen.0 + f64::from(client_offset.x),
+        screen.1 + f64::from(client_offset.y),
         scale,
     )
     .with_primary(flags & POINTER_FLAG_PRIMARY.0 != 0)
@@ -467,7 +607,14 @@ fn native_history(raw: u32) -> Option<Vec<PointerPacket>> {
             // call writes at most the entries `buffer` holds.
             unsafe { GetPointerPenInfoHistory(raw, count, Some(buffer.as_mut_ptr())) }
         })
-        .map(|readings| readings.into_iter().map(PointerPacket::Pen).collect()),
+        .map(|readings| {
+            // One mapping for the message: its device is the same throughout.
+            let map = HimetricMap::of(info.sourceDevice);
+            readings
+                .into_iter()
+                .map(|pen| PointerPacket::Pen(pen, map))
+                .collect()
+        }),
         PT_TOUCH => read_history(count, |count, buffer: &mut [POINTER_TOUCH_INFO]| {
             // SAFETY: as for the pen history.
             unsafe { GetPointerTouchInfoHistory(raw, count, Some(buffer.as_mut_ptr())) }
@@ -530,23 +677,30 @@ fn assemble_history(
     assembled.unwrap_or_else(DecodeError::into_inputs)
 }
 
+/// Whether the `WM_POINTER` id `raw` is the mouse's. A stale or invented id
+/// is not.
+pub(super) fn is_mouse_pointer(raw: u32) -> bool {
+    use windows::Win32::UI::{
+        Input::Pointer::GetPointerType,
+        WindowsAndMessaging::{POINTER_INPUT_TYPE, PT_MOUSE},
+    };
+    let mut native_kind = POINTER_INPUT_TYPE::default();
+    // SAFETY: an initialized out value owned by this call; Windows refuses a
+    // stale or invented id.
+    unsafe { GetPointerType(raw, &raw mut native_kind) }.is_ok() && native_kind == PT_MOUSE
+}
+
+/// The input a `WM_POINTER*` `message` for pointer `raw` makes; `mouse` is
+/// [`is_mouse_pointer`]`(raw)`.
 pub(super) fn native_pointer_input(
     hwnd: HWND,
     message: u32,
-    raw: u32,
+    (raw, mouse): (u32, bool),
     scale: f64,
     clock: &MessageClock,
     registry: &RefCell<ContactRegistry>,
 ) -> Assembled {
-    use windows::Win32::UI::{
-        Input::Pointer::GetPointerType,
-        WindowsAndMessaging::{POINTER_INPUT_TYPE, PT_MOUSE, WM_POINTERCAPTURECHANGED},
-    };
-    let mut native_kind = POINTER_INPUT_TYPE::default();
-    // SAFETY: an initialized out value owned by this call; Windows refuses a
-    // stale or invented id, which then reads as a non-mouse contact.
-    let mouse =
-        unsafe { GetPointerType(raw, &raw mut native_kind) }.is_ok() && native_kind == PT_MOUSE;
+    use windows::Win32::UI::WindowsAndMessaging::WM_POINTERCAPTURECHANGED;
     let contact = pointer_contact(mouse, raw);
     let cancel = |reason| {
         let time = EventTime::from_nanos(clock.message_time());
@@ -574,7 +728,7 @@ pub(super) fn native_pointer_input(
         GetTickCount64()
     };
     let modifiers = message_modifiers();
-    assemble_history(
+    let assembled = assemble_history(
         &mut registry.borrow_mut(),
         &packets,
         message,
@@ -582,7 +736,9 @@ pub(super) fn native_pointer_input(
         scale,
         now,
         modifiers,
-    )
+    );
+    clock.observe(&assembled);
+    assembled
 }
 
 pub(super) fn native_device_kind(
@@ -706,13 +862,84 @@ mod native_pointer_contracts {
     }
 
     fn pen(pen: POINTER_PEN_INFO) -> PointerPacket {
-        PointerPacket::Pen(POINTER_PEN_INFO {
-            pointerInfo: POINTER_INFO {
-                pointerType: PT_PEN,
-                ..info()
+        PointerPacket::Pen(
+            POINTER_PEN_INFO {
+                pointerInfo: POINTER_INFO {
+                    pointerType: PT_PEN,
+                    ..info()
+                },
+                ..pen
             },
-            ..pen
-        })
+            None,
+        )
+    }
+
+    /// A pen's himetric position, mapped through its device's rectangles,
+    /// keeps the fraction of a pixel the integer pixel drops; a mapping that
+    /// is empty, or that puts the pen more than a pixel from where the system
+    /// says it is (a rotated display maps the axes otherwise), leaves the
+    /// pixel.
+    fn native_pen_position_keeps_himetric_precision() {
+        let rect = |right, bottom| RECT {
+            left: 0,
+            top: 0,
+            right,
+            bottom,
+        };
+        // 10 himetric units to the pixel; `info()` is at pixel (120, 220),
+        // read at client offset (-100, -200) and scale two.
+        let tenth = HimetricMap {
+            device: rect(10_000, 10_000),
+            display: rect(1_000, 1_000),
+        };
+        let at = |himetric: POINT, map: Option<HimetricMap>| {
+            let packet = POINTER_PEN_INFO {
+                pointerInfo: POINTER_INFO {
+                    pointerType: PT_PEN,
+                    ptHimetricLocationRaw: himetric,
+                    ..info()
+                },
+                ..Default::default()
+            };
+            let position = sampled(PointerPacket::Pen(packet, map)).1.position.get();
+            (position.x, position.y)
+        };
+        let rows = [
+            (
+                "mapped",
+                POINT { x: 1_205, y: 2_207 },
+                Some(tenth),
+                (10.25, 10.35),
+            ),
+            (
+                "no mapping",
+                POINT { x: 1_205, y: 2_207 },
+                None,
+                (10.0, 10.0),
+            ),
+            (
+                "mapping disagrees with the pixel",
+                POINT { x: 2_207, y: 1_205 },
+                Some(tenth),
+                (10.0, 10.0),
+            ),
+            (
+                "empty device rectangle",
+                POINT { x: 1_205, y: 2_207 },
+                Some(HimetricMap {
+                    device: rect(0, 10_000),
+                    ..tenth
+                }),
+                (10.0, 10.0),
+            ),
+        ];
+        for (name, himetric, map, (x, y)) in rows {
+            let (got_x, got_y) = at(himetric, map);
+            assert!(
+                (got_x - x).abs() < 1e-9 && (got_y - y).abs() < 1e-9,
+                "{name}: ({got_x}, {got_y}), expected ({x}, {y})"
+            );
+        }
     }
 
     fn native_pen_masks_preserve_sensor_presence() {
@@ -1076,6 +1303,7 @@ mod native_pointer_contracts {
         for case in [
             native_raw_position_and_identity_survive as fn(),
             native_pen_masks_preserve_sensor_presence,
+            native_pen_position_keeps_himetric_precision,
             native_touch_contact_and_pressure_are_measured,
             invalid_native_sensor_and_scale_are_refused,
             native_terminal_identity_survives_callback_readmission,
@@ -1361,12 +1589,15 @@ pub(super) fn mouse_wheel_input(
 /// `window_proc`'s `WM_KEYDOWN` arm and `crate::shared::keys`'s module doc
 /// for the pairing model); when present and typeable it becomes the event's
 /// `Key::Character`, otherwise the layout-independent virtual-key fallback
-/// applies.
+/// applies. `time` is the message's generation time on the shared epoch
+/// ([`MessageClock::message_time`]), so a key and a click queued around it
+/// keep their order.
 pub fn key_down_event(
     wparam: WPARAM,
     lparam: LPARAM,
     stroke: Keystroke,
     held_dead: &mut HeldDeadKeys,
+    time: u64,
 ) -> PlatformInput {
     let vk = wparam.0 as u16;
     let (scan_code, extended, is_repeat) = keys::parse_key_lparam(lparam.0);
@@ -1404,19 +1635,14 @@ pub fn key_down_event(
     };
 
     PlatformInput::Keyboard(
-        KeyEvent::new(
-            KeyState::Down,
-            key,
-            code,
-            EventTime::from_nanos(event_timestamp_ns()),
-        )
-        .with_location(keys::location_for_code(code))
-        .with_modifiers(modifiers)
-        .with_repeat(if is_repeat {
-            KeyRepeat::AutoRepeat
-        } else {
-            KeyRepeat::First
-        }),
+        KeyEvent::new(KeyState::Down, key, code, EventTime::from_nanos(time))
+            .with_location(keys::location_for_code(code))
+            .with_modifiers(modifiers)
+            .with_repeat(if is_repeat {
+                KeyRepeat::AutoRepeat
+            } else {
+                KeyRepeat::First
+            }),
     )
 }
 
@@ -1426,7 +1652,13 @@ pub fn key_down_event(
 /// fallback — for a letter that is its shift-respecting character, for OEM
 /// punctuation the US-layout position. Consumers that type text act on
 /// `KeyState::Down` only, so this asymmetry never reaches a text field.
-pub fn key_up_event(wparam: WPARAM, lparam: LPARAM, held_dead: &mut HeldDeadKeys) -> PlatformInput {
+/// `time` is the message's, as for [`key_down_event`].
+pub fn key_up_event(
+    wparam: WPARAM,
+    lparam: LPARAM,
+    held_dead: &mut HeldDeadKeys,
+    time: u64,
+) -> PlatformInput {
     let vk = wparam.0 as u16;
     let (scan_code, extended, _) = keys::parse_key_lparam(lparam.0);
 
@@ -1442,14 +1674,9 @@ pub fn key_up_event(wparam: WPARAM, lparam: LPARAM, held_dead: &mut HeldDeadKeys
     let code = keys::scancode_to_code(scan_code, extended);
 
     PlatformInput::Keyboard(
-        KeyEvent::new(
-            KeyState::Up,
-            key,
-            code,
-            EventTime::from_nanos(event_timestamp_ns()),
-        )
-        .with_location(keys::location_for_code(code))
-        .with_modifiers(modifiers),
+        KeyEvent::new(KeyState::Up, key, code, EventTime::from_nanos(time))
+            .with_location(keys::location_for_code(code))
+            .with_modifiers(modifiers),
     )
 }
 
@@ -1458,7 +1685,8 @@ pub fn key_up_event(wparam: WPARAM, lparam: LPARAM, held_dead: &mut HeldDeadKeys
 /// composition, or a directly-sent message). There is no owning physical
 /// key, so it is dispatched as a key-down with `Code::Unidentified` and no
 /// paired key-up; the text lane consumes `Key::Character` on key-down only.
-pub fn stray_char_event(text: String) -> PlatformInput {
+/// `time` is the message's, as for [`key_down_event`].
+pub fn stray_char_event(text: String, time: u64) -> PlatformInput {
     let modifiers = message_modifiers();
 
     PlatformInput::Keyboard(
@@ -1466,7 +1694,7 @@ pub fn stray_char_event(text: String) -> PlatformInput {
             KeyState::Down,
             Key::character(text),
             Code::Unidentified,
-            EventTime::from_nanos(event_timestamp_ns()),
+            EventTime::from_nanos(time),
         )
         .with_location(Location::Standard)
         .with_modifiers(modifiers),

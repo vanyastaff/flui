@@ -105,6 +105,13 @@ fn collect_disjoint_mut<'a>(
     slots.into_iter().collect()
 }
 
+/// The depth of a child under a parent at `parent_depth`.
+fn child_depth(parent_depth: u16) -> u16 {
+    parent_depth
+        .checked_add(1)
+        .expect("BUG: render tree depth exceeds u16::MAX (or a parent cycle)")
+}
+
 impl Default for RenderTree {
     fn default() -> Self {
         Self::new()
@@ -393,15 +400,14 @@ impl RenderTree {
         parent_id: RenderId,
         render_object: Box<dyn RenderObject<BoxProtocol>>,
     ) -> Option<RenderId> {
-        let parent_depth = self.get(parent_id)?.depth();
+        let child_depth = child_depth(self.get(parent_id)?.depth());
 
         // Protocol compatibility: Box children can go under both Box and
         // Sliver parents. Under Sliver parents, the child should be
         // wrapped in SliverToBoxAdapter at the widget layer — the render
         // tree accepts it directly because the sliver layout bridge
         // handles the cross-protocol dispatch.
-        let child_node =
-            RenderNode::new_box_with_parent(render_object, parent_id, parent_depth + 1);
+        let child_node = RenderNode::new_box_with_parent(render_object, parent_id, child_depth);
         let child_slab_index = self.nodes.insert(child_node);
         let child_id = self.mint(child_slab_index);
 
@@ -421,10 +427,9 @@ impl RenderTree {
         parent_id: RenderId,
         render_object: Box<dyn RenderObject<SliverProtocol>>,
     ) -> Option<RenderId> {
-        let parent_depth = self.get(parent_id)?.depth();
+        let child_depth = child_depth(self.get(parent_id)?.depth());
 
-        let child_node =
-            RenderNode::new_sliver_with_parent(render_object, parent_id, parent_depth + 1);
+        let child_node = RenderNode::new_sliver_with_parent(render_object, parent_id, child_depth);
         let child_slab_index = self.nodes.insert(child_node);
         let child_id = self.mint(child_slab_index);
 
@@ -503,8 +508,12 @@ impl RenderTree {
         if let Some(child) = self.get_mut(child_id) {
             child.set_parent(Some(parent_id));
         }
-        if let Some(parent) = self.get_mut(parent_id) {
+        let parent_depth = self.get_mut(parent_id).map(|parent| {
             parent.add_child(child_id);
+            parent.depth()
+        });
+        if let Some(parent_depth) = parent_depth {
+            self.redepth_subtree(child_id, child_depth(parent_depth));
         }
     }
 
@@ -542,6 +551,46 @@ impl RenderTree {
         }
         if let Some(child) = self.get_mut(child_id) {
             child.set_parent(None);
+        }
+        self.redepth_subtree(child_id, 0);
+    }
+
+    /// Re-derives the depths of `root`'s subtree from its parent, for a
+    /// subtree whose parent link was written outside the edge primitives
+    /// (a relocation's destination edge synchronization).
+    pub(crate) fn rederive_subtree_depth(&mut self, root: RenderId) {
+        let depth = self
+            .parent(root)
+            .and_then(|parent| self.get(parent))
+            .map_or(0, |parent| child_depth(parent.depth()));
+        self.redepth_subtree(root, depth);
+    }
+
+    /// Writes `root_depth` to `root` and parent depth + 1 to every
+    /// descendant. The two edge primitives above are the only writers of
+    /// depth after insertion, so the dirty queues' depth sorts see the
+    /// position a node holds now, including every node of a moved subtree.
+    fn redepth_subtree(&mut self, root: RenderId, root_depth: u16) {
+        let Some(node) = self.get_mut(root) else {
+            return;
+        };
+        node.links_mut().set_depth(root_depth);
+        if node.children().is_empty() {
+            // A freshly mounted node: no walk, no allocation.
+            return;
+        }
+        let next = child_depth(root_depth);
+        let mut stack: Vec<_> = node.children().iter().map(|&child| (child, next)).collect();
+        while let Some((id, depth)) = stack.pop() {
+            let Some(node) = self.get_mut(id) else {
+                continue;
+            };
+            node.links_mut().set_depth(depth);
+            if node.children().is_empty() {
+                continue;
+            }
+            let next = child_depth(depth);
+            stack.extend(node.children().iter().map(|&child| (child, next)));
         }
     }
 
@@ -1030,5 +1079,28 @@ mod tests {
         // `root` is already `child`'s ancestor; adopting `root` under
         // `child` would close a cycle.
         tree.adopt_child(child, root);
+    }
+
+    /// Re-adopting a subtree whose deepest leaf sits at the last representable
+    /// depth succeeds: only a node with children derives a child depth.
+    #[test]
+    fn readopting_a_subtree_down_to_the_last_depth_does_not_overflow() {
+        let mut tree = RenderTree::new();
+        let root = tree.insert_box(make_leaf());
+        let top = tree
+            .insert_box_child(root, make_leaf())
+            .expect("live parent");
+        let mut leaf = top;
+        while tree.depth(leaf) != Some(u16::MAX) {
+            leaf = tree
+                .insert_box_child(leaf, make_leaf())
+                .expect("live parent");
+        }
+
+        tree.drop_child(root, top);
+        tree.adopt_child(root, top);
+
+        assert_eq!(tree.depth(top), Some(1));
+        assert_eq!(tree.depth(leaf), Some(u16::MAX));
     }
 }

@@ -112,9 +112,12 @@ System-bar and display-cutout insets are sampled from the Activity decor view.
 Packaged applications require API 23, where `View.getRootWindowInsets` becomes
 available; both SDK-tools packaging and generated Gradle configuration enforce it.
 The owner accepts a reply only while its window remains live and the sampled
-physical size matches the current native window. Stable insets exclude keyboard
-occlusion. One query may be outstanding; accepted changes dispatch callbacks
-after cache guards are released. `android_safe_area_native_metrics` pins density
+physical size matches the current native window; a reply taken at an older size
+is asked for once more. The window asks on every resize, configuration change and
+new native window, and every 500 ms while resumed. From API 30 the insets are the
+visible bars (`getInsets`), so hidden bars reserve no space; below it the stable
+insets are the only reading without keyboard occlusion. One query may be
+outstanding; accepted changes dispatch callbacks after cache guards are released. `android_safe_area_native_metrics` pins density
 conversion, stale orientation rejection and invalid conversion inputs; native
 rotation and resume additionally require a device run.
 
@@ -278,8 +281,19 @@ timestamp. Sent messages inheriting an older retrieved timestamp cannot move
 the window's clock backwards. The sample timestamp is committed before hover
 callbacks or native capture changes can dispatch another message.
 
+Keys are stamped from the same clock, read before the keydown drains its
+characters, so a key and a click queued behind a long frame keep their order.
+The clock keeps one floor for every stamp the window delivered: a `WM_POINTER`
+reading or a touchpad step stamped from the performance counter raises it, so
+a key in the same system tick, whose millisecond tick reads earlier, is not placed before the
+reading delivered ahead of it (`a_coarse_stamp_never_precedes_a_delivered_precise_one`,
+and the key rounds of `focus_loss_ends_a_touch_and_silences_its_tail`), and a focus
+loss stamps the cancels of the other contacts after the touchpad's
+(`a_focus_loss_stamps_its_cancellations_in_order`).
+
 `queued_mouse_samples_keep_native_message_time` drives the public native window
-with delayed queued mouse samples. The private arithmetic row
+with delayed queued mouse samples, `queued_key_events_keep_native_message_time`
+with a key down, a mouse move and the key up. The private arithmetic row
 `message_clock_preserves_wrapping_samples_and_window_epochs` covers rollover,
 older sent timestamps, epoch rebasing and saturation: there is no public API
 that advances the OS uptime by 49.7 days. These checks do not establish physical
@@ -299,6 +313,29 @@ against the golden when a `WM_POINTER` mouse id is its own contact. A wheel turn
 goes through the window's registry (`ContactRegistry::wheel`) only so the native
 capture journals it; it belongs to no contact sequence.
 
+The window's hover (`is_hovered`, `on_hover_status_change`, the immediate cursor
+apply) follows the mouse on either route through one `WindowContext::set_hovered`,
+which raises a change only when the hover changed: `WM_MOUSEMOVE`/`WM_MOUSELEAVE`
+on the legacy route, and on the `WM_POINTER` route every mouse message but a
+capture change enters and `WM_POINTERLEAVE` leaves. The hover is settled before
+the input of its message reaches user code, so a callback that pumps a message
+bringing the cursor back is not undone (`a_leave_callback_that_hovers_again_keeps_the_hover`).
+The system captures a mouse press on
+the `WM_POINTER` route itself, so a drag released outside the client area still
+delivers its release. A press dragged outside sends no leave while it is held,
+and no pointer message follows a `WM_POINTERCAPTURECHANGED`, so on a capture
+change the hover is read from the cursor (on the client area of this window,
+the window on top there). `a_pointer_routed_mouse_hovers_the_window` drives both with
+`SendInput` moves (never `SetCursorPos`, which arrives as `WM_MOUSEMOVE`).
+
+Losing focus (`WM_KILLFOCUS`) or being minimised (`SIZE_MINIMIZED`) ends every
+open contact on the window as `FocusLost` and cancels an open touchpad
+manipulation without pausing the viewport, since an inactive window scrolls
+under the cursor; the releases may go elsewhere, and what still arrives for an
+ended contact is an orphan. `focus_loss_and_minimising_end_the_held_press`,
+`focus_loss_ends_a_touch_and_silences_its_tail` and the viewport row
+`focus_loss_cancels_without_pausing` pin it.
+
 ### Win32 pointer readings keep counter resolution
 
 `POINTER_INFO.dwTime` advances with the ~15.6 ms system tick, so a coalesced
@@ -312,6 +349,19 @@ saturates at the epoch range.
 
 The current reading is the newest history entry and is decoded with it, so the
 event and its last coalesced sample carry one time.
+
+A pen is placed from `ptHimetricLocationRaw` through its device's
+`GetPointerDeviceRects`, read once per message, so a stroke keeps the fraction
+of a pixel the integer `ptPixelLocationRaw` drops. A mapping that is missing,
+empty, or more than a pixel from the reported pixel (a rotated display maps the
+axes otherwise) leaves the pixel (`native_pen_position_keeps_himetric_precision`;
+`synthetic_touch_and_pen_reach_native_pointer_dispatch` holds each injected pen press
+against its own himetric reading and device rectangles within 1e-6).
+
+Each pointer of a multi-touch frame is still decoded from its own message, so a
+two-finger frame reaches a recognizer as two steps; one step per frame
+(`GetPointerFrameInfoHistory`, `SkipPointerFrameMessages`) needs a frame unit in
+the shared pointer vocabulary first.
 
 The private `native_pointer_decoding_contracts` rows
 `coalesced_burst_is_ordered_by_performance_count` and
@@ -906,6 +956,13 @@ arrives inside a TSF call into a store waits for that call. Its application-code
 logged, contained: the window procedure aborts on a panic. Test:
 `a_window_offers_its_text_services_as_its_host`, and the `window destroyed inside a TSF call`
 row of `the_text_services_answer_a_completion_for_its_store`.
+
+A field's screen rectangles move with its window, so `WM_MOVE`, `WM_EXITSIZEMOVE` and
+`WM_DPICHANGED` tell the focused field's store (`TextStore::screen_moved`), which reports
+`OnLayoutChange` by its own notification rule: not while a lock is held or its gate is shut,
+since TSF answers with a synchronous lock request. An input method then moves its candidate
+window with the text; failures are logged, contained
+(`a_moved_window_tells_tsf_its_layout_changed`, a move under a held lock included).
 
 ### AppKit reopen signals use a loop-owned serialized callback pump
 
@@ -2305,8 +2362,9 @@ carries the device that drove it last; mints pointer and device identities in or
 permanently after the last; keeps a mouse's contact for the life of its device on
 the surface; returns a lifted pen to hovering on the same identity until the
 platform's leave, so its `Enter` and `Leave` pair up (a touch ends at `Up` or a
-cancel and then delivers the `Leave` for an `Enter` it delivered, after which the
-platform's own leave is a silent orphan; a hovering pen whose label returns as
+cancel, and any contact a cancel or a retirement removes, a hovering pen at a
+window's focus loss among them, delivers the `Leave` for an `Enter` it delivered,
+after which the platform's own leave is a silent orphan; a hovering pen whose label returns as
 another kind leaves first); drives touch and pen sequences by their contact (a barrel button
 changes within it, or while the pen hovers) and mouse sequences by any held
 button; counts clicks only from OS settings a backend supplies (Win32 today, AppKit
@@ -2894,12 +2952,12 @@ the app thread's own `poll_events`, invalidates the source and wakes the owner; 
 (`AChoreographer_unregisterRefreshRateCallback`) on that thread when the loop
 exits, before the data it points at is freed, and a registration dropped on any
 other thread leaks that data instead of freeing what a late call could reach.
-The idle `poll_events` timeout is the display's period, cut short by the time
-left to the next wake deadline (`idle_wait_until`), and 16 ms while the period is
-unknown. The loop does not block until the deadline even though `OwnerSignal`
-wakes the looper: the same iteration samples preferences every 500 ms, settles
-the safe area and consumes redraw requests that set a flag without waking the
-looper, so each of those would wait for the deadline.
+The loop has no timer of its own (ADR-0249): every producer wakes the looper
+(`request_redraw` on the request that sets its flag, `OwnerSignal`, the Java
+view's queue, the inset reply, this callback), and `poll_timeout` blocks until
+the next wake deadline or 500 ms preference sample while resumed, and while
+paused until a deadline still ahead or a wake. A deadline already behind while
+paused waits for a frame, so it does not cut the wait to zero.
 
 `shared/android_ndk.rs` reads the API level once, when the platform is
 built, and keeps it in the platform (no `static`): `android_get_device_api_level`
@@ -2937,8 +2995,8 @@ skipped while that rate was unknown). The host also sends its demand on
 change goes unnoticed until the next one or a resume. The JNI path, the
 choreographer registration and the frame-rate request run only on a device; the
 host tests cover the level lookup (`os_capability_table`), the value
-classification (`android_display_table`) and the idle wait
-(`idle_wait_follows_the_real_period`), and CI type-checks the rest for
+classification (`android_display_table`) and the poll timeout
+(`a_paused_loop_blocks_until_it_is_woken`), and CI type-checks the rest for
 `aarch64-linux-android`.
 
 ### A Win32 window opens hidden, in its mode, and is shown by its first frame

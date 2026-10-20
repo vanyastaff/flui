@@ -351,6 +351,46 @@ fn a_lifted_pen_hovers_on_its_identity_until_it_leaves() {
     );
 }
 
+/// A window losing focus ends every contact on it: a hovering pen that
+/// entered leaves then, a pressed one is cancelled and leaves, and the
+/// platform's own leave that follows is refused silently. Nothing that
+/// entered is left without its leave.
+fn a_retired_contact_that_entered_leaves() {
+    let mut contacts = registry();
+    let pen = PointerKind::Pen {
+        tool: flui_platform_api::pointer::PenTool::Tip,
+    };
+    for reading in [
+        reading(3, pen, ReadingAction::Enter, 1),
+        reading(3, pen, ReadingAction::Move, 2),
+        reading(4, pen, ReadingAction::Enter, 3),
+        reading(4, pen, PRESS, 4),
+    ] {
+        decode(&mut contacts, &reading).expect("valid");
+    }
+    let ended = contacts.cancel_surface(
+        NativeSurface(0),
+        EventTime::from_nanos(9_000_000),
+        NativeCancel::FocusLost,
+    );
+    let kinds: Vec<_> = pointer_events(&ended)
+        .into_iter()
+        .map(|event| match event {
+            PointerEvent::Leave(signal) => ("leave", signal.pointer.id.get().get()),
+            PointerEvent::Cancel(cancel) => ("cancel", cancel.pointer.id.get().get()),
+            other => panic!("unexpected {other:?}"),
+        })
+        .collect();
+    assert_eq!(kinds, [("leave", 1), ("cancel", 2), ("leave", 2)]);
+    let late = decode(&mut contacts, &reading(3, pen, ReadingAction::Leave, 10))
+        .expect_err("the hover already left");
+    assert_eq!(late.fault(), DecodeFault::Orphan);
+    assert!(
+        late.into_inputs().is_empty(),
+        "and the late leave is silent"
+    );
+}
+
 /// Android's `input` injector reports its mouse and its pen on one device
 /// and pointer id: a hovering mouse whose label comes back as a pen leaves,
 /// and the pen's press starts its own contact rather than being refused. A
@@ -1152,6 +1192,10 @@ fn pointer_assembly_contracts() {
             (
                 "a_lifted_pen_hovers_on_its_identity_until_it_leaves",
                 a_lifted_pen_hovers_on_its_identity_until_it_leaves,
+            ),
+            (
+                "a_retired_contact_that_entered_leaves",
+                a_retired_contact_that_entered_leaves,
             ),
             (
                 "a_hovering_mouse_relabelled_as_a_pen_leaves_before_the_pen_starts",
