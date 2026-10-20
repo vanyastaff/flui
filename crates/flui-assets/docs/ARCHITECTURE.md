@@ -487,7 +487,9 @@ blocking pool, at most `with_decode_threads` at once (half the cores, at most
 four). A host runtime's async workers never run a decode. Before it reads, a
 load takes one of four load slots per decode thread and holds it until its
 decode returns, so the reads in flight and the encoded bytes waiting to decode
-are bounded by count (each body by `MAX_BODY_BYTES`). Once its bytes are read
+are bounded by count, and each by size: a response body by `MAX_BODY_BYTES`, a
+file by the same 256 MiB (`an_oversized_file_is_refused_before_it_is_read`),
+refused before more than that is buffered. Once its bytes are read
 it asks for a decode slot. Load slots are granted in admission order. A decode
 slot goes to the earliest-admitted load whose bytes are ready; a load still
 fetching holds none, so a ready load admitted later decodes first rather than

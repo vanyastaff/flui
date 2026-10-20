@@ -117,6 +117,23 @@ fn load_image_bridged_reports_a_missing_file_as_an_error_not_a_hang() {
     assert_eq!((recovered.width(), recovered.height()), (4, 2));
 }
 
+/// A file over the 256 MiB encoded-image cap fails with a typed error before
+/// it is buffered. `set_len` makes the file without writing its bytes.
+fn an_oversized_file_is_refused_before_it_is_read() {
+    let files = FixtureCopies::new("oversized");
+    let path = files.0.join("huge.png");
+    std::fs::File::create(&path)
+        .and_then(|file| file.set_len(256 * 1024 * 1024 + 1))
+        .expect("oversized test file is created");
+    let registry = budgeted(FIXTURE_BYTES);
+    let result = block_on(registry.load_image_bridged(path.to_string_lossy().into_owned()));
+    assert!(
+        matches!(&result, Err(flui_assets::AssetError::LoadFailed { reason, .. })
+            if reason.contains("larger than")),
+        "an oversized file is refused by size, got {result:?}"
+    );
+}
+
 fn entered_current_thread_runtime_does_not_trap_bridged_loads() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -254,6 +271,10 @@ fn load_image_bridged_completes_both_the_success_and_the_failure_path() {
         (
             "missing file recovery",
             load_image_bridged_reports_a_missing_file_as_an_error_not_a_hang,
+        ),
+        (
+            "oversized file",
+            an_oversized_file_is_refused_before_it_is_read,
         ),
         (
             "undriven ambient runtime",

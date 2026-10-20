@@ -46,7 +46,9 @@ an async worker, and sent the result down a oneshot. Five defects followed from 
    `spawn_blocking`, at most `with_decode_threads` at once (half the cores, at most four). A
    host's async workers never decode. Before reading, a load takes one of four load slots per
    decode thread and holds it until its decode returns, which bounds the reads in flight and
-   the encoded bytes waiting to decode by count. Once its bytes are read it asks for a decode
+   the encoded bytes waiting to decode by count; each is bounded by size too, a response body
+   and an image file alike at 256 MiB, refused before more than that is buffered. Once its
+   bytes are read it asks for a decode
    slot. Load slots are granted in admission order. A decode slot goes to the earliest-admitted
    load whose bytes are ready, and a load still fetching holds none: the decoder is
    work-conserving, so a ready load admitted later decodes rather than waiting idle behind a

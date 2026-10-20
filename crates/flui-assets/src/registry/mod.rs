@@ -490,8 +490,15 @@ impl AssetRegistry {
 #[cfg(feature = "images")]
 const FILE_READ_CHUNK: usize = 256 * 1024;
 
+/// The largest encoded image file a bridged load reads: 256 MiB, the same
+/// bound `NetworkLoader::load_url` puts on a response body. A larger file
+/// fails before it is buffered.
+#[cfg(feature = "images")]
+const MAX_ENCODED_FILE_BYTES: u64 = 256 * 1024 * 1024;
+
 /// Reads the file at `path` one [`FILE_READ_CHUNK`] per blocking read, so the
-/// future can be dropped between chunks.
+/// future can be dropped between chunks, and never more than
+/// [`MAX_ENCODED_FILE_BYTES`].
 ///
 /// `tokio::fs::read` runs the whole `std::fs::read` as one blocking call,
 /// which an abort cannot stop.
@@ -503,10 +510,26 @@ async fn read_in_chunks(path: Arc<str>) -> Result<Vec<u8>> {
         path: path.to_string(),
         reason: error.to_string(),
     };
+    let too_large = || AssetError::LoadFailed {
+        path: path.to_string(),
+        reason: format!("the file is larger than {MAX_ENCODED_FILE_BYTES} bytes"),
+    };
     let mut file = tokio::fs::File::open(path.as_ref()).await.map_err(failed)?;
+    let length = file.metadata().await.map_err(failed)?.len();
+    if length > MAX_ENCODED_FILE_BYTES {
+        return Err(too_large());
+    }
     file.set_max_buf_size(FILE_READ_CHUNK);
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).await.map_err(failed)?;
+    // The metadata length is a hint, not a bound: the file can grow while it
+    // is read, so the read itself stops one byte past the cap.
+    let mut bytes = Vec::with_capacity(usize::try_from(length).unwrap_or(0));
+    file.take(MAX_ENCODED_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(failed)?;
+    if bytes.len() as u64 > MAX_ENCODED_FILE_BYTES {
+        return Err(too_large());
+    }
     Ok(bytes)
 }
 

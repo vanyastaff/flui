@@ -14,7 +14,8 @@
   share in-flight loads and serve decoded images from the registry's cache; a second load of a
   decoded source is a hit, not a new read or request.
 - **`flui-assets`**: `NetworkLoader::new` gives up after `CONNECT_TIMEOUT` and `READ_TIMEOUT`,
-  and `load_url` refuses a body over `MAX_BODY_BYTES` (256 MiB).
+  and `load_url` refuses a body over `MAX_BODY_BYTES` (256 MiB); `load_image_bridged` refuses
+  an image file over the same size before reading it.
 - **`flui-widgets`**: `ImageCacheKey` is opaque. Asset and network images are keyed by their
   registry as well as their source, so equal paths in two registries are two images.
 
