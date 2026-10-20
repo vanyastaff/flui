@@ -229,7 +229,20 @@ impl AndroidWindow {
         let scale = self.scale_factor();
         let changed = {
             let mut capture = self.safe_area.lock();
-            let Some(insets) = sample.and_then(|sample| sample.logical(size, scale)) else {
+            let Some(sample) = sample else {
+                return;
+            };
+            if !sample.is_for(size) {
+                // Asked before a resize and answered after it. Asked again
+                // once: a decor view that never reaches the window's size
+                // must not keep the Java thread busy.
+                if std::mem::take(&mut capture.retry_stale) {
+                    drop(capture);
+                    self.query_safe_area();
+                }
+                return;
+            }
+            let Some(insets) = sample.logical(size, scale) else {
                 return;
             };
             if !self.geometry_live.load(Ordering::Acquire) || insets == capture.accepted {
@@ -242,7 +255,14 @@ impl AndroidWindow {
         self.request_redraw();
     }
 
+    /// Ask the Java thread for the insets. A reply taken at a size the window
+    /// no longer has is asked for once more.
     pub(crate) fn request_safe_area(&self) {
+        self.safe_area.lock().retry_stale = true;
+        self.query_safe_area();
+    }
+
+    fn query_safe_area(&self) {
         {
             let mut capture = self.safe_area.lock();
             if !matches!(capture.query, super::safe_area::Query::Idle)
@@ -505,8 +525,12 @@ impl PlatformWindow for AndroidWindow {
         Some(Arc::clone(&self.system_chrome) as Arc<dyn flui_platform_api::PlatformSystemChrome>)
     }
 
+    /// Callable from any thread: the first request since the last frame wakes
+    /// the looper, which otherwise blocks until something else does.
     fn request_redraw(&self) {
-        self.redraw_requested.store(true, Ordering::SeqCst);
+        if !self.redraw_requested.swap(true, Ordering::SeqCst) {
+            self.app.create_waker().wake();
+        }
     }
 
     fn is_focused(&self) -> bool {

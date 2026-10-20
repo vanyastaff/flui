@@ -46,6 +46,7 @@ flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features 
 flui-objects = { path = ".", features = ["testing"] }
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 insta = { workspace = true }
+static_assertions = { workspace = true }
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", features = ["testing"] }
 
 [[test]]

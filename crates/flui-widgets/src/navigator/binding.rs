@@ -245,7 +245,7 @@ pub(crate) type TransitionRegistry = Rc<super::lifecycle::TerminalMap<RouteId, T
 /// `None` when no `VsyncScope` is above the navigator. There is no wall-clock
 /// fallback: a route owns a `DrivenController` built on this optional registry.
 /// Missing clocks settle finite runs and park infinite repeats (ADR-0175).
-pub(crate) type RouteVsync = Rc<Mutex<Option<Vsync>>>;
+pub(crate) type RouteVsync = Rc<RefCell<Option<Vsync>>>;
 
 /// `RouteId -> OverlayEntry`, the navigator's map. A route reaches **its own**
 /// entry through it; the entries live on the navigator, not the route
@@ -315,9 +315,9 @@ pub(crate) type PopPacingRegistry = Rc<super::lifecycle::TerminalMap<RouteId, Po
 
 /// The queue a [`RouteBinding`] writes to and a `RouteHistory` drains.
 ///
-/// Its own mutex, deliberately: it must be lockable while the history's mutex is
+/// Its own cell, deliberately: it must be writable while the history's mutex is
 /// held by an in-progress flush.
-pub(crate) type RouteCommandQueue = Rc<Mutex<VecDeque<RouteCommand>>>;
+pub(crate) type RouteCommandQueue = Rc<RefCell<VecDeque<RouteCommand>>>;
 
 /// The `RouteId`-keyed maps a navigator owns and every binding shares.
 ///
@@ -460,12 +460,12 @@ impl Drop for RouteRegistries {
 /// queued command for a route that no longer exists is dropped on drain.
 pub(crate) struct RouteBinding {
     route: RouteId,
-    queue: Weak<Mutex<VecDeque<RouteCommand>>>,
+    queue: Weak<RefCell<VecDeque<RouteCommand>>>,
     /// Applies the queue if the history is not currently locked. See *Correction 1*.
     wake: super::lifecycle::Terminal<Rc<dyn Fn()>>,
-    /// The navigator's clock. `Mutex` because `NavigatorState::init_state`
+    /// The navigator's clock. A cell because `NavigatorState::init_state`
     /// resolves it after the handle (and therefore any seeded binding) exists.
-    vsync: Weak<Mutex<Option<Vsync>>>,
+    vsync: Weak<RefCell<Option<Vsync>>>,
     /// The navigator's `RouteId`-keyed maps, each behind its own mutex — a
     /// different one from the history's, so a route may consult them from inside a
     /// flush.
@@ -591,7 +591,7 @@ impl RouteBinding {
     /// The navigator's clock, if it has one.
     pub(crate) fn vsync(&self) -> Option<Vsync> {
         let _authority = self.active_registries()?;
-        self.vsync.upgrade()?.lock().clone()
+        self.vsync.upgrade()?.borrow().clone()
     }
 
     /// Publish this route's primary animation so the route below can drive its
@@ -686,7 +686,7 @@ impl RouteBinding {
         let Some(queue) = self.queue.upgrade() else {
             return;
         };
-        queue.lock().push_back(command);
+        queue.borrow_mut().push_back(command);
         // Outside a flush this applies and flushes now; inside one it is a no-op
         // and the running flush drains the queue before returning.
         (self.wake)();
@@ -699,7 +699,7 @@ impl fmt::Debug for RouteBinding {
             .field("route", &self.route.get())
             .field(
                 "pending",
-                &self.queue.upgrade().map(|queue| queue.lock().len()),
+                &self.queue.upgrade().map(|queue| queue.borrow().len()),
             )
             .finish_non_exhaustive()
     }
@@ -717,13 +717,13 @@ impl fmt::Debug for RouteBinding {
 /// [`NavigatorRoute::binding_slot`]: super::overlay_route::NavigatorRoute::binding_slot
 #[derive(Clone, Default)]
 pub struct RouteBindingSlot {
-    inner: Rc<Mutex<Option<RouteBinding>>>,
+    inner: Rc<RefCell<Option<RouteBinding>>>,
     /// The transition family of the framework route that owns this slot, or
     /// `None` for a slot a third-party route constructed itself. Written only
     /// by the crate's `TransitionRoute`, so a route outside this crate cannot
     /// claim to be a pageless popup: a `Navigator` under a `Router` admits a
     /// route only when this reads `Some(TransitionGroup::Default)`.
-    group: Rc<Mutex<Option<TransitionGroup>>>,
+    group: Rc<Cell<Option<TransitionGroup>>>,
 }
 
 impl RouteBindingSlot {
@@ -736,30 +736,30 @@ impl RouteBindingSlot {
     /// Whether the navigator has filled this slot — i.e. the route is pushed.
     #[must_use]
     pub fn is_bound(&self) -> bool {
-        self.inner.lock().is_some()
+        self.inner.borrow().is_some()
     }
 
     /// Filled by `NavigatorHandle::push` / `seed_initial`, before `install()`.
     pub(crate) fn fill(&self, binding: RouteBinding) {
-        let _prev = self.inner.lock().replace(binding);
+        let _prev = self.inner.borrow_mut().replace(binding);
     }
 
     /// The binding, cloned out. `None` for a route that was never pushed, which
     /// is what makes every capability call on an unpushed route inert.
     pub(crate) fn get(&self) -> Option<RouteBinding> {
-        self.inner.lock().clone()
+        self.inner.borrow().clone()
     }
 
     /// Record the owning route's transition family. `TransitionRoute` calls
     /// this at construction and again whenever its family changes.
     pub(crate) fn set_group(&self, group: TransitionGroup) {
-        *self.group.lock() = Some(group);
+        self.group.set(Some(group));
     }
 
     /// The owning route's transition family; `None` when no framework route
     /// wrote one.
     pub(crate) fn group(&self) -> Option<TransitionGroup> {
-        *self.group.lock()
+        self.group.get()
     }
 }
 

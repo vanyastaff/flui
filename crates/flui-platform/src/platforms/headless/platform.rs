@@ -730,6 +730,15 @@ fn create_mock_window(
                 &signal,
                 &window.callbacks,
             ));
+        let callbacks = Arc::downgrade(&window.callbacks);
+        window.owner_redraw = Some(OwnerRedraw {
+            signal: Arc::downgrade(&signal),
+            wake: crate::shared::owner_signal::OwnerSignal::input_wake(&signal, move || {
+                if let Some(callbacks) = callbacks.upgrade() {
+                    callbacks.dispatch_request_frame();
+                }
+            }),
+        });
     }
     state.notices.mark_stale_on_wake(&window.window_state);
 
@@ -1169,7 +1178,8 @@ impl HeadlessDeferredWindowOpens {
 ///
 /// - a configurable scale factor ([`Self::simulate_scale_factor_change`],
 ///   delivered through the resize path exactly like the winit backend);
-/// - `request_redraw` dispatching through the registered callbacks
+/// - `request_redraw` dispatching through the registered callbacks on the
+///   owner thread, a request from another thread in the owner's next turn
 ///   ([`WindowCallbacks`]), like a real backend's frame wire;
 /// - programmatic event injection ([`Self::inject_event`]) and lifecycle
 ///   simulation (`simulate_resize` / `simulate_focus` /
@@ -1206,6 +1216,18 @@ pub struct MockWindow {
     platform_state: Weak<Mutex<HeadlessState>>,
     /// The OS drag session this window can start, when the platform was given one.
     drag: Option<Arc<dyn flui_platform_api::drag::PlatformDragSource>>,
+    /// Carries a frame request made off the owner thread to the owner's next
+    /// turn; `None` for a window opened with no owner signal.
+    owner_redraw: Option<OwnerRedraw>,
+}
+
+/// How a [`MockWindow`] asks its owner for a frame from another thread: the
+/// frame callback is owner code, so it runs in an owner turn, coalesced with
+/// any request already queued, as a native backend posts its redraw.
+#[derive(Clone)]
+struct OwnerRedraw {
+    signal: Weak<crate::shared::owner_signal::OwnerSignal>,
+    wake: crate::shared::InputWake,
 }
 
 impl std::fmt::Debug for MockWindow {
@@ -1440,6 +1462,7 @@ impl MockWindow {
             input_regions: Arc::default(),
             platform_state,
             drag: None,
+            owner_redraw: None,
         }
     }
 
@@ -1865,6 +1888,15 @@ impl PlatformWindow for MockWindow {
     }
 
     fn request_redraw(&self) {
+        // Any thread may ask, but the frame callback is owner code: a request
+        // from another thread waits for the owner's next turn.
+        if let Some(redraw) = &self.owner_redraw
+            && let Some(signal) = redraw.signal.upgrade()
+            && signal.owner() != thread::current().id()
+        {
+            (redraw.wake)();
+            return;
+        }
         self.callbacks.dispatch_request_frame();
     }
 

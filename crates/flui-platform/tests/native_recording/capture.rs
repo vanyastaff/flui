@@ -26,20 +26,30 @@ use super::{RECORDINGS, recording};
 const GOLDEN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/native_recording");
 
 /// What a rerun of an injected session must reproduce: the replayed
-/// transcript in device pixels (every scale set to one, so a host at another
-/// DPI compares) with each time left out, since the OS stamps each run anew.
+/// transcript in whole device pixels (every scale set to one, so a host at
+/// another DPI compares) with each time left out, since the OS stamps each run
+/// anew. A pen is placed from its himetric position, which the OS derives from
+/// the injected pixel with a rounding that depends on where the window is, so
+/// positions are compared at the pixel they were injected at.
 pub fn shape(recording: &NativeRecording) -> Vec<String> {
+    fn in_device_pixels(reading: &mut NativeReading) {
+        reading.scale = 1.0;
+        if let Some(position) = &mut reading.position {
+            position.x = position.x.round();
+            position.y = position.y.round();
+        }
+    }
     let mut device = recording.clone();
     for row in &mut device.rows {
         match row {
-            Row::Reading(reading) => reading.scale = 1.0,
+            Row::Reading(reading) => in_device_pixels(reading),
             Row::Batch {
                 coalesced,
                 predicted,
                 current,
             } => {
                 for reading in coalesced.iter_mut().chain(predicted).chain([current]) {
-                    reading.scale = 1.0;
+                    in_device_pixels(reading);
                 }
             }
             Row::Viewport { frame, .. } | Row::ViewportAbandoned { frame } => frame.scale = 1.0,
