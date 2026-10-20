@@ -215,9 +215,18 @@ impl AndroidTextInput {
         let published = Rc::clone(&self.published);
         let view = Arc::clone(&self.view);
         let status = self.status(&*store);
+        let this = self.this.clone();
+        let edited = Rc::clone(&store);
         let grant = LockGrant::read_write(move |session| {
             let outcome = replay_current(&edit, published.get(), session);
-            if outcome.restarts_the_view() {
+            // Focus may have moved to another field while the grant waited: its
+            // snapshot is the one the view mirrors now, and a restart on this
+            // store would overwrite it.
+            let still_focused = this
+                .upgrade()
+                .and_then(|input| input.focused())
+                .is_some_and(|current| Rc::ptr_eq(&current, &edited));
+            if outcome.restarts_the_view() && still_focused {
                 // The store refused a step, or the edit was dropped as stale:
                 // the input method's text no longer matches the store's.
                 let generation = Self::next_generation(&published);
