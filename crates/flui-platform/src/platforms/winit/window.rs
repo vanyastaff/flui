@@ -124,6 +124,9 @@ pub struct WinitWindow {
     /// `Occluded`: the window is hidden from the published mode instead.
     #[cfg(target_os = "linux")]
     wm_minimized: AtomicBool,
+    /// What `on_visibility_status_change` last reported (at first, what the
+    /// window opened as): a report is raised only when it changes.
+    reported_visible: parking_lot::Mutex<bool>,
 }
 
 /// What the window system lets a program do to `window`: a Wayland surface
@@ -243,6 +246,7 @@ impl WinitWindow {
             window,
             is_focused: parking_lot::Mutex::new(true),
             is_visible: parking_lot::Mutex::new(options.visible),
+            reported_visible: parking_lot::Mutex::new(options.visible),
             callbacks: crate::shared::WindowCallbacks::new(),
             #[cfg(all(target_os = "linux", feature = "a11y"))]
             accessibility: Arc::new(crate::platforms::linux::UnixAccessibility::new()),
@@ -434,20 +438,33 @@ impl WinitWindow {
         state
     }
 
-    /// Raise `on_visibility_status_change` when a published snapshot of an
-    /// X11 window enters or leaves the minimized mode (see `wm_minimized`).
-    /// A window the program hid reports nothing: it was not visible either
-    /// way.
+    /// Follow a published snapshot of an X11 window into or out of the
+    /// minimized mode (see `wm_minimized`).
     #[cfg(target_os = "linux")]
     fn follow_wm_minimized(&self, state: &WindowState) {
         if self.x11.get().is_none() {
             return;
         }
         let minimized = state.mode == WindowMode::Minimized;
-        if self.wm_minimized.swap(minimized, Ordering::AcqRel) != minimized
-            && *self.is_visible.lock()
-        {
-            self.callbacks.dispatch_visibility_status_change(!minimized);
+        if self.wm_minimized.swap(minimized, Ordering::AcqRel) != minimized {
+            self.report_visibility();
+        }
+    }
+
+    /// Raise `on_visibility_status_change` when [`PlatformWindow::is_visible`]
+    /// answers differently from the last report. The occlusion events and the
+    /// minimized mode both change it, in either order, and an `Occluded` can
+    /// repeat what is already known. The answer is read under the report's
+    /// lock, so two reporters cannot leave an older one last, and the lock is
+    /// released before the dispatch.
+    pub(super) fn report_visibility(&self) {
+        let (previous, visible) = {
+            let mut reported = self.reported_visible.lock();
+            let visible = PlatformWindow::is_visible(self);
+            (std::mem::replace(&mut *reported, visible), visible)
+        };
+        if previous != visible {
+            self.callbacks.dispatch_visibility_status_change(visible);
         }
     }
 

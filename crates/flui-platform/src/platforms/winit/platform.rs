@@ -1564,14 +1564,13 @@ impl ApplicationHandler for WinitApp {
                 // compositor-conditional extension); on a compositor that
                 // never sends it, this arm simply never fires, matching
                 // the pre-existing always-visible behavior. X11 sends none
-                // for a window the window manager minimizes (see
-                // `WinitWindow::is_visible`), so an `Occluded(false)` that
-                // arrives first reports what `is_visible` says.
+                // for a window the window manager minimizes, which reads as
+                // hidden from its mode instead, so the report is what
+                // `is_visible` says, and only when that changed.
                 if let Some(ref win) = window {
                     win.set_visible(!occluded);
                     win.refresh_state();
-                    win.callbacks()
-                        .dispatch_visibility_status_change(win.is_visible());
+                    win.report_visibility();
                 }
             }
             WinitWindowEvent::HoveredFile(path) => {
