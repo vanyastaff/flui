@@ -36,6 +36,7 @@ use flui_platform_api::text_store::{
 };
 use wasm_bindgen::{JsCast, prelude::*};
 
+use crate::shared::ime_text::{document_text, scalar_spans};
 use crate::shared::panic_boundary::contain_owner_callback;
 use crate::shared::web_text::diff;
 
@@ -145,6 +146,9 @@ pub(super) struct WebTextInput {
     entry: Cell<u32>,
     pending: RefCell<VecDeque<HostOp>>,
     retired: Cell<bool>,
+    /// The stores whose re-attach, republishing them to the surface, is
+    /// queued.
+    resync_queued: RefCell<Vec<Rc<dyn TextStore>>>,
     this: Weak<Self>,
 }
 
@@ -182,16 +186,13 @@ fn as_u32(offset: Utf16Offset) -> u32 {
 }
 
 /// The store's text and selection, read under a synchronous lock; `None`
-/// when the store cannot grant one now.
+/// when the store cannot grant one now. A protected store reads as one
+/// bullet per code unit, so the surface's offsets stay the field's.
 fn snapshot(store: &dyn TextStore) -> Option<(String, Selection)> {
     let read: Rc<RefCell<Option<(String, Selection)>>> = Rc::default();
     let out = Rc::clone(&read);
     let grant = LockGrant::read(move |session| {
-        let whole = Utf16Range::new(Utf16Offset::ZERO, session.document_len())
-            .expect("BUG: the whole document is a range");
-        if let Ok(text) = session.text(whole) {
-            *out.borrow_mut() = Some((text, session.selection()));
-        }
+        *out.borrow_mut() = Some((document_text(session), session.selection()));
     });
     // A read under a synchronous lock runs at once or is refused.
     let _ran = store.request_lock(grant, LockTiming::Sync).ok()?;
@@ -217,6 +218,7 @@ impl WebTextInput {
             entry: Cell::new(0),
             pending: RefCell::new(VecDeque::new()),
             retired: Cell::new(false),
+            resync_queued: RefCell::default(),
             this: this.clone(),
         })
     }
@@ -274,17 +276,71 @@ impl WebTextInput {
     /// Edit the focused store as the browser reported, under an asynchronous
     /// lock: now if the store is free, else when its frame transaction lets
     /// it.
-    fn edit(&self, body: impl FnOnce(&mut dyn TextStoreEdit) + 'static) {
+    ///
+    /// The browser has already applied what it reports, so an edit the store
+    /// does not take (`body` returns `false`, or the lock is refused) leaves
+    /// the surface ahead of the store: the surface is republished from the
+    /// store.
+    fn edit(&self, body: impl FnOnce(&mut dyn TextStoreEdit) -> bool + 'static) {
         let Some(store) = self.focused() else {
             return;
         };
+        let this = self.this.clone();
+        let target = Rc::clone(&store);
+        let grant = LockGrant::read_write(move |session| {
+            if !body(session)
+                && let Some(this) = this.upgrade()
+            {
+                this.schedule_resync(target);
+            }
+        });
         {
             let _entered = self.enter();
-            if let Err(error) = store.request_lock(LockGrant::read_write(body), LockTiming::Async) {
+            if let Err(error) = store.request_lock(grant, LockTiming::Async) {
                 tracing::debug!(?error, "the focused store refused the browser's edit");
+                self.schedule_resync(Rc::clone(&store));
             }
         }
         self.drain();
+    }
+
+    /// Republish `store` to its surface once the current task ends: the edit
+    /// may be running inside the store's lock, which a re-attach must not
+    /// enter. Focus may have moved on by then, and the store that took the
+    /// focus is left alone.
+    fn schedule_resync(&self, store: Rc<dyn TextStore>) {
+        {
+            let mut queued = self.resync_queued.borrow_mut();
+            if queued.iter().any(|queued| Rc::ptr_eq(queued, &store)) {
+                return;
+            }
+            queued.push(Rc::clone(&store));
+        }
+        let this = self.this.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let Some(this) = this.upgrade() else {
+                return;
+            };
+            this.resync_queued
+                .borrow_mut()
+                .retain(|queued| !Rc::ptr_eq(queued, &store));
+            let still_focused = this
+                .focused()
+                .is_some_and(|focused| Rc::ptr_eq(&focused, &store));
+            if this.retired.get() || !still_focused {
+                return;
+            }
+            // Detaching forgets the browser's composition, so the store's is
+            // committed in place, as when the host ends one.
+            let composing = this.keys.composing.get();
+            // The browser has no call that replaces a surface's whole text
+            // and selection with exact offsets, so the surface is made anew.
+            this.detach();
+            if composing {
+                let _ = commit_composition_in_place(&*store);
+            }
+            this.attach(store);
+        });
     }
 
     fn detach(&self) {
@@ -334,9 +390,13 @@ impl WebTextInput {
             return;
         }
         self.detach();
-        let Some(store) = store else {
-            return;
-        };
+        if let Some(store) = store {
+            self.attach(store);
+        }
+    }
+
+    /// Give `store` a fresh surface, holding its text and selection.
+    fn attach(&self, store: Rc<dyn TextStore>) {
         let (text, selection) = snapshot(&*store)
             .unwrap_or_else(|| (String::new(), Selection::collapsed(Utf16Offset::ZERO)));
         let attached = if self.edit_context {
@@ -394,7 +454,7 @@ impl WebTextInput {
                         let replaced = clamped(replaced, session.document_len());
                         let inserted = len16(&text);
                         if session.replace(replaced, &text).is_err() {
-                            return;
+                            return false;
                         }
                         let composition = composing.then(|| Composition {
                             range: Utf16Range::new(
@@ -411,6 +471,7 @@ impl WebTextInput {
                             anchor: selected.start(),
                             active: selected.end(),
                         });
+                        true
                     });
                 }),
             )?);
@@ -427,6 +488,7 @@ impl WebTextInput {
                     if !composing {
                         this.edit(|session| {
                             let _ = session.set_composition(None);
+                            true
                         });
                     }
                 }),
@@ -448,6 +510,7 @@ impl WebTextInput {
                 }),
             )?);
         }
+        listeners.extend(self.viewport_listeners()?);
         attach_edit_context(self.canvas.unchecked_ref(), context.as_ref())?;
         Ok(Attached {
             store: Rc::clone(store),
@@ -564,6 +627,7 @@ impl WebTextInput {
                 }),
             )?);
         }
+        listeners.extend(self.viewport_listeners()?);
         let parent = self
             .canvas
             .parent_node()
@@ -618,7 +682,7 @@ impl WebTextInput {
                 );
                 let inserted = String::from_utf16_lossy(&now[change.start..change.new_end]);
                 if session.replace(replaced, &inserted).is_err() {
-                    return;
+                    return false;
                 }
                 let composition = composing.then(|| Composition {
                     range: Utf16Range::new(
@@ -637,6 +701,7 @@ impl WebTextInput {
                 anchor: selected.start(),
                 active: selected.end(),
             });
+            true
         });
     }
 
@@ -694,6 +759,43 @@ impl WebTextInput {
     fn origin(&self) -> (f64, f64) {
         let rect = self.canvas.get_bounding_client_rect();
         (rect.left(), rect.top())
+    }
+
+    /// Listeners that tell the surface where the field moved to when the page
+    /// or one of the canvas's ancestors scrolls, or the viewport resizes or
+    /// pans under a pinch zoom, which move the canvas without the store's
+    /// layout changing. `scroll` does not bubble, so it is caught on the
+    /// window in the capture phase.
+    fn viewport_listeners(&self) -> Result<Vec<Listener>, JsValue> {
+        let window = web_sys::window().ok_or_else(|| JsValue::from_str("there is no window"))?;
+        let mut targets: Vec<(web_sys::EventTarget, bool)> = vec![(window.clone().into(), true)];
+        // Not every browser has a visual viewport.
+        if let Ok(viewport) = js_sys::Reflect::get(&window, &JsValue::from_str("visualViewport"))
+            && let Ok(viewport) = viewport.dyn_into::<web_sys::EventTarget>()
+        {
+            targets.push((viewport, false));
+        }
+        let mut listeners = Vec::new();
+        for (target, capture) in &targets {
+            for kind in ["scroll", "resize"] {
+                let this = self.this.clone();
+                listeners.push(
+                    Listener::install_in_phase(
+                        target,
+                        kind,
+                        &self.accepting,
+                        *capture,
+                        move |_| {
+                            if let Some(this) = this.upgrade() {
+                                this.push_bounds();
+                            }
+                        },
+                    )
+                    .map_err(|error| JsValue::from_str(&error.to_string()))?,
+                );
+            }
+        }
+        Ok(listeners)
     }
 
     /// Tell the surface where the field and its selection are, so the input
@@ -773,13 +875,39 @@ impl WebTextInput {
         let rects: Rc<RefCell<Vec<flui_foundation::geometry::Bounds<f64>>>> = Rc::default();
         let out = Rc::clone(&rects);
         let grant = LockGrant::read(move |session| {
-            let len = session.document_len();
-            for at in start..end {
-                let character = clamped(range(at, at + 1), len);
-                match session.rect_for_range(character) {
-                    Ok(rect) => out.borrow_mut().push(rect.bounds),
-                    Err(_) => break,
-                }
+            // One rect per code unit: both halves of a surrogate pair get the
+            // rect of the scalar they make. A protected document reads as one
+            // bullet per unit, which splits a real pair, so a unit the store
+            // refuses is retried together with the next one, or with the one before it
+            // when the request starts at the second half of a pair.
+            let text = document_text(session);
+            let (start, end) = (start as usize, end as usize);
+            let spans = scalar_spans(&text, start, end);
+            let mut spans = spans.into_iter().peekable();
+            while let Some(span) = spans.next() {
+                let found = if let Ok(rect) = session.rect_for_range(span) {
+                    Some((span, rect))
+                } else if let Some(next) = spans.peek().copied()
+                    && let Some(pair) = Utf16Range::new(span.start(), next.end())
+                    && let Ok(rect) = session.rect_for_range(pair)
+                {
+                    spans.next();
+                    Some((pair, rect))
+                } else if let Some(before) = span.start().get().checked_sub(1)
+                    && let Some(pair) = Utf16Range::new(Utf16Offset::new(before), span.end())
+                    && let Ok(rect) = session.rect_for_range(pair)
+                {
+                    Some((pair, rect))
+                } else {
+                    None
+                };
+                let Some((span, rect)) = found else {
+                    break;
+                };
+                let from = span.start().get().max(start);
+                let to = span.end().get().min(end);
+                out.borrow_mut()
+                    .extend(std::iter::repeat_n(rect.bounds, to - from));
             }
         });
         if store.request_lock(grant, LockTiming::Sync).is_err() {

@@ -36,6 +36,9 @@ pub mod android_drag;
 // Rule module; consumer: the Android backend's text input.
 #[doc(hidden)]
 pub mod android_ime;
+// Rule module; consumers: the Android and web backends' text input.
+#[doc(hidden)]
+pub mod ime_text;
 // Rule module; consumer: the Android backend.
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_display;
