@@ -246,7 +246,9 @@ renderer without a surface its owner never released, so the next acquire
 recreates again before anything else instead of skipping frames as if released.
 A frame acquired `Suboptimal` configures the surface right after it presents,
 not before the next acquire, because it may be the last frame with damage and
-a clean frame never acquires. That is once per episode: a surface still
+a clean frame never acquires. The configure owes a full repaint the caller
+never hears about, so the renderer presents the same scene again at once.
+That is once per episode: a surface still
 suboptimal after it presents as it is until a `Success`. The owner's
 `release_surface`, a successful recreation and device recovery clear both
 obligations. A

@@ -286,18 +286,23 @@ where
 /// Configure a surface whose presented frame was acquired `Suboptimal`, and
 /// mark its episode answered. Runs after the present, where the configure
 /// cannot wait on a later frame that may never come (see [`SurfaceRecovery`]).
-fn reconfigure_after_suboptimal_present<B>(backend: &mut B) -> Result<(), EngineError>
+///
+/// Returns whether it configured. A configure owes a full repaint that no
+/// caller knows about (the frame reported itself presented), so the caller
+/// repaints the same scene at once rather than leave the configured surface
+/// waiting for unrelated damage.
+fn reconfigure_after_suboptimal_present<B>(backend: &mut B) -> Result<bool, EngineError>
 where
     B: SurfaceAcquireBackend,
 {
     if !backend.recovery().reconfigure_after_present {
-        return Ok(());
+        return Ok(false);
     }
     backend.reconfigure()?;
     let recovery = backend.recovery();
     recovery.configured();
     recovery.suboptimal_answered = true;
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -467,11 +472,11 @@ mod surface_acquisition_tests {
                 ],
                 recreations: vec![],
                 frames: vec![
-                    (Acquired::Frame(1), &["acquire", "reconfigure"]),
+                    (Acquired::Frame(1), &["acquire", "reconfigure", "repaint"]),
                     (Acquired::Frame(2), &["acquire"]),
                     (Acquired::Frame(3), &["acquire"]),
                     (Acquired::Frame(4), &["acquire"]),
-                    (Acquired::Frame(5), &["acquire", "reconfigure"]),
+                    (Acquired::Frame(5), &["acquire", "reconfigure", "repaint"]),
                     (Acquired::Frame(6), &["acquire"]),
                 ],
             },
@@ -492,8 +497,11 @@ mod surface_acquisition_tests {
                     Ok(Some(frame)) => {
                         // The frame presents; the renderer then settles a
                         // suboptimal acquisition, as `render_frame_inner` does.
-                        reconfigure_after_suboptimal_present(&mut surface)
-                            .expect("the fake reconfigure succeeds");
+                        if reconfigure_after_suboptimal_present(&mut surface)
+                            .expect("the fake reconfigure succeeds")
+                        {
+                            surface.calls.push("repaint");
+                        }
                         Acquired::Frame(frame)
                     }
                     Ok(None) => Acquired::Skipped,
@@ -2333,8 +2341,18 @@ impl Renderer {
         // into the next frame instead of being paid off by this one. A failure
         // is logged, not returned: this frame did present, and the obligation
         // stays set for the next one.
-        if let Err(error) = reconfigure_after_suboptimal_present(self) {
-            tracing::warn!(target: "flui.gpu", %error, "reconfigure after a suboptimal frame failed");
+        match reconfigure_after_suboptimal_present(self) {
+            // Nothing else will ask for the repaint the configure owes: this
+            // may be a static UI's last frame, and the caller is told it
+            // presented. Present the same scene again on the configured
+            // surface. The episode is answered, so a second `Suboptimal`
+            // does not configure again and this goes at most one level deep;
+            // its disposition (or error) is what the screen now shows.
+            Ok(true) => return self.render_frame_inner(scene),
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(target: "flui.gpu", %error, "reconfigure after a suboptimal frame failed");
+            }
         }
 
         Ok(classify_frame(true, true))
