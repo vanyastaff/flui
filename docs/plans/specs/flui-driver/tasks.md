@@ -1,6 +1,7 @@
 # flui-driver: tasks
 
-- **Status:** approved by the owner (2026-10-20); no task started. `interaction/completeness`
+- **Status:** approved by the owner (2026-10-20). FD27 is in review in #1773 (the `Inspect` core, see its
+  card's evidence); no other task started. `interaction/completeness`
   has merged (#1733), so the IC tasks are unblocked. `flui run --agent` and `flui mcp` exist on
   the ADR-0095 endpoint (#1769); the tasks that replace that endpoint and `flui mcp` start from
   them.
@@ -557,6 +558,25 @@ graph LR
   - a counting sink performs zero allocations under an allocation-counting test allocator;
   - renderer and `Display` goldens pass with round-trip tests;
   - the diff reports a moved node with its delta and ignores a sub-tolerance change.
+- **Evidence (2026-10-20):**
+  - `flui-foundation`'s `foundation_it::inspect`:
+    `each_field_type_maps_to_its_value_and_compact_text`,
+    `the_derive_describes_every_shape_with_its_attributes`,
+    `a_generic_kind_reports_its_type_arguments`,
+    `geometry_text_parses_back_to_the_same_values`, `colour_and_duration_text_parse_back`,
+    `the_outline_shows_kind_id_fields_and_bounds_and_hides_defaults_at_summary`,
+    `a_snapshot_reads_fields_by_type_and_finds_nodes_by_link_and_kind`,
+    `the_diff_reports_a_moved_node_with_its_delta_and_ignores_a_sub_tolerance_change`,
+    `the_diff_matches_children_by_id_and_reports_additions_and_removals`;
+  - `inspect_allocation::a_counting_sink_walks_a_description_without_allocating`, with
+    `the_snapshot_sink_is_where_allocation_happens` as its positive control;
+  - `flui-sdk`'s `trybuild_ui::ui_tests`: `inspect_through_sdk` (pass),
+    `inspect_unmapped_field` and `inspect_unsupported_shape` (compile errors);
+  - `flui-protocol`'s `an_inspect_snapshot_keeps_its_wire_spelling`, and
+    `color_contract`'s `a_colour_describes_itself_by_its_exact_channels` in `flui-painting`.
+  - Not here, by the card: no tree implements `InspectTree` yet (FD4) and nothing converts a
+    snapshot to `InspectNode` yet (FD5); `InspectNode` joins the published schema with protocol
+    0.5 (FD1).
 
 ### FD28. Migration and removal
 

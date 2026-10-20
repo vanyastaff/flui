@@ -103,7 +103,9 @@ fn back_chord() -> (Key, Modifiers) {
 }
 
 /// The first Tab of a fresh window lands in the current route, and with a
-/// popup open it lands in the popup, not in the page the popup covers.
+/// popup open it lands in the popup, not in the page the popup covers. The
+/// first Shift+Tab lands on the current route's last control, again never
+/// on the covered page.
 pub(crate) fn first_tab_enters_the_current_route() {
     let (home_count, popup_count) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
     let (navigator, mut harness) = home(&home_count);
@@ -122,6 +124,31 @@ pub(crate) fn first_tab_enters_the_current_route() {
         Some("dialog"),
         "the covered page is not a Tab stop"
     );
+
+    // A route of two controls: Tab enters at the first, Shift+Tab at the last.
+    drop(navigator.push(PopupRoute::<i32>::new(|_, _, _| {
+        Column::new((
+            Focus::new(SizedBox::new(40.0, 40.0)).debug_label("first"),
+            Focus::new(SizedBox::new(40.0, 40.0)).debug_label("last"),
+        ))
+        .into_view()
+        .boxed()
+    })));
+    settle(&mut harness);
+    for (entry, shift, expected) in [("Tab", false, "first"), ("Shift+Tab", true, "last")] {
+        manager.unfocus();
+        let modifiers = if shift {
+            Modifiers::SHIFT
+        } else {
+            Modifiers::NONE
+        };
+        assert!(chord(&manager, &Key::Named(NamedKey::Tab), modifiers));
+        assert_eq!(
+            focused(&harness).as_deref(),
+            Some(expected),
+            "{entry} with nothing focused enters the top route at its {expected} control"
+        );
+    }
 }
 
 /// A push moves the focus out of the page below into the new route: the first
