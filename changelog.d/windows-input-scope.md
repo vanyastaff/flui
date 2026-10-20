@@ -2,7 +2,7 @@
 
 - `TextInputPurpose` (free text, email, URL, phone, number, search) and `TextStoreStatus::purpose`,
   set from `EditableText::input_purpose`, `TextField::input_purpose` and
-  `RawTextFormField::input_purpose`. It shapes the layout and suggestions an input method
+  `RawTextFormField::input_purpose` and the Material `TextField` and `TextFormField` (the type is `flui_sdk::platform::TextInputPurpose`). It shapes the layout and suggestions an input method
   offers and never filters what the field accepts.
 
 ### Fixed

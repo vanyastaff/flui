@@ -57,7 +57,7 @@ pub(super) struct DocumentState {
     /// `protected`, because TSF reads the input scope with the document.
     purpose: TextInputPurpose,
     /// Set when TSF asked for the input scope since the last retrieval.
-    scope_requested: Cell<bool>,
+    scope_requested: Cell<Option<input_scope::ScopeRequest>>,
     /// The window, reached only while its handle still names it.
     window: WindowRef,
     services: Weak<TextServices>,
@@ -87,7 +87,7 @@ impl DocumentState {
         Rc::new(Self {
             protected: store.status().protected,
             purpose: store.status().purpose,
-            scope_requested: Cell::new(false),
+            scope_requested: Cell::new(None),
             store,
             window,
             services,
@@ -777,14 +777,16 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
 
     fn RequestSupportedAttrs(
         &self,
-        _dwflags: u32,
+        dwflags: u32,
         cfilterattrs: u32,
         pafilterattrs: *const GUID,
     ) -> windows_core::Result<()> {
         self.com_entry("RequestSupportedAttrs", |state| {
             // SAFETY: TSF passes `cfilterattrs` GUIDs at `pafilterattrs`.
-            let wanted = unsafe { input_scope::filter_wants_scope(cfilterattrs, pafilterattrs) };
-            state.scope_requested.set(wanted);
+            let request = unsafe {
+                input_scope::ScopeRequest::from_request(dwflags, cfilterattrs, pafilterattrs)
+            };
+            state.scope_requested.set(request);
             Ok(())
         })
     }
@@ -794,13 +796,15 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         _acppos: i32,
         cfilterattrs: u32,
         pafilterattrs: *const GUID,
-        _dwflags: u32,
+        dwflags: u32,
     ) -> windows_core::Result<()> {
         // The scope is one for the whole document, so it holds at any position.
         self.com_entry("RequestAttrsAtPosition", |state| {
             // SAFETY: TSF passes `cfilterattrs` GUIDs at `pafilterattrs`.
-            let wanted = unsafe { input_scope::filter_wants_scope(cfilterattrs, pafilterattrs) };
-            state.scope_requested.set(wanted);
+            let request = unsafe {
+                input_scope::ScopeRequest::from_request(dwflags, cfilterattrs, pafilterattrs)
+            };
+            state.scope_requested.set(request);
             Ok(())
         })
     }
@@ -840,12 +844,12 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
     ) -> windows_core::Result<()> {
         self.com_entry("RetrieveRequestedAttrs", |state| {
             let scope = input_scope::scope_for(state.opened_status());
-            let requested = state.scope_requested.replace(false);
-            match scope {
-                Some(scope) if requested && ulcount > 0 && !paattrvals.is_null() => {
+            let requested = state.scope_requested.take();
+            match (scope, requested) {
+                (Some(scope), Some(request)) if ulcount > 0 && !paattrvals.is_null() => {
                     // SAFETY: TSF passes room for `ulcount` (at least one)
                     // values, uninitialised, so the write must not drop.
-                    unsafe { paattrvals.write(input_scope::scope_attribute(scope)) };
+                    unsafe { paattrvals.write(input_scope::scope_attribute(scope, request)) };
                     put(pcfetched, 1);
                 }
                 _ => put(pcfetched, 0),

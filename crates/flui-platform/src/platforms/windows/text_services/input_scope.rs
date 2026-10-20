@@ -7,10 +7,11 @@
 use flui_platform_api::text_store::{TextInputPurpose, TextStoreStatus};
 use windows::Win32::{
     Foundation::E_NOTIMPL,
-    System::Com::CoTaskMemAlloc,
+    System::{Com::CoTaskMemAlloc, Variant::VARIANT},
     UI::TextServices::{
         GUID_PROP_INPUTSCOPE, IS_DIGITS, IS_EMAIL_SMTPEMAILADDRESS, IS_PASSWORD, IS_SEARCH,
         IS_TELEPHONE_FULLTELEPHONENUMBER, IS_URL, ITfInputScope, ITfInputScope_Impl, InputScope,
+        TS_ATTR_FIND_WANT_VALUE,
     },
 };
 use windows_core::{BSTR, GUID};
@@ -47,16 +48,54 @@ pub(super) unsafe fn filter_wants_scope(count: u32, filter: *const GUID) -> bool
     filter.contains(&GUID_PROP_INPUTSCOPE)
 }
 
-/// The attribute value TSF reads for the scope `scope`: the attribute id and
-/// an `ITfInputScope` holding that one scope.
-pub(super) fn scope_attribute(scope: InputScope) -> windows::Win32::UI::TextServices::TS_ATTRVAL {
-    let object: ITfInputScope = SingleScope { scope }.into();
-    let unknown: windows_core::IUnknown =
-        windows_core::Interface::cast(&object).expect("BUG: every COM object answers IUnknown");
+/// How TSF asked for the input scope: only whether the document has one, or
+/// for its value too (`TS_ATTR_FIND_WANT_VALUE`). A probe is answered with an
+/// empty value, as `ITextStoreACP::RequestSupportedAttrs` requires.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ScopeRequest {
+    Probe,
+    Value,
+}
+
+impl ScopeRequest {
+    /// The request `flags` and a filter of `count` GUIDs at `filter` make, if
+    /// it names the input scope.
+    ///
+    /// # Safety
+    ///
+    /// As for [`filter_wants_scope`].
+    pub(super) unsafe fn from_request(flags: u32, count: u32, filter: *const GUID) -> Option<Self> {
+        // SAFETY: the caller's guarantee.
+        if !unsafe { filter_wants_scope(count, filter) } {
+            return None;
+        }
+        Some(if flags & TS_ATTR_FIND_WANT_VALUE != 0 {
+            Self::Value
+        } else {
+            Self::Probe
+        })
+    }
+}
+
+/// The attribute TSF reads for the scope `scope`: the attribute id and, for a
+/// request that wants the value, an `ITfInputScope` holding that one scope.
+pub(super) fn scope_attribute(
+    scope: InputScope,
+    request: ScopeRequest,
+) -> windows::Win32::UI::TextServices::TS_ATTRVAL {
+    let value = match request {
+        ScopeRequest::Probe => VARIANT::default(),
+        ScopeRequest::Value => {
+            let object: ITfInputScope = SingleScope { scope }.into();
+            let unknown: windows_core::IUnknown = windows_core::Interface::cast(&object)
+                .expect("BUG: every COM object answers IUnknown");
+            unknown.into()
+        }
+    };
     windows::Win32::UI::TextServices::TS_ATTRVAL {
         idAttr: GUID_PROP_INPUTSCOPE,
         dwOverlapId: 0,
-        varValue: unknown.into(),
+        varValue: value,
     }
 }
 
@@ -163,6 +202,21 @@ mod tests {
         ];
         for (status, expected) in cases {
             assert_eq!(scope_for(status), expected, "{status:?}");
+        }
+    }
+
+    #[test]
+    fn a_request_wants_the_value_only_when_it_says_so() {
+        let other = GUID::from_u128(1);
+        // SAFETY: each filter points at as many GUIDs as its count says.
+        unsafe {
+            let ask = |flags, count, filter| ScopeRequest::from_request(flags, count, filter);
+            assert_eq!(ask(0, 1, &GUID_PROP_INPUTSCOPE), Some(ScopeRequest::Probe));
+            assert_eq!(
+                ask(TS_ATTR_FIND_WANT_VALUE, 1, &GUID_PROP_INPUTSCOPE),
+                Some(ScopeRequest::Value)
+            );
+            assert_eq!(ask(TS_ATTR_FIND_WANT_VALUE, 1, &raw const other), None);
         }
     }
 
