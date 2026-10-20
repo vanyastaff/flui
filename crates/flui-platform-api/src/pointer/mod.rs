@@ -93,6 +93,7 @@ use crate::keyboard::Modifiers;
 /// # Ok::<(), core::num::TryFromIntError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PointerId(NonZeroU64);
 
 impl PointerId {

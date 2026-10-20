@@ -131,9 +131,20 @@ impl MotionFrame {
     }
 
     /// `root` displacement in the member's own space.
+    ///
+    /// The direction is the member's own; the length stays the root's, so a
+    /// scaled route compares like a rotated one: slop and ownership are both
+    /// in root logical pixels.
     pub(crate) fn localize(self, root: Offset<f64>) -> Offset<f64> {
         let [a, b, c, d] = self.linear;
-        Offset::new(a * root.dx + b * root.dy, c * root.dx + d * root.dy)
+        let local = Offset::new(a * root.dx + b * root.dy, c * root.dx + d * root.dy);
+        let length = local.dx.hypot(local.dy);
+        if length > 0.0 && length.is_finite() {
+            let scale = root.dx.hypot(root.dy) / length;
+            Offset::new(local.dx * scale, local.dy * scale)
+        } else {
+            local
+        }
     }
 }
 

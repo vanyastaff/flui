@@ -2787,10 +2787,7 @@ pub(crate) fn a_native_pan_drives_a_drag_only_detector() {
 }
 
 /// Sends a vertical native pan through `laid`, one `(nanos, y, phase)` at a time.
-fn send_native_pan(
-    laid: &LaidOut,
-    steps: &[(u64, f64, flui_platform_api::pointer::PanZoomPhase)],
-) {
+fn send_native_pan(laid: &LaidOut, steps: &[(u64, f64, flui_platform_api::pointer::PanZoomPhase)]) {
     use flui_foundation::geometry::Point;
     use flui_platform_api::{
         EventTime,
@@ -2859,7 +2856,7 @@ pub(crate) fn a_restarted_native_pan_ends_the_drag_it_replaces() {
             .drag(
                 DragSlot::vertical()
                     .on_end(move |_, details| {
-                        end.borrow_mut().push(format!("{:?}", details.reason))
+                        end.borrow_mut().push(format!("{:?}", details.reason));
                     })
                     .on_cancel(move |_| cancel.borrow_mut().push("cancel".to_owned())),
             )
