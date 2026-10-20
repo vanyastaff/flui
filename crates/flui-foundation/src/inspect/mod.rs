@@ -23,6 +23,7 @@ mod fields;
 mod render;
 mod snapshot;
 mod tree;
+mod type_name;
 mod value;
 
 pub use diff::{Change, DiffOptions, NodePath, diff};
@@ -31,10 +32,11 @@ pub use fields::{
 };
 pub use render::{Ansi, Plain, Role, Style, render, style_for};
 pub use snapshot::{
-    FieldError, FromField, MatchError, Matches, OwnedField, OwnedValue, SnapshotNode,
-    SnapshotQuery, Variant, snapshot,
+    FieldError, FromField, MatchError, Matches, OwnedField, OwnedValue, SnapshotError,
+    SnapshotNode, SnapshotQuery, Variant, snapshot,
 };
 pub use tree::{InspectId, InspectTree, Link, Links, NodeView};
+pub use type_name::{kind_args_of, kind_of};
 pub use value::{Rgba, ToValue, Value};
 
 /// Derives [`Inspect`] for a struct or an enum.

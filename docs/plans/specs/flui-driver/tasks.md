@@ -179,6 +179,23 @@ graph LR
   - a counter app's three trees link element → render → semantics;
   - budgets truncate with the `omitted_children` counts;
   - a stale id answers `gone`.
+- **Evidence (2026-10-20):**
+  - `flui-testing`'s `flui_testing_it::inspect`:
+    `a_counters_elements_link_to_render_objects_that_link_to_semantics`,
+    `budgets_truncate_every_tree_with_omitted_children_counts` (elements, render, layers),
+    `an_id_from_before_a_removal_is_gone` (the replacement reuses the slot, so only the
+    generation tells the nodes apart), `render_facts_read_back_typed`,
+    `a_views_inspect_fields_follow_the_element_facts`;
+  - `flui-foundation`'s `foundation_it::inspect`:
+    `a_query_from_a_missing_node_is_gone_and_an_empty_tree_is_empty`,
+    `a_type_name_spells_its_kind_and_type_arguments`.
+  - As built: `ElementTree` and `LayerTree` implement `InspectTree` themselves, and the render
+    tree through `PipelineOwner::inspect`, which carries the render-to-semantics links. An
+    element's kind comes from its view's type, which the element knows statically, so nothing is
+    recorded at mount. Views carry no `Diagnosticable` properties; `View::inspect` is their
+    description, filled by `#[view(inspect)]` on the view derives. A render object's
+    `Diagnosticable` lines arrive as one text field, `properties`, until FD28. `snapshot` answers
+    `SnapshotError::Gone` for a stale start node; the protocol's `gone` comes with FD5.
 
 ### FD5. Runtime agent
 

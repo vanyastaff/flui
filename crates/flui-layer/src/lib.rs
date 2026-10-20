@@ -53,6 +53,7 @@
 
 mod compositor;
 mod damage;
+mod inspect;
 mod layer;
 mod link;
 mod scene;

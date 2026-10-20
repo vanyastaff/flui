@@ -140,6 +140,18 @@ where
         TypeId::of::<V>()
     }
 
+    fn view_type_name(&self) -> &'static str {
+        core::any::type_name::<V>()
+    }
+
+    fn debug_kind(&self) -> &'static str {
+        self.behavior.debug_kind()
+    }
+
+    fn inspect_view(&self, out: &mut flui_foundation::inspect::Fields<'_>) {
+        View::inspect(self.core.view(), out);
+    }
+
     fn current_key_hash(&self) -> Option<u64> {
         // The View configuration always lives in `ElementCore`; read its
         // key and hash it. `View::key()` returns `None` for keyless

@@ -67,6 +67,8 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         .predicates
         .push(parse_quote!(Self: #runtime::StatelessView));
 
+    let inspect = crate::derive_stateless::inspect_method(input)?;
+
     Ok(quote! {
         #[automatically_derived]
         impl #impl_generics #runtime::View for #ident #ty_generics
@@ -75,6 +77,37 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             fn create_element(&self) -> #runtime::element::ElementKind {
                 #runtime::element::ElementKind::stateless(self)
             }
+
+            #inspect
+        }
+    })
+}
+
+/// The `View::inspect` method `#[view(inspect)]` asks for, forwarding to the type's own
+/// `Inspect` (ADR-0242 §3), or nothing without the attribute.
+pub(crate) fn inspect_method(input: &DeriveInput) -> syn::Result<TokenStream> {
+    let mut wanted = false;
+    for attr in input
+        .attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("view"))
+    {
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("inspect") {
+                wanted = true;
+                Ok(())
+            } else {
+                Err(meta.error("expected `inspect`"))
+            }
+        })?;
+    }
+    if !wanted {
+        return Ok(TokenStream::new());
+    }
+    let foundation = crate::runtime_path::Runtime::Foundation.resolve(input.ident.span())?;
+    Ok(quote! {
+        fn inspect(&self, out: &mut #foundation::inspect::Fields<'_>) {
+            <Self as #foundation::inspect::Inspect>::inspect(self, out);
         }
     })
 }

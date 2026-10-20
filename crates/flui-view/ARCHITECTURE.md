@@ -644,6 +644,19 @@ closed window alive. Flutter has no counterpart. Pinned by
 `a_window_answers_through_its_port_until_the_port_is_gone` and the runtime's
 `dev_agent_host_contains_its_hook`.
 
+### The element tree inspects itself; a view only describes its configuration
+
+`ElementTree` implements ADR-0242's `InspectTree` over `dyn ElementBase`. The tree names each
+node by its generational `ElementId`, so a read from an id whose slot now holds a newer element
+answers `SnapshotError::Gone`. A node's kind is its view's `type_name`, which every
+`Element<V, A, B>` knows from `V`; nothing is recorded at mount. The tree writes the element's
+own facts (element kind, key, lifecycle, dirtiness, depth, slot) and links the element's render
+object. The view writes only its configuration, through the provided `View::inspect`, which
+`#[view(inspect)]` on the view derives fills from the type's `#[derive(Inspect)]`. The hook is a
+method because stable Rust cannot ask at mount whether `V: Inspect`. Pinned by `flui-testing`'s
+`a_counters_elements_link_to_render_objects_that_link_to_semantics` and
+`an_id_from_before_a_removal_is_gone`.
+
 ### The composition-root seam is a hidden module, not a feature
 
 What the UI runtime-owning crates (`flui-runtime`, `flui-app`, `flui-testing`, `flui-hot-reload`)

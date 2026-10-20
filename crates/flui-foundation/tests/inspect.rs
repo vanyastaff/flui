@@ -12,8 +12,9 @@ use std::time::Duration;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Rect, Size};
 use flui_foundation::inspect::{
     Change, DiffOptions, Field, FieldError, Fields, Inspect, InspectId, InspectTree, Level, Link,
-    Links, MatchError, Meta, NodeView, OwnedValue, Plain, Rgba, Seq, Sink, SnapshotNode,
-    SnapshotQuery, ToValue, Unit, Value, Variant, diff, render, snapshot,
+    Links, MatchError, Meta, NodeView, OwnedValue, Plain, Rgba, Seq, Sink, SnapshotError,
+    SnapshotNode, SnapshotQuery, ToValue, Unit, Value, Variant, diff, kind_args_of, kind_of,
+    render, snapshot,
 };
 use flui_foundation::{ElementId, LayerId, RenderId, SemanticsId};
 
@@ -832,18 +833,24 @@ fn a_snapshot_counts_untyped_fields_and_keeps_sequences() {
 }
 
 #[test]
-fn a_query_from_a_missing_node_yields_nothing() {
+fn a_query_from_a_missing_node_is_gone_and_an_empty_tree_is_empty() {
     let tree = sample(8.0);
     let missing = SnapshotQuery {
         root: Some(render_id(99).into()),
         ..SnapshotQuery::default()
     };
-    assert!(snapshot(&tree, missing).is_none());
+    assert_eq!(
+        snapshot(&tree, missing),
+        Err(SnapshotError::Gone(render_id(99).into()))
+    );
     let empty = Tree {
         root: None,
         nodes: BTreeMap::new(),
     };
-    assert!(snapshot(&empty, SnapshotQuery::default()).is_none());
+    assert_eq!(
+        snapshot(&empty, SnapshotQuery::default()),
+        Err(SnapshotError::Empty)
+    );
 }
 
 #[test]
@@ -957,4 +964,27 @@ fn a_variant_field_reads_as_its_names() {
             name: "Cover"
         })
     );
+}
+
+/// Erased nodes name their kind from the type name: the last path segment, with its type
+/// arguments reported apart.
+#[test]
+fn a_type_name_spells_its_kind_and_type_arguments() {
+    let cases: [(&'static str, &str, &[&str]); 5] = [
+        ("Padding", "Padding", &[]),
+        ("flui_widgets::basic::Padding", "Padding", &[]),
+        ("a::Builder<b::C>", "Builder", &["b::C"]),
+        (
+            "a::Map<b::K, c::V<d::W, e::X>>",
+            "Map",
+            &["b::K", "c::V<d::W, e::X>"],
+        ),
+        ("a::F<fn(u8) -> u8, b::T>", "F", &["fn(u8) -> u8", "b::T"]),
+    ];
+    for (type_name, kind, args) in cases {
+        assert_eq!(kind_of(type_name), kind, "{type_name}");
+        let mut seen = Vec::new();
+        kind_args_of(type_name, &mut |arg| seen.push(arg));
+        assert_eq!(seen, args, "{type_name}");
+    }
 }

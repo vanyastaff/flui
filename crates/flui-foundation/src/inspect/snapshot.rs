@@ -209,11 +209,33 @@ pub struct SnapshotNode {
     pub debug_fields: u32,
 }
 
-/// Takes an owned snapshot of `tree`, or `None` when the start node does not exist.
-pub fn snapshot<T: InspectTree + ?Sized>(tree: &T, query: SnapshotQuery) -> Option<SnapshotNode> {
-    let start = query.root.or_else(|| tree.root())?;
+/// Why a snapshot has no node to start from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SnapshotError {
+    /// The tree has no root.
+    #[error("the tree is empty")]
+    Empty,
+    /// The start node is not in the tree: it was removed, or its slot holds a newer node.
+    #[error("{0} is gone")]
+    Gone(InspectId),
+}
+
+/// Takes an owned snapshot of `tree` from the query's start node.
+///
+/// # Errors
+///
+/// [`SnapshotError::Empty`] for a tree with no root and no start node asked for, and
+/// [`SnapshotError::Gone`] when the start node asked for is not in the tree.
+pub fn snapshot<T: InspectTree + ?Sized>(
+    tree: &T,
+    query: SnapshotQuery,
+) -> Result<SnapshotNode, SnapshotError> {
+    let start = query
+        .root
+        .or_else(|| tree.root())
+        .ok_or(SnapshotError::Empty)?;
     let mut budget = query.max_nodes.unwrap_or(u32::MAX);
-    take(tree, start, 0, &query, &mut budget)
+    take(tree, start, 0, &query, &mut budget).ok_or(SnapshotError::Gone(start))
 }
 
 fn take<T: InspectTree + ?Sized>(
