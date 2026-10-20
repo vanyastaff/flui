@@ -1392,6 +1392,13 @@ mod x11_window {
             window.on_state_changed(Box::new(move || {
                 counter.fetch_add(1, Ordering::SeqCst);
             }));
+            // Every visibility report, after the one the window opened with:
+            // an unmapped window has had no visibility event yet.
+            let visibility = Arc::new(Mutex::new(vec![true]));
+            let reported = Arc::clone(&visibility);
+            window.on_visibility_status_change(Box::new(move |visible| {
+                reported.lock().push(visible);
+            }));
 
             window.reveal_after_first_frame();
             until_map_state(server, id, MapState::VIEWABLE);
@@ -1421,11 +1428,6 @@ mod x11_window {
             // Hiding and showing are reported, so a late `Occluded` from
             // either cannot leave the last report behind what the window
             // answers.
-            let visibility = Arc::new(Mutex::new(Vec::new()));
-            let reported = Arc::clone(&visibility);
-            window.on_visibility_status_change(Box::new(move |visible| {
-                reported.lock().push(visible);
-            }));
             window
                 .apply(WindowCommand::Hide)
                 .expect("a desktop window hides");
