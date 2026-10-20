@@ -1333,3 +1333,14 @@ impl std::fmt::Display for ParseColorError {
 impl std::error::Error for ParseColorError {}
 
 // ===== Tests =====
+
+// ===== Inspection =====
+
+/// A colour describes itself by its channels (ADR-0242), and prints as `#RRGGBB[AA]`.
+impl flui_foundation::inspect::ToValue for Color {
+    fn to_value(&self) -> flui_foundation::inspect::Value<'_> {
+        flui_foundation::inspect::Value::Color(flui_foundation::inspect::Rgba::new(
+            self.r, self.g, self.b, self.a,
+        ))
+    }
+}
