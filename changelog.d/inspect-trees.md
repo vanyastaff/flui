@@ -31,4 +31,5 @@
 - `snapshot`, and a `SnapshotNode`'s `render`, `diff`, clone, comparison and drop, keep their own
   stack, so a tree as deep as a long layer chain snapshots without overflowing the thread's stack.
   Every layer variant reports the parameters that change what it paints (a colour or image
-  filter, a shader mask, a texture, a follower's anchors), so `diff` sees a changed effect.
+  filter, a shader mask, a texture, a follower's anchors), and a picture a fingerprint of its
+  commands, so `diff` sees a changed effect or drawing.

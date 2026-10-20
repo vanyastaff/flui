@@ -7,12 +7,17 @@
 //! the layer defines in its own coordinates, for the variants that define one. Every variant
 //! reports the parameters that change what it paints: a typed value where the inspect model has
 //! one, and otherwise (a filter, shader, annotation, or a clip shape that is not a rectangle) its
-//! `Debug` text. A clip layer also reports how it rasterises its edge.
+//! `Debug` text. A clip layer also reports how it rasterises its edge, and a picture a fingerprint
+//! of its commands next to their count, so a changed drawing reads apart.
 
+use core::fmt::{self, Write as _};
 use flui_foundation::LayerId;
 use flui_foundation::inspect::{
-    Fields, Inspect, InspectId, InspectTree, Link, Links, NodeView, SceneLayer, Unit, Value,
+    Fields, Inspect, InspectId, InspectTree, Level, Link, Links, NodeView, SceneLayer, Unit, Value,
 };
+use std::hash::{DefaultHasher, Hasher};
+
+use flui_painting::DisplayList;
 use flui_painting::paint::Clip;
 
 use crate::{Layer, LayerTree};
@@ -53,9 +58,13 @@ impl Inspect for Layer {
             }
             Layer::Picture(layer) => {
                 out.field("commands", &layer.picture().len());
+                out.field("content", &fingerprint(layer.picture()))
+                    .level(Level::Detail);
             }
             Layer::Canvas(layer) => {
                 out.field("commands", &layer.display_list().len());
+                out.field("content", &fingerprint(layer.display_list()))
+                    .level(Level::Detail);
             }
             Layer::Texture(layer) => {
                 out.value("texture_id", Value::Debug(&layer.texture_id()));
@@ -169,4 +178,24 @@ fn clip_value(clip: Clip) -> Value<'static> {
             Clip::AntiAliasWithSaveLayer => "AntiAliasWithSaveLayer",
         },
     }
+}
+
+/// A fingerprint of a display list's commands, so two pictures of one length and bounds that
+/// draw differently read apart. It hashes each command's `Debug` text as it is written, keeping
+/// none of it; equal within one build of the program, not across builds.
+fn fingerprint(list: &DisplayList) -> u64 {
+    struct Hashing(DefaultHasher);
+
+    impl fmt::Write for Hashing {
+        fn write_str(&mut self, text: &str) -> fmt::Result {
+            self.0.write(text.as_bytes());
+            Ok(())
+        }
+    }
+
+    let mut out = Hashing(DefaultHasher::new());
+    for command in list {
+        write!(out, "{command:?}").expect("BUG: hashing text never fails");
+    }
+    out.0.finish()
 }

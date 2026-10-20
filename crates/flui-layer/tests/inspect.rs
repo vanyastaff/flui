@@ -6,10 +6,11 @@ use flui_foundation::inspect::{
 };
 use flui_layer::{
     ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer,
-    FollowerLayer, ImageFilterLayer, Layer, LayerLink, LayerTree, OffsetLayer,
+    FollowerLayer, ImageFilterLayer, Layer, LayerLink, LayerTree, OffsetLayer, PictureLayer,
 };
 use flui_painting::paint::{BlendMode, Clip, ColorFilter, ImageFilter, Path};
 use flui_painting::styling::Color;
+use flui_painting::{Canvas, Paint};
 
 /// Builds a clip layer of one kind around `rect`.
 type MakeClip = fn(Rect, Clip) -> Layer;
@@ -102,13 +103,15 @@ fn diamond() -> Path {
     path
 }
 
-/// A layer whose effect changes snapshots apart from the one before, so `diff` reports it.
+/// A layer whose effect or drawing changes snapshots apart from the one before, so `diff` reports it.
 ///
-/// Fails when a variant reports nothing about its effect and two such layers read alike.
+/// Fails when a variant reports nothing about its effect, or a picture only its command count,
+/// and two such layers read alike.
 #[test]
 fn layers_that_differ_only_in_their_effect_diff_apart() {
     let link = LayerLink::new();
-    let pairs: [(&str, Layer, Layer); 3] = [
+    let pairs: [(&str, Layer, Layer); 4] = [
+        ("Picture", filled(Color::RED), filled(Color::BLUE)),
         (
             "ColorFilter",
             ColorFilterLayer::new(ColorFilter::grayscale()).into(),
@@ -171,4 +174,11 @@ impl core::fmt::Write for Lines {
         self.0 += text.matches('\n').count();
         Ok(())
     }
+}
+
+/// A picture of one rectangle filled with `color`.
+fn filled(color: Color) -> Layer {
+    let mut canvas = Canvas::new();
+    canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 40.0, 20.0), &Paint::fill(color));
+    PictureLayer::new(canvas.finish()).into()
 }
