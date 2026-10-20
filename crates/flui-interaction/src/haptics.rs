@@ -46,6 +46,8 @@ use flui_platform_api::{DeviceId, EventTime, HapticFeedback, PlatformHaptics};
 
 use crate::gesture::arena::{DispatchedInput, DispatchedInputCell};
 
+use crate::retain::Retain;
+
 /// How many outcomes a presentation holds for its observers, counting the
 /// requests still queued for a frame (ADR-0210 §4).
 pub const MAILBOX_CAPACITY: usize = 64;
@@ -53,6 +55,10 @@ pub const MAILBOX_CAPACITY: usize = 64;
 /// Consecutive failed delivery passes one registration gets before the head
 /// waits for a new registration (ADR-0210 §4).
 const RETRY_BOUND: u8 = 3;
+
+const CLOSED_UNDELIVERED: &str =
+    "a haptic outcome was not delivered before its presentation closed";
+const WITHDRAWN_UNDELIVERED: &str = "a haptic outcome was withdrawn with its failed presentation";
 
 /// The display period assumed until the window reports one: 60 Hz.
 pub const FALLBACK_REFRESH_PERIOD: Duration = Duration::from_nanos(16_666_667);
@@ -103,6 +109,7 @@ enum Play {
     },
 }
 
+#[derive(Clone)]
 struct Queued {
     ticket: HapticTicket,
     deadline: EventTime,
@@ -150,6 +157,15 @@ struct State {
     observers: RefCell<Vec<Slot>>,
     registrations: IdMint<NonZeroU64>,
     delivering: Cell<bool>,
+    /// The queued request a resolution is playing: a resolution the backend
+    /// reenters leaves it to the one playing it.
+    resolving: Cell<Option<HapticTicket>>,
+    /// Outcomes a reentered resolution decided, waiting for the request
+    /// being played to reach the mailbox first.
+    staged: RefCell<Vec<Entry>>,
+    /// The reason a close that ran inside a play reports with: the outermost
+    /// resolution reports what reached the mailbox after that close.
+    report_after_play: Cell<Option<&'static str>>,
 }
 
 /// Drop `outgoing` outside every borrow; a panic in its destructor must not
@@ -162,6 +178,46 @@ fn retire_outside_delivery(outgoing: Option<Observer>) {
             "a retired haptics observer panicked while it was dropped"
         );
         flui_foundation::panic::retain_opaque_payload(payload);
+    }
+}
+
+/// The queued request a resolution plays, for as long as it plays: the
+/// resolution it nests in, if any, takes over again when it returns or
+/// unwinds.
+struct Playing<'a> {
+    resolving: &'a Cell<Option<HapticTicket>>,
+    outer: Option<HapticTicket>,
+}
+
+impl<'a> Playing<'a> {
+    fn enter(resolving: &'a Cell<Option<HapticTicket>>, ticket: HapticTicket) -> Self {
+        let outer = resolving.replace(Some(ticket));
+        Self { resolving, outer }
+    }
+}
+
+impl Drop for Playing<'_> {
+    fn drop(&mut self) {
+        self.resolving.set(self.outer);
+    }
+}
+
+/// Moves the outcomes a reentered resolution staged into the mailbox, after
+/// the request being played.
+struct StagedOutcomes<'a>(&'a State);
+
+impl Drop for StagedOutcomes<'_> {
+    fn drop(&mut self) {
+        let state = self.0;
+        let staged = std::mem::take(&mut *state.staged.borrow_mut());
+        state.mailbox.borrow_mut().extend(staged);
+        // The presentation closed while a request played: the request, and
+        // what the close resolved behind it, reached the mailbox only now,
+        // after the close reported what it held. They are reported too.
+        if let Some(reason) = state.report_after_play.take() {
+            state.suppress_queued();
+            state.report_undelivered(reason);
+        }
     }
 }
 
@@ -202,6 +258,10 @@ impl State {
         let Some(actuator) = (self.actuator)() else {
             return HapticOutcome::Unavailable;
         };
+        // Reaching the actuator may have hidden the window or turned haptics off.
+        if self.suppressed() {
+            return HapticOutcome::Suppressed;
+        }
         match play {
             Play::Feedback(kind) => actuator.perform_with(*kind, request),
             Play::Pattern { pattern, fallback } => actuator.play(pattern, *fallback, request),
@@ -218,7 +278,8 @@ impl State {
         if request.timing == HapticTiming::Immediate {
             return self.play_now(&play, &request);
         }
-        let held = self.queue.borrow().len() + self.mailbox.borrow().len();
+        let held =
+            self.queue.borrow().len() + self.staged.borrow().len() + self.mailbox.borrow().len();
         if held >= MAILBOX_CAPACITY {
             return self.play_now(&play, &request);
         }
@@ -246,26 +307,59 @@ impl State {
 
     /// Resolve every queued request `resolve` decides, in ticket order, into
     /// the mailbox; requests it returns `None` for stay queued.
+    ///
+    /// Each request leaves the queue only as its outcome enters the mailbox,
+    /// before the next is resolved: a backend that panics in `resolve` loses
+    /// no outcome resolved before it, and its request and those behind it
+    /// stay queued. Requests a backend call queues stay behind for the next
+    /// pass.
     fn resolve(&self, mut resolve: impl FnMut(&Queued) -> Option<HapticOutcome>) {
-        let queued = std::mem::take(&mut *self.queue.borrow_mut());
-        let mut kept = VecDeque::new();
-        let mut resolved = Vec::new();
-        for entry in queued {
-            match resolve(&entry) {
-                Some(outcome) => resolved.push(Entry {
-                    ticket: entry.ticket,
-                    outcome,
-                    delivered: Vec::new(),
-                }),
-                None => kept.push_back(entry),
+        let tickets: Vec<HapticTicket> = self.queue.borrow().iter().map(|e| e.ticket).collect();
+        for ticket in tickets {
+            // Cloned out, so no borrow is held while a backend runs.
+            let Some(entry) = self
+                .queue
+                .borrow()
+                .iter()
+                .find(|entry| entry.ticket == ticket)
+                .cloned()
+            else {
+                // A backend call resolved it already.
+                continue;
+            };
+            // A resolution the backend reenters leaves the request being
+            // played to the resolution playing it.
+            if self.resolving.get() == Some(ticket) {
+                continue;
+            }
+            // What a reentered resolution decides waits until the request
+            // being played is in the mailbox, so outcomes keep ticket order;
+            // it reaches the mailbox when that play returns or unwinds.
+            let _staged = self.resolving.get().is_none().then(|| StagedOutcomes(self));
+            let outcome = {
+                let _playing = Playing::enter(&self.resolving, ticket);
+                resolve(&entry)
+            };
+            let Some(outcome) = outcome else {
+                continue;
+            };
+            let mut queue = self.queue.borrow_mut();
+            let Some(index) = queue.iter().position(|entry| entry.ticket == ticket) else {
+                continue;
+            };
+            queue.remove(index);
+            drop(queue);
+            let resolved = Entry {
+                ticket,
+                outcome,
+                delivered: Vec::new(),
+            };
+            if self.resolving.get().is_some() {
+                self.staged.borrow_mut().push(resolved);
+            } else {
+                self.mailbox.borrow_mut().push_back(resolved);
             }
         }
-        // A backend call above may have queued more; they stay behind.
-        let mut queue = self.queue.borrow_mut();
-        kept.append(&mut queue);
-        *queue = kept;
-        drop(queue);
-        self.mailbox.borrow_mut().extend(resolved);
     }
 
     fn suppress_queued(&self) {
@@ -412,6 +506,14 @@ impl State {
         self.delivering.set(false);
     }
 
+    /// A close running inside a play leaves that play's request, and what it
+    /// resolved behind it, to be reported once the play returns.
+    fn report_after_the_play(&self, reason: &'static str) {
+        if self.resolving.get().is_some() {
+            self.report_after_play.set(Some(reason));
+        }
+    }
+
     fn report_undelivered(&self, reason: &'static str) {
         let undelivered = std::mem::take(&mut *self.mailbox.borrow_mut());
         for entry in undelivered {
@@ -532,6 +634,9 @@ impl HapticsHost {
                 observers: RefCell::new(Vec::new()),
                 registrations: IdMint::new(),
                 delivering: Cell::new(false),
+                resolving: Cell::new(None),
+                staged: RefCell::new(Vec::new()),
+                report_after_play: Cell::new(None),
             },
         }
     }
@@ -564,13 +669,6 @@ impl HapticsHost {
         if !visible {
             self.state.suppress_queued();
         }
-    }
-
-    /// The deadline a request queued now gets: the factor times the window's
-    /// current refresh period.
-    #[must_use]
-    pub fn frame_deadline(&self) -> Duration {
-        self.state.frame_deadline()
     }
 
     /// A frame was presented: every queued request whose deadline has not
@@ -646,9 +744,8 @@ impl HapticsHost {
             slot.failed_passes = 0;
         }
         state.deliver(recovery);
-        state.report_undelivered(
-            "a haptic outcome was not delivered before its presentation closed",
-        );
+        state.report_undelivered(CLOSED_UNDELIVERED);
+        state.report_after_the_play(CLOSED_UNDELIVERED);
         let observers = std::mem::take(&mut *state.observers.borrow_mut());
         for slot in observers {
             recovery.retire(slot.observer);
@@ -663,10 +760,11 @@ impl HapticsHost {
         let state = &*self.state;
         state.closed.set(true);
         state.suppress_queued();
-        state.report_undelivered("a haptic outcome was withdrawn with its failed presentation");
+        state.report_undelivered(WITHDRAWN_UNDELIVERED);
+        state.report_after_the_play(WITHDRAWN_UNDELIVERED);
         let observers = std::mem::take(&mut *state.observers.borrow_mut());
         for slot in observers {
-            std::mem::forget(slot.observer);
+            slot.observer.retain();
         }
     }
 }

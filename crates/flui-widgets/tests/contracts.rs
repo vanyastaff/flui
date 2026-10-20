@@ -1133,6 +1133,7 @@ fn nested_scroll_channel() {
             ("nested_scroll::a_fresh_ancestor_physics_mid_drag_keeps_taking_the_remainder", crate::nested_scroll::a_fresh_ancestor_physics_mid_drag_keeps_taking_the_remainder),
             ("nested_scroll::a_new_chain_above_keeps_the_leaf_run", crate::nested_scroll::a_new_chain_above_keeps_the_leaf_run),
             ("nested_scroll::participant_panic_consumes_all_and_next_sequence_recovers", crate::nested_scroll::participant_panic_consumes_all_and_next_sequence_recovers),
+            ("nested_scroll::a_contact_that_ends_without_release_names_why", crate::nested_scroll::a_contact_that_ends_without_release_names_why),
             ("nested_scroll::contained_scrollable_keeps_its_remainder", crate::nested_scroll::contained_scrollable_keeps_its_remainder),
             ("nested_scroll::snap_policy_targets", crate::nested_scroll::snap_policy_targets),
             ("interactive_viewer::photo_in_pager_hands_pan_remainder_to_pager", crate::interactive_viewer::photo_in_pager_hands_pan_remainder_to_pager),

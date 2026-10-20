@@ -275,7 +275,7 @@ pub struct RefreshIndicatorStyle {
 }
 
 /// A [`RefreshIndicatorStyle`]'s builder.
-pub type RefreshIndicatorBuilder = dyn Fn(RefreshIndicatorPhase) -> Option<BoxedView>;
+pub(crate) type RefreshIndicatorBuilder = dyn Fn(RefreshIndicatorPhase) -> Option<BoxedView>;
 
 impl RefreshIndicatorStyle {
     /// A style over `child` whose indicator `builder` makes.

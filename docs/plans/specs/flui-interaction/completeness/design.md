@@ -28,14 +28,14 @@
 | `AxisLock`, `TransformLock` | блокировка оси и трансформа | UIKit `isDirectionalLockEnabled`; Compose `lockRotationOnZoomPan` |
 | `SwipeGestureRecognizer`, `SwipeStart::{Anywhere(Axis), FromEdge(PhysicalEdge)}`, `HoldGestureRecognizer` | свайп; hold на Down | UIKit `UISwipeGestureRecognizer`, `UIScreenEdgePanGestureRecognizer` |
 | `RawGestureDetector` (фабрика + `update(&config)`) | публичный детектор | Flutter `RawGestureDetector` (фабрики `GestureRecognizerFactory`) |
-| `NestedScrollConnection` (`sequence_started`, `pre_scroll`, `post_scroll`, `post_fling`, `sequence_ended`), `NestedScrollDispatcher` | канал прокрутки | Compose `NestedScrollConnection`, `NestedScrollDispatcher` |
-| `ScrollStep`, `FlingStep` | аргументы участника, `#[non_exhaustive]` | против позиционных аргументов Android `NestedScrollingParent` 1→2→3 |
+| `NestedScrollConnection` (`accepts_programmatic`, `sequence_started`, `pre_scroll`, `post_scroll`, `released`, `post_fling`, `sequence_ended`), `NestedScroll` (виджет, ставящий участника в цепочку) | канал прокрутки; диспетчер — внутренний (`ScrollSequence`), публичного типа нет: участник входит в цепочку только через `NestedScroll` | Compose `NestedScrollConnection`, `Modifier.nestedScroll` |
+| `ScrollStep { sequence, cause, device, contact, available, focal_point, device_pixel_ratio }`, `FlingStep { sequence, device, available, focal_point, device_pixel_ratio }` | аргументы участника, `#[non_exhaustive]`, в плоскости участника (ADR-0209 §1) | против позиционных аргументов Android `NestedScrollingParent` 1→2→3 |
 | `ScrollCause::{UserInput, Momentum, SideEffect, Programmatic}` | причина дельты | Compose `NestedScrollSource`; AppKit `momentumPhase`; Blitz источник прокрутки |
 | `ScrollDevice::{Pointer { kind, device }, Keyboard, Assistive, Programmatic}` | устройство последовательности; действие прокрутки AT — `UserInput` с `Assistive`, `reveal` — `Programmatic` | переиспользует `PointerKind`, `DeviceId` |
 | `ScrollEndReason::{Released, Cancelled, Preempted, ArenaLost}` | причина конца последовательности | — |
 | `FlingHandoff::{Declined, Accepted}` | ответ `post_fling` | Compose `onPostFling` |
 | `OverscrollBehavior::{Auto, Contain}` | политика остатка | CSS `overscroll-behavior` |
-| `SnapPolicy` | привязка к якорям и страницам | Compose snap fling behavior |
+| `SnapPolicy`, `PageSnap` (`ViewportFraction`), `AnchorSnap` (смещения, не ключи), `SharedSnapPolicy` | привязка к якорям и страницам | Compose snap fling behavior; Flutter `PageController.viewportFraction` |
 | `AnchoredDrag`, `DraggableAnchors` | одномерное перетаскивание к якорям | Compose `anchoredDraggable`, `DraggableAnchors` |
 | `SwipeActions`, `ReorderableList`, `ReorderableGrid`, `ContextMenuArea`, `SelectionArea`, `HitSlop` | поведенческие виджеты | SwiftUI `.swipeActions`; Flutter `ReorderableListView`, `SelectionArea`; Compose Desktop `ContextMenuArea`; React Native `hitSlop` |
 | `GestureDetector` слоты | типизированные слоты | — (конфликт невыразим, вместо assert Flutter `gesture_detector.dart:321`) |
@@ -149,17 +149,22 @@ DnD-сессия, `HapticRequest`, запись и наблюдатель. Latch
 
 ## 5. Канал вложенной прокрутки (C1–C10)
 
-`flui-widgets/src/scroll/nested.rs`; ADR заменяет ADR-0169 (ошибочное утверждение о `Send`-продолжении:
+`flui-widgets/src/scroll/nested/`; ADR заменяет ADR-0169 (ошибочное утверждение о `Send`-продолжении:
 `when_complete_or_cancel` — `FnMut + 'static`, `run_future.rs:298`; endpoint переходит на `Rc`/`Cell`).
+Форма ниже — текущая, с поправками ADR-0209 (см. его строку `Amended`).
 
 ```rust
 #[non_exhaustive]
 pub struct ScrollStep { pub sequence: InputSequenceId, pub cause: ScrollCause,
-                        pub device: ScrollDevice, pub available: Vec2 }
+                        pub device: ScrollDevice, pub contact: bool, pub available: Vec2,
+                        pub focal_point: Point, pub device_pixel_ratio: f64 }
 #[non_exhaustive]
-pub struct FlingStep { pub sequence: InputSequenceId, pub device: ScrollDevice, pub available: Velocity }
+pub struct FlingStep { pub sequence: InputSequenceId, pub device: ScrollDevice, pub available: Velocity,
+                       pub focal_point: Point, pub device_pixel_ratio: f64 }
 
 pub trait NestedScrollConnection {
+    /// Asked once when a `ScrollDevice::Programmatic` sequence starts; a decliner hears none of it.
+    fn accepts_programmatic(&self) -> bool { false }
     fn sequence_started(&self, sequence: InputSequenceId) {}
     /// The last user contact lifted, before any fling run; release decisions (refresh, snap) go here.
     fn released(&self, step: &FlingStep) {}
@@ -172,19 +177,36 @@ pub trait NestedScrollConnection {
 
 - Один примитив смещения: всё, что меняет смещение (drag, колесо, клавиатура, AT, `reveal(rect)`,
   программная прокрутка, автопрокрутка DnD), идёт через диспетчер с причиной; пользовательский ввод
-  прерывает программную и плавную прокрутку (Blitz). `Programmatic` участники обрабатывают по явному выбору (методы по умолчанию его игнорируют). Коррекция якоря ADR-0051 — не прокрутка: применяется внутри layout без диспетчеризации, участники её не видят. `ScrollCause`, `ScrollDevice`, `ScrollEndReason` — `#[non_exhaustive]`.
+  прерывает программную и плавную прокрутку (Blitz). `Programmatic` участники обрабатывают по явному выбору: `accepts_programmatic` спрашивается один раз в начале программной последовательности, отказавшийся (по умолчанию) не слышит ни начала, ни шагов, ни конца. `reveal(rect)` двигает каждого предка-прокручиваемого его собственной геометрией, ближайшего первым, в отдельной программной последовательности через цепочку этого предка: участникам выше предлагается `pre_scroll` его шага, а остаток через `post_scroll` не поднимается — то, что предок должен сдвинуть, чтобы показать вложенный viewport, не равно тому, чего не смог сдвинуть вложенный (ADR-0209 §3). Участник, который хочет ответить на reveal (заголовок, раскрывающийся над строкой), делает это как область reveal. `ScrollController::set_pixels` — сырая запись позиции ниже канала (для обвязки и тестов, как коррекция якоря): участники её не видят. Коррекция якоря ADR-0051 — не прокрутка: применяется внутри layout без диспетчеризации, участники её не видят. `ScrollCause`, `ScrollDevice`, `ScrollEndReason` — `#[non_exhaustive]`.
 - Лист последовательности с контактом — владелец арены (§4); без контакта — самый глубокий участник под
-  точкой или фокусом, способный поглотить первую дельту; закреплён на последовательность; одна реализация
-  с `AxisLock`.
+  точкой или фокусом, способный поглотить первую дельту; закреплён на последовательность. Пакет колеса
+  или тачпада находит лист распространением события по пути hit-test (каждый `Scrollable`, начиная с
+  листа, передаёт дальше пакет, которым не может сдвинуться), клавиша — фокусом; дальше latch тот же, что
+  у контакта, в той же `ScrollSequence`. Это не код `AxisLock`: тот укладывает движение pan на ось внутри
+  распознавателя, уже владеющего контактом, а у бесконтактного источника нет ни контакта, ни slop
+  (ADR-0209 §5). Лист у края всё равно доносит пакет колеса до участников между ним и ближайшим
+  объемлющим прокручиваемым.
 - Fling дельтами `SideEffect`; остаток из `dx(t)`; передача наследует `InputSequenceId`; `sequence_ended`
   один раз на участника после последнего бега; `Momentum` не вызывает `post_fling`; новый `UserInput`
   отменяет переданную инерцию (`Preempted`).
-- Latch: контактная последовательность закреплена до конца контакта; лист и цепочка закреплены на время жизни `InputSequenceId`, который выдал binding; таймаут простоя завершает только бесконтактные последовательности (колесо, клавиатура, AT, автопрокрутка) — это дедлайн binding на `EventTime` из пресета, у фазовых длиннее; у канала своих таймеров нет. Цепочка закрепляется за самым глубоким участником, поглотившим часть первой ненулевой дельты (владелец у края не закрепляет); правило передачи остатка — пресет
+- Latch: контактная последовательность закреплена до конца контакта; лист и цепочка закреплены на время жизни `InputSequenceId`, который выдал binding; таймаут простоя завершает только бесконтактные последовательности (колесо, клавиатура, AT, автопрокрутка) — это дедлайн binding на `EventTime` из пресета (`contactless_latch_idle` 1,5 с, `phased_latch_idle` 3 с — фазовый источник может начаться и не закончиться, Wayland); у канала своих таймеров нет: binding сообщает конец latch с каждым пакетом (`GestureArena::dispatched_latch_end` → `ScrollLatchEnd`), лист держит одну регистрацию дедлайна на часах арены (`GestureArena::register_deadline`). Эти два шва публичны в `flui-interaction`, потому что их читает `flui-widgets`. Цепочка закрепляется за самым глубоким участником, поглотившим часть первой ненулевой дельты (владелец у края не закрепляет); правило передачи остатка — пресет
   (Android посреди drag, iOS/macOS следующей последовательностью — проверяется на устройстве).
-- Контракт: снимок цепочки на последовательность; реентрантность отклоняется; паника = поглощено всё,
-  звено закрыто, `sequence_ended(Cancelled)`; результаты проверяются; без аллокаций.
-- `SnapPolicy` — одна: `PageView` = `Scrollable` + `SnapPolicy`; `AnchoredDrag` — ограниченный лист
-  прокрутки с той же политикой.
+- Контракт: снимок цепочки на последовательность; пользовательский ввод (drag, колесо, клавиша, действие
+  AT), посланный участником в свою же цепочку, отклоняется с диагностикой; программный запрос
+  (`jump_to`, `animate_to`, reveal) из прохода не отклоняется, а ждёт его конца в слоте команды
+  контроллера (ADR-0209 §3, §7); паника в любом вызове участника = поглощено всё, звено закрыто,
+  `sequence_ended(Cancelled)`; результаты `pre_scroll` и `post_scroll` проверяются (неконечный или
+  неверного знака — ничего, больше предложенного — всё); без аллокаций.
+- `SnapPolicy` — одна: `PageView` = `Scrollable` + `SnapPolicy` (`PageSnap`); `AnchoredDrag` — ограниченный лист
+  прокрутки с той же политикой. `AnchorSnap` не обобщён: цель — смещение, ключи держит `DraggableAnchors<K>`.
+- Публичная поверхность сверх исходной формы — намеренная, каждый пункт из поправок ADR-0209 или из
+  виджета, который его потребляет: `accepts_programmatic` (§2), поля шага `contact`, `focal_point`,
+  `device_pixel_ratio` (§1; плоскости участников и долг оседания §6a — внутренние, публичного API нет),
+  `NestedScroll` (единственный вход участника в цепочку), `ViewportFraction` и `InvalidViewportFraction`
+  (`PageSnap`, `PageController`, `flui-material` `TabController`), семейство `CollapsingHeader`
+  (`HeaderExtents`, `HeaderExtentsError`, `HeaderOrder`, C4), `RefreshController` и
+  `RefreshIndicatorStyle` (C3; состояние обновления для индикаторов `flui-material`), `ScrollLatchEnd`,
+  `GestureArena::dispatched_latch_end` и `register_deadline` (шов дедлайна выше).
 - Строки (`flui-widgets/tests`, записи): C1, C2 (30°, 50°, край в начале, второй палец, отмена), C3, C4
   (включая Tab и AT под заголовком), C5 (три уровня передачи, касание после), C6–C9, по топологии §4.
   Каждая строка — в задаче, которая строит соответствующий виджет.
@@ -351,8 +373,8 @@ live-region узел), строки W5 внесены у них. Строки м
 | трейт распознавателя | открытый `GestureRecognizer: GestureArenaMember`, `&self` (ADR-0161), `dyn`, объектно-безопасный | без ассоциированного `Details` (сломал бы `dyn`) | `Rc<dyn …>`, upcasting к `Rc<dyn GestureArenaMember>` (1.86); `PointerDispatch<'_>` не конструируется извне | `on_unimplemented`: «реализуйте также `GestureArenaMember`» |
 | фабрика `RawGestureDetector` | открытый `GestureRecognizerFactory`, стирается приватным blanket `ErasedFactory`, ключ — `TypeId` + явный `Key` | `type Recognizer: GestureRecognizer`; `create`, `update(&self, &Self::Recognizer)` | экземпляр в состоянии элемента | `do_not_recommend` на blanket-реализации |
 | слоты `GestureDetector` | структура с `Option` на семейство конфликта (`DragSlot`, `TransformSlot`) | потребляющий builder без typestate | неизменяемая конфигурация, пересборка сравнивает | `#[must_use]` |
-| `NestedScrollConnection`, диспетчер | открытый объектно-безопасный трейт на `&self`, методы по умолчанию, `!Send`; конкретный `NestedScrollDispatcher` | `ScrollStep`/`FlingStep` строит только диспетчер (`for_test` за `testing`); RPITIT нет | снимок `SmallVec<[Weak<dyn …>; 4]>` на последовательность; состояние участника в `Cell`/`RefCell` | нарушение контракта — обрезка с диагностикой |
-| `SnapPolicy` | открытый трейт по образцу `ScrollPhysics`: `target(&self, &ScrollMetrics, velocity) -> f64`; `PageSnap`, `AnchorSnap<K>` | — | `SnapPolicy: Send + Sync + Debug`, `Arc<dyn SnapPolicy>` как `SharedScrollPhysics`, идентичность — `Arc::ptr_eq` (шов компоновщика ADR-0207) | неконечная цель — обрезка с диагностикой |
+| `NestedScrollConnection`, диспетчер | открытый объектно-безопасный трейт на `&self`, методы по умолчанию, `!Send`; диспетчер — внутренняя `ScrollSequence`, участник подключается виджетом `NestedScroll` | `ScrollStep`/`FlingStep` строит только диспетчер (`for_test` за `testing`); RPITIT нет | снимок `SmallVec<[Weak<dyn …>; 4]>` на последовательность; состояние участника в `Cell`/`RefCell` | нарушение контракта — обрезка с диагностикой |
+| `SnapPolicy` | открытый трейт по образцу `ScrollPhysics`: `target(&self, &ScrollMetrics, velocity) -> f64`; `PageSnap`, `AnchorSnap` (не обобщённый: цель — смещение, карту ключей держит `DraggableAnchors<K>`, ADR-0209 §9) | — | `SnapPolicy: Send + Sync + Debug`, `Arc<dyn SnapPolicy>` как `SharedScrollPhysics`, идентичность — `Arc::ptr_eq` (шов компоновщика ADR-0207) | неконечная цель — обрезка с диагностикой |
 | `AnchoredDrag` | `AnchoredDrag<K: Copy + Eq + 'static>`, статически по перечислению якорей; `Hash` не требуется — якоря — отсортированный по смещению срез `Rc<[(K, f64)]>`, ключ ищется линейно; в канале участвует сам как прокручиваемый, публичного `connection()` нет | `DraggableAnchors::<K>::builder().at(k, x).build() -> Result<_, AnchorsError>`; `AnchoredDragController::set_anchors` — команда хэндла, как `jump_to`, а не `set_*` конфигурации: якоря `Dismissible` и `SwipeActions` зависят от протяжённости ряда, известной после layout | хэндл `Rc` с `Cell`, уведомления — существующий `ChangeNotifier` | `AnchorsError::{Empty, NonFinite, OutOfRange, Duplicate, Coincident, Missing}`: `OutOfRange` держит произведения скоростей конечными, `Coincident` — два ключа на одном смещении неразличимы при покое, `Missing` — ключ `jump_to`/`animate_to` вне набора |
 | `GestureAlternatives` | `enum Alternative { VisibleControl(ControlSpec), ContextMenu(MenuSpec) }` — обязательный аргумент конструктора; `ContextMenu` строится только с условиями A1 | `I: Intent` типизированно | владеемая конфигурация | `on_unimplemented` на `Intent` |
 | `HapticPattern` | проверяющий builder без typestate | `Intensity(f32)`, `Sharpness(f32)`: `TryFrom<f32>`, `const fn new -> Option`; готовый — `Arc<[HapticEvent]>` (неизменяемое значение через `Send + Sync` границу платформы) | значение | `HapticPatternError::{Unordered { index }, NonFinite, OutOfRange, EnvelopeNotClosed, TooLong { max }}`; `TryFrom<f32, Error = UnitRangeError>` |
