@@ -291,7 +291,7 @@ impl RenderNode {
 
     /// Returns a mutable reference to the tree links.
     #[inline]
-    pub fn links_mut(&mut self) -> &mut NodeLinks {
+    pub(crate) fn links_mut(&mut self) -> &mut NodeLinks {
         with_entry!(self, entry => entry.links_mut())
     }
 
@@ -305,7 +305,7 @@ impl RenderNode {
 
     /// Sets the parent ID.
     #[inline]
-    pub fn set_parent(&mut self, parent: Option<RenderId>) {
+    pub(crate) fn set_parent(&mut self, parent: Option<RenderId>) {
         self.links_mut().set_parent(parent);
     }
 
@@ -329,23 +329,13 @@ impl RenderNode {
 
     /// Adds a child.
     #[inline]
-    pub fn add_child(&mut self, child: RenderId) {
+    pub(crate) fn add_child(&mut self, child: RenderId) {
         self.links_mut().add_child(child);
-    }
-
-    /// Inserts a child at `index`, shifting later siblings right.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `index > self.child_count()`.
-    #[inline]
-    pub fn insert_child(&mut self, index: usize, child: RenderId) {
-        self.links_mut().insert_child(index, child);
     }
 
     /// Removes a child.
     #[inline]
-    pub fn remove_child(&mut self, child: RenderId) -> bool {
+    pub(crate) fn remove_child(&mut self, child: RenderId) -> bool {
         self.links_mut().remove_child(child)
     }
 

@@ -127,8 +127,16 @@ pub(super) struct DirtyTracker {
     /// the last, usually empty, pass; ADR-0074 §8 telemetry).
     layout_drained_total: u64,
 
+    /// Nodes the layout-invalidation walks have marked so far — monotonic,
+    /// like `layout_drained_total`.
+    layout_mark_steps: u64,
+
     /// A continuation's premise changes on admission, even when queues dedup.
     layout_stamp: LayoutStamp,
+
+    /// The epoch layout-mark walks stamp the nodes they pass with; 0 once
+    /// exhausted, which turns stamping off. See `commit_needs_layout`.
+    layout_walk_epoch: u64,
 
     /// Rejected layout retains its work until a live layout invalidation.
     blocked_layout: Option<RenderId>,
@@ -152,7 +160,9 @@ impl DirtyTracker {
             debug_doing_paint: false,
             debug_doing_semantics: false,
             layout_drained_total: 0,
+            layout_mark_steps: 0,
             layout_stamp: LayoutStamp::Tracked(0),
+            layout_walk_epoch: 1,
             blocked_layout: None,
             layout_batch: Vec::new(),
             notifier,
@@ -170,7 +180,10 @@ impl DirtyTracker {
     /// marks.
     pub(super) fn enter_phase(&mut self, phase: PhaseKind) {
         match phase {
-            PhaseKind::Layout => self.debug_doing_layout = true,
+            PhaseKind::Layout => {
+                self.debug_doing_layout = true;
+                self.forget_layout_walks();
+            }
             PhaseKind::Paint => self.debug_doing_paint = true,
             PhaseKind::Semantics => self.debug_doing_semantics = true,
         }
@@ -219,8 +232,8 @@ impl DirtyTracker {
     /// node's properties, children, or tree position actually changed, so a
     /// previously poisoned node earns another layout attempt exactly here.
     ///
-    /// The walk is idempotent — a stale call on an already-marked subtree
-    /// short-circuits when the flag check repeats. Missing `RenderId`s
+    /// The walk is idempotent, and stops where an earlier walk already
+    /// settled the path (see [`Self::commit_needs_layout`]). Missing `RenderId`s
     /// (post-removal stale references) are silent no-ops.
     ///
     /// Delivers a visual wake only after a new boundary entry is committed.
@@ -236,12 +249,28 @@ impl DirtyTracker {
     }
 
     /// Commit the complete invalidation walk without entering user code.
+    ///
+    /// A walk stamps every node it passes with the current layout-walk
+    /// epoch, and a later walk that reaches a stamped node stops there: the
+    /// rest of its path is already marked, uncached, un-poisoned and ends at
+    /// a queued boundary, so N sibling marks cost O(N + depth) rather than
+    /// O(N · depth). The epoch is forgotten by everything that can undo such
+    /// a path — a layout pass, an intrinsic or dry-layout query, a queue
+    /// eviction — and a node forgets its stamp whenever its ancestry
+    /// changes (`RenderTree`'s edge primitives re-derive depth). While a
+    /// layout pass runs, flags clear under the walk's feet, so walks neither
+    /// stamp nor stop early.
     pub(super) fn commit_needs_layout(
         &mut self,
         tree: &mut RenderTree,
         id: RenderId,
         on_invalidated: &mut dyn FnMut(RenderId),
     ) -> bool {
+        let epoch = if self.debug_doing_layout {
+            0
+        } else {
+            self.layout_walk_epoch
+        };
         let mut current = id;
         loop {
             // Snapshot the per-node decision under a short-lived borrow so
@@ -255,16 +284,13 @@ impl DirtyTracker {
                 if current == id {
                     self.invalidate_layout_premise();
                 }
-                // Idempotent flag set — the AtomicRenderFlags fetch-or is a
-                // no-op when the bit is already set. The walk does NOT
-                // short-circuit on "already marked": even with the
-                // `run_layout` → `layout_dirty_root` wiring (which clears
-                // NEEDS_LAYOUT after each successful layout via
-                // `layout_subtree_borrowed`), a stale flag can persist
-                // briefly between phases. Always-walking preserves
-                // correctness without depending on the precise clearing
-                // schedule; idempotence keeps it cheap.
+                if epoch != 0 && node.links().layout_walk() == epoch {
+                    #[cfg(debug_assertions)]
+                    self.debug_assert_walk_settled(tree, current, epoch);
+                    return self.blocked_layout.take().is_some();
+                }
                 node.mark_layout_flag();
+                self.layout_mark_steps = self.layout_mark_steps.saturating_add(1);
                 on_invalidated(current);
                 // A non-empty layout cache means an
                 // ANCESTOR's layout consumed this node's intrinsics/dry
@@ -275,6 +301,9 @@ impl DirtyTracker {
                 // cache the same way, so the escalation chains exactly as
                 // far as the cached dependencies go and no further.
                 let had_cached_queries = node.clear_layout_cache();
+                if epoch != 0 {
+                    node.links_mut().set_layout_walk(epoch);
+                }
                 let parent = node.links().parent();
                 let is_boundary =
                     (node.is_relayout_boundary() && !had_cached_queries) || parent.is_none();
@@ -294,6 +323,42 @@ impl DirtyTracker {
             current = parent.expect(
                 "parent must be Some: parent.is_none() case is already handled as is_boundary",
             );
+        }
+    }
+
+    /// Proves the path a walk stopped on is settled: every stamped node up
+    /// from `from` still needs layout, and the first one whose parent was
+    /// not passed in `epoch` — the boundary some walk ended at — is queued.
+    #[cfg(debug_assertions)]
+    fn debug_assert_walk_settled(&self, tree: &RenderTree, from: RenderId, epoch: u64) {
+        let mut current = from;
+        while let Some(node) = tree.get(current) {
+            debug_assert!(
+                node.needs_layout(),
+                "layout walk stopped at {from:?}, but {current:?} on its stamped path no longer \
+                 needs layout: a NEEDS_LAYOUT clearer did not forget the layout-walk epoch"
+            );
+            let Some(parent) = node.parent().filter(|&parent| {
+                tree.get(parent)
+                    .is_some_and(|p| p.links().layout_walk() == epoch)
+            }) else {
+                debug_assert!(
+                    self.dirty.needs_layout.contains(&current),
+                    "layout walk stopped at {from:?}, but the boundary {current:?} its path \
+                     ended at is no longer queued"
+                );
+                return;
+            };
+            current = parent;
+        }
+    }
+
+    /// Forgets every layout-walk stamp: the next mark on any node walks its
+    /// whole path again. Once the epoch counter is exhausted, walks stop
+    /// stamping for good rather than reuse an old epoch.
+    pub(super) fn forget_layout_walks(&mut self) {
+        if self.layout_walk_epoch != 0 {
+            self.layout_walk_epoch = self.layout_walk_epoch.checked_add(1).unwrap_or(0);
         }
     }
 
@@ -680,6 +745,7 @@ impl DirtyTracker {
     /// `mid_layout_marks`. Called by `remove_render_object` before the slab
     /// slots are freed so no phase walks a freed id.
     pub(super) fn evict(&mut self, removed_ids: &FxHashSet<RenderId>) {
+        self.forget_layout_walks();
         self.dirty.evict(removed_ids);
         self.mid_layout_marks.evict(removed_ids);
         if self
@@ -692,6 +758,7 @@ impl DirtyTracker {
 
     /// Clears all dirty work without processing it. Use with caution.
     pub(super) fn clear_all(&mut self) {
+        self.forget_layout_walks();
         self.dirty.clear();
         self.mid_layout_marks.clear();
         self.blocked_layout = None;
@@ -820,6 +887,7 @@ impl DirtyTracker {
     /// [`Self::exit_phase`] so the outer `while has_layout_work()`
     /// loop picks them up in the next iteration.
     pub(super) fn take_layout_batch_shallow_first(&mut self, tree: &RenderTree) -> Vec<DirtyNode> {
+        self.forget_layout_walks();
         let mut batch = std::mem::take(&mut self.layout_batch);
         batch.clear();
         batch.extend(self.dirty.needs_layout.drain().map(|entry| {
@@ -882,6 +950,11 @@ impl DirtyTracker {
     /// Dirty layout entries drained by every `run_layout` so far.
     pub(super) fn layout_drained_total(&self) -> u64 {
         self.layout_drained_total
+    }
+
+    /// Nodes the layout-invalidation walks have marked so far.
+    pub(super) fn layout_mark_steps(&self) -> u64 {
+        self.layout_mark_steps
     }
 
     // =========================================================================

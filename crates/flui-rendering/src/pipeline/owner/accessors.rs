@@ -1726,6 +1726,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     pub fn counters(&self) -> crate::pipeline::PipelineCounters {
         crate::pipeline::PipelineCounters {
             layout_roots: self.scheduler.layout_drained_total(),
+            layout_mark_steps: self.scheduler.layout_mark_steps(),
             ..self.counters
         }
     }

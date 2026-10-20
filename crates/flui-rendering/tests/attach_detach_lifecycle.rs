@@ -601,16 +601,7 @@ pub(crate) fn a_relocated_subtree_takes_its_new_depth() {
     let token = owner
         .detach_render_subtrees(&[moved])
         .expect("attached subtree");
-    owner
-        .render_tree_mut()
-        .get_mut(moved)
-        .expect("detached node stays live")
-        .set_parent(Some(deep));
-    owner
-        .render_tree_mut()
-        .get_mut(deep)
-        .expect("destination is live")
-        .add_child(moved);
+    owner.render_tree_mut().adopt_child(deep, moved);
     owner
         .attach_render_subtrees(token)
         .expect("same subtree, new position");
