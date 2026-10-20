@@ -135,3 +135,119 @@ pub fn elevated_button_with_text_child_announces_one_labelled_button_node() {
         tree.describe()
     );
 }
+
+/// Every Material control that builds its own semantics publishes the
+/// identifier its author gave it (ADR-0240) as the `author_id` of the node it
+/// forms, under the role it announces, and never in what it announces.
+pub fn material_controls_publish_their_identifier() {
+    use flui_material::{
+        Checkbox, Chip, FilledButton, FilterChip, IconButton, OutlinedButton, Radio, Switch,
+        TextButton, TextField,
+    };
+    use flui_sdk::view::prelude::*;
+    use flui_sdk::widgets::{SizedBox, TextEditingController};
+
+    /// An identifier, the role its node announces, and the control.
+    type Row = (&'static str, Role, fn() -> BoxedView);
+    let rows: [Row; 11] = [
+        ("elevated", Role::Button, || {
+            ElevatedButton::new(Text::new("Save"))
+                .on_pressed(|_cx| {})
+                .identifier("elevated")
+                .boxed()
+        }),
+        ("filled", Role::Button, || {
+            FilledButton::new(Text::new("Save"))
+                .on_pressed(|_cx| {})
+                .identifier("filled")
+                .boxed()
+        }),
+        ("outlined", Role::Button, || {
+            OutlinedButton::new(Text::new("Save"))
+                .on_pressed(|_cx| {})
+                .identifier("outlined")
+                .boxed()
+        }),
+        ("text", Role::Button, || {
+            TextButton::new(Text::new("Save"))
+                .on_pressed(|_cx| {})
+                .identifier("text")
+                .boxed()
+        }),
+        ("icon", Role::Button, || {
+            IconButton::new(SizedBox::new(24.0, 24.0))
+                .on_pressed(|_cx| {})
+                .identifier("icon")
+                .boxed()
+        }),
+        ("checkbox", Role::CheckBox, || {
+            Checkbox::new(false)
+                .on_changed(|_cx, _value| {})
+                .identifier("checkbox")
+                .boxed()
+        }),
+        ("switch", Role::Switch, || {
+            Switch::new(false)
+                .on_changed(|_cx, _value| {})
+                .identifier("switch")
+                .boxed()
+        }),
+        ("radio", Role::RadioButton, || {
+            Radio::new("spring", Some("spring"))
+                .on_changed(|_cx, _value| {})
+                .identifier("radio")
+                .boxed()
+        }),
+        ("chip", Role::Button, || {
+            Chip::new(Text::new("Tag"))
+                .on_pressed(|_cx| {})
+                .identifier("chip")
+                .boxed()
+        }),
+        ("filter-chip", Role::Button, || {
+            FilterChip::new(Text::new("Tag"))
+                .on_selected(|_cx, _selected| {})
+                .identifier("filter-chip")
+                .boxed()
+        }),
+        ("field", Role::TextInput, || {
+            TextField::new(TextEditingController::new())
+                .identifier("field")
+                .boxed()
+        }),
+    ];
+
+    let mut failed = Vec::new();
+    for (identifier, role, view) in rows {
+        let mut laid = lay_out(Theme::new(ThemeData::light(), view()), tight(200.0, 56.0));
+        laid.enable_semantics();
+        laid.pump();
+        let tree = laid
+            .a11y_tree()
+            .expect("semantics enabled before the frame");
+        let carriers: Vec<_> = tree
+            .nodes()
+            .filter(|node| node.raw().author_id() == Some(identifier))
+            .collect();
+        let [node] = carriers.as_slice() else {
+            failed.push(format!(
+                "{identifier}: {} nodes carry it\n{}",
+                carriers.len(),
+                tree.describe()
+            ));
+            continue;
+        };
+        if node.role() != role {
+            failed.push(format!("{identifier}: on a {:?} node", node.role()));
+        }
+        let announced = [node.label(), node.value(), node.raw().description()];
+        if announced
+            .iter()
+            .flatten()
+            .any(|text| text.contains(identifier))
+        {
+            failed.push(format!("{identifier}: announced in {announced:?}"));
+        }
+    }
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}

@@ -140,6 +140,8 @@ pub struct TextField {
     obscure_text: bool,
     /// Forwarded to [`EditableText::required`] — see [`Self::required`].
     required: bool,
+    /// Forwarded to [`EditableText::identifier`] — see [`Self::identifier`].
+    identifier: Option<std::sync::Arc<str>>,
     /// Forwarded to [`EditableText::on_submitted`] — see
     /// [`Self::on_submitted`].
     on_submitted: Option<SubmitCallback>,
@@ -171,6 +173,7 @@ impl std::fmt::Debug for TextField {
             .field("enabled", &self.enabled)
             .field("obscure_text", &self.obscure_text)
             .field("required", &self.required)
+            .field("identifier", &self.identifier)
             .field("on_submitted", &self.on_submitted.is_some())
             .field("on_changed", &self.on_changed.is_some())
             .finish()
@@ -206,6 +209,14 @@ impl TextField {
         self
     }
 
+    /// Names the field's node for tests and automation (ADR-0240): exported
+    /// as UI Automation's `AutomationId`, never announced.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
+        self.identifier = Some(identifier.into());
+        self
+    }
+
     /// Create a `TextField` driven by `controller`, with no decoration
     /// (label/hint/helper/error all unset — see [`InputDecoration::default`])
     /// and no `enabled` override (falls through to
@@ -220,6 +231,7 @@ impl TextField {
             enabled: None,
             obscure_text: false,
             required: false,
+            identifier: None,
             on_submitted: None,
             on_changed: None,
         }
@@ -461,6 +473,9 @@ impl ViewState<TextField> for MaterialTextFieldState {
             .obscure_text(view.obscure_text)
             .invalid(has_error)
             .required(view.required);
+        if let Some(identifier) = &view.identifier {
+            editable = editable.identifier(std::sync::Arc::clone(identifier));
+        }
         if let Some(label) = &view.decoration.label_text {
             editable = editable.semantic_label(label.clone());
         }

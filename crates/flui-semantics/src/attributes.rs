@@ -6,6 +6,8 @@
 //! that only the framework reads. The tree stores configurations and
 //! publication reads their attributes in place.
 
+use std::sync::Arc;
+
 use flui_foundation::geometry::Axis;
 use smallvec::SmallVec;
 use smol_str::SmolStr;
@@ -47,6 +49,10 @@ pub(crate) struct SemanticsAttributes {
     pub(crate) tooltip: Option<SmolStr>,
     /// What an empty text field shows in place of a value.
     pub(crate) placeholder: Option<SmolStr>,
+    /// The widget author's stable identifier for tests and automation
+    /// (ADR-0240): published as AccessKit `author_id`, never announced, never
+    /// merged into another node.
+    pub(crate) identifier: Option<Arc<str>>,
     /// The text direction.
     pub(crate) text_direction: Option<TextDirection>,
     /// The labels of the node's custom actions, in id order: a custom

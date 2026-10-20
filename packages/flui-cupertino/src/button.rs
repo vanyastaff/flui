@@ -154,6 +154,7 @@ pub struct CupertinoButton {
     alignment: Alignment,
     on_pressed: Option<ButtonCallback>,
     on_long_press: Option<ButtonCallback>,
+    identifier: Option<std::sync::Arc<str>>,
 }
 
 impl CupertinoButton {
@@ -180,6 +181,7 @@ impl CupertinoButton {
             alignment: Alignment::CENTER,
             on_pressed: None,
             on_long_press: None,
+            identifier: None,
         }
     }
 
@@ -273,6 +275,15 @@ impl CupertinoButton {
     #[must_use]
     pub fn alignment(mut self, alignment: Alignment) -> Self {
         self.alignment = alignment;
+        self
+    }
+
+    /// Names the button's node for tests and automation (ADR-0240): exported
+    /// as UI Automation's `AutomationId`, never announced. It names the node
+    /// the button's semantics form; see `Semantics::identifier`.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
+        self.identifier = Some(identifier.into());
         self
     }
 
@@ -559,10 +570,16 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
 
         // The button role is applied unconditionally, not gated on `enabled`
         // (a disabled button is still announced as a button, just an inert one).
-        let faded = Semantics::new()
+        // It sits above the gesture detector, so the button's own configuration
+        // forms its node and the tap action joins it, which is where the
+        // identifier names it (ADR-0240).
+        let mut semantics = Semantics::new()
             .role(SemanticsRole::Button)
-            .enabled(enabled)
-            .child(ConstrainedBox::new(constraints).child(FadeTransition::new(opacity, decorated)));
+            .enabled(enabled);
+        if let Some(identifier) = &view.identifier {
+            semantics = semantics.identifier(std::sync::Arc::clone(identifier));
+        }
+        let faded = ConstrainedBox::new(constraints).child(FadeTransition::new(opacity, decorated));
 
         let mut gesture_detector = GestureDetector::new();
         if enabled {
@@ -588,7 +605,7 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
             }
         }
 
-        gesture_detector.child(faded)
+        semantics.child(gesture_detector.child(faded))
     }
 
     fn dispose(&mut self) {

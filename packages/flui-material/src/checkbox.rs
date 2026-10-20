@@ -145,6 +145,7 @@ pub struct Checkbox {
     check_color: Option<Color>,
     is_error: bool,
     semantic_label: Option<String>,
+    identifier: Option<std::sync::Arc<str>>,
 }
 
 /// Binary vs tristate value storage. Keeping these as one enum (not independent
@@ -206,6 +207,7 @@ impl Checkbox {
             check_color: None,
             is_error: false,
             semantic_label: None,
+            identifier: None,
         }
     }
 
@@ -221,6 +223,7 @@ impl Checkbox {
             check_color: None,
             is_error: false,
             semantic_label: None,
+            identifier: None,
         }
     }
 
@@ -265,6 +268,15 @@ impl Checkbox {
     #[must_use]
     pub fn semantic_label(mut self, label: impl Into<String>) -> Self {
         self.semantic_label = Some(label.into());
+        self
+    }
+
+    /// Names the checkbox's node for tests and automation (ADR-0240): exported
+    /// as UI Automation's `AutomationId`, never announced. It names the node
+    /// the checkbox's semantics form; see `Semantics::identifier`.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
+        self.identifier = Some(identifier.into());
         self
     }
 
@@ -423,9 +435,10 @@ impl ViewState<Checkbox> for CheckboxState {
             });
         }
 
-        let mut semantics = Semantics::new()
-            .enabled(interactive)
-            .checkbox(checkbox_state(view.mode));
+        let mut semantics =
+            crate::button_style_button::identified(Semantics::new(), view.identifier.as_ref())
+                .enabled(interactive)
+                .checkbox(checkbox_state(view.mode));
         if let Some(label) = &view.semantic_label {
             semantics = semantics.label(label.clone());
         }

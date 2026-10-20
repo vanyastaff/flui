@@ -514,6 +514,9 @@ fn wire_node(node: &NodeRef<'_>, id: ElementId, root_claims_focus: bool) -> Node
     // UI Automation's `FullDescription`: a role ARIA forbids a name carries
     // its text here.
     out.description = node.description().filter(|text| !text.is_empty());
+    // The author's identifier (ADR-0240), as published in `author_id`. It is
+    // not `automation_id`, which only an OS backend fills (ADR-0080).
+    out.identifier = node.author_id().map(str::to_owned);
     // The `Value` pattern's value: not for a static text, whose value is its
     // name, and never a password field's. A numeric node without text reads
     // its `RangeValue` number, spelled as the desktop backend spells it.

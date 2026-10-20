@@ -425,6 +425,7 @@ pub(super) struct FieldSemantics {
     placeholder: Option<String>,
     invalid: bool,
     required: bool,
+    identifier: Option<std::sync::Arc<str>>,
 }
 
 /// Callback for [`EditableText::on_changed`], with the dispatch's
@@ -490,6 +491,22 @@ impl EditableText {
     #[must_use]
     pub fn required(mut self, required: bool) -> Self {
         self.field_semantics.required = required;
+        self
+    }
+
+    /// Names the field's node for tests and automation (ADR-0240): exported
+    /// as UI Automation's `AutomationId`, never announced.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
+        self.field_semantics.identifier = Some(identifier.into());
+        self
+    }
+
+    /// [`identifier`](Self::identifier) when `identifier` is `Some`: how a
+    /// decorated field forwards its own.
+    #[must_use]
+    pub(crate) fn identifier_if(mut self, identifier: Option<&std::sync::Arc<str>>) -> Self {
+        self.field_semantics.identifier = identifier.cloned();
         self
     }
 
@@ -2694,6 +2711,7 @@ fn build_field_view(
         .focused(focused)
         .invalid(appearance.semantics.invalid)
         .required(appearance.semantics.required)
+        .identifier_if(appearance.semantics.identifier.as_ref())
         .value(text.clone());
     if let Some(label) = &appearance.semantics.label {
         semantics = semantics.label(label.as_str());

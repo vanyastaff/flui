@@ -300,6 +300,29 @@ impl Semantics {
         self
     }
 
+    /// Set the stable identifier tests and automation select this node by
+    /// (ADR-0240), exported as UI Automation's `AutomationId`, macOS
+    /// `AXIdentifier` and AT-SPI's accessible id. It is never announced, and
+    /// it does not make a node: it names this widget's node only when the
+    /// widget forms one ([`container`](Self::container), or under a parent
+    /// that requires explicit child nodes). Absorbed into an ancestor or
+    /// merged by `MergeSemantics`, it is dropped, not carried up.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
+        self.configuration.set_identifier(identifier);
+        self
+    }
+
+    /// [`identifier`](Self::identifier) when `identifier` is `Some`: how a
+    /// control forwards the one its author gave it.
+    #[must_use]
+    pub(crate) fn identifier_if(self, identifier: Option<&std::sync::Arc<str>>) -> Self {
+        match identifier {
+            Some(identifier) => self.identifier(std::sync::Arc::clone(identifier)),
+            None => self,
+        }
+    }
+
     /// Set the accessible value.
     #[must_use]
     pub fn value(mut self, value: impl Into<flui_rendering::semantics::AttributedString>) -> Self {
@@ -1097,6 +1120,7 @@ impl_render_view!(SliverSemantics);
 /// Merges the semantics of all descendants into a single node.
 #[derive(Clone, Debug, Default)]
 pub struct MergeSemantics {
+    identifier: Option<std::sync::Arc<str>>,
     child: Child,
 }
 
@@ -1104,6 +1128,23 @@ impl MergeSemantics {
     /// Creates a merge-semantics widget.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set the merged node's stable identifier for tests and automation
+    /// (ADR-0240). The merge forms the node, so this, not a descendant's
+    /// [`Semantics::identifier`], names it: a descendant's identifier is
+    /// dropped by the merge.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
+        self.identifier = Some(identifier.into());
+        self
+    }
+
+    /// [`identifier`](Self::identifier) when `identifier` is `Some`.
+    #[must_use]
+    pub(crate) fn identifier_if(mut self, identifier: Option<&std::sync::Arc<str>>) -> Self {
+        self.identifier = identifier.cloned();
+        self
     }
 
     /// Set the child.
@@ -1122,15 +1163,17 @@ impl RenderView for MergeSemantics {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        RenderMergeSemantics::default()
+        let mut object = RenderMergeSemantics::default();
+        let _ = object.set_identifier(self.identifier.clone());
+        object
     }
 
     fn update_render_object(
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
-        _render_object: &mut Self::RenderObject,
+        render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        flui_rendering::RenderUpdateImpact::NONE
+        render_object.set_identifier(self.identifier.clone())
     }
 
     flui_view::single_child_view_children!();

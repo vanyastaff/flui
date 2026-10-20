@@ -161,6 +161,7 @@ where
     group_value: Option<T>,
     on_changed: Option<RadioChangeCallback<T>>,
     active_color: Option<Color>,
+    identifier: Option<std::sync::Arc<str>>,
 }
 
 impl<T: PartialEq + Clone + std::fmt::Debug + 'static> std::fmt::Debug for Radio<T> {
@@ -184,6 +185,7 @@ impl<T: PartialEq + Clone + 'static> Radio<T> {
             group_value,
             on_changed: None,
             active_color: None,
+            identifier: None,
         }
     }
 
@@ -206,6 +208,15 @@ impl<T: PartialEq + Clone + 'static> Radio<T> {
     #[must_use]
     pub fn active_color(mut self, color: Color) -> Self {
         self.active_color = Some(color);
+        self
+    }
+
+    /// Names the radio's node for tests and automation (ADR-0240): exported
+    /// as UI Automation's `AutomationId`, never announced. It names the node
+    /// the radio's semantics form; see `Semantics::identifier`.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
+        self.identifier = Some(identifier.into());
         self
     }
 
@@ -323,7 +334,7 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
             });
         }
 
-        Semantics::new()
+        crate::button_style_button::identified(Semantics::new(), view.identifier.as_ref())
             .radio(selected)
             .enabled(interactive)
             .child(ink_well)

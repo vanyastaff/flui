@@ -571,6 +571,95 @@ pub(crate) fn nested_merge_semantics_keeps_its_own_node() {
     );
 }
 
+/// A configuration naming its node, with `label` when one is given.
+fn identified(identifier: &str, label: Option<&str>) -> SemanticsConfiguration {
+    let mut config = SemanticsConfiguration::new();
+    config.set_identifier(identifier);
+    if let Some(label) = label {
+        config.set_label(label);
+    }
+    config
+}
+/// An identifier names only the node its own configuration forms
+/// (ADR-0240): a boundary keeps it, a contributor absorbed into its
+/// ancestor and a boundary under a merge lose it, and an identifier alone
+/// forms no node.
+pub(crate) fn an_identifier_names_only_the_node_its_configuration_forms() {
+    // The walk root's own children always form nodes, so the cases sit under
+    // a plain boundary, where contributors are absorbed.
+    let run = RenderTester::mount(
+        box_node(SemanticsContainer::default()).label("root").child(
+            box_node(SemanticsContainer::default().with_boundary())
+                .label("group")
+                .child(
+                    box_node(SemanticsLeaf {
+                        configuration: Some(identified("save-id", Some("Save"))),
+                        ..SemanticsLeaf::new(20.0).with_boundary()
+                    })
+                    .label("save"),
+                )
+                .child(box_node(SemanticsLeaf {
+                    configuration: Some(identified("note-id", Some("Note"))),
+                    ..SemanticsLeaf::new(20.0)
+                }))
+                .child(box_node(SemanticsLeaf {
+                    configuration: Some(identified("bare-id", None)),
+                    ..SemanticsLeaf::new(20.0)
+                }))
+                .child(
+                    box_node(
+                        SemanticsContainer::merge_semantics()
+                            .with_configuration(identified("card-id", None)),
+                    )
+                    .label("card")
+                    .child(box_node(SemanticsLeaf {
+                        configuration: Some(identified("open-id", Some("Open"))),
+                        ..SemanticsLeaf::new(20.0).with_boundary().with_button()
+                    })),
+                ),
+        ),
+    )
+    .with_constraints(constraints())
+    .with_semantics_enabled()
+    .run_frame();
+
+    let root = accessibility_id(run.id("root"));
+    let group = accessibility_id(run.id("group"));
+    let save = accessibility_id(run.id("save"));
+    let card = accessibility_id(run.id("card"));
+    assert_snapshot_preorder(&snapshot(&run), &[root, group, save, card]);
+
+    let owner = run
+        .owner()
+        .semantics_owner()
+        .expect("semantics must remain enabled");
+    let node_of = |id: AccessibilityNodeId| {
+        owner
+            .tree()
+            .iter()
+            .find(|(_, node)| node.accessibility_id() == Some(id))
+            .map(|(_, node)| node)
+            .expect("every expected accessibility identity resolves")
+    };
+    assert_eq!(node_of(save).config().identifier(), Some("save-id"));
+    assert_eq!(
+        node_of(group).config().identifier(),
+        None,
+        "an absorbed contributor's identifier does not cross into its ancestor"
+    );
+    assert_eq!(
+        node_of(group).label(),
+        Some("Note"),
+        "the absorbed label arrives without its identifier"
+    );
+    assert_eq!(
+        node_of(card).config().identifier(),
+        Some("card-id"),
+        "a merged parent keeps its own identifier, not its merged child's"
+    );
+    assert_eq!(node_of(card).label(), Some("Open"));
+}
+
 // ============================================================================
 // ExcludeSemantics-equivalent drops its subtree entirely from the walk.
 // ============================================================================

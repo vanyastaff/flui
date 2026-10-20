@@ -181,3 +181,31 @@ fn assert_button_announcement(button: CupertinoButton, disabled: bool) {
         tree.describe()
     );
 }
+
+/// The identifier a `CupertinoButton`'s author gives it (ADR-0240) is the
+/// `author_id` of the button's node, and is never announced.
+pub fn button_publishes_its_identifier() {
+    let mut laid = lay_out(
+        CupertinoButton::new(Text::new("Tap"))
+            .on_pressed(|_cx| {})
+            .identifier("tap-button"),
+        loose(200.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+    let node = tree
+        .find_by_label("Tap")
+        .unwrap_or_else(|error| panic!("expected one node labelled \"Tap\": {error}"));
+    assert_eq!(node.role(), Role::Button);
+    assert_eq!(
+        node.raw().author_id(),
+        Some("tap-button"),
+        "Tree was:\n{}",
+        tree.describe()
+    );
+    assert!(node.raw().description().is_none() && node.value().is_none());
+}

@@ -138,6 +138,7 @@ pub(crate) struct ButtonStyleButtonCore {
     style: Option<ButtonStyle>,
     theme_style: Option<ButtonStyle>,
     default_style: ButtonStyle,
+    identifier: Option<std::sync::Arc<str>>,
     child: BoxedView,
 }
 
@@ -152,6 +153,7 @@ impl ButtonStyleButtonCore {
             style: None,
             theme_style: None,
             default_style,
+            identifier: None,
             child,
         }
     }
@@ -186,8 +188,27 @@ impl ButtonStyleButtonCore {
         self
     }
 
+    /// Sets the identifier the button's node carries (ADR-0240).
+    #[must_use]
+    pub(crate) fn identifier(mut self, identifier: Option<std::sync::Arc<str>>) -> Self {
+        self.identifier = identifier;
+        self
+    }
+
     fn is_interactive(&self) -> bool {
         self.on_pressed.is_some()
+    }
+}
+
+/// `semantics` naming its node by `identifier` when there is one: how a
+/// control forwards the identifier its author gave it (ADR-0240).
+pub(crate) fn identified(
+    semantics: Semantics,
+    identifier: Option<&std::sync::Arc<str>>,
+) -> Semantics {
+    match identifier {
+        Some(identifier) => semantics.identifier(std::sync::Arc::clone(identifier)),
+        None => semantics,
     }
 }
 
@@ -344,18 +365,21 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
             ink_well = ink_well.on_tap(move |cx| on_pressed(cx));
         }
 
-        Semantics::new()
-            .container(true)
-            .role(SemanticsRole::Button)
-            .enabled(view.is_interactive())
-            .child(
-                ConstrainedBox::new(constraints).child(
-                    Material::new(background_color)
-                        .elevation(elevation)
-                        .shape(shape)
-                        .child(ink_well),
-                ),
-            )
+        identified(
+            Semantics::new()
+                .container(true)
+                .role(SemanticsRole::Button)
+                .enabled(view.is_interactive()),
+            view.identifier.as_ref(),
+        )
+        .child(
+            ConstrainedBox::new(constraints).child(
+                Material::new(background_color)
+                    .elevation(elevation)
+                    .shape(shape)
+                    .child(ink_well),
+            ),
+        )
     }
 
     fn dispose(&mut self) {

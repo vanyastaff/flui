@@ -80,6 +80,8 @@ pub struct RawTextField {
     enabled: bool,
     /// Forwarded to [`EditableText::invalid`].
     invalid: bool,
+    /// Forwarded to [`EditableText::identifier`].
+    identifier: Option<std::sync::Arc<str>>,
     /// Forwarded to [`EditableText::on_changed`].
     on_changed: Option<TextChanged>,
     /// Forwarded to [`EditableText::on_submitted`] — see
@@ -101,6 +103,7 @@ impl std::fmt::Debug for RawTextField {
             .field("obscure_text", &self.obscure_text)
             .field("enabled", &self.enabled)
             .field("invalid", &self.invalid)
+            .field("identifier", &self.identifier)
             .field("on_changed", &self.on_changed.is_some())
             .field("on_submitted", &self.on_submitted.is_some())
             .finish()
@@ -120,6 +123,7 @@ impl RawTextField {
             obscure_text: false,
             enabled: true,
             invalid: false,
+            identifier: None,
             on_changed: None,
             on_submitted: None,
         }
@@ -131,6 +135,14 @@ impl RawTextField {
     #[must_use]
     pub fn invalid(mut self, invalid: bool) -> Self {
         self.invalid = invalid;
+        self
+    }
+
+    /// Names the field's node for tests and automation (ADR-0240). Forwards
+    /// to [`EditableText::identifier`].
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
+        self.identifier = Some(identifier.into());
         self
     }
 
@@ -251,7 +263,8 @@ impl ViewState<RawTextField> for RawTextFieldState {
             .caret_color(view.caret_color)
             .obscure_text(view.obscure_text)
             .enabled(view.enabled)
-            .invalid(view.invalid);
+            .invalid(view.invalid)
+            .identifier_if(view.identifier.as_ref());
         if let Some(height) = view.caret_height {
             editable = editable.caret_height(height);
         }

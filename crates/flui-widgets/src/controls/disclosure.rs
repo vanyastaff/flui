@@ -71,6 +71,7 @@ pub struct Disclosure {
     direction: Option<TextDirection>,
     indicator_color: Color,
     label: Terminal<Option<String>>,
+    identifier: Option<std::sync::Arc<str>>,
 }
 
 impl std::fmt::Debug for Disclosure {
@@ -97,6 +98,7 @@ impl Clone for Disclosure {
             direction: self.direction,
             indicator_color: self.indicator_color,
             label,
+            identifier: self.identifier.clone(),
         }
     }
 }
@@ -127,6 +129,7 @@ impl Disclosure {
             direction: None,
             indicator_color: Color::BLACK,
             label: Terminal::new(None),
+            identifier: None,
         }
     }
 
@@ -164,6 +167,15 @@ impl Disclosure {
     pub fn label(mut self, label: impl Into<String>) -> Self {
         let mut label = Terminal::new(label);
         self.label = Terminal::new(Some(label.take_value().into()));
+        self
+    }
+
+    /// Name the header's node for tests and automation (ADR-0240). Never
+    /// announced; the header's merge carries it, so it names the button a
+    /// screen reader stops on.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
+        self.identifier = Some(identifier.into());
         self
     }
 }
@@ -400,14 +412,18 @@ impl ViewState<Disclosure> for DisclosureState {
             children.push(
                 // Annotated descendants otherwise publish separate nodes: the
                 // header's name and its actual Focus/actions must share one node.
-                Actions::new(MergeSemantics::new().child(header))
-                    .action::<ActivateIntent>(DisclosureActivate {
-                        live: Rc::clone(&live),
-                    })
-                    .action::<ButtonActivateIntent>(DisclosureActivate {
-                        live: Rc::clone(&live),
-                    })
-                    .boxed(),
+                Actions::new(
+                    MergeSemantics::new()
+                        .identifier_if(snapshot.identifier.as_ref())
+                        .child(header),
+                )
+                .action::<ActivateIntent>(DisclosureActivate {
+                    live: Rc::clone(&live),
+                })
+                .action::<ButtonActivateIntent>(DisclosureActivate {
+                    live: Rc::clone(&live),
+                })
+                .boxed(),
             );
             if snapshot.state == ExpansionState::Expanded {
                 let mut body = Terminal::new((*snapshot.body).clone());

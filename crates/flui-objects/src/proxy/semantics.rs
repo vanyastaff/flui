@@ -467,6 +467,30 @@ impl RenderBox for RenderIndexedSemantics {
 #[derive(Debug, Clone, Default)]
 pub struct RenderMergeSemantics {
     has_child: bool,
+    identifier: Option<std::sync::Arc<str>>,
+}
+
+impl RenderMergeSemantics {
+    /// The merged node's stable identifier (ADR-0240), if any.
+    #[inline]
+    pub fn identifier(&self) -> Option<&str> {
+        self.identifier.as_deref()
+    }
+
+    /// Names the merged node for tests and automation (ADR-0240). The merge is
+    /// the boundary that forms the node, so the identifier of a control
+    /// assembled from merged parts belongs here: a descendant's own identifier
+    /// is not carried into the merged node.
+    pub fn set_identifier(
+        &mut self,
+        identifier: Option<std::sync::Arc<str>>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.identifier == identifier {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.identifier = identifier;
+        flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
 }
 
 impl RenderBox for RenderMergeSemantics {
@@ -482,6 +506,9 @@ impl RenderBox for RenderMergeSemantics {
     fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
         config.set_semantics_boundary(true);
         config.set_merging_semantics_of_descendants(true);
+        if let Some(identifier) = &self.identifier {
+            config.set_identifier(std::sync::Arc::clone(identifier));
+        }
     }
 }
 
