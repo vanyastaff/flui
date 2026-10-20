@@ -2,7 +2,7 @@
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
-use flui_foundation::{PresentationAddress, geometry::Size};
+use flui_foundation::PresentationAddress;
 use flui_runtime::ui_runtime::UiRuntime;
 
 use crate::app::close_request::{CloseRequestRouter, PreparedCloseRequest};
@@ -19,7 +19,12 @@ struct NativeState {
     windows: RefCell<WindowRegistry>,
     drivers: RefCell<FrameDrivers>,
     /// Resizes that arrived while their driver was leased, one per presentation.
-    pending_resizes: RefCell<Vec<(PresentationAddress, Size<f64>, f64)>>,
+    pending_resizes: RefCell<
+        Vec<(
+            PresentationAddress,
+            flui_foundation::geometry::WindowMetrics,
+        )>,
+    >,
     close_requests: Arc<CloseRequestRouter>,
     retirement: NativeRetirement,
 }
@@ -160,8 +165,8 @@ impl NativeBindings {
             .iter()
             .find(|resize| resize.0 == address)
             .copied();
-        if let Some(deferred @ (_, size, scale_factor)) = deferred {
-            lease.resize(size, scale_factor);
+        if let Some(deferred @ (_, metrics)) = deferred {
+            lease.resize(metrics);
             // Taken once it has applied: a resize that panics is tried again at
             // the next checkout, and a newer one deferred meanwhile stays.
             self.0
@@ -187,14 +192,18 @@ impl NativeBindings {
     /// Resize the presentation's surface. A driver that is out on a frame
     /// takes the resize when it is next checked out, so its surface is never
     /// left at the old size; a later resize replaces one still waiting.
-    pub(super) fn resize(&self, address: PresentationAddress, size: Size<f64>, scale_factor: f64) {
+    pub(super) fn resize(
+        &self,
+        address: PresentationAddress,
+        metrics: flui_foundation::geometry::WindowMetrics,
+    ) {
         if let Some(mut lease) = self.checkout(address) {
-            lease.resize(size, scale_factor);
+            lease.resize(metrics);
             return;
         }
         let mut pending = self.0.pending_resizes.borrow_mut();
         pending.retain(|resize| resize.0 != address);
-        pending.push((address, size, scale_factor));
+        pending.push((address, metrics));
     }
 
     pub(super) fn fence_presentation(&self, address: PresentationAddress) {

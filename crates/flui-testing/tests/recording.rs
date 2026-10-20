@@ -165,8 +165,8 @@ fn a_scale_change_mid_recording_replays_to_the_same_decisions() {
         .position(|row| {
             matches!(row, InputRecord::Input(row) if matches!(
                 row.input,
-                HostInput::Window(WindowObservation::Metrics { scale_factor, .. })
-                    if scale_factor == 1.5
+                HostInput::Window(WindowObservation::Metrics(metrics))
+                    if metrics.scale().get() == 1.5
             ))
         })
         .expect("the scale change is a metrics row");

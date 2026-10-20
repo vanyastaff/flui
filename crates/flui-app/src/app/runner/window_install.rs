@@ -311,10 +311,10 @@ impl WindowInstall {
                 let _ = dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(binding));
             });
         }));
-        window.on_resize(Box::new(move |size, scale_factor| {
+        window.on_resize(Box::new(move |metrics| {
             let _ = dispatch_platform_ui_runtime(
                 dispatcher,
-                RuntimeTask::Event(RuntimeEvent::Resized { size, scale_factor }),
+                RuntimeTask::Event(RuntimeEvent::Resized(metrics)),
             );
         }));
         self.terminal_callbacks(platform);
@@ -347,17 +347,16 @@ impl WindowInstall {
         self.observe_window_state();
         // Observers precede the snapshot. Keep redraw ownership published
         // before lifecycle reconciliation can synchronously request a frame.
-        let metrics = WindowObservation::Metrics {
-            size: window.logical_size(),
-            scale_factor: window.scale_factor(),
-        };
+        let metrics = window.metrics().map(WindowObservation::Metrics);
         let snapshot = WindowObservation::Snapshot {
             execution: window.execution_state(),
             focused: window.is_focused(),
             visible: window.is_visible(),
         };
         self.observe(snapshot);
-        self.observe(metrics);
+        if let Some(metrics) = metrics {
+            self.observe(metrics);
+        }
         super::host::APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
         self.submit()
             .outcome()

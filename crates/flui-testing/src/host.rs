@@ -1066,9 +1066,15 @@ impl HeadlessHost {
         // The runner's path: a metrics observation of the window, which a
         // recording sees as the `Metrics` row it is.
         let size = self.window_of(window).size;
+        // A scale that makes no metrics is refused, as the runner refuses it.
+        let Some(metrics) =
+            flui_foundation::geometry::WindowMetrics::from_logical(size, scale_factor)
+        else {
+            return;
+        };
         self.observe(
             window.0,
-            flui_runtime::owner::WindowObservation::Metrics { size, scale_factor },
+            flui_runtime::owner::WindowObservation::Metrics(metrics),
         );
         self.size_sink_to_primary();
     }
@@ -1415,21 +1421,18 @@ impl HeadlessHost {
         presentation: PresentationId,
         observation: flui_runtime::owner::WindowObservation,
     ) {
-        if let flui_runtime::owner::WindowObservation::Metrics { scale_factor, .. } = observation
-            && scale_factor.is_finite()
-            && scale_factor > 0.0
-        {
+        if let flui_runtime::owner::WindowObservation::Metrics(metrics) = observation {
             *self
                 .window_of(HeadlessWindowId(presentation))
                 .scale_factor
-                .lock() = scale_factor;
+                .lock() = metrics.scale().get();
         }
         let address = flui_foundation::PresentationAddress {
             ui_runtime_id: self.ui_runtime.id(),
             presentation_id: presentation,
         };
         self.ui_runtime.enter(|ui_runtime| {
-            ui_runtime.apply_window_observation(address, observation, &|_, _| {});
+            ui_runtime.apply_window_observation(address, observation, &|_| {});
         });
     }
 

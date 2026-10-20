@@ -205,7 +205,7 @@ mod browser {
                     }
                     append_result("close-prefix", "returned");
                 })),
-                "resize" => self.window.on_resize(Box::new(move |_, _| {
+                "resize" => self.window.on_resize(Box::new(move |_| {
                     append_result("close-prefix", "resize");
                     if let Some(window) = window.upgrade() {
                         window.close();

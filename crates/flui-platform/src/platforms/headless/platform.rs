@@ -1696,7 +1696,7 @@ impl MockWindow {
             state.scale_factor
         };
         self.publish_state();
-        self.callbacks.dispatch_resize(size, scale);
+        self.callbacks.dispatch_logical_resize(size, scale);
     }
 
     /// Simulate the user (or the OS) moving the window to `position`, outer
@@ -1719,7 +1719,7 @@ impl MockWindow {
             state.scale_factor = scale_factor;
             state.size
         };
-        self.callbacks.dispatch_resize(size, scale_factor);
+        self.callbacks.dispatch_logical_resize(size, scale_factor);
     }
 
     /// Simulate focus change for testing.
@@ -1993,7 +1993,7 @@ impl PlatformWindow for MockWindow {
         };
         self.publish_state();
         if let Some((size, scale)) = resized {
-            self.callbacks.dispatch_resize(size, scale);
+            self.callbacks.dispatch_logical_resize(size, scale);
         }
         Ok(())
     }

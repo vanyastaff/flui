@@ -208,11 +208,7 @@ impl WebFrameDriver {
         let claim = self.gpu_loss.claim_initialization();
         self.spawn_build(None, claim, authority);
     }
-    pub(super) fn resize(
-        &mut self,
-        _size: flui_foundation::geometry::Size<f64>,
-        _scale_factor: f64,
-    ) {
+    pub(super) fn resize(&mut self, _metrics: flui_foundation::geometry::WindowMetrics) {
         // A lost context cannot be configured; the rebuild reads the window's
         // size when it finishes.
         if !self.gpu_loss.can_draw() {

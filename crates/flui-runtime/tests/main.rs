@@ -125,6 +125,19 @@ mod text_frame;
 /// pointer motion, the only consumer of a frame's vsync.
 pub(crate) const VSYNC: flui_platform_api::EventTime = flui_platform_api::EventTime::from_nanos(0);
 
+/// Window metrics from a logical size and scale, as a platform reports them.
+pub(crate) fn window_metrics(
+    width: f64,
+    height: f64,
+    scale: f64,
+) -> flui_foundation::geometry::WindowMetrics {
+    flui_foundation::geometry::WindowMetrics::from_logical(
+        flui_foundation::geometry::Size::new(width, height),
+        scale,
+    )
+    .expect("valid window metrics")
+}
+
 /// The two host-input shapes these contracts admit most, spelled through the
 /// one boundary, [`HostInput`](flui_runtime::HostInput).
 pub(crate) trait HostInputExt {

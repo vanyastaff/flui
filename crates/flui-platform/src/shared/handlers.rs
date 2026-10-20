@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use flui_foundation::IdMint;
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{Size, WindowMetrics};
 use parking_lot::Mutex;
 
 use flui_platform_api::input_capabilities::InputCapabilities;
@@ -426,7 +426,7 @@ pub struct WindowCallbacks {
 
     /// Called when the window is resized. Parameters: new size (logical), scale
     /// factor.
-    pub on_resize: Mutex<Option<Box<dyn FnMut(Size<f64>, f64) + Send>>>,
+    pub on_resize: Mutex<Option<Box<dyn FnMut(WindowMetrics) + Send>>>,
 
     /// Called when the window state may differ from the one last read.
     pub on_state_changed: Mutex<Option<Box<dyn FnMut() + Send>>>,
@@ -522,7 +522,7 @@ type StatusCallback = Box<dyn FnMut(bool) + Send>;
 enum WindowCallbackEvent {
     Input(PlatformInput),
     RequestFrame,
-    Resize(Size<f64>, f64),
+    Resize(WindowMetrics),
     StateChanged,
     Close,
     Active(bool, Option<Box<dyn FnOnce() + Send>>),
@@ -1078,7 +1078,7 @@ impl WindowCallbacks {
                         callback();
                     }
                 }
-                WindowCallbackEvent::Resize(size, scale_factor) => {
+                WindowCallbackEvent::Resize(metrics) => {
                     // Queued delivery is already fenced by `clear_now` having
                     // emptied this slot before the event runs, so this lease
                     // answers to `cleared`. The immediate iOS
@@ -1088,7 +1088,7 @@ impl WindowCallbacks {
                     // holding `clear_now` back.
                     let mut lease = CallbackLease::take(&self.on_resize, &self.cleared);
                     if let Some(callback) = lease.callback_mut() {
-                        callback(size, scale_factor);
+                        callback(metrics);
                     }
                 }
                 WindowCallbackEvent::StateChanged => {
@@ -1514,15 +1514,26 @@ impl WindowCallbacks {
         self.drain_events(drain);
     }
 
-    /// Dispatch a resize event with new logical size and scale factor.
-    pub fn dispatch_resize(&self, size: Size<f64>, scale_factor: f64) {
-        let Some(drain) = DispatchDrain::begin(
-            &self.event_dispatch,
-            WindowCallbackEvent::Resize(size, scale_factor),
-        ) else {
+    /// Dispatch a resize event with the window's new metrics.
+    pub fn dispatch_resize(&self, metrics: WindowMetrics) {
+        let Some(drain) =
+            DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Resize(metrics))
+        else {
             return;
         };
         self.drain_events(drain);
+    }
+
+    /// [`Self::dispatch_resize`] for a backend that reports a logical size: the device size is
+    /// the logical size at `scale_factor`, rounded. A report that makes no metrics (a zero or
+    /// non-finite size, a non-positive or non-finite scale) is not delivered.
+    pub fn dispatch_logical_resize(&self, size: Size<f64>, scale_factor: f64) {
+        match WindowMetrics::from_logical(size, scale_factor) {
+            Some(metrics) => self.dispatch_resize(metrics),
+            None => {
+                tracing::debug!(?size, scale_factor, "resize report makes no window metrics");
+            }
+        }
     }
 
     /// Dispatch a window state change.
@@ -1688,6 +1699,9 @@ impl WindowCallbacks {
         if self.lifecycle_closed.load(Ordering::SeqCst) {
             return;
         }
+        let Some(metrics) = WindowMetrics::from_logical(size, scale) else {
+            return;
+        };
         // Latched on `lifecycle_closed`, deliberately not the `cleared` flag
         // the queued Resize arm leases against (see `drain_events`'s own arm):
         // this is an IMMEDIATE delivery, so it is fenced the moment a close is
@@ -1696,7 +1710,7 @@ impl WindowCallbacks {
         let mut lease = CallbackLease::take(&self.on_resize, &self.lifecycle_closed);
         super::panic_boundary::contain_owner_callback(|| {
             if let Some(callback) = lease.callback_mut() {
-                callback(size, scale);
+                callback(metrics);
             }
         });
         super::panic_boundary::contain_owner_callback(|| drop(lease));
@@ -1821,7 +1835,7 @@ macro_rules! impl_window_callback_setters {
 
         fn on_resize(
             &self,
-            callback: Box<dyn FnMut(::flui_foundation::geometry::Size<f64>, f64) + Send>,
+            callback: Box<dyn FnMut(::flui_foundation::geometry::WindowMetrics) + Send>,
         ) {
             *self.$callbacks_field.on_resize.lock() = Some(callback);
         }
@@ -2176,7 +2190,7 @@ mod tests {
         let drops = Arc::new(AtomicU32::new(0));
         let first = Capture(drops.clone());
         let second = Capture(drops.clone());
-        *callbacks.on_resize.lock() = Some(Box::new(move |_, _| {
+        *callbacks.on_resize.lock() = Some(Box::new(move |_| {
             let _ = &first;
         }));
         *callbacks.on_state_changed.lock() = Some(Box::new(move || {

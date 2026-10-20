@@ -2214,7 +2214,7 @@ impl PlatformWindow for WindowsWindow {
         });
     }
 
-    fn on_resize(&self, callback: Box<dyn FnMut(Size<f64>, f64) + Send>) {
+    fn on_resize(&self, callback: Box<dyn FnMut(WindowMetrics) + Send>) {
         self.register("on_resize", move |callbacks| {
             let previous = callbacks.on_resize.lock().replace(callback);
             drop(previous);

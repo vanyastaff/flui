@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::DataTransferId;
-use flui_foundation::geometry::{DevicePixelRatio, EdgeInsets, Point, Size};
+use flui_foundation::geometry::{
+    DevicePixelRatio, DeviceSize, EdgeInsets, Point, Size, WindowMetrics,
+};
 use flui_interaction::GestureDisposition;
 use flui_platform_api::data_transfer::{
     DataTransferOffer, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
@@ -374,10 +376,9 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             HostInput::Platform(PlatformInput::Ime(ImeEvent::Enabled)),
             InputOutcome::Queued,
         )),
-        ("WindowObservation", "Metrics") => one(window(WindowObservation::Metrics {
-            size: Size::new(800.5, 600.25),
-            scale_factor: 1.75,
-        })),
+        ("WindowObservation", "Metrics") => one(window(WindowObservation::Metrics(
+            WindowMetrics::new(DeviceSize::new(1401, 1050), 1.75).expect("valid metrics"),
+        ))),
         ("WindowObservation", "Focus") => one(window(WindowObservation::Focus(false))),
         ("WindowObservation", "Visibility") => one(window(WindowObservation::Visibility(true))),
         ("WindowObservation", "Execution") => one(window(WindowObservation::Execution(

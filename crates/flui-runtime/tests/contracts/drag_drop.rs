@@ -197,13 +197,7 @@ impl OwnerEffects for Effects {
     ) {
         panic!("no pending install");
     }
-    fn resize_surface(
-        &self,
-        _: PresentationAddress,
-        _: flui_foundation::geometry::Size<f64>,
-        _: f64,
-    ) {
-    }
+    fn resize_surface(&self, _: PresentationAddress, _: flui_foundation::geometry::WindowMetrics) {}
     fn retire_presentation(&self, _: PresentationAddress, _: Option<PresentationAddress>) {}
     fn after_turn(&self, _: flui_runtime::owner::RecoveryState) {}
     fn request_continuation(&self) -> bool {

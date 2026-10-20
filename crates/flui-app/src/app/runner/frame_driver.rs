@@ -81,7 +81,7 @@ pub(super) enum FrameDriver {
 }
 
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
-type TestResize = Box<dyn FnMut(flui_foundation::geometry::Size<f64>, f64)>;
+type TestResize = Box<dyn FnMut(flui_foundation::geometry::WindowMetrics)>;
 
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) struct TestFrameDriver {
@@ -123,7 +123,7 @@ impl FrameDriver {
             }
         }
     }
-    fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
+    fn resize(&mut self, metrics: flui_foundation::geometry::WindowMetrics) {
         match self {
             #[cfg(all(
                 test,
@@ -137,17 +137,17 @@ impl FrameDriver {
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
-            Self::Desktop(driver) => driver.resize(size, scale_factor),
+            Self::Desktop(driver) => driver.resize(metrics),
             #[cfg(target_os = "android")]
-            Self::Android(driver) => driver.resize(size, scale_factor),
+            Self::Android(driver) => driver.resize(metrics),
             #[cfg(target_os = "ios")]
-            Self::Ios(driver) => driver.resize(size, scale_factor),
+            Self::Ios(driver) => driver.resize(metrics),
             #[cfg(target_arch = "wasm32")]
-            Self::Web(driver) => driver.resize(size, scale_factor),
+            Self::Web(driver) => driver.resize(metrics),
             #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
             Self::Test(driver) => {
                 if let Some(resize) = driver.resize.as_mut() {
-                    resize(size, scale_factor);
+                    resize(metrics);
                 }
             }
         }
@@ -425,11 +425,11 @@ impl FrameDriverLease {
             .expect("BUG: active frame lease owns its driver")
             .installed(&self.record);
     }
-    pub(super) fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
+    pub(super) fn resize(&mut self, metrics: flui_foundation::geometry::WindowMetrics) {
         self.driver
             .as_mut()
             .expect("BUG: active frame lease owns its driver")
-            .resize(size, scale_factor);
+            .resize(metrics);
     }
     pub(super) fn wake(&mut self, runtime: &mut UiRuntime) {
         self.driver

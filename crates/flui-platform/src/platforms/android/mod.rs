@@ -787,7 +787,7 @@ impl Platform for AndroidPlatform {
                                 // asked for, so the recreated surface is
                                 // configured at this size, not the old one.
                                 w.publish_state();
-                                w.callbacks().dispatch_resize(w.logical_size(), w.scale_factor());
+                                w.callbacks().dispatch_logical_resize(w.logical_size(), w.scale_factor());
                                 w.request_safe_area();
                                 // The request rode on the window that is gone. The
                                 // host sends its demand again on
@@ -849,7 +849,7 @@ impl Platform for AndroidPlatform {
                             let window = platform.window.lock().clone();
                             if let Some(w) = window {
                                 w.publish_state();
-                                w.callbacks().dispatch_resize(w.logical_size(), w.scale_factor());
+                                w.callbacks().dispatch_logical_resize(w.logical_size(), w.scale_factor());
                                 // The insets of the old size no longer apply.
                                 w.request_safe_area();
                                 w.request_redraw();
@@ -875,7 +875,7 @@ impl Platform for AndroidPlatform {
                             let window = platform.window.lock().clone();
                             if let Some(window) = window {
                                 window.publish_state();
-                                window.callbacks().dispatch_resize(window.logical_size(), window.scale_factor());
+                                window.callbacks().dispatch_logical_resize(window.logical_size(), window.scale_factor());
                                 window.request_safe_area();
                             }
                         }

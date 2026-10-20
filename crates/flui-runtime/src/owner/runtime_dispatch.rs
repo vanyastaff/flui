@@ -231,8 +231,8 @@ impl RuntimeWork {
             }
             Self::WindowState(address, state) => {
                 runtime.enter(|runtime| {
-                    state.apply(runtime, address, &|size, scale| {
-                        effects.resize_surface(address, size, scale);
+                    state.apply(runtime, address, &|metrics| {
+                        effects.resize_surface(address, metrics);
                     });
                 });
             }

@@ -2619,7 +2619,7 @@ mod native_windows {
         impl Drop for InstallDuringRetirement {
             fn drop(&mut self) {
                 let probe = self.probe.take().expect("replacement capture");
-                self.window.on_resize(Box::new(move |_, _| {
+                self.window.on_resize(Box::new(move |_| {
                     let _owned = &probe;
                 }));
             }
@@ -2633,7 +2633,7 @@ mod native_windows {
             }),
         };
         let weak = Arc::downgrade(&window);
-        window.on_resize(Box::new(move |_, _| {
+        window.on_resize(Box::new(move |_| {
             let _owned = (&surface, &install);
             if let Some(window) = weak.upgrade() {
                 window.close();
@@ -2798,7 +2798,8 @@ mod native_windows {
         let weak = Arc::downgrade(&window);
         let observations = Arc::new(Mutex::new(Vec::new()));
         let callback_observations = Arc::clone(&observations);
-        window.on_resize(Box::new(move |size, scale| {
+        window.on_resize(Box::new(move |metrics| {
+            let (size, scale) = (metrics.logical(), metrics.scale().get());
             let window = weak.upgrade().expect("live resize window");
             let hwnd = window
                 .as_any()
@@ -2877,7 +2878,8 @@ mod native_windows {
         let weak = Arc::downgrade(&window);
         let observations = Arc::new(Mutex::new(Vec::new()));
         let callback_observations = Arc::clone(&observations);
-        window.on_resize(Box::new(move |size, scale| {
+        window.on_resize(Box::new(move |metrics| {
+            let (size, scale) = (metrics.logical(), metrics.scale().get());
             let window = weak.upgrade().expect("live resize window");
             callback_observations
                 .lock()

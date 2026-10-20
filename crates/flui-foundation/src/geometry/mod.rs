@@ -59,6 +59,7 @@ pub mod snap;
 pub mod traits;
 pub mod transform;
 pub mod vector;
+pub mod window_metrics;
 
 /// Common imports.
 pub mod prelude {
@@ -105,6 +106,7 @@ pub use traits::{
 };
 pub use transform::Transform;
 pub use vector::{Vec2, vec2};
+pub use window_metrics::WindowMetrics;
 
 /// A point on the device-pixel grid.
 pub type DevicePoint = Point<i32>;

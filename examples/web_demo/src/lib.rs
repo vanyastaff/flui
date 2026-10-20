@@ -103,7 +103,9 @@ pub fn start() {
     }));
 
     // Register resize callback
-    window.on_resize(Box::new(|size, scale| {
+    window.on_resize(Box::new(|metrics| {
+        let size = metrics.physical();
+        let scale = metrics.scale().get();
         web_sys::console::log_1(
             &format!("Resize: {}x{} (scale: {scale})", size.width, size.height).into(),
         );

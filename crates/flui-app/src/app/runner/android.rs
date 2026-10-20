@@ -323,10 +323,10 @@ where
 
         // 7. Register resize callback -> typed Resized event; the applier
         // installed above (not this closure) actually touches the renderer.
-        window.on_resize(Box::new(move |size, scale_factor| {
+        window.on_resize(Box::new(move |metrics| {
             let _ = dispatch_platform_ui_runtime(
                 owner_dispatch,
-                RuntimeTask::Event(RuntimeEvent::Resized { size, scale_factor }),
+                RuntimeTask::Event(RuntimeEvent::Resized(metrics)),
             );
         }));
 
@@ -498,10 +498,9 @@ where
             focused: window.is_focused(),
             visible: window.is_visible(),
         });
-        installation.observe(flui_runtime::owner::WindowObservation::Metrics {
-            size: window.logical_size(),
-            scale_factor: window.scale_factor(),
-        });
+        if let Some(metrics) = window.metrics() {
+            installation.observe(flui_runtime::owner::WindowObservation::Metrics(metrics));
+        }
         APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
 
         // Seed the host's own lifecycle as Resumed. It does not decide what a
@@ -559,11 +558,12 @@ pub(super) struct AndroidFrameDriver {
 }
 
 impl AndroidFrameDriver {
-    pub(super) fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
+    pub(super) fn resize(&mut self, metrics: flui_foundation::geometry::WindowMetrics) {
         let resize = self.lane.lock().resize_hook();
+        let physical = metrics.physical();
         resize.apply(
-            (size.width * scale_factor) as u32,
-            (size.height * scale_factor) as u32,
+            physical.width.unsigned_abs(),
+            physical.height.unsigned_abs(),
         );
     }
     pub(super) fn wake(&mut self, ui_runtime: &mut crate::app::ui_runtime::UiRuntime) {
