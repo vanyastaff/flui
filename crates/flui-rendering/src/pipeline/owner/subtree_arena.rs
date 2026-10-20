@@ -454,7 +454,7 @@ impl<'tree> SubtreeArena<'tree> {
     /// the same callback `Ok` arm, and this filter is what keeps that
     /// stand-in from being misread as a recovery.
     fn note_layout_success(&self, id: RenderId) {
-        let retried = self.poison_retries.borrow_mut().contains(&id);
+        let retried = self.poison_retries.borrow().contains(&id);
         if retried || self.layout_poison.has_open_failures(id) {
             self.layout_successes.borrow_mut().push(id);
         }

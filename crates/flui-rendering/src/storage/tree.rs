@@ -571,7 +571,16 @@ impl RenderTree {
     /// depth after insertion, so the dirty queues' depth sorts see the
     /// position a node holds now, including every node of a moved subtree.
     fn redepth_subtree(&mut self, root: RenderId, root_depth: u16) {
-        let mut stack = vec![(root, root_depth)];
+        let Some(node) = self.get_mut(root) else {
+            return;
+        };
+        node.links_mut().set_depth(root_depth);
+        if node.children().is_empty() {
+            // A freshly mounted node: no walk, no allocation.
+            return;
+        }
+        let next = child_depth(root_depth);
+        let mut stack: Vec<_> = node.children().iter().map(|&child| (child, next)).collect();
         while let Some((id, depth)) = stack.pop() {
             let Some(node) = self.get_mut(id) else {
                 continue;
