@@ -3,7 +3,7 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, EdgeInsets, Point, Size};
+use flui_foundation::geometry::{Bounds, EdgeInsets, Point, Size, WindowMetrics};
 use parking_lot::Mutex;
 use raw_window_handle::{
     HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle, Win32WindowHandle,
