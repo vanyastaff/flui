@@ -536,8 +536,6 @@ impl WindowContext {
         } else {
             Self::stop_pumping(hwnd);
         }
-        // A key after this step is not stamped before it.
-        self.message_clock.observe(&inputs);
         let delivering = !inputs.is_empty();
         self.deliver_touchpad(inputs);
         if delivering && animating {
@@ -551,8 +549,12 @@ impl WindowContext {
     }
 
     /// Deliver `inputs` behind whatever an outer delivery on this window has
-    /// not delivered yet, in order (see the module's "Pumping").
+    /// not delivered yet, in order (see the module's "Pumping"). Their stamps
+    /// raise the window clock's floor first, so input stamped from a message
+    /// after them (a key, the cancels a focus loss ends the other contacts
+    /// with) is not placed before them.
     fn deliver_touchpad(&self, inputs: Vec<PlatformInput>) {
+        self.message_clock.observe(&inputs);
         let slot = &self.touchpad;
         slot.outbox.borrow_mut().extend(inputs);
         if slot.delivering.replace(true) {

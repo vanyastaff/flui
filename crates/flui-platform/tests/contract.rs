@@ -444,6 +444,10 @@ mod native_windows {
             a_pointer_routed_mouse_hovers_the_window,
         ),
         (
+            "a_leave_callback_that_hovers_again_keeps_the_hover",
+            a_leave_callback_that_hovers_again_keeps_the_hover,
+        ),
+        (
             "fractional_native_wheel_packets_preserve_observed_precision_and_source",
             fractional_native_wheel_packets_preserve_observed_precision_and_source,
         ),
@@ -4708,6 +4712,174 @@ mod native_windows {
             assert_eq!(scroll.position.get().y, 40.0 / window.scale_factor());
         }
         drop(log);
+        window.close();
+    }
+
+    /// The mouse's `WM_POINTER` id while a mouse pointer message is current.
+    #[expect(unsafe_code, reason = "queries pointer types by id")]
+    fn mouse_pointer_id() -> Option<u32> {
+        use windows::Win32::UI::{
+            Input::Pointer::GetPointerType,
+            WindowsAndMessaging::{POINTER_INPUT_TYPE, PT_MOUSE},
+        };
+        (1..=256_u32).find(|&id| {
+            let mut kind = POINTER_INPUT_TYPE::default();
+            // SAFETY: an initialized out value; an id naming no pointer is refused.
+            unsafe { GetPointerType(id, &raw mut kind) }.is_ok() && kind == PT_MOUSE
+        })
+    }
+
+    /// One `SendInput` mouse event, moving to the screen point `to` when it
+    /// is given, then pumping; `false` when the input was refused.
+    #[expect(unsafe_code, reason = "real mouse input to the foreground test window")]
+    fn inject_mouse(
+        flags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSE_EVENT_FLAGS,
+        to: Option<POINT>,
+    ) -> bool {
+        use windows::Win32::UI::{
+            Input::KeyboardAndMouse::{
+                INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_MOVE,
+                MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT, SendInput,
+            },
+            WindowsAndMessaging::{
+                GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+                SM_YVIRTUALSCREEN,
+            },
+        };
+        // SAFETY: argument-free metric queries.
+        let desk = unsafe {
+            (
+                GetSystemMetrics(SM_XVIRTUALSCREEN),
+                GetSystemMetrics(SM_YVIRTUALSCREEN),
+                GetSystemMetrics(SM_CXVIRTUALSCREEN),
+                GetSystemMetrics(SM_CYVIRTUALSCREEN),
+            )
+        };
+        let (dx, dy, flags) = match to {
+            Some(point) => (
+                ((i64::from(point.x - desk.0) * 65535 + i64::from(desk.2) / 2)
+                    / i64::from(desk.2 - 1).max(1)) as i32,
+                ((i64::from(point.y - desk.1) * 65535 + i64::from(desk.3) / 2)
+                    / i64::from(desk.3 - 1).max(1)) as i32,
+                flags | MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+            ),
+            None => (0, 0, flags),
+        };
+        let input = INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx,
+                    dy,
+                    dwFlags: flags,
+                    ..Default::default()
+                },
+            },
+        };
+        // SAFETY: an initialized union arm matching its type.
+        let sent = unsafe { SendInput(&[input], size_of::<INPUT>() as i32) } == 1;
+        let limit = Instant::now() + Duration::from_millis(60);
+        while Instant::now() < limit {
+            pump_pointer_thread();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        sent
+    }
+
+    /// A mouse leave whose `Leave` callback pumps a message that brings the
+    /// cursor back keeps the window hovered: the leave's hover is settled
+    /// before user code sees its input, so nothing after the callback undoes
+    /// what the nested message said.
+    #[expect(
+        unsafe_code,
+        reason = "real mouse input to an ephemeral foreground test window, with the cursor restored"
+    )]
+    fn a_leave_callback_that_hovers_again_keeps_the_hover() {
+        use flui_platform_api::pointer::{PointerEvent, PointerKind};
+        use windows::Win32::UI::{
+            Input::KeyboardAndMouse::MOUSE_EVENT_FLAGS,
+            WindowsAndMessaging::{GetCursorPos, SetCursorPos, WM_POINTERENTER, WindowFromPoint},
+        };
+        struct Cursor(POINT);
+        impl Drop for Cursor {
+            fn drop(&mut self) {
+                // SAFETY: restore the position captured before this row.
+                let _ = unsafe { SetCursorPos(self.0.x, self.0.y) };
+            }
+        }
+        let mut original = POINT::default();
+        // SAFETY: an initialized point; nothing is retained.
+        unsafe { GetCursorPos(&raw mut original) }.expect("capture cursor for restoration");
+        let _restore = Cursor(original);
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let Some((window, _close)) = open_pointer_target(&platform) else {
+            return;
+        };
+        let hwnd = hwnd_of(&window);
+        let screen = |x: i32, y: i32| {
+            let mut point = POINT { x, y };
+            // SAFETY: the live shown owner window and an initialized point.
+            assert!(unsafe { ClientToScreen(hwnd, &raw mut point) }.as_bool());
+            point
+        };
+        let (inside, outside) = (screen(40, 40), screen(-40, 40));
+        // SAFETY: hit tests of screen points; no handle is retained.
+        let hits = |point: POINT| unsafe { WindowFromPoint(point) } == hwnd;
+        if !hits(inside) || hits(outside) || outside.x < 0 {
+            eprintln!(
+                "CANNOT_VERIFY reentrant leave: the target is occluded or at the screen edge"
+            );
+            return;
+        }
+        // SAFETY: a point checked to be off the target.
+        unsafe { SetCursorPos(outside.x, outside.y) }.expect("place the cursor beside the target");
+        for _ in 0..25 {
+            pump_pointer_thread();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let raw = hwnd.0 as isize;
+        let came_back = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&came_back);
+        window.on_input(Box::new(move |input| {
+            if let Some(PointerEvent::Leave(signal)) = input.as_pointer()
+                && signal.pointer.kind == PointerKind::Mouse
+                && seen.load(Ordering::SeqCst) == 0
+                && let Some(mouse) = mouse_pointer_id()
+            {
+                seen.store(1, Ordering::SeqCst);
+                // The callback pumps, and the message it dispatches is the
+                // mouse entering again.
+                // SAFETY: the window's own owner thread; the message carries
+                // the mouse's pointer id, current while its leave is handled.
+                unsafe {
+                    SendMessageW(
+                        HWND(raw as *mut _),
+                        WM_POINTERENTER,
+                        Some(WPARAM(mouse as usize)),
+                        Some(LPARAM(0)),
+                    )
+                };
+            }
+            DispatchEventResult::default()
+        }));
+        if !inject_mouse(MOUSE_EVENT_FLAGS(0), Some(inside)) || !window.is_hovered() {
+            eprintln!("CANNOT_VERIFY reentrant leave: the mouse did not enter by input");
+            return;
+        }
+        let _ = inject_mouse(MOUSE_EVENT_FLAGS(0), Some(outside));
+        let limit = Instant::now() + Duration::from_millis(500);
+        while came_back.load(Ordering::SeqCst) == 0 && Instant::now() < limit {
+            pump_pointer_thread();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        if came_back.load(Ordering::SeqCst) == 0 {
+            eprintln!("CANNOT_VERIFY reentrant leave: no mouse leave arrived");
+            return;
+        }
+        assert!(
+            window.is_hovered(),
+            "the mouse that entered again during the leave's callback still hovers"
+        );
         window.close();
     }
 

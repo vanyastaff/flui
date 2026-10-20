@@ -303,6 +303,60 @@ fn the_window_pumps_paces_and_pauses_its_viewport() {
     }
 }
 
+/// A focus loss with a touchpad pan and a mouse press open ends both, in
+/// time order: the pan's cancellation is stamped from the performance
+/// counter, the press's from the message time, and the press's is not
+/// placed before it.
+///
+/// Red-check: deliver the touchpad's input without raising the window
+/// clock's floor.
+#[test]
+fn a_focus_loss_stamps_its_cancellations_in_order() {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONDOWN;
+
+    let f = fixture(None);
+    let timeline = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&timeline);
+    f.window.on_input(Box::new(move |input| {
+        let entry = match input.as_pointer() {
+            Some(PointerEvent::Scroll(scroll)) => Some(("scroll", scroll.time)),
+            Some(PointerEvent::Down(press)) => Some(("down", press.sample.time)),
+            Some(PointerEvent::Cancel(cancel)) => Some(("cancel", cancel.time)),
+            _ => None,
+        };
+        if let Some(entry) = entry {
+            recorded.lock().expect("timeline").push(entry);
+        }
+        DispatchEventResult::default()
+    }));
+    push(f.hwnd, &[status(Running), content(-8.0)]);
+    pump(f.hwnd);
+    // SAFETY: integer message data for the fixture's own window on its
+    // owner thread: a primary press at client (10, 10).
+    unsafe {
+        SendMessageW(
+            f.hwnd,
+            WM_LBUTTONDOWN,
+            Some(WPARAM(0x0001)),
+            Some(LPARAM((0x000a << 16) | 0x000a)),
+        )
+    };
+    send(f.hwnd, WM_KILLFOCUS);
+    let timeline = timeline.lock().expect("timeline").clone();
+    let kinds: Vec<_> = timeline.iter().map(|(kind, _)| *kind).collect();
+    assert_eq!(
+        kinds,
+        ["scroll", "down", "scroll", "cancel"],
+        "{timeline:?}"
+    );
+    assert!(
+        timeline.windows(2).all(|pair| pair[0].1 <= pair[1].1),
+        "every stamp follows the one delivered before it: {timeline:?}"
+    );
+    f.window.close();
+}
+
 /// Red-check: drop `release_touchpad` from `WM_DESTROY` (the open pan is
 /// never cancelled).
 #[test]

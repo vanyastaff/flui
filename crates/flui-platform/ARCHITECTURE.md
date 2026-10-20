@@ -281,10 +281,12 @@ callbacks or native capture changes can dispatch another message.
 Keys are stamped from the same clock, read before the keydown drains its
 characters, so a key and a click queued behind a long frame keep their order.
 The clock keeps one floor for every stamp the window delivered: a `WM_POINTER`
-reading stamped from its performance count raises it, so a key in the same
-system tick, whose millisecond tick reads earlier, is not placed before the
+reading or a touchpad step stamped from the performance counter raises it, so
+a key in the same system tick, whose millisecond tick reads earlier, is not placed before the
 reading delivered ahead of it (`a_coarse_stamp_never_precedes_a_delivered_precise_one`,
-and the key rounds of `focus_loss_ends_a_touch_and_silences_its_tail`).
+and the key rounds of `focus_loss_ends_a_touch_and_silences_its_tail`), and a focus
+loss stamps the cancels of the other contacts after the touchpad's
+(`a_focus_loss_stamps_its_cancellations_in_order`).
 
 `queued_mouse_samples_keep_native_message_time` drives the public native window
 with delayed queued mouse samples, `queued_key_events_keep_native_message_time`
@@ -312,8 +314,10 @@ The window's hover (`is_hovered`, `on_hover_status_change`, the immediate cursor
 apply) follows the mouse on either route through one `WindowContext::set_hovered`,
 which raises a change only when the hover changed: `WM_MOUSEMOVE`/`WM_MOUSELEAVE`
 on the legacy route, and on the `WM_POINTER` route every mouse message but a
-capture change enters and `WM_POINTERLEAVE` leaves. Entering is raised before
-the input of its message, leaving after it. The system captures a mouse press on
+capture change enters and `WM_POINTERLEAVE` leaves. The hover is settled before
+the input of its message reaches user code, so a callback that pumps a message
+bringing the cursor back is not undone (`a_leave_callback_that_hovers_again_keeps_the_hover`).
+The system captures a mouse press on
 the `WM_POINTER` route itself, so a drag released outside the client area still
 delivers its release. A press dragged outside sends no leave while it is held,
 and no pointer message follows a `WM_POINTERCAPTURECHANGED`, so on a capture

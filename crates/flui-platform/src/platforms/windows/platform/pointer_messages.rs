@@ -44,18 +44,17 @@ impl WindowContext {
             &self.message_clock,
             &self.pointer_registry,
         );
-        // Entering is announced before the input it carries, leaving after it.
-        if hover == Some(true) {
-            self.set_hovered(true);
+        // The hover is settled before any of the message's input reaches user
+        // code: a callback that pumps messages may see the cursor come back,
+        // and nothing written after it may undo that.
+        if let Some(hovered) = hover {
+            self.set_hovered(hovered);
         }
         for input in inputs {
             let deliver = self.pointer_registry.borrow().delivers(&input);
             if deliver {
                 self.callbacks.dispatch_input(input);
             }
-        }
-        if hover == Some(false) {
-            self.set_hovered(false);
         }
         if mouse && message == WM_POINTERCAPTURECHANGED {
             self.reconcile_hover(hwnd);
