@@ -151,6 +151,9 @@ fn scene_event(event: IOSSceneEvent) -> Result<(), flui_platform::BootstrapError
 }
 
 fn drive_owner() {
+    // The owner's turn starts with the commands application code queued for
+    // its windows: this wake is the one a command asks for.
+    super::owner_dispatch::apply_queued_window_commands(std::thread::current().id());
     super::host::drive_native_text_sizing();
     if let Some(mut lease) = lease_controller() {
         lease

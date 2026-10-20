@@ -221,6 +221,8 @@ pub mod notifier_generic;
 
 // Diagnostics and debugging
 pub mod debug;
+// Typed self-description of the trees (ADR-0242); replaces `debug`'s string properties.
+pub mod inspect;
 
 // ============================================================================
 // RE-EXPORTS

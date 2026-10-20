@@ -107,18 +107,21 @@ impl RefreshIntent {
     /// Ctrl+R elsewhere.
     #[must_use]
     pub fn command(label: impl Into<String>) -> GestureCommand {
-        GestureCommand::new(label, Self)
-            .key(SingleActivator::named(NamedKey::F5))
-            .key(reload_chord(TargetPlatform::current()))
+        refresh_keys(TargetPlatform::current())
+            .into_iter()
+            .fold(GestureCommand::new(label, Self), GestureCommand::key)
     }
 }
 
-fn reload_chord(platform: TargetPlatform) -> SingleActivator {
+/// The refresh keys on `platform`: F5, and Cmd+R on macOS and iOS or Ctrl+R
+/// elsewhere. The collision table checks them on every platform.
+pub(crate) fn refresh_keys(platform: TargetPlatform) -> [SingleActivator; 2] {
     let chord = SingleActivator::character("r");
-    match platform {
+    let reload = match platform {
         TargetPlatform::MacOS | TargetPlatform::iOS => chord.meta(),
         _ => chord.control(),
-    }
+    };
+    [SingleActivator::named(NamedKey::F5), reload]
 }
 
 // ---------------------------------------------------------------------------

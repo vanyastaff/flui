@@ -2009,8 +2009,9 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
 }
 
 /// The keys that zoom a focused viewer on `platform`: `+` (or `=`, its
-/// unshifted key) and `-`, alone or with the platform's command key.
-fn zoom_keys(platform: TargetPlatform) -> Vec<(SingleActivator, ZoomIntent)> {
+/// unshifted key) and `-`, alone or with the platform's command key. The
+/// collision table checks them on every platform.
+pub(crate) fn zoom_keys(platform: TargetPlatform) -> Vec<(SingleActivator, ZoomIntent)> {
     let apple = matches!(platform, TargetPlatform::MacOS | TargetPlatform::iOS);
     let command = |activator: SingleActivator| {
         if apple {

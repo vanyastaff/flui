@@ -546,6 +546,7 @@ fn kit_retains_opaque_failure_payloads_and_continues() {
 
 fn isolated_kit_payload_child(kind: &str) {
     use std::{
+        io::Read,
         process::{Command, Stdio},
         time::{Duration, Instant},
     };
@@ -560,22 +561,38 @@ fn isolated_kit_payload_child(kind: &str) {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn kit consumer child");
+    // Drained on their own threads: the child's panic backtraces outgrow a
+    // pipe buffer in an unoptimized build, and a full pipe stalls the child
+    // until the deadline kills it.
+    let drain = |mut pipe: Box<dyn Read + Send>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            pipe.read_to_end(&mut bytes).expect("child pipe");
+            bytes
+        })
+    };
+    let stdout = drain(Box::new(child.stdout.take().expect("stdout pipe")));
+    let stderr = drain(Box::new(child.stderr.take().expect("stderr pipe")));
     let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if child.try_wait().expect("child status").is_some() {
-            break;
+    let (status, blocked) = loop {
+        if let Some(status) = child.try_wait().expect("child status") {
+            break (status, false);
         }
         if Instant::now() >= deadline {
             child.kill().expect("kill blocked child");
-            let output = child.wait_with_output().expect("reap child");
-            panic!("kit failure containment blocked: {output:?}");
+            break (child.wait().expect("reap child"), true);
         }
         std::thread::sleep(Duration::from_millis(10));
-    }
-    let output = child.wait_with_output().expect("child output");
+    };
+    let stdout = String::from_utf8_lossy(&stdout.join().expect("stdout reader")).into_owned();
+    let stderr = String::from_utf8_lossy(&stderr.join().expect("stderr reader")).into_owned();
     assert!(
-        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
-        "kit opaque payload containment failed: {output:?}"
+        !blocked,
+        "kit failure containment blocked: {status}\n{stdout}\n{stderr}"
+    );
+    assert!(
+        status.success() && stdout.contains("1 passed"),
+        "kit opaque payload containment failed: {status}\n{stdout}\n{stderr}"
     );
 }
 

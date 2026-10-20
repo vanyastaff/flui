@@ -647,6 +647,69 @@ fn resize_uses_the_installed_driver_lease_through_failure_and_teardown() {
     }
 }
 
+fn a_resize_that_finds_the_driver_leased_reaches_it_at_the_next_checkout() {
+    let _clear = OwnerHostClearGuard::arm();
+    let mut installation = prepared_runtime();
+    let dispatcher = installation.dispatcher();
+    let sizes = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&sizes);
+    let frame = installation
+        .frame_driver(FrameDriver::Test(TestFrameDriver {
+            installed: None,
+            sink: counting_sink(Arc::new(AtomicUsize::new(0))),
+            prelude: None,
+            resize: Some(Box::new(move |size, scale| {
+                seen.borrow_mut().push((size, scale));
+                if seen.borrow().len() == 1 {
+                    std::panic::panic_any("deferred resize failure");
+                }
+            })),
+        }))
+        .expect("prepare resize driver");
+    installation
+        .submit()
+        .outcome()
+        .expect("idle host")
+        .expect("published resize driver");
+    let host = super::super::host::APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
+    // Hold the published driver out on a lease, as a frame in progress does.
+    let drivers = super::FrameDrivers {
+        records: vec![frame.liveness.0.upgrade().expect("live record")],
+        retirement: host.native().retirement(),
+    };
+    let lease = drivers
+        .checkout_presentation(dispatcher.address)
+        .expect("lease the installed driver");
+    let size = |width| flui_foundation::geometry::Size::new(width, 200.0);
+    host.native().resize(dispatcher.address, size(300.0), 2.0);
+    host.native().resize(dispatcher.address, size(320.0), 2.0);
+    assert!(
+        sizes.borrow().is_empty(),
+        "the leased driver is not reached"
+    );
+    drop(lease);
+
+    let frame_now = || dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding));
+    let failure = catch_unwind(AssertUnwindSafe(frame_now)).expect_err("the resize panics");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"deferred resize failure")
+    );
+    assert_eq!(
+        *sizes.borrow(),
+        [(size(320.0), 2.0)],
+        "the latest resize reaches the driver before its next frame"
+    );
+    frame_now().expect("deliver frame");
+    frame_now().expect("deliver frame");
+    assert_eq!(
+        *sizes.borrow(),
+        [(size(320.0), 2.0), (size(320.0), 2.0)],
+        "a resize that panicked is tried again once, and is gone once applied"
+    );
+    teardown_platform_ui_runtime();
+}
+
 fn assert_native_retirement_failures(retire: fn(PresentationDispatcher)) {
     for (driver_failure, handler_failure) in [
         (None, None),
@@ -752,6 +815,10 @@ fn installed_frame_driver_contract() {
             (
                 "resize_uses_the_installed_driver_lease_through_failure_and_teardown",
                 resize_uses_the_installed_driver_lease_through_failure_and_teardown as fn(),
+            ),
+            (
+                "a_resize_that_finds_the_driver_leased_reaches_it_at_the_next_checkout",
+                a_resize_that_finds_the_driver_leased_reaches_it_at_the_next_checkout as fn(),
             ),
             (
                 "a_registered_driver_delivers_the_product_scene",
