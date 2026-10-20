@@ -139,42 +139,11 @@ impl<'a> RenderObjectContext<'a> {
     pub fn register_scroll(
         &self,
         handler: impl Fn(
-            flui_interaction::routing::ScrollDispatch<'_>,
-        ) -> flui_interaction::routing::EventPropagation
+            &flui_platform_api::pointer::ScrollEvent,
+        ) -> flui_interaction::pointer::EventPropagation
         + 'static,
-    ) -> Result<flui_interaction::routing::ScrollTarget, RenderObjectContextError> {
+    ) -> Result<flui_interaction::pointer::ScrollTarget, RenderObjectContextError> {
         Ok(self.dispatch_handle()?.register_scroll(handler)?)
-    }
-
-    /// Register native scroll deltas and their exact selected-stream completion.
-    ///
-    /// # Errors
-    /// Returns the lane's dispatch error when its owner is unavailable.
-    pub fn register_scroll_sequence(
-        &self,
-        handler: impl Fn(
-            flui_interaction::ScrollSignal<'_>,
-        ) -> flui_interaction::routing::EventPropagation
-        + 'static,
-    ) -> Result<flui_interaction::routing::ScrollTarget, RenderObjectContextError> {
-        Ok(self.dispatch_handle()?.register_scroll_sequence(handler)?)
-    }
-
-    /// Replace delta and completion handling on the existing selected target.
-    ///
-    /// # Errors
-    /// Returns the lane's dispatch error for an unavailable or foreign target.
-    pub fn replace_scroll_sequence(
-        &self,
-        target: flui_interaction::routing::ScrollTarget,
-        handler: impl Fn(
-            flui_interaction::ScrollSignal<'_>,
-        ) -> flui_interaction::routing::EventPropagation
-        + 'static,
-    ) -> Result<(), RenderObjectContextError> {
-        Ok(self
-            .dispatch_handle()?
-            .replace_scroll_sequence(target, handler)?)
     }
 
     /// Replace an existing scroll target's handler without changing its
@@ -186,10 +155,10 @@ impl<'a> RenderObjectContext<'a> {
     /// or for a target that no longer belongs to the active owner lane.
     pub fn replace_scroll(
         &self,
-        target: flui_interaction::routing::ScrollTarget,
+        target: flui_interaction::pointer::ScrollTarget,
         handler: impl Fn(
-            flui_interaction::routing::ScrollDispatch<'_>,
-        ) -> flui_interaction::routing::EventPropagation
+            &flui_platform_api::pointer::ScrollEvent,
+        ) -> flui_interaction::pointer::EventPropagation
         + 'static,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.replace_scroll(target, handler)?)
@@ -203,7 +172,7 @@ impl<'a> RenderObjectContext<'a> {
     /// or for a target already removed from the active owner lane.
     pub fn unregister_scroll(
         &self,
-        target: flui_interaction::routing::ScrollTarget,
+        target: flui_interaction::pointer::ScrollTarget,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.unregister_scroll(target)?)
     }
@@ -224,10 +193,10 @@ impl<'a> RenderObjectContext<'a> {
     pub fn register_pan_zoom(
         &self,
         handler: impl Fn(
-            flui_interaction::routing::PanZoomDispatch<'_>,
-        ) -> flui_interaction::routing::EventPropagation
+            flui_interaction::pointer::PanZoomDispatch<'_>,
+        ) -> flui_interaction::pointer::EventPropagation
         + 'static,
-    ) -> Result<flui_interaction::routing::PanZoomTarget, RenderObjectContextError> {
+    ) -> Result<flui_interaction::pointer::PanZoomTarget, RenderObjectContextError> {
         Ok(self.dispatch_handle()?.register_pan_zoom(handler)?)
     }
 
@@ -240,10 +209,10 @@ impl<'a> RenderObjectContext<'a> {
     /// or for a target that no longer belongs to the active owner lane.
     pub fn replace_pan_zoom(
         &self,
-        target: flui_interaction::routing::PanZoomTarget,
+        target: flui_interaction::pointer::PanZoomTarget,
         handler: impl Fn(
-            flui_interaction::routing::PanZoomDispatch<'_>,
-        ) -> flui_interaction::routing::EventPropagation
+            flui_interaction::pointer::PanZoomDispatch<'_>,
+        ) -> flui_interaction::pointer::EventPropagation
         + 'static,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.replace_pan_zoom(target, handler)?)
@@ -257,7 +226,7 @@ impl<'a> RenderObjectContext<'a> {
     /// or for a target already removed from the active owner lane.
     pub fn unregister_pan_zoom(
         &self,
-        target: flui_interaction::routing::PanZoomTarget,
+        target: flui_interaction::pointer::PanZoomTarget,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.unregister_pan_zoom(target)?)
     }
@@ -273,8 +242,8 @@ impl<'a> RenderObjectContext<'a> {
     /// the element was mounted detached, or the owner is gone.
     pub fn register_mouse_region(
         &self,
-        callbacks: flui_interaction::routing::MouseRegionCallbacks,
-    ) -> Result<flui_interaction::routing::MouseRegionTarget, RenderObjectContextError> {
+        callbacks: flui_interaction::pointer::MouseRegionCallbacks,
+    ) -> Result<flui_interaction::pointer::MouseRegionTarget, RenderObjectContextError> {
         Ok(self.dispatch_handle()?.register_mouse_region(callbacks)?)
     }
 
@@ -287,8 +256,8 @@ impl<'a> RenderObjectContext<'a> {
     /// or for a target that no longer belongs to the active owner lane.
     pub fn replace_mouse_region(
         &self,
-        target: flui_interaction::routing::MouseRegionTarget,
-        callbacks: flui_interaction::routing::MouseRegionCallbacks,
+        target: flui_interaction::pointer::MouseRegionTarget,
+        callbacks: flui_interaction::pointer::MouseRegionCallbacks,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self
             .dispatch_handle()?
@@ -320,7 +289,7 @@ impl<'a> RenderObjectContext<'a> {
     /// or for a target already removed from the active owner lane.
     pub fn unregister_mouse_region(
         &self,
-        target: flui_interaction::routing::MouseRegionTarget,
+        target: flui_interaction::pointer::MouseRegionTarget,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.unregister_mouse_region(target)?)
     }
@@ -342,7 +311,7 @@ impl<'a> RenderObjectContext<'a> {
     /// or for a target already removed from the active owner lane.
     pub fn detach_mouse_region(
         &self,
-        target: flui_interaction::routing::MouseRegionTarget,
+        target: flui_interaction::pointer::MouseRegionTarget,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.detach_mouse_region(target)?)
     }

@@ -35,7 +35,7 @@ is sealed through its supertrait (`crates/flui-view/src/context/build_context.rs
 and carries eleven methods, from `rebuild_handle` to `pipeline_owner` (`build_context.rs:392-565`).
 The rule that came with it — "A new capability is a method on `LifecycleContext`" — closes the
 set: only `flui-view` can add a capability, and only by naming its type, so a capability whose
-backend lives in a third-party crate cannot exist. AGENTS.md's "Extending FLUI" row repeats the
+backend lives in a third-party crate cannot exist. The "Extending FLUI" table in `docs/extending.md` repeats the
 rule.
 
 The platform side already has more than the widget side can reach:
@@ -406,8 +406,8 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
 
 ## Consequences
 
-- ADR-0078 §1's closing sentence is narrowed to framework capabilities; AGENTS.md's "Platform
-  capability (a new handle)" row in "Extending FLUI" changes in the implementing change to: an
+- ADR-0078 §1's closing sentence is narrowed to framework capabilities; the "Platform
+  capability (a new handle)" row of `docs/extending.md` changes in the implementing change to: an
   interface crate on `flui-platform-api`, a provider per target, registration through a plugin,
   a headless fake, and a test that fails without it.
 - The interim `LifecycleContext::clipboard_handle` gives way to the built-in clipboard
@@ -425,7 +425,7 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
   (`crates/flui-runtime/src/presentation.rs:423`, `:1461` and their siblings) go away.
 - `AppRunError` gains `CapabilityConflict`. It is `#[non_exhaustive]`
   (`crates/flui-app/src/app/application.rs:22`), so this is not a break.
-- AGENTS.md's "Platform capability" row states the classification rule of §5, so a contributor
+- The "Platform capability" row of `docs/extending.md` states the classification rule of §5, so a contributor
   adding a capability knows which class to put it in.
 - ADR-0038 §7's `DataTransferHandle` is acquired as `cx.capability::<DataTransfer>()`.
 - Registered capabilities are data the UI runtime can list; ADR-0095's protocol can expose that list

@@ -142,8 +142,8 @@ assert!(!attachments.is_empty());
 ```
 
 In widgets, `Listener::recognizer` and `recognizer_when` use this mechanism.
-`GestureDetector` keeps its familiar `on_tap`, `on_pan_*` and other callback
-API. Explicit `cancel()` delivers cancellation and leaves a recognizer reusable.
+`GestureDetector` mounts its typed slots (`on_tap`, `drag(DragSlot)`,
+`transform(TransformSlot)` and the rest) through `RawGestureDetector`. Explicit `cancel()` delivers cancellation and leaves a recognizer reusable.
 Dropping the last owner releases membership silently, without invoking gesture
 callbacks. See [GESTURES.md](docs/GESTURES.md) and the
 [custom recognizer example](examples/custom_recognizer.rs).
@@ -217,9 +217,14 @@ let tap = TapGestureRecognizer::builder(GestureArena::new())
     .build();
 ```
 
-Processing includes bounded velocity estimation, frame resampling and explicit
-pointer smoothing filters. Hardware predictions remain separate source samples.
-OneEuro construction and filtering return typed errors. Invalid input leaves
+Processing includes bounded velocity estimation, frame resampling and One Euro
+pointer smoothing. Hardware predictions remain separate source samples.
+`GestureSettings::with_position_smoothing` makes drag, multi-drag, tap-and-drag,
+long-press, force-press and scale smooth the positions they publish after
+recognition (ends, velocities and native pan-zoom stay raw); slop, arena and velocity decisions
+keep the raw samples, and each accepted gesture starts unsmoothed. No preset
+selects smoothing. `OneEuroTuning::new` validates parameters with a typed
+error; filtering rejects invalid samples the same way. Invalid input leaves
 accepted history unchanged; the 2D filter commits both axes together, and a
 duplicate or regressed timestamp holds its accepted result and clock anchor.
 See [the pointer filtering example](examples/pointer_filtering.rs) for tuning

@@ -5,14 +5,14 @@ listener notification, the signal read contract and the train guard.
 
 ## Binding-owned input sequence identities
 
-`InputSequenceId` is a nonzero, presentation-local identity issued by a
-non-cloneable `InputSequenceIdMint`. It is distinct from reusable device pointer
-IDs and from arena-local member generations. Exhaustion refuses permanently;
-earlier identities remain valid labels for accepted contacts and their motion.
-The private terminal-counter witness
-`sequence_identity_exhaustion_is_permanent_and_preserves_older_ids` covers the
-boundary a consumer cannot construct. Binding-driven gesture tests cover actual
-admission and pointer reuse. This supplies the identity contract required by
+`InputSequenceId` is a nonzero, presentation-local identity issued by an
+owner-local `IdMint<InputSequenceId>` (ADR-0207 §4). It is distinct from reusable
+device pointer IDs and from arena-local member generations. Exhaustion refuses
+permanently; earlier identities remain valid labels for accepted contacts and
+their motion (`an_exhausted_sequence_mint_refuses_permanently`). Binding-driven
+gesture tests cover actual admission and pointer reuse
+(`binding_admits_distinct_drag_sequences_when_pointer_ids_are_reused`). This
+supplies the identity contract required by
 [ADR-0209](../../docs/adr/ADR-0209-nested-scroll-connection.md), without making
 process-global state or serialization a second identity issuer.
 

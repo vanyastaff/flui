@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-07
+- **Superseded in part by:** [ADR-0209](ADR-0209-nested-scroll-connection.md) §5 (a burst
+  expires after the preset's idle time, and a phased one that never ends after the longer phased
+  time, not after a fixed 500 ms)
 - **Related:** [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md)
   (owned source identity and native phases),
   [ADR-0164](ADR-0164-down-route-logical-pointer-capture.md)

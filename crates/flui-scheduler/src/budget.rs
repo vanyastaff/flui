@@ -446,6 +446,12 @@ impl FrameBudget {
         self.frame_count
     }
 
+    /// Set the frame duration the budget judges frames against, keeping a
+    /// fractional rate exact (see [`FrameDuration::try_from_period`]).
+    pub fn set_frame_duration(&mut self, frame_duration: FrameDuration) {
+        self.frame_duration = frame_duration;
+    }
+
     /// Set the target FPS
     pub fn set_target_fps(&mut self, target_fps: u32) {
         self.frame_duration = FrameDuration::try_from_fps(target_fps).expect("fps > 0");

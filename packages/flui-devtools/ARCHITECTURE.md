@@ -74,3 +74,29 @@ Representable durations remain exact at microsecond precision; values beyond
 `developer_history_respects_capacity_and_clear` records a completed event through
 the public timeline, reads its duration back, and exercises saturation of a
 consumer-modified event value.
+
+### The gesture inspector names members by number and inspects recordings by replay
+
+`GestureInspector` numbers arena members and composition nodes in the order
+it first sees them, by allocation identity, never by type name: two members
+of one type stay apart, and two runs over one input stream number alike. It
+builds the composition tree from each member's observed path, whose nodes
+carry identity, so the arena keeps no downward child list for it. A recording
+holds verdict and deadline rows but not joins or claims, so a recording is
+inspected by replaying it with an inspector attached to the replaying host's
+arena. `a_recording_replays_to_the_model_the_live_run_built` pins that the
+replay builds the live run's model; `detaching_stops_observation` pins that a
+detached inspector keeps its reports and receives nothing more.
+
+### The gesture overlay rebuilds only its own layer and observes only while shown
+
+`GestureInspectorOverlay` stacks a layer over the app with `StackFit::Expand`,
+so wrapping the root leaves the app's constraints unchanged. The controller
+notifies the layer alone: toggling never rebuilds the app, and the layer
+registers its arena observer only while shown and mounted, so a hidden
+overlay costs the input path nothing. Contests are drawn beside the Down
+position the overlay's translucent `Listener` recorded for their pointer, and
+a settled contest fades over `FADE` through post-frame rebuilds that stop
+once nothing fades. `toggling_hides_the_overlay_without_rebuilding_the_app`,
+`the_overlay_observes_only_while_mounted_and_shown` and
+`the_overlay_draws_each_contest_by_its_pointer_then_fades_it` pin these.

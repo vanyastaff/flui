@@ -72,7 +72,7 @@ impl FlexibleSpaceBarSettings {
     pub fn new(data: FlexibleSpaceBarData, child: impl IntoView) -> Self {
         Self {
             data,
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 }

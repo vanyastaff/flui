@@ -12,6 +12,7 @@ mod table_test;
 mod device;
 mod tasks;
 
+mod android_dex;
 mod bench;
 mod change_scope;
 mod changelog;
@@ -22,14 +23,15 @@ mod doctor;
 mod file_length;
 mod fonts;
 mod globals;
-mod host_lock;
 mod key_vocabulary;
 mod markers;
 mod module_dag;
 mod perf;
+mod platform_floor;
 mod ratchet;
+mod recording_vocabulary;
+mod testing;
 mod toolchain;
-mod verified;
 mod wasm;
 mod wgsl;
 mod workspace;
@@ -66,8 +68,6 @@ enum Command {
     Ci(tasks::CiArgs),
     /// `ci` plus every heavy CI job this host can run.
     CiFull(tasks::CiFullArgs),
-    /// fmt, clippy and tests over the crates a change touches and their dependents.
-    CheckChanged(tasks::CheckChangedArgs),
     /// Check the dependency graph and the manifests (cargo-deny, cargo-shear).
     Deps(tasks::DepsArgs),
     /// Clippy every feature on its own (cargo-hack).
@@ -88,8 +88,6 @@ enum Command {
     GpuTest(tasks::GpuTestArgs),
     /// The unsafe-code paths under Miri.
     Miri(tasks::MiriArgs),
-    /// Compile the benchmarks without running them.
-    BenchCompile(tasks::BenchCompileArgs),
     /// The demo layer snapshot suite.
     DemoSnapshots(tasks::DemoSnapshotsArgs),
     /// Remove the nested-cargo test caches under the target directory.
@@ -102,7 +100,7 @@ enum Command {
     Reach(workspace::ReachArgs),
     /// Check the declared import direction between a crate's top-level modules.
     ModuleDag(module_dag::ModuleDagArgs),
-    /// Print the lane and the packages a change touches (CI's `plan`, `check-changed`).
+    /// Print the lane and the packages a change touches (CI's `plan`).
     Affected(change_scope::AffectedArgs),
     /// Check that no include_str! target is classified as docs-only.
     PathsFilter(change_scope::PathsFilterArgs),
@@ -132,8 +130,16 @@ enum Command {
     FileLength(file_length::FileLengthArgs),
     /// Check for process markers outside the archival roots (ADR-0078 §4).
     Markers(markers::MarkersArgs),
+    /// Check that test helpers live in a kit and test support is named `testing` (ADR-0243).
+    Testing(testing::TestingArgs),
     /// Check (or --write) the W3C key tables generated from keyboard-types (ADR-0089 §4).
     KeyVocabulary(key_vocabulary::KeyVocabularyArgs),
+    /// Check (or --write) the table of variants an input recording carries (ADR-0215 §2).
+    RecordingVocabulary(recording_vocabulary::RecordingVocabularyArgs),
+    /// Check (or --write) the Android `FluiView` dex against its Java sources (ADR-0247).
+    AndroidDex(android_dex::AndroidDexArgs),
+    /// Check (or --write) the floors generated from platform-support.toml (ADR-0244).
+    PlatformFloor(platform_floor::PlatformFloorArgs),
     /// Validate changelog.d fragments; --write merges them into CHANGELOG.md and deletes them.
     Changelog(changelog::ChangelogArgs),
     /// List missing tools for `ci` / `ci-full`.
@@ -146,89 +152,12 @@ enum Command {
     Worktree(worktree::WorktreeArgs),
 }
 
-impl Command {
-    /// Whether this command builds or tests the workspace, or deletes what
-    /// such a run uses, and so waits for any other such run on the host
-    /// ([`host_lock`]). A dry run builds and deletes nothing.
-    ///
-    /// Every command is classified here, with no catch-all, so a new one
-    /// must be placed on one side or the other.
-    fn is_heavy(&self) -> bool {
-        let run = match self {
-            // Builds, tests, docs or benches of the workspace.
-            Self::Lint(args) => args.run,
-            Self::Gate(args) => args.run,
-            Self::Test(args) => args.run,
-            Self::PlatformTest(args) => args.run,
-            Self::CliTest(args) => args.run,
-            Self::BuildAllTargets(args) => args.run,
-            Self::Ci(args) => args.run,
-            Self::CiFull(args) => args.run,
-            Self::CheckChanged(args) => args.run,
-            Self::FeatureMatrix(args) => args.run,
-            Self::FacadeCombos(args) => args.run,
-            Self::CrossTypecheck(args) => args.run,
-            Self::WasmCheck(args) => args.run,
-            Self::WasmLink(args) => args.run,
-            Self::WasmTest(args) => args.run,
-            Self::LiveSmoke(args) => args.run,
-            Self::GpuTest(args) => args.run,
-            Self::Miri(args) => args.run,
-            Self::BenchCompile(args) => args.run,
-            Self::DemoSnapshots(args) => args.run,
-            // Deletes the nested-test caches a running test would use.
-            Self::CleanNested(args) => args.run,
-            Self::DocStrict(_) | Self::Device(_) | Self::BenchCollect(_) => return true,
-            // The planted-fixture comparison builds nothing.
-            Self::Perf(args) => return !args.self_test,
-            // `prune` deletes worktrees and their target directories.
-            Self::Worktree(args) => return args.deletes(),
-            // Source checks, metadata queries and bookkeeping: they build at
-            // most xtask itself.
-            Self::Checks(_)
-            | Self::Deps(_)
-            | Self::Workspace(_)
-            | Self::Reach(_)
-            | Self::ModuleDag(_)
-            | Self::Affected(_)
-            | Self::PathsFilter(_)
-            | Self::CiVerify(_)
-            | Self::Toolchain(_)
-            | Self::Wgsl(_)
-            | Self::Globals(_)
-            | Self::WasmImports(_)
-            | Self::WasmTestCrates(_)
-            | Self::LockedVersion(_)
-            | Self::DocsLinks(_)
-            | Self::DocsPaths(_)
-            | Self::FontAssets(_)
-            | Self::FileLength(_)
-            | Self::Markers(_)
-            | Self::KeyVocabulary(_)
-            | Self::Changelog(_)
-            | Self::Doctor(_) => return false,
-        };
-        !run.dry_run
-    }
-
-    /// Whether `main` takes the run lock before the command starts.
-    /// `check-changed` takes it itself once its unlocked formatting check
-    /// passes, so a formatting failure never waits behind another run.
-    fn locks_up_front(&self) -> bool {
-        self.is_heavy() && !matches!(self, Self::CheckChanged(_))
-    }
-}
-
 fn main() -> ExitCode {
     let cli = Cli::parse();
     if let Err(error) = util::built_from_this_checkout() {
         eprintln!("xtask: {error:#}");
         return ExitCode::from(2);
     }
-    let _heavy_run = cli
-        .command
-        .locks_up_front()
-        .then(host_lock::HeavyRunLock::for_this_run);
     let result = match cli.command {
         Command::Checks(args) => tasks::checks(&args),
         Command::Lint(args) => tasks::lint(&args),
@@ -239,7 +168,6 @@ fn main() -> ExitCode {
         Command::BuildAllTargets(args) => tasks::build_all_targets_task(&args),
         Command::Ci(args) => tasks::ci(&args),
         Command::CiFull(args) => tasks::ci_full(&args),
-        Command::CheckChanged(args) => tasks::check_changed(&args),
         Command::Deps(args) => tasks::deps(&args),
         Command::FeatureMatrix(args) => tasks::feature_matrix(&args),
         Command::FacadeCombos(args) => tasks::facade_combos(&args),
@@ -250,7 +178,6 @@ fn main() -> ExitCode {
         Command::LiveSmoke(args) => tasks::live_smoke(&args),
         Command::GpuTest(args) => tasks::gpu_test(&args),
         Command::Miri(args) => tasks::miri(&args),
-        Command::BenchCompile(args) => tasks::bench_compile(&args),
         Command::DemoSnapshots(args) => tasks::demo_snapshots(&args),
         Command::CleanNested(args) => tasks::clean_nested(&args),
         Command::Device(args) => device::device(&args),
@@ -272,7 +199,11 @@ fn main() -> ExitCode {
         Command::FontAssets(args) => fonts::font_assets(&args),
         Command::FileLength(args) => file_length::file_length(&args),
         Command::Markers(args) => markers::markers(&args),
+        Command::Testing(args) => testing::testing(&args),
         Command::KeyVocabulary(args) => key_vocabulary::key_vocabulary(&args),
+        Command::RecordingVocabulary(args) => recording_vocabulary::recording_vocabulary(&args),
+        Command::AndroidDex(args) => android_dex::android_dex(&args),
+        Command::PlatformFloor(args) => platform_floor::platform_floor(&args),
         Command::Changelog(args) => changelog::changelog(&args),
         Command::Doctor(args) => doctor::doctor(&args),
         Command::BenchCollect(args) => bench::bench_collect(&args),
@@ -285,118 +216,5 @@ fn main() -> ExitCode {
             eprintln!("xtask: {error:#}");
             ExitCode::FAILURE
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use clap::{CommandFactory, Parser};
-
-    use super::Cli;
-
-    /// Every command, as typed, and whether it queues behind the run lock.
-    const COMMANDS: &[(&str, bool)] = &[
-        ("lint", true),
-        ("gate", true),
-        ("test", true),
-        ("test --fast", true),
-        ("platform-test", true),
-        ("cli-test", true),
-        ("build-all-targets", true),
-        ("ci", true),
-        ("ci-full", true),
-        ("check-changed", true),
-        ("feature-matrix", true),
-        ("facade-combos", true),
-        ("cross-typecheck", true),
-        ("wasm-check", true),
-        ("wasm-link", true),
-        ("wasm-test", true),
-        ("live-smoke", true),
-        ("gpu-test", true),
-        ("miri", true),
-        ("bench-compile", true),
-        ("demo-snapshots", true),
-        ("doc-strict", true),
-        ("device macos-close-path", true),
-        ("bench-collect baseline", true),
-        ("perf", true),
-        ("perf --self-test", false),
-        ("gate --dry-run", false),
-        ("check-changed --dry-run", false),
-        ("ci --dry-run", false),
-        ("lint --dry-run", false),
-        ("checks", false),
-        ("deps", false),
-        ("clean-nested", true),
-        ("clean-nested --dry-run", false),
-        ("workspace", false),
-        ("reach", false),
-        ("module-dag", false),
-        ("affected", false),
-        ("paths-filter", false),
-        ("ci-verify", false),
-        ("toolchain", false),
-        ("wgsl", false),
-        ("globals", false),
-        ("wasm-imports module.wasm", false),
-        ("wasm-test-crates", false),
-        ("locked-version wgpu", false),
-        ("docs-links", false),
-        ("docs-paths", false),
-        ("font-assets", false),
-        ("file-length", false),
-        ("markers", false),
-        ("key-vocabulary", false),
-        ("key-vocabulary --write", false),
-        ("changelog --check", false),
-        ("doctor", false),
-        ("worktree list", false),
-        ("worktree new area/slug", false),
-        ("worktree prune", true),
-        ("worktree prune --dry-run", false),
-    ];
-
-    #[test]
-    fn heavy_commands_take_the_run_lock() {
-        let wrong: Vec<String> = COMMANDS
-            .iter()
-            .filter_map(|&(line, heavy)| {
-                let argv = std::iter::once("xtask").chain(line.split_whitespace());
-                match Cli::try_parse_from(argv) {
-                    Ok(cli) if cli.command.is_heavy() == heavy => None,
-                    Ok(_) => Some(format!("`{line}`: expected heavy = {heavy}")),
-                    Err(error) => Some(format!("`{line}`: {error}")),
-                }
-            })
-            .collect();
-        assert!(wrong.is_empty(), "misclassified: {wrong:#?}");
-        let deferred: Vec<&str> = COMMANDS
-            .iter()
-            .filter(|&&(line, heavy)| {
-                let argv = std::iter::once("xtask").chain(line.split_whitespace());
-                heavy
-                    && !Cli::try_parse_from(argv)
-                        .expect("classified above")
-                        .command
-                        .locks_up_front()
-            })
-            .map(|&(line, _)| line)
-            .collect();
-        assert_eq!(
-            deferred,
-            ["check-changed"],
-            "only check-changed waits for the lock after its formatting check"
-        );
-        let covered: std::collections::BTreeSet<&str> = COMMANDS
-            .iter()
-            .filter_map(|(line, _)| line.split_whitespace().next())
-            .collect();
-        let missing: Vec<String> = Cli::command()
-            .get_subcommands()
-            .map(|sub| sub.get_name().to_owned())
-            .filter(|name| !covered.contains(name.as_str()))
-            .collect();
-        assert!(missing.is_empty(), "commands with no row: {missing:?}");
     }
 }

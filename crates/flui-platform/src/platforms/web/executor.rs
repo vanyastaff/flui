@@ -10,7 +10,8 @@ use crate::traits::PlatformExecutor;
 
 pub struct WebExecutor;
 
-// SAFETY: WASM is single-threaded — no data races possible
+// SAFETY: the page has one thread (the module refuses `+atomics`), so the value
+// is never reached from another.
 unsafe impl Send for WebExecutor {}
 unsafe impl Sync for WebExecutor {}
 

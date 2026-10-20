@@ -102,16 +102,16 @@ mod appkit_frame_pump_probe {
         // gets none. Occlusion is the honest reason a run can produce no frames
         // at all, which is why the failure messages below distinguish "never
         // started" from "started and stalled".
-        let window = match owner.open_window(flui_platform::WindowOptions {
-            title: "FLUI frame-pump probe".to_string(),
-            size: Size::new(480.0, 320.0),
-            resizable: false,
-            visible: true,
-            decorated: true,
-            min_size: None,
-            max_size: None,
-            ..Default::default()
-        }) {
+        let window = match owner.open_window(
+            flui_platform::WindowOptions::default()
+                .with_title("FLUI frame-pump probe".to_string())
+                .with_size(Size::new(480.0, 320.0))
+                .with_resizable(false)
+                .with_visible(true)
+                .with_decorated(true)
+                .with_min_size(None)
+                .with_max_size(None),
+        ) {
             Ok(pending) => match pending.try_ready() {
                 Ok(window) => window,
                 Err(error) => fatal(format!("the window was not ready: {error:?}")),
@@ -127,7 +127,13 @@ mod appkit_frame_pump_probe {
         // the pump result: a display that reports no rate makes this `None`
         // without saying anything about the pump, and the two claims fail
         // independently.
-        if let Some(period) = window.refresh_period() {
+        let period = owner
+            .display_snapshot()
+            .ok()
+            .and_then(|snapshot| snapshot.window_display(window.display_id()))
+            .and_then(|display| display.refresh_period)
+            .map(flui_platform::RefreshPeriod::get);
+        if let Some(period) = period {
             tracing::info!(
                 period_us = period.as_micros() as u64,
                 hz = period.as_secs_f64().recip(),
@@ -135,7 +141,7 @@ mod appkit_frame_pump_probe {
             );
         } else {
             tracing::warn!(
-                "FRAME_PUMP_PROBE_REFRESH_PERIOD=unreported: refresh_period() returned None, so \
+                "FRAME_PUMP_PROBE_REFRESH_PERIOD=unreported: the window's display reported no period, so \
                  the runner paces against its default 60 Hz period on this display"
             );
         }

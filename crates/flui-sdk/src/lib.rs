@@ -21,8 +21,11 @@
 //!   them is `grep -E 'flui_sdk::(pipeline|hooks)::'`.
 //!
 //! Each item is here because `flui-material`, `flui-cupertino` or
-//! `flui-devtools` imports it outside its tests; `tests/surface.rs` pins the
-//! list.
+//! `flui-devtools` imports it outside its tests, or because an approved
+//! feature spec places it in the package-author surface (the input
+//! completeness spec's placement table: arena observation, gesture presets,
+//! system preferences, haptic feedback kinds and input regions);
+//! `tests/surface.rs` pins the list.
 
 pub use flui_animation as animation;
 pub use flui_foundation as foundation;
@@ -51,20 +54,140 @@ pub mod view {
     mod __runtime {}
 }
 
-/// Platform values: brightness, locale and the target platform.
+/// Platform values: brightness, locale, haptic feedback kinds, the host's
+/// system preferences (its haptics setting among them), the target platform
+/// (the one a gesture preset models), the window's state and mode, and the
+/// system notices the host delivers.
 pub mod platform {
     pub use flui_platform_api::Brightness;
+    pub use flui_platform_api::HapticFeedback;
+    pub use flui_platform_api::HostNotice;
     pub use flui_platform_api::InvalidLocale;
     pub use flui_platform_api::Locale;
+    pub use flui_platform_api::MemoryPressureLevel;
+    pub use flui_platform_api::SessionEndBlock;
+    pub use flui_platform_api::SessionEndRequest;
+    pub use flui_platform_api::SystemPreferences;
     pub use flui_platform_api::TargetPlatform;
+    pub use flui_platform_api::WindowCommandError;
+    pub use flui_platform_api::WindowMode;
+    pub use flui_platform_api::WindowState;
+
+    /// Handle-less input capabilities (ADR-0213). Unstable: present only
+    /// under the additive `unstable-input` feature.
+    #[cfg(feature = "unstable-input")]
+    pub mod input_capabilities {
+        pub use flui_platform_api::input_capabilities::Availability;
+        pub use flui_platform_api::input_capabilities::InputCapabilities;
+        pub use flui_platform_api::input_capabilities::PointerKindSet;
+    }
+
+    /// Haptic patterns, requests and outcomes (ADR-0210); the widget handle
+    /// that takes them is `interaction::HapticsHandle`, as in the facade.
+    /// Unstable: present only under the additive `unstable-input` feature.
+    #[cfg(feature = "unstable-input")]
+    pub mod haptics {
+        pub use flui_platform_api::haptics::ControlPoint;
+        pub use flui_platform_api::haptics::HapticCapabilities;
+        pub use flui_platform_api::haptics::HapticEvent;
+        pub use flui_platform_api::haptics::HapticOutcome;
+        pub use flui_platform_api::haptics::HapticPattern;
+        pub use flui_platform_api::haptics::HapticPatternBuilder;
+        pub use flui_platform_api::haptics::HapticPatternError;
+        pub use flui_platform_api::haptics::HapticRequest;
+        pub use flui_platform_api::haptics::HapticTicket;
+        pub use flui_platform_api::haptics::HapticTiming;
+        pub use flui_platform_api::haptics::Intensity;
+        pub use flui_platform_api::haptics::ParameterCurve;
+        pub use flui_platform_api::haptics::PatternPlayback;
+        pub use flui_platform_api::haptics::Sharpness;
+        pub use flui_platform_api::haptics::UnitRangeError;
+    }
 }
 
-/// Gesture details and focus, at the paths `flui::interaction` uses.
+/// Gesture details, focus, the per-kind gesture presets, arena observation
+/// (`GestureObserver`, which `flui-devtools`' gesture inspector builds on)
+/// and the extension surface of a custom recognizer, at the paths
+/// `flui::interaction` uses.
+///
+/// A third-party recognizer implements `GestureArenaMember` and
+/// `GestureRecognizer`, joins the arena through `ArenaMembership` (with a
+/// `MotionRole` when it moves) or `PrimaryContact`, composes with
+/// `GestureComposition` or a `SequencedBranch`, admits device kinds through
+/// `PointerKindSet`, and is mounted by `widgets::RawGestureDetector` through a
+/// `widgets::GestureRecognizerFactory`.
 pub mod interaction {
+    pub use flui_interaction::ArenaMembership;
+    pub use flui_interaction::BeginContactError;
+    pub use flui_interaction::CancelOutcome;
+    pub use flui_interaction::ContactId;
+    pub use flui_interaction::ContactSnapshot;
     pub use flui_interaction::DragDownDetails;
+    pub use flui_interaction::GestureArena;
+    pub use flui_interaction::GestureArenaEntry;
+    pub use flui_interaction::GestureArenaMember;
+    pub use flui_interaction::GestureDisposition;
     pub use flui_interaction::GestureEndReason;
-    pub use flui_interaction::routing::FocusNode;
-    pub use flui_interaction::routing::FocusSubscription;
+    pub use flui_interaction::GestureObservation;
+    pub use flui_interaction::GestureObserver;
+    pub use flui_interaction::GestureProfiles;
+    pub use flui_interaction::GestureRecognizer;
+    pub use flui_interaction::GestureSettings;
+    pub use flui_interaction::GestureSettingsProvider;
+    #[cfg(feature = "unstable-input")]
+    pub use flui_interaction::HapticObserver;
+    #[cfg(feature = "unstable-input")]
+    pub use flui_interaction::HapticsHandle;
+    pub use flui_interaction::ObserverHandle;
+    pub use flui_interaction::PointerDispatch;
+    pub use flui_interaction::PointerEvent;
+    pub use flui_interaction::PointerEventExt;
+    pub use flui_interaction::PointerId;
+    pub use flui_interaction::PointerKind;
+    pub use flui_interaction::PointerKindSet;
+    pub use flui_interaction::PrimaryContact;
+    pub use flui_interaction::cancel_all;
+    pub use flui_interaction::focus::FocusNode;
+    pub use flui_interaction::focus::FocusSubscription;
+    pub use flui_interaction::gesture::CompositionBranch;
+    pub use flui_interaction::gesture::CompositionError;
+    pub use flui_interaction::gesture::CompositionKind;
+    pub use flui_interaction::gesture::ContestCancel;
+    pub use flui_interaction::gesture::GestureBranches;
+    pub use flui_interaction::gesture::GestureComposition;
+    pub use flui_interaction::gesture::GestureContest;
+    pub use flui_interaction::gesture::MotionRole;
+    pub use flui_interaction::gesture::ObservedComposition;
+    pub use flui_interaction::gesture::ObservedMember;
+    pub use flui_interaction::gesture::PanClaim;
+    pub use flui_interaction::gesture::RejectionReason;
+    pub use flui_interaction::gesture::SequencedBranch;
+    pub use flui_platform_api::EventTime;
+
+    /// Drag-and-drop (ADR-0211): what a source widget starts through the
+    /// presentation's `DragAndDrop` and what a receiver answers, the surface
+    /// a package's reorderable list or drop zone is written against.
+    pub mod drag {
+        pub use flui_interaction::drag::AllowedActions;
+        pub use flui_interaction::drag::Autoscroll;
+        pub use flui_interaction::drag::DragAndDrop;
+        pub use flui_interaction::drag::DragError;
+        pub use flui_interaction::drag::DragIdentity;
+        pub use flui_interaction::drag::DragItem;
+        pub use flui_interaction::drag::DragObserver;
+        pub use flui_interaction::drag::DragOutcome;
+        pub use flui_interaction::drag::DragPoint;
+        pub use flui_interaction::drag::DragReach;
+        pub use flui_interaction::drag::DragSession;
+        pub use flui_interaction::drag::DragStart;
+        pub use flui_interaction::drag::DragTrigger;
+        pub use flui_interaction::drag::DragView;
+        pub use flui_interaction::drag::DropReceiver;
+        pub use flui_interaction::drag::DropReceiverSlot;
+        pub use flui_interaction::drag::MoveOutcome;
+        pub use flui_interaction::drag::SpringLoading;
+        pub use flui_platform_api::data_transfer::TransferActions;
+    }
 }
 
 /// Custom painting and the paint, style and text values, at the paths `flui::painting` uses.

@@ -8,6 +8,15 @@ decisions` entries below; a full crate architecture writeup is deferred.
 
 ## Mapping decisions
 
+### The frame budget is set to the display being produced for, before the frame begins
+
+`UpdateScheduler::set_budget_frame_duration` points the stats-only `FrameBudget` at an exact
+period (`FrameDuration::try_from_period` keeps 59.94 Hz from rounding to 60). The host sets it
+before `drive_frame` opens the frame because `handle_begin_frame` copies the budget's target
+into the frame's timing; a change made inside a frame applies to the next one. The `frame` span
+carries the period it judged the frame by as `period_us`, which is how a profiler that cannot be a
+framework dependency follows the display (`frame_span_carries_the_budget_period`).
+
 ### Lifecycle and timing observers preserve accepted delivery
 
 Lifecycle state and frame eligibility commit before notification. Reentrant
@@ -1035,9 +1044,9 @@ test pins this.
 
 `benches/async_driver_pump.rs` (criterion) is evidence attached to the PR, not
 a gate. CI's `clippy`/`feature-matrix` jobs pass `--all-targets`/`--benches`,
-so this file is type-checked and lint-checked on every PR; what CI never
-does is link or run it (`bench-compile` only `cargo bench -p flui-rendering
---no-run`s). Local measurement, `main` (`f2f1c4d9`) vs. this change, on a
+so this file is type-checked and lint-checked on every PR, and the `test`
+job's `cargo xtask build-all-targets` links it; what CI never does is run
+it. Local measurement, `main` (`f2f1c4d9`) vs. this change, on a
 13th Gen Intel Core i9-13900K (32 threads) running `rustc 1.98.1 (48a229cea
 2026-09-01)`:
 

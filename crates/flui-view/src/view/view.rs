@@ -280,6 +280,15 @@ pub trait ElementBase: Downcast + 'static {
         // future custom elements) opt in by overriding.
     }
 
+    /// Record the shared view this element was created from.
+    ///
+    /// [`BoxedView::create_element`](crate::BoxedView) calls it right after
+    /// `View::create_element`, so that the first update which offers the same
+    /// shared view again is already recognised as a no-op. Default: ignore;
+    /// the unified `Element<V, A, B>` keeps it, hand-rolled element impls opt
+    /// in by overriding.
+    fn note_source_view(&mut self, _source: std::rc::Weak<dyn View>) {}
+
     /// Get the slot position in parent's child list.
     fn slot(&self) -> usize {
         0

@@ -1,6 +1,10 @@
 name: Native xtask
 
-# Host-tool coverage for cache keys, locks and platform-specific drivers.
+# Host-tool coverage for cache keys, locks and platform-specific drivers on
+# Windows and macOS. Linux needs no leg: ci.yml's `checks` job runs
+# `cargo test -p xtask` and its `clippy` job lints the workspace, xtask
+# included, on every pull request. Dependency bumps (Cargo.lock, the root
+# Cargo.toml) do not trigger it either: xtask's own code and toolchain do.
 # Application/device runtime suites keep their existing CI/local policy.
 on:
   pull_request:
@@ -9,8 +13,6 @@ on:
       - ".github/workflows/xtask-native.yml"
       - ".github/actions/rust-toolchain/**"
       - ".cargo/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
       - "rust-toolchain.toml"
   push:
     branches: [main]
@@ -19,8 +21,6 @@ on:
       - ".github/workflows/xtask-native.yml"
       - ".github/actions/rust-toolchain/**"
       - ".cargo/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
       - "rust-toolchain.toml"
   workflow_dispatch:
 
@@ -46,7 +46,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-26.04, windows-latest, macos-latest]
+        os: [windows-latest, macos-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

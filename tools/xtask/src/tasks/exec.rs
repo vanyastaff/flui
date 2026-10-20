@@ -5,11 +5,9 @@
 //! test, or run. [`Runner`] prints each command before it runs it and stops at
 //! the first failure. Every command runs from the repository
 //! root with this process's environment, so `CARGO_TARGET_DIR`,
-//! `CARGO_BUILD_JOBS` and the rest reach the nested cargo unchanged (while
-//! this process holds the host lock, that environment carries the lock's
-//! `crate::host_lock::Parallelism`).
+//! `CARGO_BUILD_JOBS`, `CARGO_MAKEFLAGS` and the rest reach the nested cargo
+//! unchanged.
 
-use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{Read, Write};
@@ -74,7 +72,7 @@ impl Cmd {
         self
     }
 
-    /// Appends a whitespace-separated argument list (`check-changed`'s
+    /// Appends a whitespace-separated argument list (a lane's
     /// `pkg_args`, `features`, ...: package names and flags, never quoted).
     pub(super) fn split(self, list: &str) -> Self {
         self.args(list.split_whitespace())
@@ -92,7 +90,6 @@ impl Cmd {
             .args(&self.args)
             .envs(self.env.iter().map(|(key, value)| (key, value)))
             .current_dir(repo_root());
-        crate::host_lock::mark_child(&mut command);
         command
     }
 
@@ -310,26 +307,6 @@ pub(super) fn installed(program: &str, args: &[&str]) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-/// The rustup targets installed for the toolchain this checkout pins; empty
-/// when rustup is not there to ask.
-pub(super) fn installed_targets() -> BTreeSet<String> {
-    Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .current_dir(repo_root())
-        .stderr(Stdio::null())
-        .output()
-        .ok()
-        .filter(|out| out.status.success())
-        .map_or_default(|out| {
-            String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .map(str::to_owned)
-                .collect()
-        })
-}
-
 /// The workspace's target directory as cargo resolves it: `CARGO_TARGET_DIR`
 /// (relative to the repository root, where every task's cargo runs),
 /// `build.target-dir`, or `target/`. Built artifacts are looked up here, never
@@ -513,35 +490,6 @@ mod tests {
                 .steps(&[Cmd::cargo(["--no-such-flag-xtask"]).into()])
                 .is_ok()
         );
-    }
-
-    /// A command spawned while this process holds the run lock names that
-    /// lock file to the child, so a heavy xtask child does not wait for it.
-    #[test]
-    fn a_command_spawned_under_the_run_lock_is_marked() {
-        use crate::host_lock::{HeavyRunLock, Holder, LockSettings, TEST_GUARDS};
-
-        let _serial = TEST_GUARDS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("heavy.lock");
-        let holder = Holder {
-            command: "cargo xtask ci".to_owned(),
-            checkout: dir.path().to_path_buf(),
-        };
-        let guard = HeavyRunLock::acquire(&LockSettings::at(&path), &holder, &mut Vec::new());
-        let command = Cmd::cargo(["--version"]).command();
-        let marker = command
-            .get_envs()
-            .find(|(key, _)| *key == "FLUI_XTASK_LOCK_HELD")
-            .and_then(|(_, value)| value);
-        assert_eq!(
-            marker,
-            Some(path.as_os_str()),
-            "the child names the held lock"
-        );
-        drop(guard);
     }
 
     #[test]

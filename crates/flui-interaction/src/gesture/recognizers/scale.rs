@@ -1,0 +1,1799 @@
+//! Scale gesture recognizer
+//!
+//! Recognizes pinch/rotation with two contacts by default. Explicit combined
+//! mode also recognizes one-contact pan and preserves the sequence as contacts
+//! join or leave. Native pan-zoom uses the same callback actor.
+//!
+//! A scale gesture:
+//! - joins the gesture arena for **every** contact it tracks, and claims all
+//!   of them together once the contacts have moved past the scale or pan slop;
+//! - starts after winning an arena with the configured minimum contact count;
+//! - reports scale, per-axis scale, rotation and focal point measured from
+//!   where the contacts were placed, carried continuously across contacts
+//!   being added or lifted;
+//! - ends below that count; combined mode ends on the final contact.
+
+use flui_platform_api::input_capabilities::PointerKindSet;
+use std::{
+    cell::{Cell, RefCell},
+    f64::consts::{PI, TAU},
+    rc::Rc,
+};
+
+use flui_foundation::geometry::{Axis, Offset};
+use flui_platform_api::pointer::{PanZoomPhase, PointerInfo};
+use web_time::Instant;
+
+use super::{
+    callback_containment::{
+        finish_containment, invoke_callback, retire_callback, withdraw_cancelled,
+    },
+    contact::{ArenaMembership, ContactId},
+    recognizer::{
+        CancelOutcome, EventTimeline, GestureRecognizer, event_time, is_primary_down,
+        motion_history,
+    },
+};
+use crate::gesture::observer::GestureContest;
+use crate::{
+    containment::RoutePanic,
+    events::{PointerEvent, PointerEventExt, PointerKind},
+    gesture::arena::{
+        GestureArenaEntry, GestureArenaMember, GestureDisposition, MotionRole, SweepModel,
+    },
+    gesture::settings::{GestureSettings, GestureSettingsProvider},
+    gesture::{AxisLock, PositionSmoother, TransformLock, Velocity, VelocityTracker, on_rail},
+    ids::PointerId,
+    pointer::{PanZoomDispatch, PointerDispatch},
+};
+
+// ============================================================================
+// Public surface
+// ============================================================================
+
+/// Callback for scale start events
+pub type ScaleStartCallback = Rc<dyn Fn(ScaleStartDetails)>;
+
+/// Callback for scale update events
+pub type ScaleUpdateCallback = Rc<dyn Fn(ScaleUpdateDetails)>;
+
+/// Callback for scale end events
+pub type ScaleEndCallback = Rc<dyn Fn(ScaleEndDetails)>;
+
+/// Callback for scale cancel events
+pub type ScaleCancelCallback = Rc<dyn Fn()>;
+
+/// Details about scale gesture start
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct ScaleStartDetails {
+    /// Focal point (centroid of the tracked contacts).
+    pub focal_point: Offset<f64>,
+    /// Focal point in local coordinates
+    pub local_focal_point: Offset<f64>,
+    /// Number of pointers involved
+    pub pointer_count: usize,
+}
+
+/// Details about scale gesture update.
+///
+/// Every value is finite. A sample whose arithmetic would produce a
+/// non-finite value is not published.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct ScaleUpdateDetails {
+    /// Focal point: the centroid of the contacts currently down.
+    ///
+    /// It is the centroid by definition, so it moves when a contact is added
+    /// or lifted; scale and rotation do not.
+    pub focal_point: Offset<f64>,
+    /// Focal point in local coordinates
+    pub local_focal_point: Offset<f64>,
+    /// Local focal movement, rebased when the contact set changes.
+    pub focal_point_delta: Offset<f64>,
+    /// Scale factor (1.0 = no change, >1.0 = zoom in, <1.0 = zoom out).
+    ///
+    /// The ratio of the contacts' span (mean distance from the focal point)
+    /// to the span where they were placed. Adding or lifting a contact
+    /// re-measures the baseline and carries the factor reached so far, so the
+    /// value does not jump. While the baseline span is zero (coincident
+    /// contacts) the factor holds, and the first non-zero span becomes the
+    /// new baseline.
+    pub scale: f64,
+    /// Horizontal scale factor, measured on the horizontal span alone.
+    ///
+    /// Holds at its current value while the baseline horizontal span is zero
+    /// (contacts placed on one vertical line, for example), and re-measures
+    /// from the first non-zero horizontal span.
+    pub horizontal_scale: f64,
+    /// Vertical scale factor, with the same degenerate rule as
+    /// [`horizontal_scale`](Self::horizontal_scale).
+    pub vertical_scale: f64,
+    /// Rotation in radians since the contacts were placed (positive =
+    /// clockwise in a y-down space).
+    ///
+    /// Measured on the line between the two earliest contacts still down, by
+    /// accumulating each sample's change wrapped into `(-π, π]`, so turning
+    /// past half a revolution keeps counting instead of jumping by `2π`. While
+    /// those two contacts coincide the angle is undefined and the rotation
+    /// holds.
+    pub rotation: f64,
+    /// Number of pointers involved
+    pub pointer_count: usize,
+}
+
+/// Details about scale gesture end
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct ScaleEndDetails {
+    /// Last published focal point
+    pub focal_point: Offset<f64>,
+    /// Final scale factor (the last published one)
+    pub scale: f64,
+    /// Final rotation angle in radians (the last published one)
+    pub rotation: f64,
+    /// Velocity of scale change (scale units per second); `0.0` when it
+    /// cannot be estimated.
+    pub velocity: f64,
+    /// Release velocity of the local focal point, in logical pixels per second.
+    pub focal_velocity: Velocity,
+    focal_fling_velocity: Velocity,
+}
+
+impl ScaleEndDetails {
+    /// Focal release velocity resolved with the session's admitted fling limits.
+    ///
+    /// Releases below the minimum give zero; the maximum caps vector magnitude
+    /// while preserving direction. [`Self::focal_velocity`] retains the raw
+    /// measurement. These pixel-speed limits do not alter [`Self::velocity`],
+    /// which measures dimensionless scale change per second.
+    #[must_use]
+    pub const fn focal_fling_velocity(&self) -> Velocity {
+        self.focal_fling_velocity
+    }
+}
+
+/// Admission and recognition of one native pan/zoom event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+#[must_use]
+pub enum PanZoomDisposition {
+    /// The event was refused or does not belong to this actor's session.
+    Ignored,
+    /// The event belongs to a dormant session without claiming native delivery.
+    Admitted,
+    /// The event belongs to a recognized session and claims native delivery.
+    Handled,
+}
+
+/// The contact count that can begin recognition.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ScaleStartMode {
+    /// Recognize scale and rotation with at least two contacts.
+    #[default]
+    Scale,
+    /// Recognize one-contact pan and continue as contacts join or leave.
+    PanOrScale,
+}
+
+impl ScaleStartMode {
+    fn minimum_contacts(self) -> usize {
+        match self {
+            Self::Scale => 2,
+            Self::PanOrScale => 1,
+        }
+    }
+}
+
+/// Recognizes scale (pinch/zoom/rotate) gestures.
+///
+/// The default mode requires at least two contacts; [`ScaleStartMode::PanOrScale`]
+/// explicitly enables one-contact pan. Every contact passed to
+/// [`add_pointer`](GestureRecognizer::add_pointer) joins that contact's
+/// gesture arena. The recognizer claims all of its arenas once the contacts
+/// move past the span or focal-point slop (or the scale ratio slop), and
+/// starts as soon as it has won an arena with two contacts down — so a scale
+/// that wins its first contact by default, as a lone arena member does,
+/// starts when the second contact lands. Contacts added while the recognizer
+/// owns the gesture are claimed too.
+///
+/// A contact that lifts before the scale starts gives its arena up, so a
+/// competing tap can still win it. A scale that drops below two contacts
+/// ends with the configured end callback; losing a contact's arena or
+/// a pointer cancel ends it with the configured cancel callback
+/// instead. A cancel ends the whole sequence.
+///
+/// Callbacks run after the recognizer has committed its state, with no
+/// borrow held, so a callback may cancel and reuse the recognizer.
+/// Prefer `Weak` when referring to the owner in a callback. A panic propagates
+/// to the dispatcher; the next gesture starts clean. Dropping the last owner
+/// silently withdraws each membership before retiring callback captures.
+///
+/// # Example
+///
+/// ```rust
+/// use flui_interaction::prelude::*;
+/// use flui_interaction::GestureBinding;
+///
+/// let binding = GestureBinding::new();
+/// let recognizer = ScaleGestureRecognizer::builder(binding.arena().clone())
+///     .on_update(|details| println!("Scale: {:.2}x", details.scale)).build();
+/// ```
+pub struct ScaleGestureRecognizer {
+    owner: std::rc::Weak<ScaleGestureRecognizer>,
+    membership: ArenaMembership,
+    next_contact: Cell<u64>,
+    gesture_state: RefCell<ScaleState>,
+    native: RefCell<Option<NativeScale>>,
+    settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
+    callbacks: ScaleCallbacks,
+}
+
+impl std::fmt::Debug for ScaleGestureRecognizer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScaleGestureRecognizer")
+            .field("gesture_state", &*self.gesture_state.borrow())
+            .field("settings", &self.settings)
+            .finish_non_exhaustive()
+    }
+}
+
+// Field names keep the `on_start`/`on_update`-style callback names.
+#[expect(clippy::struct_field_names)]
+#[derive(Default)]
+struct ScaleCallbacks {
+    on_start: Option<ScaleStartCallback>,
+    on_update: Option<ScaleUpdateCallback>,
+    on_end: Option<ScaleEndCallback>,
+    on_cancel: Option<ScaleCancelCallback>,
+}
+
+impl Drop for ScaleCallbacks {
+    fn drop(&mut self) {
+        let mut first = None;
+        retire_callback(self.on_start.take(), &mut first);
+        retire_callback(self.on_update.take(), &mut first);
+        retire_callback(self.on_end.take(), &mut first);
+        retire_callback(self.on_cancel.take(), &mut first);
+        finish_containment(first, std::thread::panicking());
+    }
+}
+
+/// A span at or below this many logical pixels is treated as zero: the ratio
+/// against it is undefined, so it is never used as a divisor.
+const DEGENERATE_SPAN: f64 = 1e-6;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScalePhase {
+    /// No contact is tracked.
+    Idle,
+    /// Contacts are tracked; the scale has not started.
+    Possible,
+    /// The scale started and is publishing updates.
+    Started,
+}
+
+#[derive(Debug)]
+struct Contact {
+    id: ContactId,
+    pointer: PointerId,
+    position: Offset<f64>,
+    global_position: Offset<f64>,
+    /// This contact's arena membership.
+    entry: GestureArenaEntry,
+}
+
+/// Spans and focal point of a set of contacts.
+#[derive(Debug, Clone, Copy)]
+struct Measure {
+    span: f64,
+    horizontal: f64,
+    vertical: f64,
+    focal: Offset<f64>,
+}
+
+impl Measure {
+    /// Mean deviation from the focal point (the span definition `kScaleSlop`
+    /// is calibrated against), per axis and overall. `None` for fewer than two
+    /// contacts or when the arithmetic overflows.
+    fn of(contacts: &[Contact]) -> Option<Self> {
+        Self::of_positions(contacts, |contact| contact.position)
+    }
+
+    fn of_positions(
+        contacts: &[Contact],
+        position: impl Fn(&Contact) -> Offset<f64>,
+    ) -> Option<Self> {
+        if contacts.is_empty() {
+            return None;
+        }
+        // Work in coordinates divided by the largest magnitude, so neither the
+        // centroid sum nor a contact's deviation from it (up to twice the
+        // largest coordinate) overflows; only the final means are scaled back.
+        let scale = contacts.iter().fold(0.0_f64, |largest, c| {
+            let position = position(c);
+            largest.max(position.dx.abs()).max(position.dy.abs())
+        });
+        if !scale.is_finite() {
+            return None;
+        }
+        let unit = if scale > 0.0 { scale } else { 1.0 };
+        let count = contacts.len() as f64;
+        let scaled = || contacts.iter().map(|contact| position(contact) / unit);
+        let mut focal_scaled = Offset::ZERO;
+        for position in scaled() {
+            focal_scaled += position / count;
+        }
+        let (mut span, mut horizontal, mut vertical) = (0.0, 0.0, 0.0);
+        for position in scaled() {
+            let delta = position - focal_scaled;
+            span += delta.distance() / count;
+            horizontal += delta.dx.abs() / count;
+            vertical += delta.dy.abs() / count;
+        }
+        let focal = focal_scaled * unit;
+        let measure = Self {
+            span: span * unit,
+            horizontal: horizontal * unit,
+            vertical: vertical * unit,
+            focal,
+        };
+        (measure.span.is_finite()
+            && measure.horizontal.is_finite()
+            && measure.vertical.is_finite()
+            && focal.is_finite())
+        .then_some(measure)
+    }
+}
+
+/// The published scale factors.
+#[derive(Debug, Clone, Copy)]
+struct Ratios {
+    scale: f64,
+    horizontal: f64,
+    vertical: f64,
+}
+
+impl Ratios {
+    const IDENTITY: Self = Self {
+        scale: 1.0,
+        horizontal: 1.0,
+        vertical: 1.0,
+    };
+}
+
+/// What a scale gesture locks, decided when its motion first crosses a
+/// slop: the rail its focal motion follows and the transform it keeps at
+/// identity ([`AxisLock`], [`TransformLock`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+enum Locks {
+    /// No motion crossed a slop yet.
+    #[default]
+    Undecided,
+    /// Decided for the rest of the gesture.
+    Decided {
+        rail: Option<Axis>,
+        pinned: TransformLock,
+    },
+}
+
+impl Locks {
+    fn rail(self) -> Option<Axis> {
+        match self {
+            Self::Decided { rail, .. } => rail,
+            Self::Undecided => None,
+        }
+    }
+
+    fn pinned(self) -> TransformLock {
+        match self {
+            Self::Decided { pinned, .. } => pinned,
+            Self::Undecided => TransformLock::None,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ScaleState {
+    start_mode: ScaleStartMode,
+    axis_lock: AxisLock,
+    transform_lock: TransformLock,
+    locks: Locks,
+    /// First-contact profile, retained until the last contact retires.
+    settings: GestureSettings,
+    /// Identity of the current contact sequence, never reused after retirement.
+    sequence: Option<ContactId>,
+    phase: ScalePhase,
+    /// Tracked contacts in arrival order.
+    contacts: Vec<Contact>,
+    /// An arena accepted this recognizer for one of the tracked contacts.
+    won: bool,
+    /// Set while this recognizer resolves its own arenas, so the resulting
+    /// `accept_gesture` calls record the win without starting the gesture
+    /// halfway through the claim.
+    claiming: bool,
+    /// Spans measured when the contact set last changed.
+    baseline: Option<Measure>,
+    /// Factors reached when the contact set last changed.
+    carried: Ratios,
+    /// Last committed factors.
+    current: Ratios,
+    /// Last committed rotation.
+    rotation: f64,
+    /// Angle of the earliest-pair line at the last committed sample.
+    rotation_reference: Option<f64>,
+    /// Last committed focal point.
+    focal_point: Offset<f64>,
+    global_focal_point: Offset<f64>,
+    /// The focal point the last start or update published, which `End` reports;
+    /// a re-measure after a contact leaves changes `focal_point` silently.
+    published_focal: Offset<f64>,
+    previous_focal: Offset<f64>,
+    focal_velocity_tracker: VelocityTracker,
+    /// Velocity tracker for scale changes.
+    scale_velocity_tracker: VelocityTracker,
+    timeline: EventTimeline,
+    /// Post-recognition smoothing of the published focal point, captured with
+    /// the settings; restarted whenever the contact set re-baselines.
+    smoother: Option<PositionSmoother>,
+    /// Event-clock time of the latest contact sample.
+    sample_time: Option<Instant>,
+}
+
+impl Default for ScaleState {
+    fn default() -> Self {
+        Self {
+            start_mode: ScaleStartMode::Scale,
+            axis_lock: AxisLock::Free,
+            transform_lock: TransformLock::None,
+            locks: Locks::Undecided,
+            settings: GestureSettings::default(),
+            sequence: None,
+            phase: ScalePhase::Idle,
+            contacts: Vec::new(),
+            won: false,
+            claiming: false,
+            baseline: None,
+            carried: Ratios::IDENTITY,
+            current: Ratios::IDENTITY,
+            rotation: 0.0,
+            rotation_reference: None,
+            focal_point: Offset::ZERO,
+            global_focal_point: Offset::ZERO,
+            published_focal: Offset::ZERO,
+            previous_focal: Offset::ZERO,
+            focal_velocity_tracker: VelocityTracker::new(),
+            scale_velocity_tracker: VelocityTracker::new(),
+            timeline: EventTimeline::default(),
+            smoother: None,
+            sample_time: None,
+        }
+    }
+}
+
+/// Wrap an angle difference into `(-π, π]`.
+fn wrap_angle(angle: f64) -> f64 {
+    let wrapped = (angle + PI).rem_euclid(TAU) - PI;
+    if wrapped <= -PI {
+        wrapped + TAU
+    } else {
+        wrapped
+    }
+}
+
+/// The ratio of `current` to `baseline`, or `None` while the baseline is
+/// degenerate.
+/// `carried * current / baseline`, the factor reached so far times the ratio
+/// since the last baseline, or `None` for a degenerate baseline. The two
+/// orders of evaluation are tried so an intermediate quotient or product that
+/// overflows or underflows does not hide a representable result. A zero span
+/// or carried factor still publishes zero.
+fn carried_ratio(carried: f64, current: f64, baseline: f64) -> Option<f64> {
+    if baseline <= DEGENERATE_SPAN {
+        return None;
+    }
+    let direct = carried * (current / baseline);
+    if direct.is_finite() && (direct != 0.0 || current == 0.0 || carried == 0.0) {
+        return Some(direct);
+    }
+    Some((carried * current) / baseline)
+}
+
+impl ScaleState {
+    fn index_of(&self, pointer: PointerId) -> Option<usize> {
+        self.contacts.iter().position(|c| c.pointer == pointer)
+    }
+
+    /// The contact that joined exactly `contest`.
+    fn index_of_contest(&self, contest: GestureContest) -> Option<usize> {
+        self.contacts
+            .iter()
+            .position(|c| c.entry.contest() == contest)
+    }
+
+    /// The update the current factors publish. Smoothing shapes only the
+    /// published focal point; acceptance read the raw measure.
+    fn update_details(&mut self) -> ScaleUpdateDetails {
+        let (local, global) = match (self.smoother.as_mut(), self.sample_time) {
+            (Some(smoother), Some(time)) => {
+                smoother.smooth(time, self.focal_point, self.global_focal_point)
+            }
+            _ => (self.focal_point, self.global_focal_point),
+        };
+        self.published_focal = global;
+        ScaleUpdateDetails {
+            focal_point: global,
+            local_focal_point: local,
+            // Under rails, focal motion waits for the slop that picks its
+            // axis, then arrives whole on it.
+            focal_point_delta: if self.locks == Locks::Undecided
+                && self.axis_lock.rails(self.focal_velocity_tracker.kind())
+            {
+                Offset::ZERO
+            } else {
+                on_rail(
+                    local - std::mem::replace(&mut self.previous_focal, local),
+                    self.locks.rail(),
+                )
+            },
+            scale: self.current.scale,
+            horizontal_scale: self.current.horizontal,
+            vertical_scale: self.current.vertical,
+            rotation: self.rotation,
+            pointer_count: self.contacts.len(),
+        }
+    }
+
+    /// Angle of the line between the two earliest contacts, or `None` while
+    /// they coincide.
+    fn pair_angle(&self) -> Option<f64> {
+        let [first, second, ..] = self.contacts.as_slice() else {
+            return None;
+        };
+        // In coordinates divided by the largest magnitude, so contacts at
+        // opposite extremes do not overflow the difference; the angle is
+        // unchanged by the scaling.
+        let unit = [first.position, second.position]
+            .iter()
+            .fold(0.0_f64, |largest, p| {
+                largest.max(p.dx.abs()).max(p.dy.abs())
+            });
+        if !unit.is_finite() || unit == 0.0 {
+            return None;
+        }
+        let delta = second.position / unit - first.position / unit;
+        (delta.distance() > DEGENERATE_SPAN / unit).then(|| delta.dy.atan2(delta.dx))
+    }
+
+    /// Re-measure the baseline after the contact set changed, carrying the
+    /// factors reached so far so the published values stay continuous.
+    fn rebaseline(&mut self) {
+        self.carried = self.current;
+        self.baseline = Measure::of(&self.contacts);
+        self.rotation_reference = self.pair_angle();
+        // The focal point jumps silently here; smoothing restarts from it.
+        if let Some(smoother) = self.smoother.as_mut() {
+            smoother.reset();
+        }
+        if let Some(measure) = self.baseline {
+            self.focal_point = measure.focal;
+            self.previous_focal = measure.focal;
+        }
+        if let Some(measure) =
+            Measure::of_positions(&self.contacts, |contact| contact.global_position)
+        {
+            self.global_focal_point = measure.focal;
+        }
+        self.focal_velocity_tracker.reset();
+    }
+
+    /// Recompute the factors from the current positions. Commits and returns
+    /// the measure only when every resulting value is finite.
+    fn sample(&mut self) -> Option<Measure> {
+        let measure = Measure::of(&self.contacts)?;
+        let global = Measure::of_positions(&self.contacts, |contact| contact.global_position)?;
+        if !(measure.focal - self.previous_focal).is_finite() {
+            return None;
+        }
+        let mut baseline = self.baseline.unwrap_or(measure);
+        // A degenerate baseline axis is re-measured from the first usable
+        // span, so the factor holds there instead of dividing by zero.
+        for (base, now) in [
+            (&mut baseline.span, measure.span),
+            (&mut baseline.horizontal, measure.horizontal),
+            (&mut baseline.vertical, measure.vertical),
+        ] {
+            if *base <= DEGENERATE_SPAN && now > DEGENERATE_SPAN {
+                *base = now;
+            }
+        }
+        let current = Ratios {
+            scale: carried_ratio(self.carried.scale, measure.span, baseline.span)
+                .unwrap_or(self.current.scale),
+            horizontal: carried_ratio(
+                self.carried.horizontal,
+                measure.horizontal,
+                baseline.horizontal,
+            )
+            .unwrap_or(self.current.horizontal),
+            vertical: carried_ratio(self.carried.vertical, measure.vertical, baseline.vertical)
+                .unwrap_or(self.current.vertical),
+        };
+        let angle = self.pair_angle();
+        let rotation = match (angle, self.rotation_reference) {
+            (Some(angle), Some(reference)) => self.rotation + wrap_angle(angle - reference),
+            _ => self.rotation,
+        };
+        if !(current.scale.is_finite()
+            && current.horizontal.is_finite()
+            && current.vertical.is_finite()
+            && rotation.is_finite())
+        {
+            return None;
+        }
+        self.baseline = Some(baseline);
+        let pinned = self.locks.pinned();
+        self.current = if pinned == TransformLock::Scale {
+            Ratios::IDENTITY
+        } else {
+            current
+        };
+        self.rotation = if pinned == TransformLock::Rotation {
+            0.0
+        } else {
+            rotation
+        };
+        if angle.is_some() {
+            self.rotation_reference = angle;
+        }
+        self.focal_point = measure.focal;
+        self.global_focal_point = global.focal;
+        Some(measure)
+    }
+
+    /// Decide the gesture's locks once its motion since `baseline` first
+    /// crosses a slop: a gesture whose focal point crossed alone began as a
+    /// pan, and only a pan rails or pins a transform.
+    fn decide_locks(&mut self, baseline: Measure, measure: Measure, kind: PointerKind) {
+        if self.locks != Locks::Undecided {
+            return;
+        }
+        let travel = measure.focal - baseline.focal;
+        let span_slop = self.settings.span_slop_for(kind);
+        let two = self.contacts.len() >= 2;
+        let pan = self.settings.exceeds_pan_slop_for(kind, travel);
+        let zoom = two
+            && ((measure.span - baseline.span).abs() > span_slop
+                || carried_ratio(1.0, measure.span, baseline.span)
+                    .is_some_and(|ratio| self.settings.exceeds_scale_slop(ratio)));
+        // The arc the turn swept at the span, against the span's own slop.
+        let turn = two && self.rotation.abs() * baseline.span > span_slop;
+        if !(pan || zoom || turn) {
+            return;
+        }
+        let began_as_pan = pan && !zoom && !turn;
+        self.locks = Locks::Decided {
+            rail: began_as_pan
+                .then(|| self.axis_lock.rail(kind, travel))
+                .flatten(),
+            pinned: if began_as_pan {
+                self.transform_lock
+            } else {
+                TransformLock::None
+            },
+        };
+        match self.locks.pinned() {
+            TransformLock::Rotation => self.rotation = 0.0,
+            TransformLock::Scale => {
+                self.current = Ratios::IDENTITY;
+                self.carried = Ratios::IDENTITY;
+            }
+            _ => {}
+        }
+    }
+
+    /// Forget the retired sequence.
+    fn reset(&mut self) {
+        *self = Self {
+            start_mode: self.start_mode,
+            axis_lock: self.axis_lock,
+            transform_lock: self.transform_lock,
+            ..Self::default()
+        };
+    }
+
+    /// Start if the recognizer owns the gesture and has two contacts.
+    fn try_start(&mut self) -> Option<ScaleStartDetails> {
+        if self.phase != ScalePhase::Possible
+            || !self.won
+            || self.claiming
+            || self.contacts.len() < self.start_mode.minimum_contacts()
+        {
+            return None;
+        }
+        // Never start from a stale focal point: the contacts must measure.
+        let measure = Measure::of(&self.contacts)?;
+        self.focal_point = measure.focal;
+        self.published_focal = self.global_focal_point;
+        self.phase = ScalePhase::Started;
+        self.sequence = self.contacts.last().map(|contact| contact.id);
+        Some(ScaleStartDetails {
+            focal_point: self.global_focal_point,
+            local_focal_point: self.focal_point,
+            pointer_count: self.contacts.len(),
+        })
+    }
+
+    fn end_details(&mut self, now: Instant) -> ScaleEndDetails {
+        let velocity = self
+            .scale_velocity_tracker
+            .velocity_at(now)
+            .pixels_per_second
+            .dx;
+        let focal_velocity = Velocity::new(on_rail(
+            self.focal_velocity_tracker
+                .velocity_at(now)
+                .pixels_per_second,
+            self.locks.rail(),
+        ));
+        let focal_fling_velocity = self
+            .settings
+            .resolve_fling_velocity(self.focal_velocity_tracker.kind(), focal_velocity);
+        ScaleEndDetails {
+            focal_point: self.published_focal,
+            scale: self.current.scale,
+            rotation: self.rotation,
+            velocity: if velocity.is_finite() { velocity } else { 0.0 },
+            focal_velocity,
+            focal_fling_velocity,
+        }
+    }
+
+    /// After a contact left: end a started scale that fell below two
+    /// contacts, re-measure otherwise, and go idle once no contact remains.
+    /// Returns the final details when a started scale ended.
+    fn after_contact_removed(&mut self, now: Instant) -> Option<ScaleEndDetails> {
+        let ended = (self.phase == ScalePhase::Started
+            && self.contacts.len() < self.start_mode.minimum_contacts())
+        .then(|| self.end_details(now));
+        if self.contacts.is_empty() {
+            self.reset();
+        } else if ended.is_some() {
+            // The next scale on the remaining contacts measures from here.
+            self.phase = ScalePhase::Possible;
+            self.locks = Locks::Undecided;
+            self.current = Ratios::IDENTITY;
+            self.rotation = 0.0;
+            self.scale_velocity_tracker.reset();
+            self.rebaseline();
+        } else {
+            self.rebaseline();
+        }
+        ended
+    }
+}
+
+/// What a state transition asks the recognizer to do once the state lock is
+/// released.
+enum Outcome {
+    Nothing,
+    Start(ScaleStartDetails),
+    Update(ScaleUpdateDetails),
+    End(ScaleEndDetails),
+    Cancel,
+}
+
+#[derive(Debug)]
+struct NativeScale {
+    id: ContactId,
+    source: PointerInfo,
+    settings: GestureSettings,
+    started: bool,
+    focal: Offset<f64>,
+    global_focal: Offset<f64>,
+    scale: f64,
+    rotation: f64,
+    /// Where the session started, which its first motion is measured from.
+    origin: Offset<f64>,
+    locks: Locks,
+    focal_velocity: VelocityTracker,
+    scale_velocity: VelocityTracker,
+    timeline: EventTimeline,
+}
+
+impl NativeScale {
+    fn new(
+        id: ContactId,
+        source: PointerInfo,
+        focal: Offset<f64>,
+        global_focal: Offset<f64>,
+        settings: &GestureSettings,
+    ) -> Self {
+        Self {
+            id,
+            source,
+            settings: settings.clone(),
+            started: false,
+            focal,
+            global_focal,
+            scale: 1.0,
+            rotation: 0.0,
+            origin: focal,
+            locks: Locks::Undecided,
+            focal_velocity: VelocityTracker::for_gesture(
+                source.kind,
+                settings.velocity_estimator(),
+            ),
+            scale_velocity: VelocityTracker::for_gesture(
+                source.kind,
+                settings.velocity_estimator(),
+            ),
+            timeline: EventTimeline::default(),
+        }
+    }
+
+    fn matches(&self, source: PointerInfo) -> bool {
+        self.source.id == source.id && self.source.device == source.device
+    }
+
+    fn end(&mut self, now: Instant) -> ScaleEndDetails {
+        let focal_velocity = Velocity::new(on_rail(
+            self.focal_velocity.velocity_at(now).pixels_per_second,
+            self.locks.rail(),
+        ));
+        ScaleEndDetails {
+            focal_point: self.global_focal,
+            scale: self.scale,
+            rotation: self.rotation,
+            velocity: self.scale_velocity.velocity_at(now).pixels_per_second.dx,
+            focal_velocity,
+            focal_fling_velocity: self
+                .settings
+                .resolve_fling_velocity(self.source.kind, focal_velocity),
+        }
+    }
+}
+
+/// Immutable configuration for a shared scale recognizer.
+#[must_use]
+pub struct ScaleGestureRecognizerBuilder {
+    arena: crate::gesture::arena::GestureArena,
+    settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
+    start_mode: ScaleStartMode,
+    axis_lock: AxisLock,
+    transform_lock: TransformLock,
+    callbacks: ScaleCallbacks,
+}
+
+impl std::fmt::Debug for ScaleGestureRecognizerBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScaleGestureRecognizerBuilder")
+            .field("settings", &self.settings)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ScaleGestureRecognizerBuilder {
+    /// Choose combined pan/scale admission without changing the default scale contract.
+    pub fn start_mode(mut self, mode: ScaleStartMode) -> Self {
+        self.start_mode = mode;
+        self
+    }
+    /// Rail focal motion that starts near an axis onto it ([`AxisLock`]),
+    /// for touch and touchpad.
+    pub fn axis_lock(mut self, lock: AxisLock) -> Self {
+        self.axis_lock = lock;
+        self
+    }
+    /// Keep rotation or scale at identity in a gesture that begins as a pan
+    /// ([`TransformLock`]).
+    pub fn transform_lock(mut self, lock: TransformLock) -> Self {
+        self.transform_lock = lock;
+        self
+    }
+    /// Freeze device-specific tolerances before contact admission.
+    pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
+        self.settings = settings.into();
+        self
+    }
+
+    /// Admit only contacts of these device kinds, before any arena rule runs
+    /// (ADR-0208 rule 1): a pen that draws beside a finger that scrolls. The
+    /// full set, the default, admits every device.
+    pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
+        self.allowed_devices = devices;
+        self
+    }
+    /// Configure the callback delivered once the scale wins its arenas.
+    pub fn on_start(mut self, callback: impl Fn(ScaleStartDetails) + 'static) -> Self {
+        self.callbacks.on_start = Some(Rc::new(callback));
+        self
+    }
+    /// Configure the callback delivered for finite scale samples.
+    pub fn on_update(mut self, callback: impl Fn(ScaleUpdateDetails) + 'static) -> Self {
+        self.callbacks.on_update = Some(Rc::new(callback));
+        self
+    }
+    /// Configure the callback delivered when fewer than two contacts remain.
+    pub fn on_end(mut self, callback: impl Fn(ScaleEndDetails) + 'static) -> Self {
+        self.callbacks.on_end = Some(Rc::new(callback));
+        self
+    }
+    /// Configure the callback delivered when the contact sequence is cancelled.
+    pub fn on_cancel(mut self, callback: impl Fn() + 'static) -> Self {
+        self.callbacks.on_cancel = Some(Rc::new(callback));
+        self
+    }
+    /// Build the owner; membership keeps only a weak reference to it.
+    pub fn build(self) -> Rc<ScaleGestureRecognizer> {
+        Rc::new_cyclic(|this: &std::rc::Weak<ScaleGestureRecognizer>| {
+            let member: std::rc::Weak<dyn GestureArenaMember> = this.clone();
+            ScaleGestureRecognizer {
+                owner: this.clone(),
+                membership: ArenaMembership::new(self.arena, member)
+                    .with_motion_role(MotionRole::ChannelLeaf),
+                next_contact: Cell::new(0),
+                gesture_state: RefCell::new(ScaleState {
+                    start_mode: self.start_mode,
+                    axis_lock: self.axis_lock,
+                    transform_lock: self.transform_lock,
+                    ..ScaleState::default()
+                }),
+                native: RefCell::new(None),
+                settings: self.settings,
+                allowed_devices: self.allowed_devices,
+                callbacks: self.callbacks,
+            }
+        })
+    }
+}
+
+impl Drop for ScaleGestureRecognizer {
+    fn drop(&mut self) {
+        for contact in self.gesture_state.get_mut().contacts.drain(..) {
+            contact.entry.withdraw_deferred();
+        }
+    }
+}
+
+impl ScaleGestureRecognizer {
+    /// Deliver a native session through the same actor as contact recognition.
+    ///
+    /// Start stages the source until its first Update, reporting admission without
+    /// callbacks or claiming delivery. Recognized Updates and terminal events
+    /// report handling, allowing a leaf-first widget claimant to stop delivery to
+    /// its ancestors. A terminal event also retires an admitted dormant session.
+    /// An Update without Start is an independent relative step and completes
+    /// immediately. Callers arbitrate native delivery before forwarding the
+    /// first Update that can recognize the session.
+    pub fn handle_pan_zoom(&self, dispatch: PanZoomDispatch<'_>) -> PanZoomDisposition {
+        let (local, global) = (dispatch.local, dispatch.global);
+        let source = *local.pointer();
+        if source.id != global.pointer().id
+            || source.device != global.pointer().device
+            || !self.gesture_state.borrow().contacts.is_empty()
+        {
+            return PanZoomDisposition::Ignored;
+        }
+        let anchor = local.position.get();
+        let global_anchor = global.position.get();
+        let anchor = Offset::new(anchor.x, anchor.y);
+        let global_anchor = Offset::new(global_anchor.x, global_anchor.y);
+        let settings = match local.phase {
+            PanZoomPhase::Start => Some(self.settings.snapshot_for(source.kind)),
+            PanZoomPhase::Update(_) if self.native.borrow().is_none() => {
+                Some(self.settings.snapshot_for(source.kind))
+            }
+            _ => None,
+        };
+        let now = self.membership.arena().sample_now();
+        match local.phase {
+            PanZoomPhase::Start => {
+                let Some(id) = ContactId::next(&self.next_contact) else {
+                    return PanZoomDisposition::Ignored;
+                };
+                let mut incoming = NativeScale::new(
+                    id,
+                    source,
+                    anchor,
+                    global_anchor,
+                    settings
+                        .as_ref()
+                        .expect("BUG: native start captures settings"),
+                );
+                let time = incoming.timeline.instant(Some(local.time.as_nanos()), now);
+                incoming.focal_velocity.add_position(time, anchor);
+                incoming
+                    .scale_velocity
+                    .add_position(time, Offset::new(1.0, 0.0));
+                let retired = self.native.replace(Some(incoming));
+                let owner = self.owner.clone();
+                let current_owner = owner.clone();
+                dispatch.on_generation_retirement(
+                    move || {
+                        current_owner.upgrade().is_some_and(|owner| {
+                            owner
+                                .native
+                                .borrow()
+                                .as_ref()
+                                .is_some_and(|native| native.id == id)
+                        })
+                    },
+                    move || {
+                        if let Some(owner) = owner.upgrade() {
+                            let mut native = owner.native.borrow_mut();
+                            if native.as_ref().is_some_and(|native| native.id == id) {
+                                *native = None;
+                            }
+                        }
+                    },
+                );
+                if retired.is_some_and(|state| state.started) {
+                    self.deliver(Outcome::Cancel);
+                }
+                PanZoomDisposition::Admitted
+            }
+            PanZoomPhase::Update(transform) => {
+                if !matches!(global.phase, PanZoomPhase::Update(_)) {
+                    return PanZoomDisposition::Ignored;
+                }
+                // The focal point is the event's own, refreshed on every
+                // update; translation during a pinch is its movement.
+                let (focal, global_focal) = (anchor, global_anchor);
+                if !focal.is_finite() || !global_focal.is_finite() {
+                    return PanZoomDisposition::Ignored;
+                }
+                let mut state = self.native.borrow_mut();
+                if state.as_ref().is_some_and(|state| !state.matches(source)) {
+                    return PanZoomDisposition::Ignored;
+                }
+                let independent = state.is_none();
+                if independent {
+                    let Some(settings) = settings.as_ref() else {
+                        // The clock retired the active session reentrantly.
+                        return PanZoomDisposition::Ignored;
+                    };
+                    let Some(id) = ContactId::next(&self.next_contact) else {
+                        return PanZoomDisposition::Ignored;
+                    };
+                    *state = Some(NativeScale::new(
+                        id,
+                        source,
+                        anchor,
+                        global_anchor,
+                        settings,
+                    ));
+                }
+                let native = state
+                    .as_mut()
+                    .expect("BUG: native update installs its source");
+                let time = native.timeline.instant(Some(local.time.as_nanos()), now);
+                let start = (!native.started).then_some(ScaleStartDetails {
+                    focal_point: native.global_focal,
+                    local_focal_point: native.focal,
+                    pointer_count: 0,
+                });
+                let travel = focal - native.origin;
+                // A session that moved before it scaled or turned began as a
+                // pan; only a pan rails or pins a transform.
+                let still = transform.scale() == 1.0 && transform.rotation() == 0.0;
+                let locks =
+                    if native.locks == Locks::Undecided && (!still || travel != Offset::ZERO) {
+                        let (axis_lock, transform_lock) = {
+                            let config = self.gesture_state.borrow();
+                            (config.axis_lock, config.transform_lock)
+                        };
+                        Locks::Decided {
+                            rail: still.then(|| axis_lock.rail(source.kind, travel)).flatten(),
+                            pinned: if still {
+                                transform_lock
+                            } else {
+                                TransformLock::None
+                            },
+                        }
+                    } else {
+                        native.locks
+                    };
+                let pinned = locks.pinned();
+                let scale = if pinned == TransformLock::Scale {
+                    1.0
+                } else {
+                    transform.scale()
+                };
+                let rotation = if pinned == TransformLock::Rotation {
+                    0.0
+                } else {
+                    transform.rotation()
+                };
+                let details = ScaleUpdateDetails {
+                    focal_point: global_focal,
+                    local_focal_point: focal,
+                    focal_point_delta: on_rail(focal - native.focal, locks.rail()),
+                    scale,
+                    horizontal_scale: scale,
+                    vertical_scale: scale,
+                    rotation,
+                    pointer_count: 0,
+                };
+                if !details.focal_point_delta.is_finite() {
+                    return PanZoomDisposition::Ignored;
+                }
+                native.locks = locks;
+                native.started = true;
+                native.focal = focal;
+                native.global_focal = global_focal;
+                native.scale = scale;
+                native.rotation = rotation;
+                native.focal_velocity.add_position(time, focal);
+                native
+                    .scale_velocity
+                    .add_position(time, Offset::new(native.scale, 0.0));
+                let id = native.id;
+                drop(state);
+                let mut first = RoutePanic::capture(|| dispatch.claim());
+                let live = || {
+                    self.native
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|state| state.id == id)
+                };
+                if live()
+                    && let Some(start) = start
+                {
+                    RoutePanic::preserve_first(
+                        &mut first,
+                        RoutePanic::capture(|| self.deliver(Outcome::Start(start))),
+                        "native scale start",
+                    );
+                }
+                if live() {
+                    RoutePanic::preserve_first(
+                        &mut first,
+                        RoutePanic::capture(|| self.deliver(Outcome::Update(details))),
+                        "native scale update",
+                    );
+                }
+                if independent && live() {
+                    let mut state = self
+                        .native
+                        .borrow_mut()
+                        .take()
+                        .expect("BUG: independent native step remains live");
+                    let end = state.end(time);
+                    RoutePanic::preserve_first(
+                        &mut first,
+                        RoutePanic::capture(|| self.deliver(Outcome::End(end))),
+                        "native scale end",
+                    );
+                }
+                finish_containment(first, std::thread::panicking());
+                PanZoomDisposition::Handled
+            }
+            PanZoomPhase::End | PanZoomPhase::Cancelled => {
+                if !dispatch.native_terminal_is_current() {
+                    return PanZoomDisposition::Ignored;
+                }
+                let mut state = self.native.borrow_mut();
+                if state.as_ref().is_none_or(|state| !state.matches(source)) {
+                    return PanZoomDisposition::Ignored;
+                }
+                let mut native = state
+                    .take()
+                    .expect("BUG: matched native terminal retains source");
+                drop(state);
+                let time = native.timeline.instant(Some(local.time.as_nanos()), now);
+                if !native.started {
+                    return PanZoomDisposition::Admitted;
+                }
+                self.deliver(if matches!(local.phase, PanZoomPhase::Cancelled) {
+                    Outcome::Cancel
+                } else {
+                    Outcome::End(native.end(time))
+                });
+                PanZoomDisposition::Handled
+            }
+            _ => PanZoomDisposition::Ignored,
+        }
+    }
+    /// Assemble immutable callbacks and gesture policy before sharing the owner.
+    pub fn builder(arena: crate::gesture::arena::GestureArena) -> ScaleGestureRecognizerBuilder {
+        ScaleGestureRecognizerBuilder {
+            arena,
+            settings: GestureSettingsProvider::default(),
+            allowed_devices: PointerKindSet::all(),
+            start_mode: ScaleStartMode::Scale,
+            axis_lock: AxisLock::Free,
+            transform_lock: TransformLock::None,
+            callbacks: ScaleCallbacks::default(),
+        }
+    }
+
+    /// Deliver one outcome to user code. Called with no lock or borrow held.
+    fn deliver(&self, outcome: Outcome) {
+        match outcome {
+            Outcome::Nothing => {}
+            Outcome::Start(details) => {
+                let callback = self.callbacks.on_start.clone();
+                invoke_callback(callback, || {}, |cb| cb(details));
+            }
+            Outcome::Update(details) => {
+                let callback = self.callbacks.on_update.clone();
+                invoke_callback(callback, || {}, |cb| cb(details));
+            }
+            Outcome::End(details) => {
+                let callback = self.callbacks.on_end.clone();
+                invoke_callback(callback, || {}, |cb| cb(details));
+            }
+            Outcome::Cancel => {
+                let callback = self.callbacks.on_cancel.clone();
+                invoke_callback(callback, || {}, |cb| cb());
+            }
+        }
+    }
+
+    /// Give up arena memberships, then deliver `outcome`. The first panic —
+    /// from a competitor's arena callback or from the outcome — is resumed
+    /// after both have run.
+    fn withdraw_then_deliver(&self, entries: Vec<GestureArenaEntry>, outcome: Outcome) {
+        let self_driven = self.membership.arena().sweep_model() == SweepModel::SelfDriven;
+        let mut first = None;
+        for entry in entries {
+            RoutePanic::preserve_first(
+                &mut first,
+                RoutePanic::capture(|| {
+                    entry.reject_without_self();
+                    if self_driven {
+                        entry.sweep();
+                    }
+                }),
+                "scale arena withdrawal",
+            );
+        }
+        RoutePanic::preserve_first(
+            &mut first,
+            RoutePanic::capture(|| self.deliver(outcome)),
+            "scale callback",
+        );
+        // Entered while the thread is already unwinding, the failure is retained
+        // rather than resumed: a second unwind would abort.
+        finish_containment(first, std::thread::panicking());
+    }
+
+    /// Claim every listed arena, then start if that won the gesture.
+    fn claim(&self, entries: Vec<GestureArenaEntry>) {
+        let claim_sequence = self.gesture_state.borrow().sequence;
+        let mut first = None;
+        for entry in entries {
+            RoutePanic::preserve_first(
+                &mut first,
+                RoutePanic::capture(|| entry.resolve(GestureDisposition::Accepted)),
+                "scale arena claim",
+            );
+        }
+        // The move that crossed the slop already committed its factors; after the
+        // start, an update publishes them, so `End` never reports a factor no
+        // update showed.
+        let (start, update, sequence) = {
+            let mut state = self.gesture_state.borrow_mut();
+            if state.sequence != claim_sequence {
+                drop(state);
+                finish_containment(first, std::thread::panicking());
+                return;
+            }
+            state.claiming = false;
+            let start = state.try_start();
+            let update = start.is_some().then(|| state.update_details());
+            (start, update, state.sequence)
+        };
+        if let Some(details) = start {
+            RoutePanic::preserve_first(
+                &mut first,
+                RoutePanic::capture(|| self.deliver(Outcome::Start(details))),
+                "scale start callback",
+            );
+        }
+        // `on_start` may have ended (or ended and restarted) the gesture
+        // reentrantly; its update then belongs to a gesture that is over.
+        let live = || {
+            let state = self.gesture_state.borrow();
+            state.phase == ScalePhase::Started && state.sequence == sequence
+        };
+        if let Some(details) = update.filter(|_| live()) {
+            RoutePanic::preserve_first(
+                &mut first,
+                RoutePanic::capture(|| self.deliver(Outcome::Update(details))),
+                "scale update callback",
+            );
+        }
+        // Entered while the thread is already unwinding, the failure is retained
+        // rather than resumed: a second unwind would abort.
+        finish_containment(first, std::thread::panicking());
+    }
+
+    /// Whether the gesture has moved enough to claim the arena.
+    ///
+    /// A scale is accepted on absolute span change, **or** focal-point
+    /// movement, **or** the scale ratio — any one of them, not all three.
+    ///
+    /// The arms are not redundant, and dropping any of them loses a whole
+    /// class of gesture rather than a little precision:
+    ///
+    /// - **Ratio alone** cannot see a pinch that starts wide. Fingers 1000 px
+    ///   apart moving 40 px further apart are 4% — under the 5% tier — while
+    ///   having moved twice any slop.
+    /// - **Span arms alone** cannot see a two-finger *pan*. Fingers moving
+    ///   together hold both the span and the ratio exactly constant; only the
+    ///   focal point moves. This is the arm a two-finger pan rides.
+    ///
+    /// The span and focal tiers are per-kind (`computeScaleSlop` /
+    /// `computePanSlop`); the ratio tier is dimensionless and so has no kind.
+    fn should_accept(
+        baseline: Measure,
+        current: Measure,
+        kind: PointerKind,
+        settings: &GestureSettings,
+    ) -> bool {
+        if (current.span - baseline.span).abs() > settings.span_slop_for(kind) {
+            return true;
+        }
+        // A degenerate initial span means the pointers started coincident;
+        // the ratio is undefined there, so leave that arm to the two distance
+        // tiers.
+        if let Some(ratio) = carried_ratio(1.0, current.span, baseline.span)
+            && settings.exceeds_scale_slop(ratio)
+        {
+            return true;
+        }
+        settings.exceeds_pan_slop_for(kind, current.focal - baseline.focal)
+    }
+
+    /// Handle a tracked contact's move.
+    fn handle_pointer_move(
+        &self,
+        pointer: PointerId,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
+        kind: PointerKind,
+        stamp: Option<u64>,
+        history: impl Iterator<Item = (Option<u64>, Offset<f64>)>,
+    ) {
+        if !position.is_finite() {
+            return;
+        }
+        let id = {
+            let state = self.gesture_state.borrow();
+            let Some(index) = state.index_of(pointer) else {
+                return;
+            };
+            state.contacts[index].id
+        };
+        let now = self.membership.arena().sample_now();
+        let mut state = self.gesture_state.borrow_mut();
+        let Some(index) = state.index_of(pointer) else {
+            return;
+        };
+        if state.contacts[index].id != id {
+            return;
+        }
+        let baseline = state.baseline;
+        let mut crossed = false;
+        for (stamp, position) in history {
+            let timestamp = state.timeline.instant(stamp, now);
+            state.contacts[index].position = position;
+            let measure = state.sample();
+            crossed |= state.contacts.len() >= state.start_mode.minimum_contacts()
+                && measure.is_some_and(|measure| {
+                    baseline.is_some_and(|b| Self::should_accept(b, measure, kind, &state.settings))
+                });
+            if measure.is_some() && state.contacts.len() >= 2 {
+                let scale = state.current.scale;
+                state
+                    .scale_velocity_tracker
+                    .add_position(timestamp, Offset::new(scale, 0.0));
+            }
+            let focal = state.focal_point;
+            state.focal_velocity_tracker.add_position(timestamp, focal);
+        }
+        let now = state.timeline.instant(stamp, now);
+        state.sample_time = Some(now);
+        state.contacts[index].position = position;
+        state.contacts[index].global_position = global_position;
+        let Some(measure) = state.sample() else {
+            return;
+        };
+        if let Some(baseline) = baseline {
+            state.decide_locks(baseline, measure, kind);
+        }
+        // Admission observes the measured approach as well as the current
+        // geometry; callback cadence and published positions stay frame-local.
+        if state.contacts.len() >= 2 {
+            let scale = state.current.scale;
+            state
+                .scale_velocity_tracker
+                .add_position(now, Offset::new(scale, 0.0));
+        }
+        state
+            .focal_velocity_tracker
+            .add_position(now, measure.focal);
+        match state.phase {
+            ScalePhase::Possible => {
+                // Crossing a tier is a request to win, not permission to
+                // invoke callbacks: `accept_gesture` (or `claim`) is the start
+                // transition, so an observer never sees `on_start` for a
+                // gesture a competitor then takes.
+                crossed |= state.contacts.len() >= state.start_mode.minimum_contacts()
+                    && baseline
+                        .is_some_and(|b| Self::should_accept(b, measure, kind, &state.settings));
+                if crossed && !state.won {
+                    state.claiming = true;
+                    let entries = state.contacts.iter().map(|c| c.entry.clone()).collect();
+                    drop(state);
+                    self.claim(entries);
+                }
+            }
+            ScalePhase::Started => {
+                let details = state.update_details();
+                drop(state);
+                self.deliver(Outcome::Update(details));
+            }
+            ScalePhase::Idle => {}
+        }
+    }
+
+    /// Handle a tracked contact lifting.
+    fn handle_pointer_up(&self, pointer: PointerId, stamp: Option<u64>) {
+        let id = {
+            let state = self.gesture_state.borrow();
+            let Some(index) = state.index_of(pointer) else {
+                return;
+            };
+            state.contacts[index].id
+        };
+        let now = self.membership.arena().sample_now();
+        let mut state = self.gesture_state.borrow_mut();
+        let Some(index) = state.index_of(pointer) else {
+            return;
+        };
+        if state.contacts[index].id != id {
+            return;
+        }
+        let now = state.timeline.instant(stamp, now);
+        let contact = state.contacts.remove(index);
+        // A contact that lifts before the scale started gives its arena up,
+        // so a competitor (a tap) wins it on the sweep instead of this
+        // recognizer as the front member. An accepted entry ignores this.
+        let started = state.phase == ScalePhase::Started;
+        let (withdraw, accepted) = if started {
+            (None, Some(contact.entry))
+        } else {
+            (Some(contact.entry), None)
+        };
+        let outcome = state
+            .after_contact_removed(now)
+            .map_or(Outcome::Nothing, Outcome::End);
+        drop(state);
+        self.sync_motion_role();
+        // An accepted contact's arena in a self-driven arena has no binding to
+        // sweep it on Up; its entry does, so the slot does not outlive it.
+        let mut first = None;
+        if let Some(entry) = accepted
+            && self.membership.arena().sweep_model() == SweepModel::SelfDriven
+        {
+            first = RoutePanic::capture(|| entry.sweep());
+        }
+        RoutePanic::preserve_first(
+            &mut first,
+            RoutePanic::capture(|| {
+                self.withdraw_then_deliver(withdraw.into_iter().collect(), outcome);
+            }),
+            "scale terminal delivery",
+        );
+        finish_containment(first, std::thread::panicking());
+    }
+
+    /// Keeps the ownership table from handing this recognizer a motion it
+    /// cannot use: until it holds the contacts its start mode needs, its
+    /// channel-leaf role is dormant on each contact, so a pan beside it takes
+    /// a lone finger's drag (ADR-0208 §2). Once enough contacts are down, the
+    /// role is live on all of them and the scale keeps every finger of the
+    /// pinch.
+    fn sync_motion_role(&self) {
+        let (entries, dormant) = {
+            let state = self.gesture_state.borrow();
+            let dormant = state.phase != ScalePhase::Started
+                && state.contacts.len() < state.start_mode.minimum_contacts();
+            let entries: Vec<_> = state.contacts.iter().map(|c| c.entry.clone()).collect();
+            (entries, dormant)
+        };
+        for entry in entries {
+            entry.set_motion_dormant(dormant);
+        }
+    }
+
+    /// Handle a cancel for a tracked contact: the whole sequence ends.
+    fn handle_cancel(&self, pointer: PointerId) {
+        let mut state = self.gesture_state.borrow_mut();
+        if state.index_of(pointer).is_none() {
+            return;
+        }
+        let started = state.phase == ScalePhase::Started;
+        let entries: Vec<_> = std::mem::take(&mut state.contacts)
+            .into_iter()
+            .map(|c| (c.pointer, c.entry))
+            .collect();
+        state.reset();
+        drop(state);
+        let outcome = if started {
+            Outcome::Cancel
+        } else {
+            Outcome::Nothing
+        };
+        // Only the cancelled contact ends without a winner; other contacts retain rivals.
+        let mut first = None;
+        for (contact, entry) in &entries {
+            RoutePanic::preserve_first(
+                &mut first,
+                RoutePanic::capture(|| {
+                    if *contact == pointer {
+                        withdraw_cancelled(entry, self.membership.arena());
+                    } else {
+                        entry.reject_without_self();
+                    }
+                }),
+                "scale arena withdrawal",
+            );
+        }
+        RoutePanic::preserve_first(
+            &mut first,
+            RoutePanic::capture(|| self.deliver(outcome)),
+            "scale callback",
+        );
+        // Entered while the thread is already unwinding, the failure is retained
+        // rather than resumed: a second unwind would abort.
+        finish_containment(first, std::thread::panicking());
+    }
+}
+
+impl GestureRecognizer for ScaleGestureRecognizer {
+    fn allowed_devices(&self) -> PointerKindSet {
+        self.allowed_devices
+    }
+    fn add_pointer(&self, down: PointerDispatch<'_>) {
+        if self.native.borrow().is_some() {
+            return;
+        }
+        if !is_primary_down(down.local) || down.local.pointer_id() != down.global.pointer_id() {
+            return;
+        }
+        let (Some(pointer), Some(position), Some(global)) = (
+            down.local.pointer_id(),
+            down.local.position(),
+            down.global.position(),
+        ) else {
+            return;
+        };
+        if !position.is_finite()
+            || !global.is_finite()
+            || self.gesture_state.borrow().index_of(pointer).is_some()
+        {
+            return;
+        }
+        let Some(id) = ContactId::next(&self.next_contact) else {
+            return;
+        };
+        let settings = self
+            .settings
+            .snapshot_for(super::recognizer::admission_kind(down.local));
+        let Some(entry) = self.membership.join_from(pointer, down.feeder()) else {
+            return;
+        };
+
+        let (claim, sequence) = {
+            let mut state = self.gesture_state.borrow_mut();
+            // A contact added while this recognizer owns the gesture is claimed
+            // with it.
+            if state.contacts.is_empty()
+                && let PointerEvent::Down(data) = down.local
+            {
+                state.settings = settings;
+                state.smoother = state
+                    .settings
+                    .position_smoothing()
+                    .map(PositionSmoother::new);
+                state.scale_velocity_tracker = VelocityTracker::for_gesture(
+                    data.pointer.kind,
+                    state.settings.velocity_estimator(),
+                );
+                state.focal_velocity_tracker = VelocityTracker::for_gesture(
+                    data.pointer.kind,
+                    state.settings.velocity_estimator(),
+                );
+            }
+            let claim = state.won.then(|| entry.clone());
+            state.contacts.push(Contact {
+                id,
+                pointer,
+                position,
+                global_position: global,
+                entry,
+            });
+            if state.phase == ScalePhase::Idle {
+                state.phase = ScalePhase::Possible;
+                state.sequence = Some(id);
+            }
+            state.rebaseline();
+            (claim, state.sequence)
+        };
+        let clock = self.membership.arena().sample_now();
+        let mut state = self.gesture_state.borrow_mut();
+        // Clocks may cancel or admit a new generation using this same pointer.
+        if state.sequence != sequence || !state.contacts.iter().any(|contact| contact.id == id) {
+            return;
+        }
+        let now = state.timeline.instant(event_time(down.local), clock);
+        let focal = state.focal_point;
+        state.focal_velocity_tracker.add_position(now, focal);
+        let start = state.try_start();
+        let sequence = state.sequence;
+        drop(state);
+        self.sync_motion_role();
+
+        let mut first = None;
+        if let Some(entry) = claim {
+            RoutePanic::preserve_first(
+                &mut first,
+                RoutePanic::capture(|| entry.resolve(GestureDisposition::Accepted)),
+                "scale arena claim",
+            );
+        }
+        let live = {
+            let state = self.gesture_state.borrow();
+            state.phase == ScalePhase::Started
+                && state.sequence == sequence
+                && state.contacts.iter().any(|contact| contact.id == id)
+        };
+        if let Some(details) = start.filter(|_| live) {
+            RoutePanic::preserve_first(
+                &mut first,
+                RoutePanic::capture(|| self.deliver(Outcome::Start(details))),
+                "scale start callback",
+            );
+        }
+        // Entered while the thread is already unwinding, the failure is retained
+        // rather than resumed: a second unwind would abort.
+        finish_containment(first, std::thread::panicking());
+    }
+
+    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+        let event = dispatch.local;
+        // Route by the event's own pointer id: a secondary finger's events
+        // belong to that finger's contact.
+        let Some(pointer) = crate::PointerEventExt::pointer_id(event) else {
+            return;
+        };
+        match event {
+            PointerEvent::PanZoom(local) => {
+                if let PointerEvent::PanZoom(global) = dispatch.global {
+                    let _ = self.handle_pan_zoom(PanZoomDispatch::new(local, global));
+                }
+            }
+            PointerEvent::Move(data) => {
+                let pos = data.current().position.get();
+                let Some(global) = dispatch.global.position() else {
+                    return;
+                };
+                let history = motion_history(event);
+                self.handle_pointer_move(
+                    pointer,
+                    Offset::new(pos.x, pos.y),
+                    global,
+                    data.pointer.kind,
+                    event_time(event),
+                    history,
+                );
+            }
+            PointerEvent::Up(_) => self.handle_pointer_up(pointer, event_time(event)),
+            PointerEvent::Cancel(_) => self.handle_cancel(pointer),
+            _ => {}
+        }
+    }
+
+    fn cancel(&self) -> CancelOutcome {
+        let native = self.native.borrow_mut().take();
+        if let Some(native) = native {
+            if native.started {
+                self.deliver(Outcome::Cancel);
+            }
+            return CancelOutcome::Cancelled;
+        }
+        let pointer = self
+            .gesture_state
+            .borrow()
+            .contacts
+            .first()
+            .map(|contact| contact.pointer);
+        let Some(pointer) = pointer else {
+            return CancelOutcome::Idle;
+        };
+        self.handle_cancel(pointer);
+        CancelOutcome::Cancelled
+    }
+}
+
+impl GestureArenaMember for ScaleGestureRecognizer {
+    fn accept_gesture(&self, contest: GestureContest) {
+        let pointer = contest.pointer();
+        let mut state = self.gesture_state.borrow_mut();
+        if state.index_of_contest(contest).is_none() {
+            return;
+        }
+        let first_win = !state.won;
+        state.won = true;
+        if state.claiming {
+            // `claim` is resolving the arenas and starts afterwards.
+            return;
+        }
+        if first_win {
+            // Winning one contact (a lone member's default win, say) makes
+            // the gesture this recognizer's: claim the other contacts too, so
+            // a competitor cannot take one of the pinch's fingers.
+            state.claiming = true;
+            let others = state
+                .contacts
+                .iter()
+                .filter(|c| c.pointer != pointer)
+                .map(|c| c.entry.clone())
+                .collect();
+            drop(state);
+            self.claim(others);
+        } else {
+            let start = state.try_start();
+            drop(state);
+            if let Some(details) = start {
+                self.deliver(Outcome::Start(details));
+            }
+        }
+    }
+
+    fn reject_gesture(&self, contest: GestureContest) {
+        let pointer = contest.pointer();
+        // The contact's arena went to a competitor: it no longer belongs to
+        // this scale.
+        let id = {
+            let state = self.gesture_state.borrow();
+            let Some(index) = state.index_of_contest(contest) else {
+                return;
+            };
+            state.contacts[index].id
+        };
+        let now = self.membership.arena().sample_now();
+        let mut state = self.gesture_state.borrow_mut();
+        let Some(index) = state.index_of(pointer) else {
+            return;
+        };
+        if state.contacts[index].id != id {
+            return;
+        }
+        if state.phase == ScalePhase::Started {
+            // A started scale that loses one of its contacts is over: it is
+            // cancelled, and the remaining contacts are released, exactly as
+            // a pointer cancel ends it.
+            drop(state);
+            self.handle_cancel(pointer);
+            return;
+        }
+        state.contacts.remove(index);
+        let now = state.timeline.instant(None, now);
+        let outcome = if state.after_contact_removed(now).is_some() {
+            Outcome::Cancel
+        } else {
+            Outcome::Nothing
+        };
+        drop(state);
+        self.sync_motion_role();
+        self.deliver(outcome);
+    }
+}

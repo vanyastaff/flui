@@ -476,6 +476,28 @@ pub trait LifecycleContext: BuildContext {
     /// capability registry lands; the handle it returns stays the same.
     fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle>;
 
+    /// The presentation's haptics (ADR-0210 §10): semantic feedback and
+    /// patterns, immediate or aligned with the next presented frame.
+    ///
+    /// Bound to this element's presentation and owner thread. Under a
+    /// [`HapticsMode`](crate::HapticsMode) that switched haptics off, the
+    /// handle suppresses every request; acquiring it depends on the enclosing
+    /// mode, so `did_change_dependencies` runs when the mode changes and is
+    /// where to re-acquire it. `None` only on a bare owner (an `ElementTree`
+    /// in a unit test). Acquire it in a lifecycle hook (`init_state` /
+    /// `did_change_dependencies`), the same rule `clipboard_handle` follows.
+    fn haptics(&self) -> Option<flui_interaction::HapticsHandle>;
+
+    /// The presentation's drag-and-drop (ADR-0211): drags that start in its
+    /// window, and the transfers its keyboard and assistive technology cut,
+    /// copy and paste.
+    ///
+    /// Bound to this element's presentation and owner thread, and held weakly.
+    /// `None` only on a bare owner (an `ElementTree` in a unit test). Acquire it
+    /// in a lifecycle hook (`init_state` / `did_change_dependencies`), the same
+    /// rule `haptics` follows.
+    fn drag_and_drop(&self) -> Option<flui_interaction::drag::DragAndDrop>;
+
     /// The presentation's external-texture registry: register a texture,
     /// feed it frames from any thread, and draw it with a `Texture` widget.
     ///
@@ -590,6 +612,35 @@ pub trait LifecycleContext: BuildContext {
     /// `did_change_dependencies`, never in build/layout/paint. Bare owners
     /// without a presentation source return `None`.
     fn lifecycle_handle(&self) -> Option<crate::LifecycleHandle> {
+        None
+    }
+
+    /// The window this element is presented in: read its state, ask it to
+    /// change, observe it (ADR-0237). Acquire it in `init_state` or
+    /// `did_change_dependencies`, never in build/layout/paint: commands are
+    /// queued for the owner's next turn, and `build` receives a
+    /// [`BuildContext`], which has no such method:
+    ///
+    /// ```compile_fail,E0599
+    /// use flui_view::{BuildContext, LifecycleContext};
+    ///
+    /// fn build_body(ctx: &dyn BuildContext) {
+    ///     let _ = ctx.window();
+    /// }
+    /// ```
+    ///
+    /// The same acquisition is available from a lifecycle context:
+    ///
+    /// ```
+    /// use flui_view::{BuildContext, LifecycleContext};
+    ///
+    /// fn build_body(ctx: &dyn LifecycleContext) {
+    ///     let _ = ctx.window();
+    /// }
+    /// ```
+    ///
+    /// `None` for a bare owner, or a presentation that has no window.
+    fn window(&self) -> Option<crate::WindowHandle> {
         None
     }
 

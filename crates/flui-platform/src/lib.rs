@@ -113,12 +113,10 @@
 //! fn test_window_creation() {
 //!     let platform = headless_platform();
 //!
-//!     let options = WindowOptions {
-//!         title: "Test".to_string(),
-//!         size: Size::new(800.0, 600.0),
-//!         visible: true,
-//!         ..Default::default()
-//!     };
+//!     let options = WindowOptions::default()
+//!         .with_title("Test")
+//!         .with_size(Size::new(800.0, 600.0))
+//!         .with_visible(true);
 //!
 //!     let window = platform
 //!         .open_window(options)
@@ -129,27 +127,24 @@
 //!
 //! # Feature Flags
 //!
-//! - `default`: Includes winit platform
-//! - `headless`: Includes headless testing platform
+//! - `default` (`desktop`): the native desktop backend for the target OS. It
+//!   does not include winit.
+//! - `winit-backend`: the winit backend, the Linux windowing path today. It
+//!   brings `wayland` and `x11`.
+//! - `wayland`, `x11`: on Linux, the clients the display source uses to read the
+//!   outputs and their refresh rates from the compositor. On other targets they
+//!   add nothing.
+//! - `a11y`: the per-OS accessibility bridges.
 //!
-//! # Platform Capabilities
+//! The headless testing platform needs no feature.
 //!
-//! Query platform capabilities to adapt behavior:
+//! # Input capabilities
 //!
-//! ```rust,ignore
-//! use flui_platform::current_platform;
-//!
-//! let platform = current_platform();
-//! let caps = platform.capabilities();
-//!
-//! if caps.supports_touch() {
-//!     // Enable touch gestures
-//! }
-//!
-//! if caps.suspend_rendering_in_background() {
-//!     // Implement background suspension
-//! }
-//! ```
+//! There is no per-platform capability constant (ADR-0213). A capability with
+//! a handle answers through it (`PlatformWindow::haptics`, `text_input`); the
+//! rest arrive per window as `PlatformInput::Capabilities`, first as a
+//! snapshot before any other input once the window's input callback is
+//! installed, then as changes in order with the input around them.
 
 // Platform FFI is the sanctioned `unsafe` boundary of the workspace (Win32 /
 // AppKit / Android NDK / wasm-bindgen backends — `headless` has none). The
@@ -192,7 +187,6 @@ pub mod storage;
 mod table_test;
 pub mod task;
 pub mod traits;
-pub mod window;
 
 // Re-export configuration types
 // ==================== Platform Detection ====================
@@ -221,8 +215,10 @@ pub use platforms::LinuxPlatform;
 #[cfg(target_os = "macos")]
 pub use platforms::MacOSPlatform;
 pub use platforms::{
-    FakeAccessibility, FakeHaptics, FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens,
-    HeadlessExitReevaluation, HeadlessOwnerTurns, HeadlessPlatform, MockWindow,
+    DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeHaptics,
+    FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessDisplayControls,
+    HeadlessDragAndDrop, HeadlessExitReevaluation, HeadlessHostEvents, HeadlessInputDevices,
+    HeadlessOwnerTurns, HeadlessPlatform, HeadlessWindowPolicy, MockWindow,
 };
 // Web platform
 #[cfg(target_arch = "wasm32")]
@@ -244,12 +240,15 @@ pub use task::{Task, TaskLabel};
 // Re-export core traits
 pub use traits::{
     AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem,
-    CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, HostWindow,
-    MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities,
-    PlatformDisplay, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput,
-    PlatformWindow, SessionEndAnswer, SessionEndPhase, WebCapabilities, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowExecutionState, WindowId,
-    WindowMode, WindowOptions, WindowReveal, WindowShowError,
+    CursorError, DispatchEventResult, DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey,
+    DisplayRegistry, DisplayRevision, DisplaySnapshot, HostNotice, HostWindow, MemoryPressureLevel,
+    PathPromptOptions, Platform, PlatformAccessibility, PlatformExecutor, PlatformHaptics,
+    PlatformReadyCallback, PlatformTextInput, PlatformWindow, RefreshPeriod, SessionEndAnswer,
+    SessionEndBlock, SessionEndBlockError, SessionEndPhase, SessionEndRequest, SizeConstraints,
+    SystemNotice, WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
+    WindowCommandError, WindowControl, WindowDisplay, WindowEvent, WindowExecutionState,
+    WindowGeometry, WindowId, WindowMode, WindowOptions, WindowReveal, WindowRevision,
+    WindowRevisionExhausted, WindowShowError, WindowState,
 };
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.
@@ -342,16 +341,6 @@ pub use traits::{
 ///     println!("Platform ready!");
 ///     Ok(())
 /// }))?;
-/// ```
-///
-/// ```rust,ignore
-/// // Check platform capabilities
-/// let platform = current_platform()?;
-/// let caps = platform.capabilities();
-///
-/// if caps.supports_multiple_windows() {
-///     // Open multiple windows
-/// }
 /// ```
 ///
 /// # Platform-Specific Code

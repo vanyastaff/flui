@@ -1,6 +1,9 @@
 # ADR-0210: Haptics has a semantic tier and a pattern tier, both addressed and both reporting an outcome
 
-- **Status:** Accepted (2026-10-13); implementation pending (docs/plans/specs/flui-interaction/completeness/tasks.md). Until it merges, `main` follows ADR-0031 §1–§4 (`perform(HapticFeedback)`, fire-and-forget).
+- **Status:** Accepted (2026-10-13); implemented. The native macOS, iOS, Android and Web paths are
+  compiled but have not run on a device; the Windows pen path has run only on a host with no
+  haptic pen. §5 amended (2026-10-17): the window's default actuator on Windows is the pen in
+  range of it.
 - **Date:** 2026-10-13
 - **Supersedes:** [ADR-0031](ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md)
   §1–§4 only. ADR-0031 §5, the system chrome deferral, stays in force.
@@ -133,6 +136,10 @@ No widget can reach haptics today.
    request therefore reaches exactly one final outcome. Nothing plays while the window is hidden.
 5. **Source.** `source: None`, or a `DeviceId` the backend no longer knows (a pen put away, a
    device unplugged), plays on the window's default actuator. A stale source is not an error.
+   On Windows the window has no actuator of its own (§8), so its default actuator is the pen in
+   range of the window, touching or hovering: the pen a request names while it is in range,
+   otherwise the pen read most recently. With no pen in range nothing plays and the request is
+   `Unavailable`. Widgets fill no source today, so this is what makes a pen vibrate for them.
 6. **User preference.** When the observed system haptics setting is off (ADR-0212), both tiers
    resolve to `Suppressed` before reaching the backend. Built-in widgets fire haptics only
    together with a visible change, so turning haptics off loses no information.
@@ -154,6 +161,14 @@ No widget can reach haptics today.
    `Unavailable` until a release ships it or a narrow `windows-bindgen` binding is generated
    ([dependency selection](../research/2026-10-13-interaction-dependency-selection.md)). It routes
    per thread, so requests run on the owner thread of the window that received the input.
+   The pen's `SimpleHapticsController` (from `PenDevice::GetFromPointerId`) plays one waveform at a
+   time, so a pattern's calls are made at their times off the owner thread, a newer request
+   replacing what is left of an older one; a continuous waveform is handed its length where the
+   controller takes a play duration and stopped at its end otherwise, so none outlasts its step.
+   Android pattern vibrations carry the touch usage (`VibrationAttributes.USAGE_TOUCH` from API
+   33, sonification audio attributes before it), and need the install-time `VIBRATE`
+   permission: without it the backend offers no pattern playback, so patterns fall back to
+   `performHapticFeedback`, which needs none.
    The Core Haptics backend restarts its engine after interruption, suspension or idle shutdown
    (`stoppedHandler`) and after a haptic-server error (`resetHandler`). Both handlers only
    record a restart obligation and wake the owner, which restarts the engine before the next

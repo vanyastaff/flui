@@ -328,6 +328,10 @@ fn color_lerp_is_premultiplied_oklab() {
                 color_property::lerp_to_transparent_keeps_the_hue,
             ),
             (
+                "lerp_to_transparent_keeps_the_hue_at_vanishing_alpha",
+                color_property::lerp_to_transparent_keeps_the_hue_at_vanishing_alpha,
+            ),
+            (
                 "lerp_endpoints_are_exact",
                 color_property::lerp_endpoints_are_exact,
             ),

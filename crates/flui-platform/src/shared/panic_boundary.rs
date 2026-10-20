@@ -46,12 +46,44 @@ pub fn panic_payload_message(payload: &(dyn Any + Send)) -> &str {
 
 /// Contain owner callback and capture cleanup panics without dropping hostile payloads.
 pub(crate) fn contain_owner_callback(body: impl FnOnce()) {
-    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+    let _ = owner_callback_panicked(body);
+}
+
+/// [`contain_owner_callback`], answering whether `body` panicked, so a caller
+/// retiring several values retains the rest after the first failure
+/// (ADR-0127 §2).
+pub(crate) fn owner_callback_panicked(body: impl FnOnce()) -> bool {
+    let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) else {
+        return false;
+    };
+    std::mem::forget(payload);
+    if let Err(payload) = std::panic::catch_unwind(|| {
+        tracing::error!("contained owner callback or cleanup panic");
+    }) {
         std::mem::forget(payload);
-        if let Err(payload) = std::panic::catch_unwind(|| {
-            tracing::error!("contained owner callback or cleanup panic");
-        }) {
-            std::mem::forget(payload);
+    }
+    true
+}
+
+/// Run the body of an entry the OS calls and that must not unwind (a COM
+/// method, a callback behind an `extern "system"` pointer): `None` when it
+/// panicked. The panic is logged with its text, under `entry`, the log
+/// contained like any owner callback, and its payload is then retained
+/// rather than dropped, since a payload's destructor is user code that would
+/// unwind into the OS (ADR-0127 §2).
+pub fn contain_os_entry<R>(entry: &'static str, body: impl FnOnce() -> R) -> Option<R> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(value) => Some(value),
+        Err(payload) => {
+            contain_owner_callback(|| {
+                tracing::error!(
+                    entry,
+                    panic = panic_payload_message(&*payload),
+                    "an OS entry panicked; its caller is answered with a failure"
+                );
+            });
+            flui_foundation::panic::retain_opaque_payload(payload);
+            None
         }
     }
 }

@@ -23,9 +23,12 @@ mod hit_test_transform;
 #[path = "focus_retention.rs"]
 mod focus_retention;
 
+mod focus_keys;
+
 #[path = "text_store_host.rs"]
 mod text_store_host;
 
+mod arena_ownership;
 mod button_delivery;
 #[path = "gesture_lifecycle.rs"]
 mod gesture_lifecycle;
@@ -43,3 +46,10 @@ mod recognizer_api;
 mod recognizer_lifecycle;
 #[path = "velocity_and_resampling.rs"]
 mod velocity_and_resampling;
+
+mod binding_services;
+mod drag_sessions;
+mod gesture_observer;
+mod haptics;
+mod input_sequences;
+mod replay_determinism;

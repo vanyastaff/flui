@@ -84,6 +84,32 @@ impl OwnerHost {
         Ok(state.runtimes[index].status())
     }
 
+    /// The refresh interval presentation `address` paces by (its display's
+    /// period, or the 60 Hz default while that is unknown), read between owner
+    /// turns for the wake-deadline hook that re-arms the desktop pacing fallback.
+    ///
+    /// # Errors
+    /// Refuses an absent presentation or closed host, and `Busy` while the
+    /// runtime is leased to an operation or a publication holds the registry:
+    /// its presentation is mid-turn and the hook is not consulted then.
+    pub fn presentation_refresh_interval(
+        &self,
+        address: PresentationAddress,
+    ) -> Result<std::time::Duration, DispatchError> {
+        let state = self
+            .core
+            .state
+            .try_borrow()
+            .map_err(|_| DispatchError::Busy)?;
+        let index = state
+            .presentation_index(address)
+            .map_err(DispatchError::from)?;
+        match &state.runtimes[index].residence {
+            Residence::Resident(runtime) => Ok(runtime.refresh_interval(address.presentation_id)),
+            Residence::CheckedOut | Residence::RetiringCheckedOut => Err(DispatchError::Busy),
+        }
+    }
+
     /// Observe the active runtime's phase, otherwise the first frame transaction
     /// phase or first installed runtime's phase. A retiring active lease remains
     /// visible until it returns, even after host shutdown withdraws membership.

@@ -9,38 +9,49 @@ use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
+use flui_platform_api::{SessionEndAnswer, SessionEndPhase};
+
 use crate::{
-    data_transfer::{DataTransferSource, NullDataTransferSource},
+    data_transfer::DataTransferSource,
     error::PlatformError,
     shared::{PlatformHandlers, WindowCallbacks, owner_signal::OwnerSignal},
     traits::{
-        Clipboard, HostWindow, OpenWindowError, OwnerPlatform, Platform, PlatformCapabilities,
-        PlatformDisplay, PlatformExecutor, PlatformReadyCallback, WebCapabilities, WindowEvent,
-        WindowId, WindowOptions,
+        Clipboard, DisplaySnapshot, HostWindow, OpenWindowError, OwnerPlatform, Platform,
+        PlatformExecutor, PlatformReadyCallback, WindowEvent, WindowId, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
 
 use super::{
-    clipboard::WebClipboard, display::WebDisplay, executor::WebExecutor, window::WebWindow,
+    clipboard::WebClipboard, display::WebDisplays, display_events::DisplayObservers,
+    executor::WebExecutor, page_events::PageObservers, window::WebWindow,
 };
 
 /// The self-referencing `requestAnimationFrame` callback slot: the closure
 /// re-schedules itself through this handle, so it is created empty and filled
 /// once the closure exists.
-type RafClosureSlot = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
+type RafClosureSlot = Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>;
 
 /// Web/WASM platform implementation
 pub struct WebPlatform {
     state: Arc<Mutex<WebState>>,
     signal: Arc<OwnerSignal>,
     preferences: RefCell<Option<super::preferences::Preferences>>,
+    displays: Arc<WebDisplays>,
+    /// The browser listeners that keep `displays` current; present while the
+    /// platform runs.
+    display_observers: RefCell<Option<DisplayObservers>>,
+    /// The listeners that report the page being hidden and shown again; present
+    /// while the platform runs.
+    page_observers: RefCell<Option<PageObservers>>,
 }
 
 struct WebState {
     handlers: PlatformHandlers,
     background_executor: Arc<WebExecutor>,
     clipboard: Arc<WebClipboard>,
+    /// The one HTML drag-and-drop transport every canvas shares.
+    transfer: Arc<super::drag::WebTransfer>,
     is_running: bool,
     /// Window callbacks for RAF loop frame dispatch.
     /// Set when `open_window` creates the single browser window.
@@ -48,7 +59,8 @@ struct WebState {
     owner: Weak<WebPlatform>,
 }
 
-// SAFETY: WASM is single-threaded — no data races possible
+// SAFETY: the page has one thread (the module refuses `+atomics`), so the value
+// is never reached from another.
 unsafe impl Send for WebPlatform {}
 unsafe impl Sync for WebPlatform {}
 
@@ -69,6 +81,7 @@ impl WebPlatform {
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(WebExecutor::new()),
             clipboard: Arc::new(WebClipboard::new()),
+            transfer: Arc::default(),
             is_running: false,
             window_callbacks: None,
             owner: Weak::new(),
@@ -96,6 +109,9 @@ impl WebPlatform {
             state,
             signal,
             preferences: RefCell::new(preferences),
+            displays: WebDisplays::new(),
+            display_observers: RefCell::new(None),
+            page_observers: RefCell::new(None),
         })
     }
 
@@ -133,9 +149,40 @@ impl WebPlatform {
         drop(callback);
     }
 
+    /// The page was hidden or shown again: tell the session-end hook, so the
+    /// application saves what must survive.
+    ///
+    /// A page cannot be asked to wait, so the answer is not read. `pagehide`
+    /// also precedes a move into the back/forward cache: a page that comes back
+    /// reports `Cancelled`, and is hidden again later, which reports `Ending`
+    /// again. The browser may stop the page before an asynchronous write
+    /// started here finishes; only what the application hands over
+    /// synchronously is certain to be accepted.
+    fn report_session_phase(state: &Mutex<WebState>, phase: SessionEndPhase) {
+        let Some(mut hook) = state.lock().handlers.session_end.take() else {
+            return;
+        };
+        crate::shared::panic_boundary::contain_owner_callback(|| {
+            hook(phase);
+        });
+        // A hook registered while it ran replaces this one.
+        let replaced = {
+            let mut state = state.lock();
+            if state.handlers.session_end.is_none() {
+                state.handlers.session_end = Some(hook);
+                None
+            } else {
+                Some(hook)
+            }
+        };
+        crate::shared::panic_boundary::contain_owner_callback(|| drop(replaced));
+    }
+
     /// Start the requestAnimationFrame render loop
     fn start_raf_loop(&self) {
         let state = Arc::clone(&self.state);
+        let displays = Arc::downgrade(&self.displays);
+        let signal = Arc::downgrade(&self.signal);
 
         // Recursive RAF pattern: closure references itself via Rc<RefCell>
         let f: RafClosureSlot = Rc::new(RefCell::new(None));
@@ -143,13 +190,24 @@ impl WebPlatform {
 
         let window = web_sys::window().expect("no global window");
 
-        *g.borrow_mut() = Some(Closure::new(move || {
+        *g.borrow_mut() = Some(Closure::new(move |timestamp: f64| {
             let (is_running, callbacks) = {
                 let s = state.lock();
                 (s.is_running, s.window_callbacks.clone())
             };
             if !is_running {
                 return;
+            }
+
+            // The callback's timestamp is the display's cadence: the refresh
+            // estimate follows it. A new published period wakes the owner,
+            // whose next turn reads the changed snapshot.
+            if let Some(displays) = displays.upgrade()
+                && displays.frame(timestamp)
+                && let Some(signal) = signal.upgrade()
+            {
+                // A failed wake leaves the signal's retry debt.
+                let _ = signal.wake();
             }
 
             // Dispatch frame request to window callbacks
@@ -196,6 +254,10 @@ impl WebPlatform {
 }
 
 impl Platform for WebPlatform {
+    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        super::window::window_capabilities()
+    }
+
     fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
         if !self.signal.accepting() {
             return Err(PlatformError::Preferences {
@@ -249,6 +311,22 @@ impl Platform for WebPlatform {
                 message: error.to_string(),
             })?;
 
+        // Display events wake the owner through the same signal; they are
+        // observed from here on so the first snapshot already follows them.
+        *platform.display_observers.borrow_mut() = Some(DisplayObservers::start(
+            &platform.displays,
+            &platform.signal,
+        ));
+
+        // The page being hidden is the end of the session: the browser may
+        // discard it without another event.
+        let state = Arc::downgrade(&platform.state);
+        *platform.page_observers.borrow_mut() = Some(PageObservers::start(move |phase| {
+            if let Some(state) = state.upgrade() {
+                Self::report_session_phase(&state, phase);
+            }
+        }));
+
         // Window creation is direct and always Ready. Wake and quit use the
         // shared owner signal, posted to the browser microtask queue.
         let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
@@ -278,6 +356,10 @@ impl Platform for WebPlatform {
         self.signal.close();
         let preferences = self.preferences.borrow_mut().take();
         drop(preferences);
+        let display_observers = self.display_observers.borrow_mut().take();
+        drop(display_observers);
+        let page_observers = self.page_observers.borrow_mut().take();
+        drop(page_observers);
         let callback = self.with_state(|state| {
             state.is_running = false;
             state.handlers.quit.take()
@@ -301,13 +383,19 @@ impl Platform for WebPlatform {
             &options.title,
             options.size.width,
             options.size.height,
+            Arc::clone(&self.displays),
         )?;
 
         // Store window callbacks in state so the RAF loop can dispatch frames
         let callbacks = window.callbacks().clone();
+        callbacks.set_input_capabilities(crate::shared::input_availability::web(
+            super::events::has_gesture_events(),
+        ));
+        callbacks.set_input_wake(OwnerSignal::callbacks_wake(&self.signal, &callbacks));
         let retiring = Arc::clone(&callbacks);
         let state = Arc::downgrade(&self.state);
-        window.install(move || {
+        let transfer = self.with_state(|s| Arc::clone(&s.transfer));
+        window.install(&transfer, move || {
             let removed = state.upgrade().and_then(|state| {
                 let mut state = state.lock();
                 if state
@@ -340,12 +428,8 @@ impl Platform for WebPlatform {
             .map(|_| WindowId(0))
     }
 
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        vec![Arc::new(WebDisplay::from_browser())]
-    }
-
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        Some(Arc::new(WebDisplay::from_browser()))
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        self.displays.snapshot()
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
@@ -353,14 +437,9 @@ impl Platform for WebPlatform {
     }
 
     fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
-        // The web transport (navigator.clipboard, HTML5 DnD) needs its own
-        // design (ADR-0038 §8) — until then this is inert and honest, not a
-        // degraded fake over the write-cache clipboard.
-        Arc::new(NullDataTransferSource)
-    }
-
-    fn capabilities(&self) -> &dyn PlatformCapabilities {
-        &WebCapabilities
+        // HTML drag and drop; `clipboard_offer` stays `None`, since the
+        // clipboard reads only its own writes.
+        self.with_state(|s| Arc::clone(&s.transfer)) as Arc<dyn DataTransferSource>
     }
 
     fn name(&self) -> &'static str {
@@ -383,6 +462,11 @@ impl Platform for WebPlatform {
 
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
         let previous = self.with_state(|state| state.handlers.quit.replace(callback));
+        drop(previous);
+    }
+
+    fn on_session_end(&self, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {
+        let previous = self.with_state(|state| state.handlers.session_end.replace(callback));
         drop(previous);
     }
 

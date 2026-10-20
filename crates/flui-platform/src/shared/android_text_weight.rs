@@ -2,13 +2,16 @@
 
 use flui_platform_api::TextWeightPreference;
 
-/// The native field is absent before API31. A failed available query remains an
-/// error; Android's undefined sentinel remains an unavailable observation.
+use super::os_version::{Since, android::TextWeight};
+
+/// The native field is absent without [`TextWeight`], and is then never queried. A failed
+/// available query remains an error; Android's undefined sentinel remains an unavailable
+/// observation.
 pub(crate) fn observe<E>(
-    sdk: i32,
+    field: Option<Since<TextWeight>>,
     query: impl FnOnce() -> Result<i32, E>,
 ) -> Result<Option<TextWeightPreference>, E> {
-    if sdk < 31 {
+    if field.is_none() {
         return Ok(None);
     }
     let value = query()?;
@@ -20,6 +23,11 @@ mod tests {
     use std::{cell::Cell, num::NonZeroI32};
 
     use super::{TextWeightPreference, observe};
+    use crate::shared::os_version::android::{AndroidApi, TextWeight};
+
+    fn field(sdk: u32) -> Option<crate::shared::os_version::Since<TextWeight>> {
+        AndroidApi::from_level(sdk).since::<TextWeight>()
+    }
 
     #[test]
     fn android_text_weight_query_contract() {
@@ -38,7 +46,7 @@ mod tests {
             (35, i32::MAX - 1, adjustment(i32::MAX - 1)),
         ] {
             let calls = Cell::new(0);
-            let result = observe(sdk, || {
+            let result = observe(field(sdk), || {
                 calls.set(calls.get() + 1);
                 Ok::<_, &str>(raw)
             });
@@ -52,11 +60,11 @@ mod tests {
 
         for sdk in [30, 31] {
             let calls = Cell::new(0);
-            let failed = observe(sdk, || {
+            let failed = observe(field(sdk), || {
                 calls.set(calls.get() + 1);
                 Err::<i32, _>("native field failure")
             });
-            let recovered = observe(sdk, || {
+            let recovered = observe(field(sdk), || {
                 calls.set(calls.get() + 1);
                 Ok::<_, &str>(237)
             });

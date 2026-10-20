@@ -8,11 +8,11 @@ use std::{cell::Cell, hint::black_box, rc::Rc};
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use flui_foundation::geometry::Offset;
-use flui_interaction::arena::GestureArena;
 use flui_interaction::events::{
     PointerButton, PointerEvent, PointerKind, make_down_event_for_id_with_button,
     make_move_event_for_id, make_up_event_for_id_with_button,
 };
+use flui_interaction::gesture::GestureArena;
 use flui_interaction::{
     GestureRecognizer, PointerDispatch, PointerId, RecognizerSet, TapGestureRecognizer,
 };

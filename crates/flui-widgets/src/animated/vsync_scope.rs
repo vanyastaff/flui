@@ -43,12 +43,23 @@ impl VsyncScope {
             .flatten()
     }
 
+    /// Whether a state holding `current` still holds the subtree's registry
+    /// `incoming`: both absent, or one registry. A state rebinds only when
+    /// this is false, so a fresh clone of the same registry restarts nothing.
+    pub(crate) fn same_registry(current: Option<&Vsync>, incoming: Option<&Vsync>) -> bool {
+        match (current, incoming) {
+            (None, None) => true,
+            (Some(current), Some(incoming)) => current.is_same(incoming),
+            _ => false,
+        }
+    }
+
     /// Wrap `child` in a scope that provides `vsync` to its descendants.
     #[must_use]
     pub fn new(vsync: Vsync, child: impl IntoView) -> Self {
         Self {
             vsync: Some(vsync),
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 
@@ -64,7 +75,7 @@ impl VsyncScope {
     pub fn detached(child: impl IntoView) -> Self {
         Self {
             vsync: None,
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 }
@@ -89,11 +100,7 @@ impl InheritedView for VsyncScope {
     }
 
     fn update_should_notify(&self, old: &Self) -> bool {
-        match (&self.vsync, &old.vsync) {
-            (Some(new), Some(old)) => !new.is_same(old),
-            (None, None) => false,
-            _ => true,
-        }
+        !Self::same_registry(old.vsync.as_ref(), self.vsync.as_ref())
     }
 }
 

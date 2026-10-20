@@ -19,6 +19,7 @@ use super::{
     Single, Variable,
     arity::ElementArity,
     behavior::{ElementBehavior, InheritedBehavior, RenderBehavior, StatefulBehavior},
+    dispatch::ViewUpdate,
     generic::ElementCore,
 };
 use crate::{
@@ -163,6 +164,10 @@ where
         // Forward to `ElementCore::set_self_id` so the
         // Variable-arity reconciler stamp can use the real parent id.
         self.core.set_self_id(id);
+    }
+
+    fn note_source_view(&mut self, source: std::rc::Weak<dyn View>) {
+        self.core.note_source_view(Some(source));
     }
 
     fn lifecycle(&self) -> Lifecycle {
@@ -353,14 +358,21 @@ where
     // ========================================================================
 
     fn update(&mut self, new_view: &dyn View, owner: &mut crate::ElementOwner<'_>) {
-        // Snapshot the previous view so `on_view_updated` can pass it to state
-        // hooks (e.g. `ViewState::did_update_view`,
-        // `InheritedBehavior::on_view_updated` for dependent notification).
-        let old_view = self.core.view().clone();
-        if self.core.update_view(new_view) {
-            // Notify behavior of update
-            self.behavior.on_update(&self.core, owner);
-            self.behavior.on_view_updated(&self.core, &old_view, owner);
+        // The previous view goes to `on_view_updated`, for state hooks (e.g.
+        // `ViewState::did_update_view`) and `InheritedBehavior`'s dependent
+        // notification. An offer of the view the element already holds
+        // touches nothing, so there is no behavior to tell.
+        match self.core.update_view(new_view) {
+            ViewUpdate::Replaced { previous } => {
+                self.behavior.on_update(&self.core, owner);
+                self.behavior.on_view_updated(&self.core, &previous, owner);
+            }
+            ViewUpdate::Equal => {
+                self.behavior.on_update(&self.core, owner);
+                self.behavior
+                    .on_view_updated(&self.core, self.core.view(), owner);
+            }
+            ViewUpdate::Unchanged | ViewUpdate::Mismatch => {}
         }
     }
 

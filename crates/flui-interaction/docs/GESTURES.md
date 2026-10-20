@@ -1,6 +1,6 @@
 # Gesture Recognition Guide
 
-How the recognizers in `flui_interaction::recognizers` behave. Every position,
+How the recognizers in `flui_interaction::gesture` behave. Every position,
 delta, scale, pressure and velocity field is `f64` (`Offset<f64>` for points);
 times are `Instant`/`Duration`.
 
@@ -20,8 +20,8 @@ Built-in recognizers: `TapGestureRecognizer`, `DoubleTapGestureRecognizer`,
 `LongPressGestureRecognizer`, `DragGestureRecognizer` (plus the
 `vertical_drag`, `horizontal_drag` and `pan` constructors in `drag_variants`),
 `ScaleGestureRecognizer`, `ForcePressGestureRecognizer`,
-`MultiTapGestureRecognizer`, `MultiDragGestureRecognizer`,
-`EagerGestureRecognizer` and `TapAndDragGestureRecognizer`.
+`MultiTapGestureRecognizer`, `MultiDragGestureRecognizer` and
+`TapAndDragGestureRecognizer`.
 
 ## Construction
 
@@ -86,7 +86,10 @@ Down callbacks receive `TapDownDetails`; Up and completed-tap callbacks receive
 `TapUpDetails`. Move and cancellation callbacks receive `TapDetails`. Each
 snapshot carries `global_position`, `local_position` and the admitted `kind`.
 The same phase payloads apply to primary, secondary and auxiliary button
-callbacks; choosing a callback family chooses the button.
+callbacks; choosing a callback family chooses the button. A press of a button
+with no callback of its family is not admitted, so a recognizer that only
+reports secondary clicks never joins, or delays, a primary contact's arena
+(`a_tap_joins_only_contacts_of_buttons_it_reports`).
 
 ### Double tap (`double_tap.rs`, `DoubleTapPhase`)
 
@@ -214,7 +217,7 @@ contacts join or leave:
 
 ```rust
 use flui_interaction::{GestureArena, ScaleGestureRecognizer};
-use flui_interaction::recognizers::scale::ScaleStartMode;
+use flui_interaction::gesture::ScaleStartMode;
 
 let recognizer = ScaleGestureRecognizer::builder(GestureArena::new())
     .start_mode(ScaleStartMode::PanOrScale)
@@ -292,8 +295,11 @@ emits start/update/end for that step instead of inventing a continuing source.
 | `min_fling_velocity()` | 50.0 px/s |
 | `max_fling_velocity()` | 8000.0 px/s |
 
-Presets: `touch_defaults`, `mouse_defaults`, `pen_defaults`, `android_defaults`
-(400 ms long press), `ios_defaults`, `for_device`, `for_platform`, `native`.
+The table is `GestureSettings::default()`, the platform-neutral touch preset.
+`GestureSettings::preset(platform, kind)` gives a platform's values for a pointer
+kind, falling back to the kind's `PointerClass` row and then the platform row
+(ADR-0212); each row cites its sources. Observed long-press and double-tap/click
+timings are floors that a shorter override cannot undercut.
 Timing builders include `with_double_tap_timeout` and `with_long_press_timeout`.
 Numeric builders such as `try_with_touch_slop`, `try_with_pan_slop` and
 `try_with_fling_velocity` return `GestureSettingsError` for invalid ranges.
@@ -318,7 +324,33 @@ membership withdrawal for deferred resolution and never calls peers inline.
 At runtime `GestureBinding` hit-tests on Down, calls `add_pointer` along the
 route, closes the arena, sweeps on Up, and does not sweep on Cancel.
 
-## Velocity tracking (`processing/velocity.rs`)
+### Ownership and composition (ADR-0208)
+
+One contact has one owner. Drag and scale join with a `MotionRole` and claim a
+moving contact with `claim_motion(displacement)`; the arena decides between the
+moving members on the displacement accumulated since Down: a channel leaf
+(scale, `InteractiveViewer`) keeps it — a scale that needs two contacts only
+once it holds two, so one finger beside it still pans — a pan yields to an axial drag whose axis
+takes at least cos 45° of it, and the larger axial component wins, a tie going
+to the innermost member. `GestureArena::with_pan_claim(PanClaim)` (the
+`PanClaimRegion` widget) limits which axes outside axial drags may take from the
+pans inside, as CSS `touch-action` does. A recognizer's `allowed_devices`
+refuses other device kinds before any rule runs. An accepted drag starts once
+its contact crosses its own slop.
+
+`compose(GestureComposition::{Exclusive, RequireFailure})` returns two branch
+handles, and a branch composes again. `sequenced()` returns a
+`SequencedBranch`: build a hold (long press) with `hold()` and a successor
+(drag) with `successor()`; once the hold wins, `hand_off(pointer)` gives the
+contact to the successor. A composition whose waits on one path exceed the
+handle's `max_resolution_delay` is refused with
+`CompositionError::DelayCeilingExceeded`.
+
+When a member that claimed a continuing contact wins, every route target but
+the one feeding it receives one `Cancel { reason: CancelReason::Claimed }` and
+nothing more of that contact.
+
+## Velocity tracking (`gesture/velocity_tracker.rs`)
 
 ```rust
 use web_time::Instant;
@@ -334,8 +366,8 @@ let estimate = tracker.estimate_at(now); // Option<VelocityEstimate>
 
 A quadratic least-squares fit over at most 20 samples within a 100 ms horizon;
 fewer than 3 samples gives no fit, and a pointer still for 40 ms reports zero.
-Use `processing::VelocityTracker::with_estimator(kind, estimator)` for a
-different `processing::VelocityEstimator`, or configure a recognizer through
+Use `gesture::VelocityTracker::with_estimator(kind, estimator)` for a
+different `gesture::VelocityEstimator`, or configure a recognizer through
 `GestureSettings::with_velocity_estimator`. Drag, multi-drag, tap-and-drag, long-press and
 scale capture this policy when their contact sequence begins. Defaults remain
 least squares on every platform; selecting weighted recent intervals or impulse
@@ -362,6 +394,52 @@ Keep strong ownership in widget state, and attach through
 erase the Move/Up/Cancel tail of a contact admitted earlier. The
 [custom recognizer example](../examples/custom_recognizer.rs) demonstrates the
 open extension point without a parallel marker trait.
+
+A mounted custom recognizer goes through `flui_widgets::RawGestureDetector`.
+Its `GestureRecognizerFactory` builds the recognizer once in `create` from a
+`RecognizerContext` (the scope's arena, gesture settings and writer) and
+reconfigures the live one in `update(&recognizer)` on every rebuild that lists
+a factory of the same type and key, so a rebuild in the middle of a contact
+keeps the contact. A factory that leaves the list cancels its recognizer.
+A package reaches all of this through `flui_sdk::interaction` and
+`flui_sdk::widgets` without naming an internal crate;
+`crates/flui-sdk/tests/surface/custom_recognizer.rs` is a recognizer written
+that way
+(`a_rebuild_mid_gesture_keeps_the_drag`).
+
+Checklist for a new recognizer or a behavioral widget built on one:
+
+- **Ownership.** Join through `ArenaMembership` or `PrimaryContact`; a member
+  that moves joins `with_motion_role` and claims with `claim_motion`, so the
+  ownership table above decides it. Restrict device kinds with
+  `allowed_devices`, never by filtering events inside the recognizer.
+- **Composition.** Waits go through `GestureComposition` or `sequenced()`, not
+  a private timer, so the delay ceiling and observers see them.
+- **Configuration.** One immutable value per rebuild applied by the factory's
+  `update`; no `set_*` methods, and no borrow of the configuration held across
+  a callback.
+- **Settings.** Read `GestureSettings` for the contact's pointer kind at
+  admission (`settings().snapshot_for(kind)`); no hard-coded slop or timeout.
+- **Failure paths.** `cancel` reports `Cancelled` once and `Idle` after; a
+  callback may drop the last owner or rebuild the detector.
+- **Accessibility.** The widget's constructor takes a
+  `flui_widgets::GestureAlternatives` whose commands are `Intent`s; its gesture
+  performs the first through `GestureAlternatives::handle`, and the
+  alternatives give it a custom action, its keys and a visible control or a
+  context menu (ADR-0216). A row of the widget × input-path matrix runs
+  `flui_testing::assert_gesture_alternatives` over it.
+- **Localization.** Command labels name their target ("Delete Alice") in the
+  app's language; the labels the alternatives make themselves come from
+  `WidgetsLocalizations` with their parameters, and controls mirror in RTL.
+- **Slot and channel.** A gesture that conflicts with a built-in family takes
+  a typed `GestureDetector` slot; one that moves content takes part in the
+  nested-scroll channel instead of claiming the contact outright, with its
+  row in the channel table.
+- **Style.** Material and Cupertino add only thin style wrappers over the
+  behavior.
+- **Tests.** Through the public API: a mid-gesture rebuild, a configuration
+  change through `update`, and removal, each failing with its production hunk
+  reverted.
 
 Explicit `cancel()` delivers cancellation once for an active sequence and
 returns `Cancelled`, or `Idle` when there is none. It does not disable the

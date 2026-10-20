@@ -100,9 +100,11 @@ fn probe_entry(creations: &Arc<AtomicUsize>) -> OverlayEntry {
     })
 }
 
-/// The `Theater` element the overlay builds (the overlay element's only child).
+/// The `Theater` element the overlay builds, inside the anchor that names
+/// the overlay's render node.
 fn stack_element(harness: &mut Harness, overlay_element: ElementId) -> ElementId {
-    harness.only_child(overlay_element)
+    let anchor = harness.only_child(overlay_element);
+    harness.only_child(anchor)
 }
 
 /// The overlay's layer elements, bottom → top.

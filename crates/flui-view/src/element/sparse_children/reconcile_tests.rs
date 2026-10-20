@@ -180,8 +180,8 @@ fn keyless_residents_outside_the_band_are_carried_over_not_rebuilt() {
         Rc::new(move |i| {
             built.borrow_mut().push(i);
             match i {
-                5 => Some(BoxedView(Box::new(KeyedBox::new(7)))),
-                _ => Some(BoxedView(Box::new(PlainBox))),
+                5 => Some(BoxedView::new(KeyedBox::new(7))),
+                _ => Some(BoxedView::new(PlainBox)),
             }
         })
     };
@@ -349,15 +349,15 @@ fn a_child_panicking_in_create_render_object_is_replaced_at_that_index_only() {
 fn a_panicking_builder_yields_the_error_view_for_that_index_only() {
     let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(|i| {
         assert!(i != 1, "boom");
-        Some(BoxedView(Box::new(KeyedBox::new(i as u32))))
+        Some(BoxedView::new(KeyedBox::new(i as u32)))
     });
     assert!(build_item_or_error(&*builder, 0).is_some());
     let recovered = build_item_or_error(&*builder, 1).expect("an error view, not None");
     assert_eq!(
-        recovered.0.view_type_id(),
+        recovered.view_type_id(),
         std::any::TypeId::of::<crate::view::ErrorView>()
     );
-    assert!(recovered.0.key().is_none(), "the error view is unkeyed");
+    assert!(recovered.key().is_none(), "the error view is unkeyed");
 }
 
 #[test]

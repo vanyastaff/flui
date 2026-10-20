@@ -66,6 +66,25 @@ pub trait OwnerEffects {
     ) -> Option<super::TextSizingFrontier> {
         Some(frontier)
     }
+    /// Whether this host acts on a presentation's demand for its display's
+    /// highest refresh rate. Off by default: a host that answers `false` is
+    /// never told, and its runtimes arm no hold and report no hold deadline.
+    fn tracks_frame_rate_demand(&self) -> bool {
+        false
+    }
+    /// A presentation's demand for its display's highest refresh rate changed.
+    ///
+    /// Delivered after the runtime that decided it has returned to the owner,
+    /// and never for a presentation that has retired. The owner remembers what
+    /// it delivered, so a hook that panics is offered the same change again at
+    /// the next work item. The runtime has no platform edge: the host turns the
+    /// change into a request to the presentation's window.
+    fn frame_rate_demand_changed(
+        &self,
+        _address: PresentationAddress,
+        _demand: crate::frame_rate_demand::FrameRateDemand,
+    ) {
+    }
     /// Request another owner opportunity without fabricating a frame delivery.
     fn request_continuation(&self) -> bool;
 }
@@ -104,6 +123,9 @@ pub enum DispatchError {
     /// A runtime is already checked out or a publication owns the registry.
     #[error("the UI runtime is busy")]
     Busy,
+    /// The runtime's command inbox has no room for this request.
+    #[error("the UI runtime's command inbox is full")]
+    InboxFull,
 }
 
 impl From<PublicationError> for DispatchError {
@@ -144,13 +166,19 @@ impl FrameDispatcher {
         core.deliver(RuntimeWork::SurfaceRestored(self.address), effects)
     }
 
-    /// Admit a real frame delivery. Nested calls join the same owner FIFO.
+    /// Admit a real frame delivery, [`HostInput::Frame`](crate::HostInput::Frame)
+    /// with its `vsync` on the event timeline. Nested calls join the same owner
+    /// FIFO.
     ///
     /// # Errors
     /// Refuses an expired host or exact presentation, or an active publication.
-    pub fn deliver(&self, effects: &dyn OwnerEffects) -> Result<Delivery, DispatchError> {
+    pub fn deliver(
+        &self,
+        vsync: flui_platform_api::EventTime,
+        effects: &dyn OwnerEffects,
+    ) -> Result<Delivery, DispatchError> {
         let core = self.owner.upgrade().ok_or(DispatchError::OwnerGone)?;
-        core.deliver(RuntimeWork::Frame(self.address), effects)
+        core.deliver(RuntimeWork::Frame(self.address, vsync), effects)
     }
 }
 
@@ -442,6 +470,73 @@ impl OwnerCore {
         }
     }
 
+    /// Start the OS drag sessions resident runtimes decided on (ADR-0211 §7).
+    ///
+    /// Runs once the outermost callback has finished, so no dispatch, borrow,
+    /// lease or frame is in progress. Each runtime is checked out only to take
+    /// its requests and, later, to hear refusals; it is resident while a
+    /// window's start runs, because a backend may run the OS's modal loop
+    /// inside the start and deliver this runtime's input and frames from it.
+    pub(super) fn enter_pending_os_drags(self: &Rc<Self>, first: &mut Failure) {
+        let ids: Vec<_> = {
+            let state = self.state.borrow();
+            if state.closed || state.claim != DeliveryClaim::Idle {
+                return;
+            }
+            state
+                .runtimes
+                .iter()
+                .filter(|entry| match &entry.residence {
+                    Residence::Resident(runtime) => runtime.has_pending_os_drags(),
+                    _ => false,
+                })
+                .map(|entry| entry.id)
+                .collect()
+        };
+        for id in ids {
+            let Ok(lease) = RuntimeLease::checkout_runtime(self, id) else {
+                continue;
+            };
+            let taken = catch_unwind(AssertUnwindSafe(|| {
+                lease
+                    .runtime
+                    .as_deref()
+                    .expect("BUG: an active lease owns its runtime")
+                    .take_os_drag_starts()
+            }));
+            let incoming = RecoveryState::current(first);
+            lease.return_to_owner(first, incoming);
+            let entries = match taken {
+                Ok(entries) => entries,
+                Err(failure) => {
+                    preserve_first_lifecycle_panic(first, Some(failure), "OS drag admission");
+                    continue;
+                }
+            };
+            let refused = crate::ui_runtime::start_os_drags(entries, first);
+            if refused.is_empty() {
+                continue;
+            }
+            // A start's modal loop may have closed the runtime meanwhile; its
+            // sessions went with it.
+            let Ok(lease) = RuntimeLease::checkout_runtime(self, id) else {
+                continue;
+            };
+            let told = catch_unwind(AssertUnwindSafe(|| {
+                lease
+                    .runtime
+                    .as_deref()
+                    .expect("BUG: an active lease owns its runtime")
+                    .os_drags_refused(refused);
+            }))
+            .err();
+            preserve_first_lifecycle_panic(first, told, "OS drag refusal");
+            let incoming = RecoveryState::current(first);
+            lease.return_to_owner(first, incoming);
+        }
+        self.drain_retired(first);
+    }
+
     pub(super) fn continue_work(self: &Rc<Self>, effects: &dyn OwnerEffects) {
         let claimed = {
             let mut state = self.state.borrow_mut();
@@ -458,6 +553,89 @@ impl OwnerCore {
         if claimed {
             self.drive(effects);
         }
+    }
+
+    /// Tell the host every demand that differs from the one last delivered for
+    /// its presentation. A demand counts as delivered only once the host's hook
+    /// returned, so one that failed is offered again by the next work item.
+    fn deliver_frame_rate_demands(
+        &self,
+        effects: &dyn OwnerEffects,
+        runtime: UiRuntimeId,
+        demands: &[(
+            flui_foundation::PresentationId,
+            crate::frame_rate_demand::FrameRateDemand,
+        )],
+        failure: &mut Failure,
+    ) {
+        // Presentations that left the runtime owe the host nothing more.
+        self.state
+            .borrow_mut()
+            .frame_rate_delivered
+            .retain(|address, _| {
+                address.ui_runtime_id != runtime
+                    || demands.iter().any(|(id, _)| *id == address.presentation_id)
+            });
+        for &(presentation_id, demand) in demands {
+            let address = PresentationAddress {
+                ui_runtime_id: runtime,
+                presentation_id,
+            };
+            let delivered = {
+                let state = self.state.borrow();
+                if state.authorizer(address).is_err() {
+                    continue;
+                }
+                state
+                    .frame_rate_delivered
+                    .get(&address)
+                    .copied()
+                    .unwrap_or_default()
+            };
+            if delivered == demand {
+                continue;
+            }
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                effects.frame_rate_demand_changed(address, demand);
+            }));
+            match outcome {
+                Ok(()) => {
+                    self.state
+                        .borrow_mut()
+                        .frame_rate_delivered
+                        .insert(address, demand);
+                }
+                Err(payload) => {
+                    preserve_first_lifecycle_panic(failure, Some(payload), "frame rate demand");
+                }
+            }
+        }
+    }
+
+    /// Before a presentation is forgotten, tell the host it no longer wants the
+    /// high refresh rate, if the host was last told it did.
+    pub(super) fn release_frame_rate_demand(
+        &self,
+        effects: &dyn OwnerEffects,
+        address: PresentationAddress,
+        failure: &mut Failure,
+    ) {
+        let delivered = self
+            .state
+            .borrow_mut()
+            .frame_rate_delivered
+            .remove(&address);
+        if delivered != Some(crate::frame_rate_demand::FrameRateDemand::Active) {
+            return;
+        }
+        let released = catch_unwind(AssertUnwindSafe(|| {
+            effects.frame_rate_demand_changed(
+                address,
+                crate::frame_rate_demand::FrameRateDemand::Idle,
+            );
+        }))
+        .err();
+        preserve_first_lifecycle_panic(failure, released, "frame rate demand release");
     }
 
     fn drain_retired(&self, first_failure: &mut Failure) {
@@ -647,13 +825,23 @@ impl OwnerCore {
                     if let Some(payload) = failure.as_ref() {
                         runtime.report_contained_panic(address, payload.as_ref());
                     }
-                    let frontiers = if failure.is_none() && first_failure.is_none() {
+                    let healthy = failure.is_none() && first_failure.is_none();
+                    let frontiers = if healthy {
                         runtime.take_text_sizing_frontiers()
                     } else {
                         Vec::new()
                     };
+                    // An unhealthy item observes nothing, and what it did not
+                    // observe it must not forget: the delivered records stay
+                    // until a healthy item replaces them or the presentation
+                    // retires.
+                    let demands = (healthy && effects.tracks_frame_rate_demand())
+                        .then(|| runtime.frame_rate_demands());
                     lease.return_to_owner(&mut failure, RecoveryState::current(&first_failure));
                     self.state.borrow_mut().claim = DeliveryClaim::Completing;
+                    if let Some(demands) = demands {
+                        self.deliver_frame_rate_demands(effects, id, &demands, &mut failure);
+                    }
                     for work in frontiers {
                         let frontier = super::TextSizingFrontier::new(self, id, work);
                         if failure.is_some()

@@ -65,9 +65,9 @@
 //! use std::time::Duration;
 //!
 //! use flui_testing::HeadlessBinding;
-//! use flui_interaction::settings::GestureSettings;
+//! use flui_interaction::gesture::GestureSettings;
 //! use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, PointerId};
-//! use flui_interaction::routing::PointerDispatch;
+//! use flui_interaction::pointer::PointerDispatch;
 //! use flui_foundation::geometry::Point;
 //! use flui_platform_api::EventTime;
 //! use flui_platform_api::pointer::{
@@ -81,7 +81,7 @@
 //! let in_callback = Rc::clone(&fired);
 //! let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
 //!     .settings(
-//!         GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
+//!         GestureSettings::default().with_long_press_timeout(Duration::from_millis(500)),
 //!     )
 //!     .on_long_press_start(move |_details| in_callback.set(true))
 //!     .build();
@@ -114,24 +114,40 @@
 #![deny(missing_docs)]
 
 pub mod a11y;
+pub mod backend_conformance;
 pub mod bootstrap;
+pub mod gesture_alternatives;
 pub mod host;
 pub mod log_capture;
+pub mod ownership;
+pub mod recording;
 pub mod replay;
 pub mod storage;
 pub mod text_store_host;
 pub mod text_store_kit;
 pub mod widgets;
+pub mod window_conformance;
 
 pub use a11y::{
     A11yNode, A11yQuery, A11yQueryError, A11yTree, Action, ActionData, ActionRequest,
     InvokeActionError, NodeId, NotTreeBound, TreeId,
 };
+pub use backend_conformance::{BackendUnderTest, assert_backend_conforms};
 pub use bootstrap::{BuildCapabilities, MountOptions, MountOwners, Mounted};
 pub use flui_runtime::presentation::{PointerResampling, PointerResamplingError};
-pub use host::{HeadlessDevAgent, HeadlessHost, HeadlessSink, HeadlessWindow, HeadlessWindowId};
+pub use gesture_alternatives::{
+    AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives,
+};
+pub use host::{
+    HeadlessDevAgent, HeadlessHost, HeadlessOsDrags, HeadlessSink, HeadlessWindow,
+    HeadlessWindowId, NotSettled, StartedOsDrag,
+};
 pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};
-pub use replay::{GestureRecorder, PointerPhase, PointerScript, ScriptedPointer};
+pub use ownership::assert_ownership_table;
+pub use replay::{
+    MouseScript, PenScript, PinchPhase, PointerPhase, PointerScript, ScriptError, ScriptStep,
+    ScriptedPointer, TouchScript, TrackpadScript, VirtualScript,
+};
 pub use text_store_host::{RecordingTextStoreHost, StoreHostCall};
 
 use std::collections::HashMap;
@@ -142,8 +158,8 @@ use std::time::Duration;
 use flui_animation::{MotionClock, Vsync};
 use flui_foundation::PresentationId;
 use flui_interaction::ManualClock;
-use flui_interaction::arena::GestureArena;
-use flui_interaction::routing::MouseTracker;
+use flui_interaction::gesture::GestureArena;
+use flui_interaction::pointer::MouseTracker;
 use flui_interaction::{
     GestureBinding, HitTestResult, InteractionDispatchError, InteractionDispatchHandle,
     InteractionLane, PointerEvent,
@@ -1174,11 +1190,14 @@ impl HeadlessBinding {
                         //    this is a no-op there.
                         if let Some(tree_binding) = tree.as_ref() {
                             let pipeline_owner = &tree_binding.pipeline_owner;
-                            gestures.mouse_tracker().update_all_devices(|position| {
-                                let mut result = HitTestResult::new();
-                                pipeline_owner.with(|owner| owner.hit_test(position, &mut result));
-                                result
-                            });
+                            gestures
+                                .mouse_tracker()
+                                .update_all_devices(|position, kind| {
+                                    let mut result = HitTestResult::new();
+                                    pipeline_owner
+                                        .with(|owner| owner.hit_test(position, kind, &mut result));
+                                    result
+                                });
                         }
                     },
                 )

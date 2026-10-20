@@ -4,8 +4,8 @@
 //! text input is a capability trait here instead of a standalone crate.
 //! [`PlatformTextInput`] is reached
 //! through [`PlatformWindow::text_input`](crate::PlatformWindow::text_input) — the same
-//! capability-discovery pattern as [`PlatformWindow::display`](crate::PlatformWindow::display)
-//! and `flui_platform::Platform::primary_display`: a fallible accessor
+//! capability-discovery pattern as [`PlatformWindow::haptics`](crate::PlatformWindow::haptics):
+//! a fallible accessor
 //! returning `Option<Arc<dyn _>>`, not a method bolted directly onto
 //! `PlatformWindow` with a panicking/no-op default. A backend that cannot
 //! support IME (a minimal future embedder; headless without its
@@ -40,6 +40,6 @@ pub trait PlatformTextInput: Send + Sync {
 
     /// Tell the platform IME where to draw its candidate/composition
     /// window, in logical window coordinates (origin + size, matching
-    /// [`PlatformWindow::bounds`](crate::PlatformWindow::bounds)'s convention).
+    /// [`WindowState::outer`](crate::WindowState::outer)'s convention).
     fn set_ime_cursor_area(&self, area: Bounds<f64>);
 }

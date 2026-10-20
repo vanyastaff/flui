@@ -1,6 +1,6 @@
 //! Test doubles for driving a UI runtime with no platform backend and no GPU.
 //!
-//! Compiled for this crate's own tests and, through the `test-support`
+//! Compiled for this crate's own tests and, through the `testing`
 //! feature, for `flui-app`'s, which enables it on its dev edge only.
 //!
 //! - [`TestWindow`]: a [`PlatformWindow`] value with every knob the UI runtime
@@ -262,6 +262,26 @@ impl PlatformWindow for TestWindow {
 
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
         *self.cursor.lock() = cursor;
+        Ok(())
+    }
+
+    fn state(&self) -> flui_platform_api::WindowState {
+        let size = self.logical_size();
+        flui_platform_api::WindowState::new(
+            flui_platform_api::WindowGeometry::new(None, size),
+            size,
+        )
+    }
+
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
         Ok(())
     }
 

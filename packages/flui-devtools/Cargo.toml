@@ -13,6 +13,9 @@ categories = ["development-tools::profiling", "gui"]
 # The criterion bench is a development file; the published archive ships the
 # library, its tests and examples only.
 exclude = ["/benches/"]
+# Integration tests are modules of one binary (tests/main.rs); the agent
+# endpoint, which installs a global subscriber, is its own target.
+autotests = false
 
 # The crate exists only to provide these modules, so the docs must show them.
 [package.metadata.docs.rs]
@@ -110,6 +113,8 @@ full = ["profiling", "timeline", "inspector", "agent"]
 # tests call so a sibling test cannot poison their callsites' cached interest,
 # and `HeadlessBinding`, which the end-to-end tests drive real frames through.
 flui-testing = { workspace = true }
+# The end-to-end test that sets the scheduler's frame budget the way the runtime does.
+flui-scheduler = { path = "../../crates/flui-scheduler", version = "=0.2.0-dev" }
 # The end-to-end tests' one-leaf tree: a `RenderView` over `RenderSizedBox`,
 # and the pipeline owner the binding lays it out with. Neither is SDK surface.
 flui-objects = { path = "../../crates/flui-objects", version = "=0.2.0-dev" }
@@ -135,9 +140,20 @@ required-features = ["profiling"]
 name = "agent_counter"
 required-features = ["agent"]
 
+# The inspector integration tests, as modules of one binary (tests/main.rs).
+[[test]]
+name = "devtools_it"
+path = "tests/main.rs"
+
+# The frame profile end to end: its timeline test re-runs itself by name in a
+# child process, so it stays a target of its own.
+[[test]]
+name = "frame_profile_end_to_end"
+
 # The agent endpoint end to end: a separate target, because the rest of the
-# crate builds without the feature. It needs a local socket, so it compiles to
-# nothing where there is none.
+# crate builds without the feature and the server installs a global tracing
+# subscriber. It needs a local socket, so it compiles to nothing where there is
+# none.
 [[test]]
 name = "agent_endpoint"
 required-features = ["agent"]

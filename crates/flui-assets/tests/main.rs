@@ -4,6 +4,8 @@
 
 mod cases;
 
+mod memory_trim;
+
 #[path = "image_asset_integration.rs"]
 mod image_asset_integration;
 

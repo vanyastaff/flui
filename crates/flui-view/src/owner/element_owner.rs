@@ -241,6 +241,7 @@ pub struct ElementOwner<'a> {
     /// process-global or thread-local state.
     pub(crate) focus_manager: &'a Rc<FocusManager>,
     pub(crate) lifecycle_handle: &'a Option<crate::LifecycleHandle>,
+    pub(crate) window_handle: &'a Option<crate::WindowHandle>,
 
     /// The binding's async task driver, or `None` when no
     /// binding installed one. Cloned into the live `BuildCtx` so a
@@ -260,6 +261,12 @@ pub struct ElementOwner<'a> {
     /// The presentation's plain-text clipboard, threaded into every
     /// `BuildCtx` the same way `text_input_handle` is.
     pub(crate) clipboard_handle: &'a Option<flui_interaction::ClipboardHandle>,
+
+    /// The presentation's haptics, threaded the same way.
+    pub(crate) haptics_handle: &'a Option<flui_interaction::HapticsHandle>,
+
+    /// The presentation's drag-and-drop, threaded the same way.
+    pub(crate) drag_and_drop: &'a Option<flui_interaction::drag::DragAndDrop>,
 
     /// The presentation's external textures, threaded the same way.
     pub(crate) texture_registry: &'a Option<flui_rendering::layer::TextureRegistry>,

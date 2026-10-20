@@ -216,9 +216,15 @@ pub(crate) enum ImageFilterPass {
     ///
     /// Exercises the `DrawItem::Filter` seam end-to-end with zero filter math
     /// and grows `FilterOp::output_support` by 0 pixels.
-    // No production producer until a public painter API is wired; only test
-    // builds construct it.
-    #[cfg_attr(not(test), allow(dead_code))]
+    // Its only producer is the debug-only overflow indicator inside a
+    // `Compose` (`layer_dispatcher::flatten_compose`).
+    #[cfg_attr(
+        not(debug_assertions),
+        expect(
+            dead_code,
+            reason = "the overflow indicator exists only in debug builds"
+        )
+    )]
     Identity,
     /// Morphological filter: separable H then V pass with the given radius and op.
     ///

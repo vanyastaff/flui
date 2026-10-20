@@ -59,6 +59,17 @@ impl DispatchEventResult {
         deferred: true,
     };
 
+    /// Provisional outcome for a reentrant event that needs a synchronous
+    /// answer — a key, whose platform default (a system shortcut, AppKit's
+    /// key-equivalent fallback) cannot wait for the running callback. It is
+    /// answered "not handled", so the default runs now, and delivered once
+    /// after the running callback returns (ADR-0207 §7).
+    pub const DEFERRED_UNHANDLED: Self = Self {
+        propagate: true,
+        default_prevented: false,
+        deferred: true,
+    };
+
     /// Whether delivery was queued behind a reentrant callback and the final
     /// user callback outcome is therefore not available yet.
     #[must_use]
@@ -101,6 +112,12 @@ pub enum PlatformInput {
     /// during an external drag the OS owns the cursor, and the gesture-arena
     /// semantics of the pointer pipeline (capture, velocity) do not apply.
     DragDrop(DragDropEvent),
+
+    /// The surface's input capabilities ([`InputCapabilities`](crate::input_capabilities::InputCapabilities),
+    /// ADR-0213). The first is delivered before any other input once the input callback is
+    /// installed; each later one is a change (a device attached or removed, a session change),
+    /// in order with the input around it.
+    Capabilities(crate::input_capabilities::InputCapabilities),
 }
 
 impl PlatformInput {
@@ -109,7 +126,10 @@ impl PlatformInput {
     pub fn as_pointer(&self) -> Option<&PointerEvent> {
         match self {
             PlatformInput::Pointer(event) => Some(event),
-            PlatformInput::Keyboard(_) | PlatformInput::Ime(_) | PlatformInput::DragDrop(_) => None,
+            PlatformInput::Keyboard(_)
+            | PlatformInput::Ime(_)
+            | PlatformInput::DragDrop(_)
+            | PlatformInput::Capabilities(_) => None,
         }
     }
 
@@ -118,7 +138,10 @@ impl PlatformInput {
     pub fn as_keyboard(&self) -> Option<&KeyEvent> {
         match self {
             PlatformInput::Keyboard(event) => Some(event),
-            PlatformInput::Pointer(_) | PlatformInput::Ime(_) | PlatformInput::DragDrop(_) => None,
+            PlatformInput::Pointer(_)
+            | PlatformInput::Ime(_)
+            | PlatformInput::DragDrop(_)
+            | PlatformInput::Capabilities(_) => None,
         }
     }
 
@@ -127,9 +150,10 @@ impl PlatformInput {
     pub fn as_ime(&self) -> Option<&crate::ImeEvent> {
         match self {
             PlatformInput::Ime(event) => Some(event),
-            PlatformInput::Pointer(_) | PlatformInput::Keyboard(_) | PlatformInput::DragDrop(_) => {
-                None
-            }
+            PlatformInput::Pointer(_)
+            | PlatformInput::Keyboard(_)
+            | PlatformInput::DragDrop(_)
+            | PlatformInput::Capabilities(_) => None,
         }
     }
 
@@ -138,7 +162,10 @@ impl PlatformInput {
     pub fn as_drag_drop(&self) -> Option<&DragDropEvent> {
         match self {
             PlatformInput::DragDrop(event) => Some(event),
-            PlatformInput::Pointer(_) | PlatformInput::Keyboard(_) | PlatformInput::Ime(_) => None,
+            PlatformInput::Pointer(_)
+            | PlatformInput::Keyboard(_)
+            | PlatformInput::Ime(_)
+            | PlatformInput::Capabilities(_) => None,
         }
     }
 }

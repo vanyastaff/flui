@@ -7,6 +7,7 @@
 //! drain at input end. Time is a [`ManualClock`];
 //! `frames` pumps deadline frames.
 
+use flui_interaction::gesture::GestureContest;
 use std::{
     cell::{Cell, RefCell},
     panic::{AssertUnwindSafe, catch_unwind},
@@ -19,14 +20,14 @@ use std::{
 };
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::arena::{
-    GestureArena, GestureArenaEntry, GestureArenaMember, GestureCompetition, GestureDisposition,
-};
 use flui_interaction::events::{
     PointerButton, PointerEvent, PointerKind, make_down_event_for_id_with_button,
     make_move_event_for_id, make_up_event_for_id, make_up_event_for_id_with_button,
 };
-use flui_interaction::routing::PointerDispatch;
+use flui_interaction::gesture::{
+    GestureArena, GestureArenaEntry, GestureArenaMember, GestureComposition, GestureDisposition,
+};
+use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
     DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, GestureBinding, GestureEndReason,
     GestureRecognizer, HitTestResult, InteractionLane, LongPressGestureRecognizer, ManualClock,
@@ -35,6 +36,8 @@ use flui_interaction::{
     TapAndDragGestureRecognizer, TapGestureRecognizer,
 };
 use proptest::prelude::*;
+
+use crate::arena_ownership;
 
 // ---------------------------------------------------------------------------
 // Public binding driver
@@ -158,7 +161,7 @@ type TapLog = Rc<RefCell<Vec<Offset<f64>>>>;
 fn tap_and_double_tap(lane: &mut Lane) -> (TapLog, Rc<Cell<u32>>) {
     let (double_tap_arena, tap_arena) = lane
         .arena
-        .compose(GestureCompetition::RequireFirstFailure)
+        .compose(GestureComposition::RequireFailure)
         .expect("root composition")
         .into_branches();
     let taps = Rc::new(RefCell::new(Vec::new()));
@@ -602,9 +605,21 @@ fn panicking_double_tap_callback_leaves_the_next_double_tap_working() {
 }
 
 fn verdict_by_pointer_cannot_pick_a_tap_sequence() {
-    // A verdict that names only a pointer cannot say which click it decides:
-    // with a mouse, the held first click and the current one share the ID.
+    // The tap's verdicts belong to each click's own member: one delivered to
+    // the recognizer, even naming the current click's exact contest, cannot
+    // fire a tap. With a mouse, the held first click and the current one
+    // share the pointer ID.
     let mut lane = Lane::new();
+    let joined = Rc::new(Cell::new(None));
+    let last = Rc::clone(&joined);
+    let _observer = lane
+        .arena
+        .observe(move |observation: &flui_interaction::GestureObservation| {
+            if let flui_interaction::GestureObservation::Joined { contest, .. } = observation {
+                last.set(Some(*contest));
+            }
+        })
+        .expect("observer identity");
     let taps = counter();
     let doubles = counter();
     let t = Rc::clone(&taps);
@@ -630,7 +645,7 @@ fn verdict_by_pointer_cannot_pick_a_tap_sequence() {
         at(14.0, 10.0),
         mouse,
     ));
-    tap.accept_gesture(PointerId::new(std::num::NonZeroU64::MIN));
+    tap.accept_gesture(joined.get().expect("the second click joined"));
     lane.send(&up(
         PointerId::new(std::num::NonZeroU64::MIN),
         at(14.0, 10.0),
@@ -640,6 +655,151 @@ fn verdict_by_pointer_cannot_pick_a_tap_sequence() {
     assert_eq!(doubles.get(), 1, "the arena's own verdicts stand");
     assert_eq!(taps.get(), 0, "a pointer-keyed verdict fired a single tap");
     assert!(lane.arena.is_empty());
+}
+
+/// Holds the first contest it joins until the test lets it go, the way a
+/// double tap holds a first click: that generation outlives its contact.
+#[derive(Default)]
+struct FirstContestHolder {
+    held: RefCell<Option<GestureArenaEntry>>,
+    joined: Cell<bool>,
+}
+
+impl GestureArenaMember for FirstContestHolder {
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, _: GestureContest) {}
+}
+
+impl FirstContestHolder {
+    /// Joined ahead of the recognizer under test, so sweeping the held
+    /// generation gives it to the holder and rejects the recognizer there.
+    fn join(lane: &Lane) -> Rc<Self> {
+        let holder = Rc::new(Self::default());
+        let joined = Rc::clone(&holder);
+        let arena = lane.arena.clone();
+        lane.binding
+            .pointer_router()
+            .add_global_handler(Rc::new(move |event| {
+                if let PointerEvent::Down(data) = event
+                    && !joined.joined.replace(true)
+                {
+                    let entry = arena.add(data.pointer.id, &joined);
+                    entry.hold();
+                    *joined.held.borrow_mut() = Some(entry);
+                }
+            }));
+        holder
+    }
+
+    /// Release the held generation; the arena sweeps it at once.
+    fn release(&self) {
+        let entry = self.held.borrow_mut().take().expect("a held contest");
+        entry.release();
+    }
+}
+
+/// A recognizer that keeps one arena member across contacts, still a member
+/// of an earlier generation a hold kept past its Up, while the same pointer
+/// ID makes its next contact: settling the earlier generation must not reach
+/// the current contact.
+fn a_held_earlier_contest_cannot_end_the_next_contact() {
+    let touch = PointerKind::Touch;
+    let pointer = PointerId::new(std::num::NonZeroU64::MIN);
+    // The earlier contact, held past its Up, then the next contact's Down,
+    // then the earlier contest settled while the next one is down.
+    let begin = |lane: &Lane, holder: &FirstContestHolder, next: PointerEvent| {
+        click(lane, pointer, at(10.0, 10.0), touch);
+        lane.frames(50);
+        lane.send(&next);
+        holder.release();
+    };
+
+    let mut lane = Lane::new();
+    let holder = FirstContestHolder::join(&lane);
+    let (presses, cancels) = (counter(), counter());
+    let (p, c) = (Rc::clone(&presses), Rc::clone(&cancels));
+    let long_press = LongPressGestureRecognizer::builder(lane.arena.clone())
+        .on_long_press(move || p.set(p.get() + 1))
+        .on_long_press_cancel(move |_| c.set(c.get() + 1))
+        .build();
+    lane.join(&long_press);
+    begin(&lane, &holder, down(pointer, at(10.0, 10.0), touch));
+    lane.frames(600);
+    lane.send(&up(pointer, at(10.0, 10.0), touch));
+    let mut lost = Vec::new();
+    if (presses.get(), cancels.get()) != (1, 0) {
+        lost.push("long press: the still contact is a long press, never cancelled");
+    }
+
+    let mut lane = Lane::new();
+    let holder = FirstContestHolder::join(&lane);
+    let swipes = counter();
+    let s = Rc::clone(&swipes);
+    let swipe = flui_interaction::SwipeGestureRecognizer::builder(
+        lane.arena.clone(),
+        flui_interaction::SwipeStart::Anywhere(flui_foundation::geometry::Axis::Horizontal),
+    )
+    .on_swipe(move |_| s.set(s.get() + 1))
+    .build();
+    lane.join(&swipe);
+    let base = 100_000_000;
+    begin(
+        &lane,
+        &holder,
+        stamped(down(pointer, at(0.0, 10.0), touch), base),
+    );
+    let mut x = 0.0;
+    for sample in 1..=6_u64 {
+        x += 20.0;
+        lane.send(&stamped(
+            motion(pointer, at(x, 10.0), touch),
+            base + sample * 16_000_000,
+        ));
+    }
+    lane.send(&stamped(
+        up(pointer, at(x, 10.0), touch),
+        base + 104_000_000,
+    ));
+    if swipes.get() != 1 {
+        lost.push("swipe: the fast release is a swipe");
+    }
+
+    let mut lane = Lane::new();
+    let holder = FirstContestHolder::join(&lane);
+    let starts = counter();
+    let s = Rc::clone(&starts);
+    let force_press = flui_interaction::ForcePressGestureRecognizer::builder(lane.arena.clone())
+        .on_start(move |_| s.set(s.get() + 1))
+        .build();
+    lane.join(&force_press);
+    begin(
+        &lane,
+        &holder,
+        with_pressure(down(pointer, at(10.0, 10.0), touch), 0.2),
+    );
+    lane.send(&with_pressure(motion(pointer, at(10.0, 10.0), touch), 0.7));
+    lane.send(&up(pointer, at(10.0, 10.0), touch));
+    if starts.get() != 1 {
+        lost.push("force press: the pressed contact starts");
+    }
+    assert!(lost.is_empty(), "the next contact was lost: {lost:?}");
+}
+
+/// `event` reporting `reading` as its pressure.
+fn with_pressure(mut event: PointerEvent, reading: f32) -> PointerEvent {
+    let pressure =
+        flui_platform_api::pointer::Pressure::try_new(reading).expect("valid pressure fixture");
+    match &mut event {
+        PointerEvent::Down(data) => data.sample.pressure = Some(pressure),
+        PointerEvent::Up(data) => data.sample.pressure = Some(pressure),
+        PointerEvent::Move(data) => {
+            let sample = data.current().with_pressure(pressure);
+            *data = flui_interaction::events::PointerMove::new(data.pointer, data.buttons, sample)
+                .with_modifiers(data.modifiers);
+        }
+        _ => {}
+    }
+    event
 }
 
 fn panicking_first_callback_still_runs_the_rest() {
@@ -677,12 +837,15 @@ fn panicking_first_callback_still_runs_the_rest() {
 fn panicking_multi_tap_callback_leaves_the_next_pair_working() {
     let taps = counter();
     let t = Rc::clone(&taps);
-    let recognizer = MultiTapGestureRecognizer::builder(GestureArena::new(), 2)
-        .on_multi_tap(move |_| {
-            t.set(t.get() + 1);
-            assert!(t.get() > 1, "first multi tap panics");
-        })
-        .build();
+    let recognizer = MultiTapGestureRecognizer::builder(
+        GestureArena::new(),
+        flui_interaction::MultiTapCount::TWO,
+    )
+    .on_multi_tap(move |_| {
+        t.set(t.get() + 1);
+        assert!(t.get() > 1, "first multi tap panics");
+    })
+    .build();
     for (a, b, expect_panic) in [(2, 3, true), (4, 5, false)] {
         let first = down(id(a), at(10.0, 10.0), PointerKind::Touch);
         let second = down(id(b), at(90.0, 10.0), PointerKind::Touch);
@@ -710,11 +873,11 @@ struct Verdicts {
 }
 
 impl GestureArenaMember for Verdicts {
-    fn accept_gesture(&self, _pointer: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {
         self.accepted.fetch_add(1, Ordering::SeqCst);
     }
 
-    fn reject_gesture(&self, _pointer: PointerId) {
+    fn reject_gesture(&self, _: GestureContest) {
         self.rejected.fetch_add(1, Ordering::SeqCst);
     }
 }
@@ -1090,7 +1253,7 @@ fn tap_and_drag_release_uses_terminal_event_time() {
 }
 
 fn selected_velocity_cases(family: &str) {
-    use flui_interaction::{GestureSettings, processing::VelocityEstimator};
+    use flui_interaction::{GestureSettings, gesture::VelocityEstimator};
 
     for (estimator, expected) in [
         (VelocityEstimator::LeastSquares, 500.0),
@@ -1295,7 +1458,9 @@ fn after_route_up_must_not_sweep_a_reentrant_replacement() {
             0,
             "future contact waits for its own input"
         );
-        send(motion(pointer, at(120.0, 0.0), PointerKind::Touch));
+        // Vertical motion: the horizontal drag's axis takes none of it, so
+        // the pan owns the contact (ADR-0208 rule 2).
+        send(motion(pointer, at(90.0, 30.0), PointerKind::Touch));
         assert_eq!(
             replacement_starts.get(),
             1,
@@ -1486,8 +1651,64 @@ fn gesture_lifecycle_matrix() {
             verdict_by_pointer_cannot_pick_a_tap_sequence,
         ),
         (
+            "a_held_earlier_contest_cannot_end_the_next_contact",
+            a_held_earlier_contest_cannot_end_the_next_contact,
+        ),
+        (
             "panicking_first_callback_still_runs_the_rest",
             panicking_first_callback_still_runs_the_rest,
+        ),
+        (
+            "nested_composition_waits_on_an_enclosing_preferred_branch",
+            arena_ownership::nested_composition_waits_on_an_enclosing_preferred_branch,
+        ),
+        (
+            "sequenced_hold_hands_its_won_contact_to_the_successor",
+            arena_ownership::sequenced_hold_hands_its_won_contact_to_the_successor,
+        ),
+        (
+            "a_swept_earlier_generation_keeps_the_next_contacts_successors",
+            arena_ownership::a_swept_earlier_generation_keeps_the_next_contacts_successors,
+        ),
+        (
+            "sequenced_successor_fails_with_its_hold",
+            arena_ownership::sequenced_successor_fails_with_its_hold,
+        ),
+        (
+            "unhanded_successor_is_rejected_when_its_contact_ends",
+            arena_ownership::unhanded_successor_is_rejected_when_its_contact_ends,
+        ),
+        (
+            "composition_refuses_a_path_past_the_delay_ceiling",
+            arena_ownership::composition_refuses_a_path_past_the_delay_ceiling,
+        ),
+        (
+            "closed_arena_refuses_composition",
+            arena_ownership::closed_arena_refuses_composition,
+        ),
+        (
+            "allowed_devices_refuse_other_kinds_before_the_arena",
+            arena_ownership::allowed_devices_refuse_other_kinds_before_the_arena,
+        ),
+        (
+            "claimed_contact_cancels_every_other_listener_once",
+            arena_ownership::claimed_contact_cancels_every_other_listener_once,
+        ),
+        (
+            "unclaimed_wins_cancel_no_listener",
+            arena_ownership::unclaimed_wins_cancel_no_listener,
+        ),
+        (
+            "hold_on_down_beats_tap_and_long_press_not_drag",
+            arena_ownership::hold_on_down_beats_tap_and_long_press_not_drag,
+        ),
+        (
+            "hover_freezes_while_a_scroll_is_latched",
+            arena_ownership::hover_freezes_while_a_scroll_is_latched,
+        ),
+        (
+            "a_hold_tracks_its_contact_before_beaten_members_hear",
+            arena_ownership::a_hold_tracks_its_contact_before_beaten_members_hear,
         ),
     ];
     let mut failures = Vec::new();
@@ -1514,12 +1735,12 @@ struct CompositionMember {
 }
 
 impl GestureArenaMember for CompositionMember {
-    fn accept_gesture(&self, _: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {
         self.log
             .borrow_mut()
             .push((self.name, GestureDisposition::Accepted));
     }
-    fn reject_gesture(&self, _: PointerId) {
+    fn reject_gesture(&self, _: GestureContest) {
         self.log
             .borrow_mut()
             .push((self.name, GestureDisposition::Rejected));
@@ -1529,7 +1750,7 @@ impl GestureArenaMember for CompositionMember {
 fn fallback_acceptance_waits_for_preferred_failure() {
     let arena = GestureArena::new();
     let (preferred_arena, fallback_arena) = arena
-        .compose(GestureCompetition::RequireFirstFailure)
+        .compose(GestureComposition::RequireFailure)
         .expect("root arena can compose")
         .into_branches();
     let log = Rc::new(RefCell::new(Vec::new()));
@@ -1565,7 +1786,7 @@ fn fallback_acceptance_waits_for_preferred_failure() {
 fn sweep_cannot_grant_a_dependency_blocked_fallback() {
     let arena = GestureArena::new();
     let (preferred_arena, fallback_arena) = arena
-        .compose(GestureCompetition::RequireFirstFailure)
+        .compose(GestureComposition::RequireFailure)
         .expect("root arena can compose")
         .into_branches();
     let log = Rc::new(RefCell::new(Vec::new()));
@@ -1619,7 +1840,7 @@ fn preferred_death_releases_accepted_fallback_debt() {
     for sweep in [false, true] {
         let arena = GestureArena::new();
         let (first, second) = arena
-            .compose(GestureCompetition::RequireFirstFailure)
+            .compose(GestureComposition::RequireFailure)
             .expect("root composition")
             .into_branches();
         let log = Rc::new(RefCell::new(Vec::new()));
@@ -1651,23 +1872,23 @@ fn preferred_death_releases_accepted_fallback_debt() {
 }
 
 struct DeadlineFailure {
-    due: Cell<Option<web_time::Instant>>,
+    due: Cell<Option<flui_platform_api::EventTime>>,
     entry: RefCell<Option<GestureArenaEntry>>,
     member: CompositionMember,
 }
 
 impl GestureArenaMember for DeadlineFailure {
-    fn accept_gesture(&self, pointer: PointerId) {
-        self.member.accept_gesture(pointer);
+    fn accept_gesture(&self, contest: GestureContest) {
+        self.member.accept_gesture(contest);
     }
-    fn reject_gesture(&self, pointer: PointerId) {
+    fn reject_gesture(&self, contest: GestureContest) {
         self.due.set(None);
-        self.member.reject_gesture(pointer);
+        self.member.reject_gesture(contest);
     }
-    fn deadline(&self) -> Option<web_time::Instant> {
+    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         self.due.get()
     }
-    fn poll_deadline(&self, now: web_time::Instant) {
+    fn poll_deadline(&self, now: flui_platform_api::EventTime) {
         if self.due.get().is_some_and(|due| due <= now) {
             self.due.set(None);
             let entry = self.entry.borrow_mut().take();
@@ -1682,7 +1903,7 @@ fn preferred_deadline_releases_fallback_without_input() {
     let clock = ManualClock::new();
     let arena = GestureArena::binding_driven(Arc::new(clock.clone()));
     let (first, second) = arena
-        .compose(GestureCompetition::RequireFirstFailure)
+        .compose(GestureComposition::RequireFailure)
         .expect("root composition")
         .into_branches();
     let log = Rc::new(RefCell::new(Vec::new()));
@@ -1725,7 +1946,7 @@ fn composition_checks_preferred_members_after_close() {
     for admit_preferred in [false, true] {
         let arena = GestureArena::new();
         let (first, second) = arena
-            .compose(GestureCompetition::RequireFirstFailure)
+            .compose(GestureComposition::RequireFailure)
             .expect("root composition")
             .into_branches();
         let log = Rc::new(RefCell::new(Vec::new()));
@@ -1769,7 +1990,7 @@ fn composition_checks_preferred_members_after_close() {
 fn preferred_acceptance_rejects_a_pending_fallback() {
     let arena = GestureArena::new();
     let (first, second) = arena
-        .compose(GestureCompetition::RequireFirstFailure)
+        .compose(GestureComposition::RequireFailure)
         .expect("root composition")
         .into_branches();
     let log = Rc::new(RefCell::new(Vec::new()));
@@ -1804,11 +2025,11 @@ struct FailingCompositionMember {
 }
 
 impl GestureArenaMember for FailingCompositionMember {
-    fn accept_gesture(&self, pointer: PointerId) {
-        self.member.accept_gesture(pointer);
+    fn accept_gesture(&self, contest: GestureContest) {
+        self.member.accept_gesture(contest);
     }
-    fn reject_gesture(&self, pointer: PointerId) {
-        self.member.reject_gesture(pointer);
+    fn reject_gesture(&self, contest: GestureContest) {
+        self.member.reject_gesture(contest);
         panic!("{}", self.failure);
     }
 }
@@ -1816,7 +2037,7 @@ impl GestureArenaMember for FailingCompositionMember {
 fn composition_preserves_first_callback_failure_and_recovers() {
     let arena = GestureArena::new();
     let (first, second) = arena
-        .compose(GestureCompetition::RequireFirstFailure)
+        .compose(GestureComposition::RequireFailure)
         .expect("root composition")
         .into_branches();
     let log = Rc::new(RefCell::new(Vec::new()));
@@ -1882,13 +2103,13 @@ const POINTERS: u64 = 3;
 fn an_aliased_branch_join_cannot_change_the_contact_relationship() {
     let arena = GestureArena::new();
     let (first, second) = arena
-        .compose(GestureCompetition::RequireFirstFailure)
+        .compose(GestureComposition::RequireFailure)
         .expect("root composition")
         .into_branches();
-    assert!(matches!(
-        first.compose(GestureCompetition::Exclusive),
-        Err(flui_interaction::arena::CompositionError::AlreadyComposed)
-    ));
+    assert!(
+        first.compose(GestureComposition::Exclusive).is_ok(),
+        "a branch composes again into a nested node"
+    );
     let log = Rc::new(RefCell::new(Vec::new()));
     let pointer = id(2);
     let preferred = Rc::new(CompositionMember {
@@ -1991,7 +2212,7 @@ impl ModelMember {
 }
 
 impl GestureArenaMember for ModelMember {
-    fn accept_gesture(&self, _pointer: PointerId) {
+    fn accept_gesture(&self, _: GestureContest) {
         self.record(GestureDisposition::Accepted);
         assert!(
             !matches!(self.kind, MemberKind::PanicOnAccept),
@@ -1999,7 +2220,7 @@ impl GestureArenaMember for ModelMember {
         );
     }
 
-    fn reject_gesture(&self, _pointer: PointerId) {
+    fn reject_gesture(&self, _: GestureContest) {
         self.record(GestureDisposition::Rejected);
         assert!(
             !matches!(self.kind, MemberKind::PanicOnReject),
@@ -2323,8 +2544,8 @@ struct ClosesOnDrop {
 }
 
 impl GestureArenaMember for ClosesOnDrop {
-    fn accept_gesture(&self, _pointer: PointerId) {}
-    fn reject_gesture(&self, _pointer: PointerId) {}
+    fn accept_gesture(&self, _: GestureContest) {}
+    fn reject_gesture(&self, _: GestureContest) {}
 }
 
 impl Drop for ClosesOnDrop {
@@ -2412,9 +2633,9 @@ struct RetirementMember {
 }
 
 impl GestureArenaMember for RetirementMember {
-    fn accept_gesture(&self, _: PointerId) {}
+    fn accept_gesture(&self, _: GestureContest) {}
 
-    fn reject_gesture(&self, _: PointerId) {
+    fn reject_gesture(&self, _: GestureContest) {
         self.rejected.set(self.rejected.get() + 1);
         if let Some(owner) = self.owner.upgrade() {
             let retired = owner.borrow_mut().take();

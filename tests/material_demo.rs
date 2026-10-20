@@ -128,6 +128,47 @@ use flui_widgets::{FocusRoot, GestureArenaScope, MediaQuery, MediaQueryData, Vsy
 #[path = "../examples/motion_lab.rs"]
 mod motion_lab;
 
+#[expect(
+    dead_code,
+    reason = "the interactive example's main and the screenshot tree are not used by acceptance tests"
+)]
+#[path = "../examples/sliver_demo.rs"]
+mod sliver_demo;
+
+/// The live smoke's held mouse drag, headless: the pointer goes down on the
+/// sliver demo and travels upward in 15 px steps, one frame each, and every
+/// frame after the first must paint different content than the one before.
+///
+/// The drag's start gives the scroll view the keyboard focus. The enclosing
+/// focus scopes rebuild for it but hand their child back unchanged, so the
+/// demo's root is not built again under the contact (ADR-0245); this pins the
+/// end-to-end result, that the frames keep following the pointer. It does not
+/// pin the root's own shape: the demo passes the `Scrollable` no controller,
+/// but a controller made in `build` would also pass here.
+#[test]
+fn sliver_demo_content_follows_every_step_of_a_held_drag() {
+    use flui_testing::widgets::{lay_out, tight};
+
+    let mut laid = lay_out(sliver_demo::SliverDemoApp, tight(800.0, 600.0));
+    laid.dispatch_pointer_down(400.0, 450.0);
+    let mut previous = format!("{:?}", laid.draw_ops());
+    for step in 1..=20 {
+        laid.dispatch_pointer_move(400.0, 450.0 - 15.0 * f64::from(step));
+        laid.tick();
+        let frame = format!("{:?}", laid.draw_ops());
+        if step > 1 {
+            assert_ne!(
+                frame,
+                previous,
+                "step {step} of the held drag painted the frame step {} had",
+                step - 1
+            );
+        }
+        previous = frame;
+    }
+    laid.dispatch_pointer_up(400.0, 150.0);
+}
+
 #[test]
 fn motion_lab_buttons_drive_independent_property_deadlines_and_reduce() {
     use flui_animation::MotionOverride;
@@ -536,7 +577,8 @@ impl MountedDemo {
     fn hit_test(&self, position: Offset) -> HitTestResult {
         self.pipeline_owner.with(|owner| {
             let mut result = HitTestResult::new();
-            owner.hit_test(position, &mut result);
+            // Every fixture event is a mouse event.
+            owner.hit_test(position, PointerKind::Mouse, &mut result);
             result
         })
     }

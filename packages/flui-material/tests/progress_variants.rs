@@ -16,7 +16,8 @@ use flui_sdk::painting::{Color, DrawOp, TextDirection};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
-    Directionality, RefreshController, RefreshIndicator, ScrollController, SizedBox,
+    Alternative, ControlSpec, Directionality, GestureAlternatives, RefreshController,
+    RefreshIndicator, RefreshIntent, ScrollController, Scrollable, SizedBox,
 };
 use flui_testing::a11y::Role;
 
@@ -477,18 +478,25 @@ pub fn wave_amplitude_eases_in() {
 /// with the pull, then an indeterminate one in the theme's primary color while refreshing.
 pub fn material_app_refresh_shows_the_circular_indicator() {
     let (primary, track) = colors();
-    let scroll = ScrollController::new();
-    scroll.update_dimensions(300.0, 0.0, 4700.0);
     let refresh = RefreshController::new();
     let vsync = Vsync::new();
+    let alternatives = GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+        RefreshIntent::command("Refresh"),
+        SizedBox::new(24.0, 24.0),
+    )))
+    .expect("one labelled command");
     let mut laid = lay_out_animated(
         VsyncScope::new(
             vsync.clone(),
             MaterialApp::new(
-                RefreshIndicator::new()
-                    .controller(refresh.clone())
-                    .scroll_controller(scroll)
-                    .child(SizedBox::new(300.0, 5000.0)),
+                RefreshIndicator::new(
+                    Scrollable::new()
+                        .controller(ScrollController::new())
+                        .child(SizedBox::new(300.0, 5000.0)),
+                    alternatives,
+                )
+                .controller(refresh.clone())
+                .on_refresh(|_cx| std::future::pending::<()>()),
             )
             .theme(ThemeData::light()),
         ),
@@ -524,7 +532,9 @@ pub fn material_app_refresh_shows_the_circular_indicator() {
         arcs(&laid, track).is_empty(),
         "an indeterminate arc has no track"
     );
-    laid.pump_for(ms(300));
+    for _ in 0..20 {
+        laid.pump_for(ms(16));
+    }
     assert_ne!(arcs(&laid, primary), spinning, "it spins");
 }
 

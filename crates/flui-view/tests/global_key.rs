@@ -19,10 +19,12 @@
 use std::sync::Arc;
 
 use flui_foundation::ViewKey;
+// The duplicate-key fixture runs only where the debug check panics.
+#[cfg(debug_assertions)]
 use flui_rendering::{PipelineCell, pipeline::PipelineOwner, protocol::BoxProtocol};
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, RenderView,
-    StatefulElement, StatefulView, StatelessView, View, ViewExt, ViewState,
+    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, StatefulElement,
+    StatefulView, StatelessView, View, ViewExt, ViewState,
 };
 use parking_lot::RwLock;
 
@@ -103,12 +105,14 @@ impl View for KeyedCounter {
     }
 }
 
+#[cfg(debug_assertions)]
 #[derive(Clone)]
 struct DuplicateHost {
     children: Vec<flui_view::BoxedView>,
 }
 
-impl RenderView for DuplicateHost {
+#[cfg(debug_assertions)]
+impl flui_view::RenderView for DuplicateHost {
     type Protocol = BoxProtocol;
     type RenderObject = flui_objects::RenderSizedBox;
 
@@ -138,6 +142,7 @@ impl RenderView for DuplicateHost {
     }
 }
 
+#[cfg(debug_assertions)]
 impl View for DuplicateHost {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::render_variable(self)

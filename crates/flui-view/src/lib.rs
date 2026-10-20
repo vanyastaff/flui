@@ -167,18 +167,25 @@ mod table_test;
 pub mod __runtime;
 // Lifecycle notifications
 mod lifecycle;
-pub use lifecycle::{LifecycleClosed, LifecycleHandle, LifecycleSubscription};
+mod observation;
+mod window_handle;
+pub use lifecycle::{
+    HostNoticeSubscription, LifecycleClosed, LifecycleHandle, LifecycleSubscription,
+};
+pub use window_handle::{WindowClosed, WindowHandle, WindowSubscription};
 // Holding a presentation's close while work finishes
 mod close_guard;
 pub use close_guard::{CloseChanged, CloseGuard, CloseHold, CloseReason, PendingClose, StaleClose};
 // The host's registry of published document bytes and the owner-notify
 // channel; reached through `__runtime`
 mod flush_registry;
+mod haptics_mode;
+pub use haptics_mode::HapticsMode;
 mod owner_notify;
 // Binding
 pub use binding::{
-    AppExitResponse, AppLifecycleState, AttachError, PredictiveBackEvent, RouteInformation,
-    ViewFocusDirection, ViewFocusEvent, ViewFocusState, WidgetsBinding, WidgetsBindingObserver,
+    AppLifecycleState, AttachError, PredictiveBackEvent, RouteInformation, ViewFocusDirection,
+    ViewFocusEvent, ViewFocusState, WidgetsBinding, WidgetsBindingObserver,
 };
 // Child helpers
 pub use child::{Child, Children};
@@ -292,9 +299,8 @@ pub mod prelude {
     };
     pub use crate::{
         binding::{
-            AppExitResponse, AppLifecycleState, PredictiveBackEvent, RouteInformation,
-            ViewFocusDirection, ViewFocusEvent, ViewFocusState, WidgetsBinding,
-            WidgetsBindingObserver,
+            AppLifecycleState, PredictiveBackEvent, RouteInformation, ViewFocusDirection,
+            ViewFocusEvent, ViewFocusState, WidgetsBinding, WidgetsBindingObserver,
         },
         child::{Child, Children},
         element::{

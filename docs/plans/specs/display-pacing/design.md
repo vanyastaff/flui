@@ -1,6 +1,6 @@
 # Display pacing: дисплеи, период обновления и их изменения — design
 
-- **Статус:** черновик
+- **Статус:** завершена (реализация влита: #1721–#1728; ADR-0236)
 - **Дата:** 2026-10-17
 - **База:** `main` @ `61f017696`
 - **Требования:** [requirements.md](requirements.md)
@@ -132,6 +132,9 @@ Proposed). Ни один принятый ADR не заменяется.
   | Web | один дисплей — `Web(Primary)`; для `screenschange` ключ — идентичность JS-объекта `ScreenDetailed` в удерживаемом списке (метка не ключ: названия повторяются); новый объект без совпадения — `Unkeyed` |
   | headless | `Injected(u64)` — внедряемое значение |
   | оболочка winit до DP7 | `Backend(String)` — стабильная строка бэкенда (`native_id`); это ключ-метка (на Windows — имя `\\.\DISPLAYn`), поэтому он временный: **DP7 удаляет `DisplayKey::Backend` из публичного перечисления**, когда winit переходит на нативные источники ОС |
+  Варианты `DisplayKey` появляются вместе с источником, который их производит: в первом PR есть только
+  `AndroidId`, `IosScreen`, `Web`, `Injected`, `Backend` и `Unkeyed`; ключи Windows, macOS, Wayland и X11
+  приходят с PR своих источников.
   Нюансы документируются: два одинаковых монитора различаются разъёмом; обмен кабелями меняет
   идентичности; повторное подключение сохраняет. Постоянная идентичность между запусками
   **не добавляется**: она относится к восстановлению положения окна (пробел 9). Как добавить без
@@ -250,7 +253,9 @@ Proposed). Ни один принятый ADR не заменяется.
   (R15):** callback хореографа снимается (`AChoreographer_unregisterRefreshRateCallback`) **до** освобождения
   данных, на которые он указывает, а не после; поздний вызов инертен для замещающего хоста. Окно: дисплей
   активности `Activity.getDisplay()` (API 30) иначе `WindowManager.getDefaultDisplay()`. Зашитые
-  `AndroidDisplay` (1080×2340, 2,75) удаляются.
+  `AndroidDisplay` (1080×2340, 2,75) удаляются. `DisplayManager.getDisplays()` перечисляет и виртуальные
+  дисплеи (трансляция, запись экрана); `getDisplayId` не переиспользуется в течение загрузки, поэтому
+  вновь подключённый дисплей получает новую идентичность.
   *Решение исполнителя:* эта комбинация, а не один вариант; ниже API 30 чтение происходит только на
   `ConfigChanged` и возобновлении, вне кадра (опроса нет).
 - **D-10. Linux: модуль дисплеев как первая часть будущего нативного бэкенда.** Каталог
@@ -321,12 +326,32 @@ Proposed). Ни один принятый ADR не заменяется.
   `on_display_changed` и инвалидацией снимка (смена backing меняет масштаб дисплея);
   `display_id()` — экран окна → UUID. Кэш `refresh_period` в окне уходит.
 - **D-14. Web.** Оценщик встроен в уже существующий цикл `requestAnimationFrame`
-  (`web/platform.rs:136`): последние 30 разностей отметок, медиана, выбросы (>3 медианы — вкладка в
-  фоне) отбрасываются; пересчёт после `visibilitychange` в видимое и смены `devicePixelRatio`;
-  оценка — период, документируемый как оценка. `devicePixelRatio`: `matchMedia("(resolution: Xdppx)")`
-  с повторной установкой после каждого срабатывания. `screenschange` — если
-  `navigator.permissions.query({name: "window-management"})` вернул `granted`; запрос разрешения
-  автоматически **не** вызывается (*решение исполнителя*: запрос — явное действие приложения).
+  (`web/platform.rs:136`): последние 30 разностей отметок; оценка — усечённое среднее (без десятой
+  части самых быстрых и самых медленных), а не медиана: при таймере, округлённом до 1 мс, 120 Гц
+  приходит как 8 и 9 мс, и медиана остановилась бы на 8,0. Выбросы — разности длиннее 3 нижних
+  квартилей окна (вкладка в фоне, дросселирование; базой служит нижний квартиль, потому что у окна,
+  где большинство кадров дросселировано, медиана сама медленная); пересчёт после `visibilitychange`
+  в видимое и смены `devicePixelRatio`, при переносе окна на другой экран (а без доступа к экранам — при любом `change` на `window.screen`, единственном признаке переноса) период забывается;
+  оценка — период, документируемый как оценка. Первое значение публикуется после полного окна (30
+  разностей). Замена опубликованного значения: кандидат вне полосы 3% пять кадров подряд, и среднее
+  последних 10 разностей согласуется с ним (в пределах 6%), и кандидат неподвижен (в пределах 1% от
+  значения начала серии), поэтому значения «между» двумя частотами при смене 144 → 100 Гц не
+  публикуются (живой прогон показал 95 Гц на пути без этого правила). `devicePixelRatio`: `matchMedia("(resolution: Xdppx)")` с
+  повторной установкой после каждого срабатывания (запрос должен совпадать с текущим значением,
+  иначе значение читается снова; отказ браузера повторяется с растущей паузой (до 120 кадров) без предела числа попыток, а также сразу при `resize` окна и `change` экрана). `change` на
+  `window.screen` (где есть `onchange`) инвалидирует снимок и без разрешения. `screenschange`,
+  `currentscreenchange` и `change` каждого `ScreenDetailed` — если
+  `navigator.permissions.query({name: "window-management"})` (или прежнее `window-placement`) вернул
+  `granted`, в том числе выданное позже; запрос разрешения автоматически **не** вызывается
+  (*решение исполнителя*: запрос — явное действие приложения). Экран окна — тот, что назван
+  `currentScreen`; период принадлежит только ему, и забывается лишь когда сменился сам объект
+  `currentScreen`. Масштаб экрана окна берётся из `window.devicePixelRatio` в обоих режимах (он
+  включает масштаб страницы), а границы переводятся в физические пиксели без масштаба страницы: с
+  доступом — собственным `ScreenDetailed.devicePixelRatio`, без доступа — отношением, которое
+  страница имела при первом чтении `window.screen` (в Chrome `screen.width` от масштаба страницы не
+  зависит, а `devicePixelRatio` — произведение масштаба ОС на масштаб страницы), заново при `change`
+  экрана. При первом появлении списка `currentScreen` наследует идентификатор дисплея из режима
+  одного экрана.
 - **D-15. Headless.** `HeadlessPlatform::with_displays(Vec<DisplaySpec>)` (по умолчанию один
   дисплей прежних параметров), `simulate_display_change(DisplayId, DisplayChange)`,
   `HeadlessWindow::simulate_move_to(DisplayId)`; тем же путём проходят
@@ -373,6 +398,10 @@ Proposed). Ни один принятый ADR не заменяется.
   Тестовый шов: конструкторы принимают значение версии (`AndroidApi::from_level`) и источник символов
   (`SymbolSource`: настоящий `dlsym`, поддельный в тесте). Дескриптор `NdkFn` держит дескриптор
   `dlopen` библиотеки живым столько же, сколько платформа (указатель функции не переживает `dlclose`).
+  *Решение исполнителя (DP8):* Apple-модуль версий — один общий `shared/apple_os_version.rs`
+  (`OsVersion`, `VersionedFeature`, `Since<F>`; чистый, его строки идут на Linux) и чтец
+  `platforms/ios/os_version.rs`, а не пара `platforms/{macos,ios}/os_version.rs`: на macOS нет вызова,
+  который зависит от версии, и чтец без потребителя был бы неподключённой поверхностью.
   Два существующих чтения `SDK_INT` по JNI
   (`android/preferences.rs:147`, `:299`) переходят на этот модуль. **Где:** модуль каждой ОС входит в
   ближайший PR, который его читает, а не в первый — в первом PR у модуля не было бы читателя
@@ -555,7 +584,7 @@ trybuild в `tests/compile_fail/` (AGENTS: compile-fail — fixture, не doctes
 
 **Доставка** (`flui-app`, `tests/` через headless, таблица `display_delivery_contract`):
 `seed_holds_every_display_before_the_first_window` (R1), `refresh_switch_publishes_a_new_snapshot`
-(R2), `change_between_registration_and_seed_is_not_lost` (R10), `snapshot_is_committed_before_observers_run`,
+(R2), `a_change_racing_the_sample_still_reaches_the_window` (R10), `snapshot_is_committed_before_observers_run`,
 `panicking_window_observer_keeps_the_snapshot_and_the_tail` (R11),
 `apply_panic_keeps_the_debt_and_the_next_equal_change_is_delivered` (R11),
 `foreign_thread_invalidation_wakes_the_owner`, `late_callback_cannot_reach_a_replacement_host` (R15).
@@ -586,9 +615,12 @@ trybuild в `tests/compile_fail/` (AGENTS: compile-fail — fixture, не doctes
 (кадров нет, дедлайн пробуждения выдержки 250 мс выдаёт `Default`), `hint_is_reapplied_when_the_native_window_is_replaced_after_resume`,
 `unsupported_api_issues_no_hint_request` (на стороне Android, через `os_capability_table`).
 
-**Бэкенды.** Windows: `windows_display_contract` (`cfg(windows)`, локально): `window_display_is_the_monitor_it_is_on`,
-`display_id_is_not_the_monitor_handle`, `refresh_is_the_rational_active_mode`,
-`display_change_message_defers_sampling_to_the_owner`, `dpi_change_invalidates_the_snapshot`; только значения,
+**Бэкенды.** Windows (`cfg(windows)`, локально; нативные строки — таблица `native_windows` в
+`crates/flui-platform/tests/contract.rs`, счётчик выборок — `display_message_tests.rs` в `src`):
+`window_display_is_a_display_of_the_snapshot`, `refresh_is_the_rational_active_mode`,
+`dpi_change_raises_the_display_hint`, `moves_within_one_monitor_raise_no_display_hint`,
+`display_change_message_invalidates_the_snapshot_and_wakes_the_owner`, `dpi_change_invalidates_the_snapshot`,
+`work_area_change_invalidates_the_snapshot`; только значения,
 перенос между двумя мониторами здесь не проверяется. Linux (`src`, закрытый шов):
 `wayland_output_applies_only_after_done`, `wayland_name_v4_keys_the_output`, `wayland_below_v4_mints_fresh`,
 `wayland_removed_output_leaves_the_snapshot`, `x11_refresh_is_dot_clock_over_totals`,

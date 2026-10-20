@@ -100,6 +100,17 @@ pub enum TransferFormat {
     },
 }
 
+impl TransferFormat {
+    /// Whether this is FLUI's private drag-session identity
+    /// ([`DragSessionKey::representation`](crate::drag::DragSessionKey::representation)),
+    /// whatever its parameters.
+    #[must_use]
+    pub fn is_drag_identity(&self) -> bool {
+        matches!(self, Self::Custom { mime }
+            if mime.as_str().split(';').next() == Some(crate::drag::IDENTITY_ESSENCE))
+    }
+}
+
 /// Stage-1/2 descriptor of one representation: format + size hint, no
 /// payload.
 #[derive(Debug, Clone)]
@@ -119,51 +130,17 @@ pub struct RepresentationIndex(pub u16);
 // Actions + feedback
 // ============================================================================
 
-/// Drop effects a DnD source permits / a target accepts. Plain `u8` bitset —
-/// no external bitflags dependency.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct TransferActions(u8);
-
-impl TransferActions {
-    /// No action — a target replying with this refuses the drop.
-    pub const NONE: Self = Self(0);
-    /// Copy the data; the source keeps its copy.
-    pub const COPY: Self = Self(1 << 0);
-    /// Move the data; the source is expected to remove its copy.
-    pub const MOVE: Self = Self(1 << 1);
-    /// Link to the data rather than transferring it.
-    pub const LINK: Self = Self(1 << 2);
-
-    /// Whether every action in `other` is present in `self`.
-    #[must_use]
-    pub const fn contains(self, other: Self) -> bool {
-        (self.0 & other.0) == other.0
-    }
-
-    /// The set union of the two action sets.
-    #[must_use]
-    pub const fn union(self, other: Self) -> Self {
-        Self(self.0 | other.0)
-    }
-
-    /// Whether the set is empty (no permitted/accepted action).
-    #[must_use]
-    pub const fn is_empty(self) -> bool {
-        self.0 == 0
-    }
-}
-
-impl std::ops::BitOr for TransferActions {
-    type Output = Self;
-
-    fn bitor(self, rhs: Self) -> Self {
-        self.union(rhs)
-    }
-}
-
-impl std::ops::BitOrAssign for TransferActions {
-    fn bitor_assign(&mut self, rhs: Self) {
-        *self = self.union(rhs);
+bitflags::bitflags! {
+    /// Drop effects a DnD source permits / a target accepts. The empty set
+    /// permits or accepts nothing: a target replying with it refuses the drop.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+    pub struct TransferActions: u8 {
+        /// Copy the data; the source keeps its copy.
+        const COPY = 1;
+        /// Move the data; the source is expected to remove its copy.
+        const MOVE = 1 << 1;
+        /// Link to the data rather than transferring it.
+        const LINK = 1 << 2;
     }
 }
 
@@ -180,6 +157,24 @@ pub struct DropFeedback {
     /// The action the target would take on a drop right now, or `None` to
     /// reject.
     pub accept: Option<TransferActions>,
+}
+
+impl DropFeedback {
+    /// The one action this answer takes while the source permits `allowed`:
+    /// the accepted actions the source permits, narrowed to one (copy, then
+    /// move, then link), since every drag protocol reports a single effect.
+    /// `None` refuses the drop.
+    #[must_use]
+    pub fn resolve(self, allowed: TransferActions) -> Option<TransferActions> {
+        let permitted = self.accept? & allowed;
+        [
+            TransferActions::COPY,
+            TransferActions::MOVE,
+            TransferActions::LINK,
+        ]
+        .into_iter()
+        .find(|action| permitted.contains(*action))
+    }
 }
 
 // ============================================================================
@@ -256,11 +251,9 @@ pub enum TransferUri {
 /// decoding belongs to the consumer (flui-assets' decoders), not the
 /// transport.
 ///
-/// Declared as part of the frozen vocabulary, but **no backend delivers it
-/// yet**: image representations arrive with the native transports (ADR-0038
-/// §5 protocol mapping). Until then no source ever announces
-/// [`TransferFormat::Image`], so a request for one cannot arise — there is
-/// deliberately no stub that fabricates success.
+/// A request for a representation announced as [`TransferFormat::Image`]
+/// resolves as this payload, with the bytes as the source provided them
+/// (ADR-0038 §5 protocol mapping).
 #[derive(Debug, Clone)]
 pub struct TransferImage {
     /// Container format of `bytes` (e.g. `image/png`).

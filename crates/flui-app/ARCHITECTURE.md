@@ -9,6 +9,21 @@ the dispatch layer moves there too.
 
 ## Invariants
 
+- **The installed host owns the accepted display snapshot, and a window's display is
+  derived from it.** A sample is committed before any window is told; the derived
+  display travels to each followed window as an ordinary window observation, after
+  every sample and after every window hint, and a presentation acts only on a real
+  difference. A window failing to apply neither stops its siblings nor cancels the
+  snapshot, and the next sample offers it the same value again. That retry waits for the next
+  owner wake: nothing schedules one, so a window whose apply failed stays on its previous display
+  until a wake arrives (a display change, a window hint or any other owner turn). Native hints reach the
+  host as an owner wake, never as application code on a foreign thread. The desktop
+  pacing fallback keeps no period: each arm reads the presentation's current refresh
+  interval, so it follows a mode switch or a move without a resize.
+  `display_delivery_contract`, `window_display_observation_contract` and
+  `display_pacing_contract` (in `runner/owner_dispatch/display_tests.rs`, in-source
+  because the host is private to the runner) cover these contracts.
+
 - **Browser owner wakes refresh the installed host.** ADR-0196 uses the same
   loop-identity and logical-host checks as desktop delivery. DOM invalidation
   posts the shared owner signal rather than entering the runtime directly;
@@ -285,8 +300,11 @@ Desktop primary and secondary windows, UIKit and Web submit their initial
 execution, focus and visibility as one `WindowObservation::Snapshot` after
 registering callbacks.
 The queue entry supplies its exact presentation incarnation; the payload cannot
-capture a different target. Android host lifecycle callbacks use runtime-scoped
-`RuntimeDispatcher::lifecycle`. These paths carry closed operations.
+capture a different target. Android does the same: its focus, visibility and
+execution callbacks are addressed observations, and the application lifecycle is
+derived from them (`derive_lifecycle_state`), as on iOS; no Android callback sets
+the lifecycle itself, since focus alone never means paused. These paths carry
+closed operations.
 
 Snapshots and lifecycle transitions stay lossless and ordered. A suspended or
 unfocused observation can cancel pointer sequences and notify lifecycle listeners;

@@ -17,6 +17,7 @@
 - **Amended:** 2026-10-11 — the FLUI schema was 0.2 under ADR-0176; negotiated MCP versions are a separate protocol.
 - **Amended:** 2026-10-12 — schema 0.3 adds the `heading` wire role (ADR-0203).
 - **Amended:** 2026-10-13 — the current FLUI schema is 0.4, which adds a node's optional `description`.
+- **Amended:** 2026-10-18 — the Android runner drives the hook as the desktop and iOS runners do.
 - **Amends:** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) (settles its "Not
   decided here" in-process transport; the wire contract is unchanged)
 - **Superseded in part by:** [ADR-0124](ADR-0124-controlled-numeric-and-disclosure-actions.md):
@@ -138,14 +139,17 @@ This settles ADR-0080's open item:
   `flui_view::dev_agent::DevAgentHook` on its configuration (`AppConfig::with_dev_agent`), which
   the package reaches through `flui-sdk`; the host attaches it once per event loop and hands it
   an `AgentWindow` per window with content. `flui_runtime::dev_agent::DevAgentHost` holds the
-  hook's containment for every host (the desktop and iOS runners, and `flui-testing`'s headless
+  hook's containment for every host (the desktop, iOS and Android runners, and `flui-testing`'s headless
   UI runtime, which is how CI exercises it); no transport is in the runtime. An `AgentWindow` holds
   its window's agent weakly, so a closed window answers `gone` with kind `window` and needs no
   close notification, and holds the window's semantics handle strongly, so semantics are
   collected only while the tool keeps the window. `DevAgentHook::attach` answers whether the
   hook serves: one that does not (a release build, missing or short credentials, a failed bind)
-  stays unattached and is handed no window, so it costs the application nothing. Android and
-  web drive no hook.
+  stays unattached and is handed no window, so it costs the application nothing. The web
+  drives no hook. An Android app process inherits no launch environment, so the application
+  builds its `AgentEndpoint` itself (the interaction gallery reads a token the driver wrote into
+  its files as its own user, and serves a socket there, which the driver reaches through
+  `run-as`).
 - *Framing.* Newline-delimited JSON, lines of at most 1 MiB, a `{"hello":{"token":…}}` first
   line, then `windows`, `read` and `act` requests; every `read` and `act` names its window,
   because element ids are scoped to a window. Errors use ADR-0080's error object with `kind`

@@ -1,6 +1,7 @@
 //! Public-contract tests for the inert ADR-0027 owner-local interaction lane.
 
-use flui_interaction::routing::MouseRegionTarget;
+use flui_interaction::gesture::GestureContest;
+use flui_interaction::pointer::MouseRegionTarget;
 use flui_interaction::{
     HitTestEntry, InteractionDispatchError, InteractionDispatchHandle, InteractionLane,
     PointerTarget, RenderId, ResolvedRouteToken,
@@ -466,6 +467,26 @@ impl flui_platform_api::PlatformWindow for CaptureWakeWindow {
     ) -> Result<(), flui_platform_api::CursorError> {
         Ok(())
     }
+    fn state(&self) -> flui_platform_api::WindowState {
+        let size = self.logical_size();
+        flui_platform_api::WindowState::new(
+            flui_platform_api::WindowGeometry::new(None, size),
+            size,
+        )
+    }
+
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        Ok(())
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -968,6 +989,14 @@ fn binding_input_contract_matrix() {
             frame_coalesced_history_reaches_tap_drag_velocity,
         ),
         (
+            "focus_loss_cancellation_refuses_the_contact_tail",
+            focus_loss_cancellation_refuses_the_contact_tail,
+        ),
+        (
+            "window_leave_drops_queued_hover_moves",
+            window_leave_drops_queued_hover_moves,
+        ),
+        (
             "device_removal_preserves_a_reentrant_replacement",
             device_removal_preserves_a_reentrant_replacement,
         ),
@@ -1016,18 +1045,6 @@ fn binding_input_contract_matrix() {
             scroll_terminal_reentry_keeps_new_lease,
         ),
         ("scroll_claim_reentry", scroll_claim_reentry_keeps_new_lease),
-        (
-            "scroll_active_observer_reentry",
-            scroll_active_observer_reentry_withdraws_old_lease,
-        ),
-        (
-            "scroll_completion_reentry",
-            scroll_completion_withdraws_before_reentry_and_recovers_from_failure,
-        ),
-        (
-            "scroll_completion_debt",
-            scroll_completion_waits_for_its_lane_and_preserves_competing_failures,
-        ),
         ("scroll_focus_loss", scroll_focus_loss_releases_lease),
         ("scroll_kind_metadata", scroll_kind_metadata_keeps_lease),
         ("scroll_role_metadata", scroll_role_metadata_keeps_lease),
@@ -1519,6 +1536,126 @@ fn mismatched_hover_failed_retirement_and_reentry() {
 }
 fn mismatched_hover_competing_retirement() {
     assert_isolated_hover_metadata_retirement("mismatch");
+}
+
+/// A hover move queued for the frame, then the pointer leaves: the window,
+/// through the pointer's own `Leave`, or with its device. The frame flush
+/// delivers no hover move after the leave; with no leave it delivers one.
+fn window_leave_drops_queued_hover_moves() {
+    use flui_interaction::events::{DeviceId, PointerEvent, PointerKind, make_move_event};
+    use flui_interaction::{GestureBinding, HitTestResult, Offset};
+    use flui_platform_api::{
+        EventTime,
+        pointer::{PointerDeviceChange, PointerSignal},
+    };
+    use std::{cell::Cell, rc::Rc};
+
+    #[derive(Clone, Copy, Debug)]
+    enum Leaves {
+        Not,
+        Window,
+        Pointer,
+        Device,
+    }
+    let device = DeviceId::try_from(7_u64).expect("device");
+    let delivered_after = |leaves: Leaves| {
+        let lane = InteractionLane::try_new().expect("owner lane");
+        let binding = GestureBinding::new();
+        let moves = Rc::new(Cell::new(0));
+        let seen = Rc::clone(&moves);
+        binding
+            .pointer_router()
+            .add_global_handler(Rc::new(move |event| {
+                if matches!(event, PointerEvent::Move(_)) {
+                    seen.set(seen.get() + 1);
+                }
+            }));
+        let PointerEvent::Move(mut hover) =
+            make_move_event(Offset::new(20.0, 20.0), PointerKind::Mouse).expect("finite hover")
+        else {
+            unreachable!("a move fixture")
+        };
+        hover.pointer = hover.pointer.with_device(device);
+        let pointer = hover.pointer;
+        lane.enter(|| {
+            binding.handle_pointer_event(&PointerEvent::Move(hover), |_| HitTestResult::new());
+            match leaves {
+                Leaves::Not => {}
+                Leaves::Window => binding.handle_pointer_left_window(),
+                Leaves::Pointer => binding.handle_pointer_event(
+                    &PointerEvent::Leave(PointerSignal::new(pointer, EventTime::from_nanos(1))),
+                    |_| HitTestResult::new(),
+                ),
+                Leaves::Device => binding.handle_pointer_event(
+                    &PointerEvent::DeviceRemoved(PointerDeviceChange::new(
+                        device,
+                        PointerKind::Mouse,
+                        EventTime::from_nanos(1),
+                    )),
+                    |_| HitTestResult::new(),
+                ),
+            }
+            binding.flush_pending_moves();
+        });
+        moves.get()
+    };
+    let delivered: Vec<_> = [Leaves::Not, Leaves::Window, Leaves::Pointer, Leaves::Device]
+        .into_iter()
+        .map(|leaves| (leaves, delivered_after(leaves)))
+        .collect();
+    assert_eq!(
+        format!("{delivered:?}"),
+        "[(Not, 1), (Window, 0), (Pointer, 0), (Device, 0)]",
+        "only a pointer still in the window hovers at the flush"
+    );
+}
+
+/// Focus loss cancels a contact whose pointer is still pressed: the moves and
+/// release the platform still reports for it reach no listener, and the
+/// pointer's next Down is admitted.
+fn focus_loss_cancellation_refuses_the_contact_tail() {
+    use flui_interaction::events::{
+        PointerEvent, PointerKind, make_down_event_for_id, make_move_event_for_id,
+        make_up_event_for_id,
+    };
+    use flui_interaction::{GestureBinding, HitTestResult, Offset, PointerId};
+    use std::{cell::RefCell, rc::Rc};
+
+    let lane = InteractionLane::try_new().expect("owner lane");
+    let binding = GestureBinding::new();
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&seen);
+    binding
+        .pointer_router()
+        .add_global_handler(Rc::new(move |event| {
+            log.borrow_mut().push(match event {
+                PointerEvent::Down(_) => "down",
+                PointerEvent::Move(_) => "move",
+                PointerEvent::Up(_) => "up",
+                PointerEvent::Cancel(_) => "cancel",
+                _ => "other",
+            });
+        }));
+    let finger = PointerId::try_from(2_u64).expect("pointer");
+    let touch = PointerKind::Touch;
+    let send = |event: PointerEvent| {
+        binding.handle_pointer_event(&event, |_| HitTestResult::new());
+        binding.flush_pending_moves();
+    };
+    lane.enter(|| {
+        send(make_down_event_for_id(finger, Offset::ZERO, touch).expect("down"));
+        binding.cancel_active_pointers();
+        for x in [10.0, 20.0] {
+            send(make_move_event_for_id(finger, Offset::new(x, 0.0), touch).expect("move"));
+        }
+        send(make_up_event_for_id(finger, Offset::new(20.0, 0.0), touch).expect("up"));
+        send(make_down_event_for_id(finger, Offset::ZERO, touch).expect("down"));
+    });
+    assert_eq!(
+        *seen.borrow(),
+        ["down", "cancel", "down"],
+        "the cancelled contact's tail reaches nobody; the next contact is admitted"
+    );
 }
 
 fn device_removal_preserves_a_reentrant_replacement() {
@@ -2026,7 +2163,7 @@ fn velocity_for_hardware_trace(producer: HardwareVelocityProducer, flush_each: b
         MultiDragHandle, MultiDragUpdateDetails, PointerId, ScaleGestureRecognizer,
         TapAndDragGestureRecognizer,
         events::{PointerEvent, PointerKind, make_down_event_for_id, make_up_event_for_id},
-        routing::PointerDispatch,
+        pointer::PointerDispatch,
     };
     use std::{cell::RefCell, rc::Rc, sync::Arc};
     let binding = GestureBinding::with_clock(Arc::new(ManualClock::new()));
@@ -2470,7 +2607,6 @@ enum ScrollLeaseCase {
     Retired,
     TerminalReentry,
     ClaimReentry,
-    ActiveObserverReentry,
     FocusLoss,
     KindMetadata,
     RoleMetadata,
@@ -2491,285 +2627,6 @@ fn scroll_terminal_reentry_keeps_new_lease() {
 }
 fn scroll_claim_reentry_keeps_new_lease() {
     assert_scroll_lease(ScrollLeaseCase::ClaimReentry);
-}
-fn scroll_active_observer_reentry_withdraws_old_lease() {
-    assert_scroll_lease(ScrollLeaseCase::ActiveObserverReentry);
-}
-
-fn scroll_completion_withdraws_before_reentry_and_recovers_from_failure() {
-    use flui_foundation::{ManualClock, geometry::Offset};
-    use flui_interaction::events::make_scroll_event;
-    use flui_interaction::{
-        EventPropagation, GestureBinding, HitTestResult, ScrollEndReason, ScrollSignal,
-    };
-    use flui_platform_api::{
-        EventTime,
-        pointer::{
-            CancelReason, DeviceId, PointerCancel, PointerDeviceChange, PointerEvent, ScrollPhase,
-        },
-    };
-    use std::{
-        cell::{Cell, RefCell},
-        panic::{AssertUnwindSafe, catch_unwind},
-        rc::Rc,
-        sync::Arc,
-        time::Duration,
-    };
-
-    for ending in ["idle", "terminal", "preempt", "cancel", "focus", "device"] {
-        for fails in [false, true] {
-            let clock = Arc::new(ManualClock::new());
-            let binding = Rc::new(GestureBinding::with_clock(clock.clone()));
-            let lane = InteractionLane::try_new().expect("lane");
-            let handle = lane.dispatch_handle();
-            let device = DeviceId::try_from(31_u64).expect("device");
-            let packet = move |phase| {
-                let PointerEvent::Scroll(mut scroll) =
-                    make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)).expect("wheel")
-                else {
-                    unreachable!()
-                };
-                scroll.pointer = scroll.pointer.with_device(device);
-                scroll.phase = Some(phase);
-                PointerEvent::Scroll(scroll)
-            };
-            let completed = Rc::new(RefCell::new(Vec::new()));
-            let fresh_calls = Rc::new(Cell::new(0));
-            lane.enter(|| {
-                let calls = fresh_calls.clone();
-                let fresh = handle
-                    .register_scroll(move |_| {
-                        calls.set(calls.get() + 1);
-                        EventPropagation::Stop
-                    })
-                    .expect("fresh target");
-                let mut fresh_path = HitTestResult::new();
-                fresh_path.add(
-                    flui_interaction::HitTestEntry::new(RenderId::new(2)).scroll_target(fresh),
-                );
-                let weak_binding = Rc::downgrade(&binding);
-                let log = completed.clone();
-                let old = handle
-                    .register_scroll_sequence(move |signal| {
-                        if let ScrollSignal::End(end) = signal {
-                            log.borrow_mut().push(end);
-                            weak_binding
-                                .upgrade()
-                                .expect("binding")
-                                .handle_pointer_event(&packet(ScrollPhase::Began), |_| {
-                                    fresh_path.clone()
-                                });
-                            assert!(!fails, "scroll completion failure");
-                        }
-                        EventPropagation::Stop
-                    })
-                    .expect("old target");
-                let mut old_path = HitTestResult::new();
-                old_path
-                    .add(flui_interaction::HitTestEntry::new(RenderId::new(1)).scroll_target(old));
-                let begin = packet(ScrollPhase::Began);
-                let PointerEvent::Scroll(scroll) = begin else {
-                    unreachable!()
-                };
-                binding.handle_pointer_event(&begin, |_| old_path.clone());
-                assert!(binding.has_pending_deadlines());
-                assert!(binding.next_deadline().is_some());
-                let outcome = catch_unwind(AssertUnwindSafe(|| match ending {
-                    "idle" => {
-                        clock.advance(Duration::from_secs(2));
-                        binding.tick_deadlines();
-                    }
-                    "terminal" => binding
-                        .handle_pointer_event(&packet(ScrollPhase::Ended), |_| old_path.clone()),
-                    "preempt" => binding
-                        .handle_pointer_event(&packet(ScrollPhase::Began), |_| old_path.clone()),
-                    "cancel" => binding.handle_pointer_event(
-                        &PointerEvent::Cancel(PointerCancel::new(
-                            scroll.pointer,
-                            EventTime::from_nanos(0),
-                            CancelReason::Platform,
-                        )),
-                        |_| old_path.clone(),
-                    ),
-                    "focus" => binding.cancel_active_pointers(),
-                    "device" => binding.handle_pointer_event(
-                        &PointerEvent::DeviceRemoved(PointerDeviceChange::new(
-                            device,
-                            scroll.pointer.kind,
-                            EventTime::from_nanos(0),
-                        )),
-                        |_| old_path.clone(),
-                    ),
-                    _ => unreachable!(),
-                }));
-                if fails {
-                    let failure =
-                        outcome.expect_err("completion failure propagates after withdrawal");
-                    assert_eq!(
-                        flui_foundation::panic::payload_text(&*failure),
-                        Some("scroll completion failure")
-                    );
-                } else {
-                    outcome.expect("healthy completion");
-                }
-                assert_eq!(
-                    completed.borrow().len(),
-                    1,
-                    "exactly one completion: {ending}"
-                );
-                assert_eq!(
-                    completed.borrow()[0].reason,
-                    match ending {
-                        "idle" | "terminal" => ScrollEndReason::Released,
-                        "preempt" => ScrollEndReason::Preempted,
-                        _ => ScrollEndReason::Cancelled,
-                    }
-                );
-                binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| old_path.clone());
-                assert_eq!(
-                    fresh_calls.get(),
-                    2,
-                    "old completion cannot withdraw the reentrant source: {ending}, failure={fails}"
-                );
-            });
-        }
-    }
-}
-
-fn scroll_completion_waits_for_its_lane_and_preserves_competing_failures() {
-    use flui_foundation::{ManualClock, geometry::Offset};
-    use flui_interaction::events::make_scroll_event;
-    use flui_interaction::{EventPropagation, GestureBinding, HitTestResult, ScrollSignal};
-    use flui_platform_api::pointer::{DeviceId, PointerEvent};
-    use std::{
-        cell::{Cell, RefCell},
-        panic::{AssertUnwindSafe, catch_unwind},
-        rc::Rc,
-        sync::Arc,
-        time::Duration,
-    };
-
-    for foreign_lane in [false, true] {
-        let clock = Arc::new(ManualClock::new());
-        let binding = if foreign_lane {
-            GestureBinding::with_clock(clock.clone())
-        } else {
-            GestureBinding::with_settings(
-                flui_interaction::GestureSettings::default()
-                    .with_scroll_sequence_timeouts(Duration::ZERO, Duration::ZERO),
-            )
-        };
-        let lane = InteractionLane::try_new().expect("lane");
-        let other = InteractionLane::try_new().expect("other lane");
-        let calls = Rc::new(Cell::new(0));
-        lane.enter(|| {
-            let sink = calls.clone();
-            let target = lane
-                .dispatch_handle()
-                .register_scroll_sequence(move |signal| {
-                    if matches!(signal, ScrollSignal::End(_)) {
-                        sink.set(sink.get() + 1);
-                    }
-                    EventPropagation::Stop
-                })
-                .expect("target");
-            let mut path = HitTestResult::new();
-            path.add(flui_interaction::HitTestEntry::new(RenderId::new(1)).scroll_target(target));
-            binding.handle_pointer_event(
-                &make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)).expect("wheel"),
-                |_| path,
-            );
-        });
-        clock.advance(Duration::from_secs(1));
-        if foreign_lane {
-            other.enter(|| binding.tick_deadlines());
-        } else {
-            binding.tick_deadlines();
-        }
-        assert_eq!(
-            calls.get(),
-            0,
-            "foreign contexts cannot deliver owner callbacks"
-        );
-        assert!(
-            binding.has_pending_deadlines(),
-            "accepted completion remains deliverable"
-        );
-        assert!(binding.next_deadline().is_some());
-        lane.enter(|| {
-            binding.tick_deadlines();
-            binding.tick_deadlines();
-        });
-        assert_eq!(
-            calls.get(),
-            1,
-            "completion is delivered once after lane return"
-        );
-        assert!(!binding.has_pending_deadlines());
-    }
-
-    for failures in [0, 1, 2] {
-        let clock = Arc::new(ManualClock::new());
-        let binding = GestureBinding::with_clock(clock.clone());
-        let lane = InteractionLane::try_new().expect("lane");
-        let log = Rc::new(RefCell::new(Vec::new()));
-        let fail = Rc::new(Cell::new(failures));
-        lane.enter(|| {
-            for id in [1_u64, 2] {
-                let log = log.clone();
-                let fail = fail.clone();
-                let target = lane
-                    .dispatch_handle()
-                    .register_scroll_sequence(move |signal| {
-                        if matches!(signal, ScrollSignal::End(_)) {
-                            log.borrow_mut().push(id);
-                            if id <= fail.get() {
-                                std::panic::panic_any(if id == 1 {
-                                    "first scroll end"
-                                } else {
-                                    "second scroll end"
-                                });
-                            }
-                        }
-                        EventPropagation::Stop
-                    })
-                    .expect("target");
-                let mut path = HitTestResult::new();
-                path.add(
-                    flui_interaction::HitTestEntry::new(RenderId::new(1)).scroll_target(target),
-                );
-                let PointerEvent::Scroll(mut event) =
-                    make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)).expect("wheel")
-                else {
-                    unreachable!()
-                };
-                event.pointer = event
-                    .pointer
-                    .with_device(DeviceId::try_from(id).expect("device"));
-                binding.handle_pointer_event(&PointerEvent::Scroll(event), |_| path);
-            }
-            clock.advance(Duration::from_secs(1));
-            let outcome = catch_unwind(AssertUnwindSafe(|| binding.tick_deadlines()));
-            if failures == 0 {
-                outcome.expect("healthy completions");
-            } else {
-                let payload = outcome.expect_err("first completion remains authoritative");
-                assert_eq!(
-                    flui_foundation::panic::payload_text(&*payload),
-                    Some("first scroll end")
-                );
-            }
-            assert_eq!(
-                log.borrow().as_slice(),
-                [1, 2],
-                "a failed completion cannot erase the accepted tail"
-            );
-            fail.set(0);
-            binding.tick_deadlines();
-            assert_eq!(log.borrow().len(), 2, "completed failures are not retried");
-            assert!(!binding.has_pending_deadlines());
-        });
-    }
 }
 fn scroll_focus_loss_releases_lease() {
     assert_scroll_lease(ScrollLeaseCase::FocusLoss);
@@ -2824,7 +2681,7 @@ fn assert_signal_owner_batch(device_removal: bool, native: bool) {
             let native_phase = match phase {
                 ScrollPhase::Began => PanZoomPhase::Start,
                 ScrollPhase::Changed => PanZoomPhase::Update(
-                    PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("native transform"),
+                    PanZoomTransform::try_new(1.2, 0.0).expect("native transform"),
                 ),
                 _ => unreachable!("batch fixture phase"),
             };
@@ -3055,8 +2912,7 @@ fn assert_signal_claim_retirement(competing: bool, native: bool) {
             let native_phase = match phase {
                 ScrollPhase::Began => PanZoomPhase::Start,
                 ScrollPhase::Changed => PanZoomPhase::Update(
-                    PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0)
-                        .expect("finite native transform"),
+                    PanZoomTransform::try_new(1.2, 0.0).expect("finite native transform"),
                 ),
                 ScrollPhase::Ended => PanZoomPhase::End,
                 _ => unreachable!("fixture phase"),
@@ -3087,7 +2943,7 @@ fn assert_signal_claim_retirement(competing: bool, native: bool) {
     #[derive(Clone, Copy)]
     enum Target {
         Wheel(flui_interaction::ScrollTarget),
-        Native(flui_interaction::routing::PanZoomTarget),
+        Native(flui_interaction::pointer::PanZoomTarget),
     }
     let entry = |id, target| match target {
         Target::Wheel(target) => HitTestEntry::new(RenderId::new(id)).scroll_target(target),
@@ -3212,9 +3068,9 @@ fn native_repeated_start_keeps_selected_owner() {
 }
 
 fn native_staged_retirement_preserves_delivery_and_failure() {
-    use flui_foundation::geometry::{Offset, Point};
-    use flui_interaction::recognizers::scale::{PanZoomDisposition, ScaleGestureRecognizer};
-    use flui_interaction::routing::EventPropagation;
+    use flui_foundation::geometry::Point;
+    use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
+    use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
     use flui_platform_api::{
         EventTime,
@@ -3266,7 +3122,7 @@ fn native_staged_retirement_preserves_delivery_and_failure() {
             };
             let update = || {
                 packet(PanZoomPhase::Update(
-                    PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale"),
+                    PanZoomTransform::try_new(1.2, 0.0).expect("scale"),
                 ))
             };
             lane.enter(|| {
@@ -3321,7 +3177,7 @@ fn native_staged_retirement_preserves_delivery_and_failure() {
 fn native_cancellation_retains_captures_after_prior_capture_failure() {
     use flui_foundation::geometry::{Offset, Point};
     use flui_interaction::events::make_down_event;
-    use flui_interaction::routing::EventPropagation;
+    use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
     use flui_platform_api::{
         EventTime,
@@ -3447,9 +3303,9 @@ fn native_cancellation_retains_captures_after_prior_capture_failure() {
 }
 
 fn native_claim_prior_observation_failure_preserves_captures() {
-    use flui_foundation::geometry::{Offset, Point};
-    use flui_interaction::recognizers::scale::{PanZoomDisposition, ScaleGestureRecognizer};
-    use flui_interaction::routing::EventPropagation;
+    use flui_foundation::geometry::Point;
+    use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
+    use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
     use flui_platform_api::{
         EventTime,
@@ -3510,7 +3366,7 @@ fn native_claim_prior_observation_failure_preserves_captures() {
         };
         let update = || {
             packet(PanZoomPhase::Update(
-                PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale"),
+                PanZoomTransform::try_new(1.2, 0.0).expect("scale"),
             ))
         };
         lane.enter(|| {
@@ -3622,9 +3478,9 @@ fn native_cached_actor_reentry_preserves_new_generation(
     repeated_start: bool,
     observer_reentry: bool,
 ) {
-    use flui_foundation::geometry::{Offset, Point};
-    use flui_interaction::recognizers::scale::{PanZoomDisposition, ScaleGestureRecognizer};
-    use flui_interaction::routing::EventPropagation;
+    use flui_foundation::geometry::Point;
+    use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
+    use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
     use flui_platform_api::{
         EventTime,
@@ -3674,7 +3530,7 @@ fn native_cached_actor_reentry_preserves_new_generation(
         };
         let update = || {
             packet(PanZoomPhase::Update(
-                PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale"),
+                PanZoomTransform::try_new(1.2, 0.0).expect("scale"),
             ))
         };
         let armed = Rc::new(Cell::new(false));
@@ -3728,9 +3584,9 @@ fn native_cached_actor_reentry_preserves_new_generation(
 }
 
 fn native_same_actor_terminal_reentry_preserves_new_generation() {
-    use flui_foundation::geometry::{Offset, Point};
-    use flui_interaction::recognizers::scale::{PanZoomDisposition, ScaleGestureRecognizer};
-    use flui_interaction::routing::EventPropagation;
+    use flui_foundation::geometry::Point;
+    use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
+    use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
     use flui_platform_api::{
         EventTime,
@@ -3782,7 +3638,7 @@ fn native_same_actor_terminal_reentry_preserves_new_generation() {
                     };
                     let update = || {
                         packet(PanZoomPhase::Update(
-                            PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale"),
+                            PanZoomTransform::try_new(1.2, 0.0).expect("scale"),
                         ))
                     };
                     let armed = Rc::new(Cell::new(true));
@@ -3841,7 +3697,7 @@ fn native_same_actor_terminal_reentry_preserves_new_generation() {
 fn native_close_preserves_retirement_ownership() {
     use flui_foundation::geometry::{Offset, Point};
     use flui_interaction::events::make_down_event_for_id;
-    use flui_interaction::routing::EventPropagation;
+    use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
     use flui_platform_api::{
         EventTime,
@@ -3942,9 +3798,9 @@ fn native_close_preserves_retirement_ownership() {
 }
 
 fn native_terminal_observation_failure_keeps_owned_delivery() {
-    use flui_foundation::geometry::{Offset, Point};
-    use flui_interaction::recognizers::scale::{PanZoomDisposition, ScaleGestureRecognizer};
-    use flui_interaction::routing::EventPropagation;
+    use flui_foundation::geometry::Point;
+    use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
+    use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
     use flui_platform_api::{
         EventTime,
@@ -3987,7 +3843,7 @@ fn native_terminal_observation_failure_keeps_owned_delivery() {
         };
         let update = || {
             packet(PanZoomPhase::Update(
-                PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale"),
+                PanZoomTransform::try_new(1.2, 0.0).expect("scale"),
             ))
         };
         lane.enter(|| {
@@ -4026,7 +3882,7 @@ fn native_terminal_observation_failure_keeps_owned_delivery() {
 
 fn native_staged_owner_cleanup_is_exact() {
     use flui_foundation::geometry::Point;
-    use flui_interaction::routing::EventPropagation;
+    use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
     use flui_platform_api::{
         EventTime,
@@ -4109,8 +3965,8 @@ fn native_staged_owner_cleanup_is_exact() {
 fn native_staged_generation_survives_geometry_and_reentry() {
     use flui_foundation::geometry::{Offset, Point};
     use flui_interaction::events::{make_down_event_for_id, make_move_event_for_id};
-    use flui_interaction::recognizers::scale::{PanZoomDisposition, ScaleGestureRecognizer};
-    use flui_interaction::routing::{EventPropagation, PointerDispatch};
+    use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
+    use flui_interaction::pointer::{EventPropagation, PointerDispatch};
     use flui_interaction::{GestureBinding, GestureRecognizer, HitTestResult};
     use flui_platform_api::{
         EventTime,
@@ -4145,7 +4001,7 @@ fn native_staged_generation_survives_geometry_and_reentry() {
             };
             let update = || {
                 packet(PanZoomPhase::Update(
-                    PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale"),
+                    PanZoomTransform::try_new(1.2, 0.0).expect("scale"),
                 ))
             };
             let first_start = Rc::new(Cell::new(true));
@@ -4259,8 +4115,7 @@ fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
             let native_phase = match phase {
                 ScrollPhase::Began => PanZoomPhase::Start,
                 ScrollPhase::Changed => PanZoomPhase::Update(
-                    PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0)
-                        .expect("finite native transform"),
+                    PanZoomTransform::try_new(1.2, 0.0).expect("finite native transform"),
                 ),
                 ScrollPhase::Ended => PanZoomPhase::End,
                 _ => unreachable!("fixture phase"),
@@ -4303,7 +4158,7 @@ fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
     #[derive(Clone, Copy)]
     enum Target {
         Wheel(flui_interaction::ScrollTarget),
-        Native(flui_interaction::routing::PanZoomTarget),
+        Native(flui_interaction::pointer::PanZoomTarget),
     }
     let entry = |id, target| match target {
         Target::Wheel(target) => HitTestEntry::new(RenderId::new(id)).scroll_target(target),
@@ -4343,11 +4198,6 @@ fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
                 };
                 count.set(count.get() + 1);
                 if case == ScrollLeaseCase::TerminalReentry && terminal {
-                    weak.upgrade()
-                        .expect("binding")
-                        .handle_pointer_event(&packet(ScrollPhase::Began), |_| replacement.clone());
-                }
-                if case == ScrollLeaseCase::ActiveObserverReentry && !terminal {
                     weak.upgrade()
                         .expect("binding")
                         .handle_pointer_event(&packet(ScrollPhase::Began), |_| replacement.clone());
@@ -4474,15 +4324,6 @@ fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
                     2,
                     "replacement consumer remains selected"
                 );
-            }
-            ScrollLeaseCase::ActiveObserverReentry => {
-                assert!(!native, "native repeated Start intentionally keeps its current session");
-                binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| fresh_path.clone());
-                assert_eq!(selected_calls.get(), 1, "withdrawn active packet must not invoke its old consumer after observer reentry");
-                assert_eq!(fresh_calls.get(), 1, "fresh consumer receives only its admitted Begin");
-                binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| selected_path.clone());
-                assert_eq!(selected_calls.get(), 1);
-                assert_eq!(fresh_calls.get(), 2, "old active delivery must not replace the newer source authority");
             }
             ScrollLeaseCase::FocusLoss => {
                 binding.cancel_active_pointers();
@@ -5208,7 +5049,7 @@ fn drag_callback_ownership_and_retirement() {
         ),
         (
             "stop sweep accepts drag",
-            stop_tracking_pointer_sweep_starts_the_unresolved_drag,
+            stop_tracking_pointer_sweep_accepts_the_unmoved_drag_without_starting_it,
         ),
     ];
     if let Ok(selected) = std::env::var(SELECTED) {
@@ -5264,9 +5105,9 @@ fn drag_callback_ownership_and_retirement() {
 }
 
 fn fresh_drag_completes_after_retirement() {
-    use flui_interaction::arena::GestureArena;
     use flui_interaction::events::{PointerKind, make_move_event, make_up_event};
-    use flui_interaction::routing::PointerDispatch;
+    use flui_interaction::gesture::GestureArena;
+    use flui_interaction::pointer::PointerDispatch;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
     use std::{cell::Cell, rc::Rc};
 
@@ -5294,7 +5135,7 @@ fn fresh_drag_completes_after_retirement() {
 }
 
 fn drag_dispose_capture_reentry() {
-    use flui_interaction::arena::GestureArena;
+    use flui_interaction::gesture::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer};
     use std::{
         cell::{Cell, RefCell},
@@ -5304,11 +5145,11 @@ fn drag_dispose_capture_reentry() {
     let owner = Rc::new(RefCell::new(Weak::<DragGestureRecognizer>::new()));
     let weak = owner.clone();
     struct Rival(Rc<Cell<usize>>);
-    impl flui_interaction::arena::GestureArenaMember for Rival {
-        fn accept_gesture(&self, _: flui_interaction::PointerId) {
+    impl flui_interaction::gesture::GestureArenaMember for Rival {
+        fn accept_gesture(&self, _: flui_interaction::GestureContest) {
             self.0.set(self.0.get() + 1);
         }
-        fn reject_gesture(&self, _: flui_interaction::PointerId) {
+        fn reject_gesture(&self, _: flui_interaction::GestureContest) {
             panic!("retiring owner must not reject its rival");
         }
     }
@@ -5342,7 +5183,7 @@ fn drag_dispose_capture_reentry() {
         flui_interaction::events::PointerKind::Touch,
     )
     .expect("finite input");
-    recognizer.add_pointer(flui_interaction::routing::PointerDispatch::at_root(&down));
+    recognizer.add_pointer(flui_interaction::pointer::PointerDispatch::at_root(&down));
     arena.add(
         flui_interaction::PointerId::new(core::num::NonZeroU64::MIN),
         &rival,
@@ -5359,7 +5200,7 @@ fn drag_dispose_capture_reentry() {
 }
 
 fn drag_callback_replacements_commit_before_retirement() {
-    use flui_interaction::arena::GestureArena;
+    use flui_interaction::gesture::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer};
     use std::{cell::Cell, rc::Rc};
 
@@ -5407,7 +5248,7 @@ fn drag_callback_replacements_commit_before_retirement() {
 }
 
 fn drag_dispose_closes_callback_admission() {
-    use flui_interaction::arena::GestureArena;
+    use flui_interaction::gesture::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer};
     use std::{cell::Cell, rc::Rc};
 
@@ -5457,7 +5298,7 @@ fn drag_final_callback_owner_during_active_unwind() {
 }
 
 fn drag_independent_capture_failures(final_owner: bool, active_unwind: bool) {
-    use flui_interaction::arena::GestureArena;
+    use flui_interaction::gesture::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::{cell::Cell, rc::Rc};
@@ -5519,7 +5360,7 @@ fn drag_independent_capture_failures(final_owner: bool, active_unwind: bool) {
 }
 
 fn drag_caller_keeps_previously_caught_failure() {
-    use flui_interaction::arena::GestureArena;
+    use flui_interaction::gesture::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     let caller_failure = catch_unwind(|| panic!("caller already caught failure"))
@@ -5545,7 +5386,7 @@ fn drag_caller_keeps_previously_caught_failure() {
 }
 
 fn drag_callbacks_live_until_the_final_shared_owner() {
-    use flui_interaction::arena::GestureArena;
+    use flui_interaction::gesture::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer};
     use std::{cell::Cell, rc::Rc};
     let dropped = Rc::new(Cell::new(0));
@@ -5592,7 +5433,7 @@ fn drag_callback_body_failure_retains_its_capture() {
 }
 
 fn drag_self_dispose_from_callback(body_failure: bool) {
-    use flui_interaction::arena::GestureArena;
+    use flui_interaction::gesture::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::{
@@ -5626,7 +5467,7 @@ fn drag_self_dispose_from_callback(body_failure: bool) {
             flui_interaction::events::PointerKind::Touch,
         )
         .expect("finite input");
-        recognizer.add_pointer(flui_interaction::routing::PointerDispatch::at_root(&down));
+        recognizer.add_pointer(flui_interaction::pointer::PointerDispatch::at_root(&down));
     }));
     if body_failure {
         assert_eq!(
@@ -5663,8 +5504,8 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
         atomic::{AtomicBool, Ordering},
     };
 
-    use flui_interaction::arena::GestureArena;
-    use flui_interaction::arena::GestureArenaMember;
+    use flui_interaction::gesture::GestureArena;
+    use flui_interaction::gesture::GestureArenaMember;
     use flui_interaction::{ArenaMembership, GestureSettings, Offset, PointerId, PrimaryContact};
 
     struct RejectEventPanic(Arc<AtomicBool>);
@@ -5687,20 +5528,20 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
     }
     struct Sibling(Rc<Cell<usize>>);
     impl GestureArenaMember for Sibling {
-        fn accept_gesture(&self, _: PointerId) {
+        fn accept_gesture(&self, _: GestureContest) {
             self.0.set(self.0.get() + 1);
         }
-        fn reject_gesture(&self, _: PointerId) {
+        fn reject_gesture(&self, _: GestureContest) {
             panic!("disposing the drag must preserve its sibling");
         }
     }
 
     struct WithdrawingContact(PrimaryContact);
     impl GestureArenaMember for WithdrawingContact {
-        fn accept_gesture(&self, _: PointerId) {
+        fn accept_gesture(&self, _: GestureContest) {
             panic!("withdrawing member must not win its old competition");
         }
-        fn reject_gesture(&self, _: PointerId) {
+        fn reject_gesture(&self, _: GestureContest) {
             panic!("locally retired contact must not receive its own rejection");
         }
     }
@@ -5720,7 +5561,7 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
     recognizer
         .0
         .begin(
-            flui_interaction::routing::PointerDispatch::at_root(&down),
+            flui_interaction::pointer::PointerDispatch::at_root(&down),
             &GestureSettings::default(),
         )
         .expect("contact admitted");
@@ -5767,7 +5608,7 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
     let next = recognizer
         .0
         .begin(
-            flui_interaction::routing::PointerDispatch::at_root(&down),
+            flui_interaction::pointer::PointerDispatch::at_root(&down),
             &GestureSettings::default(),
         )
         .expect("withdrawn owner admits next contact");
@@ -5783,9 +5624,9 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
 }
 
 fn drag_completion_commits_tracking_before_stop_diagnostics() {
-    use flui_interaction::arena::GestureArena;
     use flui_interaction::events::{PointerKind, make_move_event, make_up_event};
-    use flui_interaction::routing::PointerDispatch;
+    use flui_interaction::gesture::GestureArena;
+    use flui_interaction::pointer::PointerDispatch;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
     use std::cell::Cell;
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -5872,19 +5713,19 @@ fn drag_completion_commits_tracking_before_stop_diagnostics() {
     fresh_drag_completes_after_retirement();
 }
 
-fn stop_tracking_pointer_sweep_starts_the_unresolved_drag() {
-    use flui_interaction::arena::GestureArena;
-    use flui_interaction::arena::GestureArenaMember;
+fn stop_tracking_pointer_sweep_accepts_the_unmoved_drag_without_starting_it() {
+    use flui_interaction::gesture::GestureArena;
+    use flui_interaction::gesture::GestureArenaMember;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
     use std::cell::Cell;
     use std::rc::Rc;
 
     struct Rival(Rc<Cell<usize>>);
     impl GestureArenaMember for Rival {
-        fn accept_gesture(&self, _: PointerId) {
+        fn accept_gesture(&self, _: GestureContest) {
             panic!("the sweep accepts the front member");
         }
-        fn reject_gesture(&self, _: PointerId) {
+        fn reject_gesture(&self, _: GestureContest) {
             self.0.set(self.0.get() + 1);
         }
     }
@@ -5900,7 +5741,7 @@ fn stop_tracking_pointer_sweep_starts_the_unresolved_drag() {
         flui_interaction::events::PointerKind::Touch,
     )
     .expect("finite input");
-    recognizer.add_pointer(flui_interaction::routing::PointerDispatch::at_root(&down));
+    recognizer.add_pointer(flui_interaction::pointer::PointerDispatch::at_root(&down));
     let rejections = Rc::new(Cell::new(0));
     let rival = Rc::new(Rival(rejections.clone()));
     arena.add(PointerId::new(core::num::NonZeroU64::MIN), &rival);
@@ -5910,8 +5751,8 @@ fn stop_tracking_pointer_sweep_starts_the_unresolved_drag() {
     arena.sweep(PointerId::new(core::num::NonZeroU64::MIN));
     assert_eq!(
         (starts.get(), rejections.get()),
-        (1, 1),
-        "the sweep accepts the retiring drag and starts it"
+        (0, 1),
+        "the sweep accepts the drag, which holds until its slop (ADR-0208)"
     );
     assert_eq!(
         recognizer.cancel(),
@@ -5931,10 +5772,10 @@ fn stop_tracking_preserves_reentrant_contact_after_sweep_failure() {
 }
 
 fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) {
-    use flui_interaction::arena::GestureArena;
-    use flui_interaction::arena::GestureArenaMember;
     use flui_interaction::events::{PointerKind, make_down_event};
-    use flui_interaction::routing::PointerDispatch;
+    use flui_interaction::gesture::GestureArena;
+    use flui_interaction::gesture::GestureArenaMember;
+    use flui_interaction::pointer::PointerDispatch;
     use flui_interaction::{ArenaMembership, GestureSettings, Offset, PointerId, PrimaryContact};
     use std::cell::Cell;
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -5947,14 +5788,14 @@ fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) 
         fail_after_admission: bool,
     }
     impl GestureArenaMember for ReentrantSweep {
-        fn accept_gesture(&self, pointer: PointerId) {
+        fn accept_gesture(&self, contest: GestureContest) {
             if self.admitted_next.replace(true) {
                 self.next_accepts.set(self.next_accepts.get() + 1);
                 return;
             }
             assert_eq!(
                 self.contact.current().map(|contact| contact.pointer),
-                Some(pointer),
+                Some(contest.pointer()),
                 "the retiring contact stays visible to its sweep resolution"
             );
             // Reuse the platform pointer ID while the old exact-generation
@@ -5970,7 +5811,7 @@ fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) 
                 "sweep failure after next contact admission"
             );
         }
-        fn reject_gesture(&self, _: PointerId) {
+        fn reject_gesture(&self, _: GestureContest) {
             panic!("swept front member must be accepted");
         }
     }
@@ -6070,7 +5911,7 @@ struct ClosingRegions {
 
 fn closing_regions(on_enter: bool) -> ClosingRegions {
     use flui_interaction::__runtime::{CloseMode, close_dispatch, presentation_dispatch};
-    use flui_interaction::routing::{MouseRegionCallbacks, MouseTrackerAnnotation};
+    use flui_interaction::pointer::{MouseRegionCallbacks, MouseTrackerAnnotation};
     use std::rc::Rc;
 
     let lane = InteractionLane::try_new().expect("lane");
@@ -6081,7 +5922,7 @@ fn closing_regions(on_enter: bool) -> ClosingRegions {
         for region in 1..=2_usize {
             let counted = Rc::clone(&calls);
             let closing = owner.clone();
-            let callback: flui_interaction::routing::MouseEnterCallback = Rc::new(move |_, _| {
+            let callback: flui_interaction::pointer::MouseEnterCallback = Rc::new(move |_, _| {
                 counted.set(counted.get() + 1);
                 close_dispatch(&closing, CloseMode::Ordinary);
             });
@@ -6123,7 +5964,7 @@ fn hover_move() -> flui_interaction::events::PointerEvent {
 }
 
 fn enter_batch_stops_after_owner_close() {
-    use flui_interaction::routing::{MouseTracker, PointerMotionKind};
+    use flui_interaction::pointer::{MouseTracker, PointerMotionKind};
 
     let regions = closing_regions(true);
     let tracker = MouseTracker::new();
@@ -6138,7 +5979,7 @@ fn enter_batch_stops_after_owner_close() {
 }
 
 fn hover_batch_stops_after_owner_close() {
-    use flui_interaction::routing::MouseTracker;
+    use flui_interaction::pointer::MouseTracker;
 
     let regions = closing_regions(false);
     let tracker = MouseTracker::new();
@@ -6216,10 +6057,7 @@ fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
                         unreachable!()
                     };
                     let event = scroll;
-                    let _ = owner.invoke_scroll_target(
-                        target,
-                        flui_interaction::ScrollDispatch::at_root(&event),
-                    );
+                    let _ = owner.invoke_scroll_target(target, &event);
                 }
                 "pan-zoom" => {
                     let target = owner
@@ -6237,7 +6075,7 @@ fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
                     );
                     let _ = owner.invoke_pan_zoom_target(
                         target,
-                        flui_interaction::routing::PanZoomDispatch::at_root(&event),
+                        flui_interaction::pointer::PanZoomDispatch::at_root(&event),
                     );
                 }
                 "path clip" => {
@@ -6279,7 +6117,7 @@ fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
 #[test]
 fn scoped_handle_cannot_mutate_a_sibling_owners_targets() {
     use flui_interaction::__runtime::presentation_dispatch;
-    use flui_interaction::routing::MouseRegionCallbacks;
+    use flui_interaction::pointer::MouseRegionCallbacks;
 
     let lane = InteractionLane::try_new().expect("lane");
     let ui_runtime = lane.dispatch_handle();

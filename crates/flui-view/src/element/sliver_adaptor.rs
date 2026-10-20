@@ -291,7 +291,7 @@ impl StaticChildren {
         let map = self.key_to_index.get_or_init(|| {
             let mut map: HashMap<u64, Vec<usize>> = HashMap::new();
             for (index, child) in self.children.iter().enumerate() {
-                if let Some(child_key) = child.0.key() {
+                if let Some(child_key) = child.key() {
                     map.entry(child_key.key_hash()).or_default().push(index);
                 }
             }
@@ -299,7 +299,6 @@ impl StaticChildren {
         });
         map.get(&key.key_hash())?.iter().copied().find(|&index| {
             self.children[index]
-                .0
                 .key()
                 .is_some_and(|child_key| child_key.key_eq(key))
         })
@@ -736,14 +735,8 @@ impl<R: LazyMultiBoxRender> ChildManager for SliverAdaptorManager<R> {
                 owner,
             ) {
                 Some(view) => {
-                    self.sparse_children.ensure(
-                        logical_index,
-                        view.0.as_ref(),
-                        host,
-                        tree,
-                        owner,
-                        pipeline,
-                    );
+                    self.sparse_children
+                        .ensure(logical_index, &view, host, tree, owner, pipeline);
                     any_new_build = true;
                 }
                 None => {
@@ -1694,7 +1687,7 @@ mod tests {
     fn make_builder(item_count: usize) -> Rc<dyn Fn(usize) -> Option<BoxedView>> {
         Rc::new(move |idx: usize| {
             if idx < item_count {
-                Some(BoxedView(Box::new(ItemView)))
+                Some(BoxedView::new(ItemView))
             } else {
                 None
             }
@@ -1760,7 +1753,7 @@ mod tests {
         let mut manager = list_manager(host, 3);
         manager.builder = Rc::new(|index| {
             assert_ne!(index, 1, "requested item builder panic");
-            Some(BoxedView(Box::new(ItemView)))
+            Some(BoxedView::new(ItemView))
         });
 
         let did_work = manager.service(
@@ -1813,7 +1806,7 @@ mod probe_tests {
     fn counting(len: usize, calls: &RefCell<Vec<usize>>) -> impl Fn(usize) -> Option<BoxedView> {
         move |index| {
             calls.borrow_mut().push(index);
-            (index < len).then(|| BoxedView(Box::new(super::tests::ItemView)))
+            (index < len).then(|| BoxedView::new(super::tests::ItemView))
         }
     }
 

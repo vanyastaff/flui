@@ -28,19 +28,30 @@ use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_clas
 use objc2_foundation::{
     NSArray, NSDefaultRunLoopMode, NSNumber, NSObjectProtocol, NSRunLoop, NSSet,
 };
-use objc2_quartz_core::CADisplayLink;
+use objc2_quartz_core::{CADisplayLink, CAFrameRateRange};
 use objc2_ui_kit::{
-    UIHoverGestureRecognizer, UITouch, UITouchType, UITraitCollection, UITraitEnvironment,
-    UIUserInterfaceStyle, UIView, UIViewController, UIWindow, UIWindowScene,
+    UIHoverGestureRecognizer, UIRectEdge, UIScreen, UITouch, UITouchType, UITraitCollection,
+    UITraitEnvironment, UIUserInterfaceStyle, UIView, UIWindow, UIWindowScene,
 };
 
 use flui_foundation::geometry::{EdgeInsets, Size};
-use flui_platform_api::WindowAppearance;
+use flui_platform_api::{
+    WindowAppearance, WindowCapabilities, WindowCommand, WindowCommandError, WindowGeometry,
+    WindowState,
+};
 
+use super::display::{IosDisplays, ScreenIdentity};
 use super::events::TouchInputState;
 use super::native_owner::NativeOwner;
+use super::status_bar::FluiViewController;
 use crate::shared::WindowCallbacks;
-use crate::traits::{CursorError, PlatformWindow, WindowExecutionState, WindowId};
+use crate::shared::apple_display_identity::change_screen;
+use crate::shared::display_link_rate::{
+    FrameRatePreference, FrameRateRange, FrameRateRangeProperty, LinkPeriod,
+};
+use crate::shared::os_version::Since;
+use crate::shared::window_state::WindowStateCell;
+use crate::traits::{CursorError, DisplayId, PlatformWindow, WindowExecutionState, WindowId};
 
 /// The content view: a `UIView` subclass that forwards touches.
 ///
@@ -73,6 +84,15 @@ pub struct FluiViewIvars {
     /// app's background transitions. `RefCell` because the view's methods
     /// reach it through a shared `&self`.
     display_link: RefCell<Option<Retained<CADisplayLink>>>,
+    /// The cadence the link's ticks show, and the period it last published.
+    link_period: RefCell<LinkPeriod>,
+    /// The platform's display source, which holds the period the link reports.
+    displays: Arc<IosDisplays>,
+    /// The screen this window's scene is on; shared with the window, whose
+    /// `display_id` any thread may call.
+    screen: Arc<parking_lot::Mutex<ScreenIdentity>>,
+    /// The window this view belongs to; owns the link periods it reports.
+    window_id: WindowId,
     metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
     /// Whether the view's `userInterfaceStyle` was dark when last sampled.
     /// Apart from `metrics`: the theme is the system's, so it needs neither a
@@ -180,12 +200,54 @@ define_class!(
             self.pin_for_native_callback();
             let current = self.ivars().display_link.borrow().as_ref()
                 .is_some_and(|active| std::ptr::eq::<CADisplayLink>(&raw const **active, link));
-            if current && !link.isPaused() { self.callbacks().dispatch_request_frame(); }
+            if current && !link.isPaused() {
+                self.observe_link_cadence(link);
+                self.callbacks().dispatch_request_frame();
+            }
         }
     }
 
     unsafe impl NSObjectProtocol for FluiView {}
 );
+
+/// What a view needs to name its display: the platform's source, the screen
+/// slot it shares with its window, and the window that owns its link periods.
+struct ViewDisplay {
+    displays: Arc<IosDisplays>,
+    screen: Arc<parking_lot::Mutex<ScreenIdentity>>,
+    window: WindowId,
+}
+
+/// Ask `link` to run at the best rate `screen` sustains: a frame-rate range on
+/// iOS 15 and later, `preferredFramesPerSecond` before it.
+fn request_frame_rate(link: &CADisplayLink, displays: &IosDisplays, screen: &UIScreen) {
+    let maximum = i64::try_from(screen.maximumFramesPerSecond()).unwrap_or(0);
+    match displays.frame_rate_preference(maximum) {
+        FrameRatePreference::Range(property, range) => {
+            set_frame_rate_range(link, property, range);
+        }
+        FrameRatePreference::FramesPerSecond(frames) => {
+            link.setPreferredFramesPerSecond(
+                isize::try_from(frames).expect("BUG: a u16 frame rate fits isize"),
+            );
+        }
+    }
+}
+
+/// `CADisplayLink.preferredFrameRateRange`, which exists from iOS 15. The
+/// proof can only come from a version check, so the call cannot be written for
+/// an older system.
+fn set_frame_rate_range(
+    link: &CADisplayLink,
+    _available: Since<FrameRateRangeProperty>,
+    range: FrameRateRange,
+) {
+    link.setPreferredFrameRateRange(CAFrameRateRange {
+        minimum: range.minimum,
+        maximum: range.maximum,
+        preferred: range.preferred,
+    });
+}
 
 /// Which touch callback produced a batch, mapped to the pointer phase the
 /// owned pointer vocabulary uses.
@@ -205,6 +267,7 @@ impl FluiView {
         metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
         dark: Arc<AtomicBool>,
         owner_signal: std::sync::Weak<crate::shared::owner_signal::OwnerSignal>,
+        display: ViewDisplay,
     ) -> Retained<Self> {
         let bounds = objc2_ui_kit::UIScreen::mainScreen(mtm).bounds();
         let this = mtm.alloc::<Self>();
@@ -218,6 +281,10 @@ impl FluiView {
             sampling_active: std::cell::Cell::new(false),
             sampling_pending: std::cell::Cell::new(false),
             display_link: RefCell::new(None),
+            link_period: RefCell::new(LinkPeriod::default()),
+            displays: display.displays,
+            screen: display.screen,
+            window_id: display.window,
             metrics,
             dark,
         });
@@ -330,7 +397,10 @@ impl FluiView {
     /// The link is added to the main run loop in the default mode — the run
     /// loop `UIApplicationMain` drives — so it fires on the main thread and
     /// therefore on the owner lane.
-    fn start_display_link(&self) {
+    ///
+    /// `screen` is the one the window's scene is on: the link is asked to run
+    /// at that screen's best rate, so a ProMotion panel is not held at 60 Hz.
+    fn start_display_link(&self, screen: &UIScreen) {
         if self.ivars().display_link.borrow().is_some() {
             return;
         }
@@ -345,7 +415,71 @@ impl FluiView {
         unsafe {
             link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), NSDefaultRunLoopMode);
         }
+        request_frame_rate(&link, &self.ivars().displays, screen);
         self.ivars().display_link.replace(Some(link));
+    }
+
+    /// Take `screen` as the one this window is on. A change of screen resets
+    /// what the link measured, asks the link for the new screen's best rate,
+    /// and tells the owner the display may have changed.
+    fn adopt_screen(&self, screen: &UIScreen) {
+        let identity = self
+            .ivars()
+            .displays
+            .identify(MainThreadMarker::from(self), screen);
+        let changed = change_screen(&mut *self.ivars().screen.lock(), identity);
+        let Some(previous) = changed else {
+            return;
+        };
+        if let Some(number) = previous.number {
+            self.ivars()
+                .displays
+                .forget_link_period(number, self.ivars().window_id);
+        }
+        self.ivars().link_period.borrow_mut().forget();
+        let link = self.ivars().display_link.borrow().clone();
+        if let Some(link) = link {
+            request_frame_rate(&link, &self.ivars().displays, screen);
+        }
+        self.ivars().displays.invalidate();
+        self.callbacks().dispatch_display_changed();
+    }
+
+    /// The scene is gone: this window names no screen until it is attached
+    /// again. Forgets the window's link period on the old screen and, if the
+    /// identity was set, tells the owner the display changed. No lock or
+    /// borrow is held across the callback.
+    fn detach_screen(&self) {
+        let changed = change_screen(&mut *self.ivars().screen.lock(), ScreenIdentity::default());
+        let Some(previous) = changed else {
+            return;
+        };
+        if let Some(number) = previous.number {
+            self.ivars()
+                .displays
+                .forget_link_period(number, self.ivars().window_id);
+        }
+        self.ivars().link_period.borrow_mut().forget();
+        self.ivars().displays.invalidate();
+        self.callbacks().dispatch_display_changed();
+    }
+
+    /// Read the cadence one tick shows (the time to the frame it targets) and
+    /// publish it when it leaves the band around the last published period.
+    fn observe_link_cadence(&self, link: &CADisplayLink) {
+        let interval = link.targetTimestamp() - link.timestamp();
+        let published = self.ivars().link_period.borrow_mut().observe(interval);
+        let number = self.ivars().screen.lock().number;
+        let (Some(period), Some(number)) = (published, number) else {
+            return;
+        };
+        self.ivars()
+            .displays
+            .report_link_period(number, self.ivars().window_id, period);
+        if let Some(signal) = self.ivars().owner_signal.upgrade() {
+            let _ = signal.wake();
+        }
+        self.callbacks().dispatch_display_changed();
     }
 
     /// Pause or resume the tick — driven by the app's background/foreground
@@ -361,6 +495,15 @@ impl FluiView {
         let link = self.ivars().display_link.borrow_mut().take();
         if let Some(link) = link {
             link.invalidate();
+            // A link that is gone measures nothing: the screen's period is
+            // unknown until its replacement ticks.
+            self.ivars().link_period.borrow_mut().forget();
+            let number = self.ivars().screen.lock().number;
+            if let Some(number) = number {
+                self.ivars()
+                    .displays
+                    .forget_link_period(number, self.ivars().window_id);
+            }
         }
     }
 
@@ -450,6 +593,13 @@ impl FluiView {
         if std::ptr::from_ref::<UIWindow>(&window) as usize != identity {
             return;
         }
+        // The scene can be shown on another screen without a new attachment;
+        // layout and trait changes are where this view learns of it. A change
+        // dispatches a callback, so admission is rechecked below as for any
+        // other emission.
+        if let Some(scene) = window.windowScene() {
+            self.adopt_screen(&scene.screen());
+        }
         let bounds = self.bounds();
         let insets = self.safeAreaInsets();
         let next = WindowMetrics {
@@ -470,6 +620,9 @@ impl FluiView {
         if previous.size != next.size || previous.scale != next.scale {
             self.callbacks()
                 .dispatch_metrics_resize(next.size, next.scale);
+            // The published state follows the metrics: `state()` reads them
+            // again when the owner asks.
+            self.callbacks().dispatch_state_changed();
         }
         if self.ivars().sampling.get() != admission {
             // The resize dispatch above retired this view, so this snapshot's
@@ -529,9 +682,22 @@ struct WindowMetrics {
     safe_area: EdgeInsets,
 }
 
+/// UIKit's edge set for the edges the exclusion regions reach.
+fn rect_edge(edges: crate::shared::screen_edges::DeferredEdges) -> UIRectEdge {
+    [
+        (edges.top, UIRectEdge::Top),
+        (edges.left, UIRectEdge::Left),
+        (edges.bottom, UIRectEdge::Bottom),
+        (edges.right, UIRectEdge::Right),
+    ]
+    .into_iter()
+    .filter(|(reached, _)| *reached)
+    .fold(UIRectEdge::None, |set, (_, edge)| set | edge)
+}
+
 struct NativeAttachment {
     window: Retained<UIWindow>,
-    controller: Retained<UIViewController>,
+    controller: Retained<FluiViewController>,
     token: u64,
     published: bool,
     retiring: bool,
@@ -568,7 +734,19 @@ pub struct IOSWindow {
     metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
     /// Shared with the view, which samples it on the main thread.
     dark: Arc<AtomicBool>,
+    /// The screen the scene is on, kept by the view; read by `display_id`.
+    screen: Arc<parking_lot::Mutex<ScreenIdentity>>,
     id: WindowId,
+    /// The input regions last projected, and the screen edges they reach.
+    input_regions: parking_lot::Mutex<(
+        flui_platform_api::input_regions::ProjectedInputRegions,
+        crate::shared::screen_edges::DeferredEdges,
+    )>,
+    /// The haptic actuator, made on first use and shared, so its Core
+    /// Haptics engine lives as long as the window.
+    haptics: std::sync::OnceLock<Arc<super::haptics::IOSHaptics>>,
+    /// The published window state (ADR-0237).
+    snapshot: WindowStateCell,
 }
 
 impl IOSWindow {
@@ -577,8 +755,16 @@ impl IOSWindow {
         mtm: MainThreadMarker,
         id: WindowId,
         signal: std::sync::Weak<crate::shared::owner_signal::OwnerSignal>,
+        displays: Arc<IosDisplays>,
     ) -> Self {
+        let screen = Arc::new(parking_lot::Mutex::new(ScreenIdentity::default()));
         let callbacks = Arc::new(WindowCallbacks::new());
+        callbacks.set_input_capabilities(crate::shared::input_availability::ios());
+        if let Some(owner) = signal.upgrade() {
+            callbacks.set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
+                &owner, &callbacks,
+            ));
+        }
         let metrics = Arc::new(parking_lot::Mutex::new(WindowMetrics {
             size: Size::new(0.0, 0.0),
             scale: 1.0,
@@ -591,6 +777,11 @@ impl IOSWindow {
             Arc::clone(&metrics),
             Arc::clone(&dark),
             signal,
+            ViewDisplay {
+                displays,
+                screen: Arc::clone(&screen),
+                window: id,
+            },
         );
         Self {
             native: NativeOwner::new(
@@ -604,7 +795,14 @@ impl IOSWindow {
             callbacks,
             metrics,
             dark,
+            screen,
             id,
+            input_regions: parking_lot::Mutex::default(),
+            haptics: std::sync::OnceLock::new(),
+            snapshot: WindowStateCell::new(WindowState::new(
+                WindowGeometry::new(None, Size::new(0.0, 0.0)),
+                Size::new(0.0, 0.0),
+            )),
             closed: AtomicBool::new(false),
             lifecycle: parking_lot::Mutex::new(IOSLifecycle {
                 execution: WindowExecutionState::Detached,
@@ -625,7 +823,9 @@ impl IOSWindow {
             .ivars()
             .sampling
             .set(SamplingAdmission::Constructing);
-        let controller = self.status_bar.attach_controller(marker);
+        let controller = self
+            .status_bar
+            .attach_controller(marker, rect_edge(self.input_regions.lock().1));
         controller.setView(Some(&native.view));
         let window = UIWindow::initWithWindowScene(marker.alloc(), scene);
         window.setRootViewController(Some(&controller));
@@ -643,7 +843,7 @@ impl IOSWindow {
         window.layoutIfNeeded();
         native.view.sample_metrics();
         self.lifecycle.lock().execution = WindowExecutionState::Suspended;
-        native.view.start_display_link();
+        native.view.start_display_link(&scene.screen());
         native.view.set_display_link_paused(true);
     }
 
@@ -710,6 +910,7 @@ impl IOSWindow {
             .ivars()
             .sampling
             .set(SamplingAdmission::Detached);
+        native.view.detach_screen();
     }
 
     /// Pause or resume the per-frame tick (delegates to the content view's
@@ -804,6 +1005,8 @@ impl IOSWindow {
                 }
             }
         }
+        // Visibility and focus are part of the published state.
+        self.callbacks.dispatch_state_changed();
         let current = || {
             !self.closed.load(Ordering::SeqCst) && self.lifecycle.lock().generation == generation
         };
@@ -947,6 +1150,10 @@ impl PlatformWindow for IOSWindow {
         self.metrics.lock().scale
     }
 
+    fn display_id(&self) -> Option<DisplayId> {
+        self.screen.lock().id
+    }
+
     /// Ask for a frame.
     ///
     /// A demand signal only — it neither dispatches a frame nor marks the
@@ -983,11 +1190,53 @@ impl PlatformWindow for IOSWindow {
         self.metrics.lock().safe_area
     }
 
+    fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
+        let marker = MainThreadMarker::new()?;
+        let haptics = self.haptics.get_or_init(|| {
+            let view: Retained<objc2_ui_kit::UIView> =
+                Retained::into_super(self.native.get(marker).view.clone());
+            Arc::new(super::haptics::IOSHaptics::new(view, marker))
+        });
+        Some(Arc::clone(haptics) as Arc<dyn crate::traits::PlatformHaptics>)
+    }
+
+    /// UIKit defers system gestures per screen edge, not per rectangle: the window
+    /// projects the regions, and when the projection changed defers each edge an
+    /// exclusion region reaches (`preferredScreenEdgesDeferringSystemGestures`). A region
+    /// clear of every edge has no UIKit equivalent and defers nothing.
+    fn set_input_regions(&self, regions: &[flui_platform_api::input_regions::InputRegion]) {
+        let Some(marker) = MainThreadMarker::new() else {
+            return;
+        };
+        let size = self.physical_size();
+        let scale = self.scale_factor();
+        let edges = {
+            let mut state = self.input_regions.lock();
+            let (projection, edges) = &mut *state;
+            let Some(sent) = projection.update(regions, scale, None) else {
+                return;
+            };
+            *edges = crate::shared::screen_edges::DeferredEdges::of(sent, size);
+            *edges
+        };
+        let controller = self
+            .native
+            .get(marker)
+            .attachment
+            .borrow()
+            .as_ref()
+            .map(|attachment| attachment.controller.clone());
+        if let Some(controller) = controller {
+            controller.defer_edges(rect_edge(edges));
+        }
+    }
+
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform_api::PlatformSystemChrome>> {
         Some(Arc::new(super::status_bar::IOSSystemChrome(Arc::clone(
             &self.status_bar,
         ))))
     }
+
     fn appearance(&self) -> WindowAppearance {
         if self.dark.load(Ordering::Relaxed) {
             WindowAppearance::Dark
@@ -1017,9 +1266,41 @@ impl PlatformWindow for IOSWindow {
         Err(CursorError::Unsupported)
     }
 
-    fn get_title(&self) -> String {
-        // `UIWindow` has no title; the bundle display name is the app's name.
-        "FLUI iOS".to_owned()
+    /// `UIWindow` has no title, frame, position or commands, so a scene's
+    /// window honours none and observes nothing.
+    fn capabilities(&self) -> WindowCapabilities {
+        WindowCapabilities::NONE
+    }
+
+    fn apply(&self, command: WindowCommand) -> Result<(), WindowCommandError> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(WindowCommandError::Closed);
+        }
+        // The system owns the surface: every command is refused, except the one
+        // that asks for the mode every window has.
+        command.admit(&PlatformWindow::capabilities(self))?;
+        Ok(())
+    }
+
+    /// The scene's size, visibility and focus. The metrics and lifecycle live
+    /// apart from this cell, so each call reads them again. `on_state_changed`
+    /// is raised where they change: when the view's size or scale does, and on
+    /// each lifecycle step.
+    fn state(&self) -> WindowState {
+        self.snapshot.invalidate();
+        let published = self.snapshot.state_with(|| {
+            let size = self.metrics.lock().size;
+            WindowState::new(WindowGeometry::new(None, size), size)
+                .with_visible(self.is_visible())
+                .with_focused(self.is_focused())
+                .with_resizable(false)
+                .with_decorated(false)
+                .with_display(self.screen.lock().id)
+        });
+        if published.changed {
+            self.callbacks.dispatch_state_changed();
+        }
+        published.state
     }
 
     fn as_any(&self) -> &dyn Any {

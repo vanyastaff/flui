@@ -2,6 +2,9 @@
 //! that writes process-global state keeps its own `[[test]]` target instead (see
 //! `Cargo.toml`).
 
+#[path = "config_options.rs"]
+mod config_options;
+
 #[path = "data_transfer_transport.rs"]
 mod data_transfer_transport;
 

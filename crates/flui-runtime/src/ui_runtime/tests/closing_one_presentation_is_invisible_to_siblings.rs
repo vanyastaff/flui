@@ -370,10 +370,10 @@ fn run_custom_key_child(fail: bool) {
 }
 
 impl flui_interaction::GestureArenaMember for CloseArenaMember {
-    fn accept_gesture(&self, _: flui_interaction::PointerId) {
+    fn accept_gesture(&self, _: flui_interaction::GestureContest) {
         self.calls.set(self.calls.get() + 1);
     }
-    fn reject_gesture(&self, _: flui_interaction::PointerId) {
+    fn reject_gesture(&self, _: flui_interaction::GestureContest) {
         let _ = (&self.captures.first, &self.captures.second);
         self.calls.set(self.calls.get() + 1);
         CLOSE_REENTRY.with(|hook| {
@@ -524,6 +524,18 @@ impl flui_platform_api::PlatformWindow for OwnershipWindow {
             assert!(!self.fail_callback, "window cursor failure");
         }
         self.delegate.set_cursor(cursor)
+    }
+    fn state(&self) -> flui_platform_api::WindowState {
+        self.delegate.state()
+    }
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        self.delegate.capabilities()
+    }
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        self.delegate.apply(command)
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

@@ -14,14 +14,14 @@ use crate::runtime_services::{RuntimeHostServices, RuntimeServices};
 use crossbeam_channel::bounded;
 use flui_foundation::{PresentationId, UiRuntimeId};
 use flui_interaction::InteractionLane;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 use flui_painting::FontCollection;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 use flui_platform_api::PlatformTextInput;
 #[cfg(test)]
 use flui_rendering::pipeline::PipelineCell;
 use flui_scheduler::AppLifecycleState;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 use flui_scheduler::ClockSource;
 use flui_view::GlobalKeyScope;
 use std::cell::{Cell, RefCell};
@@ -30,9 +30,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 use std::sync::atomic::AtomicU64;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 use std::sync::atomic::Ordering;
 
 impl UiRuntime {
@@ -126,6 +126,8 @@ impl UiRuntime {
             storage,
             clock,
             text,
+            data_transfer,
+            process_nonce,
         } = services;
 
         // The ui_runtime's scheduler fires the SAME platform wake its presentation
@@ -144,6 +146,8 @@ impl UiRuntime {
 
         let interaction_lane = InteractionLane::try_new()?;
         let global_key_scope = GlobalKeyScope::new();
+        let drag =
+            flui_interaction::drag::DragOwner::new(process_nonce, ui_runtime_id, data_transfer);
 
         let presentation = PresentationState::new(
             presentation_id,
@@ -168,11 +172,17 @@ impl UiRuntime {
                 storage: storage.clone(),
                 clock: &clock,
                 text: text.clone(),
+                drag: drag.handle(),
             },
         );
 
         // The frame-time origin reads the ui_runtime's clock, so a manual clock's
         // frame timestamps measure from the same timeline they advance on.
+        drag.attach_presentation(
+            presentation_id,
+            presentation.window_id(),
+            presentation.hit_test_handle(),
+        );
         let start = flui_foundation::MonotonicClock::now(&clock);
         let unknown = flui_platform_api::SystemPreferences::default();
         super::preferences::publish(
@@ -189,6 +199,7 @@ impl UiRuntime {
             geometry_turn: std::rc::Rc::new(RefCell::new(None)),
             owner_frame,
             interaction_lane,
+            drag,
             global_key_scope,
             presentations: PresentationForest::single(presentation),
             focus_coordinator: FocusCoordinator::new(presentation_id),
@@ -197,11 +208,13 @@ impl UiRuntime {
             clock,
             frame_time: Cell::new(None),
             needs_redraw,
+            input_taps: crate::InputTaps::new(Arc::clone(&wake)),
+            decision_recorder: super::recording::DecisionRecorder::default(),
             wake: Arc::clone(&wake),
             clipboard,
             storage,
             text,
-            #[cfg(any(test, feature = "test-support"))]
+            #[cfg(any(test, feature = "testing"))]
             now_secs_override: AtomicU64::new(0),
             rx,
             sender_prototype: UiCommandSender {
@@ -224,7 +237,7 @@ impl UiRuntime {
 
     /// A UI runtime over a focused test window, with a wake that only sets the
     /// redraw flag.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn for_test() -> Self {
         Self::for_test_with_text_input(None)
@@ -235,7 +248,7 @@ impl UiRuntime {
     /// # Panics
     ///
     /// If the UI runtime's interaction lane cannot be created.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn for_test_with_text_input(
         platform_text_input: Option<Arc<dyn PlatformTextInput>>,
@@ -250,7 +263,7 @@ impl UiRuntime {
     /// # Panics
     ///
     /// If the UI runtime's interaction lane cannot be created.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn for_test_with_window(window: Arc<dyn flui_platform_api::PlatformWindow>) -> Self {
         let identity = crate::runtime_services::next_identity();
@@ -291,7 +304,7 @@ impl UiRuntime {
 
     /// Test-only: this UI runtime's text context, so a test can check which font
     /// collection it was built from and which pipelines lend it.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn text_context_for_test(&self) -> &flui_rendering::TextContextHandle {
         &self.text
@@ -316,7 +329,7 @@ impl UiRuntime {
     }
 
     /// The UI runtime's frame-failure text-retention policy.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn frame_failure_detail_for_test(&self) -> FrameFailureDetail {
         self.frame_failure_detail.get()

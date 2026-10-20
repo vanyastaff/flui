@@ -314,7 +314,7 @@ fn a_runtime_driven_fade_reaches_the_profiler() {
 fn zero_history_capacity_keeps_counters_without_frames() {
     let profiler = Profiler::with_config(flui_devtools::ProfilerConfig {
         max_frame_history: 0,
-        jank_threshold_ms: -1.0,
+        jank_line: flui_devtools::JankLine::Fixed(-1.0),
     });
     for _ in 0..2 {
         profiler.begin_frame();
@@ -937,4 +937,39 @@ fn developer_history_respects_capacity_and_clear() {
         }
     }
     assert!(failures.is_empty(), "failed cases: {failures:?}");
+}
+
+/// The framework half of the jank line: the real `frame` span carries the
+/// scheduler budget's period in `period_us`, and the profiler judges the frame
+/// by it. A budget no real frame can meet makes every frame jank; a budget no
+/// real frame can miss makes none.
+#[test]
+fn a_real_frame_is_judged_against_the_period_its_scheduler_reports() {
+    use flui_scheduler::FrameDuration;
+
+    flui_testing::log_capture::disarm_interest_cache();
+    for (period, janky) in [
+        (Duration::from_micros(1), true),
+        (Duration::from_secs(10), false),
+    ] {
+        let profiler = Arc::new(Profiler::new());
+        let subscriber =
+            tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            let mut binding = HeadlessBinding::new();
+            binding.scheduler().set_budget_frame_duration(
+                FrameDuration::try_from_period(period).expect("a nonzero period"),
+            );
+            binding.pump_frame(Duration::from_millis(16));
+        });
+        let frame = profiler
+            .frame_stats()
+            .expect("one driven frame is one profiled frame");
+        assert_eq!(
+            frame.is_jank(),
+            janky,
+            "a {period:?} budget judged a real frame that took {:.3} ms",
+            frame.total_time_ms()
+        );
+    }
 }

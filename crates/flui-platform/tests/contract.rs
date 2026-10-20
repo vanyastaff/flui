@@ -31,21 +31,22 @@ fn test_window_lifecycle_contract() {
         "Platform name should not be empty"
     );
 
-    // Contract 2: Platform must enumerate displays (even if empty for headless)
-    let displays = platform.displays();
-    tracing::info!("Platform has {} display(s)", displays.len());
+    // Contract 2: Platform must sample its displays: a snapshot (empty before a
+    // winit loop runs) or a typed error, never a panic
+    match platform.display_snapshot() {
+        Ok(snapshot) => tracing::info!("Platform has {} display(s)", snapshot.displays().len()),
+        Err(error) => tracing::info!("Platform has no display source: {error}"),
+    }
 
     // Contract 3: Window creation should either succeed or fail gracefully
-    let options = WindowOptions {
-        title: "Contract Test Window".to_string(),
-        size: Size::new(640.0, 480.0),
-        visible: false,
-        resizable: true,
-        decorated: true,
-        min_size: Some(Size::new(320.0, 240.0)),
-        max_size: None,
-        ..Default::default()
-    };
+    let options = WindowOptions::default()
+        .with_title("Contract Test Window".to_string())
+        .with_size(Size::new(640.0, 480.0))
+        .with_visible(false)
+        .with_resizable(true)
+        .with_decorated(true)
+        .with_min_size(Some(Size::new(320.0, 240.0)))
+        .with_max_size(None);
 
     match platform.open_window(options) {
         Ok(window) => {
@@ -119,12 +120,10 @@ fn test_window_lifecycle_contract() {
             tracing::info!("✓ request_redraw() executed without panic");
 
             // Contract 9: Multiple window creation
-            let options2 = WindowOptions {
-                title: "Contract Test Window 2".to_string(),
-                size: Size::new(400.0, 300.0),
-                visible: false,
-                ..Default::default()
-            };
+            let options2 = WindowOptions::default()
+                .with_title("Contract Test Window 2".to_string())
+                .with_size(Size::new(400.0, 300.0))
+                .with_visible(false);
 
             match platform.open_window(options2) {
                 Ok(window2) => {
@@ -206,6 +205,10 @@ mod native_windows {
     const CHILD: &str = "FLUI_NATIVE_WINDOW_CONTRACT_CHILD";
     const CASES: &[(&str, fn())] = &[
         (
+            "touchpad_viewport_initialises_and_survives_its_messages",
+            touchpad_viewport_initialises_and_survives_its_messages,
+        ),
+        (
             "shift_character_reaches_native_key_dispatch",
             shift_character_reaches_native_key_dispatch,
         ),
@@ -278,8 +281,8 @@ mod native_windows {
             system_key_callback_can_close_window,
         ),
         (
-            "deferred_system_key_preserves_window",
-            deferred_system_key_preserves_window,
+            "a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once",
+            a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once,
         ),
         ("alt_tap_keeps_next_character", alt_tap_keeps_next_character),
         ("f10_keeps_next_character", f10_keeps_next_character),
@@ -413,6 +416,14 @@ mod native_windows {
             synthetic_touch_and_pen_reach_native_pointer_dispatch,
         ),
         (
+            "a_captured_native_pointer_session_replays_to_what_it_delivered",
+            a_captured_native_pointer_session_replays_to_what_it_delivered,
+        ),
+        (
+            "a_captured_native_mouse_session_replays_to_what_it_delivered",
+            a_captured_native_mouse_session_replays_to_what_it_delivered,
+        ),
+        (
             "native_mouse_wheels_keep_hover_identity_and_signed_units",
             native_mouse_wheels_keep_hover_identity_and_signed_units,
         ),
@@ -420,7 +431,232 @@ mod native_windows {
             "fractional_native_wheel_packets_preserve_observed_precision_and_source",
             fractional_native_wheel_packets_preserve_observed_precision_and_source,
         ),
+        (
+            "repeated_samples_of_the_real_monitors_keep_their_ids",
+            repeated_samples_of_the_real_monitors_keep_their_ids,
+        ),
+        (
+            "refresh_is_the_rational_active_mode",
+            refresh_is_the_rational_active_mode,
+        ),
+        (
+            "window_display_is_a_display_of_the_snapshot",
+            window_display_is_a_display_of_the_snapshot,
+        ),
+        (
+            "dpi_change_raises_the_display_hint",
+            dpi_change_raises_the_display_hint,
+        ),
+        (
+            "moves_within_one_monitor_raise_no_display_hint",
+            moves_within_one_monitor_raise_no_display_hint,
+        ),
     ];
+
+    // The monitors are keyed by their display targets, not the reusable GDI
+    // names, and a sample of an unchanged topology is the same snapshot.
+    fn repeated_samples_of_the_real_monitors_keep_their_ids() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let first = platform.display_snapshot().expect("first sample");
+        let second = platform.display_snapshot().expect("second sample");
+        let ids = |snapshot: &flui_platform_api::DisplaySnapshot| {
+            snapshot
+                .displays()
+                .iter()
+                .map(|display| display.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&first), ids(&second), "resampling changed a monitor id");
+        let distinct: std::collections::HashSet<_> = ids(&first).into_iter().collect();
+        assert_eq!(
+            distinct.len(),
+            first.displays().len(),
+            "two monitors share an id"
+        );
+    }
+
+    // Each active path's `refreshRate`, read straight from `QueryDisplayConfig`
+    // and paired with its GDI source name, independently of the source under
+    // test.
+    #[expect(unsafe_code, reason = "reading the active display paths")]
+    fn system_path_rates() -> Vec<(String, u32, u32)> {
+        use windows::Win32::Devices::Display::{
+            DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_MODE_INFO,
+            DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME, DisplayConfigGetDeviceInfo,
+            GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig,
+        };
+        let (mut paths, mut modes) = (0u32, 0u32);
+        // SAFETY: both out-pointers are valid `u32`s for the call.
+        let sized = unsafe {
+            GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &raw mut paths, &raw mut modes)
+        };
+        assert_eq!(sized.0, 0, "sizing the display config");
+        let mut path_info = vec![DISPLAYCONFIG_PATH_INFO::default(); paths as usize];
+        let mut mode_info = vec![DISPLAYCONFIG_MODE_INFO::default(); modes as usize];
+        // SAFETY: the buffers hold exactly the counts passed in; active paths
+        // take no topology id.
+        let queried = unsafe {
+            QueryDisplayConfig(
+                QDC_ONLY_ACTIVE_PATHS,
+                &raw mut paths,
+                path_info.as_mut_ptr(),
+                &raw mut modes,
+                mode_info.as_mut_ptr(),
+                None,
+            )
+        };
+        assert_eq!(queried.0, 0, "querying the display config");
+        path_info.truncate(paths as usize);
+        path_info
+            .iter()
+            .map(|path| {
+                let mut name = DISPLAYCONFIG_SOURCE_DEVICE_NAME::default();
+                name.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+                name.header.size = std::mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32;
+                name.header.adapterId = path.sourceInfo.adapterId;
+                name.header.id = path.sourceInfo.id;
+                // SAFETY: the header carries the request type and the struct's
+                // own size; `name` outlives the call.
+                let status = unsafe { DisplayConfigGetDeviceInfo(&raw mut name.header) };
+                assert_eq!(status, 0, "naming the source");
+                let end = name
+                    .viewGdiDeviceName
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(name.viewGdiDeviceName.len());
+                (
+                    String::from_utf16_lossy(&name.viewGdiDeviceName[..end]),
+                    path.targetInfo.refreshRate.Numerator,
+                    path.targetInfo.refreshRate.Denominator,
+                )
+            })
+            .collect()
+    }
+
+    // The snapshot's period is the target's rational rate converted exactly,
+    // not a rounded whole-hertz figure.
+    fn refresh_is_the_rational_active_mode() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let snapshot = platform.display_snapshot().expect("snapshot");
+        let rates = system_path_rates();
+        assert!(!rates.is_empty(), "the system reports an active path");
+        let mut compared = 0;
+        for (gdi_name, numerator, denominator) in rates {
+            let Ok(expected) = flui_platform_api::RefreshPeriod::from_ratio(numerator, denominator)
+            else {
+                continue;
+            };
+            let display = snapshot
+                .displays()
+                .iter()
+                .find(|display| display.name == gdi_name)
+                .unwrap_or_else(|| panic!("{gdi_name} is not in {:?}", snapshot.displays()));
+            assert_eq!(
+                display.refresh_period,
+                Some(expected),
+                "{gdi_name}: {numerator}/{denominator} Hz"
+            );
+            compared += 1;
+        }
+        assert!(compared > 0, "no path carried a rate to compare");
+    }
+
+    fn window_display_is_a_display_of_the_snapshot() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        // The window reads the sample the snapshot took; it samples nothing.
+        let snapshot = platform.display_snapshot().expect("snapshot");
+        let id = window
+            .display_id()
+            .expect("a window on a monitor names its display");
+        assert!(
+            snapshot.get(id).is_some(),
+            "{id:?} is not in {:?}",
+            snapshot.displays()
+        );
+        window.close();
+    }
+
+    #[expect(unsafe_code, reason = "sending WM_DPICHANGED to an owned window")]
+    fn dpi_change_raises_the_display_hint() {
+        use windows::Win32::UI::{HiDpi::GetDpiForWindow, WindowsAndMessaging::WM_DPICHANGED};
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = window
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 backend")
+            .hwnd();
+        let hints = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&hints);
+        window.on_display_changed(Box::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
+        // SAFETY: the window is live on this thread; `rect` outlives the
+        // synchronous send, which is the pointer WM_DPICHANGED's lparam carries.
+        unsafe {
+            let dpi = GetDpiForWindow(hwnd);
+            let mut rect = RECT::default();
+            windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &raw mut rect)
+                .expect("window rect");
+            SendMessageW(
+                hwnd,
+                WM_DPICHANGED,
+                Some(WPARAM(((dpi << 16) | dpi) as usize)),
+                Some(LPARAM((&raw const rect) as isize)),
+            );
+        }
+        assert_eq!(
+            hints.load(Ordering::SeqCst),
+            1,
+            "a DPI change must raise one display hint"
+        );
+        window.close();
+    }
+
+    #[expect(unsafe_code, reason = "moving an owned window")]
+    fn moves_within_one_monitor_raise_no_display_hint() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = window
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 backend")
+            .hwnd();
+        let hints = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&hints);
+        window.on_display_changed(Box::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
+        let move_to = |x: i32, y: i32| {
+            // SAFETY: this live wrapper owns the HWND on its creating thread;
+            // SetWindowPos receives only by-value coordinates and flags.
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    None,
+                    x,
+                    y,
+                    0,
+                    0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                )
+            }
+            .expect("native move");
+        };
+        // The first message seeds the window's monitor.
+        move_to(100, 100);
+        let seeded = hints.load(Ordering::SeqCst);
+        for (x, y) in [(140, 120), (200, 150), (80, 90)] {
+            move_to(x, y);
+        }
+        assert_eq!(
+            hints.load(Ordering::SeqCst),
+            seeded,
+            "a move that stays on one monitor raised a display hint"
+        );
+        window.close();
+    }
 
     pub(super) fn run_requested_child() -> bool {
         let Ok(name) = std::env::var(CHILD) else {
@@ -485,24 +721,87 @@ mod native_windows {
 
     fn open(platform: &WindowsPlatform, decorated: bool) -> Arc<dyn HostWindow> {
         platform
-            .open_window(WindowOptions {
-                visible: false,
-                decorated,
-                size: Size::new(320.0, 240.0),
-                ..Default::default()
-            })
+            .open_window(
+                WindowOptions::default()
+                    .with_visible(false)
+                    .with_decorated(decorated)
+                    .with_size(Size::new(320.0, 240.0)),
+            )
             .expect("create actual hidden Win32 window")
+    }
+
+    // The DirectManipulation viewport initialises on a real window and the
+    // window reports precise scrolling and trackpad gestures as native; the
+    // messages that drive it (a contact offer for a pointer that is no
+    // touchpad's, the pump timer, the modal size loop) are handled with no
+    // touchpad attached, and closing the window releases the viewport.
+    // Whether a precision touchpad's manipulation arrives is not exercised:
+    // it needs the hardware (docs/platform-parity.md).
+    #[expect(unsafe_code, reason = "owned Win32 messages to the fixture's own HWND")]
+    fn touchpad_viewport_initialises_and_survives_its_messages() {
+        use flui_platform::traits::PlatformInput;
+        use flui_platform_api::input_capabilities::Availability;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            DM_POINTERHITTEST, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_TIMER,
+        };
+
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open_shown(&platform);
+        let hwnd = hwnd_of(&window);
+        let claimed = Arc::new(Mutex::new(None));
+        let observed = Arc::clone(&claimed);
+        window.on_input(Box::new(move |input| {
+            if let PlatformInput::Capabilities(capabilities) = input {
+                *observed.lock().expect("capabilities") = Some(capabilities);
+            }
+            DispatchEventResult::default()
+        }));
+        let capabilities = claimed
+            .lock()
+            .expect("capabilities")
+            .take()
+            .expect("the window reports its capabilities first");
+        assert_eq!(capabilities.precise_scroll(), Availability::Native);
+        assert_eq!(capabilities.trackpad_gestures(), Availability::Native);
+        // SAFETY: integer message data for the fixture's own HWND on its
+        // owner thread; `0x444D` is the viewport's pacing timer, and pointer
+        // id `0x7fff_fff0` names no live pointer.
+        unsafe {
+            for (message, wparam) in [
+                (WM_TIMER, 0x444D),
+                (DM_POINTERHITTEST, 0x7fff_fff0),
+                (WM_ENTERSIZEMOVE, 0),
+                (WM_TIMER, 0x444D),
+                (DM_POINTERHITTEST, 0x7fff_fff0),
+                (WM_EXITSIZEMOVE, 0),
+                (WM_TIMER, 0x444D),
+            ] {
+                SendMessageW(hwnd, message, Some(WPARAM(wparam)), Some(LPARAM(0)));
+            }
+        }
+        let closed = Arc::new(AtomicBool::new(false));
+        let close_observed = Arc::clone(&closed);
+        window.on_close(Box::new(move || {
+            close_observed.store(true, Ordering::SeqCst);
+        }));
+        window.close();
+        assert!(
+            closed.load(Ordering::SeqCst),
+            "closing runs the close callback"
+        );
+        drop(window);
+        drop(platform);
     }
 
     // DefWindowProc ignores Alt+F4 and leaves menu mode at once for a hidden
     // window, so system-key defaults are exercised on a shown one.
     fn open_shown(platform: &WindowsPlatform) -> Arc<dyn HostWindow> {
         platform
-            .open_window(WindowOptions {
-                visible: true,
-                size: Size::new(160.0, 120.0),
-                ..Default::default()
-            })
+            .open_window(
+                WindowOptions::default()
+                    .with_visible(true)
+                    .with_size(Size::new(160.0, 120.0)),
+            )
             .expect("create actual shown Win32 window")
     }
 
@@ -579,11 +878,11 @@ mod native_windows {
         Box::new(WindowsPlatform::new().expect("native Windows platform"))
             .run(Box::new(move |owner| {
                 let WindowOpen::Ready(window) = owner
-                    .open_window(WindowOptions {
-                        visible: true,
-                        size: Size::new(160.0, 120.0),
-                        ..Default::default()
-                    })
+                    .open_window(
+                        WindowOptions::default()
+                            .with_visible(true)
+                            .with_size(Size::new(160.0, 120.0)),
+                    )
                     .expect("open readmission window")
                 else {
                     panic!("Win32 on-ready window was deferred");
@@ -699,11 +998,11 @@ mod native_windows {
             .run(Box::new(move |owner| {
                 if let Some(visible) = window {
                     let WindowOpen::Ready(_window) = owner
-                        .open_window(WindowOptions {
-                            visible,
-                            size: Size::new(160.0, 120.0),
-                            ..Default::default()
-                        })
+                        .open_window(
+                            WindowOptions::default()
+                                .with_visible(visible)
+                                .with_size(Size::new(160.0, 120.0)),
+                        )
                         .expect("open callback-less window")
                     else {
                         panic!("Win32 on-ready window was deferred");
@@ -740,11 +1039,11 @@ mod native_windows {
         Box::new(WindowsPlatform::new().expect("native Windows platform"))
             .run(Box::new(move |owner| {
                 let WindowOpen::Ready(window) = owner
-                    .open_window(WindowOptions {
-                        visible: true,
-                        size: Size::new(160.0, 120.0),
-                        ..Default::default()
-                    })
+                    .open_window(
+                        WindowOptions::default()
+                            .with_visible(true)
+                            .with_size(Size::new(160.0, 120.0)),
+                    )
                     .expect("open same-instant window")
                 else {
                     panic!("Win32 on-ready window was deferred");
@@ -868,11 +1167,11 @@ mod native_windows {
         Box::new(WindowsPlatform::new().expect("native Windows platform"))
             .run(Box::new(move |owner| {
                 let WindowOpen::Ready(window) = owner
-                    .open_window(WindowOptions {
-                        visible: minimized,
-                        size: Size::new(160.0, 120.0),
-                        ..Default::default()
-                    })
+                    .open_window(
+                        WindowOptions::default()
+                            .with_visible(minimized)
+                            .with_size(Size::new(160.0, 120.0)),
+                    )
                     .expect("open unpainted window")
                 else {
                     panic!("Win32 on-ready window was deferred");
@@ -952,11 +1251,11 @@ mod native_windows {
                 let mut windows = Vec::new();
                 for index in 0..2 {
                     let WindowOpen::Ready(window) = owner
-                        .open_window(WindowOptions {
-                            visible: true,
-                            size: Size::new(160.0, 120.0),
-                            ..Default::default()
-                        })
+                        .open_window(
+                            WindowOptions::default()
+                                .with_visible(true)
+                                .with_size(Size::new(160.0, 120.0)),
+                        )
                         .expect("open actual deadline window")
                     else {
                         panic!("Win32 on-ready window was deferred");
@@ -1088,8 +1387,12 @@ mod native_windows {
     fn system_key_callback_can_close_window() {
         system_keyboard_close("closed_in_callback");
     }
-    fn deferred_system_key_preserves_window() {
-        system_keyboard_close("deferred");
+    /// A nested Alt+F4 sent while the first one's callback runs needs its
+    /// answer now: it is answered "not handled", so the native default closes
+    /// the window, and the key itself is delivered once, after the running
+    /// callback returns (ADR-0207 §7).
+    fn a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once() {
+        system_keyboard_close("reentrant");
     }
 
     // SetKeyboardState affects this owner thread, not physical keyboard input.
@@ -1198,6 +1501,9 @@ mod native_windows {
             let callback_replacement = Arc::clone(&replacement);
             let callback_replacement_closes = Arc::clone(&replacement_closes);
             window.on_input(Box::new(move |event| {
+                if matches!(event, flui_platform::traits::PlatformInput::Capabilities(_)) {
+                    return flui_platform::traits::DispatchEventResult::default();
+                }
                 assert_eq!(
                     event.as_keyboard().expect("native key event").key,
                     flui_platform_api::keyboard::Key::Named(
@@ -1205,10 +1511,11 @@ mod native_windows {
                     )
                 );
                 let first = input_observations.fetch_add(1, Ordering::SeqCst) == 0;
-                if mode == "deferred" && first {
+                if mode == "reentrant" && first {
                     // SAFETY: the upgraded callback's window owns this
                     // same native handle on the current thread. This nested
-                    // delivery returns DEFERRED before its callback can run.
+                    // delivery is answered "not handled" before its callback
+                    // can run, so its native default closes the window.
                     unsafe {
                         SendMessageW(
                             HWND(raw_hwnd as *mut _),
@@ -1230,7 +1537,7 @@ mod native_windows {
                 }
                 DispatchEventResult::resolved(
                     true,
-                    mode == "prevented" || (mode == "deferred" && first),
+                    mode == "prevented" || (mode == "reentrant" && first),
                 )
             }));
         }
@@ -1265,7 +1572,7 @@ mod native_windows {
         assert!(drained, "{mode}: owned message drain exceeded its bound");
         assert_eq!(
             input_count.load(Ordering::SeqCst),
-            if mode == "deferred" {
+            if mode == "reentrant" {
                 2
             } else {
                 usize::from(mode != "unhandled")
@@ -1287,7 +1594,7 @@ mod native_windows {
         }
         assert_eq!(
             close_count.load(Ordering::SeqCst),
-            usize::from(mode != "prevented" && mode != "vetoed" && mode != "deferred"),
+            usize::from(mode != "prevented" && mode != "vetoed"),
             "{mode}: native default close"
         );
         assert_eq!(
@@ -1298,7 +1605,7 @@ mod native_windows {
         if mode == "vetoed" {
             window.on_should_close(Box::new(|| true));
         }
-        if mode == "vetoed" || mode == "prevented" || mode == "deferred" {
+        if mode == "vetoed" || mode == "prevented" {
             window.close();
         }
         drop(window);
@@ -1336,6 +1643,9 @@ mod native_windows {
         let typed = Arc::new(Mutex::new(Vec::<String>::new()));
         let typed_observations = Arc::clone(&typed);
         window.on_input(Box::new(move |event| {
+            if matches!(event, flui_platform::traits::PlatformInput::Capabilities(_)) {
+                return flui_platform::traits::DispatchEventResult::default();
+            }
             if let Some(keyboard) = event.as_keyboard()
                 && keyboard.state() == flui_platform_api::keyboard::KeyState::Down
                 && let flui_platform_api::keyboard::Key::Character(text) = &keyboard.key
@@ -1477,6 +1787,9 @@ mod native_windows {
         )>::new()));
         let observed = Arc::clone(&keys);
         window.on_input(Box::new(move |event| {
+            if matches!(event, flui_platform::traits::PlatformInput::Capabilities(_)) {
+                return flui_platform::traits::DispatchEventResult::default();
+            }
             // Only the dead key under test; modifier releases the platform
             // synthesizes around a layout switch are not part of this contract.
             if let Some(keyboard) = event.as_keyboard()
@@ -1706,6 +2019,9 @@ mod native_windows {
         let typed = Arc::new(Mutex::new(Vec::<String>::new()));
         let typed_observations = Arc::clone(&typed);
         window.on_input(Box::new(move |event| {
+            if matches!(event, flui_platform::traits::PlatformInput::Capabilities(_)) {
+                return flui_platform::traits::DispatchEventResult::default();
+            }
             if let Some(keyboard) = event.as_keyboard()
                 && keyboard.state() == flui_platform_api::keyboard::KeyState::Down
                 && let flui_platform_api::keyboard::Key::Character(text) = &keyboard.key
@@ -1844,6 +2160,9 @@ mod native_windows {
         // The input callback must be `Send`; carry the handle as an address.
         let pumped_window = hwnd.0 as usize;
         window.on_input(Box::new(move |event| {
+            if matches!(event, flui_platform::traits::PlatformInput::Capabilities(_)) {
+                return flui_platform::traits::DispatchEventResult::default();
+            }
             if event
                 .as_keyboard()
                 .is_some_and(|key| key.state() == flui_platform_api::keyboard::KeyState::Down)
@@ -1997,26 +2316,27 @@ mod native_windows {
         let weak = Arc::downgrade(&window);
         let observations = Arc::new(Mutex::new(Vec::new()));
         let callback_observations = Arc::clone(&observations);
-        window.on_moved(Box::new(move || {
+        window.on_state_changed(Box::new(move || {
             let window = weak.upgrade().expect("live moved window");
             let hwnd = window
                 .as_any()
                 .downcast_ref::<WindowsWindow>()
                 .expect("Win32 backend")
                 .hwnd();
-            let mut origin = POINT::default();
+            let mut rect = windows::Win32::Foundation::RECT::default();
             // SAFETY: the upgraded wrapper owns this HWND on the callback's
-            // creating thread; origin is a live correctly sized out-parameter.
-            assert!(unsafe { ClientToScreen(hwnd, &raw mut origin) }.as_bool());
+            // creating thread; rect is a live correctly sized out-parameter.
+            unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &raw mut rect) }
+                .expect("window rectangle");
             let scale = window.scale_factor();
             let actual = flui_foundation::geometry::Point::new(
-                origin.x as f64 / scale,
-                origin.y as f64 / scale,
+                f64::from(rect.left) / scale,
+                f64::from(rect.top) / scale,
             );
             callback_observations
                 .lock()
                 .expect("move observations")
-                .push((actual, window.bounds().origin));
+                .push((actual, window.state().outer.position));
         }));
         for (x, y) in [(40_000, 100), (200, 150)] {
             observations.lock().expect("move observations").clear();
@@ -2036,10 +2356,14 @@ mod native_windows {
             .expect("native move");
             let values = observations.lock().expect("move observations");
             let &(actual, observed) = values.last().expect("native move delivered");
-            assert_eq!(actual, observed, "callback saw truncated or stale origin");
             assert_eq!(
-                window.bounds().origin,
-                actual,
+                Some(actual),
+                observed,
+                "callback saw truncated or stale origin"
+            );
+            assert_eq!(
+                window.state().outer.position,
+                Some(actual),
                 "getter changed after native move"
             );
         }
@@ -2061,6 +2385,9 @@ mod native_windows {
         let observed = Arc::new(Mutex::new(Vec::new()));
         let keys = observed.clone();
         window.on_input(Box::new(move |event| {
+            if matches!(event, flui_platform::traits::PlatformInput::Capabilities(_)) {
+                return flui_platform::traits::DispatchEventResult::default();
+            }
             if let Some(event) = event.as_keyboard() {
                 keys.lock().expect("keys").push(event.clone());
             }
@@ -2481,12 +2808,19 @@ mod native_windows {
                 ));
         }));
         for requested in [Size::new(500.0, 360.0), Size::new(440.0, 280.0)] {
-            window.resize(requested);
+            window
+                .apply(flui_platform_api::WindowCommand::SetSize(requested))
+                .expect("the native window resizes");
             let values = observations.lock().expect("resize observations");
             let &(size, scale, observed, physical, observed_scale) =
                 values.last().expect("native resize delivered");
             assert_eq!(size, observed, "getter stale inside resize callback");
             assert_eq!(scale, observed_scale);
+            assert!(
+                (size.width - requested.width).abs() <= 1.0 / scale
+                    && (size.height - requested.height).abs() <= 1.0 / scale,
+                "the command sizes the client area, not the outer frame: asked {requested:?}, got {size:?}"
+            );
             assert_eq!(
                 window.logical_size(),
                 size,
@@ -2534,6 +2868,9 @@ mod native_windows {
         let events = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&events);
         window.on_input(Box::new(move |input| {
+            if matches!(input, flui_platform::traits::PlatformInput::Capabilities(_)) {
+                return flui_platform::traits::DispatchEventResult::default();
+            }
             if let Some(event) = input.as_pointer() {
                 recorded.lock().expect("pointer log").push(event.clone());
             }
@@ -3093,6 +3430,376 @@ mod native_windows {
         window.close();
     }
 
+    /// A touch and a pen injected into a real window under `native-capture`
+    /// journal a native recording that replays, through the shared decoder,
+    /// to exactly the events the window delivered, and to the shape of its
+    /// golden `win32_injected_touch_and_pen.jsonl`
+    /// (`native_recording::capture::hold_against_golden`).
+    fn a_captured_native_pointer_session_replays_to_what_it_delivered() {
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        captured_native_pointer_session();
+        #[cfg(not(all(debug_assertions, feature = "native-capture")))]
+        eprintln!("CANNOT_VERIFY native capture: needs a debug build with `native-capture`");
+    }
+
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    #[expect(
+        unsafe_code,
+        reason = "real native pointer injection into an ephemeral shown test window"
+    )]
+    fn captured_native_pointer_session() {
+        use crate::native_recording::capture::record;
+        use crate::native_recording::codec::Backend;
+        use windows::Win32::UI::{
+            Controls::{
+                CreateSyntheticPointerDevice, DestroySyntheticPointerDevice, POINTER_FEEDBACK_NONE,
+                POINTER_TYPE_INFO, POINTER_TYPE_INFO_0,
+            },
+            Input::Pointer::{
+                InjectSyntheticPointerInput, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT,
+                POINTER_FLAG_INRANGE, POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_INFO,
+                POINTER_PEN_INFO, POINTER_TOUCH_INFO,
+            },
+            WindowsAndMessaging::{
+                PEN_MASK_PRESSURE, PEN_MASK_TILT_X, PEN_MASK_TILT_Y, PT_PEN, PT_TOUCH,
+                TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE, WindowFromPoint,
+            },
+        };
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let (delivered, recordings) = record(Backend::Win32, || {
+            let (window, _close) = open_pointer_target(&platform)?;
+            let hwnd = hwnd_of(&window);
+            pump_pointer_thread();
+            let mut target = POINT { x: 40, y: 40 };
+            // SAFETY: the live shown owner window and an initialized point.
+            assert!(unsafe { ClientToScreen(hwnd, &raw mut target) }.as_bool());
+            // SAFETY: a hit test of a screen point; no handle is retained.
+            if unsafe { WindowFromPoint(target) } != hwnd {
+                eprintln!("CANNOT_VERIFY native capture: the shown target is occluded");
+                return None;
+            }
+            let events = record_pointer(&window);
+            for native_kind in [PT_TOUCH, PT_PEN] {
+                // SAFETY: one ephemeral synthetic device, destroyed below.
+                let device = match unsafe {
+                    CreateSyntheticPointerDevice(native_kind, 1, POINTER_FEEDBACK_NONE)
+                } {
+                    Ok(device) => device,
+                    Err(error) => {
+                        eprintln!(
+                            "CANNOT_VERIFY native capture: CreateSyntheticPointerDevice refused: {error}"
+                        );
+                        return None;
+                    }
+                };
+                for (flags, dx, pressure) in [
+                    (
+                        POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
+                        0,
+                        512,
+                    ),
+                    (
+                        POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
+                        6,
+                        768,
+                    ),
+                    (POINTER_FLAG_UP, 6, 0),
+                ] {
+                    let at = POINT {
+                        x: target.x + dx,
+                        y: target.y,
+                    };
+                    let info = POINTER_INFO {
+                        pointerType: native_kind,
+                        pointerId: 1,
+                        pointerFlags: flags,
+                        ptPixelLocation: at,
+                        ptPixelLocationRaw: at,
+                        ..Default::default()
+                    };
+                    let packet = if native_kind == PT_TOUCH {
+                        let contact = RECT {
+                            left: at.x - 10,
+                            top: at.y - 15,
+                            right: at.x + 10,
+                            bottom: at.y + 15,
+                        };
+                        POINTER_TYPE_INFO {
+                            r#type: native_kind,
+                            Anonymous: POINTER_TYPE_INFO_0 {
+                                touchInfo: POINTER_TOUCH_INFO {
+                                    pointerInfo: info,
+                                    touchMask: TOUCH_MASK_CONTACTAREA | TOUCH_MASK_PRESSURE,
+                                    pressure,
+                                    rcContact: contact,
+                                    rcContactRaw: contact,
+                                    ..Default::default()
+                                },
+                            },
+                        }
+                    } else {
+                        POINTER_TYPE_INFO {
+                            r#type: native_kind,
+                            Anonymous: POINTER_TYPE_INFO_0 {
+                                penInfo: POINTER_PEN_INFO {
+                                    pointerInfo: info,
+                                    penMask: PEN_MASK_PRESSURE | PEN_MASK_TILT_X | PEN_MASK_TILT_Y,
+                                    pressure,
+                                    tiltX: 30,
+                                    tiltY: 0,
+                                    ..Default::default()
+                                },
+                            },
+                        }
+                    };
+                    // SAFETY: the union arm matches the type and the device;
+                    // the packet outlives the synchronous native copy.
+                    let injected = unsafe { InjectSyntheticPointerInput(device, &[packet]) };
+                    if let Err(error) = injected {
+                        // SAFETY: this fixture owns the device it created.
+                        unsafe { DestroySyntheticPointerDevice(device) };
+                        eprintln!(
+                            "CANNOT_VERIFY native capture: InjectSyntheticPointerInput refused: {error}"
+                        );
+                        return None;
+                    }
+                    let limit = Instant::now() + Duration::from_millis(300);
+                    while Instant::now() < limit {
+                        pump_pointer_thread();
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                }
+                // SAFETY: this fixture owns the device it created.
+                unsafe { DestroySyntheticPointerDevice(device) };
+            }
+            let delivered = events.lock().expect("pointer log").clone();
+            window.close();
+            Some(delivered)
+        });
+        let Some(delivered) = delivered else {
+            return;
+        };
+        let [recording] = recordings.as_slice() else {
+            panic!("one window, one registry: {recordings:?}");
+        };
+        assert!(
+            delivered
+                .iter()
+                .filter(|event| matches!(event, flui_platform_api::pointer::PointerEvent::Down(_)))
+                .count()
+                >= 2,
+            "the injected touch and pen were delivered: {delivered:?}"
+        );
+        let replayed: Vec<String> = recording
+            .replay()
+            .iter()
+            .map(|input| format!("{:?}", input.as_pointer().expect("pointer input")))
+            .collect();
+        let delivered: Vec<String> = delivered.iter().map(|event| format!("{event:?}")).collect();
+        assert_eq!(
+            replayed, delivered,
+            "the journal replays to what the window delivered"
+        );
+        crate::native_recording::capture::hold_against_golden(
+            "win32_injected_touch_and_pen",
+            recording,
+        );
+    }
+
+    /// Mouse buttons, a Control-held click and both wheels sent through
+    /// `SendInput` to a real window under `native-capture` journal a native
+    /// recording that replays to exactly the events the window delivered, and
+    /// to the shape of its golden `win32_sent_mouse_and_wheel.jsonl`.
+    fn a_captured_native_mouse_session_replays_to_what_it_delivered() {
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        captured_native_mouse_session();
+        #[cfg(not(all(debug_assertions, feature = "native-capture")))]
+        eprintln!("CANNOT_VERIFY native capture: needs a debug build with `native-capture`");
+    }
+
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    #[expect(
+        unsafe_code,
+        reason = "real mouse and modifier input sent to an ephemeral foreground test window, with the cursor restored"
+    )]
+    fn captured_native_mouse_session() {
+        use crate::native_recording::capture::{hold_against_golden, record};
+        use crate::native_recording::codec::Backend;
+        use flui_platform_api::pointer::PointerEvent;
+        use windows::Win32::UI::{
+            Input::KeyboardAndMouse::{
+                INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
+                KEYEVENTF_KEYUP, MOUSE_EVENT_FLAGS, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN,
+                MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL,
+                MOUSEINPUT, SendInput,
+            },
+            WindowsAndMessaging::{
+                GetCursorPos, GetForegroundWindow, SetCursorPos, WindowFromPoint,
+            },
+        };
+        struct Cursor(POINT);
+        impl Drop for Cursor {
+            fn drop(&mut self) {
+                // SAFETY: restore the position captured before this row.
+                let _ = unsafe { SetCursorPos(self.0.x, self.0.y) };
+            }
+        }
+        /// One step of the session: the cursor to a client point, or input.
+        enum Step {
+            Cursor(i32, i32),
+            Mouse(MOUSE_EVENT_FLAGS, i32),
+            Key(VIRTUAL_KEY, KEYBD_EVENT_FLAGS),
+        }
+        let mut original = POINT::default();
+        // SAFETY: an initialized point; nothing is retained.
+        unsafe { GetCursorPos(&raw mut original) }.expect("capture cursor for restoration");
+        let _restore = Cursor(original);
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let (delivered, recordings) = record(Backend::Win32, || {
+            let (window, _close) = open_pointer_target(&platform)?;
+            let hwnd = hwnd_of(&window);
+            let screen = |x: i32, y: i32| {
+                let mut point = POINT { x, y };
+                // SAFETY: the live shown owner window and an initialized point.
+                assert!(unsafe { ClientToScreen(hwnd, &raw mut point) }.as_bool());
+                point
+            };
+            for (x, y) in [(40, 40), (46, 40)] {
+                // SAFETY: a hit test of a screen point; no handle is retained.
+                if unsafe { WindowFromPoint(screen(x, y)) } != hwnd {
+                    eprintln!("CANNOT_VERIFY native capture: the shown target is occluded");
+                    return None;
+                }
+            }
+            let events = record_pointer(&window);
+            let (left_down, left_up) = (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP);
+            let steps = [
+                Step::Cursor(40, 40),
+                // A click, then a second within the double-click time.
+                Step::Mouse(left_down, 0),
+                Step::Mouse(left_up, 0),
+                Step::Mouse(left_down, 0),
+                Step::Mouse(left_up, 0),
+                // A drag with the secondary button chorded in.
+                Step::Cursor(46, 40),
+                Step::Mouse(left_down, 0),
+                Step::Mouse(MOUSEEVENTF_RIGHTDOWN, 0),
+                Step::Mouse(MOUSEEVENTF_RIGHTUP, 0),
+                Step::Mouse(left_up, 0),
+                // A Control-held click.
+                Step::Key(VK_CONTROL, KEYBD_EVENT_FLAGS(0)),
+                Step::Mouse(left_down, 0),
+                Step::Mouse(left_up, 0),
+                Step::Key(VK_CONTROL, KEYEVENTF_KEYUP),
+                // A wheel detent away from the user, a tilt right, and a
+                // half detent toward the user (a precise device).
+                Step::Mouse(MOUSEEVENTF_WHEEL, 120),
+                Step::Mouse(MOUSEEVENTF_HWHEEL, 120),
+                Step::Mouse(MOUSEEVENTF_WHEEL, -60),
+            ];
+            let mut cursor = screen(40, 40);
+            for step in steps {
+                let mut now = POINT::default();
+                // SAFETY: observes activation and an initialized point; no
+                // handle is retained.
+                let (foreground, placed) = unsafe {
+                    (
+                        GetForegroundWindow() == hwnd,
+                        GetCursorPos(&raw mut now).is_ok() && now == cursor,
+                    )
+                };
+                if !foreground || !(placed || matches!(step, Step::Cursor(..))) {
+                    eprintln!(
+                        "CANNOT_VERIFY native capture: the target lost the foreground, or another input moved the cursor, mid-session (foreground {foreground}, cursor {now:?}, expected {cursor:?})"
+                    );
+                    return None;
+                }
+                let input = match step {
+                    Step::Cursor(x, y) => {
+                        cursor = screen(x, y);
+                        // SAFETY: a point checked against this shown target.
+                        unsafe { SetCursorPos(cursor.x, cursor.y) }.expect("move the cursor");
+                        None
+                    }
+                    Step::Mouse(flags, data) => Some(INPUT {
+                        r#type: INPUT_MOUSE,
+                        Anonymous: INPUT_0 {
+                            mi: MOUSEINPUT {
+                                mouseData: data.cast_unsigned(),
+                                dwFlags: flags,
+                                ..Default::default()
+                            },
+                        },
+                    }),
+                    Step::Key(key, flags) => Some(INPUT {
+                        r#type: INPUT_KEYBOARD,
+                        Anonymous: INPUT_0 {
+                            ki: KEYBDINPUT {
+                                wVk: key,
+                                dwFlags: flags,
+                                ..Default::default()
+                            },
+                        },
+                    }),
+                };
+                if let Some(input) = input {
+                    // SAFETY: an initialized union arm matching its type; the
+                    // foreground window is this row's own target.
+                    let sent = unsafe { SendInput(&[input], size_of::<INPUT>() as i32) };
+                    if sent != 1 {
+                        eprintln!("CANNOT_VERIFY native capture: SendInput was refused");
+                        return None;
+                    }
+                }
+                let limit = Instant::now() + Duration::from_millis(40);
+                while Instant::now() < limit {
+                    pump_pointer_thread();
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            }
+            let mut now = POINT::default();
+            // SAFETY: an initialized point; nothing is retained.
+            if unsafe { GetCursorPos(&raw mut now) }.is_err() || now != cursor {
+                eprintln!(
+                    "CANNOT_VERIFY native capture: another input moved the cursor mid-session"
+                );
+                return None;
+            }
+            let delivered = events.lock().expect("pointer log").clone();
+            window.close();
+            Some(delivered)
+        });
+        let Some(delivered) = delivered else {
+            return;
+        };
+        let [recording] = recordings.as_slice() else {
+            panic!("one window, one registry: {recordings:?}");
+        };
+        let count =
+            |wanted: fn(&PointerEvent) -> bool| delivered.iter().filter(|e| wanted(e)).count();
+        assert_eq!(
+            count(|event| matches!(event, PointerEvent::Down(_))),
+            4,
+            "four primary presses were delivered: {delivered:?}"
+        );
+        assert_eq!(
+            count(|event| matches!(event, PointerEvent::Scroll(_))),
+            3,
+            "three wheel turns were delivered: {delivered:?}"
+        );
+        let replayed: Vec<String> = recording
+            .replay()
+            .iter()
+            .map(|input| format!("{:?}", input.as_pointer().expect("pointer input")))
+            .collect();
+        let delivered: Vec<String> = delivered.iter().map(|event| format!("{event:?}")).collect();
+        assert_eq!(
+            replayed, delivered,
+            "the journal replays to what the window delivered"
+        );
+        hold_against_golden("win32_sent_mouse_and_wheel", recording);
+    }
+
     #[expect(
         unsafe_code,
         reason = "drains actual native pointer broker messages on the child window's owner thread"
@@ -3446,11 +4153,11 @@ mod native_windows {
 
     fn open_owned(owner: &OwnerPlatform) -> Arc<dyn HostWindow> {
         owner
-            .open_window(WindowOptions {
-                visible: false,
-                size: Size::new(320.0, 240.0),
-                ..Default::default()
-            })
+            .open_window(
+                WindowOptions::default()
+                    .with_visible(false)
+                    .with_size(Size::new(320.0, 240.0)),
+            )
             .expect("create actual hidden Win32 window")
             .try_ready()
             .expect("owner-thread window opens directly")
@@ -3614,5 +4321,106 @@ mod native_windows {
             2,
             "the loop ended with the hook's replacement window still open"
         );
+    }
+}
+
+/// AppKit's nested-pump row of ADR-0207 §7. A `keyDown:` AppKit delivers to
+/// the content view while the window's input callback runs (a modal run loop
+/// pumped from inside it) is queued behind the running callback and
+/// delivered once, after it returns. AppKit's `keyDown:` takes no answer, and
+/// the backend implements no `performKeyEquivalent:`, so no AppKit key needs
+/// a synchronous one.
+///
+/// Type-checked on every host by `cargo check --target aarch64-apple-darwin`;
+/// it runs only in an AppKit-run-loop-pumping macOS process.
+#[cfg(target_os = "macos")]
+mod native_appkit {
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use flui_platform::WindowOptions;
+    use flui_platform::traits::{DispatchEventResult, PlatformInput};
+    use objc2::{class, msg_send, runtime::AnyObject};
+    use objc2_foundation::{NSPoint, NSString};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    /// A `keyDown:` NSEvent for the `k` key, the press AppKit would deliver.
+    #[expect(unsafe_code, reason = "constructing a real NSEvent through AppKit")]
+    fn key_event() -> *mut AnyObject {
+        let characters = NSString::from_str("k");
+        // SAFETY: a class-method constructor with plain arguments; the event
+        // is autoreleased and outlives this test's synchronous use of it.
+        unsafe {
+            msg_send![
+                class!(NSEvent),
+                keyEventWithType: 10_usize,
+                location: NSPoint::new(0.0, 0.0),
+                modifierFlags: 0_usize,
+                timestamp: 1.0_f64,
+                windowNumber: 0_isize,
+                context: std::ptr::null_mut::<AnyObject>(),
+                characters: &*characters,
+                charactersIgnoringModifiers: &*characters,
+                isARepeat: false,
+                keyCode: 40_u16
+            ]
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039)"]
+    #[expect(
+        unsafe_code,
+        reason = "native keyDown: delivery to the real content view"
+    )]
+    fn a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once() {
+        let platform = flui_platform::current_platform().expect("AppKit platform");
+        let window = platform
+            .open_window(WindowOptions::default().with_visible(false))
+            .expect("AppKit window");
+        let RawWindowHandle::AppKit(handle) =
+            window.window_handle().expect("live window handle").as_raw()
+        else {
+            panic!("an AppKit window handle");
+        };
+        let view = handle.ns_view.as_ptr().cast::<AnyObject>() as usize;
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let nested = Arc::new(AtomicBool::new(false));
+        let (sink, inside) = (Arc::clone(&log), Arc::clone(&nested));
+        window.on_input(Box::new(move |input| {
+            let PlatformInput::Keyboard(_) = input else {
+                return DispatchEventResult::default();
+            };
+            let first = sink.lock().expect("log").is_empty();
+            sink.lock()
+                .expect("log")
+                .push(if inside.load(Ordering::SeqCst) {
+                    "nested"
+                } else {
+                    "key"
+                });
+            if first {
+                inside.store(true, Ordering::SeqCst);
+                // SAFETY: the content view is live on this main thread; a
+                // second `keyDown:` reaches it while this callback runs.
+                unsafe {
+                    let _: () = msg_send![view as *mut AnyObject, keyDown: key_event()];
+                }
+                inside.store(false, Ordering::SeqCst);
+            }
+            DispatchEventResult::default()
+        }));
+        // SAFETY: as above, outside any callback.
+        unsafe {
+            let _: () = msg_send![view as *mut AnyObject, keyDown: key_event()];
+        }
+        assert_eq!(
+            *log.lock().expect("log"),
+            ["key", "key"],
+            "the nested press is queued, never run inside the callback, and delivered once"
+        );
+        window.close();
     }
 }

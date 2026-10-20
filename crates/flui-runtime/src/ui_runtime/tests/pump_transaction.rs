@@ -471,7 +471,7 @@ fn resampling_sibling_case(fail: bool, compete: bool) {
 /// the pump polls it, and the callback never runs.
 #[test]
 fn a_ui_runtime_on_a_manual_clock_fires_gesture_deadlines_on_that_clock() {
-    use flui_interaction::settings::GestureSettings;
+    use flui_interaction::gesture::GestureSettings;
     use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer, PointerId};
 
     let mut clock = ManualClock::new();
@@ -479,9 +479,7 @@ fn a_ui_runtime_on_a_manual_clock_fires_gesture_deadlines_on_that_clock() {
     let fired = Arc::new(AtomicBool::new(false));
     let fired_in_callback = Arc::clone(&fired);
     let recognizer = LongPressGestureRecognizer::builder(ui_runtime.gestures().arena().clone())
-        .settings(
-            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
-        )
+        .settings(GestureSettings::default().with_long_press_timeout(Duration::from_millis(500)))
         .on_long_press_start(move |_details| fired_in_callback.store(true, Ordering::SeqCst))
         .build();
     let position = flui_foundation::geometry::Offset::new(10.0, 10.0);

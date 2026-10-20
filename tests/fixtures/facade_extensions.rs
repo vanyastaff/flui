@@ -303,7 +303,7 @@ fn gesture_recognizer_uses_headless_virtual_time() {
     let callback = fired.clone();
     let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
         .settings(
-            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
+            GestureSettings::default().with_long_press_timeout(Duration::from_millis(500)),
         )
         .on_long_press_start(move |_details: flui::interaction::LongPressStartDetails| {
             callback.fetch_add(1, Ordering::SeqCst);
@@ -365,9 +365,11 @@ fn typed_drag_down_callback_is_available_from_the_widget_surface() {
     let observed = downs.clone();
     let tree = lay_out(
         GestureDetector::new()
-            .on_horizontal_drag_down(move |_cx, _details: flui::widgets::DragDownDetails| {
-                observed.fetch_add(1, Ordering::SeqCst);
-            })
+            .drag(flui::widgets::DragSlot::horizontal().on_down(
+                move |_cx, _details: flui::widgets::DragDownDetails| {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                },
+            ))
             .behavior(HitTestBehavior::Opaque)
             .child(SizedBox::new(40.0, 30.0)),
         loose(100.0),
@@ -385,13 +387,13 @@ struct DistanceRecognizer {
 }
 
 impl flui::interaction::GestureArenaMember for DistanceRecognizer {
-    fn accept_gesture(&self, pointer: flui::interaction::PointerId) {
-        assert!(self.contact.tracks(pointer));
+    fn accept_gesture(&self, contest: flui::interaction::GestureContest) {
+        assert!(self.contact.tracks_contest(contest));
         self.accepted.fetch_add(1, Ordering::SeqCst);
     }
 
-    fn reject_gesture(&self, pointer: flui::interaction::PointerId) {
-        assert!(self.contact.tracks(pointer));
+    fn reject_gesture(&self, contest: flui::interaction::GestureContest) {
+        assert!(self.contact.tracks_contest(contest));
         self.rejected.fetch_add(1, Ordering::SeqCst);
     }
 }
@@ -628,8 +630,8 @@ use flui::interaction::{
     ClientToken, Code, DetachOutcome, FocusAttachment, FocusChangeCallback, FocusDetachOutcome,
     FocusManager, FocusNode, FocusNodeChangeCallback, FocusNodeId, FocusNodeRegistration,
     FocusRequestOutcome, FocusScopeNode, FocusTraversalPolicy, FocusTreeError, HitTestEntry,
-    HitTestHandle, HitTestSnapshot, InteractionDispatchError, Key, KeyEvent, KeyEventHandler,
-    KeyEventResult, KeyState, Location, Modifiers, NamedKey, ReadingOrderPolicy, RectProvider,
+    HitTestHandle, HitTestSnapshot, InteractionDispatchError, Key, KeyCancelHandler, KeyEvent,
+    KeyEventHandler, KeyEventResult, KeyState, Location, Modifiers, NamedKey, ReadingOrderPolicy, RectProvider,
     ResolvedStep, TextInputClient, TextInputError, TextInputHandle, TraversalEdgeBehavior,
 };
 
@@ -654,6 +656,7 @@ fn interaction_callback_vocabulary_is_nameable_through_the_facade() {
     nameable::<HitTestEntry>();
     nameable::<HitTestSnapshot>();
     nameable::<InteractionDispatchError>();
+    nameable::<KeyCancelHandler>();
     nameable::<KeyEventHandler>();
     nameable::<KeyEventResult>();
     nameable::<ReadingOrderPolicy>();

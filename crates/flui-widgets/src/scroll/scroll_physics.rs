@@ -14,14 +14,14 @@
 //!
 //! - `BouncingScrollPhysics.create_ballistic_simulation` creates the spring
 //!   simulation but the caller is responsible for driving (ticking) it —
-//!   `Scrollable.on_pan_end` notes this explicitly.
+//!   `Scrollable`'s drag `on_end` notes this explicitly.
 //! - Parent-physics chaining (`ScrollPhysics.parent`) — not yet wired.
 
 use std::sync::Arc;
 
 use flui_animation::simulation::{
-    BouncingScrollSimulation, FrictionSimulation, Simulation, SimulationBounds, SpringDescription,
-    SpringSimulation, Tolerance,
+    BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
+    SimulationBounds, SpringDescription, SpringSimulation, Tolerance,
 };
 use flui_rendering::view::ScrollPosition;
 
@@ -112,6 +112,12 @@ impl ScrollMetrics {
         Tolerance::for_device_pixel_ratio(self.device_pixel_ratio).ok()
     }
 
+    /// How far off a target, in logical pixels, still counts as on it:
+    /// [`rest_slop`] at these metrics' ratio.
+    pub(crate) fn rest_slop(&self) -> f64 {
+        rest_slop(self.device_pixel_ratio)
+    }
+
     /// The scroll range, or `None` when the extents are unordered or not
     /// finite.
     pub(crate) fn bounds(&self) -> Option<SimulationBounds> {
@@ -126,7 +132,7 @@ impl ScrollMetrics {
     /// viewport_dimension * viewport_fraction)`. This is the *public*, defensively-guarded
     /// formula — distinct from the internal recompute
     /// `ScrollPosition::apply_viewport_dimension` drives — used by both
-    /// `PageController::page` and `PageScrollPhysics` (`page_view.rs`) so the
+    /// `PageController::page` and `PageSnap` (`nested/snap.rs`) so the
     /// two agree on exactly what "the current page" means.
     ///
     /// This snapshot alone never special-cases a collapsed
@@ -155,6 +161,18 @@ impl ScrollMetrics {
     #[must_use]
     pub fn pixels_from_page(&self, viewport_fraction: f64, page: f64) -> f64 {
         page * self.viewport_dimension * viewport_fraction
+    }
+}
+
+/// Half a device pixel at `device_pixel_ratio`, in logical pixels: the slop a
+/// ballistic run rests within (ADR-0155), so whatever came to rest a hair off
+/// a target counts as on it. Half a logical pixel for a ratio that is not
+/// finite and positive.
+pub(crate) fn rest_slop(device_pixel_ratio: f64) -> f64 {
+    if device_pixel_ratio.is_finite() && device_pixel_ratio > 0.0 {
+        0.5 / device_pixel_ratio
+    } else {
+        0.5
     }
 }
 
@@ -199,17 +217,6 @@ pub trait ScrollPhysics: Send + Sync + std::fmt::Debug {
     /// The return value is the _accepted_ position, not the rejected overshoot.
     fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f64) -> f64;
 
-    /// Resolve a simulation step through the same offset primitive. The default
-    /// keeps hard boundaries; spring physics may already encode overscroll and
-    /// must not apply drag resistance to its recovery a second time.
-    fn apply_ballistic_boundary_conditions(
-        &self,
-        metrics: &ScrollMetrics,
-        proposed_pixels: f64,
-    ) -> f64 {
-        self.apply_boundary_conditions(metrics, proposed_pixels)
-    }
-
     /// Create a `Simulation` that coasts the viewport to rest after the user
     /// lifts their finger.
     ///
@@ -220,7 +227,7 @@ pub trait ScrollPhysics: Send + Sync + std::fmt::Debug {
     /// The simulation positions are in logical pixels, matching
     /// `ScrollController.pixels()`. The caller is responsible for advancing
     /// (ticking) the simulation; see the `DEFERRED` note in
-    /// `Scrollable::on_pan_end`.
+    /// the drag `on_end` in `Scrollable`.
     fn create_ballistic_simulation(
         &self,
         metrics: &ScrollMetrics,
@@ -246,63 +253,6 @@ pub trait ScrollPhysics: Send + Sync + std::fmt::Debug {
 /// Cloning the `Arc` is cheap; the physics object itself is stateless.
 pub type SharedScrollPhysics = Arc<dyn ScrollPhysics>;
 
-/// A ballistic simulation whose samples pass through its physics'
-/// [`ScrollPhysics::apply_ballistic_boundary_conditions`], for owners that
-/// write sampled positions straight to a scroll position.
-///
-/// Physics simulations coast without bounds so a nested run can hand the
-/// velocity left at an edge to an ancestor. An owner outside that dispatcher
-/// must still stop where its own boundary refuses a sample: the motion rests
-/// at the resolved position, with zero velocity.
-pub(crate) struct BoundaryResolvedSimulation {
-    inner: Box<dyn Simulation>,
-    physics: SharedScrollPhysics,
-    metrics: ScrollMetrics,
-}
-
-impl BoundaryResolvedSimulation {
-    pub(crate) fn new(
-        inner: Box<dyn Simulation>,
-        physics: SharedScrollPhysics,
-        metrics: ScrollMetrics,
-    ) -> Self {
-        Self {
-            inner,
-            physics,
-            metrics,
-        }
-    }
-
-    /// The raw sample and its resolved position.
-    fn sample(&self, time: f64) -> (f64, f64) {
-        let raw = self.inner.x(time);
-        let resolved = self
-            .physics
-            .apply_ballistic_boundary_conditions(&self.metrics, raw);
-        (raw, resolved)
-    }
-}
-
-impl Simulation for BoundaryResolvedSimulation {
-    fn x(&self, time: f64) -> f64 {
-        self.sample(time).1
-    }
-
-    fn dx(&self, time: f64) -> f64 {
-        let (raw, resolved) = self.sample(time);
-        if resolved == raw {
-            self.inner.dx(time)
-        } else {
-            0.0
-        }
-    }
-
-    fn is_done(&self, time: f64) -> bool {
-        let (raw, resolved) = self.sample(time);
-        resolved != raw || self.inner.is_done(time)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // ClampingScrollPhysics — Android-style hard clamp
 // ---------------------------------------------------------------------------
@@ -310,9 +260,7 @@ impl Simulation for BoundaryResolvedSimulation {
 /// Hard-clamps scroll position to `[min, max]`.
 ///
 /// Scroll cannot go past the content edge; the boundary snaps instantly and
-/// post-fling coast stops where the clamp first refuses a sample. The
-/// simulation itself coasts unbounded, so a nested scroll can hand the
-/// velocity left at the edge to an ancestor.
+/// post-fling coast is bounded so the final position lands within range.
 #[derive(Debug, Clone, Copy)]
 pub struct ClampingScrollPhysics {
     /// Below this absolute velocity (logical px / s) no fling is started.
@@ -323,7 +271,7 @@ pub struct ClampingScrollPhysics {
     pub min_fling_velocity_px_per_sec: f64,
     /// Friction drag coefficient for the fling deceleration. Must be in `(0,
     /// 1)`. The default is approximately `0.135` in
-    /// `FrictionSimulation`.
+    /// `BoundedFrictionSimulation`.
     pub fling_drag_coefficient: f64,
 }
 
@@ -342,7 +290,7 @@ impl Default for ClampingScrollPhysics {
     /// Returns the same values as [`ClampingScrollPhysics::new`] — notably
     /// `fling_drag_coefficient = 0.135`, which `#[derive(Default)]` cannot
     /// provide (it would zero-initialize every field, and a drag coefficient of
-    /// 0 is invalid for `FrictionSimulation`).
+    /// 0 is invalid for `BoundedFrictionSimulation`).
     fn default() -> Self {
         Self::new()
     }
@@ -370,11 +318,11 @@ impl ScrollPhysics for ClampingScrollPhysics {
             return None;
         }
         // Unordered extents, a NaN position or an invalid drag: no fling.
-        metrics.bounds()?;
-        let simulation = FrictionSimulation::new(
+        let simulation = BoundedFrictionSimulation::new(
             self.fling_drag_coefficient,
             metrics.pixels,
             velocity_px_per_sec,
+            metrics.bounds()?,
             metrics.ballistic_tolerance()?,
         )
         .ok()?;
@@ -454,13 +402,6 @@ impl Default for BouncingScrollPhysics {
 }
 
 impl ScrollPhysics for BouncingScrollPhysics {
-    fn apply_ballistic_boundary_conditions(
-        &self,
-        _metrics: &ScrollMetrics,
-        proposed_pixels: f64,
-    ) -> f64 {
-        proposed_pixels
-    }
     fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f64) -> f64 {
         let anchor = if proposed_pixels < metrics.min_scroll_extent {
             metrics.pixels.min(metrics.min_scroll_extent)

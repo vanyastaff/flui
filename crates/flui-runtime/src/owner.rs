@@ -30,7 +30,9 @@ mod text_sizing;
 pub use callback::OwnerCallback;
 pub use delivery::{Delivery, DispatchError, FrameDispatcher, OwnerEffects};
 pub use preferences::SystemPreferencesSnapshot;
-pub use presentation_dispatch::{InputOutcome, PresentationDispatcher, WindowObservation};
+pub use presentation_dispatch::{
+    DisplayUpdate, InputOutcome, PresentationDispatcher, WindowObservation,
+};
 use runtime_dispatch::RuntimeWork;
 pub use runtime_dispatch::{RuntimeDispatcher, RuntimeOperation};
 pub use status::RuntimeStatus;
@@ -76,6 +78,10 @@ struct OwnerState {
     next_continuation: u64,
     callback_depth: usize,
     callback_remaining: usize,
+    /// The frame-rate demand last delivered to the host for each presentation;
+    /// a missing entry is `Idle`.
+    frame_rate_delivered:
+        std::collections::HashMap<PresentationAddress, crate::frame_rate_demand::FrameRateDemand>,
 }
 
 #[derive(Default, PartialEq, Eq)]

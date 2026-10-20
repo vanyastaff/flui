@@ -44,7 +44,7 @@ use flui_sdk::widgets::{SizedBox, TextEditingController};
 /// Tapping anywhere in the decorated area focuses the field, which reaches
 /// the composed `InputDecorator` (the active-indicator color/width flips to
 /// the focused branch) — and unfocusing reverts it. Exercises the full
-/// production path: `GestureDetector::on_tap` → `FocusNode::request_focus` →
+/// production path: the press's `Listener` → `FocusNode::request_focus` →
 /// `MaterialTextFieldState`'s own node listener →
 /// `rebuild_handle().schedule(reason)` → a headless `tick()`.
 ///
@@ -96,9 +96,16 @@ pub fn tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator() 
          indicator color, got: {focused}"
     );
 
-    // Round trip: unfocusing must revert it.
+    // Round trip: unfocusing must revert it, and the press's tap, which the
+    // field's double-tap holds for the double-tap time, takes no focus back.
     focus_node.unfocus();
-    laid.tick();
+    for _ in 0..40 {
+        laid.pump_for(std::time::Duration::from_millis(16));
+    }
+    assert!(
+        !focus_node.has_focus(),
+        "a focus moved on after the press stays moved"
+    );
 
     let reverted = laid
         .render_property(decorated_box, "decoration")

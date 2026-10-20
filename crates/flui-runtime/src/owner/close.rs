@@ -33,12 +33,21 @@ impl OwnerCore {
                 entry.residence = Residence::RetiringCheckedOut;
             }
         }
+        // The window outlives the presentation, so a high refresh rate it was
+        // given is released before the host stops following it.
+        let mut failure = None;
+        self.release_frame_rate_demand(effects, address, &mut failure);
         // Withdraw native routing before terminal observers. A caught native
         // failure remains authoritative throughout logical close and retention.
-        let failure = catch_unwind(AssertUnwindSafe(|| {
+        let retired = catch_unwind(AssertUnwindSafe(|| {
             effects.retire_presentation(address, surviving);
         }))
         .err();
+        crate::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut failure,
+            retired,
+            "presentation retirement",
+        );
         let failure = catch_unwind(AssertUnwindSafe(|| {
             if surviving.is_some() {
                 runtime.close_presentation_after_failure(address.presentation_id, failure);

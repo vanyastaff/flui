@@ -16,19 +16,26 @@ mod accessibility;
 mod appearance;
 mod clipboard;
 mod com_apartment;
-mod display;
+mod direct_manipulation;
+pub(crate) mod display;
+mod drag;
 mod events;
+mod haptics;
+mod host_events;
 mod platform;
 pub(crate) mod preferences;
 mod text_services;
 mod util;
 mod window;
 mod window_ext;
+mod window_frame;
+mod window_limits;
+mod window_modes;
+mod window_placement;
 
 #[cfg(feature = "a11y")]
 pub use accessibility::WindowsAccessibility;
 pub use clipboard::WindowsClipboard;
-pub use display::{WindowsDisplay, enumerate_displays};
 pub use platform::WindowsPlatform;
 pub use window::WindowsWindow;
 pub use window_ext::{

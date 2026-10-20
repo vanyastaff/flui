@@ -53,7 +53,7 @@ windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Libr
 # The hook's unit tests run without `host-hook` (`src/lib.rs` compiles `hook`
 # under `cfg(test)` too), so a plain `cargo test -p flui-hot-reload` covers it.
 flui-sdk = { workspace = true }
-flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-utils"] }
+flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["testing"] }
 # `tests/plugin_pipeline_text.rs` reads which text context a plugin's layout
 # was lent (`flui_painting::testing::text_context_lends`, through
 # `TextContextHandle::with`).

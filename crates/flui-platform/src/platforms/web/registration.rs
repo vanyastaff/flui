@@ -22,7 +22,17 @@ export function releaseCanvas(canvas, token) {
     if (canvas[ownerKey] === token) delete canvas[ownerKey];
 }
 export function effectiveCanvasFocus(canvas) {
-    return !!canvas.ownerDocument?.hasFocus() && canvas.getRootNode().activeElement === canvas;
+    if (!canvas.ownerDocument?.hasFocus()) return false;
+    return isOwnedFocus(canvas, canvas.getRootNode().activeElement);
+}
+// The canvas, or the text editor its owner registered beside it.
+export function isOwnedFocus(canvas, node) {
+    if (node === canvas) return true;
+    const editor = canvas[ownerKey]?.editor;
+    return !!node && node === editor;
+}
+export function setCanvasEditor(canvas, token, editor) {
+    if (canvas[ownerKey] === token) token.editor = editor;
 }
 export function observeCanvas(observer, canvas) { observer.observe(canvas); }
 export function disconnectObserver(observer) { observer.disconnect(); }
@@ -50,6 +60,10 @@ extern "C" {
     fn release_canvas(canvas: &web_sys::HtmlCanvasElement, token: &JsValue) -> Result<(), JsValue>;
     #[wasm_bindgen(js_name = effectiveCanvasFocus)]
     pub(super) fn effective_focus(canvas: &web_sys::HtmlCanvasElement) -> bool;
+    #[wasm_bindgen(js_name = isOwnedFocus)]
+    pub(super) fn is_owned_focus(canvas: &web_sys::HtmlCanvasElement, node: &JsValue) -> bool;
+    #[wasm_bindgen(js_name = setCanvasEditor)]
+    fn set_canvas_editor(canvas: &web_sys::HtmlCanvasElement, token: &JsValue, editor: &JsValue);
     #[wasm_bindgen(catch, js_name = observeCanvas)]
     fn observe_canvas(
         observer: &web_sys::ResizeObserver,
@@ -137,13 +151,60 @@ impl Drop for CanvasClaim {
     }
 }
 
-struct Listener {
+pub(super) struct Listener {
     target: web_sys::EventTarget,
     kind: &'static str,
     closure: Option<Closure<dyn Fn(web_sys::Event)>>,
     // The JS wrapper has only a Weak reference. Even a refused detach cannot
     // retain application captures or invoke the retired body.
     _body: Rc<dyn Fn(web_sys::Event)>,
+}
+
+impl Listener {
+    /// A nonpassive listener for `kind` on `target`, outside a
+    /// registration's installation: one the window's text input attaches to
+    /// its surface while the window lives. Its body runs only while
+    /// `accepting` holds; dropping it detaches it.
+    pub(super) fn install(
+        target: &web_sys::EventTarget,
+        kind: &'static str,
+        accepting: &Rc<Cell<bool>>,
+        body: impl Fn(web_sys::Event) + 'static,
+    ) -> Result<Self, OpenWindowError> {
+        let body: Rc<dyn Fn(web_sys::Event)> = Rc::new(body);
+        let weak = Rc::downgrade(&body);
+        let accepting = Rc::clone(accepting);
+        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |event| {
+            if accepting.get()
+                && let Some(body) = weak.upgrade()
+            {
+                body(event);
+            }
+        });
+        let options = web_sys::AddEventListenerOptions::new();
+        options.set_passive(false);
+        // Own the token before calling the host: a replaced add method might
+        // install a listener and then throw. Dropping it still attempts removal.
+        let listener = Self {
+            target: target.clone(),
+            kind,
+            closure: Some(closure),
+            _body: body,
+        };
+        target
+            .add_event_listener_with_callback_and_add_event_listener_options(
+                kind,
+                listener
+                    .closure
+                    .as_ref()
+                    .expect("BUG: live listener owns closure")
+                    .as_ref()
+                    .unchecked_ref(),
+                &options,
+            )
+            .map_err(backend)?;
+        Ok(listener)
+    }
 }
 
 impl Drop for Listener {
@@ -181,12 +242,56 @@ impl Drop for ResizeSubscription {
     }
 }
 
+/// A registration-owned `setTimeout` slot: one pending deadline at a time,
+/// cleared when re-armed and when the registration retires. Its body runs
+/// only while the registration accepts, through a weak reference like a
+/// listener's.
+pub(super) struct DeadlineTimer {
+    closure: Closure<dyn Fn()>,
+    pending: Rc<Cell<Option<i32>>>,
+    _body: Rc<dyn Fn()>,
+}
+
+impl DeadlineTimer {
+    /// Run the body once `delay` has passed, replacing a pending run.
+    pub(super) fn arm(&self, delay: std::time::Duration) {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        if let Some(id) = self.pending.take() {
+            window.clear_timeout_with_handle(id);
+        }
+        let millis = i32::try_from(delay.as_millis()).unwrap_or(i32::MAX);
+        match window.set_timeout_with_callback_and_timeout_and_arguments_0(
+            self.closure.as_ref().unchecked_ref(),
+            millis,
+        ) {
+            Ok(id) => self.pending.set(Some(id)),
+            Err(error) => report(error),
+        }
+    }
+
+    /// Clear the pending run, if any.
+    pub(super) fn cancel(&self) {
+        if let (Some(id), Some(window)) = (self.pending.take(), web_sys::window()) {
+            window.clear_timeout_with_handle(id);
+        }
+    }
+}
+
+impl Drop for DeadlineTimer {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
 pub(super) struct Registration {
     pub(super) accepting: Rc<Cell<bool>>,
     pub(super) pointers: Rc<RefCell<HashMap<i32, u16>>>,
     canvas: web_sys::HtmlCanvasElement,
     listeners: Vec<Listener>,
     observer: Option<ResizeSubscription>,
+    timers: Vec<Rc<DeadlineTimer>>,
     claim: CanvasClaim,
 }
 
@@ -198,8 +303,34 @@ impl Registration {
             canvas: canvas.clone(),
             listeners: Vec::new(),
             observer: None,
+            timers: Vec::new(),
             claim,
         }
+    }
+
+    /// A deadline timer whose body runs only while this registration
+    /// accepts; retirement clears it.
+    pub(super) fn timer(&mut self, body: impl Fn() + 'static) -> Rc<DeadlineTimer> {
+        let body: Rc<dyn Fn()> = Rc::new(body);
+        let weak = Rc::downgrade(&body);
+        let accepting = Rc::clone(&self.accepting);
+        let pending: Rc<Cell<Option<i32>>> = Rc::default();
+        let fired = Rc::clone(&pending);
+        let closure = Closure::<dyn Fn()>::new(move || {
+            fired.set(None);
+            if accepting.get()
+                && let Some(body) = weak.upgrade()
+            {
+                body();
+            }
+        });
+        let timer = Rc::new(DeadlineTimer {
+            closure,
+            pending,
+            _body: body,
+        });
+        self.timers.push(Rc::clone(&timer));
+        timer
     }
 
     pub(super) fn listen(
@@ -208,42 +339,11 @@ impl Registration {
         kind: &'static str,
         body: impl Fn(web_sys::Event) + 'static,
     ) -> Result<(), OpenWindowError> {
-        let body: Rc<dyn Fn(web_sys::Event)> = Rc::new(body);
-        let weak = Rc::downgrade(&body);
-        let accepting = Rc::clone(&self.accepting);
-        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |event| {
-            if accepting.get()
-                && let Some(body) = weak.upgrade()
-            {
-                body(event);
-            }
-        });
-        let options = web_sys::AddEventListenerOptions::new();
-        options.set_passive(false);
-        // Own the token before calling the host: a replaced add method might
-        // install a listener and then throw. Rollback still attempts removal.
-        self.listeners.push(Listener {
-            target: target.clone(),
-            kind,
-            closure: Some(closure),
-            _body: body,
-        });
-        let listener = self
-            .listeners
-            .last()
-            .expect("BUG: listener token just inserted");
-        target
-            .add_event_listener_with_callback_and_add_event_listener_options(
-                kind,
-                listener
-                    .closure
-                    .as_ref()
-                    .expect("BUG: live listener owns closure")
-                    .as_ref()
-                    .unchecked_ref(),
-                &options,
-            )
-            .map_err(backend)
+        // A refused add drops its token at once, which attempts removal; the
+        // installed prefix is removed when the registration rolls back.
+        let listener = Listener::install(target, kind, &self.accepting, body)?;
+        self.listeners.push(listener);
+        Ok(())
     }
 
     pub(super) fn observe(&mut self, body: impl Fn() + 'static) -> Result<(), OpenWindowError> {
@@ -284,6 +384,30 @@ impl Registration {
     pub(super) fn capture_owner(&self) -> PointerCaptureOwner {
         self.claim.capture_owner()
     }
+
+    /// The canvas's claim, as the text input names its editor on it.
+    pub(super) fn editor_slot(&self) -> EditorSlot {
+        EditorSlot {
+            canvas: self.claim.canvas.clone(),
+            token: self.claim.token.clone(),
+        }
+    }
+}
+
+/// Where a canvas's owner names the text editor beside it, so the canvas's
+/// focus area includes it.
+#[derive(Clone)]
+pub(super) struct EditorSlot {
+    canvas: web_sys::HtmlCanvasElement,
+    token: JsValue,
+}
+
+impl EditorSlot {
+    /// `editor` is now part of the canvas's focus area; `None` when none is.
+    pub(super) fn set(&self, editor: Option<&web_sys::HtmlElement>) {
+        let editor = editor.map_or(JsValue::NULL, |editor| JsValue::from(editor.clone()));
+        set_canvas_editor(&self.canvas, &self.token, &editor);
+    }
 }
 
 impl Drop for Registration {
@@ -300,6 +424,9 @@ impl Drop for Registration {
         }
         let observer = self.observer.take();
         let listeners = std::mem::take(&mut self.listeners);
+        for timer in std::mem::take(&mut self.timers) {
+            timer.cancel();
+        }
         drop(observer);
         for listener in listeners {
             drop(listener);

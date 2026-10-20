@@ -7,8 +7,22 @@
 //! hook `flui-hot-reload`'s host drivers implement (ADR-0094 §1), and
 //! `view::dev_agent`, the hook `flui-devtools`' agent server implements
 //! (ADR-0095 §3), and `view::FrameWaker`, the one scheduler capability a
-//! package hands a worker thread (ADR-0136 §2).
+//! package hands a worker thread (ADR-0136 §2). The input-completeness surface
+//! the spec places in the SDK follows: arena observation, the per-kind gesture
+//! presets, system preferences and haptic feedback kinds, input regions, the
+//! snap policies scrollables settle through, the anchored drag built on them,
+//! the theme-free context menu the design systems style, and the collapsing
+//! header the scroll channel moves.
 //! Animation prelude imports also pin the shared package-author entry point.
+//! `custom_recognizer` proves the extension surface with a recognizer written
+//! against the SDK alone, and `behavioural_widget` a gesture widget whose
+//! gesture and alternatives perform one intent, checked by
+//! `assert_gesture_alternatives`.
+
+#[path = "surface/behavioural_widget.rs"]
+mod behavioural_widget;
+#[path = "surface/custom_recognizer.rs"]
+mod custom_recognizer;
 
 /// Every measured item through its SDK path: removing or moving one fails to
 /// build this test.
@@ -48,8 +62,20 @@ mod measured {
     use flui_sdk::geometry::{EdgeInsets as _, RRect as _, Radius as _};
     use flui_sdk::hooks::FrameSnapshot as _;
     use flui_sdk::interaction::{
-        DragDownDetails as _, FocusNode as _, FocusSubscription as _, GestureEndReason as _,
+        ArenaMembership as _, BeginContactError as _, CancelOutcome as _, CompositionBranch as _,
+        CompositionError as _, CompositionKind as _, ContactId as _, ContactSnapshot as _,
+        ContestCancel as _, DragDownDetails as _, EventTime as _, FocusNode as _,
+        FocusSubscription as _, GestureArena as _, GestureArenaEntry as _, GestureArenaMember as _,
+        GestureBranches as _, GestureComposition as _, GestureContest as _,
+        GestureDisposition as _, GestureEndReason as _, GestureObservation as _,
+        GestureObserver as _, GestureProfiles as _, GestureRecognizer as _, GestureSettings as _,
+        GestureSettingsProvider as _, MotionRole as _, ObservedComposition as _,
+        ObservedMember as _, ObserverHandle as _, PanClaim as _, PointerDispatch as _,
+        PointerEvent as _, PointerEventExt as _, PointerId as _, PointerKind as _,
+        PointerKindSet as _, PrimaryContact as _, RejectionReason as _, SequencedBranch as _,
+        cancel_all as _,
     };
+    // A behavioural widget's gesture alternatives (ADR-0216).
     use flui_sdk::painting::Alignment as _;
     use flui_sdk::painting::{
         Border as _, BorderRadius as _, BorderRadiusExt as _, BorderSide as _, BorderStyle as _,
@@ -66,7 +92,10 @@ mod measured {
         TranslationFraction as _,
     };
     use flui_sdk::platform::{
-        Brightness as _, InvalidLocale as _, Locale as _, TargetPlatform as _,
+        Brightness as _, HapticFeedback as _, HostNotice as _, InvalidLocale as _, Locale as _,
+        MemoryPressureLevel as _, SessionEndBlock as _, SessionEndRequest as _,
+        SystemPreferences as _, TargetPlatform as _, WindowCommandError as _, WindowMode as _,
+        WindowState as _,
     };
     use flui_sdk::rendering::{
         BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, RenderError as _,
@@ -81,10 +110,12 @@ mod measured {
     use flui_sdk::view::{
         AnimatedView as _, AsyncDriver as _, BoxedView as _, BuildContext as _,
         BuildContextExt as _, Child as _, FieldMask as _, FrameWaker as _, GlobalKey as _,
-        InheritedData as _, InheritedView as _, IntoView as _, PostFrameHandle as _,
-        RebuildHandle as _, RebuildReason as _, RenderObjectContext as _, RenderView as _,
-        StatefulView as _, View as _, ViewExt as _, ViewState as _, impl_animated_view as _,
-        impl_inherited_view as _, impl_render_view as _, single_child_view_children as _,
+        HostNoticeSubscription as _, InheritedData as _, InheritedView as _, IntoView as _,
+        LifecycleHandle as _, PostFrameHandle as _, RebuildHandle as _, RebuildReason as _,
+        RenderObjectContext as _, RenderView as _, StatefulView as _, View as _, ViewExt as _,
+        ViewState as _, WindowClosed as _, WindowHandle as _, WindowSubscription as _,
+        impl_animated_view as _, impl_inherited_view as _, impl_render_view as _,
+        single_child_view_children as _,
     };
     use flui_sdk::widgets::__private::{
         AnchoredBox as _, FlightSeat as _, SeatClaim as _, SeatHold as _, TextFormFieldConfig as _,
@@ -94,6 +125,40 @@ mod measured {
     use flui_sdk::widgets::icon::IconData as _;
     use flui_sdk::widgets::layout::PreferredSizeView as _;
     use flui_sdk::widgets::prelude::{BoxConstraints as _, BoxFit as _};
+    use flui_sdk::widgets::{
+        Actions as _, ActivateIntent as _, ActivationPressIntent as _, Align as _, AnchorSnap as _,
+        AnchorSnapError as _, AnchoredDrag as _, AnchoredDragController as _,
+        AnchoredDragState as _, AnchorsError as _, AnimatedBuilder as _, AppBuilder as _,
+        Assertiveness as _, AutovalidateMode as _, BackIntent as _,
+        BoxedLocalizationsDelegate as _, ButtonActivateIntent as _, CallbackAction as _,
+        Center as _, ClipRect as _, ColoredBox as _, Column as _, ConstrainedBox as _,
+        Container as _, ContentShape as _, CrossAxisAlignment as _, CustomMultiChildLayout as _,
+        CustomPaint as _, CustomPainter as _, DecoratedBox as _, DefaultFocusRingStyle as _,
+        DefaultTextStyle as _, Directionality as _, Disclosure as _, DisclosureState as _,
+        DismissIntent as _, DragSlot as _, DraggableAnchors as _, DraggableAnchorsBuilder as _,
+        EditableText as _, Expanded as _, ExpansionState as _, FadeTransition as _, Flexible as _,
+        FloatingHeaderSnapConfiguration as _, Focus as _, FocusRing as _, FocusRingStyle as _,
+        ForcePressSlot as _, FormFieldHandle as _, GestureArenaScope as _, GestureDetector as _,
+        GestureRecognizerFactory as _, HeadingLevel as _, HeroMode as _, HitShape as _,
+        HitSlop as _, HitTestBehavior as _, Icon as _, IconData as _, IconTheme as _,
+        IconThemeData as _, InheritedTheme as _, IntrinsicWidth as _, InvalidViewportFraction as _,
+        LayoutId as _, MainAxisAlignment as _, MainAxisSize as _, MediaQuery as _,
+        MediaQueryData as _, MergeSemantics as _, MouseRegion as _, MultiChildLayoutContext as _,
+        MultiChildLayoutDelegate as _, NavigatorHandle as _, NavigatorObserver as _,
+        NumericRange as _, NumericRangeError as _, Offstage as _, Opacity as _, Padding as _,
+        PageRoute as _, PageSnap as _, PanClaimRegion as _, PopupRoute as _, Positioned as _,
+        PreferredSizeView as _, RawGestureDetector as _, RecognizerContext as _,
+        RefreshController as _, RefreshIndicator as _, RefreshIntent as _, RouteAnimation as _,
+        RouteResult as _, Row as _, SafeArea as _, SelectAllTextIntent as _, Semantics as _,
+        SemanticsAnchor as _, SemanticsRole as _, SharedSnapPolicy as _, SizedBox as _,
+        SlideTransition as _, Slider as _, SliderState as _, SliverPersistentHeader as _,
+        SliverPersistentHeaderDelegate as _, SnapPolicy as _, Stack as _, StackFit as _,
+        SubmitCallback as _, Table as _, TableCell as _, TableCellVerticalAlignment as _,
+        TableColumnWidth as _, TableRow as _, Text as _, TextEditingController as _,
+        TickerMode as _, Toggled as _, Transform as _, TransformSlot as _, ViewportFraction as _,
+        WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _, WidgetStates as _,
+        WidgetStatesController as _, WidgetsApp as _,
+    };
     use flui_sdk::widgets::{
         Actions as _, ActivateIntent as _, ActivityArc as _, ActivityIndicator as _, Align as _,
         AnimatedBuilder as _, AnimatedLerp as _, AppBuilder as _, Assertiveness as _,
@@ -125,6 +190,30 @@ mod measured {
         Transform as _, WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _,
         WidgetStates as _, WidgetStatesController as _, WidgetsApp as _,
     };
+    use flui_sdk::widgets::{
+        Alternative as _, AlternativeKind as _, CommandAppearance as _, CommandHandle as _,
+        CompanionGap as _, CompanionLink as _, CompanionRegistration as _, CompanionSpec as _,
+        ContactAdmission as _, ContextMenuArea as _, ControlPlacement as _, ControlSpec as _,
+        GestureAlternatives as _, GestureAlternativesError as _, GestureCommand as _,
+        InteractiveViewer as _, MenuCause as _, MenuItem as _, MenuPresenter as _,
+        MenuRequest as _, MenuSpec as _, PanIntent as _, ShowContextMenuIntent as _,
+        SingleActivator as _, WidgetsLocalizations as _, ZoomIntent as _,
+    };
+    use flui_sdk::widgets::{
+        CollapsingHeader as _, CollapsingHeaderState as _, HeaderExtents as _,
+        HeaderExtentsError as _, HeaderOrder as _,
+    };
+    use flui_sdk::widgets::{
+        CopySelectionTextIntent as _, DragAnchor as _, DragCommands as _, Draggable as _,
+        DropCommands as _, DropHover as _, DropTarget as _, PasteTextIntent as _,
+    };
+    use flui_sdk::widgets::{
+        DismissDirection as _, DismissDirectionCallback as _, DismissThreshold as _,
+        DismissThresholdError as _, DismissUpdateCallback as _, DismissUpdateDetails as _,
+        Dismissible as _, DismissibleState as _, SwipeAction as _, SwipeActions as _,
+        SwipeActionsError as _, SwipeActionsState as _, SwipeAlternative as _, SwipeEdge as _,
+    };
+    use flui_sdk::widgets::{MultiTapCount as _, MultiTapCountError as _};
     use flui_sdk::{
         geometry::{
             EdgeInsets as _, Lerp as _, Offset as _, Point as _, RRect as _, Rect as _, Size as _,
@@ -179,6 +268,37 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::interaction::FocusNode) -> flui_sdk::interaction::FocusNode = |x| x;
     let _: fn(flui::interaction::FocusSubscription) -> flui_sdk::interaction::FocusSubscription =
         |x| x;
+    let _: fn(flui::interaction::GestureProfiles) -> flui_sdk::interaction::GestureProfiles = |x| x;
+    let _: fn(flui::interaction::GestureSettings) -> flui_sdk::interaction::GestureSettings = |x| x;
+    let _: fn(flui::interaction::GestureArena) -> flui_sdk::interaction::GestureArena = |x| x;
+    let _: fn(flui::interaction::PrimaryContact) -> flui_sdk::interaction::PrimaryContact = |x| x;
+    let _: fn(flui::interaction::GestureComposition) -> flui_sdk::interaction::GestureComposition =
+        |x| x;
+    let _: fn(flui::interaction::SequencedBranch) -> flui_sdk::interaction::SequencedBranch = |x| x;
+    let _: fn(flui::interaction::drag::DragItem) -> flui_sdk::interaction::drag::DragItem = |x| x;
+    let _: fn(flui::interaction::drag::DragAndDrop) -> flui_sdk::interaction::drag::DragAndDrop =
+        |x| x;
+    let _: fn(
+        Box<dyn flui::interaction::drag::DropReceiver>,
+    ) -> Box<dyn flui_sdk::interaction::drag::DropReceiver> = |x| x;
+    let _: fn(flui::widgets::Draggable) -> flui_sdk::widgets::Draggable = |x| x;
+    let _: fn(flui::interaction::MotionRole) -> flui_sdk::interaction::MotionRole = |x| x;
+    let _: fn(flui::interaction::PanClaim) -> flui_sdk::interaction::PanClaim = |x| x;
+    let _: fn(flui::interaction::PointerKindSet) -> flui_sdk::interaction::PointerKindSet = |x| x;
+    let _: fn(
+        flui::interaction::GestureSettingsProvider,
+    ) -> flui_sdk::interaction::GestureSettingsProvider = |x| x;
+    let _: fn(
+        Box<dyn flui::interaction::GestureObserver>,
+    ) -> Box<dyn flui_sdk::interaction::GestureObserver> = |x| x;
+    let _: fn(flui::interaction::EventTime) -> flui_sdk::interaction::EventTime = |x| x;
+    let _: fn(
+        Box<dyn flui::interaction::GestureRecognizer>,
+    ) -> Box<dyn flui_sdk::interaction::GestureRecognizer> = |x| x;
+    let _: fn(flui::widgets::RecognizerContext) -> flui_sdk::widgets::RecognizerContext = |x| x;
+    let _: fn(flui::platform::SystemPreferences) -> flui_sdk::platform::SystemPreferences = |x| x;
+    let _: fn(flui::platform::TargetPlatform) -> flui_sdk::platform::TargetPlatform = |x| x;
+    let _: fn(flui::platform::HapticFeedback) -> flui_sdk::platform::HapticFeedback = |x| x;
     let _: fn(flui::painting::Canvas) -> flui_sdk::painting::Canvas = |x| x;
     let _: fn(flui::painting::SemanticsRegion) -> flui_sdk::painting::SemanticsRegion = |x| x;
     let _: fn(flui::painting::SemanticsRegionKey) -> flui_sdk::painting::SemanticsRegionKey = |x| x;
@@ -217,7 +337,10 @@ fn declared_surface() -> Vec<&'static str> {
 #[test]
 fn the_public_surface_is_the_measured_list() {
     let pinned = [
+        "pub mod drag {",
+        "pub mod haptics {",
         "pub mod hooks {",
+        "pub mod input_capabilities {",
         "pub mod interaction {",
         "pub mod painting {",
         "pub mod pipeline {",
@@ -227,10 +350,67 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_animation as animation;",
         "pub use flui_foundation as foundation;",
         "pub use flui_foundation::geometry;",
+        "pub use flui_interaction::ArenaMembership;",
+        "pub use flui_interaction::BeginContactError;",
+        "pub use flui_interaction::CancelOutcome;",
+        "pub use flui_interaction::ContactId;",
+        "pub use flui_interaction::ContactSnapshot;",
         "pub use flui_interaction::DragDownDetails;",
+        "pub use flui_interaction::GestureArena;",
+        "pub use flui_interaction::GestureArenaEntry;",
+        "pub use flui_interaction::GestureArenaMember;",
+        "pub use flui_interaction::GestureDisposition;",
         "pub use flui_interaction::GestureEndReason;",
-        "pub use flui_interaction::routing::FocusNode;",
-        "pub use flui_interaction::routing::FocusSubscription;",
+        "pub use flui_interaction::GestureObservation;",
+        "pub use flui_interaction::GestureObserver;",
+        "pub use flui_interaction::GestureProfiles;",
+        "pub use flui_interaction::GestureRecognizer;",
+        "pub use flui_interaction::GestureSettings;",
+        "pub use flui_interaction::GestureSettingsProvider;",
+        "pub use flui_interaction::HapticObserver;",
+        "pub use flui_interaction::HapticsHandle;",
+        "pub use flui_interaction::ObserverHandle;",
+        "pub use flui_interaction::PointerDispatch;",
+        "pub use flui_interaction::PointerEvent;",
+        "pub use flui_interaction::PointerEventExt;",
+        "pub use flui_interaction::PointerId;",
+        "pub use flui_interaction::PointerKind;",
+        "pub use flui_interaction::PointerKindSet;",
+        "pub use flui_interaction::PrimaryContact;",
+        "pub use flui_interaction::cancel_all;",
+        "pub use flui_interaction::drag::AllowedActions;",
+        "pub use flui_interaction::drag::Autoscroll;",
+        "pub use flui_interaction::drag::DragAndDrop;",
+        "pub use flui_interaction::drag::DragError;",
+        "pub use flui_interaction::drag::DragIdentity;",
+        "pub use flui_interaction::drag::DragItem;",
+        "pub use flui_interaction::drag::DragObserver;",
+        "pub use flui_interaction::drag::DragOutcome;",
+        "pub use flui_interaction::drag::DragPoint;",
+        "pub use flui_interaction::drag::DragReach;",
+        "pub use flui_interaction::drag::DragSession;",
+        "pub use flui_interaction::drag::DragStart;",
+        "pub use flui_interaction::drag::DragTrigger;",
+        "pub use flui_interaction::drag::DragView;",
+        "pub use flui_interaction::drag::DropReceiver;",
+        "pub use flui_interaction::drag::DropReceiverSlot;",
+        "pub use flui_interaction::drag::MoveOutcome;",
+        "pub use flui_interaction::drag::SpringLoading;",
+        "pub use flui_interaction::focus::FocusNode;",
+        "pub use flui_interaction::focus::FocusSubscription;",
+        "pub use flui_interaction::gesture::CompositionBranch;",
+        "pub use flui_interaction::gesture::CompositionError;",
+        "pub use flui_interaction::gesture::CompositionKind;",
+        "pub use flui_interaction::gesture::ContestCancel;",
+        "pub use flui_interaction::gesture::GestureBranches;",
+        "pub use flui_interaction::gesture::GestureComposition;",
+        "pub use flui_interaction::gesture::GestureContest;",
+        "pub use flui_interaction::gesture::MotionRole;",
+        "pub use flui_interaction::gesture::ObservedComposition;",
+        "pub use flui_interaction::gesture::ObservedMember;",
+        "pub use flui_interaction::gesture::PanClaim;",
+        "pub use flui_interaction::gesture::RejectionReason;",
+        "pub use flui_interaction::gesture::SequencedBranch;",
         "pub use flui_objects::PathClipConfiguration;",
         "pub use flui_objects::RenderPhysicalShape;",
         "pub use flui_objects::TranslationFraction;",
@@ -255,9 +435,38 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_painting::typography::TextDirection;",
         "pub use flui_painting::typography::TextStyle;",
         "pub use flui_platform_api::Brightness;",
+        "pub use flui_platform_api::EventTime;",
+        "pub use flui_platform_api::HapticFeedback;",
+        "pub use flui_platform_api::HostNotice;",
         "pub use flui_platform_api::InvalidLocale;",
         "pub use flui_platform_api::Locale;",
+        "pub use flui_platform_api::MemoryPressureLevel;",
+        "pub use flui_platform_api::SessionEndBlock;",
+        "pub use flui_platform_api::SessionEndRequest;",
+        "pub use flui_platform_api::SystemPreferences;",
         "pub use flui_platform_api::TargetPlatform;",
+        "pub use flui_platform_api::WindowCommandError;",
+        "pub use flui_platform_api::WindowMode;",
+        "pub use flui_platform_api::WindowState;",
+        "pub use flui_platform_api::data_transfer::TransferActions;",
+        "pub use flui_platform_api::haptics::ControlPoint;",
+        "pub use flui_platform_api::haptics::HapticCapabilities;",
+        "pub use flui_platform_api::haptics::HapticEvent;",
+        "pub use flui_platform_api::haptics::HapticOutcome;",
+        "pub use flui_platform_api::haptics::HapticPattern;",
+        "pub use flui_platform_api::haptics::HapticPatternBuilder;",
+        "pub use flui_platform_api::haptics::HapticPatternError;",
+        "pub use flui_platform_api::haptics::HapticRequest;",
+        "pub use flui_platform_api::haptics::HapticTicket;",
+        "pub use flui_platform_api::haptics::HapticTiming;",
+        "pub use flui_platform_api::haptics::Intensity;",
+        "pub use flui_platform_api::haptics::ParameterCurve;",
+        "pub use flui_platform_api::haptics::PatternPlayback;",
+        "pub use flui_platform_api::haptics::Sharpness;",
+        "pub use flui_platform_api::haptics::UnitRangeError;",
+        "pub use flui_platform_api::input_capabilities::Availability;",
+        "pub use flui_platform_api::input_capabilities::InputCapabilities;",
+        "pub use flui_platform_api::input_capabilities::PointerKindSet;",
         "pub use flui_rendering::constraints::BoxConstraints;",
         "pub use flui_rendering::hit_testing::HitTestBehavior;",
         "pub use flui_rendering::protocol::BoxProtocol;",

@@ -103,19 +103,6 @@ impl RouteInformation {
 }
 
 // ============================================================================
-// App Exit Response
-// ============================================================================
-
-/// Response to an app exit request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AppExitResponse {
-    /// Allow the app to exit.
-    Exit,
-    /// Cancel the exit request.
-    Cancel,
-}
-
-// ============================================================================
 // View Focus Event
 // ============================================================================
 
@@ -293,22 +280,6 @@ pub trait WidgetsBindingObserver {
     /// Called when the view focus changes.
     fn did_change_view_focus(&self, _event: ViewFocusEvent) {}
 
-    /// Called when a request is received from the system to exit the
-    /// application.
-    ///
-    /// Return `AppExitResponse::Cancel` to prevent exit.
-    /// All observers are asked before exiting.
-    fn did_request_app_exit(&self) -> Pin<Box<dyn Future<Output = AppExitResponse> + Send + '_>> {
-        Box::pin(async { AppExitResponse::Exit })
-    }
-
-    // ========================================================================
-    // System Events
-    // ========================================================================
-
-    /// Called when system is running low on memory.
-    fn did_have_memory_pressure(&self) {}
-
     /// Called when accessibility features change.
     fn did_change_accessibility_features(&self) {}
 }
@@ -430,7 +401,6 @@ impl Drop for BindingObserverOwner {
 }
 
 type BindingRouteFuture<'a> = Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
-type BindingExitFuture<'a> = Pin<Box<dyn Future<Output = AppExitResponse> + Send + 'a>>;
 
 // The current observer, remaining snapshot and returned response future are
 // separate owners in a suspended dispatch. Fence the response independently.
@@ -460,33 +430,13 @@ impl Drop for BindingRouteResponse<'_> {
     }
 }
 
-struct BindingExitResponse<'a>(Option<BindingExitFuture<'a>>);
-
-impl Future for BindingExitResponse<'_> {
-    type Output = AppExitResponse;
-    fn poll(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<AppExitResponse> {
-        self.get_mut()
-            .0
-            .as_mut()
-            .expect("BUG: exit response polled after retirement")
-            .as_mut()
-            .poll(cx)
-    }
-}
-
-impl Drop for BindingExitResponse<'_> {
-    fn drop(&mut self) {
-        if let Some(future) = self.0.take() {
-            if std::thread::panicking() {
-                std::mem::forget(future);
-            } else {
-                drop(future);
-            }
-        }
-    }
+/// Which build pass of a frame [`WidgetsBinding::draw_frame_impl`] runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BuildPass {
+    /// The frame's first build: expires what the previous frame left.
+    FrameEntry,
+    /// A repeat within the same frame: keeps what this frame recorded.
+    Repeat,
 }
 
 /// Inner mutable state of WidgetsBinding
@@ -1175,10 +1125,21 @@ impl WidgetsBinding {
     /// In debug mode, panics if called while already building dirty elements
     /// (to catch accidental frame scheduling during build).
     pub fn draw_frame(&self) {
-        self.draw_frame_impl(|| {});
+        self.draw_frame_impl(BuildPass::FrameEntry, || {});
     }
 
-    pub(crate) fn draw_frame_impl(&self, before_finalize: impl FnOnce()) {
+    /// Rebuild what owner code dirtied after this frame's build and layout
+    /// settled, and finalize what that removed, inside the same frame.
+    ///
+    /// Unlike [`Self::draw_frame`] this does not open a frame: the recovered
+    /// lifecycle panics the frame's first build left stay for the frame's
+    /// drain. [`BuildOwner::last_frame_build_report`] then describes this
+    /// pass.
+    pub fn rebuild_within_frame(&self) {
+        self.draw_frame_impl(BuildPass::Repeat, || {});
+    }
+
+    pub(crate) fn draw_frame_impl(&self, pass: BuildPass, before_finalize: impl FnOnce()) {
         let mut inner = self.inner.write();
 
         #[cfg(debug_assertions)]
@@ -1211,12 +1172,14 @@ impl WidgetsBinding {
             BuildingFlagReset(&self.debug_building_dirty_elements)
         };
 
-        let discarded_recovered_panics = inner.build_owner.discard_stale_recovered_panics();
-        if discarded_recovered_panics != 0 {
-            tracing::warn!(
-                count = discarded_recovered_panics,
-                "discarding recovered lifecycle panics left undrained from the previous frame"
-            );
+        if pass == BuildPass::FrameEntry {
+            let discarded_recovered_panics = inner.build_owner.discard_stale_recovered_panics();
+            if discarded_recovered_panics != 0 {
+                tracing::warn!(
+                    count = discarded_recovered_panics,
+                    "discarding recovered lifecycle panics left undrained from the previous frame"
+                );
+            }
         }
 
         inner.build_scheduled = false;
@@ -1238,7 +1201,7 @@ impl WidgetsBinding {
             build_owner.build_scope(element_tree);
 
             tracing::debug!("Build phase complete");
-        } else {
+        } else if pass == BuildPass::FrameEntry {
             inner.build_owner.clear_frame_build_report();
         }
 
@@ -1341,6 +1304,40 @@ impl WidgetsBinding {
         build_owner.run_frame_with_layout_builders(element_tree, pipeline)
     }
 
+    /// [`Self::run_frame_with_layout_builders`]'s build-during-layout
+    /// fixpoint alone, released before it returns, so the caller can run
+    /// owner code against the settled tree before
+    /// [`Self::run_settled_frame`] paints it.
+    ///
+    /// # Errors
+    ///
+    /// The first layout error of a pass.
+    pub fn settle_layout_with_builders(
+        &self,
+        pipeline: &PipelineCell,
+    ) -> flui_rendering::error::RenderResult<()> {
+        let mut inner = self.inner.write();
+        let WidgetsBindingInner {
+            ref mut build_owner,
+            ref mut element_tree,
+            ..
+        } = *inner;
+        build_owner.settle_layout_with_builders(element_tree, pipeline)
+    }
+
+    /// Paint a tree [`Self::settle_layout_with_builders`] settled: layout of
+    /// whatever is still dirty, compositing, paint and semantics.
+    ///
+    /// # Errors
+    ///
+    /// The pipeline's first error.
+    pub fn run_settled_frame(
+        &self,
+        pipeline: &PipelineCell,
+    ) -> flui_rendering::error::RenderResult<Option<flui_rendering::layer::LayerTree>> {
+        BuildOwner::run_settled_frame(pipeline)
+    }
+
     /// Check if we are currently building dirty elements.
     ///
     /// Reads the atomic flag directly — no lock acquired.
@@ -1441,18 +1438,6 @@ impl WidgetsBinding {
             std::panic::resume_unwind(payload);
         }
     }
-
-    /// Notify all observers of memory pressure.
-    ///
-    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
-    /// rationale.
-    pub fn handle_memory_pressure(&self) {
-        let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
-        for observer in &observers {
-            observer.did_have_memory_pressure();
-        }
-    }
-
     /// Notify all observers of accessibility features change.
     ///
     /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
@@ -1472,6 +1457,13 @@ impl WidgetsBinding {
     /// Get the number of observers.
     pub fn observer_count(&self) -> usize {
         self.inner.read().observers.len()
+    }
+
+    /// Give the elements of this binding the window they are presented in, so
+    /// `LifecycleContext::window` answers. Call before the root is attached.
+    #[doc(hidden)]
+    pub fn set_window_handle(&self, handle: crate::WindowHandle) {
+        self.inner.write().build_owner.set_window_handle(handle);
     }
 
     // ========================================================================
@@ -1624,33 +1616,6 @@ impl WidgetsBinding {
         let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
         for observer in &observers {
             observer.did_change_view_focus(event);
-        }
-    }
-
-    // ========================================================================
-    // App Exit Request
-    // ========================================================================
-
-    /// Handle an app exit request from the system.
-    ///
-    /// All observers are asked. If any returns `Cancel`, the exit is prevented.
-    pub async fn handle_request_app_exit(&self) -> AppExitResponse {
-        let observers: Vec<_> = self.inner.read().observers.clone();
-        let mut should_cancel = false;
-
-        for observer in observers {
-            if BindingExitResponse(Some(observer.did_request_app_exit())).await
-                == AppExitResponse::Cancel
-            {
-                should_cancel = true;
-                // Don't return early - all observers should be notified
-            }
-        }
-
-        if should_cancel {
-            AppExitResponse::Cancel
-        } else {
-            AppExitResponse::Exit
         }
     }
 }

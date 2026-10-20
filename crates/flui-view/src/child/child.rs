@@ -43,14 +43,14 @@ impl Child {
     /// Create a Child with the given View.
     pub fn some(view: impl View) -> Self {
         Self {
-            inner: Some(BoxedView(Box::new(view))),
+            inner: Some(BoxedView::new(view)),
         }
     }
 
     /// Create a Child from an optional View.
     pub fn from_option(view: Option<impl View>) -> Self {
         Self {
-            inner: view.map(|v| BoxedView(Box::new(v))),
+            inner: view.map(BoxedView::new),
         }
     }
 
@@ -66,7 +66,7 @@ impl Child {
 
     /// Get a reference to the child View if present.
     pub fn as_ref(&self) -> Option<&dyn View> {
-        self.inner.as_ref().map(|b| &*b.0 as &dyn View)
+        self.inner.as_ref().map(|b| b as &dyn View)
     }
 
     /// Get the inner BoxedView if present.
@@ -81,7 +81,7 @@ impl Child {
 
     /// Replace the child with a new one, returning the old.
     pub fn replace(&mut self, view: impl View) -> Option<BoxedView> {
-        self.inner.replace(BoxedView(Box::new(view)))
+        self.inner.replace(BoxedView::new(view))
     }
 }
 

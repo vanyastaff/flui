@@ -14,7 +14,7 @@ use flui_foundation::notifier::Listenable;
 use flui_interaction::PointerDispatch;
 use flui_interaction::events::PointerEventExt;
 use flui_interaction::events::PointerId;
-use flui_interaction::routing::{
+use flui_interaction::focus::{
     FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, KeyEventHandler,
     KeyEventResult, RectProvider,
 };
@@ -35,8 +35,9 @@ use flui_view::{BoxedView, RenderView, impl_render_view};
 
 use crate::AnimatedBuilder;
 use crate::interaction::actions::{
-    Action, ActionChain, ActionChainProvider, ActionOutcome, CopySelectionTextIntent,
-    PasteTextIntent, SelectAllTextIntent, as_node_context, erased_action, layered_chain,
+    Action, ActionChain, ActionChainProvider, ActionOutcome, ActivateIntent, ActivationPressIntent,
+    CopySelectionTextIntent, DismissIntent, PasteTextIntent, SelectAllTextIntent, as_node_context,
+    erased_action, layered_chain,
 };
 use crate::semantics::Semantics;
 use crate::support::{command_modifiers, ref_callback};
@@ -579,7 +580,7 @@ impl EditableText {
     /// Fires on a raw Enter keypress rather than an IME action-button
     /// commit, since this substrate has no platform IME-action-button
     /// integration yet (see the type doc's `# DEFERRED (v1)` list). The key
-    /// is consumed ([`KeyEventResult::Handled`](flui_interaction::routing::KeyEventResult))
+    /// is consumed ([`KeyEventResult::Handled`](flui_interaction::focus::KeyEventResult))
     /// only when a callback is set — with none, Enter is left unconsumed
     /// (`Ignored`) so an ancestor can still act on it, unchanged from this
     /// field's behavior before this method existed.
@@ -1207,6 +1208,9 @@ impl EditableTextState {
                     controller: Rc::clone(&self.controller),
                     focus_node: Rc::clone(&self.observed_focus_node),
                 }),
+                erased_action::<ActivateIntent>(KeptByTheField),
+                erased_action::<ActivationPressIntent>(KeptByTheField),
+                erased_action::<DismissIntent>(KeptByTheField),
             ],
         );
         // Register the new record before the old token drops: the old one is
@@ -1215,6 +1219,33 @@ impl EditableTextState {
             Some(self.focus_node.register_context(as_node_context(&chain)));
         self.action_chain = Some(chain);
         self.enclosing_action_chain = enclosing;
+    }
+}
+
+/// The keys a field types or ignores that the default bindings would turn
+/// into a command for an enclosing control: the release of a typed space
+/// (`ActivateIntent`), Space's key-down and an Escape. A focused field
+/// consumes them without effect, so typing a space in a field inside a
+/// pressable card does not press the card, and Escape in a field closes
+/// nothing.
+#[derive(Clone, Copy)]
+struct KeptByTheField;
+
+impl Action<ActivateIntent> for KeptByTheField {
+    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+        ActionOutcome::Performed
+    }
+}
+
+impl Action<ActivationPressIntent> for KeptByTheField {
+    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
+        ActionOutcome::Performed
+    }
+}
+
+impl Action<DismissIntent> for KeptByTheField {
+    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &DismissIntent) -> ActionOutcome {
+        ActionOutcome::Performed
     }
 }
 
@@ -2276,9 +2307,8 @@ fn word_jump_modifier(platform: TargetPlatform) -> Modifiers {
 /// too (native Ctrl+Arrow is the OS's own Spaces-switch shortcut there,
 /// so Control would never even reach this handler). Web and embedded
 /// targets need `TargetPlatform` resolved at RUNTIME instead — the same
-/// gap `GestureSettings::native`'s own doc already flags for the
-/// analogous gesture-settings case
-/// (`flui-interaction/src/settings.rs`). Tracked, not fixed here — see
+/// gap `GestureSettings::preset` closes for gestures by taking the
+/// platform as a value (`flui-interaction/src/gesture/settings.rs`). Tracked, not fixed here — see
 /// `flui-widgets/ARCHITECTURE.md`'s Mapping decision #19.
 ///
 /// # DEFERRED

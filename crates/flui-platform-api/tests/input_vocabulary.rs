@@ -5,14 +5,14 @@
 use core::f64::consts::{FRAC_PI_2, PI, TAU};
 use core::time::Duration;
 
-use flui_foundation::geometry::{Offset, Point, Size};
+use flui_foundation::geometry::{Point, Size};
 use flui_platform_api::EventTime;
 use flui_platform_api::keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, NamedKey};
 use flui_platform_api::pointer::{
-    ContactSize, InputValueError, PanZoomTransform, PenOrientation, PointerButton, PointerButtons,
-    PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress,
-    PointerRelease, PointerRole, PointerSample, Pressure, Quantity, ScrollDelta, ScrollEvent,
-    ScrollPhase, ScrollUnit, TangentialPressure, Twist,
+    ContactSize, HoverDistance, InputValueError, PanZoomTransform, PenOrientation, PointerButton,
+    PointerButtons, PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition,
+    PointerPress, PointerRelease, PointerRole, PointerSample, Pressure, Quantity, ScrollDelta,
+    ScrollEvent, ScrollPhase, ScrollUnit, TangentialPressure, Twist,
 };
 
 use crate::run_table;
@@ -103,6 +103,21 @@ fn an_out_of_range_reading_is_refused_or_saturated() {
     assert_eq!(
         TangentialPressure::saturating(-3.0).map(TangentialPressure::get),
         Ok(-1.0)
+    );
+    assert!(matches!(
+        HoverDistance::try_new(1.5),
+        Err(InputValueError::OutOfRange {
+            quantity: Quantity::HoverDistance,
+            ..
+        })
+    ));
+    assert_eq!(
+        HoverDistance::saturating(-0.1).map(HoverDistance::get),
+        Ok(0.0)
+    );
+    assert_eq!(
+        HoverDistance::saturating(f32::NAN).map(drop),
+        non_finite(Quantity::HoverDistance)
     );
     assert!(matches!(
         PenOrientation::try_new(2.0 * PI, 0.0),
@@ -248,10 +263,9 @@ fn a_non_finite_scroll_delta_is_refused_and_zero_keeps_the_phase() {
 }
 
 fn a_pan_zoom_transform_is_finite_with_a_positive_scale() {
-    let zero = Offset::new(0.0, 0.0);
     for scale in [0.0, -2.0] {
         assert!(matches!(
-            PanZoomTransform::try_new(zero, scale, 0.0),
+            PanZoomTransform::try_new(scale, 0.0),
             Err(InputValueError::OutOfRange {
                 quantity: Quantity::Scale,
                 ..
@@ -259,26 +273,19 @@ fn a_pan_zoom_transform_is_finite_with_a_positive_scale() {
         ));
     }
     assert_eq!(
-        PanZoomTransform::try_new(zero, f64::NAN, 0.0).map(drop),
+        PanZoomTransform::try_new(f64::NAN, 0.0).map(drop),
         non_finite(Quantity::Scale)
     );
     assert_eq!(
-        PanZoomTransform::try_new(zero, 1.0, f64::INFINITY).map(drop),
+        PanZoomTransform::try_new(1.0, f64::INFINITY).map(drop),
         non_finite(Quantity::Rotation)
     );
-    assert_eq!(
-        PanZoomTransform::try_new(Offset::new(f64::NAN, 0.0), 1.0, 0.0).map(drop),
-        non_finite(Quantity::Pan)
-    );
-    let transform = PanZoomTransform::try_new(Offset::new(3.0, 4.0), 1.5, 0.25).expect("valid");
-    assert_eq!(
-        (transform.pan(), transform.scale(), transform.rotation()),
-        (Offset::new(3.0, 4.0), 1.5, 0.25)
-    );
+    let transform = PanZoomTransform::try_new(1.5, 0.25).expect("valid");
+    assert_eq!((transform.scale(), transform.rotation()), (1.5, 0.25));
     assert_eq!(PanZoomTransform::default(), PanZoomTransform::IDENTITY);
     // Every finite positive scale is valid, a subnormal one included.
     let tiny = f64::MIN_POSITIVE / 4.0;
-    assert!(PanZoomTransform::try_new(zero, tiny, 0.0).is_ok());
+    assert!(PanZoomTransform::try_new(tiny, 0.0).is_ok());
 }
 
 fn a_key_event_is_a_repeat_only_while_down() {

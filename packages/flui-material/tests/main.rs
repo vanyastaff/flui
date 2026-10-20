@@ -41,6 +41,9 @@ mod flexible_space_bar;
 #[path = "floating_action_button.rs"]
 mod floating_action_button;
 
+#[path = "gesture_alternatives.rs"]
+mod gesture_alternatives;
+
 #[path = "icon_button.rs"]
 mod icon_button;
 
@@ -786,6 +789,34 @@ fn linear_progress_switches_to_determinate() {
         (
             "progress_indicator::negative zero announces zero percent",
             progress_indicator::negative_zero_announces_zero_percent,
+        ),
+    ]);
+}
+
+/// A `TabBarView`'s alternatives to a swipe (ADR-0216): the input-path matrix
+/// rows, whose single-pointer path is the `TabBar` beside it.
+#[test]
+fn gesture_alternatives() {
+    common::run_cases(&[
+        (
+            "gesture_alternatives::tab_bar_view_with_its_tab_bar",
+            gesture_alternatives::tab_bar_view_with_its_tab_bar,
+        ),
+        (
+            "gesture_alternatives::tab_bar_view_without_a_tab_bar",
+            gesture_alternatives::tab_bar_view_without_a_tab_bar,
+        ),
+        (
+            "gesture_alternatives::the_end_tabs_have_no_step_beyond_them",
+            gesture_alternatives::the_end_tabs_have_no_step_beyond_them,
+        ),
+        (
+            "gesture_alternatives::unmounting_the_tab_bar_unregisters_it",
+            gesture_alternatives::unmounting_the_tab_bar_unregisters_it,
+        ),
+        (
+            "gesture_alternatives::replacing_the_controller_moves_the_pager_and_bar_to_the_new_one",
+            gesture_alternatives::replacing_the_controller_moves_the_pager_and_bar_to_the_new_one,
         ),
     ]);
 }

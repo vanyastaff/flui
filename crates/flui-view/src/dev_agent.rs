@@ -14,12 +14,8 @@
 //!
 //! | Host | `attach` / `detach` | `window_opened` |
 //! |------|---------------------|-----------------|
-//! | desktop, iOS | yes | each window that mounts a root view |
-//! | Android | no | no |
-//! | web | no | no |
-//!
-//! The Android and web hosts log once, at start, that they drive no agent
-//! hook when one is installed.
+//! | desktop, iOS, Android | yes | each window that mounts a root view |
+//! | web | attach only: the page's loop never ends | the page's window |
 //!
 //! - [`DevAgentHook::attach`] runs once per event loop, on the owner thread,
 //!   before the first window opens. When it answers that it serves, the

@@ -13,8 +13,9 @@ use flui_rendering::layer::Layer;
 use flui_testing::a11y::Role;
 use flui_view::{SignalWriteExt, ViewExt};
 use flui_widgets::{
-    ActivityIndicator, Center, RefreshController, RefreshIndicator, Row, ScrollController,
-    SizedBox, TickerMode, VsyncScope,
+    ActivityIndicator, Alternative, Center, ControlSpec, GestureAlternatives, RefreshController,
+    RefreshIndicator, RefreshIntent, Row, ScrollController, Scrollable, SizedBox, TickerMode,
+    VsyncScope,
 };
 
 use crate::common::{LaidOut, lay_out, lay_out_animated, loose, tight};
@@ -707,7 +708,12 @@ fn indicator_ui_runtime_stop_mid_repeat() {
 
 #[test]
 fn refresh_indicator_spins_while_refreshing() {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use std::task::{Poll, Waker};
+
     use flui_animation::MotionOverride;
+
     fn full() {
         refreshing_case(MotionOverride::Full);
     }
@@ -715,17 +721,35 @@ fn refresh_indicator_spins_while_refreshing() {
         refreshing_case(MotionOverride::Reduce);
     }
     fn refreshing_case(preference: MotionOverride) {
-        let scroll = ScrollController::new();
-        scroll.update_dimensions(300.0, 0.0, 4700.0);
         let refresh = RefreshController::new();
+        let done = Rc::new(Cell::new(false));
+        let waker: Rc<RefCell<Option<Waker>>> = Rc::default();
+        let (gate, parked) = (Rc::clone(&done), Rc::clone(&waker));
         let vsync = Vsync::new();
         let mut laid = lay_out_animated(
             VsyncScope::new(
                 vsync.clone(),
-                RefreshIndicator::new()
-                    .controller(refresh.clone())
-                    .scroll_controller(scroll)
-                    .child(SizedBox::new(300.0, 5000.0)),
+                RefreshIndicator::new(
+                    Scrollable::new()
+                        .controller(ScrollController::new())
+                        .child(SizedBox::new(250.0, 5000.0)),
+                    GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+                        RefreshIntent::command("Refresh"),
+                        SizedBox::new(24.0, 24.0),
+                    )))
+                    .expect("one labelled command"),
+                )
+                .controller(refresh.clone())
+                .on_refresh(move |_cx| {
+                    let (gate, parked) = (Rc::clone(&gate), Rc::clone(&parked));
+                    std::future::poll_fn(move |cx| {
+                        if gate.get() {
+                            return Poll::Ready(());
+                        }
+                        *parked.borrow_mut() = Some(cx.waker().clone());
+                        Poll::Pending
+                    })
+                }),
             ),
             tight(300.0, 300.0),
             vsync.clone(),
@@ -735,17 +759,31 @@ fn refresh_indicator_spins_while_refreshing() {
         laid.pump_for(Duration::ZERO);
         assert!(arcs(&laid).is_empty(), "no spinner while idle");
 
-        laid.dispatch_pointer_down(150.0, 40.0);
-        laid.dispatch_pointer_move(150.0, 140.0);
-        laid.dispatch_pointer_up(150.0, 140.0);
-        laid.pump();
+        laid.dispatch_pointer_down(100.0, 40.0);
+        for y in [60.0, 100.0, 140.0, 180.0, 220.0] {
+            laid.dispatch_pointer_move_after(100.0, y, ms(16));
+        }
+        laid.pump_for(ms(16));
+        assert!(
+            refresh.pull_distance_px() > 0.0,
+            "the finger is still pulling"
+        );
+        assert_eq!(
+            arcs(&laid).len(),
+            1,
+            "without a style the band holds the spinner while pulling (ADR-0235)"
+        );
+        laid.dispatch_pointer_up(100.0, 220.0);
+        for _ in 0..30 {
+            laid.pump_for(ms(16));
+        }
         assert!(refresh.is_refreshing());
+        assert_eq!(refresh.pull_distance_px(), 0.0, "the pull settled");
         assert_eq!(
             vsync.len(),
             idle + 1,
             "the spinner registered its controller"
         );
-        laid.pump_for(Duration::ZERO);
         let first = only_arc(&laid);
         laid.pump_for(ms(300));
         let later = only_arc(&laid);
@@ -759,17 +797,23 @@ fn refresh_indicator_spins_while_refreshing() {
             assert!(first.1 > 0.0);
         }
 
-        refresh.finish();
-        laid.pump();
-        assert!(arcs(&laid).is_empty(), "no spinner after finish");
+        done.set(true);
+        if let Some(waker) = waker.take() {
+            waker.wake();
+        }
+        laid.pump_for(ms(16));
+        laid.pump_for(ms(16));
+        assert!(!refresh.is_refreshing());
+        assert!(arcs(&laid).is_empty(), "no spinner after the refresh");
         assert_eq!(vsync.len(), idle, "the spinner's controller is released");
     }
     crate::common::cases::run_cases("refresh loading", &[("Full", full), ("Reduce", reduced)]);
 }
 
 /// A `RefreshIndicatorStyle` builds the indicator from the phase: the pull's share of the
-/// threshold while pulling (complete past a zero threshold, nothing for a NaN one), and its
-/// own refreshing indicator in place of the default spinner.
+/// threshold while pulling (capped at one), and its own refreshing indicator in place of the
+/// default spinner. A threshold that is not finite and positive is refused where it is set, so
+/// the default stands.
 #[test]
 fn refresh_style_builds_the_indicator_from_the_phase() {
     use std::cell::RefCell;
@@ -784,14 +828,12 @@ fn refresh_style_builds_the_indicator_from_the_phase() {
         style_case(80.0, |pull| pull / 80.0, true);
     }
     fn threshold_zero() {
-        style_case(0.0, |_| 1.0, true);
+        style_case(0.0, |pull| pull / 80.0, true);
     }
     fn threshold_nan() {
-        style_case(f64::NAN, |_| 0.0, false);
+        style_case(f64::NAN, |pull| pull / 80.0, true);
     }
     fn style_case(threshold: f64, progress: fn(f64) -> f64, refreshes: bool) {
-        let scroll = ScrollController::new();
-        scroll.update_dimensions(300.0, 0.0, 4700.0);
         let refresh = RefreshController::new();
         let phases = Rc::new(RefCell::new(Vec::new()));
         let seen = Rc::clone(&phases);
@@ -809,11 +851,19 @@ fn refresh_style_builds_the_indicator_from_the_phase() {
                             _ => None,
                         }
                     },
-                    RefreshIndicator::new()
-                        .controller(refresh.clone())
-                        .scroll_controller(scroll)
-                        .threshold_px(threshold)
-                        .child(SizedBox::new(300.0, 5000.0)),
+                    RefreshIndicator::new(
+                        Scrollable::new()
+                            .controller(ScrollController::new())
+                            .child(SizedBox::new(300.0, 5000.0)),
+                        GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+                            RefreshIntent::command("Refresh"),
+                            SizedBox::new(24.0, 24.0),
+                        )))
+                        .expect("one labelled command"),
+                    )
+                    .controller(refresh.clone())
+                    .threshold_px(threshold)
+                    .on_refresh(|_cx| std::future::pending::<()>()),
                 ),
             ),
             tight(300.0, 300.0),
@@ -831,10 +881,12 @@ fn refresh_style_builds_the_indicator_from_the_phase() {
         }
         let pulled: Vec<RefreshIndicatorPhase> = pulls
             .iter()
+            .filter(|&&pull| pull > 0.0)
             .map(|&pull| RefreshIndicatorPhase::Pulling {
                 progress: progress(pull).min(1.0),
             })
             .collect();
+        assert!(!pulled.is_empty(), "the drag pulled: {pulls:?}");
         assert_eq!(
             *phases.borrow(),
             pulled,

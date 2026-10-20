@@ -1,8 +1,10 @@
 # ADR-0207: A UI runtime takes input through one `HostInput` boundary on one timeline, on its owner thread
 
-- **Status:** Accepted (2026-10-13); implementation pending
-  (`docs/plans/specs/flui-interaction/completeness/tasks.md`). Until it merges, `main` follows the
-  current code: four separate input paths into the runtime and arena deadlines on `web_time`.
+- **Status:** Accepted (2026-10-13); implemented. §7 was narrowed on implementation (2026-10-13):
+  a reentrant key is the event that needs a synchronous answer; reentrant pointer input keeps
+  suppressing its native default. The AppKit nested-pump row is type-checked on Windows and Linux
+  hosts and runs only in an AppKit-pumping macOS process. §1 amended (2026-10-19): assistive
+  requests cross the command inbox (see the amendment).
 - **Date:** 2026-10-13
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (owner-affine runtimes, the
   runtime-local FIFO), [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§4: callbacks lose
@@ -46,10 +48,14 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
    }
    ```
 
-   `UiRuntime::dispatch(HostInput)` unwraps it: it calls `GestureBinding` with the
-   interaction-owned parts only — `PlatformInput`, `WindowEvent` and the frame tick — and gets a
-   `#[must_use]` `DispatchOutcome` back, and it passes `Accessibility` to the semantics owner
-   (`flui-semantics` already depends on accesskit). No `flui-interaction` signature names
+   The runtime admits it through its owner FIFO (`PresentationDispatcher::dispatch`; the frame
+   driver's `FrameDispatcher::deliver` admits the same `Frame` work) and unwraps it: it calls
+   `GestureBinding` with the interaction-owned parts only — pointer input
+   (`dispatch_pointer_on`, which returns a `#[must_use]` `DispatchOutcome` naming the input's
+   sequence), the window observation and the frame tick — and it passes `Accessibility` to the
+   semantics owner (`flui-semantics` already depends on accesskit). The `Window` payload is the
+   runtime's normalized `WindowObservation` (`flui_platform_api::WindowEvent` keys raw window
+   events by native id). No `flui-interaction` signature names
    `HostInput`. That variant couples
    `HostInput` to accesskit's 0.x `ActionRequest`: an accesskit bump that changes it is a
    breaking change of this boundary and of the recording DTO. There is no source trait: the set
@@ -83,7 +89,11 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
    diagnostic context (`None` outside dispatch, ADR-0210), so programmatic haptics mint nothing.
 5. **`InputSurface`.** A window or an embedded surface is the routing and recording root. Pointer
    sequences, capture, hover, coalescing and latch are keyed by `(InputSurface, DeviceId)` from
-   their first implementation, never by a process-wide "current pointer".
+   their first implementation, never by a process-wide "current pointer". The set is closed (no
+   `#[non_exhaustive]`): a new kind of routing root changes every owner keyed by it and the
+   recording format. A host routes platform input to a surface through
+   `UiRuntime::handle_input_on`; the runtime holds an embedded surface's input with the window's
+   until the tree is committed.
 6. **`PointerKind::Virtual`.** `PointerKind` in `flui-platform-api` is `#[non_exhaustive]` and
    gains a fieldless virtual kind (gamepad cursor, automation, later XR) before the recording
    format is frozen. Its device is the event's `DeviceId`: a field would be a second identity, and
@@ -91,10 +101,14 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
    a ray query arrives as a new hit-test request type, not as a vector field in recordings.
 7. **Reentrant native events are queued.** A native event that arrives while a callback is
    running goes to the backend's queue and is delivered after the callback returns, in order
-   (ADR-0027 §3's FIFO); it is never dropped. An event that needs a synchronous answer (AppKit's
-   `performKeyEquivalent:`, the result of a `WM_POINTER*` message) is answered "not handled" when
-   it arrives reentrantly, and its queued delivery is de-duplicated against the follow-up the OS
-   sends for an unhandled event.
+   (ADR-0027 §3's FIFO); it is never dropped. A key needs a synchronous answer — its platform
+   default (a system shortcut such as Alt+F4, AppKit's key-equivalent fallback) cannot wait for
+   the running callback — so a reentrant key is answered "not handled"
+   (`DispatchEventResult::DEFERRED_UNHANDLED`) and the default runs now, and the platform's
+   follow-up for that unhandled key (AppKit resends a declined key equivalent as `keyDown:`) is
+   recognized and not delivered again: the key reaches the application once. Reentrant pointer
+   input keeps `DEFERRED`, which suppresses its default: the default of an unanswered
+   `WM_POINTER*` is the legacy mouse message promoted from it, which its queued delivery replaces.
 8. **Threading.** Recognizers, the arena, the scroll channel, focus, the IME host, DnD sessions
    and widget haptics run on the owner thread of their `UiRuntime` and are `!Send`;
    `GestureBinding` joins the pinned owner types. A window's platform thread is its owner
@@ -124,10 +138,9 @@ and one entry point. A blocked owner stalls only its runtime, as in Compose, UIK
   nested-pump rows and `a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once`.
 - `latch_and_hover_are_keyed_by_surface_and_device`, `contactless_sequences_get_binding_minted_devices`
   and, in `flui-runtime`, `accessibility_input_reaches_the_semantics_owner`.
-- Static assertions: `GestureBinding: !Send + !Sync`; `HostInput`, `InputSequenceId`,
-  `InputSurface` and `ScrollStep` are `Send + 'static`. trybuild `gesture_binding_stays_on_its_thread`
-  in `crates/flui-interaction/tests/compile_fail/`, and `compile_pass` rows accepting
-  `Rc`-capturing recognizers and scroll connections.
+- Static assertions: `GestureBinding: !Send + !Sync` (`crates/flui-interaction/tests/binding_services.rs`);
+  `HostInput`, `InputSequenceId`, `InputSurface` and `ScrollStep` are `Send + 'static`; and
+  `compile_pass` rows accepting `Rc`-capturing recognizers and scroll connections.
 
 Linux CI runs every row except the Win32 and AppKit nested-pump rows, which run on a native host
 only. Per-thread Win32 runtimes and cross-thread capture are unverified until measured on Windows.
@@ -141,3 +154,29 @@ only. Per-thread Win32 runtimes and cross-thread capture are unverified until me
   WinUI InteractionTracker either fall back to the main thread or drop scroll-linked callbacks.
 - **Separate sequence ids per subsystem.** A fling handed between channel members, a haptic tied
   to the gesture and a recording row would then need translation tables.
+
+## Amendment (2026-10-19): assistive requests cross the command inbox
+
+§1 said every `HostInput` is admitted through the owner FIFO. An assistive request is not: the
+accessibility adapter produces it on its own thread, and the owner FIFO is owner-affine (`Rc`,
+`!Send`), so it cannot be reached from there. The request crosses the runtime's bounded command
+inbox (`UiCommand::Accessibility`), stamped for the presentation whose bridge received it, and is
+unwrapped at the next owner turn's Idle drain — inside that turn, before its frame begins.
+`PresentationDispatcher::dispatch` queues an owner-thread caller's `HostInput::Accessibility` in
+the same inbox and answers `InputOutcome::Queued` (`DispatchError::InboxFull` when it has no
+room), so there is one path and one ordering for every assistive request.
+
+`Queued` promises the request is applied at the next inbox drain and before the next frame: a
+frame drains the inbox before it records and renders, so a recording lists the request before the
+frame it preceded and a replay applies it there. It promises no order against other `HostInput`
+the same caller dispatches afterwards — those run through the owner FIFO first. A request whose
+presentation closed before the drain is dropped with a warning; a panicking handler wakes the
+owner, so the requests behind it run on the next turn, and then resumes.
+
+Re-admitting the drained request into the owner FIFO was rejected: the drain already runs inside
+an owner turn, so the request would join the FIFO behind the frame that turn is driving and reach
+the semantics owner one frame later than now, with nothing gained in ordering — no causal order
+exists between an adapter thread and native input. The rest of §1 stands: the request is decoded
+on the owner thread, recorded where it is applied (`Unhandled` when no handler ran), and replayed
+from its row. `accessibility_input_reaches_the_semantics_owner` pins that a dispatched request
+waits for the next turn's drain and runs there.

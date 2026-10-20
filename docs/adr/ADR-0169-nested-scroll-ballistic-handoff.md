@@ -1,8 +1,9 @@
 # ADR-0169: Nested scroll ballistic boundary handoff
 
-- **Status:** Accepted
+- **Status:** Superseded
 - **Date:** 2026-10-08
-- **Superseded-by:** [ADR-0209](ADR-0209-nested-scroll-connection.md) on merge of its implementation; until then this record describes `main`
+- **Superseded-by:** [ADR-0209](ADR-0209-nested-scroll-connection.md): the fling residual is one
+  pass of the nested scroll channel, and the endpoint is the `Rc`/`Cell` scroll owner
 - **Related:** [ADR-0127](ADR-0127-exceptional-path-retention.md)
   (exceptional retirement),
   [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md)
@@ -32,12 +33,6 @@ the outgoing endpoint; unmount does likewise. Default physics belongs to the
 widget state, so an ordinary rebuild with the same configuration retains its
 identity. Explicit physics uses the caller's `Arc` identity. There is no global
 default instance, label comparison or registry of scroll owners.
-
-Endpoint ownership is `Rc` with `Cell` liveness. Animation completion callbacks
-run on the UI owner and do not require `Send`; atomic endpoint ownership adds no
-cross-thread capability. Shared authored physics retains its existing `Arc`
-identity. This ownership correction does not by itself implement ADR-0209's
-cause-aware delta channel.
 
 The exact animation run's `TickerFuture` continuation owns transfer delivery.
 Only normal completion at the expected boundary, with the same existing run

@@ -1007,3 +1007,34 @@ fn a_read_tree_round_trips_through_json() {
     let back: Tree = serde_json::from_value(json).expect("a tree deserializes");
     assert_eq!(back, tree);
 }
+
+/// The owner publishes its root scaled by the device pixel ratio, as every
+/// window's pipeline sets it; a read at the same ratio reports the surface
+/// pixels the node covers, not the ratio applied twice.
+#[test]
+fn a_surface_rect_applies_the_owners_published_ratio_once() {
+    let mut f = Fixture::new();
+    let root = f.add(None, 1, |_| {});
+    let button = f.add(Some(root), 2, |c| {
+        c.set_role(SemanticsRole::Button);
+        c.set_label("Save");
+        c.add_action(SemanticsAction::Click, noop());
+    });
+    f.owner
+        .get_mut(button)
+        .expect("the button was just added")
+        .set_rect(LogicalRect::from_ltrb(10.0, 20.25, 40.5, 41.0));
+    f.owner.set_device_pixel_ratio(2.0);
+
+    let tree = f.read(&ReadQuery::new());
+    assert_eq!(
+        tree.roots[0].children[0].surface_rect,
+        Some(Rect {
+            x: 20,
+            y: 40,
+            width: 61,
+            height: 42
+        }),
+        "a 2x window's button covers its logical bounds doubled"
+    );
+}

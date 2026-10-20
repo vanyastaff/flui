@@ -22,7 +22,7 @@ impl UiRuntime {
 
     /// Draw a frame and return the produced `Scene`, if any. Test-only —
     /// production drives frames through [`Self::pump`].
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn draw_frame(&self, constraints: BoxConstraints) -> Option<Scene> {
         match self
@@ -40,7 +40,7 @@ impl UiRuntime {
     /// The draw step alone (the crate-private `render_frame`), for a test outside this
     /// crate that pins the submit classification against a scripted backend.
     /// Test-only — production drives frames through [`Self::pump`].
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     pub fn render_frame_for_test<S: crate::sink::FrameSink + ?Sized>(&self, sink: &mut S) -> bool {
         self.render_frame(sink)
     }
@@ -145,6 +145,13 @@ impl UiRuntime {
                     fresh,
                 )
             }));
+
+            // A removal during the segment's one repeat left the focus on a
+            // node that is gone; nothing else may ask for the frame that
+            // moves it.
+            if presentation.focus_manager().has_orphaned_focus() {
+                self.request_redraw_for(presentation);
+            }
 
             // Publish readiness before diagnostics or deferred owner code can
             // query render objects changed by this attempt.
@@ -409,18 +416,21 @@ impl UiRuntime {
             .renderer()
             .root_pipeline_owner()
             .with_mut(|owner| owner.set_root_constraints(Some(constraints)));
-        let layer_tree = match presentation
-            .widgets()
-            .run_frame_with_layout_builders(presentation.pipeline())
-        {
-            Ok(layer_tree) => layer_tree,
-            Err(error) => {
-                // Paint commits the layer tree (which carries its own
-                // leader index) before semantics runs; a semantics error
-                // retains it for the retry.
-                return Err(error);
-            }
-        };
+        let widgets = presentation.widgets();
+        widgets.settle_layout_with_builders(presentation.pipeline())?;
+        // Focus leaves a node the build or layout removed now, with the tree
+        // settled and no tree borrow held: the move runs focus listeners. What
+        // the move dirties is rebuilt and laid out once more before paint;
+        // anything it dirties beyond that waits for the next frame.
+        if Self::settle_orphaned_focus(presentation) {
+            presentation.enter_segment_phase(SegmentPhase::Build);
+            widgets.rebuild_within_frame();
+            presentation.enter_segment_phase(SegmentPhase::Pipeline);
+            widgets.settle_layout_with_builders(presentation.pipeline())?;
+        }
+        // Paint commits the layer tree (which carries its own leader index)
+        // before semantics runs; a semantics error retains it for the retry.
+        let layer_tree = widgets.run_settled_frame(presentation.pipeline())?;
 
         presentation.enter_segment_phase(SegmentPhase::Tail);
 
@@ -441,6 +451,7 @@ impl UiRuntime {
                 .overlay_style
                 .stage(&layer_tree, constraints.max_width);
             presentation.attach_performance_overlay(&mut layer_tree, text);
+            presentation.stage_input_regions();
 
             // By value, not `Arc<Scene>` — see `FramePaintOutcome::Painted`'s
             // own doc for why.
@@ -450,6 +461,16 @@ impl UiRuntime {
         }
     }
 
+    /// Move `presentation`'s focus off a node this frame removed; whether the
+    /// primary focus changed.
+    fn settle_orphaned_focus(presentation: &PresentationState) -> bool {
+        let manager = presentation.focus_manager();
+        let primary = || manager.primary_focus().map(|node| node.id());
+        let before = primary();
+        manager.settle_orphaned_focus();
+        primary() != before
+    }
+
     /// Commit a painted presentation after the sink accepts its scene.
     fn commit_painted_frame(&self, presentation: &PresentationState) {
         debug_assert!(
@@ -457,6 +478,7 @@ impl UiRuntime {
             "commit target must belong to this ui_runtime"
         );
         let committed_revision = presentation.commit_tree_revision();
+        presentation.publish_input_regions();
         tracing::trace!(
             target: "flui.frame",
             event = "tree_revision_committed",
@@ -472,8 +494,20 @@ impl UiRuntime {
             return;
         };
         let mut replayed = 0usize;
-        for pointer_event in replay.by_ref() {
-            let dispatch = Self::dispatch_pointer_event_entered(presentation, &pointer_event);
+        for mut held in replay.by_ref() {
+            let row = held.take_row();
+            if row.is_some() {
+                // Verdicts reached earlier in the frame precede this input's
+                // row; the ones its dispatch reaches follow it.
+                self.admit_decisions();
+            }
+            let dispatch =
+                Self::dispatch_pointer_event_entered(presentation, held.surface, &held.event);
+            // Recorded before a dispatch failure resumes: the event was
+            // dispatched, so its row is not lost with the unwind.
+            if let Some(row) = row {
+                row.dispatched(&held.event, dispatch.as_ref().ok().copied().flatten());
+            }
             replayed = replayed.saturating_add(1);
             if let Err(payload) = dispatch {
                 self.request_redraw_for(presentation);
@@ -493,7 +527,7 @@ impl UiRuntime {
     ///
     /// Crate-private: a host reaches it only through [`Self::pump`], so no
     /// code outside this crate can draw a frame that skips begin or end frame
-    /// (tests outside it use `render_frame_for_test`, under `test-support`).
+    /// (tests outside it use `render_frame_for_test`, under `testing`).
     ///
     /// The host chooses the sink it hands the pump: `flui-app` passes its
     /// raster lane on the desktop, Android and iOS runners and a direct sink
@@ -550,11 +584,19 @@ impl UiRuntime {
                 deferred,
                 "frame deferred arena resolution",
             );
+            // A delivered frame's vsync, when the host reported one, anchors
+            // motion sampling on the event timeline (ADR-0207 §2).
+            let vsync = presentation.frame_vsync.take();
             let motion = catch_unwind(AssertUnwindSafe(|| {
                 let gestures = presentation.gestures();
                 if gestures.is_resampling_enabled() {
+                    let frame_time = vsync
+                        .and_then(|vsync| {
+                            flui_interaction::__runtime::wake_instant(gestures, vsync)
+                        })
+                        .unwrap_or(frame_time);
                     let sample = frame_time
-                        .checked_sub(flui_interaction::processing::DEFAULT_RESAMPLE_LOOKBACK)
+                        .checked_sub(flui_interaction::pointer::DEFAULT_RESAMPLE_LOOKBACK)
                         .unwrap_or(frame_time);
                     if let Some(next) = sample.checked_add(gestures.sampling_clock().period()) {
                         gestures
@@ -674,6 +716,10 @@ impl UiRuntime {
             match render_verdict {
                 SubmitVerdict::Presented => {
                     self.commit_painted_frame(producer);
+                    // The frame reached `present()`: frame-aligned haptics
+                    // play with it (ADR-0210 §4). Only this arm plays them;
+                    // the others leave the queue to its deadline.
+                    producer.haptics().frame_presented();
                     deliver_overlay_style = true;
                     presented = true;
                     producer.record_frame_rendered();
@@ -696,6 +742,11 @@ impl UiRuntime {
                 }
                 SubmitVerdict::NoPresent => {
                     self.commit_painted_frame(producer);
+                    // No frame-aligned haptics: the backend found no damage,
+                    // so the screen kept the previous frame and the change a
+                    // queued request confirms never showed. A request queued
+                    // before that previous frame already resolved with it; the
+                    // rest resolve `Suppressed` at their deadline.
                     deliver_overlay_style = true;
                     // Nothing was owed and nothing was lost — the surface was
                     // never asked to show anything, so a withheld streak is
@@ -749,6 +800,9 @@ impl UiRuntime {
                 // clears is the common case; the cap is what makes the
                 // pathological one terminate.
                 SubmitVerdict::NotShown => {
+                    // The frame never reached the screen, so frame-aligned
+                    // haptics wait: a retry that presents before their
+                    // deadline plays them, otherwise they resolve `Suppressed`.
                     self.commit_painted_frame(producer);
                     producer.record_frame_dropped();
                     let streak = producer.record_frame_withheld();
@@ -866,16 +920,18 @@ impl UiRuntime {
             .presentations
             .iter()
             .filter(|presentation| presentation.frame_commit_state() == FrameCommitState::Committed)
+            // Hover holds while a scroll is latched (ADR-0208 rule 6).
+            .filter(|presentation| !presentation.gestures().is_hover_frozen())
         {
             let refresh = catch_unwind(AssertUnwindSafe(|| {
                 presentation
                     .gestures()
                     .mouse_tracker()
-                    .update_all_devices(|position| {
-                        let mut result = flui_interaction::routing::HitTestResult::new();
+                    .update_all_devices(|position, kind| {
+                        let mut result = flui_interaction::pointer::HitTestResult::new();
                         presentation
                             .renderer()
-                            .hit_test_in_view(&mut result, position, 0);
+                            .hit_test_in_view(&mut result, position, kind, 0);
                         result
                     });
             }))

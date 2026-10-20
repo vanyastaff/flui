@@ -1,6 +1,7 @@
 use flui_view::{StatelessView, View};
 
 use super::frame_pacing::{FallbackGate, WakeAction, wake_action};
+use super::gpu_loss::GpuLossLedger;
 use super::host::{install_owner_platform, with_owner_platform};
 use super::owner_dispatch::prepare_platform_ui_runtime;
 use crate::app::AppConfig;
@@ -21,7 +22,6 @@ where
     use parking_lot::Mutex;
 
     tracing::info!("Starting web platform via flui-platform");
-    crate::app::dev_agent::log_undriven(&config, "web");
 
     // Platform init is an environment failure (unsupported browser, missing
     // wasm feature, driver problem), not a `BUG:` invariant — see the
@@ -98,6 +98,7 @@ where
         // desktop bootstrap.
         ui_runtime.set_frame_failure_handler(config.frame_failure_handler.clone());
         ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
+        config.install_input_tap(&ui_runtime);
 
         let logical = window.logical_size();
         let attach = ui_runtime.enter(|ui_runtime| {
@@ -111,10 +112,41 @@ where
             tracing::error!("Root widget attach failed: {:?}", e);
             return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
         }
-        let installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
+        // Vended while the ui_runtime is still ours, as on the desktop: an
+        // installation that fails drops it, and the hook is handed only a
+        // window that finished installing.
+        let agent_window = config
+            .dev_agent
+            .as_ref()
+            .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
+        // The browser takes a canvas's WebGL context away whenever it reclaims
+        // GPU memory, often from a tab nobody sees, where no animation frame
+        // would notice. The loss wakes the owner, whose next turn rebuilds the
+        // renderer; the same ledger takes a lost WebGPU device (the renderer
+        // reports it).
+        let gpu_loss = Arc::new(GpuLossLedger::default());
+        let wake = ui_runtime.wake_handle();
+        {
+            let (gpu_loss, wake) = (Arc::clone(&gpu_loss), Arc::clone(&wake));
+            window.on_surface_status_change(Box::new(move |available| {
+                if available {
+                    gpu_loss.record_context_restore();
+                } else {
+                    gpu_loss.record_context_loss();
+                }
+                wake();
+            }));
+        }
+        let mut installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
+        installation.dev_agent(config.dev_agent.zip(agent_window));
         owner_platform_installed(|owner| {
             installation.submit_web(
-                super::frame_driver::FrameDriver::Web(WebFrameDriver { renderer, window }),
+                super::frame_driver::FrameDriver::Web(WebFrameDriver {
+                    renderer,
+                    window,
+                    gpu_loss,
+                    owner_wake: wake,
+                }),
                 &owner.shared(),
             )
         })?;
@@ -135,7 +167,18 @@ where
         install_owner_platform(owner)?;
         super::host::install_configured_executors(&config);
         super::host::install_host_storage(&config);
+        // Attached before the page's one window opens, as a desktop loop
+        // attaches before its first. A failed bootstrap drops the attachment,
+        // which detaches the hook.
+        let agent = config
+            .dev_agent
+            .as_ref()
+            .and_then(crate::app::dev_agent::DevAgent::attach);
         bootstrap_web(root, config)?;
+        // The loop this attachment spans is the page's, which outlives this
+        // callback and never ends while the page lives (the host stays
+        // resident for the same reason, above): the hook stays attached.
+        std::mem::forget(agent);
         tracing::info!("Web platform ready");
         Ok(())
     }));
@@ -151,42 +194,26 @@ where
 pub(super) struct WebFrameDriver {
     renderer: std::sync::Arc<parking_lot::Mutex<Option<flui_engine::Renderer>>>,
     window: std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+    /// What the browser or the renderer reported lost, and not yet rebuilt.
+    gpu_loss: std::sync::Arc<GpuLossLedger>,
+    /// Wakes the owner: the next turn rebuilds without waiting for a frame.
+    owner_wake: std::sync::Arc<dyn Fn() + Send + Sync>,
 }
 
 impl WebFrameDriver {
     pub(super) fn installed(&mut self, authority: super::frame_driver::FrameLiveness) {
-        use std::sync::Arc;
-        let renderer_slot = Arc::clone(&self.renderer);
-        let window = Arc::clone(&self.window);
-        wasm_bindgen_futures::spawn_local(async move {
-            if !authority.is_live() {
-                return;
-            }
-            let mut renderer = match flui_engine::Renderer::new(Arc::clone(&window)).await {
-                Ok(renderer) => renderer,
-                Err(error) => {
-                    tracing::error!(%error, "GPU initialization failed");
-                    return;
-                }
-            };
-            if !authority.is_live() {
-                return;
-            }
-            // Adapter initialization may span many native resizes.
-            let size = window.physical_size();
-            renderer.resize(size.width as u32, size.height as u32);
-            match authority.publish(&renderer_slot, renderer) {
-                Ok(previous) => drop(previous),
-                Err(renderer) => {
-                    drop(renderer);
-                    return;
-                }
-            }
-            window.request_redraw();
-            tracing::info!("WebGPU renderer initialized");
-        });
+        // The first build is held like a rebuild, so a loss while the adapter
+        // is being asked for neither starts a second one nor is forgotten: a
+        // failed first build is owed again and made at the next wake.
+        let claim = self.gpu_loss.claim_initialization();
+        self.spawn_build(None, claim, authority);
     }
     pub(super) fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
+        // A lost context cannot be configured; the rebuild reads the window's
+        // size when it finishes.
+        if !self.gpu_loss.can_draw() {
+            return;
+        }
         if let Some(renderer) = self.renderer.lock().as_mut() {
             // Match the browser canvas backing store at fractional DPR.
             renderer.resize(
@@ -202,9 +229,16 @@ impl WebFrameDriver {
     ) {
         use crate::app::raster_lane::DirectSink;
         use flui_runtime::pump::SampledClock;
-        use std::sync::Arc;
+        // Before the dirty gate: a lost device or context needs no frame to be
+        // noticed, and a hidden tab runs none.
+        self.start_rebuild_if_owed(&liveness);
+        let gpu_loss = &self.gpu_loss;
         let renderer_frame = &self.renderer;
         let action = ui_runtime.enter(|ui_runtime| {
+            // A rebuilt renderer draws on a canvas that starts empty.
+            if gpu_loss.take_repaint_owed() {
+                ui_runtime.mark_primary_needs_full_repaint();
+            }
             // Owner-inbox drain: commands and worker results commit
             // HERE, at the frame boundary while the scheduler phase
             // is Idle — never inside the frame transaction below.
@@ -227,6 +261,13 @@ impl WebFrameDriver {
                 FallbackGate::default(),
             )
         });
+        // The WebGL context is gone: nothing can draw until the browser
+        // restores it, and the restoration owes a full repaint. The wake still
+        // services commands, tasks and input without a frame.
+        let action = match action {
+            WakeAction::Render if !gpu_loss.can_draw() => WakeAction::PumpBackground,
+            other => other,
+        };
         match action {
             WakeAction::Skip => return,
             WakeAction::PumpBackground => {
@@ -267,100 +308,132 @@ impl WebFrameDriver {
             let mut sink = DirectSink::new(r).with_textures(textures);
             let _ = ui_runtime.pump(&mut SampledClock(now), &mut sink);
 
+            // A device lost during the frame is rebuilt now rather than at
+            // the next wake.
             if r.is_device_lost() {
-                drop(slot);
-                let renderer_recover = Arc::clone(renderer_frame);
-                // A cloned, `'static` wake handle: the spawned
-                // future outlives this callback's `&UiRuntime`
-                // borrow, so it cannot capture `ui_runtime` itself.
-                let wake = ui_runtime.wake_handle();
-                let recovery_authority = liveness;
-                wasm_bindgen_futures::spawn_local(async move {
-                    if !recovery_authority.is_live() {
-                        return;
-                    }
-                    // Never hold the renderer mutex across `.await`.
-                    let Some(mut renderer) = renderer_recover.lock().take() else {
-                        return;
-                    };
-                    let result = renderer.recover().await;
-                    if !recovery_authority.is_live() {
-                        return;
-                    }
-                    match recovery_authority.publish(&renderer_recover, renderer) {
-                        Ok(previous) => drop(previous),
-                        Err(renderer) => {
-                            drop(renderer);
-                            return;
-                        }
-                    }
-                    match result {
-                        Ok(()) => {
-                            tracing::warn!("GPU device lost — recovered successfully");
-                            wake();
-                        }
-                        Err(e @ flui_engine::EngineError::SurfaceTargetUnavailable { .. }) => {
-                            // The window owner reports its native
-                            // handle is gone or suspended (issue
-                            // #1043). `HandleError::Unavailable` is
-                            // `Recoverability::Recoverable` — a
-                            // backgrounded tab's canvas can report
-                            // this transiently — but
-                            // `HandleError::NotSupported` is
-                            // `Fatal` (the owner can never answer
-                            // this handle kind). This arm does not
-                            // branch on that classification: the
-                            // retry wake below fires either way,
-                            // same as any other failure; only the
-                            // log severity is lower, since the
-                            // common case is expected to clear on
-                            // its own.
-                            tracing::warn!(
-                                error = ?e,
-                                "GPU device recovery failed — window target unavailable; retry armed for the next wake regardless"
-                            );
-                            wake();
-                        }
-                        Err(e) => {
-                            // Driver may still be resetting. Arm
-                            // the retry wake in the failure arm
-                            // too — RAF alone re-pumps an ACTIVE
-                            // tab, but a backgrounded tab's RAF
-                            // is suspended, and without this wake
-                            // the recovery is never retried once
-                            // the tab comes back to the front.
-                            //
-                            // No `DeviceRecoveryBackoff` here —
-                            // web stays un-unified with the
-                            // desktop/Android `DeviceRecovery`
-                            // seam (its `recover()` is async,
-                            // driven through `spawn_local`, not
-                            // a synchronous call that trait
-                            // could wrap) — and needs no backoff
-                            // of its own either: the renderer
-                            // slot stays `None` for the
-                            // duration of this `.await`, so the
-                            // outer closure's own `let Some(r)
-                            // = slot.as_mut() else { return; }`
-                            // above already refuses to spawn a
-                            // second recovery while one is in
-                            // flight, and once it returns the
-                            // browser's own `requestAnimationFrame`
-                            // cadence bounds how often a new one
-                            // can start (~16ms, the same order
-                            // as desktop/Android's base backoff
-                            // interval) — see the `PumpBackground`
-                            // arm's own comment above for why
-                            // RAF is a sufficient pacer here.
-                            tracing::error!(
-                                error = ?e,
-                                "GPU device recovery failed; retry armed for the next wake"
-                            );
-                            wake();
-                        }
-                    }
-                });
+                gpu_loss.record_device_loss();
             }
         }
+        self.start_rebuild_if_owed(&liveness);
+    }
+
+    /// Rebuild the renderer when something was lost and the rebuild can
+    /// succeed; build it from scratch when there is none, because its first
+    /// build failed.
+    ///
+    /// A failed build is retried by the next wake — the next animation frame
+    /// of a visible tab, or the context's restoration — and not at once: the
+    /// driver may still be resetting, and an immediate retry would ask it again
+    /// in a loop.
+    fn start_rebuild_if_owed(&self, liveness: &super::frame_driver::FrameLiveness) {
+        if self
+            .renderer
+            .lock()
+            .as_ref()
+            .is_some_and(flui_engine::Renderer::is_device_lost)
+        {
+            self.gpu_loss.record_device_loss();
+        }
+        let Some(claim) = self.gpu_loss.claim_rebuild() else {
+            return;
+        };
+        // Taken now, not when the future first runs: a frame between the two
+        // would draw on the lost renderer, and its own loss report would owe a
+        // second rebuild.
+        let lost = self.renderer.lock().take();
+        self.spawn_build(lost, claim, liveness.clone());
+    }
+
+    /// Build the renderer on the browser's executor: `lost` is rebuilt, and
+    /// `None` is built for the first time. Success publishes it and wakes the
+    /// owner; failure puts a rebuilt renderer back and leaves the claim to owe
+    /// the build again.
+    fn spawn_build(
+        &self,
+        lost: Option<flui_engine::Renderer>,
+        claim: super::gpu_loss::RebuildClaim,
+        authority: super::frame_driver::FrameLiveness,
+    ) {
+        use std::sync::Arc;
+        let renderer_slot = Arc::clone(&self.renderer);
+        let window = Arc::clone(&self.window);
+        let (gpu_loss, wake) = (Arc::clone(&self.gpu_loss), Arc::clone(&self.owner_wake));
+        wasm_bindgen_futures::spawn_local(async move {
+            if !authority.is_live() {
+                return;
+            }
+            let first_build = lost.is_none();
+            let (renderer, built) = match lost {
+                Some(mut renderer) => {
+                    let built = renderer.recover().await;
+                    (Some(renderer), built)
+                }
+                None => match flui_engine::Renderer::new(Arc::clone(&window)).await {
+                    Ok(renderer) => (Some(renderer), Ok(())),
+                    Err(error) => (None, Err(error)),
+                },
+            };
+            if !authority.is_live() {
+                return;
+            }
+            let Some(mut renderer) = renderer else {
+                if let Err(error) = built {
+                    tracing::error!(%error, "GPU initialization failed; retried at the next wake");
+                }
+                return;
+            };
+            if let Err(error) = built {
+                // The renderer goes back either way; the dropped claim owes
+                // the rebuild again.
+                if let Ok(previous) = authority.publish(&renderer_slot, renderer) {
+                    drop(previous);
+                }
+                if matches!(
+                    error,
+                    flui_engine::EngineError::SurfaceTargetUnavailable { .. }
+                ) {
+                    // The window owner reports its native handle is gone or
+                    // suspended. A backgrounded tab's canvas can report this
+                    // transiently, so the log is a warning.
+                    tracing::warn!(
+                        ?error,
+                        "GPU rebuild failed — window target unavailable; retried at the next wake"
+                    );
+                } else {
+                    tracing::error!(?error, "GPU rebuild failed; retried at the next wake");
+                }
+                return;
+            }
+            // A lost WebGPU device is reported by the browser, not by a canvas
+            // event: the renderer says so, and the owner starts rebuilding at
+            // once. A loss before the hook was installed is not replayed, so
+            // ask once.
+            let (hook_loss, hook_wake) = (Arc::clone(&gpu_loss), Arc::clone(&wake));
+            renderer.on_device_lost(move || {
+                hook_loss.record_device_loss();
+                hook_wake();
+            });
+            if renderer.is_device_lost() {
+                gpu_loss.record_device_loss();
+            }
+            // The adapter and device may take many native resizes to arrive.
+            let size = window.physical_size();
+            renderer.resize(size.width as u32, size.height as u32);
+            match authority.publish(&renderer_slot, renderer) {
+                Ok(previous) => drop(previous),
+                Err(renderer) => {
+                    drop(renderer);
+                    return;
+                }
+            }
+            claim.complete();
+            if first_build {
+                window.request_redraw();
+                tracing::info!("WebGPU renderer initialized");
+            } else {
+                tracing::warn!("GPU lost — renderer rebuilt");
+                wake();
+            }
+        });
     }
 }

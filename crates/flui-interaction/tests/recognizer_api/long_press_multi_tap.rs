@@ -17,7 +17,7 @@ use flui_interaction::{
         PointerButton, PointerEvent, PointerKind, PointerMove, PointerPosition, PointerSample,
         make_down_event_for_id_with_button, make_up_event_for_id,
     },
-    routing::PointerDispatch,
+    pointer::PointerDispatch,
 };
 
 fn pointer(raw: u64) -> PointerId {
@@ -94,7 +94,7 @@ fn long_press_payloads_preserve_spaces_history_and_terminal_time() {
         let root_down = press_event(71, Offset::new(100.0, 0.0), 0, false);
         recognizer.add_pointer(PointerDispatch::new(&local_down, &root_down));
         clock.advance(Duration::from_millis(500));
-        recognizer.poll_deadline(clock.now());
+        recognizer.poll_deadline(super::at(&clock));
         let local_move = press_move(
             71,
             &[
@@ -166,7 +166,7 @@ fn long_press_overflow_and_callback_failure_allow_fresh_terminal_delivery() {
     let extreme = press_event(72, Offset::new(-f64::MAX, 0.0), 0, false);
     recognizer.add_pointer(PointerDispatch::at_root(&extreme));
     clock.advance(Duration::from_millis(500));
-    recognizer.poll_deadline(clock.now());
+    recognizer.poll_deadline(super::at(&clock));
     let overflowing = press_move(72, &[(510_000_000, f64::MAX)], &[]);
     recognizer.handle_event(PointerDispatch::at_root(&overflowing));
     assert_eq!(
@@ -179,7 +179,7 @@ fn long_press_overflow_and_callback_failure_allow_fresh_terminal_delivery() {
         let down = press_event(72, Offset::ZERO, 0, false);
         recognizer.add_pointer(PointerDispatch::at_root(&down));
         clock.advance(Duration::from_millis(500));
-        recognizer.poll_deadline(clock.now());
+        recognizer.poll_deadline(super::at(&clock));
         let up = press_event(72, Offset::ZERO, 500_000_000, true);
         let result = catch_unwind(AssertUnwindSafe(|| {
             recognizer.handle_event(PointerDispatch::at_root(&up));
@@ -303,7 +303,7 @@ fn up(recognizer: &dyn GestureRecognizer, raw: u64) {
 
 fn huge_timeout_arms_no_deadline() {
     let recognizer = LongPressGestureRecognizer::builder(GestureArena::new())
-        .settings(GestureSettings::touch_defaults().with_long_press_timeout(Duration::MAX))
+        .settings(GestureSettings::default().with_long_press_timeout(Duration::MAX))
         .build();
     recognizer.add_pointer(PointerDispatch::at_root(&down(31)));
     assert!(recognizer.deadline().is_none());
@@ -381,14 +381,17 @@ fn next_multi_tap_after_a_callback_panic() {
     let callback_fail = Rc::clone(&fail);
     let taps = Rc::new(Cell::new(0));
     let callback_taps = Rc::clone(&taps);
-    let recognizer = MultiTapGestureRecognizer::builder(GestureArena::new(), 2)
-        .on_multi_tap(move |_| {
-            callback_taps.set(callback_taps.get() + 1);
-            if callback_fail.get() {
-                std::panic::panic_any("multi tap failure");
-            }
-        })
-        .build();
+    let recognizer = MultiTapGestureRecognizer::builder(
+        GestureArena::new(),
+        flui_interaction::MultiTapCount::TWO,
+    )
+    .on_multi_tap(move |_| {
+        callback_taps.set(callback_taps.get() + 1);
+        if callback_fail.get() {
+            std::panic::panic_any("multi tap failure");
+        }
+    })
+    .build();
     for raw in [41, 42] {
         recognizer.add_pointer(PointerDispatch::at_root(&down(raw)));
     }
@@ -411,9 +414,12 @@ fn incomplete_multi_tap_times_out_on_the_owner_frame() {
     let arena = GestureArena::with_clock(Arc::new(clock.clone()));
     let cancellations = Rc::new(Cell::new(0));
     let callback_cancellations = Rc::clone(&cancellations);
-    let recognizer = MultiTapGestureRecognizer::builder(arena.clone(), 2)
-        .on_multi_tap_cancel(move |_| callback_cancellations.set(callback_cancellations.get() + 1))
-        .build();
+    let recognizer =
+        MultiTapGestureRecognizer::builder(arena.clone(), flui_interaction::MultiTapCount::TWO)
+            .on_multi_tap_cancel(move |_| {
+                callback_cancellations.set(callback_cancellations.get() + 1);
+            })
+            .build();
     recognizer.add_pointer(PointerDispatch::at_root(&down(51)));
     assert!(arena.has_pending_deadlines());
     clock.advance(Duration::from_millis(101));
@@ -432,9 +438,12 @@ fn multi_tap_center_stays_finite_at_admitted_coordinate_extremes() {
     for coordinates in [[f64::MAX, f64::MAX], [f64::MAX, -f64::MAX]] {
         let details = Rc::new(RefCell::new(None));
         let captured = Rc::clone(&details);
-        let recognizer = MultiTapGestureRecognizer::builder(GestureArena::new(), 2)
-            .on_multi_tap(move |tap| *captured.borrow_mut() = Some(tap))
-            .build();
+        let recognizer = MultiTapGestureRecognizer::builder(
+            GestureArena::new(),
+            flui_interaction::MultiTapCount::TWO,
+        )
+        .on_multi_tap(move |tap| *captured.borrow_mut() = Some(tap))
+        .build();
         for (raw, x) in [(61, coordinates[0]), (62, coordinates[1])] {
             let event = make_down_event_for_id_with_button(
                 pointer(raw),

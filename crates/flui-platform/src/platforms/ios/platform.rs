@@ -54,16 +54,14 @@ use objc2_ui_kit::{
 use parking_lot::Mutex;
 
 use crate::error::PlatformError;
-use crate::shared::PlatformHandlers;
+use crate::shared::{PlatformHandlers, system_notice::SystemNotices};
 use crate::traits::{
-    Clipboard, MobileCapabilities, OpenWindowError, OwnerPlatform, Platform, PlatformCapabilities,
-    PlatformDisplay, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent,
-    WindowId, WindowOptions,
+    Clipboard, DisplaySnapshot, OpenWindowError, OwnerPlatform, Platform, PlatformExecutor,
+    PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId, WindowOptions,
     owner::{DirectOwnerHooks, OwnerHooks},
 };
 
 use super::clipboard::IOSClipboard;
-use super::display::IOSDisplay;
 use super::executor::IOSExecutor;
 use super::window::{IOSWindow, LifecycleObservation};
 
@@ -134,7 +132,12 @@ pub struct IOSPlatform {
     deadline: Mutex<Option<(Arc<()>, web_time::Instant)>>,
     background_executor: Arc<IOSExecutor>,
     clipboard: Arc<IOSClipboard>,
-    capabilities: MobileCapabilities,
+    displays: Arc<super::display::IosDisplays>,
+    /// Marks `displays` stale and wakes the owner on screen and scene
+    /// notifications; main-thread owned like `preferences`.
+    _screen_observer: NativeOwner<super::display::ScreenObserver>,
+    /// Where the memory warning goes on its way to the host.
+    notices: Arc<SystemNotices>,
 }
 
 impl std::fmt::Debug for IOSPlatform {
@@ -180,6 +183,8 @@ impl IOSPlatform {
             });
             Ok(())
         }));
+        let displays = Arc::new(super::display::IosDisplays::new(marker));
+        let screen_observer = super::display::ScreenObserver::new(&displays, &signal);
         Ok(Self {
             handlers: Arc::new(Mutex::new(PlatformHandlers::new())),
             running: Arc::new(AtomicBool::new(true)),
@@ -206,7 +211,9 @@ impl IOSPlatform {
             deadline: Mutex::new(None),
             background_executor: Arc::new(IOSExecutor),
             clipboard: Arc::new(IOSClipboard::new()),
-            capabilities: MobileCapabilities::ios(),
+            displays,
+            _screen_observer: NativeOwner::new(screen_observer, marker),
+            notices: Arc::default(),
         })
     }
 
@@ -268,6 +275,28 @@ impl IOSPlatform {
             .session
             .as_ref()
             .map(|record| Arc::clone(&record.window))
+    }
+
+    /// UIKit is about to terminate the process: let the application write what
+    /// must survive. There is no way to ask it to wait, so the answer is not
+    /// read.
+    fn announce_session_end(&self) {
+        let hook = self.handlers.lock().session_end.take();
+        if let Some(mut hook) = hook {
+            crate::shared::panic_boundary::contain_owner_callback(|| {
+                let _ = hook(flui_platform_api::SessionEndPhase::Ending);
+            });
+            crate::shared::panic_boundary::contain_owner_callback(|| drop(hook));
+        }
+    }
+
+    /// UIKit's memory warning means the system is close to terminating the
+    /// application, which is the critical level.
+    fn warn_of_memory_pressure(&self) {
+        self.notices
+            .dispatch(flui_platform_api::SystemNotice::MemoryPressure(
+                flui_foundation::memory::MemoryPressureLevel::Critical,
+            ));
     }
 
     fn invoke_quit(&self) {
@@ -381,6 +410,10 @@ struct DelegateState {
 }
 
 impl Platform for IOSPlatform {
+    fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         self.background_executor.clone()
     }
@@ -443,14 +476,11 @@ impl Platform for IOSPlatform {
         self.preferences.get(marker).sample(marker)
     }
 
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        MainThreadMarker::new()
-            .map(|mtm| vec![IOSDisplay::main_display(mtm)])
-            .unwrap_or_default()
-    }
-
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        MainThreadMarker::new().map(IOSDisplay::main_display)
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        let marker = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
+            message: "UIKit display sampling must run on the main thread".into(),
+        })?;
+        self.displays.snapshot(marker)
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
@@ -461,12 +491,23 @@ impl Platform for IOSPlatform {
         Arc::new(crate::data_transfer::NullDataTransferSource)
     }
 
-    fn capabilities(&self) -> &dyn PlatformCapabilities {
-        &self.capabilities
-    }
-
     fn name(&self) -> &'static str {
         "iOS (UIKit)"
+    }
+
+    fn on_session_end(
+        &self,
+        callback: Box<
+            dyn FnMut(flui_platform_api::SessionEndPhase) -> flui_platform_api::SessionEndAnswer
+                + Send,
+        >,
+    ) {
+        let previous = self.handlers.lock().session_end.replace(callback);
+        crate::shared::panic_boundary::contain_owner_callback(|| drop(previous));
+    }
+
+    fn on_host_notice(&self, callback: Box<dyn FnMut(flui_platform_api::SystemNotice) + Send>) {
+        self.notices.set_hook(callback);
     }
 
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
@@ -592,14 +633,23 @@ define_class!(
             });
         }
 
-        /// If UIKit sends termination, notify the loop. OS termination is not
-        /// guaranteed to deliver this callback. This is currently where we run
-        /// its loop-exit signal: `UIApplicationMain`'s loop never returns, so
-        /// there is no "after `run`" for the runner to use.
+        /// If UIKit sends termination, tell the application its session is
+        /// ending, then notify the loop. OS termination is not guaranteed to
+        /// deliver this callback. This is currently where we run its loop-exit
+        /// signal: `UIApplicationMain`'s loop never returns, so there is no
+        /// "after `run`" for the runner to use.
         #[unsafe(method(applicationWillTerminate:))]
         fn will_terminate(&self, _application: &UIApplication) {
-            crate::shared::panic_boundary::contain_owner_callback(|| tracing::info!("UIApplication willTerminate — firing the quit handler"));
+            crate::shared::panic_boundary::contain_owner_callback(|| tracing::info!("UIApplication willTerminate — ending the session, then firing the quit handler"));
+            Self::with_platform(IOSPlatform::announce_session_end);
             Self::with_platform(IOSPlatform::finish_quit);
+        }
+
+        /// UIKit asks the application to free memory it can rebuild: the
+        /// system is close to terminating it.
+        #[unsafe(method(applicationDidReceiveMemoryWarning:))]
+        fn did_receive_memory_warning(&self, _application: &UIApplication) {
+            Self::with_platform(IOSPlatform::warn_of_memory_pressure);
         }
     }
 
@@ -673,7 +723,12 @@ impl IOSPlatform {
             return None;
         };
         if let Some(id) = fresh {
-            let window = Arc::new(IOSWindow::new(marker, id, Arc::downgrade(&self.signal)));
+            let window = Arc::new(IOSWindow::new(
+                marker,
+                id,
+                Arc::downgrade(&self.signal),
+                Arc::clone(&self.displays),
+            ));
             let admitted = {
                 let mut state = self.state().borrow_mut();
                 let admitted = self.signal.accepting()

@@ -24,13 +24,15 @@ workspace = true
 # `default_pools_started`), and the `testing` module's `TestWindow` and
 # `ScriptedSink` doubles, for this crate's own tests and for `flui-app`'s,
 # which enable it on their dev edge. Never on a normal edge.
-test-support = []
+testing = []
 # `reload::ReloadTier`, the development reload the UI runtime applies. Names no
 # hot-reload crate; `flui-app` always turns it on and translates an installed
 # `DevReloadHook`'s event into it (ADR-0094 §1).
 hot-reload = []
 
 [dependencies]
+# `ActionRequest`, the assistive-technology variant of `HostInput` (ADR-0207 §1).
+accesskit = { workspace = true }
 # `PresentationId`, which names a held-input queue in traces.
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # `PointerEvent`/`PointerId`, the events the held-input lane retains.
@@ -105,7 +107,7 @@ serde_json = { workspace = true }
 # The test-only hooks of the crates the UI runtime drives: `push_pending_child_
 # request_for_test`, `register_layout_builder_for_test`.
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
-flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-utils"] }
+flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["testing"] }
 # `testing::font_collection_holders`, which pins who holds the app's font
 # collection and when a UI runtime lets go of it.
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", features = ["testing"] }

@@ -143,7 +143,7 @@ pub trait Platform: Send + Sync + 'static {
     // Windows + displays
     fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError>;
     fn active_window(&self) -> Option<WindowId>;
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>>;
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError>;
 
     // Input
     fn clipboard(&self) -> Arc<dyn Clipboard>;
@@ -151,7 +151,6 @@ pub trait Platform: Send + Sync + 'static {
     // Callbacks + metadata
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>);
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>);
-    fn capabilities(&self) -> &dyn PlatformCapabilities;
     fn name(&self) -> &'static str;
     // ... plus optional methods for cursor, file pickers, app activation, etc.
 }

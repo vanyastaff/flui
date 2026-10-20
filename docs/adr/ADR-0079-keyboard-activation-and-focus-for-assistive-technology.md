@@ -5,6 +5,8 @@
 - **Superseded-by:** [ADR-0203](ADR-0203-semantics-vocabulary.md), in part: the semantics focus
   action. `Focus` and `Blur` are published and routed through the widget's owner-local action
   lane (ADR-0086 §3), so the focus node never crosses the `Send + Sync` handler seam.
+- **Amended:** below ("Amendment: activation keys, navigation keys and the focus indicator"),
+  for §1 and the `Escape` item of "Not implemented".
 - **Supersedes:** ADR-0023's resolve-at-own-position divergence (a `Shortcuts` resolves its
   intent at the primary focus), and ADR-0026 §4's nesting rule `Actions(Shortcuts(child))`,
   which that divergence forced.
@@ -84,7 +86,34 @@ record its `Actions` chain on its node (decision 2), since shortcuts resolve the
 The semantics `onFocus` action (an assistive technology asking a node to take focus) — the
 handler must be `Send + Sync` and the node is owner-local; `focusable` is therefore not yet
 advertised as AccessKit's `Action::Focus`, so UI Automation reports buttons as not keyboard
-focusable until they hold the focus. Arrow-key directional traversal and `Escape` → dismiss.
+focusable until they hold the focus. Arrow-key directional traversal (`Escape` is bound: see the amendment).
+
+## Amendment: activation keys, navigation keys and the focus indicator
+
+Amends §1 and the `Escape` item of "Not implemented"; the rest stands.
+
+- **Activation is once per physical press.** Enter and Select activate (`ActivateIntent`) on
+  key-down; auto-repeat does not activate. Space sends `ActivationPressIntent` on key-down and
+  `ActivateIntent` on its release (`SingleActivator::on_release`), so a control can show itself
+  pressed while Space is held. A control that answers `ActivationPressIntent` consumes the
+  key-down.
+- **A press owns its repeats and its release.** `FocusManager` records the traversal unit that
+  had primary focus at each key-down; a repeat or release reaches the focus walk only while that
+  unit still has it. A release that arrives after focus moved to another unit (Space held, then
+  Tab or a route push) is no key event anywhere, so no binding activates the new focus and no
+  node of a covered route hears it. The press's path is told instead, through
+  `FocusNode::register_on_key_cancel`, and so is it when the window loses activation with the
+  key held: a held-key consumer such as a keyboard scroll ends what the press began
+  (`keyboard_focus_contracts` in `flui-interaction` and `flui-widgets`).
+- **Escape sends `DismissIntent`.** Only a dismissible surface answers it.
+- **Back sends `BackIntent`:** Alt+Left and `BrowserBack`, or Cmd+[ and `BrowserBack` on macOS and
+  iOS (Option+Left moves by word there), once per press.
+- **Input modality drives the indicator.** `FocusRing` shows only while the enclosing `Focus` has
+  visible focus: focus moved by a key, traversal or assistive technology (`Focus` requests it with
+  `FocusCause::Assistive`), not focus set by a pointer press. `RawButton` is a Tab stop with
+  `on_press`, answers the activation intents and draws the ring.
+
+Handlers for `BackIntent` and `DismissIntent` (the navigator and modal routes) are not wired yet.
 
 ## Consequences
 

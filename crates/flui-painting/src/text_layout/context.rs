@@ -33,6 +33,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
+use flui_foundation::memory::MemoryPressureLevel;
+
 use super::host::{HostData, HostFaces, HostFonts};
 use crate::error::RegisterFontError;
 use crate::parley_text::SpanBrush;
@@ -624,6 +626,9 @@ impl fmt::Debug for FontCollection {
     }
 }
 
+/// How many moderate trims a loaded font file may go unused before one drops it.
+const TRIM_MAX_AGE: u64 = 4;
+
 /// One UI runtime's text service: Parley's font and layout contexts over a clone
 /// of the app's [`FontCollection`].
 ///
@@ -663,6 +668,23 @@ impl TextContext {
         &self.fonts
     }
 
+    /// Give back what shaping can rebuild: the layout scratch buffers, and the
+    /// loaded font files nothing holds.
+    ///
+    /// [`Moderate`](MemoryPressureLevel::Moderate) drops the scratch buffers and
+    /// the font files not used for a while. [`Critical`](MemoryPressureLevel::Critical)
+    /// drops every font file as well. A face a
+    /// [`FontRegistry`](crate::glyphs::FontRegistry) holds keeps its data and
+    /// its keys; a face nothing holds loads again, under a new blob id, on its
+    /// next use.
+    pub fn reclaim(&mut self, level: MemoryPressureLevel) {
+        self.layout_cx = parley::LayoutContext::new();
+        match level {
+            MemoryPressureLevel::Moderate => self.font_cx.source_cache.prune(TRIM_MAX_AGE, false),
+            _ => self.font_cx.source_cache.prune(0, true),
+        }
+    }
+
     /// Records one measurement made through this context. Counted only in
     /// test builds, where it shows which context a layout measured on.
     #[inline]
@@ -700,7 +722,7 @@ mod tests {
 
     use super::super::fallback_chain::FallbackChain;
     use super::super::host::{HostData, HostFaces, HostSource};
-    use super::{FontCollection, FontCollectionInner, TextContext};
+    use super::{FontCollection, FontCollectionInner, MemoryPressureLevel, TextContext};
     use crate::parley_text::ParagraphSpec;
     use crate::typography::{TextDirection, TextStyle};
 
@@ -1066,6 +1088,84 @@ mod tests {
         );
     }
 
+    /// A collection over Roboto loaded from a file of its own, so one arm's blob
+    /// is not reachable from another's source cache.
+    fn file_backed_roboto(arm: &str) -> (FontCollection, std::path::PathBuf) {
+        use parley::fontique::{Collection, CollectionOptions, SourceCache};
+
+        let path = std::env::temp_dir().join(format!(
+            "flui-prune-roboto-{arm}-{}-{:?}.ttf",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, ROBOTO).expect("the temp dir is writable");
+        let mut collection = Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        });
+        collection.load_fonts_from_paths([path.as_path()]);
+        collection.make_shared();
+        let fonts = FontCollection(Arc::new(FontCollectionInner {
+            generation: std::sync::atomic::AtomicU64::new(0),
+            collection,
+            source_cache: SourceCache::new_shared(),
+            host_fed: std::sync::atomic::AtomicBool::new(false),
+        }));
+        (fonts, path)
+    }
+
+    /// The key of the face `cx` shapes "Hamburg" in, registering it when a
+    /// registry is given.
+    fn roboto_face(
+        cx: &mut TextContext,
+        registry: Option<&mut crate::glyphs::FontRegistry>,
+    ) -> crate::glyphs::FaceKey {
+        let style = TextStyle {
+            font_family: Some("Roboto".to_owned()),
+            ..TextStyle::default()
+        };
+        let spans: Vec<(String, Option<TextStyle>)> = vec![("Hamburg".to_owned(), Some(style))];
+        let paragraph = cx
+            .shape(&ParagraphSpec {
+                font_weight_adjustment: 0,
+                spans: &spans,
+                default_style: None,
+                font_size: 16.0,
+                max_width: None,
+                min_width: 0.0,
+                text_align: crate::typography::TextAlign::Start,
+                line_height: None,
+                direction: TextDirection::Ltr,
+                max_lines: None,
+                ellipsis: None,
+            })
+            .expect("valid fixture shapes")
+            .to_shaped(None);
+        let run = paragraph.runs().next().expect("Roboto shapes a run");
+        if let Some(registry) = registry {
+            registry.prepare_run(&run).expect("Roboto registers");
+        }
+        run.face().key()
+    }
+
+    /// A critical trim gives back the font files nothing holds and a moderate
+    /// one keeps the ones just used; either way the next shape works.
+    #[test]
+    fn trimming_gives_back_unheld_font_files_by_level() {
+        for (level, reloads) in [
+            (MemoryPressureLevel::Moderate, false),
+            (MemoryPressureLevel::Critical, true),
+        ] {
+            let (fonts, path) = file_backed_roboto(&format!("trim-{level:?}"));
+            let mut cx = TextContext::new(&fonts);
+            let before = roboto_face(&mut cx, None);
+            cx.reclaim(level);
+            let after = roboto_face(&mut cx, None);
+            let _ = std::fs::remove_file(&path);
+            assert_eq!(before != after, reloads, "{level:?}");
+        }
+    }
+
     /// Keys stay equal across a source-cache prune while a registry holds
     /// the face's blob (ADR-0092 §5): fontique keeps a file-backed blob only
     /// weakly, so without a holder a prune drops it, the next shape loads
@@ -1073,76 +1173,23 @@ mod tests {
     /// changes. The arm without a registry shows the prune does that here.
     #[test]
     fn a_held_blob_keeps_its_keys_across_a_prune() {
-        use parley::fontique::{Collection, CollectionOptions, SourceCache};
+        use crate::glyphs::FontRegistry;
 
-        use crate::glyphs::{FaceKey, FontRegistry};
-
-        // One file and one collection per arm, so neither arm's blob is
-        // reachable from the other's source cache.
-        let collection_over = |arm: &str| {
-            let path = std::env::temp_dir().join(format!(
-                "flui-prune-roboto-{arm}-{}-{:?}.ttf",
-                std::process::id(),
-                std::thread::current().id()
-            ));
-            std::fs::write(&path, ROBOTO).expect("the temp dir is writable");
-            let mut collection = Collection::new(CollectionOptions {
-                shared: false,
-                system_fonts: false,
-            });
-            collection.load_fonts_from_paths([path.as_path()]);
-            collection.make_shared();
-            let fonts = FontCollection(Arc::new(FontCollectionInner {
-                generation: std::sync::atomic::AtomicU64::new(0),
-                collection,
-                source_cache: SourceCache::new_shared(),
-                host_fed: std::sync::atomic::AtomicBool::new(false),
-            }));
-            (fonts, path)
-        };
-        let style = TextStyle {
-            font_family: Some("Roboto".to_owned()),
-            ..TextStyle::default()
-        };
-        let spans: Vec<(String, Option<TextStyle>)> = vec![("Hamburg".to_owned(), Some(style))];
-        let face = |cx: &mut TextContext, registry: Option<&mut FontRegistry>| -> FaceKey {
-            let paragraph = cx
-                .shape(&ParagraphSpec {
-                    font_weight_adjustment: 0,
-                    spans: &spans,
-                    default_style: None,
-                    font_size: 16.0,
-                    max_width: None,
-                    min_width: 0.0,
-                    text_align: crate::typography::TextAlign::Start,
-                    line_height: None,
-                    direction: TextDirection::Ltr,
-                    max_lines: None,
-                    ellipsis: None,
-                })
-                .expect("valid fixture shapes")
-                .to_shaped(None);
-            let run = paragraph.runs().next().expect("Roboto shapes a run");
-            if let Some(registry) = registry {
-                registry.prepare_run(&run).expect("Roboto registers");
-            }
-            run.face().key()
-        };
         let pruned = |cx: &mut TextContext| cx.font_cx.source_cache.prune(0, true);
 
-        let (fonts, path) = collection_over("held");
+        let (fonts, path) = file_backed_roboto("held");
         let mut cx = TextContext::new(&fonts);
         let mut registry = FontRegistry::new();
-        let held = face(&mut cx, Some(&mut registry));
+        let held = roboto_face(&mut cx, Some(&mut registry));
         pruned(&mut cx);
-        let again = face(&mut cx, None);
+        let again = roboto_face(&mut cx, None);
         let _ = std::fs::remove_file(&path);
 
-        let (fonts, path) = collection_over("control");
+        let (fonts, path) = file_backed_roboto("control");
         let mut control = TextContext::new(&fonts);
-        let first = face(&mut control, None);
+        let first = roboto_face(&mut control, None);
         pruned(&mut control);
-        let reloaded = face(&mut control, None);
+        let reloaded = roboto_face(&mut control, None);
         let _ = std::fs::remove_file(&path);
 
         assert_eq!(

@@ -255,7 +255,8 @@ mod notes_flow {
         let size = laid.size(id);
         let x = position.dx + size.width / 2.0;
         let y = position.dy + size.height / 2.0;
-        let path = laid.hit_test_pointer(offset(x, y));
+        // `dispatch_pointer_down` below is a mouse press.
+        let path = laid.hit_test_pointer(offset(x, y), flui::interaction::PointerKind::Mouse);
         let button_hit = laid.pipeline_owner().with(|owner| {
             let mut ancestor = Some(id);
             while let Some(current) = ancestor {

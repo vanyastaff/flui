@@ -125,6 +125,19 @@ pub mod linux {
             .expect("native setting change");
     }
 
+    /// Where a live case stands, as the owner has observed it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Live {
+        /// The first turn, with the portal's initial reduced motion.
+        Seed,
+        /// The fixture changed the setting to full motion.
+        Changing,
+        /// Full motion is accepted and the portal's reads fail.
+        Failing,
+        /// The reads succeed again; the retained retry brings reduced motion.
+        Recovering,
+    }
+
     struct RetireCheck {
         platform: Arc<WinitPlatform>,
         refused: Arc<AtomicBool>,
@@ -200,6 +213,9 @@ pub mod linux {
         let (late_send, late_receive) = tokio::sync::oneshot::channel::<PlatformProxy>();
         let late_proxy = case == "late-proxy";
         let (step, mut steps) = tokio::sync::mpsc::unbounded_channel();
+        // Set once both failed reads finished, before the inspecting wake.
+        let failed_reads = Arc::new(AtomicBool::new(false));
+        let failed_reads_done = Arc::clone(&failed_reads);
         let connection = service.clone();
         let update = runtime.spawn(async move {
             let Ok(proxy) = begin.await else {
@@ -246,6 +262,7 @@ pub mod linux {
                 // finished. A wake immediately after the first error reply
                 // could race source admission and pass with broken cleanup.
                 state.failed.notified().await;
+                failed_reads_done.store(true, Ordering::SeqCst);
                 proxy
                     .wake()
                     .expect("inspect accepted value after failed read");
@@ -294,10 +311,7 @@ pub mod linux {
                 );
                 if scheme {
                     let window = owner
-                        .open_window(flui_platform::WindowOptions {
-                            visible: false,
-                            ..Default::default()
-                        })?
+                        .open_window(flui_platform::WindowOptions::default().with_visible(false))?
                         .try_ready()?;
                     assert_eq!(
                         window.appearance(),
@@ -322,47 +336,73 @@ pub mod linux {
                 } else if live {
                     let proxy = owner.proxy();
                     let mut start = Some(start);
-                    let mut phase = 0;
+                    let mut phase = Live::Seed;
                     owner.on_wake(Box::new(move || {
                         let _ = &capture;
                         let motion = reader
                             .preferences()
                             .expect("live owner observation")
                             .motion();
-                        let expected_motion = if start.is_some() || (recovery && phase == 3) {
-                            MotionPreference::Reduce
-                        } else {
-                            MotionPreference::NoPreference
-                        };
-                        if motion != Some(expected_motion) {
-                            eprintln!("owner delivered {motion:?}; expected {expected_motion:?}");
+                        let fail = |expected: MotionPreference| {
+                            eprintln!(
+                                "owner delivered {motion:?} in {phase:?}; expected {expected:?}"
+                            );
                             callback_failed.store(true, Ordering::SeqCst);
                             proxy.request_quit().expect("stop failed observation");
-                            return;
-                        }
-                        if let Some(start) = start.take() {
-                            assert_eq!(motion, Some(MotionPreference::Reduce));
-                            start.send(proxy.clone()).expect("start live update");
-                            phase = 1;
-                        } else if recovery && phase < 3 {
-                            assert_eq!(
-                                motion,
-                                Some(MotionPreference::NoPreference),
-                                "failed refresh cannot replace accepted motion"
-                            );
-                            step.send(()).expect("advance recovery fixture");
-                            phase += 1;
-                        } else {
-                            assert_eq!(
-                                motion,
-                                Some(if recovery {
+                        };
+                        // A turn may also come from another owner-turn source (a
+                        // display change, a host notice): every turn must see the
+                        // accepted value, and a phase ends on what the owner
+                        // observes, never on how many turns it had.
+                        phase = match (phase, motion) {
+                            (Live::Seed, Some(MotionPreference::Reduce)) => {
+                                start
+                                    .take()
+                                    .expect("BUG: the seed turn runs once")
+                                    .send(proxy.clone())
+                                    .expect("start live update");
+                                Live::Changing
+                            }
+                            (Live::Seed, _) => {
+                                fail(MotionPreference::Reduce);
+                                return;
+                            }
+                            // The full update is not accepted yet.
+                            (Live::Changing, Some(MotionPreference::Reduce)) => Live::Changing,
+                            (Live::Changing, Some(MotionPreference::NoPreference)) if recovery => {
+                                step.send(()).expect("advance recovery fixture");
+                                Live::Failing
+                            }
+                            (Live::Changing, Some(MotionPreference::NoPreference)) => {
+                                proxy.request_quit().expect("live owner quit");
+                                Live::Changing
+                            }
+                            // Failed refresh cannot replace accepted motion.
+                            (Live::Failing, Some(MotionPreference::NoPreference)) => {
+                                if failed_reads.load(Ordering::SeqCst) {
+                                    step.send(()).expect("advance recovery fixture");
+                                    Live::Recovering
+                                } else {
+                                    Live::Failing
+                                }
+                            }
+                            // The retained retry has not run yet.
+                            (Live::Recovering, Some(MotionPreference::NoPreference)) => {
+                                Live::Recovering
+                            }
+                            (Live::Recovering, Some(MotionPreference::Reduce)) => {
+                                proxy.request_quit().expect("live owner quit");
+                                Live::Recovering
+                            }
+                            (Live::Changing | Live::Failing | Live::Recovering, _) => {
+                                fail(if phase == Live::Recovering {
                                     MotionPreference::Reduce
                                 } else {
                                     MotionPreference::NoPreference
-                                })
-                            );
-                            proxy.request_quit().expect("live owner quit");
-                        }
+                                });
+                                return;
+                            }
+                        };
                     }))?;
                 } else {
                     if late_proxy {

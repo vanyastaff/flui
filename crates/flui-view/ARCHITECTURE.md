@@ -87,6 +87,27 @@ most recent actual frame report. Clearing telemetry does not route build work or
 the scheduler's drain budget. Pinned by
 `tests/build_owner_tests.rs::clean_binding_frames_report_no_builds`.
 
+### A child the parent hands back unchanged is not built again
+
+ADR-0245. `BoxedView` shares its erased view (`Rc<dyn View>`), and the allocation is the
+view's identity. `BoxedView::create_element` records it on the element it creates
+(`ElementBase::note_source_view`), `dispatch_view_update` records the one each update takes
+(and clears it for an update from anything else), and an update offering the shared view the
+element already holds returns `ViewUpdate::Unchanged` before cloning, replacing or marking
+dirty: no `did_update_view`, no render-object update, no rebuild. The element holds it
+weakly, so it never prolongs a view or what its closures captured, and the allocation stays
+reserved while held, so another view cannot take its address. Boxing a `BoxedView` returns it
+unchanged; `Child` and `Children` lend their `BoxedView`s, not the views inside, so the
+reconciler sees the identity. A parent that rebuilds for its own reasons (a focus edge, a
+route change) therefore rebuilds what it builds and hands the child it was given back
+as it is. Anything the child reads reaches it by its own schedule (state, an inherited
+value, a signal); a `build` reading something else no longer refreshes when an ancestor
+rebuilds. The identity check runs ahead of `should_skip_rebuild`, which stays the opt-in for
+equal-but-distinct views. Pinned by
+`flui-widgets` `a_child_handed_back_unchanged_is_built_only_when_something_it_reads_changes`
+(unchanged, rebuilt anew, unchanged but dependent) and
+`the_first_focus_gain_does_not_rebuild_the_app_under_a_drag`.
+
 ### Owner and key envelopes retire after authority is withdrawn
 
 **Rule:** the build owner's reactive graph, tree observer and scheduled-build
@@ -334,6 +355,26 @@ keyboard value vocabulary. The external fixture retains a focus node, mounts
 `Focus`, and observes focus and unfocus notifications. Its headless IME check
 only verifies typed capability access with no native owner; it does not claim
 platform IME behavior. Runtime owners and adapter constructors are not exported.
+
+### Haptics follow the enclosing `HapticsMode`
+
+`LifecycleContext::haptics` returns the presentation's `HapticsHandle`, switched
+off under a disabled `HapticsMode` (ADR-0210 §10). The switch lives here rather
+than in `flui-widgets` so the context that hands out the capability applies it:
+acquiring the handle depends on the enclosing mode, nested modes compose as an
+AND, and a mode change re-runs `did_change_dependencies`, where the widget
+re-acquires it. A widget cannot reach an unswitched handle under a disabled
+mode. **Tests:** `haptics_preference_and_subtree_switch_suppress_both_tiers`.
+
+### Drag and drop is a lifecycle capability
+
+`LifecycleContext::drag_and_drop` returns the presentation's `DragAndDrop`
+(ADR-0211): the runtime's drag sessions, bound to this presentation's window
+and cursor, held weakly. It is installed on the build owner when the
+presentation is assembled and reaches every build context the way haptics do;
+`build` cannot acquire it, so a drag starts only from a widget's own gesture
+or action, never as a side effect of building. **Tests:** the `drag_and_drop`
+table in `crates/flui-widgets/tests/contracts.rs`.
 
 ### Build contexts are live during build; there is no detached fallback context
 

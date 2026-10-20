@@ -36,11 +36,12 @@ use std::thread::ThreadId;
 
 use flui_foundation::{ClaimHandle, ClaimOutcome};
 use flui_platform_api::text_store::TextStoreHost;
+use flui_platform_api::{SessionEndAnswer, SessionEndPhase, SystemNotice};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 use super::{
-    Clipboard, ClipboardItem, HostWindow, PathPromptOptions, Platform, PlatformCapabilities,
-    PlatformDisplay, PlatformExecutor, WindowEvent, WindowId, WindowOptions,
+    Clipboard, ClipboardItem, HostWindow, PathPromptOptions, Platform, PlatformExecutor,
+    WindowEvent, WindowId, WindowOptions,
 };
 use crate::data_transfer::DataTransferSource;
 use crate::error::PlatformError;
@@ -101,6 +102,43 @@ impl OwnerPlatform {
         self.hooks.on_wake(callback)
     }
 
+    /// Install the callback the platform asks at each phase of the user's
+    /// session ending, replacing any earlier one. See
+    /// [`Platform::on_session_end`].
+    pub fn on_session_end(
+        &self,
+        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
+    ) {
+        self.platform.on_session_end(callback);
+    }
+
+    /// Install the callback the platform calls with each system notice other
+    /// than a session end's phases, replacing any earlier one. See
+    /// [`Platform::on_host_notice`].
+    pub fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
+        self.platform.on_host_notice(callback);
+    }
+
+    /// Tell the platform the application released the session end it asked to
+    /// wait for. See [`Platform::release_session_end`].
+    pub fn release_session_end(&self) {
+        self.platform.release_session_end();
+    }
+
+    /// The commands and observations every window of this platform has, known
+    /// before one opens. See [`Platform::window_capabilities`].
+    #[must_use]
+    pub fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        self.platform.window_capabilities()
+    }
+
+    /// The title bar and border a decorated window adds to its content size on a
+    /// display of scale `scale_factor`. See [`Platform::window_frame_inset`].
+    #[must_use]
+    pub fn window_frame_inset(&self, scale_factor: f64) -> flui_foundation::geometry::Size<f64> {
+        self.platform.window_frame_inset(scale_factor)
+    }
+
     /// Open a window. `Ready` is guaranteed inside `on_ready`; afterwards
     /// the backend may defer through its owner lane (where one exists),
     /// returning `Pending`.
@@ -125,16 +163,12 @@ impl OwnerPlatform {
         self.platform.preferences()
     }
 
-    /// All available displays (monitors).
-    #[must_use]
-    pub fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        self.platform.displays()
-    }
-
-    /// The primary display.
-    #[must_use]
-    pub fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        self.platform.primary_display()
+    /// Sample every display (monitor) the platform knows right now.
+    ///
+    /// # Errors
+    /// Forwards a failed native read.
+    pub fn display_snapshot(&self) -> Result<flui_platform_api::DisplaySnapshot, PlatformError> {
+        self.platform.display_snapshot()
     }
 
     /// Activate the application (bring to front).
@@ -213,8 +247,8 @@ assert_not_impl_any!(OwnerPlatform: Send, Sync);
 /// owner-thread affinity, per ADR-0039 §2's "what stays" table.
 ///
 /// `Clone + Send + Sync`: unlike `&dyn Platform` (which is `Platform: Send +
-/// Sync` in full, `open_window`/`quit`/`activate`/`displays`/
-/// `primary_display`/`keyboard_layout`/`active_window`
+/// Sync` in full, `open_window`/`quit`/`activate`/`display_snapshot`/
+/// `keyboard_layout`/`active_window`
 /// included), a `SharedPlatform` genuinely can cross a `std::thread::scope`
 /// boundary into safe code without smuggling an owner-affine call along
 /// with it — **the method list below IS the fence**: every method on this
@@ -247,12 +281,6 @@ impl SharedPlatform {
     #[must_use]
     pub fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         self.platform.background_executor()
-    }
-
-    /// The platform's capabilities descriptor.
-    #[must_use]
-    pub fn capabilities(&self) -> &dyn PlatformCapabilities {
-        self.platform.capabilities()
     }
 
     /// The platform's name for debugging/logging.
@@ -301,6 +329,41 @@ impl SharedPlatform {
     /// Registers a callback for when the application should quit.
     pub fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
         self.platform.on_quit(callback);
+    }
+
+    /// Registers the callback asked at each phase of the user's session
+    /// ending; see [`Platform::on_session_end`].
+    pub fn on_session_end(
+        &self,
+        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
+    ) {
+        self.platform.on_session_end(callback);
+    }
+
+    /// Registers the callback called with each other system notice; see
+    /// [`Platform::on_host_notice`].
+    pub fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
+        self.platform.on_host_notice(callback);
+    }
+
+    /// Tells the platform the application released the session end it asked to
+    /// wait for; see [`Platform::release_session_end`].
+    pub fn release_session_end(&self) {
+        self.platform.release_session_end();
+    }
+
+    /// The commands and observations every window of this platform has, known
+    /// before one opens; see [`Platform::window_capabilities`].
+    #[must_use]
+    pub fn window_capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        self.platform.window_capabilities()
+    }
+
+    /// The frame a decorated window adds to its content size on a display of
+    /// scale `scale_factor`; see [`Platform::window_frame_inset`].
+    #[must_use]
+    pub fn window_frame_inset(&self, scale_factor: f64) -> flui_foundation::geometry::Size<f64> {
+        self.platform.window_frame_inset(scale_factor)
     }
 
     /// Registers a callback for when the application is reopened (macOS).
@@ -461,7 +524,7 @@ pub enum OpenWindowError {
         /// The lane's fixed capacity.
         capacity: usize,
         /// The options that could not be enqueued.
-        rejected: WindowOptions,
+        rejected: Box<WindowOptions>,
     },
     /// The event-loop owner is gone. `rejected` is `Some` when refusal
     /// happens at enqueue (the producer can retry without rebuilding
@@ -470,7 +533,7 @@ pub enum OpenWindowError {
     #[error("event-loop owner is gone")]
     OwnerGone {
         /// The options that could not be delivered, if known at refusal.
-        rejected: Option<WindowOptions>,
+        rejected: Option<Box<WindowOptions>>,
     },
     /// The backend could not create the window.
     #[error("the backend could not create the window: {message}")]
@@ -547,13 +610,9 @@ impl PlatformProxy {
     ///
     /// # Errors
     /// See [`ProxySendError`].
-    // The error carries `WindowOptions`, over clippy's size threshold only with 64-bit pointers.
-    #[cfg_attr(
-        target_pointer_width = "64",
-        expect(
-            clippy::result_large_err,
-            reason = "the rejection hands the caller's options back for a retry; a window open is not a hot path"
-        )
+    #[expect(
+        clippy::result_large_err,
+        reason = "the rejection hands the caller's options back for a retry; a window open is not a hot path"
     )]
     pub fn open_window(
         &self,
@@ -837,7 +896,7 @@ impl OwnerHooks for DirectOwnerHooks {
     fn open_owner_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError> {
         if !self.signal.accepting() {
             return Err(OpenWindowError::OwnerGone {
-                rejected: Some(options),
+                rejected: Some(Box::new(options)),
             });
         }
         self.platform.open_window(options).map(WindowOpen::Ready)
@@ -859,13 +918,9 @@ pub(crate) trait ProxyTransport: Send + Sync {
     }
 
     /// Enqueues a window-open request from a worker thread.
-    // The error carries `WindowOptions`, over clippy's size threshold only with 64-bit pointers.
-    #[cfg_attr(
-        target_pointer_width = "64",
-        expect(
-            clippy::result_large_err,
-            reason = "the rejection hands the caller's options back for a retry; a window open is not a hot path"
-        )
+    #[expect(
+        clippy::result_large_err,
+        reason = "the rejection hands the caller's options back for a retry; a window open is not a hot path"
     )]
     fn open_window(
         &self,

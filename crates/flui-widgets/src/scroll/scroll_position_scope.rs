@@ -34,7 +34,7 @@ impl ScrollPositionScope {
     pub fn new(position: ScrollPosition, child: impl IntoView) -> Self {
         Self {
             position,
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 

@@ -11,11 +11,13 @@ use flui_interaction::events::{
     Modifiers, PointerButtons, PointerEvent, PointerInfo, PointerKind, PointerPosition,
     ScrollDelta, ScrollEvent, make_move_event_for_id, pointer::ScrollUnit,
 };
-use flui_interaction::routing::{
-    DeviceId, InteractionDispatchHandle, InteractionLane, MouseRegionCallbacks, MouseRegionTarget,
+use flui_interaction::pointer::{
+    InteractionDispatchHandle, InteractionLane, MouseRegionCallbacks, MouseRegionTarget,
     MouseTracker, MouseTrackerAnnotation, PointerMotionKind,
 };
-use flui_interaction::{CursorIcon, EventPropagation, HitTestEntry, HitTestResult, PointerId};
+use flui_interaction::{
+    CursorIcon, DeviceId, EventPropagation, HitTestEntry, HitTestResult, PointerId,
+};
 use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool};
 
 const MOUSE: u64 = 2;
@@ -164,8 +166,8 @@ fn stationary_device_follows_layout_without_duplicates() {
             &HitTestResult::new(),
         );
         // Layout moves the nested regions under the still cursor.
-        tracker.update_all_devices(|_| nested.clone());
-        tracker.update_all_devices(|_| nested.clone());
+        tracker.update_all_devices(|_, _| nested.clone());
+        tracker.update_all_devices(|_, _| nested.clone());
         assert_eq!(
             take(&log),
             ["enter outer 2", "enter inner 2"],
@@ -173,7 +175,7 @@ fn stationary_device_follows_layout_without_duplicates() {
         );
 
         // Layout replaces them with a sibling: every exit precedes the enter.
-        tracker.update_all_devices(|_| moved.clone());
+        tracker.update_all_devices(|_, _| moved.clone());
         tracker.update_with_motion(
             &hover(MOUSE, PointerKind::Mouse, at, 2),
             PointerMotionKind::Hover,
@@ -244,7 +246,7 @@ fn refresh_callback_panic_reaches_every_device() {
     assert_eq!(enters.get(), 2);
 
     let failure = catch_unwind(AssertUnwindSafe(|| {
-        lane.enter(|| tracker.update_all_devices(|_| HitTestResult::new()));
+        lane.enter(|| tracker.update_all_devices(|_, _| HitTestResult::new()));
     }));
     let payload = failure.expect_err("an exit panic resumes after the refresh");
     let message = payload.downcast_ref::<&str>().copied();
@@ -255,7 +257,7 @@ fn refresh_callback_panic_reaches_every_device() {
     );
     assert_eq!(exits.get(), 2, "the other device's exit still runs");
 
-    lane.enter(|| tracker.update_all_devices(regions_at));
+    lane.enter(|| tracker.update_all_devices(|position, _| regions_at(position)));
     assert_eq!(enters.get(), 4, "the next refresh works for both devices");
 }
 
@@ -288,7 +290,7 @@ fn refresh_hit_test_panic_keeps_the_device_for_the_next_refresh() {
 
     let failure = catch_unwind(AssertUnwindSafe(|| {
         lane.enter(|| {
-            tracker.update_all_devices(|position| {
+            tracker.update_all_devices(|position, _| {
                 assert!(position != pen_at, "hit test failed");
                 HitTestResult::new()
             });
@@ -301,7 +303,7 @@ fn refresh_hit_test_panic_keeps_the_device_for_the_next_refresh() {
         "the healthy device's transition is delivered"
     );
 
-    lane.enter(|| tracker.update_all_devices(|_| HitTestResult::new()));
+    lane.enter(|| tracker.update_all_devices(|_, _| HitTestResult::new()));
     assert_eq!(
         take(&log),
         ["exit P 3"],
@@ -344,7 +346,7 @@ fn refresh_preserves_the_first_failure_in_device_delivery_order() {
 
         let payload = catch_unwind(AssertUnwindSafe(|| {
             lane.enter(|| {
-                tracker.update_all_devices(|position| {
+                tracker.update_all_devices(|position, _| {
                     assert!(position != probe_at, "probe failure");
                     HitTestResult::new()
                 });
@@ -362,7 +364,7 @@ fn refresh_preserves_the_first_failure_in_device_delivery_order() {
         assert_eq!(exits.get(), 1, "the competing exit callback still runs");
 
         lane.enter(|| {
-            tracker.update_all_devices(|position| {
+            tracker.update_all_devices(|position, _| {
                 if position == callback_at {
                     path(&[(1, region)])
                 } else {
@@ -657,7 +659,7 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
         let tracker = MouseTracker::new();
         let observed = Rc::new(RefCell::new(Vec::new()));
         let next_observed = Rc::clone(&observed);
-        let replacement: flui_interaction::routing::CursorChangeCallback =
+        let replacement: flui_interaction::pointer::CursorChangeCallback =
             Rc::new(move |pointer, cursor| {
                 next_observed.borrow_mut().push(("new", pointer.id, cursor));
             });
@@ -900,7 +902,7 @@ fn ambient_refresh_preserves_the_latest_physical_cursor_owner() {
         &text,
     );
     let count = observed.borrow().len();
-    tracker.update_all_devices(|position| {
+    tracker.update_all_devices(|position, _| {
         if position == mouse_at {
             text.clone()
         } else {
@@ -917,7 +919,7 @@ fn ambient_refresh_preserves_the_latest_physical_cursor_owner() {
         count,
         "unchanged ambient geometry must not republish cursor"
     );
-    tracker.update_all_devices(|_| arrow.clone());
+    tracker.update_all_devices(|_, _| arrow.clone());
     assert_eq!(
         observed.borrow().last(),
         Some(&(
@@ -941,7 +943,7 @@ fn ambient_refresh_preserves_the_latest_physical_cursor_owner() {
         "removing the owner deliberately resets to arrow rather than another source"
     );
     let count = observed.borrow().len();
-    tracker.update_all_devices(|_| text.clone());
+    tracker.update_all_devices(|_, _| text.clone());
     assert_eq!(
         observed.borrow().len(),
         count,
@@ -999,7 +1001,7 @@ fn ambient_probe_cannot_replace_reentrant_physical_observation(moved: bool, reti
             &initial_path,
         );
         take(&regions);
-        tracker.update_all_devices(|position| {
+        tracker.update_all_devices(|position, _| {
             assert_eq!(
                 position, original_position,
                 "probe uses its admitted snapshot"
@@ -1030,7 +1032,7 @@ fn ambient_probe_cannot_replace_reentrant_physical_observation(moved: bool, reti
             transitions.iter().all(|entry| !entry.contains("stale")),
             "discarded probe must not publish stale region transitions: {transitions:?}"
         );
-        tracker.update_all_devices(|position| {
+        tracker.update_all_devices(|position, _| {
             assert_eq!(position, fresh_position);
             fresh_path.clone()
         });
@@ -1099,7 +1101,7 @@ fn ambient_batch_delivers_accepted_regions_before_later_probe_reentry(
         );
         assert_eq!(take(&log), ["enter Old"]);
         let result = catch_unwind(AssertUnwindSafe(|| {
-            tracker.update_all_devices(|position| {
+            tracker.update_all_devices(|position, _| {
                 if position == original_position {
                     transient.clone()
                 } else {
@@ -1151,7 +1153,7 @@ fn ambient_batch_delivers_accepted_regions_before_later_probe_reentry(
         assert!(fresh_hovered.get());
         assert_eq!(sibling_hovered.get(), !probe_failure);
         fail_exit.set(false);
-        tracker.update_all_devices(|position| {
+        tracker.update_all_devices(|position, _| {
             if position == fresh_position {
                 fresh.clone()
             } else {
@@ -1232,7 +1234,7 @@ fn removed_cursor_owner_failure_keeps_default_publication_deliverable() {
     );
     assert!(tracker.device_position(device(MOUSE)).is_none());
     failed.set(false);
-    tracker.update_all_devices(|_| panic!("removed source must not be probed"));
+    tracker.update_all_devices(|_, _| panic!("removed source must not be probed"));
     assert_eq!(
         *observed.borrow(),
         [
@@ -1249,7 +1251,7 @@ fn removed_cursor_owner_failure_keeps_default_publication_deliverable() {
         "ownerless default debt survives until successful publication"
     );
     let count = observed.borrow().len();
-    tracker.update_all_devices(|_| panic!("removed source must not be probed"));
+    tracker.update_all_devices(|_, _| panic!("removed source must not be probed"));
     assert_eq!(
         observed.borrow().len(),
         count,
@@ -1410,21 +1412,7 @@ fn scroll_target_delta_is_localized_as_a_vector() {
         let sink = Rc::clone(&seen);
         let target = handle
             .register_scroll(move |event| {
-                assert!(
-                    event.sequence.is_none(),
-                    "raw hit-result dispatch has no binding admission"
-                );
-                assert_close(
-                    (event.global.position.get().x, event.global.position.get().y),
-                    (80.0, 70.0),
-                    "original scroll position",
-                );
-                assert_close(
-                    (event.global.delta.x(), event.global.delta.y()),
-                    (12.0, 0.0),
-                    "original scroll delta",
-                );
-                sink.borrow_mut().push(*event.local);
+                sink.borrow_mut().push(*event);
                 EventPropagation::Continue
             })
             .expect("register scroll");
@@ -1492,15 +1480,14 @@ fn perspective_vectors_follow_the_current_focal_and_preserve_counts() {
             .with_modifiers(Modifiers::SHIFT),
         )
     };
-    let pan = |x, dx| {
+    let pinch = |x| {
         PointerEvent::PanZoom(
             PanZoomEvent::new(
                 pointer,
                 EventTime::from_nanos(78),
                 position(x, 2.0),
                 PanZoomPhase::Update(
-                    PanZoomTransform::try_new(Offset::new(dx, 0.0), 1.25, 0.3)
-                        .expect("finite cumulative transform"),
+                    PanZoomTransform::try_new(1.25, 0.3).expect("finite cumulative transform"),
                 ),
             )
             .with_modifiers(Modifiers::CONTROL),
@@ -1510,8 +1497,8 @@ fn perspective_vectors_follow_the_current_focal_and_preserve_counts() {
         scroll(ScrollUnit::Pixels, 0.0, 1.0),
         scroll(ScrollUnit::Lines, 0.0, -2.0),
         scroll(ScrollUnit::Pages, 0.0, -3.0),
-        pan(0.0, 1.0),
-        pan(2.0, 1.0),
+        pinch(0.0),
+        pinch(2.0),
     ];
     let lane = InteractionLane::try_new().expect("lane");
     let handle = lane.dispatch_handle();
@@ -1528,7 +1515,7 @@ fn perspective_vectors_follow_the_current_focal_and_preserve_counts() {
         let sink = claimed.clone();
         let claim = handle
             .register_scroll(move |event| {
-                sink.borrow_mut().push(*event.local);
+                sink.borrow_mut().push(*event);
                 EventPropagation::Continue
             })
             .expect("scroll claim");
@@ -1556,11 +1543,10 @@ fn perspective_vectors_follow_the_current_focal_and_preserve_counts() {
             (0.0, -2.0 + f64::EPSILON),
             (f64::MAX, f64::MAX),
         ] {
-            for event in [scroll(ScrollUnit::Pixels, x, dx), pan(x, dx)] {
-                result.dispatch(&event);
-                if let PointerEvent::Scroll(scroll) = event {
-                    result.dispatch_scroll(&scroll);
-                }
+            let event = scroll(ScrollUnit::Pixels, x, dx);
+            result.dispatch(&event);
+            if let PointerEvent::Scroll(scroll) = event {
+                result.dispatch_scroll(&scroll);
             }
         }
     });
@@ -1600,19 +1586,13 @@ fn perspective_vectors_follow_the_current_focal_and_preserve_counts() {
                 );
             }
             (PointerEvent::PanZoom(local), PointerEvent::PanZoom(global)) => {
-                let PanZoomPhase::Update(value) = local.phase else {
-                    panic!("update");
-                };
-                let expected = if index == 3 {
-                    (2.0 / 3.0, -2.0 / 3.0)
-                } else {
-                    (1.0 / 5.0, -1.0 / 5.0)
-                };
-                assert_close(
-                    (value.pan().dx, value.pan().dy),
-                    expected,
-                    "current-focal cumulative pan",
+                assert_eq!(
+                    local.phase, global.phase,
+                    "scale and rotation are dimensionless; only the focal localizes"
                 );
+                let expected = if index == 3 { (0.0, 2.0) } else { (1.0, 1.0) };
+                let focal = local.position.get();
+                assert_close((focal.x, focal.y), expected, "localized focal point");
                 let mut metadata = *local;
                 metadata.position = global.position;
                 metadata.phase = global.phase;

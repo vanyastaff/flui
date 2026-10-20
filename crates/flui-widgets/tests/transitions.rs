@@ -618,8 +618,8 @@ pub(crate) fn a_moving_slide_preserves_selected_pointer_coordinates() {
 
         let first = Offset::new(90.0 + sign * 20.0, 90.0);
         let selected = Cell::new(false);
-        binding.replay_with(&PointerScript::tap(first), |binding, position| {
-            let path = binding.hit_test(position);
+        binding.replay_with(&PointerScript::tap(first), |binding, position, kind| {
+            let path = binding.hit_test(position, kind);
             if !selected.replace(true) {
                 // Change the public animation after choosing the path, before
                 // the owner lane receives it. Its mapping must remain admitted.

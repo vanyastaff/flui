@@ -31,26 +31,15 @@ fn main() -> anyhow::Result<()> {
     let platform = current_platform()?;
     tracing::info!("Platform: {}", platform.name());
 
-    // Query platform capabilities
-    let capabilities = platform.capabilities();
-    tracing::info!("Capabilities:");
-    tracing::info!(
-        "  - Multiple windows: {}",
-        capabilities.supports_multiple_windows()
-    );
-    tracing::info!("  - Touch input: {}", capabilities.supports_touch());
-
     // Create main window
-    let window_options = WindowOptions {
-        title: "Event Handling Demo - Click, type, resize!".to_string(),
-        size: Size::new(800.0, 600.0),
-        resizable: true,
-        visible: true,
-        decorated: true,
-        min_size: Some(Size::new(400.0, 300.0)),
-        max_size: None,
-        ..Default::default()
-    };
+    let window_options = WindowOptions::default()
+        .with_title("Event Handling Demo - Click, type, resize!".to_string())
+        .with_size(Size::new(800.0, 600.0))
+        .with_resizable(true)
+        .with_visible(true)
+        .with_decorated(true)
+        .with_min_size(Some(Size::new(400.0, 300.0)))
+        .with_max_size(None);
 
     tracing::info!("\n📱 Creating window...");
     let window = platform.open_window(window_options)?;
@@ -105,13 +94,10 @@ fn main() -> anyhow::Result<()> {
     tracing::info!("  6. Focus/unfocus window - fires WindowEvent::FocusChanged");
     tracing::info!("  7. Close window - fires WindowEvent::CloseRequested");
 
-    // Show multi-touch info
-    if capabilities.supports_touch() {
-        tracing::info!("\n👆 Multi-Touch:");
-        tracing::info!("  - Each touch point has unique PointerId");
-        tracing::info!("  - Supports simultaneous touches");
-        tracing::info!("  - Touch events are PointerKind::Touch");
-    }
+    // Input capabilities arrive per window, as the first input event.
+    tracing::info!("\n👆 Input capabilities:");
+    tracing::info!("  - PlatformInput::Capabilities comes first, then on every change");
+    tracing::info!("  - present() lists the attached device kinds (touch, pen, ...)");
 
     // Keep window alive
     tracing::info!("\n✨ Window is ready for interaction!");
@@ -151,6 +137,9 @@ fn main() -> anyhow::Result<()> {
     //         PlatformInput::Keyboard(event) => {
     //             tracing::info!("⌨️  Keyboard event: key={:?}, modifiers={:?}",
     //                 event.key, event.modifiers);
+    //         }
+    //         PlatformInput::Capabilities(capabilities) => {
+    //             tracing::info!("Pen: {:?}", capabilities.pen());
     //         }
     //     }
     // }));

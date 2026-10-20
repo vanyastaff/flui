@@ -237,7 +237,7 @@ fractional ratios ([flutter#151065](https://github.com/flutter/flutter/issues/15
 
 ### 9. Order
 
-Each step is one PR that builds and passes `cargo xtask check-changed`:
+Each step is one PR that builds and passes the pre-PR checks (AGENTS.md, "Checking a change"):
 
 1. This record, the census and the research.
 2. `flui_foundation::geometry` with §3–§5's types and their tests. Temporary `From` conversions

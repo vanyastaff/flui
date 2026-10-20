@@ -38,6 +38,10 @@
 *.tar binary
 *.gz binary
 *.wasm binary
+*.dex binary
+
+# Java sources (the digest `cargo xtask android-dex` checks reads LF bytes)
+*.java text eol=lf
 
 # Lock files (exact match, no diff)
 Cargo.lock text eol=lf -diff linguist-generated=true

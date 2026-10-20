@@ -1,6 +1,6 @@
 # Display pacing — задачи
 
-- **Статус:** черновик
+- **Статус:** завершена — спека #1716; реализация влита: DP1–DP3 #1721, DP4 #1722, DP5 #1727, DP6 #1725 и #1726, DP7 #1728, DP8 #1724, DP9 — PR закрытия
 - **Дата:** 2026-10-17
 - **Design:** [design.md](design.md); требования — [requirements.md](requirements.md); ADR —
   [ADR-0236](../../../adr/ADR-0236-display-snapshot-and-refresh-period.md)
@@ -46,15 +46,15 @@ DP7 зависит от DP4 и DP8, потому что заменяет обо�
 
 | ID | Задача | Требования | Зависит | P | Где | Дн | Статус |
 |---|---|---|---|---|---|---|---|
-| DP1 | PR 1. Контракт, ADR, headless, оболочки macOS и winit | R1, R3, R6–R9, R22a, R30 | — | — | L | 5 | — |
-| DP2 | PR 1. Хост: снимок, доставка, наблюдение окна | R1, R2, R10–R15 | DP1 | — | L | 3 | — |
-| DP3 | PR 1. Потребители: `FallbackWake`, бюджет, окно ресэмплера, строка jank devtools (поле span), метрика ADR-0212; период презентации | R4, R16, R19–R21, R20a | DP2 | — | L | 5 | — |
-| DP4 | PR 2. Windows: снимок, ключи, частота, `WM_DISPLAYCHANGE`, дисплей окна, модуль версий | R2, R3, R7, R23, R29, R34 | DP3 | [P] | L, W | 5 | — |
-| DP5 | PR 3. Android: JNI-выборка, `AChoreographer`, модуль API-уровня, запрос частоты по активности | R2, R17, R17a, R26, R34 | DP3 | [P] | L, A | 7 | — |
-| DP6 | PR 4. Web: оценка по rAF, `devicePixelRatio`, `screenschange`, проверка возможностей | R5, R27, R34 | DP3 | [P] | L, B | 4 | — |
-| DP7 | PR 5. Linux: модуль дисплеев; замена оболочки winit нативными источниками ОС; честные заглушки | R28, R29, R31 | DP3, DP4, DP8 | — | L, X, WSL | 8 | — |
-| DP8 | PR 6. macOS и iOS: замена оболочки macOS (уведомление экранов, инвалидация), iOS: ProMotion, `display_id()`, модуль версий | R18, R24, R25, R34 | DP3 | [P] | L (типы) | 3 | — |
-| DP9 | PR 7. Проба, живые прогоны, parity/gaps, changelog | R32, R33 | DP4–DP8 | — | W, A, B, WSL, X | 3 | — |
+| DP1 | PR 1. Контракт, ADR, headless, оболочки macOS и winit | R1, R3, R6–R9, R22a, R30 | — | — | L | 5 | сделана, #1721 |
+| DP2 | PR 1. Хост: снимок, доставка, наблюдение окна | R1, R2, R10–R15 | DP1 | — | L | 3 | сделана, #1721 |
+| DP3 | PR 1. Потребители: `FallbackWake`, бюджет, окно ресэмплера, строка jank devtools (поле span), метрика ADR-0212; период презентации | R4, R16, R19–R21, R20a | DP2 | — | L | 5 | сделана, #1721 |
+| DP4 | PR 2. Windows: снимок, ключи, частота, `WM_DISPLAYCHANGE`, дисплей окна, модуль версий | R2, R3, R7, R23, R29, R34 | DP3 | [P] | L, W | 5 | сделана, #1722 |
+| DP5 | PR 3. Android: JNI-выборка, `AChoreographer`, модуль API-уровня, запрос частоты по активности | R2, R17, R17a, R26, R34 | DP3 | [P] | L, A | 7 | сделана, #1727 |
+| DP6 | PR 4. Web: оценка по rAF, `devicePixelRatio`, `screenschange`, проверка возможностей | R5, R27, R34 | DP3 | [P] | L, B | 4 | сделана, #1725, #1726 |
+| DP7 | PR 5. Linux: модуль дисплеев; замена оболочки winit нативными источниками ОС; честные заглушки | R28, R29, R31 | DP3, DP4, DP8 | — | L, X, WSL | 8 | сделана, #1728 |
+| DP8 | PR 6. macOS и iOS: замена оболочки macOS (уведомление экранов, инвалидация), iOS: ProMotion, `display_id()`, модуль версий | R18, R24, R25, R34 | DP3 | [P] | L (типы) | 3 | сделана, #1724 |
+| DP9 | PR 7. Проба, живые прогоны, parity/gaps, changelog | R32, R33 | DP4–DP8 | — | W, A, B, WSL, X | 3 | сделана, PR закрытия |
 
 ## Карточки
 
@@ -142,8 +142,8 @@ owner_dispatch.rs}`, `crates/flui-runtime/src/owner/presentation_dispatch.rs`,
 `on_display_changed`; winit-на-Windows получает снимок у этого источника; **модуль версий (D-19):**
 `platforms/windows/os_version.rs` — `WindowsBuild` из `RtlGetVersion`, доказательство для флага
 `QDC_VIRTUAL_MODE_AWARE` (сборка ≥ 18362); читатель — вызов `QueryDisplayConfig` этой же задачи.
-Тесты: `windows_build_below_18362_omits_the_virtual_mode_flag`, `windows_display_contract`
-(W, локально) и чистые строки `os_display_classification` (L): `windows_zero_or_one_hz_is_unknown`,
+Тесты: `windows_build_below_18362_omits_the_virtual_mode_flag`, нативные строки `mod native_windows` в
+`crates/flui-platform/tests/contract.rs` и `display_message_tests.rs` в `src` (W, локально) и чистые строки `os_display_classification` (L): `windows_zero_or_one_hz_is_unknown`,
 `rational_refresh_converts_exactly`, `nearest_monitor_resolves_by_native_key` (seam с внедрённым
 перечислением). Падают на основе: окно отвечает основным монитором (`windows/window.rs:1067`–`1085`),
 `WM_DISPLAYCHANGE` не обрабатывается. Файлы: `crates/flui-platform/src/platforms/windows/{display.rs,
@@ -243,7 +243,7 @@ CI (`xrandr`), WSLg на машине владельца. Файлы: `crates/fl
 | R7 | `same_connector_after_replug_keeps_the_id`, `two_identical_monitors_get_distinct_ids`, `swapped_cables_swap_identities`, `unkeyed_output_mints_a_fresh_id_each_time` | DP1 | L |
 | R8 | `exhausted_counter_refuses_without_wrapping`, `known_key_still_resolves_after_exhaustion` | DP1 | L |
 | R9 | rustdoc `DisplayInfo` и ADR-0236 | DP1 | — |
-| R10 | `change_between_registration_and_seed_is_not_lost` | DP2 | L |
+| R10 | `a_change_racing_the_sample_still_reaches_the_window` | DP2 | L |
 | R11 | `snapshot_is_committed_before_observers_run`, `panicking_window_observer_keeps_the_snapshot_and_the_tail`, `apply_panic_keeps_the_debt_and_the_next_equal_change_is_delivered`, `foreign_thread_invalidation_wakes_the_owner` | DP2 | L |
 | R12 | `moving_to_another_display_notifies_once`, `refresh_change_of_own_display_notifies`, `other_displays_change_is_silent`, `unread_field_change_is_silent` | DP2 | L |
 | R13 | `several_changes_before_the_turn_deliver_the_last`, `newer_unknown_display_replaces_a_pending_known_one` | DP2 | L |
@@ -260,13 +260,13 @@ CI (`xrandr`), WSLg на машине владельца. Файлы: `crates/fl
 | R21 | `refresh_interval_metric_recomputes_on_display_change`, `unknown_refresh_period_uses_the_60_hz_fallback`, `period_product_overflow_is_treated_as_unknown`, `non_finite_factor_is_treated_as_unknown`, `display_change_runs_the_dpi_geometry_barrier` | DP3 | L |
 | R22 | структурное свойство, проверяется ревью; строки нет | DP3 | — |
 | R22a | `macos_and_winit_shims_keep_the_period_they_report_today` | DP1 | L |
-| R23 | `windows_display_contract`, `os_display_classification`; прогон | DP4 | L, W |
+| R23 | нативные строки `native_windows` (`tests/contract.rs`) и `display_message_tests.rs`, `os_display_classification`; прогон | DP4 | L, W |
 | R24 | компиляция и типы (`cross-typecheck`), `macos_display_key_is_the_display_uuid` | DP8 | L |
 | R25 | компиляция и типы | DP8 | L |
 | R26 | `android_refresh_value_table`; прогон на S21 | DP5 | L, A |
 | R27 | `web_refresh_estimate_table`; смена масштаба страницы | DP6 | L, B |
 | R28 | строки Linux (модель); Xvfb, WSLg | DP7 | L, X, WSL |
-| R29 | `windows_display_contract`, `winit_window_matches_its_output_by_native_id`, `mirrored_outputs_keep_distinct_ids` | DP4, DP7 | L, W |
+| R29 | нативные строки `native_windows` (`tests/contract.rs`), `winit_window_matches_its_output_by_native_id`, `mirrored_outputs_keep_distinct_ids` | DP4, DP7 | L, W |
 | R30 | `window_display_observation_contract` через внедрение | DP1, DP2 | L |
 | R31 | `no_features_gives_an_empty_snapshot_not_a_panic`; rustdoc `lib.rs` | DP7 | L |
 | R32 | пример `displays.rs` | DP9 | W, A, B, WSL |

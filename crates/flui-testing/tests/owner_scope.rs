@@ -31,7 +31,10 @@ pub(crate) fn interaction_targets_are_isolated_between_headless_bindings() {
 pub(crate) fn pointer_route_panic_still_runs_the_down_arena_lifecycle() {
     let binding = HeadlessBinding::new();
     let pointer = PointerId::new(std::num::NonZeroU64::MIN);
-    let recognizer = TapGestureRecognizer::builder(binding.arena().clone()).build();
+    // A tap that reports taps joins the contact's arena.
+    let recognizer = TapGestureRecognizer::builder(binding.arena().clone())
+        .on_tap(|_| {})
+        .build();
     let event = pointer_down(Offset::new(4.0, 7.0), device_kind_from_button(0))
         .expect("finite test position");
     recognizer.add_pointer(flui_interaction::PointerDispatch::at_root(&event));

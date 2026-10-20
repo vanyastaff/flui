@@ -11,7 +11,7 @@
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::processing::{OneEuroFilter2D, VelocityEstimator, VelocityTracker};
+use flui_interaction::gesture::{OneEuroFilter2D, VelocityEstimator, VelocityTracker};
 use flui_interaction::{MonotonicClock, SystemClock};
 use flui_platform_api::pointer::PointerKind;
 

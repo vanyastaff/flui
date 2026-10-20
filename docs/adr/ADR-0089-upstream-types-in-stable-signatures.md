@@ -57,7 +57,7 @@ Upstream types reach public paths today in four ways, each checked in this tree:
 - **Raw handles.** `PlatformWindow` already exposes only the borrowed
   `HasWindowHandle`/`HasDisplayHandle` path (`crates/flui-platform-api/src/platform_window.rs`),
   which [ADR-0063](ADR-0063-the-renderer-owns-its-surface-target.md) moved the renderer to. The
-  legacy `Window` trait (`crates/flui-platform/src/window.rs:53`) still has
+  legacy `Window` trait (since removed by ADR-0237) still has
   `fn raw_window_handle(&self) -> RawWindowHandle` (`window.rs:196`), returning a crate-local
   enum (`window.rs:265`); nothing outside the crate uses it.
 

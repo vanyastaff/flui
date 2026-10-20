@@ -37,10 +37,10 @@ design document with no code, and a code change with no record, are both incompl
   `git branch -D`. Prefer non-destructive alternatives (new branches, new commits, tags).
 - Keep your own hooks and signing on: `--no-verify`, `--no-gpg-sign` and equivalents are for
   when the maintainer explicitly asks.
-- The repository ships no git hook: CI is the gate. For the answer before a push,
-  `cargo xtask check-changed` lints the changed crates and their dependents and tests the changed
-  ones (`--full` runs the rest of CI's lane locally too), and
-  `cargo xtask gate` the non-test half of `cargo xtask ci`.
+- The repository ships no git hook: CI is the gate. For the answer before a push, run
+  `cargo fmt --all`, then clippy and nextest on the crates you changed, one at a time (AGENTS.md,
+  "Checking a change"); `cargo xtask affected --worktree` lists the crates a change reaches, and
+  `cargo xtask ci` reproduces CI locally when you need it.
 - `.gitignore` covers what this repository's own builds and workflows write, plus the most
   common editor and OS files. Your own tools stay on your machine: an agent runtime's state goes
   in `.git/info/exclude` (every worktree of the clone shares it) or your global excludes file,

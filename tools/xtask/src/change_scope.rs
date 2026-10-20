@@ -1,7 +1,7 @@
 //! Which packages a change touches, and the guards that keep that classification honest.
 //!
 //! `cargo xtask affected` is the ONE computation behind CI's lanes (the `plan`
-//! job) and `cargo xtask check-changed`, so the two cannot disagree:
+//! job); locally it shows the same scope for a change, so the two cannot disagree:
 //!
 //! ```text
 //! cargo xtask affected                         # vs origin/main, human summary
@@ -82,31 +82,8 @@ pub(crate) fn affected(args: &AffectedArgs) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// The scoped check for this checkout (`cargo xtask check-changed` reads it
-/// in-process).
-pub(crate) struct WorktreeLane {
-    /// Its change against the base, uncommitted and untracked files included,
-    /// as the `(key, value)` pairs `affected --worktree --format shell` prints
-    /// for a pull request.
-    pub(crate) fields: Vec<(&'static str, String)>,
-    /// The packages a changed file belongs to, sorted.
-    pub(crate) seeds: Vec<String>,
-}
-
-/// The [`WorktreeLane`] of this checkout's change against `base`.
-pub(crate) fn worktree_lane(base: &str) -> anyhow::Result<WorktreeLane> {
-    let repo = Repo::open(repo_root());
-    let scope = classify::classify(&repo, &repo.changed_files(base, true)?)?;
-    Ok(WorktreeLane {
-        fields: lane_args::lane_args(&repo, &scope, Event::PullRequest)?
-            .fields()
-            .into(),
-        seeds: scope.seeds,
-    })
-}
-
 /// The packages that do not build for wasm32 (`[package.metadata.flui]
-/// wasm = false`), which `check-changed`'s wasm step excludes too.
+/// wasm = false`), which the wasm steps exclude.
 pub(crate) fn no_wasm_packages() -> anyhow::Result<BTreeSet<String>> {
     let repo = Repo::open(repo_root());
     Ok(lane_args::no_wasm_packages(repo.workspace()?))
@@ -195,9 +172,8 @@ pub(crate) fn paths_filter(_args: &PathsFilterArgs) -> anyhow::Result<ExitCode> 
 /// Arguments for `cargo xtask ci-verify`, the `ci` aggregator job's check.
 ///
 /// Its inputs come from the environment the job sets: `NEEDS` (the
-/// `toJSON(needs)` of every gated job), `LANE`, `STANDALONE`,
-/// `EVENT`, and the lane lists `HEAVY_JOBS` (the `wide` lane's jobs),
-/// `FULL_JOBS` and `EXTENDED_JOBS`.
+/// `toJSON(needs)` of every gated job), `LANE`, `EVENT`, and the lane lists
+/// `HEAVY_JOBS` (the `wide` lane's jobs) and `FULL_JOBS`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct CiVerifyArgs {}
 
@@ -220,13 +196,11 @@ pub(crate) fn ci_verify(_args: &CiVerifyArgs) -> anyhow::Result<ExitCode> {
     let lanes = aggregator::LaneJobs {
         wide: list("HEAVY_JOBS")?,
         full: list("FULL_JOBS")?,
-        extended: list("EXTENDED_JOBS")?,
     };
     let (lane, event) = (env("LANE")?, env("EVENT")?);
     let plan = aggregator::Plan {
         result: needs.get("plan").map(String::as_str),
         lane: &lane,
-        standalone: std::env::var("STANDALONE").is_ok_and(|v| !v.trim().is_empty()),
     };
     let ci_yml = classify::read_normalised(&repo_root().join(".github/workflows/ci.yml"))
         .context("reading .github/workflows/ci.yml")?;
@@ -266,7 +240,6 @@ mod tests {
             doc_args: "-p flui -p flui-material -p flui-web-counter --features flui/testing"
                 .to_owned(),
             doctest_args: "-p flui -p flui-material".to_owned(),
-            standalone: String::new(),
         }
     }
 
@@ -278,7 +251,7 @@ mod tests {
              platform=false\ncross_platform=false\ncross_app=true\ncross_cli=false\ncross_desktop_mcp=false\ncross_ios=true\n\
              wasm_args=-p flui -p flui-material -p flui-web-counter\nwasm_facade=true\nhack_args=\n\
              doc_args=-p flui -p flui-material -p flui-web-counter --features flui/testing\n\
-             doctest_args=-p flui -p flui-material\nstandalone=\n";
+             doctest_args=-p flui -p flui-material\n";
         assert_eq!(out, expected);
         let mut multi = sample();
         multi.reason = "a\nb".to_owned();
@@ -291,7 +264,10 @@ mod tests {
             out.starts_with("LANE=wide\nMODE=packages\nHEAVY_REQUIRED=false\nREASON='changed: flui-material; plus 2 dependents'\n"),
             "{out}"
         );
-        assert!(out.ends_with("\nSTANDALONE=''\n"), "{out}");
+        assert!(
+            out.ends_with("\nDOCTEST_ARGS='-p flui -p flui-material'\n"),
+            "{out}"
+        );
         assert!(out.contains("\nHACK_ARGS=''\n"), "{out}");
         assert!(
             out.contains("\nFEATURES='--features flui/cupertino'\n"),

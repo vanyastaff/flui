@@ -1,6 +1,6 @@
 //! Presentation-owned gesture arbitration and inherited input policy.
 
-use flui_interaction::arena::{GestureArena, SweepModel};
+use flui_interaction::gesture::{GestureArena, SweepModel};
 use flui_interaction::{GestureSettingsProvider, WheelPreferencesProvider};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, impl_inherited_view};
@@ -41,7 +41,7 @@ impl GestureArenaScope {
             arena,
             settings: None,
             wheel_preferences: None,
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 
@@ -49,7 +49,9 @@ impl GestureArenaScope {
     ///
     /// An authored [`flui_interaction::GestureSettings`] becomes a fixed profile;
     /// a presentation supplies its live provider. New admissions read the
-    /// provider while active contacts retain their admitted settings.
+    /// provider while active contacts retain their admitted settings. Beneath
+    /// an outer scope, the outer provider's accessibility timing floors still
+    /// raise a shorter authored long-press or double-tap timing.
     #[must_use]
     pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
         self.settings = Some(settings.into());
@@ -71,6 +73,12 @@ impl GestureArenaScope {
             .expect("BUG: gesture consumers must acquire settings beneath GestureArenaScope")
     }
 
+    /// The scope's gesture settings, or the framework defaults outside one.
+    pub(crate) fn settings_or_default_of(ctx: &dyn BuildContext) -> GestureSettingsProvider {
+        ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| scope.data.settings.clone())
+            .unwrap_or_default()
+    }
+
     pub(crate) fn wheel_preferences_of(ctx: &dyn BuildContext) -> WheelPreferencesProvider {
         ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| scope.data.wheel_preferences.clone())
             .expect("BUG: wheel consumers must acquire preferences beneath GestureArenaScope")
@@ -83,17 +91,78 @@ impl GestureArenaScope {
     /// arena or take over the binding's lifecycle.
     #[must_use]
     pub fn of(ctx: &dyn BuildContext) -> GestureArena {
-        ctx.get::<ResolvedGestureArenaScope, _>(|scope| scope.data.arena.clone())
-            .expect(
-                "BUG: gesture consumers must be mounted beneath GestureArenaScope; \
+        // Compositions built from the handle are checked against the scope's
+        // gesture policy (ADR-0208 delay ceiling).
+        ctx.get::<ResolvedGestureArenaScope, _>(|scope| {
+            scope.data.arena.with_settings(scope.data.settings.clone())
+        })
+        .expect(
+            "BUG: gesture consumers must be mounted beneath GestureArenaScope; \
              the presentation binding is the sole GestureArena lifecycle owner",
-            )
+        )
+    }
+
+    /// [`Self::of`], registering a dependency: the caller's
+    /// `did_change_dependencies` runs when the scope hands out a handle that
+    /// admits elsewhere or another policy.
+    ///
+    /// # Panics
+    /// Panics outside a presentation scope, as [`Self::of`] does.
+    pub(crate) fn dependent_of(ctx: &dyn BuildContext) -> GestureArena {
+        ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| {
+            scope.data.arena.with_settings(scope.data.settings.clone())
+        })
+        .expect(
+            "BUG: gesture consumers must be mounted beneath GestureArenaScope; \
+             the presentation binding is the sole GestureArena lifecycle owner",
+        )
+    }
+
+    /// [`Self::of`], or `None` outside a presentation scope.
+    pub(crate) fn maybe_of(ctx: &dyn BuildContext) -> Option<GestureArena> {
+        ctx.get::<ResolvedGestureArenaScope, _>(|scope| {
+            scope.data.arena.with_settings(scope.data.settings.clone())
+        })
     }
 
     /// The shared arena configured for this scope.
     #[must_use]
     pub fn arena(&self) -> &GestureArena {
         &self.arena
+    }
+}
+
+/// The arena handle and the gesture settings a widget builds its recognizers
+/// for. Equal policies admit alike under the same settings, so recognizers
+/// built for one serve the other.
+#[derive(Clone, Debug)]
+pub(crate) struct GesturePolicy {
+    pub(crate) arena: GestureArena,
+    pub(crate) settings: GestureSettingsProvider,
+}
+
+impl GesturePolicy {
+    /// The scope's policy. Reading the settings depends on the scope, so the
+    /// caller's `did_change_dependencies` runs when the scope changes.
+    pub(crate) fn of(ctx: &dyn BuildContext) -> Self {
+        Self {
+            arena: GestureArenaScope::of(ctx),
+            settings: GestureArenaScope::settings_of(ctx),
+        }
+    }
+
+    /// [`Self::of`], or `None` outside a presentation scope.
+    pub(crate) fn maybe_of(ctx: &dyn BuildContext) -> Option<Self> {
+        GestureArenaScope::maybe_of(ctx).map(|arena| Self {
+            arena,
+            settings: GestureArenaScope::settings_or_default_of(ctx),
+        })
+    }
+}
+
+impl PartialEq for GesturePolicy {
+    fn eq(&self, other: &Self) -> bool {
+        self.settings == other.settings && self.arena.admits_like(&other.arena)
     }
 }
 
@@ -107,10 +176,15 @@ impl std::fmt::Debug for GestureArenaScope {
 
 impl StatelessView for GestureArenaScope {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let settings = self.settings.clone().unwrap_or_else(|| {
-            ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| scope.data.settings.clone())
-                .unwrap_or_default()
-        });
+        let inherited =
+            ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| scope.data.settings.clone());
+        // An override beneath another scope still meets the host's
+        // accessibility timing floors (ADR-0212 §3).
+        let settings = match (self.settings.clone(), inherited) {
+            (Some(authored), Some(inherited)) => inherited.overridden_by(authored),
+            (Some(authored), None) => authored,
+            (None, inherited) => inherited.unwrap_or_default(),
+        };
         let wheel_preferences = self.wheel_preferences.clone().unwrap_or_else(|| {
             ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| {
                 scope.data.wheel_preferences.clone()
@@ -149,8 +223,11 @@ impl InheritedView for ResolvedGestureArenaScope {
     fn child(&self) -> &dyn View {
         &self.child
     }
+    /// A consumer's recognizers join the arena and follow the policy they were
+    /// built with, so a change of either reaches every dependent.
     fn update_should_notify(&self, old: &Self) -> bool {
-        self.data.settings != old.data.settings
+        !self.data.arena.admits_like(&old.data.arena)
+            || self.data.settings != old.data.settings
             || self.data.wheel_preferences != old.data.wheel_preferences
     }
 }

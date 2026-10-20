@@ -338,6 +338,7 @@ where
     ui_runtime.set_motion_override(config.motion_override);
     ui_runtime.set_frame_failure_handler(config.frame_failure_handler.clone());
     ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
+    config.install_input_tap(&ui_runtime);
 
     let logical = window.logical_size();
     let owner = APP_RUNTIME
@@ -382,6 +383,8 @@ where
         )
         .with_textures(textures),
     ));
+
+    super::host::track_raster_lane(lane.lock().reclaim_handle());
 
     // 5. Input -> entered ui_runtime input dispatch.
     install_input_wiring(owner_dispatch, window.as_ref());
@@ -462,6 +465,8 @@ where
         );
     }));
     installation.observe_appearance();
+    installation.observe_display();
+    installation.observe_window_state();
     // Register before sampling, so native facts changed during renderer bootstrap
     // cannot be replaced by a synthetic Resumed observation.
     let execution = window.execution_state();

@@ -5,6 +5,7 @@
 //!
 //! Run with `cargo run -p flui-interaction --example custom_recognizer`.
 
+use flui_interaction::gesture::GestureContest;
 use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};
 
 use flui_foundation::geometry::Point;
@@ -16,8 +17,8 @@ use flui_interaction::{
     ManualClock, PointerButton, PointerButtons, PointerDispatch, PointerEventExt, PointerId,
     PointerInfo, PointerPosition, PointerPress, PointerRelease, PointerSample, PrimaryContact,
     RecognizerSet, RenderId,
-    arena::GestureArena,
     events::{PointerEvent, PointerKind},
+    gesture::GestureArena,
 };
 
 struct LoggingRecognizer {
@@ -39,14 +40,24 @@ impl LoggingRecognizer {
 }
 
 impl GestureArenaMember for LoggingRecognizer {
-    fn accept_gesture(&self, pointer: PointerId) {
+    fn accept_gesture(&self, contest: GestureContest) {
         self.won.set(true);
-        println!("[{}] accepted for pointer {pointer:?}", self.name);
+        println!(
+            "[{}] accepted for pointer {:?}",
+            self.name,
+            contest.pointer()
+        );
     }
 
-    fn reject_gesture(&self, pointer: PointerId) {
-        self.contact.withdraw();
-        println!("[{}] rejected for pointer {pointer:?}", self.name);
+    fn reject_gesture(&self, contest: GestureContest) {
+        if self.contact.tracks_contest(contest) {
+            self.contact.withdraw();
+        }
+        println!(
+            "[{}] rejected for pointer {:?}",
+            self.name,
+            contest.pointer()
+        );
     }
 }
 

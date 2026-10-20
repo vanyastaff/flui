@@ -341,6 +341,18 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
         None
     }
 
+    /// The input regions this sliver claims, in its local paint coordinates at its
+    /// absolute paint `size`.
+    ///
+    /// Default: none. See [`RenderObject::describe_input_regions`].
+    fn describe_input_regions(
+        &self,
+        size: flui_foundation::geometry::Size,
+        regions: &mut crate::input_regions::InputRegionSink,
+    ) {
+        let _ = (size, regions);
+    }
+
     // ========================================================================
     // Compositing / Layer Boundaries
     // ========================================================================
@@ -596,6 +608,14 @@ where
         size: flui_foundation::geometry::Size,
     ) -> Option<flui_foundation::geometry::Matrix4> {
         <T as RenderSliver>::hit_test_transform(self, size)
+    }
+
+    fn describe_input_regions(
+        &self,
+        size: flui_foundation::geometry::Size,
+        regions: &mut crate::input_regions::InputRegionSink,
+    ) {
+        <T as RenderSliver>::describe_input_regions(self, size, regions);
     }
 
     fn describe_semantics_configuration(

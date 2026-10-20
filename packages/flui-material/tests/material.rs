@@ -7,7 +7,7 @@
 //! before testing the child (`crates/flui-objects/src/proxy/physical_model.rs`
 //! — a deliberate FLUI-wide divergence from the oracle, which gates this on
 //! `_clipper != null`). For the `PathClip` variant `Material` uses,
-//! `compute_clip` calls `flui_interaction::routing::resolve_path_clip_target`
+//! `compute_clip` calls `flui_interaction::pointer::resolve_path_clip_target`
 //! against the **actually registered** `PathClipTarget` — the same
 //! `sync_path_clip_target` wiring `create_render_object`/`update_render_object`
 //! install during a real mount. So a corner-point hit-test through a fully

@@ -57,6 +57,7 @@ members = [
     "examples/web_demo",                     # wasm32 cdylibs; build steps in examples/README.md
     "examples/painting_demo",
     "examples/web_counter",
+    "examples/interaction_gallery",          # One screen per interaction widget: desktop, Android, web
     "tools/live-smoke",                      # Live end-to-end harness: real window, X11 input, teardown
     "tools/desktop-mcp",                     # MCP server that drives desktop apps
     "tools/xtask",                           # `cargo xtask`: gates, change scoping, release and weekly tooling
@@ -262,8 +263,16 @@ toml = "1.1"
 objc2 = { version = "0.6.4", features = ["std"] }
 objc2-foundation = { version = "0.3.2", default-features = false }
 objc2-app-kit = { version = "0.3.2", default-features = false }
+# Core Haptics, the iOS backend's second haptic tier (ADR-0210 §7); the
+# same objc2 0.3 generation as the bindings above.
+objc2-core-haptics = { version = "0.3.2", default-features = false }
 dispatch2 = "0.3.1"
+block2 = "0.6.2"
+# ANDROID - the NativeActivity glue flui-platform and flui-app share.
+android-activity = { version = "0.6", features = ["native-activity"] }
 jni = "0.22.4"
+# Android's dynamic loader: the NDK functions newer than minSdk are looked up by name.
+libc = "0.2"
 # Quartz window identities, including windows omitted from capture lists.
 core-foundation = "0.10"
 core-graphics = "0.25"
@@ -346,6 +355,17 @@ wgpu-profiler = { version = "0.28", default-features = false }
 # Used by flui-engine to compose blend_helpers.wgsl into mode.wgsl / advanced_blend.wgsl.
 naga_oil = { version = "0.23", default-features = false }
 winit = "0.30.12"
+# Linux display source (flui-platform `wayland` / `x11` features): the output
+# list and refresh rate from the compositor, on a connection of its own next to
+# winit's. The X11 and Wayland client versions are the ones winit already pulls
+# into the lock, so the tree gains no second copy. `x11rb` runs on its pure-Rust
+# connection (no libxcb) and needs RandR only; `wayland-protocols` carries
+# `zxdg_output_v1`, which lives under `unstable`.
+x11rb = { version = "0.13", default-features = false, features = ["randr"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+# Safe `poll` and `eventfd` for the display thread's connection and stop descriptors.
+rustix = { version = "1", default-features = false, features = ["std", "event"] }
 raw-window-handle = "0.6"
 pollster = "1.0"
 # Trait-only `Stream`. NOT `futures`/`futures-util`: no executor, no
@@ -403,6 +423,16 @@ proc-macro2 = "1"
 syn = "3"
 # Markdown events for `cargo xtask markers`: prose apart from code spans and blocks.
 pulldown-cmark = { version = "0.13", default-features = false }
+
+# BROWSER DRIVER - `cargo xtask device web-input`: fetching the ChromeDriver
+# that matches the installed Chrome (Chrome for Testing archives), the
+# WebDriver BiDi socket, and the localhost page the session loads.
+ureq = { version = "3.3", default-features = false, features = ["rustls"] }
+tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
+tiny_http = { version = "0.12", default-features = false }
+zip = { version = "9.0.4", default-features = false }
+# `cargo xtask device web-gallery`: the page captures BiDi returns as base64.
+base64 = { version = "0.22", default-features = false, features = ["std"] }
 # === Engine-specific dependencies (NOT in workspace) ===
 # These are ONLY used in flui-engine:
 # - etagere (glyph atlas packing)
@@ -801,6 +831,15 @@ localizations = []
 # It is not skipped when no adapter is found: a test that quietly passes on a machine
 # that cannot run it inflates the count and proves nothing. CI runs it in `gpu-test`.
 gpu-readback-tests = []
+
+# === Unstable input surface ===
+# Additive. Re-exports the handle-less input capabilities
+# (`flui::platform::input_capabilities`: `InputCapabilities`, `Availability`,
+# `PointerKindSet`) and the second haptic tier (`flui::platform::haptics`,
+# `flui::interaction::HapticsHandle`), until every backend passes its
+# conformance rows (ADR-0213 §5, ADR-0210 §9); `flui-sdk` has the matching
+# feature for packages. The platform crates build the types regardless.
+unstable-input = []
 
 # Development-only reload machinery, off in an ordinary production graph. This
 # re-exports flui-hot-reload as `flui::hot_reload`; the application installs

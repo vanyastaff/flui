@@ -9,6 +9,8 @@ use flui_painting::TextSizing;
 use flui_runtime::owner::{OwnerEffects, OwnerHost, WindowObservation};
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
 use flui_runtime::ui_runtime::UiRuntime;
+
+use crate::HostInputExt as _;
 use flui_view::prelude::*;
 use flui_widgets::MotionBuilder;
 
@@ -202,11 +204,11 @@ fn system_motion_change_reaches_media_query_and_the_clock() {
             &effects,
         )
         .expect("scaled motion");
-    frame.deliver(&effects).expect("anchor frame");
+    frame.deliver(crate::VSYNC, &effects).expect("anchor frame");
     effects
         .frame_time
         .set(effects.frame_time.get() + Duration::from_millis(384));
-    frame.deliver(&effects).expect("scaled frame");
+    frame.deliver(crate::VSYNC, &effects).expect("scaled frame");
     assert!((normal.controller().value() - 0.2).abs() < 1e-9);
     assert!((preserve.controller().value() - 0.4).abs() < 1e-9);
     let before = observed.borrow().len();
@@ -224,7 +226,9 @@ fn system_motion_change_reaches_media_query_and_the_clock() {
         0.2,
         "publication does not sample user animation"
     );
-    frame.deliver(&effects).expect("reduced frame");
+    frame
+        .deliver(crate::VSYNC, &effects)
+        .expect("reduced frame");
     assert_eq!(normal.controller().value(), 1.0);
     assert!((preserve.controller().value() - 0.416).abs() < 1e-9);
     assert_eq!(observed.borrow().len(), before + 1);
@@ -234,7 +238,9 @@ fn system_motion_change_reaches_media_query_and_the_clock() {
         .update_preferences(reduced, &effects)
         .expect("duplicate preference");
     assert_eq!(wakes.load(Ordering::SeqCst), 0);
-    frame.deliver(&effects).expect("duplicate frame");
+    frame
+        .deliver(crate::VSYNC, &effects)
+        .expect("duplicate frame");
     assert_eq!(
         observed.borrow().len(),
         before + 1,
@@ -487,7 +493,9 @@ impl OwnerEffects for Effects {
                 ] {
                     target.observe(observation, self).expect("queued state");
                 }
-                frame.deliver(self).expect("frame observes this segment");
+                frame
+                    .deliver(crate::VSYNC, self)
+                    .expect("frame observes this segment");
             }
         }
     }
@@ -635,7 +643,9 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         geometry_gate: RefCell::new(None),
     };
     let frames = owner.frame_dispatcher(address).expect("frame authority");
-    frames.deliver(&effects).expect("initial frame");
+    frames
+        .deliver(crate::VSYNC, &effects)
+        .expect("initial frame");
     assert_eq!(
         observed.borrow().last(),
         Some(&(Size::new(800.0, 600.0), 1.0))
@@ -651,7 +661,9 @@ fn resize_and_surface_restore_reach_the_product_frame() {
             &effects,
         )
         .expect("resize");
-    frames.deliver(&effects).expect("resized frame");
+    frames
+        .deliver(crate::VSYNC, &effects)
+        .expect("resized frame");
     assert_eq!(
         observed.borrow().last(),
         Some(&(Size::new(200.0, 100.0), 2.0))
@@ -663,13 +675,17 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         [(Size::new(200.0, 100.0), 2.0)]
     );
     effects.expects_present.set(Some(false));
-    frames.deliver(&effects).expect("settled idle frame");
+    frames
+        .deliver(crate::VSYNC, &effects)
+        .expect("settled idle frame");
     assert_eq!(effects.sink.borrow().submitted, 2);
     frames
         .surface_restored(&effects)
         .expect("surface restoration");
     effects.expects_present.set(Some(true));
-    frames.deliver(&effects).expect("restored surface frame");
+    frames
+        .deliver(crate::VSYNC, &effects)
+        .expect("restored surface frame");
     assert_eq!(effects.sink.borrow().submitted, 3);
     // The direct host scale entry must keep inherited data in step with the
     // renderer, without a caller obtaining and mutating the root's source.
@@ -685,7 +701,9 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         .expect("direct scale update");
     effects.size.set((200, 100));
     effects.expects_present.set(None);
-    frames.deliver(&effects).expect("direct scale frame");
+    frames
+        .deliver(crate::VSYNC, &effects)
+        .expect("direct scale frame");
     assert_eq!(
         observed.borrow().last(),
         Some(&(Size::new(200.0, 100.0), 1.0)),
@@ -706,7 +724,9 @@ fn resize_and_surface_restore_reach_the_product_frame() {
                 &effects,
             )
             .expect("reject invalid direct scale");
-        frames.deliver(&effects).expect("frame after rejection");
+        frames
+            .deliver(crate::VSYNC, &effects)
+            .expect("frame after rejection");
         assert_eq!(
             observed.borrow().last(),
             Some(&(Size::new(200.0, 100.0), 1.0))
@@ -724,7 +744,7 @@ fn resize_and_surface_restore_reach_the_product_frame() {
             )
             .expect("discard invalid metrics");
         frames
-            .deliver(&effects)
+            .deliver(crate::VSYNC, &effects)
             .expect("frame after invalid metrics");
         assert_eq!(effects.native_sizes.borrow().len(), native_calls);
         assert_eq!(
@@ -752,7 +772,9 @@ fn resize_and_surface_restore_reach_the_product_frame() {
                 &effects,
             )
             .expect("accept contrast observation");
-        frames.deliver(&effects).expect("contrast frame");
+        frames
+            .deliver(crate::VSYNC, &effects)
+            .expect("contrast frame");
         assert_eq!(
             contrast.borrow().last(),
             Some(&preference.unwrap_or(false)),
@@ -768,7 +790,9 @@ fn resize_and_surface_restore_reach_the_product_frame() {
                 &effects,
             )
             .expect("accept preference snapshot");
-        frames.deliver(&effects).expect("preference frame");
+        frames
+            .deliver(crate::VSYNC, &effects)
+            .expect("preference frame");
         assert_eq!(
             text_scale.borrow().last(),
             Some(&TextSizing::linear(scale).expect("valid scale")),
@@ -886,10 +910,12 @@ fn a_secondary_window_observation_does_not_present_the_primary() {
         geometry_gate: RefCell::new(None),
     };
     let frames = owner.frame_dispatcher(primary).expect("primary frames");
-    frames.deliver(&effects).expect("initial frame");
+    frames
+        .deliver(crate::VSYNC, &effects)
+        .expect("initial frame");
     effects.expects_present.set(Some(false));
     frames
-        .deliver(&effects)
+        .deliver(crate::VSYNC, &effects)
         .expect("settled primary stays idle");
     owner
         .presentation_dispatcher(secondary)
@@ -900,7 +926,7 @@ fn a_secondary_window_observation_does_not_present_the_primary() {
         )
         .expect("secondary appearance update");
     frames
-        .deliver(&effects)
+        .deliver(crate::VSYNC, &effects)
         .expect("secondary observation leaves primary idle");
     assert_eq!(effects.sink.borrow().submitted, 1);
     owner.shutdown(&effects);
@@ -942,6 +968,18 @@ fn owner_metrics_contract() {
             (
                 "gesture_preferences_are_captured_in_input_order_before_a_frame",
                 gesture_preferences_are_captured_in_input_order_before_a_frame as fn(),
+            ),
+            (
+                "gesture_values_follow_the_presentation_display",
+                gesture_values_follow_the_presentation_display as fn(),
+            ),
+            (
+                "a_failed_move_keeps_its_regions_subscribers_and_row",
+                a_failed_move_keeps_its_regions_subscribers_and_row as fn(),
+            ),
+            (
+                "accessibility_floor_holds_under_an_authored_scope",
+                accessibility_floor_holds_under_an_authored_scope as fn(),
             ),
             (
                 "preference_fanout_survives_a_failing_runtime",
@@ -1019,7 +1057,7 @@ fn bold_text_changes_the_painted_glyphs() {
             }
             "EditableText" => flui_widgets::EditableText::new(
                 flui_widgets::TextEditingController::with_text(text),
-                flui_interaction::routing::FocusNode::new(),
+                flui_interaction::focus::FocusNode::new(),
             )
             .text_style(style.clone())
             .boxed(),
@@ -1090,7 +1128,9 @@ fn bold_text_changes_the_painted_glyphs() {
                 coords => panic!("the generated face has one weight axis, got {coords:?}"),
             }
         };
-        frames.deliver(&effects).expect("initial text frame");
+        frames
+            .deliver(crate::VSYNC, &effects)
+            .expect("initial text frame");
         let authored = coordinates();
         for (preference, expected) in [
             (Some(TextWeightPreference::NoPreference), 400.0),
@@ -1111,7 +1151,9 @@ fn bold_text_changes_the_painted_glyphs() {
             owner
                 .update_preferences(values, &effects)
                 .expect("accept text-weight observation");
-            frames.deliver(&effects).expect("text-weight frame");
+            frames
+                .deliver(crate::VSYNC, &effects)
+                .expect("text-weight frame");
             let resolved = coordinates();
             if preference == Some(TextWeightPreference::Bold) && override_weight.is_none() {
                 assert!(
@@ -1284,7 +1326,7 @@ fn bold_text_changes_the_painted_glyphs() {
             owner
                 .frame_dispatcher(late_address)
                 .expect("late frame authority")
-                .deliver(&late_effects)
+                .deliver(crate::VSYNC, &late_effects)
                 .expect("late text-weight frame");
             let sink = late_effects.sink.borrow();
             let restored = sink.paragraphs[0].runs().next().expect("restored run");
@@ -1407,7 +1449,9 @@ fn preferred_locales_select_resources_and_direction() {
             geometry_gate: RefCell::new(None),
         };
         let frames = owner.frame_dispatcher(address).expect("localized frames");
-        frames.deliver(&effects).expect("fallback frame");
+        frames
+            .deliver(crate::VSYNC, &effects)
+            .expect("fallback frame");
         assert_eq!(
             observed.borrow().last(),
             Some(&overridden.unwrap_or(("Hello", TextDirection::Ltr)))
@@ -1465,7 +1509,9 @@ fn preferred_locales_select_resources_and_direction() {
             owner
                 .update_preferences(values, &effects)
                 .expect("publish ordered languages");
-            frames.deliver(&effects).expect("localized frame");
+            frames
+                .deliver(crate::VSYNC, &effects)
+                .expect("localized frame");
             assert_eq!(
                 observed.borrow().last(),
                 Some(&overridden.unwrap_or(expected)),
@@ -1559,7 +1605,7 @@ fn preferred_locales_select_resources_and_direction() {
                 owner
                     .frame_dispatcher(recipient.address)
                     .expect("live localized recipient")
-                    .deliver(recipient)
+                    .deliver(crate::VSYNC, recipient)
                     .expect("localized recipient frame");
                 assert_eq!(
                     resources.borrow().last(),
@@ -1628,6 +1674,7 @@ fn native_fling_profile_controls_real_scroll_inertia() {
         calls: AtomicUsize::new(0),
         query_time: Mutex::new(None),
         panic_next: AtomicBool::new(false),
+        display: Mutex::default(),
     });
     let runtime = UiRuntime::new(
         flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
@@ -1685,7 +1732,9 @@ fn native_fling_profile_controls_real_scroll_inertia() {
                 .checked_sub(Duration::from_millis(16))
                 .expect("advanced frame clock"),
         );
-        frames.deliver(&effects).expect("actual runtime frame");
+        frames
+            .deliver(crate::VSYNC, &effects)
+            .expect("actual runtime frame");
     };
     frame();
     controller.set_pixels(500.0);
@@ -1775,6 +1824,7 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
             calls: AtomicUsize::new(0),
             query_time: Mutex::new(None),
             panic_next: AtomicBool::new(false),
+            display: Mutex::default(),
         });
         let fonts = flui_painting::FontCollection::new();
         let mut services = flui_runtime::ui_runtime::RuntimeHostServices::new(
@@ -1832,7 +1882,7 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
         owner
             .frame_dispatcher(address)
             .expect("frame")
-            .deliver(&effects)
+            .deliver(crate::VSYNC, &effects)
             .expect("first cold layout");
         if recipients.is_empty() {
             owner
@@ -1935,6 +1985,170 @@ struct GeometryWindow {
     calls: std::sync::atomic::AtomicUsize,
     query_time: std::sync::Mutex<Option<(flui_foundation::ManualClock, std::time::Duration)>>,
     panic_next: std::sync::atomic::AtomicBool,
+    /// The display the window reports being on.
+    display: std::sync::Mutex<Option<flui_platform_api::DisplayId>>,
+}
+
+/// Geometry belongs to the display a presentation is on: a move to a display
+/// of equal or different scale re-reads it for new contacts, while a contact
+/// admitted before the move keeps its snapshot.
+fn gesture_values_follow_the_presentation_display() {
+    use flui_foundation::{
+        ManualClock, MonotonicClock,
+        geometry::{DevicePixelRatio, Offset},
+    };
+    use flui_interaction::{
+        events::PointerKind,
+        testing::input::{pointer_down, pointer_move, pointer_up},
+    };
+    use flui_platform_api::{
+        DisplayId, DisplayKey, DisplayRegistry, Distance, GestureGeometry, PlatformInput,
+    };
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize},
+    };
+    let registry = DisplayRegistry::new();
+    let display_id = |key: u64| -> DisplayId {
+        registry
+            .mint(&DisplayKey::Injected(key))
+            .expect("display id")
+    };
+
+    let geometry = |ratio: f64, slop: f64| {
+        Ok(Some(
+            GestureGeometry::new(DevicePixelRatio::new(ratio).expect("ratio"))
+                .with_touch_slop(Distance::new(slop).expect("distance")),
+        ))
+    };
+    let owner = OwnerHost::new();
+    let clock = ManualClock::new();
+    let window = Arc::new(GeometryWindow {
+        inner: Arc::clone(crate::owner_publication::window().window()),
+        answer: Mutex::new(geometry(1.0, 2.0)),
+        calls: AtomicUsize::new(0),
+        query_time: Mutex::new(None),
+        panic_next: AtomicBool::new(false),
+        display: Mutex::new(Some(display_id(1))),
+    });
+    let runtime = UiRuntime::new(
+        flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
+        1.0,
+        flui_runtime::ui_runtime::RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Manual(clock.clone()),
+        ),
+    )
+    .expect("runtime");
+    let taps = Rc::new(Cell::new(0));
+    let output = taps.clone();
+    runtime
+        .attach_root_widget_with_size(
+            &flui_widgets::GestureDetector::new()
+                .on_tap(move |_| output.set(output.get() + 1))
+                .child(flui_widgets::ColoredBox::new(
+                    flui_painting::styling::Color::RED,
+                )),
+            800.0,
+            600.0,
+        )
+        .expect("mount");
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish")
+        .commit();
+    let size = Rc::new(Cell::new((800, 600)));
+    let effects = Effects {
+        address,
+        sink: RefCell::new(Sink {
+            size: size.clone(),
+            submitted: 0,
+            paragraphs: Vec::new(),
+        }),
+        size,
+        frame_time: Cell::new(clock.now()),
+        trace: RefCell::new(Vec::new()),
+        expects_present: Cell::new(None),
+        owner: owner.clone(),
+        burst: Cell::new(false),
+        native_sizes: RefCell::new(Vec::new()),
+        fail_resize: Cell::new(false),
+        fail_tail: Cell::new(false),
+        geometry_gate: RefCell::new(None),
+    };
+    owner
+        .frame_dispatcher(address)
+        .expect("frames")
+        .deliver(crate::VSYNC, &effects)
+        .expect("layout");
+    let target = owner.presentation_dispatcher(address).expect("input");
+    let send = |event| {
+        target
+            .input(PlatformInput::Pointer(event), &effects)
+            .expect("input");
+    };
+    let start = Offset::new(40.0, 40.0);
+    let drifted = Offset::new(45.0, 40.0);
+    let tap = || {
+        send(pointer_down(start, PointerKind::Touch).expect("down"));
+        send(pointer_move(drifted, PointerKind::Touch).expect("move"));
+        send(pointer_up(drifted, PointerKind::Touch).expect("up"));
+    };
+    let move_to = |display: u64, answer| {
+        *window.display.lock().expect("display script") = Some(display_id(display));
+        *window.answer.lock().expect("query script") = answer;
+    };
+    tap();
+    assert_eq!(taps.get(), 0, "display 1's 2px slop rejects a 5px drift");
+
+    // Equal scale: only the display identity changes.
+    send(pointer_down(start, PointerKind::Touch).expect("held across the move"));
+    move_to(2, geometry(1.0, 10.0));
+    target
+        .observe(WindowObservation::Moved, &effects)
+        .expect("moved");
+    send(pointer_move(drifted, PointerKind::Touch).expect("move"));
+    send(pointer_up(drifted, PointerKind::Touch).expect("up"));
+    assert_eq!(
+        taps.get(),
+        0,
+        "the active contact keeps display 1's snapshot"
+    );
+    tap();
+    assert_eq!(taps.get(), 1, "a new contact reads display 2's 10px slop");
+
+    // A move within one display re-reads nothing.
+    let calls = window.calls.load(std::sync::atomic::Ordering::Relaxed);
+    target
+        .observe(WindowObservation::Moved, &effects)
+        .expect("moved within the display");
+    assert_eq!(
+        window.calls.load(std::sync::atomic::Ordering::Relaxed),
+        calls,
+        "no query while the display is unchanged"
+    );
+
+    // Different scale: the display and its pixel context change together.
+    move_to(3, geometry(2.0, 2.0));
+    target
+        .observe(
+            WindowObservation::Metrics {
+                size: Size::new(800.0, 600.0),
+                scale_factor: 2.0,
+            },
+            &effects,
+        )
+        .expect("moved to a denser display");
+    tap();
+    assert_eq!(
+        taps.get(),
+        1,
+        "display 3's 2px slop applies at its own scale"
+    );
+    owner.shutdown(&effects);
 }
 
 impl flui_platform_api::PlatformWindow for GeometryWindow {
@@ -1965,8 +2179,31 @@ impl flui_platform_api::PlatformWindow for GeometryWindow {
     ) -> Result<(), flui_platform_api::CursorError> {
         self.inner.set_cursor(cursor)
     }
+    fn state(&self) -> flui_platform_api::WindowState {
+        let size = self.logical_size();
+        flui_platform_api::WindowState::new(
+            flui_platform_api::WindowGeometry::new(None, size),
+            size,
+        )
+    }
+
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        Ok(())
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+    fn display_id(&self) -> Option<flui_platform_api::DisplayId> {
+        *self.display.lock().expect("display script")
     }
     fn gesture_geometry(
         &self,
@@ -1986,6 +2223,255 @@ impl flui_platform_api::PlatformWindow for GeometryWindow {
         }
         self.answer.lock().expect("query script").clone()
     }
+}
+
+/// A window whose input-region backend, or display query, fails once on
+/// request.
+struct RegionWindow {
+    inner: std::sync::Arc<dyn flui_platform_api::PlatformWindow>,
+    /// How many regions each call handed the backend.
+    sent: std::sync::Mutex<Vec<usize>>,
+    panic_next: std::sync::atomic::AtomicBool,
+    /// The next display query panics, failing the gesture-geometry refresh.
+    panic_display: std::sync::atomic::AtomicBool,
+}
+
+impl flui_platform_api::PlatformWindow for RegionWindow {
+    fn id(&self) -> flui_platform_api::WindowId {
+        self.inner.id()
+    }
+    fn physical_size(&self) -> Size<i32> {
+        self.inner.physical_size()
+    }
+    fn logical_size(&self) -> Size<f64> {
+        self.inner.logical_size()
+    }
+    fn scale_factor(&self) -> f64 {
+        self.inner.scale_factor()
+    }
+    fn request_redraw(&self) {
+        self.inner.request_redraw();
+    }
+    fn is_focused(&self) -> bool {
+        self.inner.is_focused()
+    }
+    fn is_visible(&self) -> bool {
+        self.inner.is_visible()
+    }
+    fn set_cursor(
+        &self,
+        cursor: flui_platform_api::CursorIcon,
+    ) -> Result<(), flui_platform_api::CursorError> {
+        self.inner.set_cursor(cursor)
+    }
+    fn state(&self) -> flui_platform_api::WindowState {
+        self.inner.state()
+    }
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        Ok(())
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn display_id(&self) -> Option<flui_platform_api::DisplayId> {
+        if self
+            .panic_display
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            panic!("scripted display query failure");
+        }
+        None
+    }
+    fn set_input_regions(&self, regions: &[flui_platform_api::input_regions::InputRegion]) {
+        self.sent.lock().expect("sent regions").push(regions.len());
+        if self
+            .panic_next
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            panic!("scripted input-region failure");
+        }
+    }
+}
+
+/// The window state a host publishes: its content moves with `position`.
+struct MovingWindow {
+    position: std::sync::Mutex<(
+        flui_foundation::geometry::Point<f64>,
+        flui_platform_api::WindowRevision,
+    )>,
+}
+
+/// [`MovingWindow`] shared with the test that moves it.
+struct SharedControl(std::sync::Arc<MovingWindow>);
+
+impl flui_platform_api::WindowControl for SharedControl {
+    fn state(&self) -> flui_platform_api::WindowState {
+        let (position, revision) = *self.0.position.lock().expect("position");
+        let size = Size::new(40.0, 40.0);
+        let mut state = flui_platform_api::WindowState::new(
+            flui_platform_api::WindowGeometry::new(Some(position), size),
+            size,
+        );
+        state.revision = revision;
+        state
+    }
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+    fn submit(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        Ok(())
+    }
+    fn request_close(&self) {}
+}
+
+/// Input regions survive a failing backend: a frame whose hand-off panics
+/// still commits them, a move whose gesture-geometry refresh panics still
+/// re-sends them, and a move whose re-send panics still reaches the window's
+/// state subscribers and the recording, with the regions kept for the next.
+fn a_failed_move_keeps_its_regions_subscribers_and_row() {
+    use flui_foundation::geometry::Point;
+    use flui_platform_api::WindowRevision;
+    use flui_runtime::{HostInput, InputRecord};
+    use std::sync::{Arc, Mutex, atomic::AtomicBool};
+
+    let window = Arc::new(RegionWindow {
+        inner: Arc::clone(crate::owner_publication::window().window()),
+        sent: Mutex::new(Vec::new()),
+        panic_next: AtomicBool::new(false),
+        panic_display: AtomicBool::new(false),
+    });
+    let mut runtime = UiRuntime::new(
+        flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
+        1.0,
+        flui_runtime::ui_runtime::RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Platform,
+        ),
+    )
+    .expect("runtime");
+    let control = Arc::new(MovingWindow {
+        position: Mutex::new((Point::new(0.0, 0.0), WindowRevision::ZERO)),
+    });
+    let source = flui_view::__runtime::WindowSource::new(SharedControl(Arc::clone(&control)));
+    let delivered = Rc::new(Cell::new(0));
+    let (_, _subscription) = {
+        let delivered = Rc::clone(&delivered);
+        source
+            .handle()
+            .subscribe(move |_| delivered.set(delivered.get() + 1))
+            .expect("open window")
+    };
+    let id = runtime.presentation_id();
+    assert!(runtime.install_window(id, source));
+    runtime
+        .attach_root_widget_with_size(
+            &flui_widgets::SystemGestureExclusion::new().child(flui_widgets::ColoredBox::new(
+                flui_painting::styling::Color::RED,
+            )),
+            40.0,
+            40.0,
+        )
+        .expect("mount");
+    struct Sink;
+    impl FrameSink for Sink {
+        fn surface_size(&mut self) -> (u32, u32) {
+            (40, 40)
+        }
+        fn submit(&mut self, _: flui_layer::Scene) -> SubmitVerdict {
+            SubmitVerdict::Presented
+        }
+    }
+    let address = PresentationAddress {
+        ui_runtime_id: runtime.id(),
+        presentation_id: id,
+    };
+    let fail_next_regions = || {
+        window
+            .panic_next
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    };
+    // The frame's own hand-off fails: its regions are committed anyway.
+    fail_next_regions();
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.pump(
+            &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
+            &mut Sink,
+        )
+    }));
+    let sent = || window.sent.lock().expect("sent regions").clone();
+    assert_eq!(sent(), [1], "the frame handed off one exclusion region");
+    runtime.apply_window_observation(address, WindowObservation::Moved, &|_, _| {});
+    assert_eq!(
+        sent(),
+        [1, 1],
+        "a failed frame hand-off still committed its region"
+    );
+
+    // The gesture-geometry refresh fails: the regions follow the move anyway.
+    window
+        .panic_display
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let moved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.apply_window_observation(address, WindowObservation::Moved, &|_, _| {});
+    }));
+    assert!(moved.is_err(), "the refresh failure resumes");
+    assert_eq!(
+        sent(),
+        [1, 1, 1],
+        "a failed geometry refresh still re-sends the regions"
+    );
+
+    let rows = Rc::new(RefCell::new(Vec::new()));
+    let tap = runtime
+        .input_taps()
+        .install({
+            let rows = Rc::clone(&rows);
+            move |record: &InputRecord| {
+                if let InputRecord::Input(row) = record
+                    && let HostInput::Window(observation) = row.input
+                {
+                    rows.borrow_mut().push(format!("{observation:?}"));
+                }
+            }
+        })
+        .expect("registration");
+    {
+        let mut position = control.position.lock().expect("position");
+        *position = (Point::new(100.0, 0.0), position.1.next().expect("revision"));
+    }
+    fail_next_regions();
+    let moved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.apply_window_observation(address, WindowObservation::State, &|_, _| {});
+    }));
+    assert!(moved.is_err(), "the backend's failure resumes");
+    assert_eq!(
+        delivered.get(),
+        1,
+        "the subscribers received the moved state"
+    );
+    assert_eq!(*rows.borrow(), ["Moved"], "the recording kept the move");
+
+    runtime.apply_window_observation(address, WindowObservation::Moved, &|_, _| {});
+    assert_eq!(
+        sent(),
+        [1, 1, 1, 1, 1],
+        "the next move hands the backend the committed region again"
+    );
+    tap.finish().expect("complete recording");
 }
 
 fn native_geometry_controls_admission_and_retries_without_a_frame() {
@@ -2018,6 +2504,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         calls: AtomicUsize::new(0),
         query_time: std::sync::Mutex::new(None),
         panic_next: AtomicBool::new(false),
+        display: std::sync::Mutex::default(),
     });
     let runtime = UiRuntime::new(
         flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
@@ -2075,7 +2562,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     owner
         .frame_dispatcher(address)
         .expect("frames")
-        .deliver(&effects)
+        .deliver(crate::VSYNC, &effects)
         .expect("layout");
     let target = owner.presentation_dispatcher(address).expect("input");
     let tap = || {
@@ -2276,7 +2763,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     owner
         .frame_dispatcher(address)
         .expect("frames")
-        .deliver(&effects)
+        .deliver(crate::VSYNC, &effects)
         .expect("real hold deadline frame");
     assert_eq!(
         holds.get(),
@@ -2364,7 +2851,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     owner
         .frame_dispatcher(address)
         .expect("normal frame")
-        .deliver(&effects)
+        .deliver(crate::VSYNC, &effects)
         .expect("slow native gate then normal pump");
     assert_eq!(
         window.calls.load(Ordering::Relaxed),
@@ -2647,7 +3134,7 @@ fn wheel_preferences_reach_the_next_mounted_input() {
         owner
             .frame_dispatcher(address)
             .expect("frame")
-            .deliver(&effects)
+            .deliver(crate::VSYNC, &effects)
             .expect("mount frame");
         owner
             .update_preferences(
@@ -2934,7 +3421,7 @@ fn gesture_preferences_are_captured_in_input_order_before_a_frame() {
                     .checked_sub(Duration::from_millis(16))
                     .expect("advanced frame clock"),
             );
-            frames.deliver(&effects).expect("frame");
+            frames.deliver(crate::VSYNC, &effects).expect("frame");
         };
         frame(Duration::from_millis(16));
         let target = owner
@@ -3013,6 +3500,116 @@ fn gesture_preferences_are_captured_in_input_order_before_a_frame() {
     }
 }
 
+/// An authored scope below the host's observed touch-and-hold delay is raised
+/// to it for new admissions, and follows the host when the floor goes away.
+fn accessibility_floor_holds_under_an_authored_scope() {
+    use flui_foundation::{ManualClock, MonotonicClock, geometry::Offset};
+    use flui_interaction::{
+        events::PointerKind,
+        testing::input::{pointer_down, pointer_up},
+    };
+    use flui_platform_api::{GesturePreferences, PlatformInput, SystemPreferences};
+    use std::{sync::Arc, time::Duration};
+
+    let owner = OwnerHost::new();
+    let clock = ManualClock::new();
+    let runtime = UiRuntime::new(
+        crate::owner_publication::window(),
+        1.0,
+        flui_runtime::ui_runtime::RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Manual(clock.clone()),
+        ),
+    )
+    .expect("manual-clock runtime");
+    let calls = Rc::new(Cell::new(0));
+    let activated = Rc::clone(&calls);
+    let root = AuthoredGestureTiming {
+        timeout: Duration::from_millis(100),
+        child: flui_widgets::GestureDetector::new()
+            .on_long_press(move |_| activated.set(activated.get() + 1))
+            .child(flui_widgets::ColoredBox::new(
+                flui_painting::styling::Color::RED,
+            )),
+    };
+    runtime
+        .attach_root_widget_with_size(&root, 800.0, 600.0)
+        .expect("attach detector");
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish")
+        .commit();
+    let size = Rc::new(Cell::new((800, 600)));
+    let effects = Effects {
+        address,
+        sink: RefCell::new(Sink {
+            size: Rc::clone(&size),
+            submitted: 0,
+            paragraphs: Vec::new(),
+        }),
+        size,
+        frame_time: Cell::new(clock.now()),
+        trace: RefCell::new(Vec::new()),
+        expects_present: Cell::new(None),
+        owner: owner.clone(),
+        burst: Cell::new(false),
+        native_sizes: RefCell::new(Vec::new()),
+        fail_resize: Cell::new(false),
+        fail_tail: Cell::new(false),
+        geometry_gate: RefCell::new(None),
+    };
+    let frames = owner.frame_dispatcher(address).expect("frame dispatcher");
+    let frame = |duration| {
+        clock.advance(duration);
+        effects.frame_time.set(
+            clock
+                .now()
+                .checked_sub(Duration::from_millis(16))
+                .expect("advanced frame clock"),
+        );
+        frames.deliver(crate::VSYNC, &effects).expect("frame");
+    };
+    frame(Duration::from_millis(16));
+    let target = owner
+        .presentation_dispatcher(address)
+        .expect("pointer dispatcher");
+    let press = |event| {
+        target
+            .input(PlatformInput::Pointer(event), &effects)
+            .expect("deliver pointer");
+    };
+    let at = Offset::new(40.0, 40.0);
+    owner
+        .update_preferences(
+            SystemPreferences::default().with_gestures(
+                GesturePreferences::default().with_long_press_timeout(Duration::from_millis(900)),
+            ),
+            &effects,
+        )
+        .expect("accepted touch-and-hold delay");
+    press(pointer_down(at, PointerKind::Touch).expect("down"));
+    frame(Duration::from_millis(500));
+    assert_eq!(
+        calls.get(),
+        0,
+        "authored 100ms is raised to the 900ms floor"
+    );
+    frame(Duration::from_millis(500));
+    assert_eq!(calls.get(), 1);
+    press(pointer_up(at, PointerKind::Touch).expect("up"));
+    owner
+        .update_preferences(SystemPreferences::default(), &effects)
+        .expect("floor withdrawn");
+    press(pointer_down(at, PointerKind::Touch).expect("down"));
+    frame(Duration::from_millis(150));
+    assert_eq!(calls.get(), 2, "without a floor the authored value applies");
+    press(pointer_up(at, PointerKind::Touch).expect("up"));
+    owner.shutdown(&effects);
+}
+
 fn preference_fanout_survives_a_failing_runtime() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::{
@@ -3065,7 +3662,7 @@ fn preference_fanout_survives_a_failing_runtime() {
             owner
                 .frame_dispatcher(address)
                 .expect("recipient frame")
-                .deliver(&effects)
+                .deliver(crate::VSYNC, &effects)
                 .expect("initial consumer frame");
             assert_eq!(
                 *observed.borrow(),
@@ -3109,7 +3706,7 @@ fn preference_fanout_survives_a_failing_runtime() {
             owner
                 .frame_dispatcher(effects.address)
                 .expect("live recipient")
-                .deliver(effects)
+                .deliver(crate::VSYNC, effects)
                 .expect("preference recovery frame");
             assert_eq!(
                 observed.borrow().last(),
@@ -3129,7 +3726,7 @@ fn preference_fanout_survives_a_failing_runtime() {
             owner
                 .frame_dispatcher(effects.address)
                 .expect("live recipient")
-                .deliver(effects)
+                .deliver(crate::VSYNC, effects)
                 .expect("next frame after recovery");
             assert_eq!(
                 observed.borrow().last(),
@@ -3186,7 +3783,7 @@ fn queued_state_bursts_coalesce_between_observing_frames() {
     owner
         .frame_dispatcher(address)
         .expect("frame")
-        .deliver(&effects)
+        .deliver(crate::VSYNC, &effects)
         .expect("deliver burst and frames");
     assert_eq!(
         *effects.native_sizes.borrow(),
@@ -3292,12 +3889,16 @@ fn resize_failure_preserves_other_batched_window_state() {
         };
         let frame = owner.frame_dispatcher(address).expect("frame");
         let target = owner.presentation_dispatcher(address).expect("window");
-        frame.deliver(&effects).expect("initial scene");
+        frame
+            .deliver(crate::VSYNC, &effects)
+            .expect("initial scene");
         effects.expects_present.set(Some(false));
         {
             let _callback = owner.begin_callback(&effects).expect("physical callback");
             for _ in 0..32 {
-                frame.deliver(&effects).expect("spend callback budget");
+                frame
+                    .deliver(crate::VSYNC, &effects)
+                    .expect("spend callback budget");
             }
             for observation in [
                 WindowObservation::Brightness(Brightness::Light),
@@ -3355,7 +3956,9 @@ fn resize_failure_preserves_other_batched_window_state() {
             .surface_restored(&effects)
             .expect("next native opportunity");
         effects.expects_present.set(Some(true));
-        frame.deliver(&effects).expect("recovery scene");
+        frame
+            .deliver(crate::VSYNC, &effects)
+            .expect("recovery scene");
         assert_eq!(
             text_scale.borrow().last(),
             Some(&TextSizing::linear(2.0).expect("valid scale")),
@@ -3391,7 +3994,7 @@ fn resize_failure_preserves_other_batched_window_state() {
             )
             .expect("a later resize still works");
         frame
-            .deliver(&effects)
+            .deliver(crate::VSYNC, &effects)
             .expect("scene after subsequent resize");
         assert_eq!(
             observed.borrow().last(),
@@ -3489,7 +4092,7 @@ fn pointer_stream_and_keyboard_survive_interleaved_resize() {
             };
             let frame = owner.frame_dispatcher(address).expect("frame");
             frame
-                .deliver(&effects)
+                .deliver(crate::VSYNC, &effects)
                 .expect("layout and present hit-test tree");
             let target = owner.presentation_dispatcher(address).expect("input");
             let inputs = [
@@ -3524,7 +4127,9 @@ fn pointer_stream_and_keyboard_survive_interleaved_resize() {
             {
                 let _callback = owner.begin_callback(&effects).expect("physical callback");
                 for _ in 0..32 {
-                    frame.deliver(&effects).expect("use physical budget");
+                    frame
+                        .deliver(crate::VSYNC, &effects)
+                        .expect("use physical budget");
                 }
                 for (index, input) in inputs.into_iter().enumerate() {
                     for width in [800.0 + index as f64, 900.0 + index as f64] {

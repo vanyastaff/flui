@@ -39,9 +39,9 @@ use std::{
 
 use flui_foundation::{ElementId, RenderId};
 use flui_objects::BuildDuringLayoutCell;
-// Only the test-utils registration helper names the concrete cell; the registry
+// Only the `testing` registration helper names the concrete cell; the registry
 // itself is payload-blind.
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "testing"))]
 use flui_objects::LayoutConstraintsCell;
 use flui_rendering::pipeline::PipelineCell;
 use parking_lot::Mutex;
@@ -117,7 +117,7 @@ impl LayoutBuilderRegistry {
         self.len.load(Ordering::Acquire) == 0
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn len(&self) -> usize {
         self.len.load(Ordering::Acquire)
     }
@@ -415,6 +415,44 @@ impl BuildOwner {
         tree: &mut ElementTree,
         pipeline: &PipelineCell,
     ) -> flui_rendering::error::RenderResult<Option<flui_rendering::layer::LayerTree>> {
+        self.settle_layout_with_builders(tree, pipeline)?;
+        Self::run_settled_frame(pipeline)
+    }
+
+    /// The rest of a frame after [`Self::settle_layout_with_builders`]:
+    /// layout of whatever is still dirty, compositing, paint and semantics,
+    /// with no further build-during-layout servicing.
+    ///
+    /// # Errors
+    ///
+    /// The pipeline's first error.
+    pub fn run_settled_frame(
+        pipeline: &PipelineCell,
+    ) -> flui_rendering::error::RenderResult<Option<flui_rendering::layer::LayerTree>> {
+        pipeline.with_mut(|pipeline_owner| {
+            let (owner, result) = pipeline_owner.take_idle().run_frame();
+            *pipeline_owner = owner;
+            result
+        })
+    }
+
+    /// The build-during-layout fixpoint of
+    /// [`Self::run_frame_with_layout_builders`] alone: lay out and service
+    /// layout builders and lazy slivers until the tree settles, without
+    /// compositing, painting or assembling semantics.
+    ///
+    /// A frame that must act on the settled tree before paint — move focus off
+    /// a node the build removed — runs this, does its work, and then
+    /// [`Self::run_settled_frame`].
+    ///
+    /// # Errors
+    ///
+    /// The first layout error of a pass.
+    pub fn settle_layout_with_builders(
+        &mut self,
+        tree: &mut ElementTree,
+        pipeline: &PipelineCell,
+    ) -> flui_rendering::error::RenderResult<()> {
         let mut lazy_passes: usize = 0;
         let mut lazy_budget_exhausted = false;
         let converged = {
@@ -487,12 +525,7 @@ impl BuildOwner {
             Ok(false) => report_non_convergence(),
             Ok(true) => {}
         }
-
-        pipeline.with_mut(|pipeline_owner| {
-            let (owner, result) = pipeline_owner.take_idle().run_frame();
-            *pipeline_owner = owner;
-            result
-        })
+        Ok(())
     }
 }
 
@@ -519,7 +552,7 @@ fn drive_fixpoint<E>(mut pass: impl FnMut() -> Result<bool, E>) -> Result<bool, 
 /// Exists because the seam ships **inert** — no widget registers
 /// into it until `LayoutBuilder` lands — so the only way for `flui-testing` / `flui-app` to prove
 /// their frame paths actually run the seam is to plant an entry by hand.
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "testing"))]
 impl BuildOwner {
     /// Override the per-frame lazy-band pass budget (default six passes).
     /// Test-only: a budget of one lets a harness

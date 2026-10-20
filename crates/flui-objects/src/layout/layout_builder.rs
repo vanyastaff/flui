@@ -9,7 +9,7 @@
 //! 2. lays its child out under **those same constraints** and reads the child's
 //!    size back,
 //! 3. sizes itself to `constraints.constrain(child_size)` — or, with no child,
-//!    to `constraints.biggest()`.
+//!    to `constraints.smallest()`, which is finite under any constraints.
 //!
 //! It performs **no build**. Publishing is the whole point: the cell's
 //! edge-triggered `needs_build` flag is read *between* layout passes by
@@ -145,8 +145,10 @@ impl RenderBox for RenderLayoutBuilder {
             Ok(constraints.constrain(child_size))
         } else {
             // No child yet — the first pass of a freshly mounted builder, before
-            // `service_layout_builders` has run the builder even once.
-            Ok(constraints.biggest())
+            // `service_layout_builders` has run the builder even once. The size
+            // stands in for that pass alone, and must be finite: in a list or a
+            // column the main axis is unbounded, where the biggest size is not.
+            Ok(constraints.smallest())
         }
     }
 

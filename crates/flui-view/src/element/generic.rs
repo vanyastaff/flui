@@ -42,6 +42,7 @@ use flui_rendering::parent_data::SliverSlot;
 use std::{
     any::TypeId,
     marker::PhantomData,
+    rc::{Rc, Weak},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -52,7 +53,11 @@ use flui_foundation::{ElementId, ListenerCallback, RenderId};
 use flui_rendering::pipeline::PipelineCell;
 
 use super::arity::ElementArity;
-use crate::{element::Lifecycle, owner::ExternalBuildScheduler, view::View};
+use crate::{
+    element::{Lifecycle, dispatch::ViewUpdate},
+    owner::ExternalBuildScheduler,
+    view::View,
+};
 
 /// The `V`-independent half of [`ElementCore`]: every field except the view
 /// itself, plus the cold lifecycle transitions, compiled ONCE instead of once
@@ -118,6 +123,15 @@ struct CoreState {
     /// Handle for scheduling THIS element's rebuild from a listener callback
     /// fired outside a frame; captured at mount.
     external_scheduler: Option<ExternalBuildScheduler>,
+
+    /// The shared view (a [`BoxedView`](crate::BoxedView)'s allocation) the
+    /// stored configuration was last taken from, if it came from one. An
+    /// update offering that same allocation again changes nothing, which
+    /// [`crate::element::dispatch`] answers without cloning, replacing or
+    /// rebuilding. Weak, so the element never extends the life of a view (or
+    /// of what its closures captured); the allocation itself stays reserved
+    /// while this is held, so a different view can never be mistaken for it.
+    source_view: Option<Weak<dyn View>>,
 }
 
 impl CoreState {
@@ -132,6 +146,7 @@ impl CoreState {
             self_id: None,
             element_parent: None,
             external_scheduler: None,
+            source_view: None,
         }
     }
 
@@ -488,7 +503,7 @@ where
     /// via `Downcast::into_any` + `Box::downcast::<V>` — the literal
     /// `downcast_ref::<V>()` view-type smuggling is gone from this
     /// path entirely. On type mismatch
-    /// the dispatch returns `false` without `tracing::warn!`; the
+    /// the dispatch returns [`ViewUpdate::Mismatch`] without `tracing::warn!`; the
     /// caller (reconciler) replaces the element rather than
     /// continuing with stale state.
     ///
@@ -498,13 +513,31 @@ where
     ///
     /// # Returns
     ///
-    /// `true` if update succeeded, `false` if the type mismatched
-    /// (caller replaces the element).
-    pub fn update_view(&mut self, new_view: &dyn View) -> bool
+    /// What the update did: [`ViewUpdate::Mismatch`] when the type did not
+    /// match (the caller replaces the element), [`ViewUpdate::Unchanged`]
+    /// when the view offered is the one the element already holds,
+    /// [`ViewUpdate::Equal`] when it compares equal under
+    /// [`View::should_skip_rebuild`] (kept as it was), and
+    /// [`ViewUpdate::Replaced`] otherwise, with the view held before.
+    pub(crate) fn update_view(&mut self, new_view: &dyn View) -> ViewUpdate<V>
     where
         V: View,
     {
         crate::element::dispatch::dispatch_view_update(self, new_view)
+    }
+
+    /// Whether `shared` is the allocation the stored view was last taken from.
+    pub(crate) fn is_taken_from(&self, shared: &Rc<dyn View>) -> bool {
+        self.state
+            .source_view
+            .as_ref()
+            .is_some_and(|source| std::ptr::addr_eq(source.as_ptr(), Rc::as_ptr(shared)))
+    }
+
+    /// Record where the stored view came from: a shared view, or `None` for
+    /// one built in place that nothing can offer again.
+    pub(crate) fn note_source_view(&mut self, source: Option<Weak<dyn View>>) {
+        self.state.source_view = source;
     }
 
     // ========================================================================
@@ -521,8 +554,8 @@ where
     /// Replace the stored view. Used by
     /// [`crate::element::dispatch::dispatch_view_update`] after the
     /// `TypeId`-keyed `Box::downcast::<V>` succeeds.
-    pub(crate) fn replace_view_for_dispatch(&mut self, view: V) {
-        self.view = view;
+    pub(crate) fn replace_view_for_dispatch(&mut self, view: V) -> V {
+        std::mem::replace(&mut self.view, view)
     }
 
     /// Mark the element as needing rebuild. Used by

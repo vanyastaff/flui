@@ -4,18 +4,26 @@
 //! when they talk to the platform, and nothing that implements it:
 //!
 //! - the capability traits [`PlatformTextInput`], [`PlatformHaptics`],
-//!   [`PlatformDisplay`], [`Clipboard`] and the data-transfer transport
+//!   [`Clipboard`] and the data-transfer transport
 //!   ([`data_transfer::DataTransferSource`], ADR-0038);
+//! - the display vocabulary: [`DisplaySnapshot`], [`DisplayInfo`], the opaque
+//!   [`DisplayId`] a [`DisplayRegistry`] issues, and the validated
+//!   [`RefreshPeriod`] (ADR-0236);
 //! - the byte-storage capability [`Storage`] and its vocabulary
 //!   ([`StorageName`], [`StoredVersion`], [`WriteMode`], [`StorageError`]);
 //! - the text store an input method pulls from ([`TextStore`] and the rest of
 //!   [`text_store`], ADR-0090);
 //! - the input vocabulary ([`PlatformInput`], [`DispatchEventResult`],
-//!   [`DragDropEvent`] and the conversion helpers);
+//!   [`DragDropEvent`] and the conversion helpers) and the handle-less input capabilities
+//!   ([`input_capabilities`], ADR-0213);
+//! - the two haptic tiers, their requests and outcomes ([`haptics`], ADR-0210);
 //! - the per-window contract [`PlatformWindow`] and the window vocabulary
-//!   ([`WindowId`], [`WindowOptions`], [`WindowMode`], [`WindowEvent`],
+//!   ([`WindowId`], [`WindowOptions`], [`WindowEvent`],
 //!   [`WindowExecutionState`], [`CursorIcon`] and the errors window
-//!   operations return).
+//!   operations return);
+//! - the window state contract: the [`WindowState`] snapshot a window
+//!   publishes, the [`WindowCommand`]s it takes and the
+//!   [`WindowCapabilities`] that say which (ADR-0237).
 //!
 //! No OS, winit, AccessKit or tokio type may appear here (ADR-0082 §1). That
 //! is the point of the crate: naming a contract must not link a backend, so a
@@ -92,13 +100,18 @@ mod brightness;
 mod clipboard;
 pub mod data_transfer;
 mod display;
+pub mod drag;
 mod event_time;
 mod haptic_feedback;
-mod haptics;
+pub mod haptics;
+mod host_notice;
 mod ime;
 mod input;
+pub mod input_capabilities;
+pub mod input_regions;
 pub mod keyboard;
 mod locale;
+mod placement;
 mod platform_window;
 pub mod pointer;
 mod preferences;
@@ -108,6 +121,7 @@ mod target_platform;
 mod text_input;
 pub mod text_store;
 mod window;
+mod window_state;
 
 pub use brightness::Brightness;
 pub use clipboard::{Clipboard, ClipboardItem, InMemoryClipboard};
@@ -115,10 +129,18 @@ pub use clipboard::{Clipboard, ClipboardItem, InMemoryClipboard};
 /// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.
 pub use cursor_icon::CursorIcon;
 pub use data_transfer::{DataTransferOffer, DataTransferSource, NullDataTransferSource};
-pub use display::{DisplayId, PlatformDisplay};
+pub use display::{
+    DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision,
+    DisplayRevisionExhausted, DisplaySnapshot, FrameRateHint, InvalidRefreshPeriod, RefreshPeriod,
+    WindowDisplay,
+};
 pub use event_time::EventTime;
 pub use haptic_feedback::HapticFeedback;
 pub use haptics::PlatformHaptics;
+pub use host_notice::{
+    HostNotice, MemoryPressureLevel, SessionEndAnswer, SessionEndBlock, SessionEndBlockError,
+    SessionEndPhase, SessionEndRequest, SystemNotice,
+};
 pub use ime::ImeEvent;
 pub use input::{
     DispatchEventResult, DragDropEvent, PlatformInput, delta_offset_from_coords, device_to_logical,
@@ -126,12 +148,14 @@ pub use input::{
 };
 pub use keyboard::{Code, Key, KeyEvent, KeyState, Location, Modifiers, NamedKey};
 pub use locale::{InvalidLocale, Locale};
-pub use platform_window::PlatformWindow;
+pub use placement::{PlacementError, ResolvedPlacement, WindowPlacement};
+pub use platform_window::{PlatformWindow, WindowAt};
 pub use pointer::{
-    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
-    PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo,
-    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
-    PointerSample, ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
+    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenSqueeze,
+    PenSqueezePhase, PenTool, PointerButton, PointerButtons, PointerCancel, PointerEvent,
+    PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress,
+    PointerRelease, PointerRevision, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
+    ScrollPhase, ScrollPrecision, ScrollUnit,
 };
 pub use preferences::{
     Distance, DurationScale, FlingSpeeds, GestureGeometry, GesturePreferences, InvalidPreference,
@@ -146,6 +170,10 @@ pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
 pub use window::{
-    CursorError, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent,
-    WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal, WindowShowError,
+    CursorError, WindowAppearance, WindowBackgroundAppearance, WindowEvent, WindowExecutionState,
+    WindowId, WindowOptions, WindowReveal, WindowShowError,
+};
+pub use window_state::{
+    SizeConstraints, WindowCapabilities, WindowCommand, WindowCommandError, WindowControl,
+    WindowGeometry, WindowMode, WindowRevision, WindowRevisionExhausted, WindowState,
 };

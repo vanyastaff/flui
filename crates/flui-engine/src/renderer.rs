@@ -370,6 +370,28 @@ impl GpuCapabilities {
     }
 }
 
+/// The hook a renderer's devices report a loss to, shared with their
+/// callbacks; see [`Renderer::on_device_lost`].
+#[derive(Default)]
+struct DeviceLostSlot {
+    hook: parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+}
+
+impl DeviceLostSlot {
+    fn replace(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        let previous = self.hook.lock().replace(hook);
+        drop(previous);
+    }
+
+    /// Runs the hook outside the lock, so it may install another.
+    fn notify(&self) {
+        let hook = self.hook.lock().clone();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+}
+
 /// GPU context available during layer tree rendering.
 ///
 /// Bundled GPU stack rebuilt by `new` (windowed path) and `recover`.
@@ -452,6 +474,10 @@ pub struct Renderer {
     /// Set by the device-lost callback; checked at frame start to trigger
     /// device recreation. `Arc<AtomicBool>` because the callback is `'static`.
     device_lost: Arc<std::sync::atomic::AtomicBool>,
+    /// Told when the device-lost callback fires, so the owner can recover
+    /// without waiting for a frame. One cell for the renderer's lifetime:
+    /// every device `recover` builds reports into it.
+    device_lost_hook: Arc<DeviceLostSlot>,
     /// The damage owed, the retained last frame a partial frame repaints
     /// into, and the one-frame promotion to full — the protocol the headless
     /// retained capture runs too (see [`crate::frame_protocol`]).
@@ -588,15 +614,20 @@ impl Renderer {
         // One extra pointer chase per surface creation; documented, not
         // fixed — see issue #1043.
         let (w, h) = (800u32, 600u32); // Will be updated on first resize
-        let (target, stack) = Self::probe_then_build(Arc::new(target), |target| async move {
-            let stack = Self::build_windowed_gpu_stack(
-                &crate::frame_protocol::FrameProtocol::new(),
-                &target,
-                w,
-                h,
-            )
-            .await?;
-            Ok((target, stack))
+        let device_lost_hook = Arc::default();
+        let (target, stack) = Self::probe_then_build(Arc::new(target), |target| {
+            let device_lost_hook = Arc::clone(&device_lost_hook);
+            async move {
+                let stack = Self::build_windowed_gpu_stack(
+                    &crate::frame_protocol::FrameProtocol::new(),
+                    &target,
+                    w,
+                    h,
+                    &device_lost_hook,
+                )
+                .await?;
+                Ok((target, stack))
+            }
         })
         .await?;
         let lease = SurfaceLease::from_parts(target, stack.surface);
@@ -613,6 +644,7 @@ impl Renderer {
             offscreen: stack.offscreen,
             supports_copy_src: stack.supports_copy_src,
             device_lost: stack.device_lost,
+            device_lost_hook,
             frame: crate::frame_protocol::FrameProtocol::new(),
             pre_present_hook: None,
             lease,
@@ -813,6 +845,7 @@ impl Renderer {
         target: &Arc<dyn WindowTarget>,
         width: u32,
         height: u32,
+        device_lost_hook: &Arc<DeviceLostSlot>,
     ) -> EngineResult<WindowedGpuStack> {
         let backends = Self::select_backend();
         tracing::info!("Creating wgpu instance with backends: {:?}", backends);
@@ -887,7 +920,11 @@ impl Renderer {
             crate::adapter::request_flui_device(&adapter, &capabilities, "FLUI GPU Device").await?;
 
         let device_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        Self::install_device_diagnostics(&device, Arc::clone(&device_lost));
+        Self::install_device_diagnostics(
+            &device,
+            Arc::clone(&device_lost),
+            Arc::clone(device_lost_hook),
+        );
 
         let device = Arc::new(device);
         let queue = Arc::new(queue);
@@ -959,6 +996,22 @@ impl Renderer {
             self.painter.domain().mark_lost();
         }
         lost || self.painter.domain().is_lost()
+    }
+
+    /// Call `hook` when this renderer's device reports itself lost, after
+    /// [`is_device_lost`](Self::is_device_lost) already answers `true`;
+    /// replaces an earlier hook. A loss that happened before the hook was
+    /// installed is not replayed: ask `is_device_lost` once after installing.
+    ///
+    /// The flag alone is read at the next frame; a host whose frames stop
+    /// (a hidden browser tab) needs to hear the loss when it happens, to start
+    /// [`recover`](Self::recover) at once. The backend can report the loss
+    /// synchronously from inside any call on this renderer, with the caller's
+    /// locks held, and from whichever thread it is on: the hook must only wake
+    /// the owner, never touch the renderer. Devices built by `recover` report
+    /// into the same hook.
+    pub fn on_device_lost(&self, hook: impl Fn() + Send + Sync + 'static) {
+        self.device_lost_hook.replace(Arc::new(hook));
     }
 
     /// Whether the intermediate-texture present path is active for this frame.
@@ -1048,8 +1101,14 @@ impl Renderer {
         // 800×600.
         let (width, height) = (self.config.width, self.config.height);
 
-        let stack =
-            Self::build_windowed_gpu_stack(&self.frame, released.target(), width, height).await?;
+        let stack = Self::build_windowed_gpu_stack(
+            &self.frame,
+            released.target(),
+            width,
+            height,
+            &self.device_lost_hook,
+        )
+        .await?;
 
         self.instance = stack.instance;
         self.adapter = stack.adapter;
@@ -1159,6 +1218,7 @@ impl Renderer {
     fn install_device_diagnostics(
         device: &wgpu::Device,
         device_lost_flag: Arc<std::sync::atomic::AtomicBool>,
+        device_lost_hook: Arc<DeviceLostSlot>,
     ) {
         device.on_uncaptured_error(Arc::new(|error: wgpu::Error| {
             tracing::error!(
@@ -1171,7 +1231,7 @@ impl Renderer {
                 ?reason,
                 %message,
                 "wgpu device lost — the GPU context is gone; the renderer will \
-                 attempt device recreation on the next frame",
+                 attempt device recreation",
             );
             // `Relaxed`, and paired with the `Relaxed` load in
             // `is_device_lost`: this flag carries no data. It answers one
@@ -1181,6 +1241,7 @@ impl Renderer {
             // this atomic. A release/acquire pair here would synchronize
             // nothing.
             device_lost_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            device_lost_hook.notify();
         });
     }
 
@@ -1369,6 +1430,13 @@ impl Renderer {
     /// Mark a screen region as dirty (needs repaint).
     pub fn mark_dirty(&mut self, rect: flui_foundation::geometry::Rect<f64>) {
         self.frame.mark_dirty(rect);
+    }
+
+    /// Give back the GPU memory the next frames can rebuild: pooled buffers and,
+    /// at [`Critical`](flui_foundation::memory::MemoryPressureLevel::Critical),
+    /// the glyph atlas. Call between frames.
+    pub fn reclaim(&mut self, level: flui_foundation::memory::MemoryPressureLevel) {
+        self.painter.reclaim(level);
     }
 
     /// Mark the entire screen as needing repaint.
@@ -2447,6 +2515,56 @@ mod tests {
         }
     }
 
+    /// A device the driver or the page destroys reaches the hook the owner
+    /// installed, after the flag the next frame reads already says so.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_lost_device_reaches_the_installed_hook() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(
+            &crate::adapter::trusted_adapter_options(wgpu::PowerPreference::LowPower, None),
+        ))
+        .expect("GPU adapter for the device-lost hook");
+        let (device, _queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("Device-lost hook"),
+                ..wgpu::DeviceDescriptor::default()
+            }))
+            .expect("GPU device for the device-lost hook");
+
+        let flag = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let flag_when_called = Arc::new(AtomicBool::new(false));
+        let cell = Arc::<DeviceLostSlot>::default();
+        {
+            let (flag, calls, flag_when_called) = (
+                Arc::clone(&flag),
+                Arc::clone(&calls),
+                Arc::clone(&flag_when_called),
+            );
+            cell.replace(Arc::new(move || {
+                calls.fetch_add(1, Ordering::Relaxed);
+                flag_when_called.store(flag.load(Ordering::Relaxed), Ordering::Relaxed);
+            }));
+        }
+        Renderer::install_device_diagnostics(&device, Arc::clone(&flag), cell);
+
+        device.destroy();
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .expect("destruction settles");
+
+        assert_eq!(calls.load(Ordering::Relaxed), 1, "the hook ran once");
+        assert!(
+            flag_when_called.load(Ordering::Relaxed),
+            "the flag is set before the hook runs"
+        );
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn quarantined_domain_reaches_the_backend_recovery_predicate() {
         struct ReleasedWindow;
@@ -2512,6 +2630,7 @@ mod tests {
             offscreen,
             supports_copy_src: false,
             device_lost: Arc::clone(&callback_flag),
+            device_lost_hook: Arc::default(),
             frame: crate::frame_protocol::FrameProtocol::new(),
             pre_present_hook: None,
             lease: SurfaceLease::released_for_test(Arc::new(ReleasedWindow)),
@@ -3033,6 +3152,8 @@ mod tests {
         shader_mask_external_texture_registrations_follow_parent();
         #[cfg(not(target_arch = "wasm32"))]
         quarantined_domain_reaches_the_backend_recovery_predicate();
+        #[cfg(not(target_arch = "wasm32"))]
+        a_lost_device_reaches_the_installed_hook();
         a_refused_texture_frame_keeps_the_accepted_one_for_reupload();
         sdr_surface_selection_rejects_incompatible_pairs();
         sdr_surface_selection_painter_readback_preserves_swatches_and_blending();

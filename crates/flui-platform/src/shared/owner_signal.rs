@@ -94,6 +94,8 @@ struct State {
     queued: bool,
     active: bool,
     quit: bool,
+    /// Windows whose held input waits for an owner turn (ADR-0213 §3).
+    input_resumes: Vec<super::InputWake>,
 }
 
 pub(crate) struct OwnerSignal {
@@ -113,6 +115,7 @@ impl OwnerSignal {
                 queued: false,
                 active: false,
                 quit: false,
+                input_resumes: Vec::new(),
             }),
             notify,
             owner: Mutex::new(std::thread::current().id()),
@@ -207,7 +210,8 @@ impl OwnerSignal {
     }
     fn schedule(&self) -> Result<(), ProxySendError<()>> {
         let mut state = self.state.lock();
-        if state.running && (state.pending || state.quit) && !state.queued && !state.active {
+        let work = state.pending || state.quit || !state.input_resumes.is_empty();
+        if state.running && work && !state.queued && !state.active {
             // Backend-only nonblocking post, never a user callback. Serialize
             // posting with admission so another sender cannot acknowledge a
             // wake that the first sender has not successfully posted yet.
@@ -219,6 +223,67 @@ impl OwnerSignal {
         }
         Ok(())
     }
+    /// Ask for an owner turn that runs `resume`, a window's held input
+    /// delivery; one queued run per window.
+    pub(crate) fn resume_input(&self, resume: super::InputWake) {
+        {
+            let mut state = self.state.lock();
+            if !state.accepting {
+                return;
+            }
+            if !state
+                .input_resumes
+                .iter()
+                .any(|queued| Arc::ptr_eq(queued, &resume))
+            {
+                state.input_resumes.push(resume);
+            }
+        }
+        if let Err(error) = self.schedule() {
+            contain_owner_callback(|| tracing::error!(%error, "input resume could not be posted"));
+        }
+    }
+
+    /// The wake a window installs with
+    /// [`WindowCallbacks::set_input_wake`](super::WindowCallbacks::set_input_wake).
+    /// `resume` calls the window's
+    /// [`WindowCallbacks::resume_input_delivery`](super::WindowCallbacks::resume_input_delivery)
+    /// through a weak reference, so a queued turn never keeps a window alive.
+    pub(crate) fn input_wake(
+        signal: &Arc<Self>,
+        resume: impl Fn() + Send + Sync + 'static,
+    ) -> super::InputWake {
+        let signal = Arc::downgrade(signal);
+        let resume: super::InputWake = Arc::new(resume);
+        Arc::new(move || {
+            if let Some(signal) = signal.upgrade() {
+                signal.resume_input(Arc::clone(&resume));
+            }
+        })
+    }
+
+    /// The wake for a window whose callbacks are shared.
+    pub(crate) fn callbacks_wake(
+        signal: &Arc<Self>,
+        callbacks: &Arc<super::WindowCallbacks>,
+    ) -> super::InputWake {
+        let callbacks = Arc::downgrade(callbacks);
+        Self::input_wake(signal, move || {
+            if let Some(callbacks) = callbacks.upgrade() {
+                callbacks.resume_input_delivery();
+            }
+        })
+    }
+
+    /// Resume every window that asked, outside the state lock.
+    fn run_input_resumes(&self) {
+        let resumes = std::mem::take(&mut self.state.lock().input_resumes);
+        for resume in resumes {
+            contain_owner_callback(|| resume());
+            contain_owner_callback(|| drop(resume));
+        }
+    }
+
     /// One finite turn over the signal's own shared slot.
     pub(crate) fn drive(&self) -> bool {
         self.drive_in(&self.shared)
@@ -235,6 +300,20 @@ impl OwnerSignal {
             if state.quit {
                 state.quit = false;
                 return true;
+            }
+            if state.accepting && state.running && !state.input_resumes.is_empty() {
+                // Held window input resumes in its own turn, before the
+                // application's turn; resumes it asks for get a later turn.
+                state.active = true;
+                drop(state);
+                self.run_input_resumes();
+                self.state.lock().active = false;
+                if let Err(error) = self.schedule() {
+                    contain_owner_callback(|| {
+                        tracing::error!(%error, "owner turn could not be rearmed");
+                    });
+                }
+                return false;
             }
             if !state.accepting || !state.running || !state.pending {
                 return false;

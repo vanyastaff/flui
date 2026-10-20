@@ -2127,6 +2127,32 @@ impl UpdateScheduler {
         self.inner.frame.budget.borrow_mut().avg_fps()
     }
 
+    /// Judge frames against `frame_duration` from the next frame on: the
+    /// period of the display being produced for, so `is_janky`, `avg_fps` and
+    /// the `period_us` field of the `frame` span follow the display instead of
+    /// the 60 Hz the scheduler was built with.
+    ///
+    /// The host sets it before the frame begins. [`FrameTiming`]
+    /// copies the budget's duration when a frame starts, so a change made
+    /// inside a frame applies to the following one.
+    pub fn set_budget_frame_duration(&self, frame_duration: FrameDuration) {
+        self.inner
+            .frame
+            .budget
+            .borrow_mut()
+            .set_frame_duration(frame_duration);
+    }
+
+    /// The period, in microseconds, the budget currently judges frames against.
+    pub(crate) fn budget_period_micros(&self) -> u64 {
+        self.inner
+            .frame
+            .budget
+            .borrow()
+            .frame_duration()
+            .as_micros()
+    }
+
     /// Check if last frame was janky
     pub fn is_janky(&self) -> bool {
         self.inner.frame.budget.borrow_mut().is_janky()

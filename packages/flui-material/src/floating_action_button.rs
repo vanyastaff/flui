@@ -160,7 +160,7 @@ impl FloatingActionButton {
     pub fn new(child: impl IntoView) -> Self {
         Self {
             on_pressed: None,
-            child: BoxedView(Box::new(child.into_view())),
+            child: BoxedView::new(child.into_view()),
         }
     }
 

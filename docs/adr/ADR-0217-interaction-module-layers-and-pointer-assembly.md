@@ -5,6 +5,8 @@
   ADR-0143 and the current code: unlayered `flui-interaction` modules, per-backend pointer
   assembly, and a `PanZoomTransform` that carries pan.
 - **Date:** 2026-10-13
+- **Amended:** 2026-10-19 — the layer table follows the implemented manifest: DnD sessions are
+  the `drag` module beside `gesture`, and `haptics` is layer 5, below `__runtime` and `testing`.
 - **Amends:** [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md): `PanZoomTransform`
   loses its pan component; a two-finger pan is `Scroll` with phases, and translation during a
   pinch is carried by the focal point, updated on every `Update`.
@@ -36,12 +38,15 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
 
    | Layer | Modules |
    |---|---|
-   | 0 | `events`, `ids`, `close`, `containment`, `retain` |
-   | 1 | `pointer`: hit test, interaction lane, router, capture, mouse tracker, `resampler` and `sampling_clock` (out of `processing`), `wheel_preferences`, `InputSequenceId` minting; it consumes the input `flui-runtime` routes from `HostInput` (ADR-0207) and owns no boundary of its own |
-   | 1 | `focus` (`focus`, `focus_scope`, `traversal`, moved out of `routing`); `text_input` (`text_input`, `clipboard`) |
-   | 2 | `gesture`: `arena`, `recognizers`, `velocity`, `lsq_solver`, `one_euro` (out of `processing`; `Velocity` by one path), `settings`, `details`, `traits`, `observability`, DnD sessions |
-   | 3 | `binding` |
-   | — | `testing` (feature) and `prelude` are transparent |
+   | 0 | `events`, `ids`, `retain` |
+   | 1 | `close`, `containment` (they name `retain`, and modules in one layer name none of each other) |
+   | 2 | `pointer`: hit test, interaction lane, router, capture, mouse tracker, `resampler` and `sampling_clock` (out of `processing`), `wheel_preferences`, `InputSequenceId` minting; it consumes the input `flui-runtime` routes from `HostInput` (ADR-0207) and owns no boundary of its own |
+   | 2 | `focus` (`focus`, `focus_scope`, `traversal`, moved out of `routing`); `text_input` (`text_input`, `clipboard`) |
+   | 3 | `gesture`: `arena`, `recognizers`, `velocity`, `lsq_solver`, `one_euro` (out of `processing`; `Velocity` by one path), `settings`, `details`, `traits`, `observability`; `drag` (DnD sessions, over pointer capture and hit testing) |
+   | 4 | `binding` |
+   | 5 | `haptics` (a presentation's haptics, on the binding's clock and dispatch) |
+   | 6 | `__runtime` (the runtime's terminal-cleanup seam) and `testing` (feature; test builders that drive the binding, so it holds code and is not transparent) |
+   | — | `prelude` is transparent (only `use` items) |
 
    Modules move in mechanical commits; a moved `static` or `thread_local!` keeps its `globals`
    entry in the same commit. Each public type is reachable by one path.
@@ -67,10 +72,22 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
    `CancelReason::InvalidInput` and a diagnostic; a reading that belongs to no open contact is
    dropped with a diagnostic. Nothing is half-applied. The
    registry keeps the originating native event per contact, so a native DnD can start from it.
-   Assembly allocates nothing per event.
+   Assembly allocates nothing per event. A contact that can hover (mouse, pen) survives its
+   `Up`: it returns to hovering on the same pointer identity, a later `Move` hovers on that
+   identity, and the platform's leave (`WM_POINTERLEAVE`, the end of a UIKit hover, out of
+   range) ends a pen, so its `Enter` and `Leave` pair up; a mouse stays for the life of its
+   device. A touch has no hover and ends at `Up`; one that delivered an `Enter` delivers its
+   `Leave` when it ends, at `Up` or at a cancel, as a DOM `pointerleave` follows `pointerup`,
+   and the platform's own later leave for it (`WM_POINTERLEAVE`) is an expected orphan that
+   emits nothing and logs nothing (row `an_entered_touch_leaves_when_it_ends`). A hovering pen whose label comes back as
+   another kind left without a leave: it gets one, then the reading starts a new contact (row
+   `a_lifted_pen_hovers_on_its_identity_until_it_leaves`).
 4. **Two-finger pan is `Scroll`.** On every OS a two-finger trackpad pan is `Scroll` with
    `ScrollPhase`, and platform momentum is `ScrollPhase::Momentum*`. `PanZoom` carries only scale
-   and rotation, about a defined focal point. This amends ADR-0143: `PanZoomTransform` loses its
+   and rotation, about a defined focal point. A session's consumer is chosen along the path
+   hit at its `Start` focal point and kept like a captured pointer however far the focal
+   point moves; raw observers follow fresh geometry (row
+   `viewer_keeps_a_pinch_whose_focal_point_leaves_it`). This amends ADR-0143: `PanZoomTransform` loses its
    pan component, and translation during a pinch is carried by the focal point, updated on every
    `Update`. On Windows DirectManipulation serves only the
    precision touchpad; touch stays raw contacts.

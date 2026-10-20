@@ -64,18 +64,17 @@ impl Children {
 
     /// Add a child to the end.
     pub fn push(&mut self, view: impl View) {
-        self.inner.push(BoxedView(Box::new(view)));
+        self.inner.push(BoxedView::new(view));
     }
 
     /// Add multiple children.
     pub fn extend(&mut self, views: impl IntoIterator<Item = impl View>) {
-        self.inner
-            .extend(views.into_iter().map(|v| BoxedView(Box::new(v))));
+        self.inner.extend(views.into_iter().map(BoxedView::new));
     }
 
     /// Insert a child at the given index.
     pub fn insert(&mut self, index: usize, view: impl View) {
-        self.inner.insert(index, BoxedView(Box::new(view)));
+        self.inner.insert(index, BoxedView::new(view));
     }
 
     /// Remove a child at the given index.
@@ -94,12 +93,12 @@ impl Children {
 
     /// Get a reference to a child at the given index.
     pub fn get(&self, index: usize) -> Option<&dyn View> {
-        self.inner.get(index).map(|b| &*b.0 as &dyn View)
+        self.inner.get(index).map(|b| b as &dyn View)
     }
 
     /// Iterate over children as View references.
     pub fn iter(&self) -> impl Iterator<Item = &dyn View> {
-        self.inner.iter().map(|b| &*b.0 as &dyn View)
+        self.inner.iter().map(|b| b as &dyn View)
     }
 
     /// Take all children, leaving an empty collection.
@@ -136,14 +135,13 @@ impl std::fmt::Debug for Children {
 
 impl<V: View> FromIterator<V> for Children {
     fn from_iter<I: IntoIterator<Item = V>>(iter: I) -> Self {
-        let inner = iter.into_iter().map(|v| BoxedView(Box::new(v))).collect();
+        let inner = iter.into_iter().map(BoxedView::new).collect();
         Self { inner }
     }
 }
 
 impl<V: View> Extend<V> for Children {
     fn extend<I: IntoIterator<Item = V>>(&mut self, iter: I) {
-        self.inner
-            .extend(iter.into_iter().map(|v| BoxedView(Box::new(v))));
+        self.inner.extend(iter.into_iter().map(BoxedView::new));
     }
 }

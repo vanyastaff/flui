@@ -63,6 +63,26 @@ impl PlatformWindow for Window {
     ) -> Result<(), flui_platform_api::CursorError> {
         self.inner.set_cursor(cursor)
     }
+    fn state(&self) -> flui_platform_api::WindowState {
+        let size = self.logical_size();
+        flui_platform_api::WindowState::new(
+            flui_platform_api::WindowGeometry::new(None, size),
+            size,
+        )
+    }
+
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        flui_platform_api::WindowCapabilities::NONE
+    }
+
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        command.admit(&flui_platform_api::WindowCapabilities::NONE)?;
+        Ok(())
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -283,5 +303,233 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
             Some(&(TextSizing::linear(1.0).expect("valid scale"), false)),
             "the next healthy publication still reaches its mounted consumer"
         );
+    }
+}
+
+struct HapticWindow {
+    inner: Arc<dyn PlatformWindow>,
+    haptics: Arc<flui_platform_api::haptics::FakeHaptics>,
+}
+impl PlatformWindow for HapticWindow {
+    fn id(&self) -> flui_platform_api::WindowId {
+        self.inner.id()
+    }
+    fn physical_size(&self) -> Size<i32> {
+        self.inner.physical_size()
+    }
+    fn logical_size(&self) -> Size<f64> {
+        self.inner.logical_size()
+    }
+    fn scale_factor(&self) -> f64 {
+        self.inner.scale_factor()
+    }
+    fn request_redraw(&self) {
+        self.inner.request_redraw();
+    }
+    fn is_focused(&self) -> bool {
+        self.inner.is_focused()
+    }
+    fn is_visible(&self) -> bool {
+        self.inner.is_visible()
+    }
+    fn set_cursor(
+        &self,
+        cursor: flui_platform_api::CursorIcon,
+    ) -> Result<(), flui_platform_api::CursorError> {
+        self.inner.set_cursor(cursor)
+    }
+    fn state(&self) -> flui_platform_api::WindowState {
+        self.inner.state()
+    }
+    fn capabilities(&self) -> flui_platform_api::WindowCapabilities {
+        self.inner.capabilities()
+    }
+    fn apply(
+        &self,
+        command: flui_platform_api::WindowCommand,
+    ) -> Result<(), flui_platform_api::WindowCommandError> {
+        self.inner.apply(command)
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn haptics(&self) -> Option<Arc<dyn flui_platform_api::PlatformHaptics>> {
+        Some(self.haptics.clone())
+    }
+}
+
+/// An observed "off" suppresses both tiers, immediate and frame-aligned,
+/// before they reach the backend; unobserved and "on" play them, and each
+/// accepted revision decides the next request (ADR-0212 §1).
+pub(crate) fn haptics_preference_suppresses_both_tiers() {
+    use flui_platform_api::HapticFeedback;
+    use flui_platform_api::haptics::{
+        FakeHaptics, HapticOutcome, HapticPattern, HapticRequest, HapticTiming,
+    };
+    let haptics = Arc::new(FakeHaptics::new());
+    let window = Arc::new(HapticWindow {
+        inner: flui_platform::headless_platform()
+            .open_window(flui_platform::traits::WindowOptions::default())
+            .expect("window"),
+        haptics: haptics.clone(),
+    });
+    let runtime = UiRuntime::new(
+        crate::presentation::PresentationWindow::new(window.clone(), None),
+        1.0,
+        crate::runtime_services::RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Platform,
+        ),
+    )
+    .expect("runtime");
+    let origin = Rc::new(());
+    let mut revision = 0;
+    let mut accept = |values: SystemPreferences| {
+        revision += 1;
+        runtime.apply_preferences(crate::owner::SystemPreferencesSnapshot {
+            origin: Rc::clone(&origin),
+            revision,
+            values: Arc::new(values),
+        });
+    };
+    let pattern = HapticPattern::builder()
+        .transient(std::time::Duration::ZERO, 1.0, 1.0)
+        .build()
+        .expect("valid");
+    let handle = runtime.haptics();
+    let now = HapticRequest::new(HapticTiming::Immediate);
+    let frame = HapticRequest::new(HapticTiming::FramePresented);
+    // Each round requests both tiers at both timings.
+    let round = || {
+        [
+            handle.perform(HapticFeedback::LightImpact, now),
+            handle.play(&pattern, HapticFeedback::LightImpact, now),
+            handle.perform(HapticFeedback::LightImpact, frame),
+            handle.play(&pattern, HapticFeedback::LightImpact, frame),
+        ]
+    };
+    let played = |outcomes: [HapticOutcome; 4]| {
+        outcomes
+            .iter()
+            .all(|outcome| matches!(outcome, HapticOutcome::Submitted | HapticOutcome::Queued(_)))
+    };
+    let suppressed =
+        |outcomes: [HapticOutcome; 4]| outcomes.iter().all(|o| *o == HapticOutcome::Suppressed);
+    assert!(played(round()), "no snapshot yet: unobserved plays");
+    for (observed, plays) in [(None, true), (Some(true), true), (Some(false), false)] {
+        let values = observed.map_or_else(SystemPreferences::default, |enabled| {
+            SystemPreferences::default().with_haptics(enabled)
+        });
+        accept(values);
+        let before = haptics.calls().len();
+        let outcomes = round();
+        if plays {
+            assert!(played(outcomes), "observed {observed:?}: {outcomes:?}");
+        } else {
+            assert!(suppressed(outcomes), "observed {observed:?}: {outcomes:?}");
+            assert_eq!(
+                haptics.calls().len(),
+                before,
+                "a suppressed request never reaches the backend"
+            );
+        }
+    }
+    accept(SystemPreferences::default());
+    assert!(played(round()), "a later unobserved revision plays again");
+    // The runtime reaches the window weakly; the test owns it until here.
+    drop(window);
+}
+
+/// A frame-aligned request plays only with a frame that reached `present()`
+/// (ADR-0210 §4). `NotShown` never reached the screen; `NoPresent` found no
+/// damage, so the screen kept the previous frame and the change the request
+/// confirms never showed. Both leave the request to its deadline, where it
+/// resolves `Suppressed` without reaching the backend.
+pub(crate) fn frame_aligned_haptics_play_only_with_a_presented_frame() {
+    use crate::{presentation::PresentationWindow, runtime_services::RuntimeHostServices};
+    use crate::{sink::SubmitVerdict, testing::ScriptedSink};
+    use flui_platform_api::HapticFeedback;
+    use flui_platform_api::haptics::{FakeHaptics, HapticOutcome, HapticRequest, HapticTiming};
+    for verdict in [
+        SubmitVerdict::Presented,
+        SubmitVerdict::NotShown,
+        SubmitVerdict::NoPresent,
+    ] {
+        let haptics = Arc::new(FakeHaptics::new());
+        let window = Arc::new(HapticWindow {
+            inner: flui_platform::headless_platform()
+                .open_window(flui_platform::traits::WindowOptions::default())
+                .expect("window"),
+            haptics: haptics.clone(),
+        });
+        let clock = ManualClock::new();
+        let mut runtime = UiRuntime::new(
+            PresentationWindow::new(window.clone(), None),
+            1.0,
+            RuntimeHostServices::new(
+                Arc::new(|| {}),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                &flui_painting::FontCollection::new(),
+                flui_scheduler::ClockSource::Manual(clock.clone()),
+            ),
+        )
+        .expect("runtime");
+        runtime
+            .attach_root_widget_with_size(&flui_widgets::SizedBox::square(20.0), 800.0, 600.0)
+            .expect("root");
+        let handle = runtime.haptics();
+        let delivered = Rc::new(RefCell::new(Vec::new()));
+        let sink_of = Rc::clone(&delivered);
+        let _observer = handle.observe(move |ticket, outcome| {
+            sink_of.borrow_mut().push((ticket, outcome));
+        });
+        // Queued before the first frame, which paints the root.
+        let HapticOutcome::Queued(ticket) = handle.perform(
+            HapticFeedback::DragLift,
+            HapticRequest::new(HapticTiming::FramePresented),
+        ) else {
+            panic!("{verdict:?}: a frame-aligned request queues");
+        };
+        let mut sink = ScriptedSink::new(move |_, _| verdict);
+        let pump = |runtime: &mut UiRuntime, sink: &mut ScriptedSink| {
+            let _ = runtime.pump(
+                &mut crate::pump::SampledClock(MonotonicClock::now(&clock)),
+                sink,
+            );
+        };
+        pump(&mut runtime, &mut sink);
+        assert!(
+            sink.submit_calls > 0,
+            "{verdict:?}: the first frame painted"
+        );
+        let presented = verdict == SubmitVerdict::Presented;
+        assert_eq!(
+            haptics.feedback(),
+            if presented {
+                vec![HapticFeedback::DragLift]
+            } else {
+                Vec::new()
+            },
+            "{verdict:?}: only a presented frame plays the request"
+        );
+        // Past any deadline: the request has resolved and been delivered.
+        clock.advance(Duration::from_secs(1));
+        pump(&mut runtime, &mut sink);
+        pump(&mut runtime, &mut sink);
+        let expected = if presented {
+            HapticOutcome::Submitted
+        } else {
+            HapticOutcome::Suppressed
+        };
+        assert_eq!(*delivered.borrow(), [(ticket, expected)], "{verdict:?}");
+        if !presented {
+            assert_eq!(haptics.calls(), [], "{verdict:?}: never played late");
+        }
+        drop(runtime);
+        drop(window);
     }
 }

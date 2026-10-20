@@ -114,7 +114,7 @@ impl<'runtime> PresentationSampling<'runtime> {
                 let enabled =
                     runtime.scheduler.frames_enabled() && !presentation.clock().is_hidden();
                 let was_running =
-                    enabled && vsync.has_running() && !presentation.motion_is_paused();
+                    presentation.animation_running(runtime.scheduler.frames_enabled());
                 if was_running {
                     // Admission belongs to this selected tick, including a final sample.
                     presentation.clock().mark_demand(DemandKind::Animation);
@@ -140,6 +140,9 @@ impl<'runtime> PresentationSampling<'runtime> {
                     now,
                     recovery,
                 );
+            });
+            self.run(SamplingStage::HapticDelivery, |recovery| {
+                presentation.haptics().service(recovery);
             });
         }
     }
@@ -353,6 +356,21 @@ impl<'runtime> PresentationSampling<'runtime> {
 }
 
 impl UiRuntime {
+    /// Advance the runtime's drags to `now`: spring-loading that came due, and
+    /// the OS told of each drop whose requests have all resolved (ADR-0211 §5, §8).
+    fn service_drags(&self, now: web_time::Instant) {
+        self.drag.tick(self.event_time_at(now));
+    }
+
+    /// `instant` on the event timeline the runtime's input is stamped on.
+    fn event_time_at(&self, instant: web_time::Instant) -> flui_platform_api::EventTime {
+        let elapsed =
+            instant.saturating_duration_since(flui_foundation::MonotonicClock::epoch(&self.clock));
+        flui_platform_api::EventTime::from_nanos(
+            u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX),
+        )
+    }
+
     /// Refresh extension observations after an owner operation, never from a getter.
     pub(crate) fn refresh_deadline_observations(&self, state: crate::owner::RecoveryState) {
         self.enter(|runtime| runtime.sample_deadline_operations(state, DeadlineOperation::Observe));
@@ -406,8 +424,16 @@ impl UiRuntime {
                         recovery,
                     );
                 });
+                operation.run(SamplingStage::HapticDelivery, |recovery| {
+                    presentation.haptics().service(recovery);
+                });
             }
             operation.establish_recovery();
+        }
+        if matches!(deadlines, DeadlineOperation::PollDue)
+            && let Some(operation) = sampling.first_mut()
+        {
+            operation.run(SamplingStage::GestureDeadline, |_| self.service_drags(now));
         }
         for operation in &mut sampling {
             if let Some(kind) = operation.take_failure_kind(self) {
@@ -446,6 +472,11 @@ impl UiRuntime {
             .collect();
         for operation in &mut sampling {
             operation.sample(self, constraints, raw, now);
+        }
+        // The runtime's drags are not any one presentation's; their deadlines
+        // are reported against the first presentation sampled.
+        if let Some(operation) = sampling.first_mut() {
+            operation.run(SamplingStage::GestureDeadline, |_| self.service_drags(now));
         }
         for operation in &mut sampling {
             operation.admit(self);

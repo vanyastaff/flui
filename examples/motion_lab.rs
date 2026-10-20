@@ -30,11 +30,17 @@ use flui::material::{
 use flui::painting::styling::Color;
 use flui::prelude::*;
 use flui::widgets::{
-    ActivityIndicator, AnimateExt, AnimatedContainer, AnimatedCrossFade, AnimatedList,
-    AnimatedOpacity, AnimatedPositioned, AnimatedRotation, AnimatedScale, AnimatedSlide,
-    CrossFadeState, Dismissible, Effects, NavigatorHandle, PageRoute, ScrollController, Scrollable,
-    Shimmer, Skeleton, Stack, TickerMode, Transition, TranslationFraction, Trigger, column, row,
+    Actions, ActivityIndicator, Alternative, AnimateExt, AnimatedContainer, AnimatedCrossFade,
+    AnimatedList, AnimatedOpacity, AnimatedPositioned, AnimatedRotation, AnimatedScale,
+    AnimatedSlide, CallbackAction, ControlSpec, CrossFadeState, Dismissible, Effects,
+    GestureAlternatives, GestureCommand, Intent, NavigatorHandle, PageRoute, ScrollController,
+    Scrollable, Shimmer, SingleActivator, Skeleton, Stack, TickerMode, Transition,
+    TranslationFraction, Trigger, column, row,
 };
+
+/// What dismissing the card means, whichever path performs it.
+struct DismissCard;
+impl Intent for DismissCard {}
 
 const BLUE: Color = Color::rgb(35, 94, 180);
 const ORANGE: Color = Color::rgb(216, 102, 35);
@@ -186,14 +192,28 @@ impl LabState {
                 .child(Center::new().child(Text::new("Card dismissed. Press Restore card.")))
                 .boxed()
         } else {
-            Dismissible::new(
-                SizedBox::new(420.0, 52.0).child(
-                    ColoredBox::new(BLUE)
-                        .child(Center::new().child(Text::new("Swipe this card sideways"))),
-                ),
+            // The swipe, the Dismiss button, the screen reader's action and
+            // Ctrl+Shift+D on the focused card all perform `DismissCard`.
+            let alternatives =
+                GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+                    GestureCommand::new("Dismiss card", DismissCard)
+                        .key(SingleActivator::character("d").control().shift()),
+                    Padding::all(8.0).child(Text::new("Dismiss")),
+                )))
+                .expect("one labelled command");
+            Actions::new(
+                Dismissible::new(
+                    SizedBox::new(420.0, 52.0).child(
+                        ColoredBox::new(BLUE)
+                            .child(Center::new().child(Text::new("Swipe this card sideways"))),
+                    ),
+                    alternatives,
+                )
+                .background(ColoredBox::new(ORANGE)),
             )
-            .background(ColoredBox::new(ORANGE))
-            .on_dismissed(move |cx, _| dismissed.set(cx, true))
+            .action(CallbackAction::new(move |cx, _: &DismissCard| {
+                dismissed.set(cx, true)
+            }))
             .boxed()
         };
 

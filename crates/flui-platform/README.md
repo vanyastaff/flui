@@ -21,9 +21,8 @@ consumed by path (not published to crates.io).
 ## Surfaces
 
 ```text
-traits/          Platform, PlatformWindow, PlatformDisplay, PlatformExecutor,
-                 PlatformCapabilities, PlatformEmbedder,
-                 input (PlatformInput, velocity tracking)
+traits/          Platform, PlatformWindow, PlatformExecutor,
+                 input (PlatformInput, InputCapabilities per window)
 shared/          PlatformHandlers / WindowCallbacks — callback registries
 platforms/       windows, macos, headless, winit (+ linux/android/ios/web stubs)
 executor.rs      BackgroundExecutor (tokio pool)

@@ -123,9 +123,7 @@ impl PopEntryScope {
     pub(crate) fn new(registry: PopEntryRegistry, child: impl IntoView) -> Self {
         Self {
             registry: crate::navigator::lifecycle::Terminal::new(registry),
-            child: crate::navigator::lifecycle::Terminal::new(BoxedView(Box::new(
-                child.into_view(),
-            ))),
+            child: crate::navigator::lifecycle::Terminal::new(BoxedView::new(child.into_view())),
         }
     }
 }
@@ -211,9 +209,7 @@ impl PopScope {
     /// `PopScope` only observes.
     pub fn new(child: impl IntoView) -> Self {
         Self {
-            child: crate::navigator::lifecycle::Terminal::new(BoxedView(Box::new(
-                child.into_view(),
-            ))),
+            child: crate::navigator::lifecycle::Terminal::new(BoxedView::new(child.into_view())),
             can_pop: true,
             on_pop_invoked: None,
         }

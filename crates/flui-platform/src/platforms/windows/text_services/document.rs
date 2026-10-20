@@ -43,6 +43,7 @@ use windows::Win32::{
 use windows_core::{BOOL, GUID, HRESULT, IUnknown, Interface, PCWSTR, PWSTR, Ref};
 
 use super::TextServices;
+use crate::platforms::windows::platform::WindowRef;
 use crate::shared::text_geometry::{ScreenRect, range_rect_to_screen, screen_point_to_client};
 
 /// The state one TSF document shares between its COM object and the
@@ -52,7 +53,8 @@ pub(super) struct DocumentState {
     /// Whether the store was protected when the document opened: the
     /// static status TSF read then, which no notification can change.
     protected: bool,
-    hwnd: HWND,
+    /// The window, reached only while its handle still names it.
+    window: WindowRef,
     services: Weak<TextServices>,
     sink: RefCell<Option<AdvisedSink>>,
     slot: SessionSlot,
@@ -74,13 +76,13 @@ struct AdvisedSink {
 impl DocumentState {
     pub(super) fn new(
         store: Rc<dyn TextStore>,
-        hwnd: HWND,
+        window: WindowRef,
         services: Weak<TextServices>,
     ) -> Rc<Self> {
         Rc::new(Self {
             protected: store.status().protected,
             store,
-            hwnd,
+            window,
             services,
             sink: RefCell::new(None),
             slot: SessionSlot::default(),
@@ -109,19 +111,26 @@ impl DocumentState {
             .map(|advised| advised.sink.clone())
     }
 
-    /// The window's scale and client origin in physical screen pixels.
+    /// The window's scale and client origin in physical screen pixels; both
+    /// read only while the handle still names this document's window, else
+    /// the default scale at (0, 0), which the caller reports as no better
+    /// than that.
     fn screen_frame(&self) -> (DevicePixelRatio, DevicePoint) {
-        let scale = super::super::platform::with_window_context(self.hwnd, "text_services", |c| {
-            c.scale_factor.get()
-        })
-        .and_then(DevicePixelRatio::new)
-        .unwrap_or_default();
-        let mut origin = POINT::default();
-        // SAFETY: `origin` is a live, writable local; `ClientToScreen` only
-        // writes through the pointer it is given. A dead window leaves it at
-        // (0, 0), which the caller reports as no better than that.
-        let _ = unsafe { ClientToScreen(self.hwnd, &raw mut origin) };
-        (scale, DevicePoint::new(origin.x, origin.y))
+        let hwnd = self.window.hwnd();
+        let (scale, origin) = self
+            .window
+            .with_context("text_services", |context| {
+                let mut origin = POINT::default();
+                // SAFETY: `origin` is a live, writable local; `ClientToScreen`
+                // only writes through the pointer it is given.
+                let _ = unsafe { ClientToScreen(hwnd, &raw mut origin) };
+                (context.scale_factor.get(), origin)
+            })
+            .unwrap_or_default();
+        (
+            DevicePixelRatio::new(scale).unwrap_or_default(),
+            DevicePoint::new(origin.x, origin.y),
+        )
     }
 
     /// Run one granted lock: open the session slot, hand TSF the lock and
@@ -363,7 +372,9 @@ mod com_object {
     use super::DocumentState;
 
     /// The `ITextStoreACP` object TSF holds for one document.
-    #[implement(ITextStoreACP, ITfContextOwnerCompositionSink)]
+    /// Its state is an `Rc` of the window's thread, so it is not agile: COM
+    /// marshals another apartment's calls back to that thread.
+    #[implement(ITextStoreACP, ITfContextOwnerCompositionSink, Agile = false)]
     pub(in super::super) struct TsfStore {
         pub(super) state: Rc<DocumentState>,
     }
@@ -914,7 +925,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
             // Outside a lock, or before a layout: the client area.
             let mut client = RECT::default();
             // SAFETY: `client` is a live, writable local.
-            unsafe { GetClientRect(state.hwnd, &raw mut client) }?;
+            unsafe { GetClientRect(state.window.hwnd(), &raw mut client) }?;
             Ok(RECT {
                 left: client.left + origin.x,
                 top: client.top + origin.y,
@@ -925,7 +936,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
     }
 
     fn GetWnd(&self, _vcview: u32) -> windows_core::Result<HWND> {
-        self.com_entry("GetWnd", |state| Ok(state.hwnd))
+        self.com_entry("GetWnd", |state| Ok(state.window.hwnd()))
     }
 }
 

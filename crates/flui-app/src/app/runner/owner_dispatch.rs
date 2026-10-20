@@ -1,5 +1,6 @@
+use flui_runtime::HostInput;
 use flui_runtime::owner::RuntimeOperation;
-#[cfg(any(test, target_os = "android"))]
+#[cfg(all(test, not(target_os = "android")))]
 use flui_scheduler::AppLifecycleState;
 
 use super::host::APP_RUNTIME;
@@ -12,7 +13,7 @@ pub(in crate::app) struct PresentationDispatcher {
     pub(super) address: flui_foundation::PresentationAddress,
 }
 
-#[cfg(any(test, target_os = "android", target_os = "ios"))]
+#[cfg(any(all(test, not(target_os = "android")), target_os = "ios"))]
 impl PresentationDispatcher {
     pub(super) fn runtime(self) -> RuntimeDispatcher {
         RuntimeDispatcher {
@@ -34,7 +35,17 @@ impl RuntimeDispatcher {
         dispatch_owner_turn(OwnerTurn::Runtime(self, RuntimeOperation::FontsChanged))
     }
 
-    #[cfg(any(test, target_os = "android"))]
+    pub(super) fn host_notice(
+        self,
+        notice: flui_platform::HostNotice,
+    ) -> Result<flui_runtime::owner::Delivery, DispatchError> {
+        dispatch_owner_turn_delivery(OwnerTurn::Runtime(
+            self,
+            RuntimeOperation::HostNotice(notice),
+        ))
+    }
+
+    #[cfg(all(test, not(target_os = "android")))]
     pub(super) fn lifecycle(self, state: AppLifecycleState) -> Result<(), DispatchError> {
         dispatch_owner_turn(OwnerTurn::Runtime(self, RuntimeOperation::Lifecycle(state)))
     }
@@ -133,13 +144,6 @@ pub(in crate::app) enum RuntimeEvent {
     /// [`WindowVisibility`](Self::WindowVisibility).
     WindowFocus(bool),
     /// Reversible native execution eligibility for one presentation.
-    #[cfg_attr(
-        any(target_arch = "wasm32", target_os = "android"),
-        expect(
-            dead_code,
-            reason = "these runners retain their existing host lifecycle transport"
-        )
-    )]
     WindowExecution(flui_platform::WindowExecutionState),
     /// Addressed logical content-view safe area.
     ///
@@ -169,6 +173,15 @@ pub(in crate::app) enum RuntimeEvent {
     /// (`PlatformWindow::on_appearance_changed`). Republishes
     /// `MediaQueryData::platform_brightness` through the root media query.
     AppearanceChanged(flui_platform_api::Brightness),
+    /// The host derived a new display for this window from the platform's
+    /// snapshot (`display_host`): which display it is on and that display's
+    /// refresh period, possibly "unknown". Delivered after every sample and
+    /// acted on only when it differs from what the presentation holds.
+    DisplayChanged(flui_runtime::owner::DisplayUpdate),
+    /// The window's published state may have changed
+    /// (`PlatformWindow::on_state_changed`); the owner reads it when it
+    /// delivers this.
+    WindowStateChanged,
     /// The pointer entered (`true`) or left (`false`) the window (winit's
     /// `CursorEntered`/`CursorLeft`, via
     /// `PlatformWindow::on_hover_status_change`). Leave sweeps the addressed
@@ -213,12 +226,13 @@ impl RuntimeEvent {
         address: flui_foundation::PresentationAddress,
         target: &flui_runtime::owner::PresentationDispatcher,
     ) -> Result<flui_runtime::owner::Delivery, flui_runtime::owner::DispatchError> {
-        use flui_runtime::owner::WindowObservation;
+        use flui_runtime::owner::{Delivery, InputOutcome, WindowObservation};
         #[cfg(not(any(test, target_os = "android", target_os = "ios")))]
         let _ = address;
         let observation = match self {
             #[cfg(any(test, target_os = "android", target_os = "ios"))]
             Self::PrimarySurfaceRestored => {
+                host.displays().reapply_frame_rate(address);
                 return host
                     .logical()
                     .frame_dispatcher(address)?
@@ -233,8 +247,15 @@ impl RuntimeEvent {
             Self::WindowExecution(execution) => WindowObservation::Execution(execution),
             Self::WindowHover(inside) => WindowObservation::Hover(inside),
             Self::AppearanceChanged(brightness) => WindowObservation::Brightness(brightness),
+            Self::DisplayChanged(update) => WindowObservation::Display(update),
+            Self::WindowStateChanged => WindowObservation::State,
         };
-        target.observe(observation, host.effects())
+        target
+            .dispatch(HostInput::Window(observation), host.effects())
+            .map(|outcome| match outcome {
+                InputOutcome::Queued => Delivery::Queued,
+                InputOutcome::Handled | InputOutcome::Unhandled => Delivery::Driven,
+            })
     }
 }
 
@@ -515,13 +536,20 @@ fn dispatch_platform_input(
         let result = host
             .logical()
             .presentation_dispatcher(dispatcher.address)
-            .and_then(|target| target.input(input, host.effects()))
+            .and_then(|target| target.dispatch(HostInput::Platform(input), host.effects()))
             .map_err(DispatchError::from);
         super::fonts::announce_font_change();
         result
     });
     let default_prevented = !matches!(outcome, Ok(flui_runtime::owner::InputOutcome::Unhandled));
     flui_platform::DispatchEventResult::resolved(false, default_prevented)
+}
+
+/// A delivered frame's vsync on the event timeline: the host's reading of the
+/// process event epoch when the frame is admitted. No backend reports the
+/// display's own vsync timestamp yet.
+pub(super) fn frame_vsync() -> flui_platform_api::EventTime {
+    flui_platform_api::EventTime::from_nanos(flui_platform::shared::events::event_timestamp_ns())
 }
 
 pub(super) fn dispatch_platform_ui_runtime(
@@ -531,7 +559,127 @@ pub(super) fn dispatch_platform_ui_runtime(
     dispatch_owner_turn(OwnerTurn::Presentation(dispatcher, event))
 }
 
+/// Apply the commands application code queued for its windows, when this is the
+/// owner thread and no owner callback is running. Applying one may re-enter the
+/// window procedure, so it never runs inside user code: a call from inside a
+/// callback leaves the queue for the next turn that starts idle.
+pub(super) fn apply_queued_window_commands(owner_thread: std::thread::ThreadId) {
+    if std::thread::current().id() != owner_thread {
+        return;
+    }
+    let Some((queues, host)) = APP_RUNTIME.with(|slot| {
+        slot.try_borrow()
+            .ok()
+            .map(|state| (state.window_commands.clone(), state.installed_host.clone()))
+    }) else {
+        return;
+    };
+    if host.logical().in_callback() {
+        return;
+    }
+    queues.apply_pending();
+}
+
+/// Deliver a system notice to every UI runtime this host runs, each on its own
+/// owner turn.
+pub(super) fn deliver_host_notice(notice: &flui_platform::HostNotice) -> NoticeDelivery {
+    // The process may be gone before a subscriber has finished: write what the
+    // host itself keeps first.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    if matches!(notice, flui_platform::HostNotice::SessionEnded) {
+        super::placement::flush_all();
+    }
+    // The host's shared memory is reclaimed once, ahead of every runtime's own
+    // caches and of every subscriber: the notice reaches subscribers on later
+    // owner turns.
+    let mut failure = flui_foundation::panic::FirstPanic::new();
+    if let flui_platform::HostNotice::MemoryPressure(level) = notice {
+        failure.contain(|| reclaim_host_memory(*level));
+    }
+    let dispatchers = APP_RUNTIME.with(|slot| {
+        let Ok(runtime) = slot.try_borrow() else {
+            return Vec::new();
+        };
+        let Some(owner_thread) = runtime.owner_thread else {
+            return Vec::new();
+        };
+        runtime
+            .installed_host
+            .logical()
+            .runtime_ids()
+            .map(|ids| {
+                ids.into_iter()
+                    .map(|id| RuntimeDispatcher { owner_thread, id })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    });
+    let mut outcome = NoticeDelivery::default();
+    for dispatcher in dispatchers {
+        match dispatcher.host_notice(notice.clone()) {
+            Ok(flui_runtime::owner::Delivery::Driven) => outcome.ran += 1,
+            Ok(_) => outcome.queued += 1,
+            Err(error) => {
+                outcome.refused += 1;
+                tracing::debug!(?dispatcher, ?error, "host notice not delivered");
+            }
+        }
+    }
+    failure.resume();
+    outcome
+}
+
+/// How a system notice reached the UI runtimes: on the spot, queued behind a
+/// turn that was already running, or not at all.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct NoticeDelivery {
+    /// Runtimes whose subscribers had heard it when the call returned.
+    pub(super) ran: usize,
+    /// Runtimes whose turn was busy: they hear it later, after the call.
+    pub(super) queued: usize,
+    /// Runtimes that could not take it.
+    pub(super) refused: usize,
+}
+
+impl NoticeDelivery {
+    /// Whether every subscriber has heard the notice by now.
+    pub(super) fn is_complete(self) -> bool {
+        self.queued == 0 && self.refused == 0
+    }
+}
+
+/// Ask the host's shared memory to give back for `level`: the application's
+/// receivers and every raster lane's pools.
+fn reclaim_host_memory(level: flui_foundation::memory::MemoryPressureLevel) {
+    use flui_foundation::memory::ReclaimMemory as _;
+    // Cloned out of the cell: a receiver's destructors may touch the host.
+    let memory = APP_RUNTIME.with(|slot| {
+        slot.try_borrow()
+            .ok()
+            .map(|state| std::sync::Arc::clone(&state.host_memory))
+    });
+    if let Some(memory) = memory {
+        memory.reclaim(level);
+    }
+}
+
 fn dispatch_owner_turn(turn: OwnerTurn) -> Result<(), DispatchError> {
+    dispatch_owner_turn_delivery(turn).map(|_| ())
+}
+
+/// [`dispatch_owner_turn`], reporting whether the work ran in this call or was
+/// queued behind the turn already running.
+fn dispatch_owner_turn_delivery(
+    turn: OwnerTurn,
+) -> Result<flui_runtime::owner::Delivery, DispatchError> {
+    // Window commands queued by application code apply at the start of the
+    // turn, before its frame and outside the turn's callback guard: a native
+    // call re-enters the window procedure.
+    apply_queued_window_commands(turn.owner_thread());
     let host = current_host(turn.owner_thread())?;
     let _callback = host
         .logical()
@@ -557,7 +705,7 @@ fn dispatch_owner_turn(turn: OwnerTurn) -> Result<(), DispatchError> {
                     }
                     host.logical()
                         .frame_dispatcher(dispatcher.address)
-                        .and_then(|frame| frame.deliver(host.effects()))
+                        .and_then(|frame| frame.deliver(frame_vsync(), host.effects()))
                 }
                 RuntimeTask::ClosePresentation(id) => {
                     let address = flui_foundation::PresentationAddress {
@@ -577,7 +725,6 @@ fn dispatch_owner_turn(turn: OwnerTurn) -> Result<(), DispatchError> {
             }
         }
     }
-    .map(|_| ())
     .map_err(DispatchError::from);
     super::fonts::announce_font_change();
     result
@@ -812,6 +959,22 @@ pub(super) fn teardown_platform_ui_runtime() {
     }
 }
 
+#[path = "owner_dispatch/display_tests.rs"]
+#[cfg(all(
+    test,
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod display_tests;
+#[path = "owner_dispatch/notice_tests.rs"]
+#[cfg(all(
+    test,
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod notice_tests;
 #[path = "owner_dispatch/tests.rs"]
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 mod owner_dispatch_tests;

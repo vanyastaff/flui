@@ -166,7 +166,7 @@ impl IconButton {
         Self {
             on_pressed: None,
             style: None,
-            icon: BoxedView(Box::new(icon.into_view())),
+            icon: BoxedView::new(icon.into_view()),
         }
     }
 

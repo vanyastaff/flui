@@ -198,6 +198,6 @@ with their owners (ADR-0083).
 
 ## Verification
 
-`cargo xtask workspace`, `reach`, `globals`, `checks`, `check-changed`, and `cross-typecheck` for
+`cargo xtask workspace`, `reach`, `globals`, `checks`, the pre-PR checks, and `cross-typecheck` for
 Windows, macOS, Android and iOS on every pull request of the transition. Win32, AppKit, Android
 and iOS code is type-checked only unless a pull request shows a local run.
