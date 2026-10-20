@@ -102,18 +102,12 @@ struct Mounted {
     binding: HeadlessBinding,
     position: ScrollPosition,
 }
-
 impl Mounted {
-    fn pump(&mut self) -> FrameReport {
-        self.binding.pump_frame(FRAME);
-        self.binding.last_frame_report().clone()
-    }
-
     /// Pumps `frames` frames and sums their reports.
     fn pump_many(&mut self, frames: usize) -> FrameReport {
         let mut total = FrameReport::default();
         for _ in 0..frames {
-            total += &self.pump();
+            total += &self.binding.pump_frame_report(FRAME);
         }
         total
     }
@@ -178,7 +172,7 @@ fn perf_counters_are_live_on_a_full_reassemble() {
     let mut app = mount();
     app.binding.perform_reassemble();
     app.binding.reassemble_render_tree();
-    let report = app.pump();
+    let report = app.binding.pump_frame_report(FRAME);
     record("full_reassemble", &report);
 
     for (name, value) in report.counters() {

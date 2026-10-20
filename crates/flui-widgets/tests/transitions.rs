@@ -89,11 +89,6 @@ impl Headless {
         Self { binding }
     }
 
-    fn pump(&mut self, dt: Duration) -> FrameReport {
-        self.binding.pump_frame(dt);
-        self.binding.last_frame_report().clone()
-    }
-
     fn pipeline(&self) -> &PipelineCell {
         self.binding.pipeline_owner().expect("tree-bound")
     }
@@ -204,7 +199,7 @@ fn tick_without_rebuilding<V, E, F>(
     let mut tree = Headless::mount(view);
     for value in VALUES {
         controller.set_value(value);
-        let report = tree.pump(FRAME);
+        let report = tree.binding.pump_frame_report(FRAME);
         assert_no_rebuild(&report, &format!("{what}: a tick to {value}"));
         for index in 0..nodes {
             assert_matrix(
@@ -312,7 +307,7 @@ fn ticks_without_rebuilding<V: View + Clone + 'static>(
     let mut tree = Headless::mount(view);
     for value in VALUES {
         controller.set_value(value);
-        let report = tree.pump(FRAME);
+        let report = tree.binding.pump_frame_report(FRAME);
         assert_no_rebuild(&report, &format!("{what}: a tick to {value}"));
         check(&tree, value);
     }
@@ -508,12 +503,12 @@ pub(crate) fn virtual_time_ticks_follow_the_controller_value() {
     let mut tree = Headless::mount(ScaleTransition::new(scalar(c), child_box()));
     tree.binding.adopt_vsync(vsync);
     c.forward().expect("a fresh controller forwards");
-    tree.pump(FRAME);
-    let report = tree.pump(Duration::from_millis(150));
+    tree.binding.pump_frame_report(FRAME);
+    let report = tree.binding.pump_frame_report(Duration::from_millis(150));
     assert_no_rebuild(&report, "a time tick");
     assert_matrix(tree.matrix(0), scale_by(c.value()), "mid-run");
 
-    let report = tree.pump(Duration::ZERO);
+    let report = tree.binding.pump_frame_report(Duration::ZERO);
     assert_no_rebuild(&report, "a zero-dt frame");
     assert_eq!(
         report.pipeline.nodes_painted, 0,
@@ -522,14 +517,14 @@ pub(crate) fn virtual_time_ticks_follow_the_controller_value() {
     assert_matrix(tree.matrix(0), scale_by(c.value()), "after a zero-dt frame");
 
     c.reverse().expect("a running controller reverses");
-    tree.pump(FRAME);
-    let report = tree.pump(Duration::from_millis(60));
+    tree.binding.pump_frame_report(FRAME);
+    let report = tree.binding.pump_frame_report(Duration::from_millis(60));
     let value = c.value();
     assert!(value < 0.5, "the reverse run moved back, got {value}");
     assert_no_rebuild(&report, "a reversing tick");
     assert_matrix(tree.matrix(0), scale_by(value), "reverse mid-run");
 
-    tree.pump(Duration::from_secs(10));
+    tree.binding.pump_frame_report(Duration::from_secs(10));
     assert_eq!(c.value(), 0.0, "a 10 s jump completes the reverse run");
     assert_matrix(tree.matrix(0), scale_by(0.0), "after a 10 s jump");
 }
