@@ -17,8 +17,8 @@ use std::rc::{Rc, Weak};
 use flui_foundation::geometry::{DevicePixelRatio, DevicePoint};
 use flui_platform_api::text_store::{
     Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode, Selection, TextChange,
-    TextStore, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus,
-    Utf16Offset, Utf16Range,
+    TextInputPurpose, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead,
+    TextStoreStatus, Utf16Offset, Utf16Range,
 };
 use windows::Win32::{
     Foundation::{
@@ -42,7 +42,7 @@ use windows::Win32::{
 };
 use windows_core::{BOOL, GUID, HRESULT, IUnknown, Interface, PCWSTR, PWSTR, Ref};
 
-use super::TextServices;
+use super::{TextServices, input_scope};
 use crate::platforms::windows::platform::WindowRef;
 use crate::shared::text_geometry::{ScreenRect, range_rect_to_screen, screen_point_to_client};
 
@@ -53,6 +53,11 @@ pub(super) struct DocumentState {
     /// Whether the store was protected when the document opened: the
     /// static status TSF read then, which no notification can change.
     protected: bool,
+    /// The store's purpose when the document opened; static like
+    /// `protected`, because TSF reads the input scope with the document.
+    purpose: TextInputPurpose,
+    /// Set when TSF asked for the input scope since the last retrieval.
+    scope_requested: Cell<bool>,
     /// The window, reached only while its handle still names it.
     window: WindowRef,
     services: Weak<TextServices>,
@@ -81,6 +86,8 @@ impl DocumentState {
     ) -> Rc<Self> {
         Rc::new(Self {
             protected: store.status().protected,
+            purpose: store.status().purpose,
+            scope_requested: Cell::new(false),
             store,
             window,
             services,
@@ -90,6 +97,15 @@ impl DocumentState {
             poisoned: Cell::new(false),
             last_text_ext: Cell::new(None),
         })
+    }
+
+    /// The store's status as TSF last read it: the protection and purpose it
+    /// opened with, the rest current.
+    fn opened_status(&self) -> TextStoreStatus {
+        self.store
+            .status()
+            .with_protected(self.protected)
+            .with_purpose(self.purpose)
     }
 
     /// Forget the sink and stop listening to the store; the document is
@@ -530,11 +546,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
     }
 
     fn GetStatus(&self) -> windows_core::Result<TS_STATUS> {
-        self.com_entry("GetStatus", |state| {
-            Ok(ts_status(
-                state.store.status().with_protected(state.protected),
-            ))
-        })
+        self.com_entry("GetStatus", |state| Ok(ts_status(state.opened_status())))
     }
 
     fn QueryInsert(
@@ -766,20 +778,31 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
     fn RequestSupportedAttrs(
         &self,
         _dwflags: u32,
-        _cfilterattrs: u32,
-        _pafilterattrs: *const GUID,
+        cfilterattrs: u32,
+        pafilterattrs: *const GUID,
     ) -> windows_core::Result<()> {
-        Ok(())
+        self.com_entry("RequestSupportedAttrs", |state| {
+            // SAFETY: TSF passes `cfilterattrs` GUIDs at `pafilterattrs`.
+            let wanted = unsafe { input_scope::filter_wants_scope(cfilterattrs, pafilterattrs) };
+            state.scope_requested.set(wanted);
+            Ok(())
+        })
     }
 
     fn RequestAttrsAtPosition(
         &self,
         _acppos: i32,
-        _cfilterattrs: u32,
-        _pafilterattrs: *const GUID,
+        cfilterattrs: u32,
+        pafilterattrs: *const GUID,
         _dwflags: u32,
     ) -> windows_core::Result<()> {
-        Ok(())
+        // The scope is one for the whole document, so it holds at any position.
+        self.com_entry("RequestAttrsAtPosition", |state| {
+            // SAFETY: TSF passes `cfilterattrs` GUIDs at `pafilterattrs`.
+            let wanted = unsafe { input_scope::filter_wants_scope(cfilterattrs, pafilterattrs) };
+            state.scope_requested.set(wanted);
+            Ok(())
+        })
     }
 
     fn RequestAttrsTransitioningAtPosition(
@@ -811,12 +834,24 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
 
     fn RetrieveRequestedAttrs(
         &self,
-        _ulcount: u32,
-        _paattrvals: *mut TS_ATTRVAL,
+        ulcount: u32,
+        paattrvals: *mut TS_ATTRVAL,
         pcfetched: *mut u32,
     ) -> windows_core::Result<()> {
-        put(pcfetched, 0);
-        Ok(())
+        self.com_entry("RetrieveRequestedAttrs", |state| {
+            let scope = input_scope::scope_for(state.opened_status());
+            let requested = state.scope_requested.replace(false);
+            match scope {
+                Some(scope) if requested && ulcount > 0 && !paattrvals.is_null() => {
+                    // SAFETY: TSF passes room for `ulcount` (at least one)
+                    // values, uninitialised, so the write must not drop.
+                    unsafe { paattrvals.write(input_scope::scope_attribute(scope)) };
+                    put(pcfetched, 1);
+                }
+                _ => put(pcfetched, 0),
+            }
+            Ok(())
+        })
     }
 
     fn GetEndACP(&self) -> windows_core::Result<i32> {
@@ -1079,7 +1114,9 @@ impl TextStoreObserver for SinkObserver {
         let Some(state) = self.state.upgrade() else {
             return;
         };
-        if state.closed.get() || state.store.status().protected == state.protected {
+        let now = state.store.status();
+        if state.closed.get() || (now.protected == state.protected && now.purpose == state.purpose)
+        {
             return;
         }
         if let Some(services) = state.services.upgrade() {

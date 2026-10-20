@@ -7,6 +7,7 @@ use std::rc::Rc;
 use flui_interaction::FocusNode;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextStyle;
+use flui_platform_api::text_store::TextInputPurpose;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 
@@ -119,6 +120,13 @@ impl RawTextFormField {
         self
     }
 
+    /// What the field is for (default [`TextInputPurpose::Text`]).
+    #[must_use]
+    pub fn input_purpose(mut self, purpose: TextInputPurpose) -> Self {
+        self.config.input_purpose = purpose;
+        self
+    }
+
     /// Use a caller-owned focus node.
     #[must_use]
     pub fn focus_node(mut self, focus_node: Rc<FocusNode>) -> Self {
@@ -180,6 +188,7 @@ impl ViewState<RawTextFormField> for RawTextFormFieldState {
             let error = input.field.error_text();
             let mut field = RawTextField::new(input.controller.clone())
                 .obscure_text(input.obscure_text)
+                .input_purpose(input.input_purpose)
                 .enabled(input.enabled)
                 .invalid(error.is_some())
                 .on_changed(input.on_changed());

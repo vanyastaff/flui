@@ -26,7 +26,7 @@ use flui_painting::{
 };
 use flui_platform_api::TargetPlatform;
 use flui_platform_api::keyboard::{ImeComposition, Key, KeyRepeat, KeyState, Modifiers, NamedKey};
-use flui_platform_api::text_store::OwnerCalls;
+use flui_platform_api::text_store::{OwnerCalls, TextInputPurpose};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::protocol::BoxProtocol;
@@ -403,6 +403,10 @@ pub struct EditableText {
     /// stronger than redacting at each of those points, because it cannot be
     /// forgotten at a new one.
     pub(super) obscure_text: bool,
+    /// What the field is for, which input methods shape their layout and
+    /// suggestions by (default [`TextInputPurpose::Text`]). It never filters
+    /// what the field accepts.
+    pub(super) input_purpose: TextInputPurpose,
     /// The character painted in place of each source character.
     pub(super) obscuring_character: char,
     /// Called with the current text when Enter is pressed while this field
@@ -446,6 +450,7 @@ impl EditableText {
             enabled: true,
             text_style: None,
             obscure_text: false,
+            input_purpose: TextInputPurpose::Text,
             obscuring_character: DEFAULT_OBSCURING_CHARACTER,
             on_submitted: None,
             on_changed: None,
@@ -530,6 +535,16 @@ impl EditableText {
     #[must_use]
     pub fn obscure_text(mut self, obscure: bool) -> Self {
         self.obscure_text = obscure;
+        self
+    }
+
+    /// What the field is for: an email, URL, phone or number field asks the
+    /// input method for the layout that suits it (default
+    /// [`TextInputPurpose::Text`]). An obscured field is a password field
+    /// whatever its purpose.
+    #[must_use]
+    pub fn input_purpose(mut self, purpose: TextInputPurpose) -> Self {
+        self.input_purpose = purpose;
         self
     }
 
@@ -644,6 +659,7 @@ impl std::fmt::Debug for EditableText {
             .field("enabled", &self.enabled)
             .field("text_style", &self.text_style)
             .field("obscure_text", &self.obscure_text)
+            .field("input_purpose", &self.input_purpose)
             .field("obscuring_character", &self.obscuring_character)
             .field("on_submitted", &self.on_submitted.is_some())
             .field("on_changed", &self.on_changed.is_some())
@@ -784,6 +800,9 @@ pub struct EditableTextState {
     /// Whether the field is obscured, read by the copy action at key time
     /// and kept current by `did_update_view`.
     obscure: Rc<Cell<bool>>,
+    /// The field's purpose, read by the text store's status and kept current
+    /// by `did_update_view`.
+    input_purpose: Rc<Cell<TextInputPurpose>>,
     /// The mask character, read by the text store's geometry and kept
     /// current by `did_update_view`.
     obscuring_character: Rc<Cell<char>>,
@@ -846,6 +865,7 @@ impl StatefulView for EditableText {
             clipboard: None,
             selection_drag: Rc::new(Cell::new(None)),
             obscure: Rc::new(Cell::new(self.obscure_text)),
+            input_purpose: Rc::new(Cell::new(self.input_purpose)),
             obscuring_character: Rc::new(Cell::new(self.obscuring_character)),
             text_store: None,
             enclosing_action_chain: None,
@@ -1576,6 +1596,7 @@ impl ViewState<EditableText> for EditableTextState {
             pipeline: self.pipeline_owner.clone(),
             inner_anchor: self.inner_anchor.clone(),
             obscure: Rc::clone(&self.obscure),
+            input_purpose: Rc::clone(&self.input_purpose),
             obscuring_character: Rc::clone(&self.obscuring_character),
             edits: self.edit_observer(),
         }));
@@ -1777,7 +1798,8 @@ impl ViewState<EditableText> for EditableTextState {
         let mut calls = OwnerCalls::new();
         let was_obscured = self.obscure.replace(new_view.obscure_text);
         self.obscuring_character.set(new_view.obscuring_character);
-        if was_obscured != new_view.obscure_text
+        let was_purpose = self.input_purpose.replace(new_view.input_purpose);
+        if (was_obscured != new_view.obscure_text || was_purpose != new_view.input_purpose)
             && let Some(store) = &self.text_store
         {
             calls.run(|| store.status_changed());

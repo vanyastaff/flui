@@ -39,6 +39,7 @@
 //! Owner-thread only: nothing here is `Send` or `Sync`.
 
 mod document;
+mod input_scope;
 #[cfg(test)]
 mod probe;
 #[cfg(test)]
