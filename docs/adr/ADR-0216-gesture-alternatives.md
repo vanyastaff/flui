@@ -8,7 +8,8 @@
 - **Amended:** 2026-10-18 — §1 and §4: the single-pointer path may be drawn by a companion widget
   linked through `CompanionLink`, and `assert_gesture_alternatives` certifies it.
 - **Amended:** 2026-10-19 — §4: a virtual pointer's secondary click opens the menu; the revealed
-  menu control stays until focus leaves the row, and the focus ring takes no pointer input.
+  menu control stays until focus leaves the row or a pointer presses the row elsewhere, and the
+  focus ring takes no pointer input.
 - **Related:** [ADR-0023](ADR-0023-actions-shortcuts-seam.md),
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md),
   [ADR-0172](ADR-0172-host-owned-system-preferences.md),
@@ -185,9 +186,10 @@ GestureAlternatives::handle(&self, &dyn BuildContext) -> CommandHandle   // the 
   target square, after the content in reading order by default and mirrored in a right-to-left
   locale. The control a menu row reveals on keyboard or assistive-technology focus is labelled
   `WidgetsLocalizations::context_menu_button_label(target)` ("Actions for Alice"); once
-  revealed it stays until focus leaves the row, since the pointer press that would use it ends
-  the visible focus first. The focus ring takes no pointer input, so the row's gesture and its
-  controls work under it.
+  revealed it stays until focus leaves the row or a pointer presses the row off it, since the
+  pointer press that would use it ends the visible focus first, and a control left over the row
+  would hide its trailing edge from the row's gesture. The focus ring is painted behind the
+  control and takes no pointer input, so the row's gesture and its controls work under it.
 - **Announcements** are live-region nodes until the owner's announcer exists.
 - **A closure is not an intent.** `Intent` carries `#[diagnostic::on_unimplemented]`, so a
   callback passed where the gesture's intent belongs fails to compile with the reason.

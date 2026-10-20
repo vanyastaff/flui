@@ -1280,6 +1280,10 @@ fn gesture_alternatives() {
                 crate::gesture_alternatives::every_preset_opens_the_menu_by_its_pointer_trigger,
             ),
             (
+                "gesture_alternatives::a_press_off_the_revealed_control_frees_the_trailing_edge",
+                crate::gesture_alternatives::a_press_off_the_revealed_control_frees_the_trailing_edge,
+            ),
+            (
                 "gesture_alternatives::the_menu_long_press_waits_for_the_system_setting",
                 crate::gesture_alternatives::the_menu_long_press_waits_for_the_system_setting,
             ),

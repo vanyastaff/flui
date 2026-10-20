@@ -32,7 +32,7 @@ use flui_interaction::{
 };
 use flui_platform_api::TargetPlatform;
 use flui_view::prelude::*;
-use flui_view::{InheritedView, WriterSource, impl_inherited_view};
+use flui_view::{InheritedView, RebuildHandle, RebuildReason, WriterSource, impl_inherited_view};
 use smallvec::SmallVec;
 
 use super::actions::{
@@ -886,6 +886,7 @@ impl StatefulView for GestureAlternatives {
                 _ => None,
             },
             mounted: Rc::new(Cell::new(true)),
+            control_revealed: Rc::new(Cell::new(false)),
         }
     }
 }
@@ -917,6 +918,11 @@ pub struct GestureAlternativesState {
     /// Cleared on dispose, so a check queued by the mount frame stays silent
     /// for alternatives that have gone.
     mounted: Rc<Cell<bool>>,
+    /// Whether a menu row's revealed control is shown: set when visible focus
+    /// is in the row, cleared the moment focus leaves it (the row's
+    /// `on_focus_change`), so focus that leaves and comes back by pointer
+    /// within one frame does not find it still set.
+    control_revealed: Rc<Cell<bool>>,
 }
 
 /// A menu's long press: a hold whose successors are the long-press drags
@@ -939,12 +945,12 @@ impl fmt::Debug for GestureAlternativesState {
 
 impl GestureAlternativesState {
     /// Acquire the arena, the policy and the writer, in a lifecycle hook.
-    /// Only a menu's long press uses them, but every alternative mounts
-    /// gesture detectors (its controls, its menu's secondary click), so
-    /// mounting outside a gesture scope is the same invariant violation it is
-    /// for them, not a menu that quietly has no long press.
+    /// Only a menu's long press uses them. A companion row mounts no gesture
+    /// detector, so it works outside a gesture scope and acquires none there;
+    /// a menu cannot be outside one without a long press, since its
+    /// secondary-click detector panics outside a scope first.
     fn acquire(&mut self, ctx: &dyn LifecycleContext) {
-        self.policy = Some((GesturePolicy::of(ctx), ctx.writer_source()));
+        self.policy = GesturePolicy::maybe_of(ctx).map(|policy| (policy, ctx.writer_source()));
         self.rebuild_hold();
     }
 
@@ -1256,7 +1262,11 @@ impl GestureAlternatives {
                 );
                 let decorated = FocusDecorations {
                     content,
-                    menu_control: Some((label, Rc::clone(&opener))),
+                    menu_control: Some(MenuControl {
+                        label,
+                        opener: Rc::clone(&opener),
+                        revealed: Rc::clone(&state.control_revealed),
+                    }),
                     min_target,
                 };
                 opener_slot.set(Rc::clone(&opener), menu.dismiss.clone());
@@ -1272,7 +1282,15 @@ impl GestureAlternatives {
 
         // The row's `Focus` records the chain above it, so the menu's action
         // sits above the `Focus` for a key at the row to find it.
-        let focus = Focus::new(row).debug_label("GestureAlternatives").boxed();
+        let revealed = Rc::clone(&state.control_revealed);
+        let focus = Focus::new(row)
+            .debug_label("GestureAlternatives")
+            .on_focus_change(move |_cx, in_row| {
+                if !in_row {
+                    revealed.set(false);
+                }
+            })
+            .boxed();
         let focus = match open_menu {
             Some(open_menu) => Actions::new(focus).action(open_menu).boxed(),
             None => focus,
@@ -1353,7 +1371,8 @@ impl Action<ShowContextMenuIntent> for OpenMenu {
 /// and, for a menu, the control that opens it — the keyboard's and assistive
 /// technology's way to the menu where the platform has no menu key or the
 /// adapter does not route `ShowContextMenu` (ADR-0216 §2). Once revealed, the
-/// control stays until focus leaves the row, so a pointer may press it too.
+/// control stays until focus leaves the row or a pointer presses the row off
+/// it, so a pointer may press it too.
 ///
 /// The content is laid out with the row's own constraints and stays the
 /// first child, so revealing either keeps its elements and state; the
@@ -1361,17 +1380,32 @@ impl Action<ShowContextMenuIntent> for OpenMenu {
 #[derive(Clone, StatefulView)]
 struct FocusDecorations {
     content: BoxedView,
-    menu_control: Option<(String, MenuOpener)>,
+    menu_control: Option<MenuControl>,
     min_target: f64,
+}
+
+/// A menu row's revealed control: its label, what it opens, and whether it
+/// is shown.
+#[derive(Clone)]
+struct MenuControl {
+    label: String,
+    opener: MenuOpener,
+    /// Set from when visible focus is in the row until focus leaves it,
+    /// which the row's `on_focus_change` clears as it happens, or a pointer
+    /// presses the row anywhere but on the control. A pointer press ends the
+    /// visible focus before it reaches anything, so a control that hid with
+    /// the focus ring would leave the pointer that pressed it nothing to
+    /// release on; one that stayed after a press elsewhere would cover the
+    /// row's trailing edge, where the row's own gesture could not start.
+    revealed: Rc<Cell<bool>>,
 }
 
 struct FocusDecorationsState {
     focus_manager: Option<Rc<FocusManager>>,
-    /// Whether the menu control is shown: from when visible focus enters the
-    /// row until focus leaves it. A pointer press clears the visible focus
-    /// before it reaches anything, so a control that hid with the focus ring
-    /// would leave the pointer that pressed it nothing to release on.
-    control_revealed: Cell<bool>,
+    rebuild: Option<RebuildHandle>,
+    /// Set by a press on the revealed control, read by the row's listener
+    /// the same press reaches next.
+    control_pressed: Rc<Cell<bool>>,
 }
 
 impl StatefulView for FocusDecorations {
@@ -1380,7 +1414,8 @@ impl StatefulView for FocusDecorations {
     fn create_state(&self) -> Self::State {
         FocusDecorationsState {
             focus_manager: None,
-            control_revealed: Cell::new(false),
+            rebuild: None,
+            control_pressed: Rc::new(Cell::new(false)),
         }
     }
 }
@@ -1388,6 +1423,7 @@ impl StatefulView for FocusDecorations {
 impl ViewState<FocusDecorations> for FocusDecorationsState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.focus_manager = Some(ctx.focus_manager());
+        self.rebuild = Some(ctx.rebuild_handle());
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
@@ -1405,17 +1441,32 @@ impl ViewState<FocusDecorations> for FocusDecorationsState {
                 .as_ref()
                 .and_then(|manager| manager.primary_focus())
                 .is_some_and(|primary| primary.has_visible_focus());
-        let revealed = focus_in_row && (visible_in_row || self.control_revealed.get());
-        self.control_revealed.set(revealed);
-        // The ring comes last: it goes with the visible focus while the
-        // control stays, and a layer that goes must not shift the control's
-        // place among the layers, which would rebuild it under the press.
-        let mut layers = vec![view.content.clone()];
-        if revealed && let Some((label, opener)) = &view.menu_control {
+        // Every layer keeps its place, so the control is never rebuilt under
+        // the press that ends the visible focus: the ring's slot is always
+        // there, behind the control, holding the ring while the row has
+        // visible focus, and takes no pointer input, so a press lands on
+        // what it covers.
+        let ring = if row.as_ref().is_some_and(|row| row.has_visible_focus()) {
+            FocusRing::new(SizedBox::expand()).boxed()
+        } else {
+            SizedBox::shrink().boxed()
+        };
+        let ring = IgnorePointer::new().child(ring);
+        let mut layers = vec![view.content.clone(), Positioned::fill(ring).boxed()];
+        let revealed = view.menu_control.as_ref().is_some_and(|control| {
+            let revealed = focus_in_row && (visible_in_row || control.revealed.get());
+            control.revealed.set(revealed);
+            revealed
+        });
+        if revealed && let Some(MenuControl { label, opener, .. }) = &view.menu_control {
             let opener = Rc::clone(opener);
             let control = control_button(label.clone(), more_glyph(), view.min_target, move |cx| {
                 opener(cx, MenuCause::Control, None);
             });
+            let pressed = Rc::clone(&self.control_pressed);
+            let control = Listener::new()
+                .on_pointer_down(move |_cx, _dispatch| pressed.set(true))
+                .child(control);
             let trailing = Positioned::new(control).top(0.0).bottom(0.0);
             let trailing = match Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr) {
                 TextDirection::Rtl => trailing.left(0.0),
@@ -1423,12 +1474,25 @@ impl ViewState<FocusDecorations> for FocusDecorationsState {
             };
             layers.push(trailing.boxed());
         }
-        // The ring only marks the row: a press lands on what it covers.
-        if row.as_ref().is_some_and(|row| row.has_visible_focus()) {
-            let ring = IgnorePointer::new().child(FocusRing::new(SizedBox::expand()));
-            layers.push(Positioned::fill(ring).boxed());
-        }
-        Stack::new(layers).fit(StackFit::Passthrough)
+        let stack = Stack::new(layers).fit(StackFit::Passthrough);
+        let Some(MenuControl { revealed, .. }) = &view.menu_control else {
+            return stack.boxed();
+        };
+        // A press anywhere in the row but on the control hides it: the
+        // control's own listener has heard the press first if it was on it.
+        let (revealed, pressed) = (Rc::clone(revealed), Rc::clone(&self.control_pressed));
+        let rebuild = self
+            .rebuild
+            .clone()
+            .expect("BUG: focus decorations built before init_state captured their rebuild handle");
+        Listener::new()
+            .on_pointer_down(move |_cx, _dispatch| {
+                if !pressed.replace(false) && revealed.replace(false) {
+                    rebuild.schedule(RebuildReason::StateChange);
+                }
+            })
+            .child(stack)
+            .boxed()
     }
 }
 
@@ -1437,7 +1501,7 @@ impl fmt::Debug for FocusDecorations {
         f.debug_struct("FocusDecorations")
             .field(
                 "menu_control",
-                &self.menu_control.as_ref().map(|(label, _)| label),
+                &self.menu_control.as_ref().map(|control| &control.label),
             )
             .finish_non_exhaustive()
     }
