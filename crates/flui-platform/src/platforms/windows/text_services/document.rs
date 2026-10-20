@@ -796,14 +796,13 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
         _acppos: i32,
         cfilterattrs: u32,
         pafilterattrs: *const GUID,
-        dwflags: u32,
+        _dwflags: u32,
     ) -> windows_core::Result<()> {
         // The scope is one for the whole document, so it holds at any position.
         self.com_entry("RequestAttrsAtPosition", |state| {
             // SAFETY: TSF passes `cfilterattrs` GUIDs at `pafilterattrs`.
-            let request = unsafe {
-                input_scope::ScopeRequest::from_request(dwflags, cfilterattrs, pafilterattrs)
-            };
+            let request =
+                unsafe { input_scope::ScopeRequest::at_position(cfilterattrs, pafilterattrs) };
             state.scope_requested.set(request);
             Ok(())
         })

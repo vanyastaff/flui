@@ -58,6 +58,19 @@ pub(super) enum ScopeRequest {
 }
 
 impl ScopeRequest {
+    /// The request a `RequestAttrsAtPosition` call with a filter of `count`
+    /// GUIDs at `filter` makes, if it names the input scope.
+    ///
+    /// # Safety
+    ///
+    /// As for [`filter_wants_scope`].
+    pub(super) unsafe fn at_position(count: u32, filter: *const GUID) -> Option<Self> {
+        // A request at a position has no probe form (its flags are reserved),
+        // so it always wants the value.
+        // SAFETY: the caller's guarantee.
+        unsafe { Self::from_request(TS_ATTR_FIND_WANT_VALUE, count, filter) }
+    }
+
     /// The request `flags` and a filter of `count` GUIDs at `filter` make, if
     /// it names the input scope.
     ///
@@ -217,6 +230,11 @@ mod tests {
                 Some(ScopeRequest::Value)
             );
             assert_eq!(ask(TS_ATTR_FIND_WANT_VALUE, 1, &raw const other), None);
+            // A request at a position has no probe form.
+            assert_eq!(
+                ScopeRequest::at_position(1, &GUID_PROP_INPUTSCOPE),
+                Some(ScopeRequest::Value)
+            );
         }
     }
 
