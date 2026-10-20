@@ -547,6 +547,52 @@ pub(crate) fn a_sibling_snapshot_forgets_held_keys() {
     });
 }
 
+/// A key-cancel handler that panics while a window loses activation, alone or
+/// to a sibling, still leaves every window's focus and lifecycle updated: the
+/// panic reaches the caller after the pass, not halfway through it.
+pub(crate) fn a_panicking_key_cancel_still_moves_window_focus() {
+    for to_sibling in [false, true] {
+        let (mut ui_runtime, id, node, _log) = keyboard_ui_runtime();
+        let _cancel = node.register_on_key_cancel(Rc::new(|_| panic!("key cancel handler")));
+        let sibling = to_sibling.then(|| ui_runtime.install_second_presentation_for_test());
+        deliver(
+            &ui_runtime,
+            id,
+            key(
+                Code::Enter,
+                Key::Named(NamedKey::Enter),
+                KeyState::Down,
+                false,
+            ),
+        );
+        let payload = catch_unwind(AssertUnwindSafe(|| match sibling {
+            Some(sibling) => ui_runtime.update_window_focus(sibling, true),
+            None => ui_runtime.update_window_focus(id, false),
+        }))
+        .expect_err("the handler's panic reaches the caller");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"key cancel handler"));
+        let presentation = ui_runtime.presentations.get(id).expect("installed");
+        assert!(!presentation.window_focused.get(), "sibling: {to_sibling}");
+        assert_eq!(
+            flui_view::__runtime::BindingRuntime::lifecycle_source(presentation.widgets())
+                .current(),
+            Some(flui_scheduler::AppLifecycleState::Inactive),
+            "the window that lost activation is told so (sibling: {to_sibling})"
+        );
+        if let Some(sibling) = sibling {
+            assert!(
+                ui_runtime
+                    .presentations
+                    .get(sibling)
+                    .expect("installed")
+                    .window_focused
+                    .get(),
+                "the sibling took the focus"
+            );
+        }
+    }
+}
+
 /// Hold Enter, run `deactivate`, then send Enter's repeat and release: the
 /// node saw only the key-down.
 fn held_enter_after(deactivate: impl FnOnce(&mut UiRuntime, PresentationId)) {
