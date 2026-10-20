@@ -9228,7 +9228,7 @@ fn harness_theater_baselines_follow_only_onstage_children() {
 fn harness_offstage_and_layout_builder_forward_live_baselines() {
     for candidate in [
         box_node(RenderOffstage::visible()),
-        box_node(RenderLayoutBuilder::new(Arc::new(
+        box_node(RenderLayoutBuilder::new(Rc::new(
             LayoutConstraintsCell::new(),
         ))),
     ] {
@@ -11274,16 +11274,21 @@ fn harness_sliver_persistent_header_floating_pinned_shares_reveal_sequence_but_c
 // These assertions encode the algorithm recorded in ADR-0017.
 // ============================================================================
 
+// The build-during-layout mailboxes are owner-thread state: publishing from
+// `perform_layout` takes no lock, which only a `!Sync` cell can promise.
+static_assertions::assert_not_impl_any!(LayoutConstraintsCell: Sync);
+static_assertions::assert_not_impl_any!(flui_objects::HeaderShrinkCell: Sync);
+
 /// A layout pass must publish the **real** incoming constraints — not a
 /// placeholder, and not a default. This is the regression that catches a
 /// reprise of the pre-rewrite `LayoutBuilder`, whose builder was handed
 /// `BoxConstraints::UNCONSTRAINED` (commit `bb58a8fa`).
 fn harness_layout_builder_publishes_the_real_incoming_constraints() {
-    let cell = Arc::new(LayoutConstraintsCell::new());
+    let cell = Rc::new(LayoutConstraintsCell::new());
     let incoming = BoxConstraints::new(10.0, 120.0, 20.0, 90.0);
 
     let _run = RenderTester::mount(
-        box_node(RenderLayoutBuilder::new(Arc::clone(&cell)))
+        box_node(RenderLayoutBuilder::new(Rc::clone(&cell)))
             .child(box_node(RenderColoredBox::green(30.0, 40.0)).label("child")),
     )
     .with_constraints(incoming)
@@ -11324,7 +11329,7 @@ fn harness_layout_builder_without_a_child_takes_its_smallest_size() {
         ),
     ];
     for (name, constraints, expected) in cases {
-        let run = RenderTester::mount(box_node(RenderLayoutBuilder::new(Arc::new(
+        let run = RenderTester::mount(box_node(RenderLayoutBuilder::new(Rc::new(
             LayoutConstraintsCell::new(),
         ))))
         .with_constraints(constraints)

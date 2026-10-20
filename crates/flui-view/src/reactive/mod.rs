@@ -109,6 +109,18 @@ pub use writer::{
 /// handle [`Signal::default`].
 static NEXT_GRAPH_ID: AtomicU32 = AtomicU32::new(1);
 
+/// Takes the next graph id from `counter`. The space is never reused: a wrapped
+/// id would let a stale [`SignalSlot`] of a dropped graph validate against a
+/// live one, so the counter parks at the unbound id after the last and every
+/// later graph is refused.
+fn next_graph_id(counter: &AtomicU32) -> u32 {
+    counter
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            (current != SignalSlot::UNBOUND_GRAPH).then(|| current.wrapping_add(1))
+        })
+        .expect("BUG: reactive graph id space exhausted")
+}
+
 struct Node {
     generation: u32,
     live: bool,
@@ -190,13 +202,7 @@ impl Reactive {
     /// frame-request callback changes).
     #[must_use]
     pub fn new() -> Self {
-        // Skip the unbound id if the counter ever wraps.
-        let id = loop {
-            let id = NEXT_GRAPH_ID.fetch_add(1, Ordering::Relaxed);
-            if id != SignalSlot::UNBOUND_GRAPH {
-                break id;
-            }
-        };
+        let id = next_graph_id(&NEXT_GRAPH_ID);
         Self {
             id,
             inner: Rc::new(RefCell::new(Inner::default())),
@@ -1637,5 +1643,15 @@ mod tests {
                 ),
             ],
         );
+    }
+
+    #[test]
+    fn graph_ids_are_refused_after_the_last_instead_of_wrapping() {
+        let counter = std::sync::atomic::AtomicU32::new(u32::MAX);
+        assert_eq!(super::next_graph_id(&counter), u32::MAX);
+        for _ in 0..2 {
+            let refused = std::panic::catch_unwind(|| super::next_graph_id(&counter));
+            assert!(refused.is_err(), "an exhausted id space stays exhausted");
+        }
     }
 }

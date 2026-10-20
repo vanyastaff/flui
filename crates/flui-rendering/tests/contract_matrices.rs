@@ -52,6 +52,8 @@ fn lifecycle_matrix() {
         ("local marks survive a failed wake and coalesce", crate::attach_detach_lifecycle::local_marks_survive_a_failed_wake_and_coalesce),
         ("local marks wait for a hook and end with the attachment", crate::attach_detach_lifecycle::local_marks_wait_for_a_hook_and_end_with_the_attachment),
         ("attach_detach_lifecycle::insert_fires_exactly_one_attach_with_a_handle_bound_to_the_new_id", crate::attach_detach_lifecycle::insert_fires_exactly_one_attach_with_a_handle_bound_to_the_new_id),
+        ("attach_detach_lifecycle::a_layout_mark_during_paint_is_diagnosed", crate::attach_detach_lifecycle::a_layout_mark_during_paint_is_diagnosed),
+        ("attach_detach_lifecycle::a_relocated_subtree_takes_its_new_depth", crate::attach_detach_lifecycle::a_relocated_subtree_takes_its_new_depth),
         ("dispose_eviction::removing_a_subtree_evicts_its_dirty_entries", crate::dispose_eviction::removing_a_subtree_evicts_its_dirty_entries),
         ("dispose_eviction::render_tree_retirement_preserves_independent_envelopes", crate::dispose_eviction::render_tree_retirement_preserves_independent_envelopes),
         ("pipeline_scenarios::repeated_churn_cycles_stay_clean_and_generations_protect_every_round", crate::pipeline_scenarios::repeated_churn_cycles_stay_clean_and_generations_protect_every_round),
@@ -113,6 +115,7 @@ fn paint_matrix() {
 #[test]
 fn layout_protocol_matrix() {
     let cases: &[(&str, fn())] = &[
+        ("layout_dirty_root::adopted_nodes_lay_out_parents_before_children", crate::layout_dirty_root::adopted_nodes_lay_out_parents_before_children),
         ("intrinsics_cache::intrinsic_walk_memoizes_every_level", crate::intrinsics_cache::intrinsic_walk_memoizes_every_level),
         ("render_viewport::viewport_lays_out_forward_slivers_and_applies_content_dimensions", crate::render_viewport::viewport_lays_out_forward_slivers_and_applies_content_dimensions),
         ("render_viewport::viewport_positions_first_sliver_for_axis_and_growth_matrix", crate::render_viewport::viewport_positions_first_sliver_for_axis_and_growth_matrix),

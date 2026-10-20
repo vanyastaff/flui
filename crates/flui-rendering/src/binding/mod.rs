@@ -15,8 +15,6 @@
 
 use std::sync::Arc;
 
-use parking_lot::RwLock;
-
 use crate::{
     hit_testing::HitTestResult,
     pipeline::PipelineCell,
@@ -151,53 +149,35 @@ pub trait RendererBinding {
     // RenderView Management
     // ========================================================================
     //
-    // This section used to expose `render_views()` returning a
-    // `&RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>` — a triple-lock
-    // topology baked into the trait surface. Every consumer had to reason
-    // about the outer `HashMap` lock, the inner `Arc<RwLock<RenderView>>`
-    // lock, and the implicit map-entry refcount. An audit flagged it as a
-    // newtype-getter violation at trait level: a getter returning a raw
-    // lock forces every caller to re-derive its own locking discipline
-    // instead of the trait stating what operation is needed.
-    //
-    // The trait surface now exposes four primitives instead:
-    //   - `render_view(id)`         — single lookup, refcount bump
-    //   - `render_view_ids()`       — owned `Vec<u64>` snapshot
-    //   - `insert_render_view`      — single-write
-    //   - `remove_render_view_by_id` — single-write + return
-    //
-    // The implementer retains full freedom over container choice
-    // (`HashMap`, `DashMap`, `IndexMap`...) and lock primitive
-    // (`RwLock`, `Mutex`, lock-free). The trait says what the lock
-    // does, not how it is held — *Gjengset, Rust for Rustaceans* ch.3.
+    // The trait lends render views and never hands out a lock: storage and
+    // its synchronisation stay the implementer's, and no caller can hold a
+    // view's guard across a call back into the binding.
 
-    /// Returns the render view for `view_id`, if present.
+    /// Runs `visit` on the render view for `view_id`; `false` when there is
+    /// none.
     ///
-    /// The returned `Arc<RwLock<RenderView>>` is a reference-count bump;
-    /// the caller acquires the inner lock for actual access. The
-    /// implementer's outer container lock is held only for the duration
-    /// of the lookup.
-    fn render_view(&self, view_id: u64) -> Option<Arc<RwLock<RenderView>>>;
+    /// The view is lent for the call only. While it is lent, a nested call
+    /// for the same id finds no view, and a view inserted under that id
+    /// during the call replaces the lent one.
+    fn with_render_view(&self, view_id: u64, visit: &mut dyn FnMut(&mut RenderView)) -> bool;
 
     /// Returns the IDs of all render views currently managed by this
     /// binding.
     ///
     /// Iteration order is **not** guaranteed (the canonical impl uses a
-    /// `HashMap`). The returned `Vec` is owned; the implementer's outer
-    /// container lock is held only for the duration of collection.
+    /// `HashMap`).
     fn render_view_ids(&self) -> Vec<u64>;
 
     /// Inserts a render view at `view_id`.
     ///
     /// If a view with `view_id` already exists, this replaces it; the
-    /// prior value is dropped. Implementers wanting custom replace
-    /// semantics override this directly. The default-impl helper
+    /// prior value is dropped. The default-impl helper
     /// [`Self::add_render_view_with_config`] applies view-configuration
     /// derivation on top of this primitive.
-    fn insert_render_view(&self, view_id: u64, view: Arc<RwLock<RenderView>>);
+    fn insert_render_view(&self, view_id: u64, view: RenderView);
 
     /// Removes a render view, returning it if it existed.
-    fn remove_render_view_by_id(&self, view_id: u64) -> Option<Arc<RwLock<RenderView>>>;
+    fn remove_render_view_by_id(&self, view_id: u64) -> Option<RenderView>;
 
     /// Adds a render view with the binding's view-configuration derivation
     /// applied first.
@@ -212,14 +192,9 @@ pub trait RendererBinding {
     /// [`Self::insert_render_view`] directly when the view's
     /// configuration is already set (e.g. carrying it from an old
     /// binding).
-    ///
-    /// # Arguments
-    ///
-    /// * `view_id` - Unique identifier for this view
-    /// * `view` - The render view to add
-    fn add_render_view_with_config(&self, view_id: u64, view: Arc<RwLock<RenderView>>) {
-        let config = self.create_view_configuration_for(&view.read());
-        view.write().set_configuration(config);
+    fn add_render_view_with_config(&self, view_id: u64, mut view: RenderView) {
+        let config = self.create_view_configuration_for(&view);
+        view.set_configuration(config);
         self.insert_render_view(view_id, view);
     }
 
@@ -277,18 +252,12 @@ pub trait RendererBinding {
     fn handle_metrics_changed(&self) {
         let mut force_frame = false;
 
-        // Ids-then-lookup iteration: the outer-container lock is released
-        // between snapshot collection and per-view writes. Previously this
-        // method held the read-lock on the container for the duration of
-        // every view's write-lock, which is the exact nested-lock topology
-        // the trait reshape above was meant to avoid.
         for view_id in self.render_view_ids() {
-            if let Some(view) = self.render_view(view_id) {
-                let mut view_guard = view.write();
-                force_frame = force_frame || view_guard.has_configuration();
-                let new_config = self.create_view_configuration_for(&view_guard);
-                view_guard.set_configuration(new_config);
-            }
+            self.with_render_view(view_id, &mut |view| {
+                force_frame = force_frame || view.has_configuration();
+                let new_config = self.create_view_configuration_for(view);
+                view.set_configuration(new_config);
+            });
         }
 
         if force_frame {
@@ -323,10 +292,11 @@ pub fn debug_dump_render_tree<B: RendererBinding + ?Sized>(binding: &B) -> Strin
 
     ids.into_iter()
         .filter_map(|id| {
-            binding.render_view(id).map(|view| {
-                let view_guard = view.read();
-                format!("=== RenderView {id} ===\n{view_guard:?}")
-            })
+            let mut dump = None;
+            binding.with_render_view(id, &mut |view| {
+                dump = Some(format!("=== RenderView {id} ===\n{view:?}"));
+            });
+            dump
         })
         .collect::<Vec<_>>()
         .join("\n\n")
@@ -341,14 +311,14 @@ pub fn debug_dump_layer_tree<B: RendererBinding + ?Sized>(binding: &B) -> String
 
     ids.into_iter()
         .filter_map(|id| {
-            binding.render_view(id).map(|view| {
-                let view_guard = view.read();
-                if let Some(layer) = view_guard.layer() {
-                    format!("=== LayerTree {id} ===\n{layer:?}")
-                } else {
-                    format!("=== LayerTree {id} ===\nLayer tree unavailable")
-                }
-            })
+            let mut dump = None;
+            binding.with_render_view(id, &mut |view| {
+                dump = Some(match view.layer() {
+                    Some(layer) => format!("=== LayerTree {id} ===\n{layer:?}"),
+                    None => format!("=== LayerTree {id} ===\nLayer tree unavailable"),
+                });
+            });
+            dump
         })
         .collect::<Vec<_>>()
         .join("\n\n")

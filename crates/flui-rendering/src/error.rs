@@ -140,6 +140,10 @@ pub enum RenderError {
     /// variant keeps the error surface stable for a future re-entrant
     /// seam (e.g. a paint-triggered relayout) that could reintroduce the
     /// condition at runtime.
+    ///
+    /// A layout *mark* made during paint is a different misuse and is
+    /// diagnosed where it happens: the owner logs it, applies the mark next
+    /// frame, and `run_paint` asserts against it in debug builds.
     #[error("layout cannot be performed during paint phase")]
     LayoutDuringPaint,
 
