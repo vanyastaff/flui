@@ -58,8 +58,8 @@ fn tap_builder_lifecycle_contract() {
 
 /// A press its arena has not decided shows as pressed 100 ms after Down,
 /// before its release; the up and the tap still wait for the win. A press
-/// another member takes before then showed nothing and hears only its
-/// cancellation.
+/// another member takes before then showed nothing and hears nothing, not
+/// even a cancellation: a cancel only ends a down that was sent.
 fn an_undecided_press_shows_before_its_release() {
     use flui_interaction::gesture::{GestureArenaMember, GestureContest};
     struct Rival;
@@ -77,7 +77,7 @@ fn an_undecided_press_shows_before_its_release() {
     let rows: [(u64, Then, &[&str]); 4] = [
         (150, Then::Released, &["down", "up", "tap"]),
         (150, Then::Taken, &["down", "cancel"]),
-        (50, Then::Taken, &["cancel"]),
+        (50, Then::Taken, &[]),
         (50, Then::Released, &["down", "up", "tap"]),
     ];
     for (wait, then, heard) in rows {
@@ -367,6 +367,10 @@ fn panicking_cancel_callback_cannot_strand_tap_tracking() {
     let down = make_down_event(Offset::ZERO, PointerKind::Touch).expect("valid fixture sample");
     let up = make_up_event(Offset::ZERO, PointerKind::Touch).expect("valid fixture sample");
     recognizer.add_pointer(PointerDispatch::at_root(&down));
+    // The cancel only ends a press whose down was sent: the sole member wins
+    // at close, which sends it.
+    arena.close(down.pointer_id().expect("fixture contact identity"));
+    arena.drain_deferred_resolutions();
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| recognizer.cancel()));
     assert!(failure.is_err());
     assert_eq!(recognizer.cancel(), CancelOutcome::Idle);

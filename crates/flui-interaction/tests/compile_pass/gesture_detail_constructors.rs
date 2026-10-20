@@ -13,8 +13,9 @@ use flui_interaction::{
 fn main() {
     let global = Offset::new(40.0, 60.0);
     let local = Offset::new(10.0, 20.0);
-    let _down = TapDownDetails::new(global, local).with_kind(PointerKind::Mouse);
-    let _up = TapUpDetails::new(global, local).with_kind(PointerKind::Mouse);
+    let pointer = flui_interaction::PointerId::try_from(1_u64).expect("authored contact");
+    let _down = TapDownDetails::new(global, local, pointer).with_kind(PointerKind::Mouse);
+    let _up = TapUpDetails::new(global, local, pointer).with_kind(PointerKind::Mouse);
     let _move = LongPressMoveUpdateDetails::new(global, local, Offset::ZERO, Offset::ZERO);
     let _end = LongPressEndDetails::new(global, local, Velocity::ZERO);
     let _pressure = ForcePressDetails::new(global, local, 0.5, 1.0);

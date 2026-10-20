@@ -24,9 +24,11 @@ motion keeps the state layer (with `Pressed`) and grows no wave. Colours come
 from the well's `overlay_color` (alpha included), else the ambient
 `RippleConfiguration` colour or the theme's `on_surface` at the token alpha; a
 `RippleScope` without a configuration turns both parts off. Waves follow the
-raw contact through a `Listener`, so a press shows before the tap is
-recognised; `GestureDetector::on_tap_cancel` fades a contact that stops being
-a tap. The 100 ms `Pressed` window stays on the tap. The state layer drops
+press the tap recognizer shows: a wave starts at `on_tap_down` (at once when
+no rival holds the contact, else at the press timeout or the win) and ends with
+`on_tap_up` or `on_tap_cancel`; a `Listener` ends it on the raw up, a primary
+release under another button and a pointer cancel. A second contact beside a
+pending tap grows no wave. The 100 ms `Pressed` window stays on the tap. The state layer drops
 `Pressed` only while a wave carries it, and shows a held contact as pressed
 when no wave runs (reduced motion). An idle well attaches no painter, so it
 records nothing.

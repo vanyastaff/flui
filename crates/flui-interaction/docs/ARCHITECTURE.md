@@ -471,8 +471,10 @@ Local design choices and why. Each entry names the conflict, the choice, and the
 - **A tap shows its press before release.** The down callback runs at the
   tap's win or 100 ms after Down while its arena is undecided (the contact's
   deadline), whichever comes first; up and tap still wait for the win. A
-  contact that stops being a tap still hears its cancellation whether or not
-  its down showed, as `GestureDetector::on_tap_cancel` documents.
+  contact that stops being a tap hears its cancellation only if its down
+  showed, so a down-minus-cancel count never goes negative; one lost before
+  hears nothing. `TapDownDetails` and `TapUpDetails` name the contact, as
+  `TapDetails` does, so a caller ends the press it started.
   `an_undecided_press_shows_before_its_release` pins the four orders.
 - **A long press released past its timeout is a long press.** An Up that
   arrives after the deadline but before its poll (a stalled frame) fires the

@@ -8,7 +8,7 @@
 
 use flui_foundation::geometry::Offset;
 
-use crate::{PointerKind, Velocity};
+use crate::{PointerId, PointerKind, Velocity};
 
 // ============================================================================
 // Tap Gesture Details
@@ -28,16 +28,25 @@ pub struct TapDownDetails {
 
     /// The kind of device that triggered the tap
     pub kind: PointerKind,
+
+    /// The contact that pressed: the one a later up or cancel of the same
+    /// press names
+    pub pointer: PointerId,
 }
 
 impl TapDownDetails {
     /// Creates new tap down details
     #[inline]
-    pub const fn new(global_position: Offset<f64>, local_position: Offset<f64>) -> Self {
+    pub const fn new(
+        global_position: Offset<f64>,
+        local_position: Offset<f64>,
+        pointer: PointerId,
+    ) -> Self {
         Self {
             global_position,
             local_position,
             kind: PointerKind::Touch,
+            pointer,
         }
     }
 
@@ -63,16 +72,24 @@ pub struct TapUpDetails {
 
     /// The kind of device that triggered the tap
     pub kind: PointerKind,
+
+    /// The contact that lifted
+    pub pointer: PointerId,
 }
 
 impl TapUpDetails {
     /// Creates new tap up details
     #[inline]
-    pub const fn new(global_position: Offset<f64>, local_position: Offset<f64>) -> Self {
+    pub const fn new(
+        global_position: Offset<f64>,
+        local_position: Offset<f64>,
+        pointer: PointerId,
+    ) -> Self {
         Self {
             global_position,
             local_position,
             kind: PointerKind::Touch,
+            pointer,
         }
     }
 

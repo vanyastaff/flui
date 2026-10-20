@@ -2613,3 +2613,64 @@ pub(crate) fn scoped_position_smoothing_reaches_drag_slot_updates() {
     );
     assert!(smoothed < 2.0, "smoothed jitter {smoothed} of 8 px");
 }
+
+/// A tap reports a cancel only for a press it showed: a contact lost before
+/// the press timeout reports nothing, one lost after reports down then
+/// cancel, and a tap reports down, up, tap.
+pub(crate) fn a_tap_cancel_only_follows_a_tap_down() {
+    use flui_widgets::SizedBox;
+    use std::{cell::RefCell, rc::Rc, time::Duration};
+
+    #[derive(Clone, Copy)]
+    enum Row {
+        Tap,
+        LostEarly,
+        LostLate,
+    }
+    for (row, expected) in [
+        (Row::Tap, vec!["down", "up", "tap"]),
+        (Row::LostEarly, vec![]),
+        (Row::LostLate, vec!["down", "cancel"]),
+    ] {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let entry = |name: &'static str| {
+            let log = Rc::clone(&log);
+            move || log.borrow_mut().push(name)
+        };
+        let (down, up, tap, cancel) = (entry("down"), entry("up"), entry("tap"), entry("cancel"));
+        let mut laid = lay_out(
+            GestureDetector::new()
+                .behavior(flui_widgets::HitTestBehavior::Opaque)
+                .on_long_press(|_| {})
+                .child(
+                    GestureDetector::new()
+                        .behavior(flui_widgets::HitTestBehavior::Opaque)
+                        .on_tap_down(move |_, _| down())
+                        .on_tap_up(move |_, _| up())
+                        .on_tap(move |_| tap())
+                        .on_tap_cancel(move |_, _| cancel())
+                        .child(SizedBox::new(100.0, 100.0)),
+                ),
+            tight(100.0, 100.0),
+        );
+        laid.dispatch_pointer_down(50.0, 50.0);
+        match row {
+            Row::Tap => {
+                laid.pump_for(Duration::from_millis(30));
+                laid.dispatch_pointer_up(50.0, 50.0);
+            }
+            Row::LostEarly => {
+                laid.pump_for(Duration::from_millis(30));
+                laid.dispatch_pointer_move_after(50.0, 95.0, Duration::from_millis(10));
+                laid.dispatch_pointer_up(50.0, 95.0);
+            }
+            Row::LostLate => {
+                // The long press takes the contact after its deadline.
+                laid.pump_for(Duration::from_millis(700));
+                laid.dispatch_pointer_up(50.0, 50.0);
+            }
+        }
+        laid.pump_for(Duration::from_millis(16));
+        assert_eq!(*log.borrow(), expected);
+    }
+}

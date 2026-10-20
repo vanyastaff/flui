@@ -140,6 +140,14 @@ impl TapCallbacks {
             TapButton::Tertiary => self.on_tertiary_tap.clone(),
         }
     }
+    /// The cancel callback of a sequence whose down was sent: a cancel never
+    /// arrives without the down it ends, so a pressed counter stays balanced.
+    fn cancel_after_down(&self, sequence: &TapSequence) -> Option<TapCallback> {
+        sequence
+            .down_sent
+            .then(|| self.cancel(sequence.button))
+            .flatten()
+    }
     fn cancel(&self, button: TapButton) -> Option<TapCallback> {
         match button {
             TapButton::Primary => self.on_tap_cancel.clone(),
@@ -407,7 +415,7 @@ impl TapGestureRecognizer {
                 pointer: retired.pointer,
             };
             invoke_callback(
-                self.callbacks.cancel(retired.button),
+                self.callbacks.cancel_after_down(&retired),
                 || {
                     retired.member.contact.withdraw();
                 },
@@ -491,7 +499,7 @@ impl TapGestureRecognizer {
         let retired = self.sequences.borrow_mut().remove(id);
         if let Some(retired) = retired {
             invoke_callback(
-                self.callbacks.cancel(retired.button),
+                self.callbacks.cancel_after_down(&retired),
                 || {
                     retired.member.contact.cancel();
                 },
@@ -560,6 +568,7 @@ impl GestureRecognizer for TapGestureRecognizer {
             global_position: snapshot.global,
             local_position: snapshot.local,
             kind: snapshot.kind,
+            pointer: snapshot.pointer,
         };
         {
             let mut sequences = self.sequences.borrow_mut();
@@ -637,6 +646,7 @@ impl GestureRecognizer for TapGestureRecognizer {
                             global_position: details.global_position,
                             local_position: details.local_position,
                             kind: details.kind,
+                            pointer: details.pointer,
                         });
                         sequences.current = None;
                         false

@@ -1957,6 +1957,12 @@ fn stationary_gesture_measured_excursion(family: &str) {
         if family == "multi tap" {
             rig.down(2, 300.0, 100.0);
         }
+        if family == "tap" {
+            // A tap cancels only a press it showed: the press timeout sends
+            // the down.
+            rig.advance(100);
+            rig.binding.arena().poll_deadlines();
+        }
         queue_excursion(&rig, coalesced_packet);
         assert_eq!(
             (recognized.get(), cancelled.get()),

@@ -58,11 +58,13 @@ fn main() {
         global_position: Offset::ZERO,
         local_position: Offset::ZERO,
         kind: PointerKind::Touch,
+        pointer: PointerId::try_from(1_u64).expect("authored contact"),
     };
     let _ = TapUpDetails {
         global_position: Offset::ZERO,
         local_position: Offset::ZERO,
         kind: PointerKind::Touch,
+        pointer: PointerId::try_from(1_u64).expect("authored contact"),
     };
     let _ = LongPressMoveUpdateDetails {
         global_position: Offset::ZERO,

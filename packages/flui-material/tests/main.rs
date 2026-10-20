@@ -232,8 +232,8 @@ fn ink_feedback_contracts() {
             ink_ripple::a_long_press_winning_the_arena_cancels_the_wave,
         ),
         (
-            "ink_ripple::rejecting one contact leaves the other pressing",
-            ink_ripple::rejecting_one_contact_leaves_the_other_pressing,
+            "ink_ripple::a second contact grows no wave beside a pending tap",
+            ink_ripple::a_second_contact_grows_no_wave_beside_a_pending_tap,
         ),
         (
             "ink_ripple::releasing another button leaves the primary pressing",

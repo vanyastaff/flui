@@ -72,6 +72,7 @@ fn callback_failure_containment() {
             ("form::a_panicking_reset_callback_does_not_disable_later_form_validation", crate::form::a_panicking_reset_callback_does_not_disable_later_form_validation),
             ("form::a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first", crate::form::a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first),
             ("gesture_detector::horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_wedge_the_detector", crate::gesture_detector::horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_wedge_the_detector),
+            ("gesture_detector::a_tap_cancel_only_follows_a_tap_down", crate::gesture_detector::a_tap_cancel_only_follows_a_tap_down),
             ("media_query_fields::a_build_that_panics_before_reading_keeps_its_dependency", crate::media_query_fields::a_build_that_panics_before_reading_keeps_its_dependency),
             ("signals::writes_and_creations_inside_build_are_refused_by_the_runtime", crate::signals::writes_and_creations_inside_build_are_refused_by_the_runtime),
             ("signals::a_stale_handle_read_in_build_is_a_typed_error_through_try_get", crate::signals::a_stale_handle_read_in_build_is_a_typed_error_through_try_get),
