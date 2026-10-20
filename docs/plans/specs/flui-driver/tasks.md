@@ -1,7 +1,7 @@
 # flui-driver: tasks
 
-- **Status:** approved by the owner (2026-10-20). FD27 has merged (#1773). FD1 is in review (protocol
-  0.5, see its card's evidence); no other task started. `interaction/completeness`
+- **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782) and FD4 (#1796) have
+  merged; FD31 is in review; FD2 is next. `interaction/completeness`
   has merged (#1733), so the IC tasks are unblocked. `flui run --agent` and `flui mcp` exist on
   the ADR-0095 endpoint (#1769); the tasks that replace that endpoint and `flui mcp` start from
   them.
@@ -706,6 +706,23 @@ graph LR
   - a render object whose description calls `with_mut` on its pipeline gets `TreeBusy`;
   - a view whose `inspect` panics leaves its siblings in the snapshot and the binding usable for
     the next frame.
+- **Evidence (2026-10-20):**
+  - `flui-view`'s `view_it::inspect_reentry`:
+    `a_snapshot_asked_for_from_build_or_inspect_answers_busy` (with the phase check reverted the
+    nested snapshot recurses until the stack overflows),
+    `an_inspect_that_reaches_for_the_tree_is_recorded_on_its_node`;
+  - `flui-rendering`'s `rendering_it::render_inspect_reentry`:
+    `a_render_snapshot_asked_for_from_a_frame_or_its_own_walk_answers_busy`,
+    `a_description_that_checks_the_owner_out_is_recorded_on_its_node`;
+  - `flui-foundation`'s `foundation_it::inspect`:
+    `a_panicking_description_is_recorded_on_its_node_and_the_walk_goes_on`.
+  - As built: the busy answer is `SnapshotError::Busy(phase)` from
+    `WidgetsBinding::inspect_elements` and `PipelineCell::inspect_render`, the two snapshot entry
+    points the agent will call; `TreeBusy` stays inside `flui-view`. The binding's state moved
+    from `Arc<RwLock<_>>` to an `Rc` cell that names its phase (`building`, `inspecting`), so
+    `with_element_tree(_mut)` from inside a build or a snapshot panics naming the phase instead of
+    deadlocking. A render object's reentrant `with_mut` keeps `PipelineCell`'s panic, which the
+    snapshot records on that node as `inspect_failed`.
 
 ## Notes for whoever implements this
 

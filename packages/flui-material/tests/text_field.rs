@@ -416,3 +416,48 @@ pub fn the_field_carries_its_label_hint_and_error_for_assistive_technology() {
         tree.describe()
     );
 }
+
+// ============================================================================
+// Input purpose — the field's text store reports what the field is for
+// ============================================================================
+
+/// `TextField::input_purpose` and `TextFormField::input_purpose` reach the
+/// text store the input method reads, and a rebuild that changes it reaches
+/// the store too.
+///
+/// Mutation red-check: drop `.input_purpose(view.input_purpose)` where
+/// `TextField` builds its `EditableText` — the store keeps reporting `Text`.
+pub fn the_input_purpose_reaches_the_text_store() {
+    use flui_material::TextFormField;
+    use flui_sdk::platform::TextInputPurpose;
+
+    let controller = TextEditingController::new();
+    let focus_node = FocusNode::with_debug_label("purpose");
+    let mut harness = flui_testing::widgets::harness::mount_with_ime(Theme::new(
+        ThemeData::light(),
+        SizedBox::new(300.0, 100.0).child(
+            TextField::new(controller)
+                .focus_node(Rc::clone(&focus_node))
+                .input_purpose(TextInputPurpose::Email),
+        ),
+    ));
+    let _ = focus_node.request_focus();
+    harness.tick();
+    let store = harness.active_text_store().expect("focused store");
+    assert_eq!(store.status().purpose, TextInputPurpose::Email);
+
+    let form_controller = TextEditingController::new();
+    let form_focus = FocusNode::with_debug_label("form purpose");
+    let mut form = flui_testing::widgets::harness::mount_with_ime(Theme::new(
+        ThemeData::light(),
+        SizedBox::new(300.0, 100.0).child(
+            TextFormField::new(form_controller)
+                .focus_node(Rc::clone(&form_focus))
+                .input_purpose(TextInputPurpose::Phone),
+        ),
+    ));
+    let _ = form_focus.request_focus();
+    form.tick();
+    let store = form.active_text_store().expect("focused form store");
+    assert_eq!(store.status().purpose, TextInputPurpose::Phone);
+}

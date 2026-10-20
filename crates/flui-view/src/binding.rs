@@ -30,6 +30,8 @@
 //! binding.draw_frame();
 //! ```
 
+mod tree_cell;
+
 use std::{
     future::Future,
     pin::Pin,
@@ -41,9 +43,12 @@ use std::{
 };
 
 use flui_foundation::ElementId;
+use flui_foundation::inspect::{SnapshotError, SnapshotNode, SnapshotQuery};
 use flui_interaction::FocusManager;
 use flui_rendering::pipeline::PipelineCell;
 use parking_lot::RwLock;
+use tree_cell::TreeCell;
+use tree_cell::TreePhase;
 
 use crate::{
     owner::{BuildOwner, RecoveredPanic},
@@ -313,17 +318,20 @@ pub use flui_scheduler::AppLifecycleState;
 /// binding.attach_root_widget(&my_view);
 /// ```
 ///
-/// # Thread Safety
+/// # Threads and re-entry
 ///
-/// WidgetsBinding uses internal RwLock for thread-safe mutable access.
+/// The binding stays on its owner thread. Code it runs (a view's `build` or
+/// `inspect`, a lifecycle hook, a `with_element_tree` closure) may reach the
+/// binding again: a call that needs the tree while it is in use gets
+/// [`SnapshotError::Busy`] from [`Self::inspect_elements`] and a panic naming
+/// the phase from the other accessors, never a deadlock.
 pub struct WidgetsBinding {
     pub(crate) lifecycle: crate::lifecycle::LifecycleSource,
-    /// Inner mutable state. `Arc` so the GlobalKey registry closures can
+    /// Inner mutable state. `Rc` so the GlobalKey registry closures can
     /// hold a `Weak` back-reference to *this* binding's tree (a dead
     /// binding's keys resolve to `None` — the weak-callback pattern);
-    /// the lock itself is the pre-lease interior-mutability shape (C5
-    /// endgame removes it once `&mut self` threading lands).
-    inner: Arc<RwLock<WidgetsBindingInner>>,
+    /// the cell names what the tree is busy with, so re-entry is answered.
+    inner: Rc<TreeCell<WidgetsBindingInner>>,
 
     /// This binding's GlobalKey lookup handle. It is activated by the owning
     /// `UiRuntime` for the dynamic extent of each UI runtime entry.
@@ -523,7 +531,7 @@ impl WidgetsBinding {
         let lifecycle = crate::lifecycle::LifecycleSource::new();
         let mut build_owner = BuildOwner::with_focus_manager(focus_manager);
         build_owner.set_lifecycle_handle(lifecycle.handle());
-        let inner = Arc::new(RwLock::new(WidgetsBindingInner {
+        let inner = Rc::new(TreeCell::new(WidgetsBindingInner {
             build_owner,
             element_tree: ElementTree::new(),
             root_element: None,
@@ -554,28 +562,25 @@ impl WidgetsBinding {
     /// drops (the weak-callback pattern — a dead tree is a miss, never a
     /// dangle and never a panic).
     ///
-    /// Neither closure blocks. The binding holds its own write lock across a
-    /// frame, attach, detach and layout-builder build, and user code inside
-    /// those (build, lifecycle hooks, dispose) may read a `GlobalKey`; a
-    /// blocking read there would wait on its own thread forever. The binding
-    /// is `!Send`, so a lock that cannot be taken at once is held by this
-    /// thread, and the closure reports `RegistryBusy` instead. The read is
-    /// recursive because `GlobalKey::with_current_state`'s callback runs
-    /// inside the visit's read guard and may look up a second key; with a
-    /// fair lock a plain nested read could queue behind a waiting writer.
+    /// Neither closure panics on a busy tree. The binding borrows its tree
+    /// exclusively across a frame, attach, detach and layout-builder build,
+    /// and user code inside those (build, lifecycle hooks, dispose) may read
+    /// a `GlobalKey`; the closure reports `RegistryBusy` then. A shared
+    /// borrow nests, so `GlobalKey::with_current_state`'s callback, which
+    /// runs inside the visit's borrow, may look up a second key.
     fn make_global_key_registry(
-        inner: &Arc<RwLock<WidgetsBindingInner>>,
+        inner: &Rc<TreeCell<WidgetsBindingInner>>,
     ) -> crate::key::registry::GlobalKeyRegistryHandle {
         use crate::key::registry::RegistryBusy;
 
-        let lookup_inner = Arc::downgrade(inner);
-        let visit_inner = Arc::downgrade(inner);
+        let lookup_inner = Rc::downgrade(inner);
+        let visit_inner = Rc::downgrade(inner);
         crate::key::registry::GlobalKeyRegistryHandle::new(
             move |key| {
                 let Some(inner) = lookup_inner.upgrade() else {
                     return Ok(None);
                 };
-                let Some(inner) = inner.try_read_recursive() else {
+                let Ok(inner) = inner.try_read() else {
                     return Err(RegistryBusy);
                 };
                 if inner.build_owner.owner_closed() {
@@ -587,7 +592,7 @@ impl WidgetsBinding {
                 let Some(inner) = visit_inner.upgrade() else {
                     return Ok(());
                 };
-                let Some(inner) = inner.try_read_recursive() else {
+                let Ok(inner) = inner.try_read() else {
                     return Err(RegistryBusy);
                 };
                 if inner.build_owner.owner_closed() {
@@ -715,13 +720,38 @@ impl WidgetsBinding {
     // ========================================================================
 
     /// Execute a function with read access to the element tree.
+    ///
+    /// # Panics
+    ///
+    /// When the tree is being built, inspected or lent for writing further up this thread's
+    /// stack.
+    #[track_caller]
     pub fn with_element_tree<R>(&self, f: impl FnOnce(&ElementTree) -> R) -> R {
         f(&self.inner.read().element_tree)
     }
 
     /// Execute a function with write access to the element tree.
+    ///
+    /// # Panics
+    ///
+    /// When the tree is in use further up this thread's stack.
+    #[track_caller]
     pub fn with_element_tree_mut<R>(&self, f: impl FnOnce(&mut ElementTree) -> R) -> R {
         f(&mut self.inner.write().element_tree)
+    }
+
+    /// A typed snapshot of the element tree (ADR-0242): each node is an element named by the
+    /// view that created it. A view's `inspect` that panics is recorded on its node as
+    /// [`INSPECT_FAILED`](flui_foundation::inspect::INSPECT_FAILED).
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::Busy`] when asked from code the binding is running (a `build`, a view's
+    /// `inspect`, a `with_element_tree_mut` closure), and the tree's own
+    /// [`SnapshotError`]s otherwise.
+    pub fn inspect_elements(&self, query: SnapshotQuery) -> Result<SnapshotNode, SnapshotError> {
+        let inner = self.inner.try_read_in(TreePhase::Inspecting)?;
+        flui_foundation::inspect::snapshot(&inner.element_tree, query)
     }
 
     /// Get the root element ID.
@@ -787,7 +817,7 @@ impl WidgetsBinding {
     where
         V: View + Clone + 'static,
     {
-        let mut inner = self.inner.write();
+        let mut inner = self.inner.write_in(TreePhase::Building);
 
         if inner.root_element.is_some() {
             return Err(AttachError::AlreadyAttached);
@@ -862,7 +892,7 @@ impl WidgetsBinding {
     /// would ever run, leaking subscriptions/listeners/timers for the life
     /// of this binding.
     pub fn detach_root_widget(&self) {
-        let mut inner = self.inner.write();
+        let mut inner = self.inner.write_in(TreePhase::Building);
 
         if let Some(root_id) = inner.root_element.take() {
             // Remove the whole subtree (this clears the tree since root_id
@@ -1081,7 +1111,7 @@ impl WidgetsBinding {
     /// preserving [`StatefulView`](crate::StatefulView) state in the element tree.
     pub fn perform_reassemble(&self) {
         {
-            let mut inner = self.inner.write();
+            let mut inner = self.inner.write_in(TreePhase::Building);
             let WidgetsBindingInner {
                 ref mut build_owner,
                 ref mut element_tree,
@@ -1140,7 +1170,7 @@ impl WidgetsBinding {
     }
 
     pub(crate) fn draw_frame_impl(&self, pass: BuildPass, before_finalize: impl FnOnce()) {
-        let mut inner = self.inner.write();
+        let mut inner = self.inner.write_in(TreePhase::Building);
 
         #[cfg(debug_assertions)]
         let _building_guard = {
@@ -1268,7 +1298,7 @@ impl WidgetsBinding {
     /// tick) will land at the same `draw_frame` call site immediately after this
     /// call, keeping both bindings in sync.
     pub fn service_child_requests(&self, pipeline: &PipelineCell) {
-        let mut inner = self.inner.write();
+        let mut inner = self.inner.write_in(TreePhase::Building);
         let WidgetsBindingInner {
             ref mut build_owner,
             ref mut element_tree,
@@ -1295,7 +1325,7 @@ impl WidgetsBinding {
         &self,
         pipeline: &PipelineCell,
     ) -> flui_rendering::error::RenderResult<Option<flui_rendering::layer::LayerTree>> {
-        let mut inner = self.inner.write();
+        let mut inner = self.inner.write_in(TreePhase::Building);
         let WidgetsBindingInner {
             ref mut build_owner,
             ref mut element_tree,
@@ -1316,7 +1346,7 @@ impl WidgetsBinding {
         &self,
         pipeline: &PipelineCell,
     ) -> flui_rendering::error::RenderResult<()> {
-        let mut inner = self.inner.write();
+        let mut inner = self.inner.write_in(TreePhase::Building);
         let WidgetsBindingInner {
             ref mut build_owner,
             ref mut element_tree,
@@ -1734,7 +1764,7 @@ mod tests {
         // now true of the widgets binding itself).
         let binding1 = WidgetsBinding::new();
         let binding2 = WidgetsBinding::new();
-        assert!(!Arc::ptr_eq(&binding1.inner, &binding2.inner));
+        assert!(!Rc::ptr_eq(&binding1.inner, &binding2.inner));
     }
 
     /// Run `f` on a fresh thread and fail the test if it has not returned

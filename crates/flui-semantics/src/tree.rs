@@ -674,6 +674,14 @@ impl SemanticsTree {
         }
     }
 
+    /// Every live arena node that publishes under `id`, in insertion order:
+    /// empty when none does, more than one when the identity is aliased.
+    pub(crate) fn nodes_with_accessibility_id(&self, id: AccessibilityNodeId) -> &[SemanticsId] {
+        self.stable_index
+            .get(&id.as_u64())
+            .map_or(&[], SmallVec::as_slice)
+    }
+
     /// Whether any live arena node publishes under this raw stable id.
     pub(crate) fn is_accessibility_id_live(&self, raw: u64) -> bool {
         self.stable_index.contains_key(&raw)

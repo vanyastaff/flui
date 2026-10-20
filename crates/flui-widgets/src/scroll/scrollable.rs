@@ -82,7 +82,10 @@ use crate::animated::VsyncScope;
 use crate::interaction::focus_reveal::{
     FocusRevealScope, RevealTarget, SharedRevealTarget, reveal_distance,
 };
-use crate::localization::axis_direction_from_axis_reverse_and_directionality;
+use crate::localization::{
+    BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, WidgetsLocalizations,
+    axis_direction_from_axis_reverse_and_directionality,
+};
 use crate::scroll::drag_autoscroll::{DragAutoscroll, DragAutoscrollAnchor};
 use crate::scroll::nested::{
     NestedScrollScope, OverscrollBehavior, ScrollCause, ScrollDevice,
@@ -552,6 +555,19 @@ pub struct ScrollableState {
     pipeline: Option<WeakPipelineCell>,
     /// This scrollable as the reveal scope of the focus inside it.
     reveal: Rc<ScrollReveal>,
+    /// What `apply_view` resolved from the view and the ambient scopes, for
+    /// `build` to read: the axis direction, the semantic mover (none for an
+    /// anchored drag) and the label of the position control.
+    applied: Option<Applied>,
+}
+
+/// The configuration `ScrollableState::apply_view` hands to `build`.
+#[derive(Clone)]
+struct Applied {
+    axis_direction: AxisDirection,
+    owner: Rc<ScrollOwner>,
+    move_to: Option<Rc<dyn Fn(f64, ScrollCause)>>,
+    position_label: &'static str,
 }
 
 impl std::fmt::Debug for ScrollableState {
@@ -607,6 +623,7 @@ impl StatefulView for Scrollable {
             post_frame: None,
             command_listener: None,
             pipeline: None,
+            applied: None,
         }
     }
 }
@@ -632,9 +649,9 @@ impl ScrollableState {
     /// The owner serving `view`'s configuration under the chain above
     /// `ctx`: the current one when nothing it was created for changed, a
     /// new one otherwise, retiring the old into it. A new physics or snap
-    /// policy value is taken in place, so a build that allocates one every
-    /// time keeps its owner; a retirement hands the work in progress to the
-    /// successor and calls no participant, so it may run here, in `build`.
+    /// policy value is taken in place, so a view that allocates one every
+    /// time keeps its owner. Runs from `apply_view`, outside `build`: it
+    /// services the command queued before any owner served the controller.
     fn owner(
         &self,
         view: &Scrollable,
@@ -889,17 +906,12 @@ impl ViewState<Scrollable> for ScrollableState {
         self.hold = Some(self.hold_recognizer(arena));
     }
 
-    fn build(&self, view: &Scrollable, ctx: &dyn BuildContext) -> impl IntoView {
-        let wheel_preferences = GestureArenaScope::wheel_preferences_of(ctx);
-        let wheel_distances = view.wheel_distances;
-        let scroll_controller = self.scroll_controller.clone();
-        let a11y_controller = self.scroll_controller.clone();
+    fn apply_view(&mut self, view: &Scrollable, ctx: &dyn BuildContext) {
         let physics = view
             .physics
             .as_ref()
             .unwrap_or(&self.default_physics)
             .clone();
-        let scroll_direction = view.scroll_direction;
         // No explicit override: resolve the same way the `.child()` fast
         // path's internally-composed `SingleChildScrollView` resolves its
         // own `AxisDirection` — same helper, same ambient `Directionality`
@@ -907,9 +919,66 @@ impl ViewState<Scrollable> for ScrollableState {
         // without `Scrollable` needing to see what `SingleChildScrollView`
         // computed. See `axis_direction`'s field docs for the override case.
         let axis_direction = view.axis_direction.unwrap_or_else(|| {
-            axis_direction_from_axis_reverse_and_directionality(ctx, scroll_direction, false)
+            axis_direction_from_axis_reverse_and_directionality(ctx, view.scroll_direction, false)
         });
         let owner = self.owner(view, &physics, axis_direction, ctx);
+        let motion = view.anchored.as_ref().map(|leaf| {
+            *leaf.slot.owner.borrow_mut() = Rc::downgrade(&owner);
+            Rc::clone(&leaf.motion)
+        });
+        // The hook a user callback may replace runs after this borrow ends.
+        let outgoing = self.env.motion.replace(motion);
+        drop(outgoing);
+        // An anchored drag publishes its own adjustable node and is no
+        // reveal scope: it is not a view onto its content.
+        let move_to = if view.anchored.is_some() {
+            self.reveal.configure(None, ctx);
+            None
+        } else {
+            let move_to = semantic_scroll_mover(
+                Rc::clone(&owner),
+                &self.scroll_controller,
+                self.post_frame.clone(),
+                self.pipeline.clone(),
+            );
+            self.reveal.configure(
+                Some(RevealMove {
+                    move_to: Rc::clone(&move_to),
+                    controller: self.scroll_controller.clone(),
+                    axis: view.scroll_direction,
+                    reversed: axis_direction.is_reversed(),
+                }),
+                ctx,
+            );
+            Some(move_to)
+        };
+        let position_label = match BoxedWidgetsLocalizations::maybe_of(ctx) {
+            Some(localizations) => localizations.scroll_position_label(),
+            None => DefaultWidgetsLocalizations.scroll_position_label(),
+        };
+        self.applied = Some(Applied {
+            axis_direction,
+            owner,
+            move_to,
+            position_label,
+        });
+    }
+
+    fn build(&self, view: &Scrollable, ctx: &dyn BuildContext) -> impl IntoView {
+        let wheel_preferences = GestureArenaScope::wheel_preferences_of(ctx);
+        let wheel_distances = view.wheel_distances;
+        let scroll_controller = self.scroll_controller.clone();
+        let a11y_controller = self.scroll_controller.clone();
+        let Applied {
+            axis_direction,
+            owner,
+            move_to,
+            position_label,
+        } = self
+            .applied
+            .clone()
+            .expect("BUG: `apply_view` runs before every build");
+        let scroll_direction = view.scroll_direction;
         let anchored = view.anchored.is_some();
         let admission = view
             .anchored
@@ -919,13 +988,6 @@ impl ViewState<Scrollable> for ScrollableState {
             .anchored
             .as_ref()
             .and_then(|leaf| leaf.cancelled.clone());
-        let motion = view.anchored.as_ref().map(|leaf| {
-            *leaf.slot.owner.borrow_mut() = Rc::downgrade(&owner);
-            Rc::clone(&leaf.motion)
-        });
-        // The hook a user callback may replace runs after this borrow ends.
-        let outgoing = self.env.motion.replace(motion);
-        drop(outgoing);
         let devices = view.devices;
         let snap = view.snap.clone();
         let semantic_label = view.semantic_label.clone();
@@ -1091,7 +1153,7 @@ impl ViewState<Scrollable> for ScrollableState {
             // "only express interest in the event if it would actually result
             // in a scroll" — the outer scrollable then takes the tick.
             let ctrl_wheel = scroll_controller;
-            let post_frame_wheel = post_frame.clone();
+            let post_frame_wheel = post_frame;
             let fling_wheel = fling_controller.clone();
             let wheel_motion = Rc::clone(&self.wheel_motion);
             let owner_wheel = Rc::clone(&owner);
@@ -1327,33 +1389,14 @@ impl ViewState<Scrollable> for ScrollableState {
             // The scrollable's own plane: its deltas and its pointer are
             // local to this box.
             let listener = AnchoredBox::new(self.env.plane.anchor(), listener);
-            let content: BoxedView = if anchored {
-                // The anchored drag publishes its own adjustable node, and
-                // is no reveal scope: it is not a view onto its content.
-                self.reveal.configure(None, ctx);
-                listener.boxed()
-            } else {
-                let move_to = semantic_scroll_mover(
-                    Rc::clone(&owner),
-                    &a11y_controller,
-                    post_frame,
-                    self.pipeline.clone(),
-                );
-                self.reveal.configure(
-                    Some(RevealMove {
-                        move_to: Rc::clone(&move_to),
-                        controller: a11y_controller.clone(),
-                        axis: scroll_direction,
-                        reversed: axis_direction.is_reversed(),
-                    }),
-                    ctx,
-                );
+            let content: BoxedView = if let Some(move_to) = move_to {
                 let (viewport_semantics, position_semantics) = scroll_semantics(
                     a11y_controller,
                     scroll_direction,
                     axis_direction.is_reversed(),
                     move_to,
                     semantic_label,
+                    position_label,
                     // AccessKit's item: a line when scrolling vertically, a
                     // character when scrolling horizontally.
                     match scroll_direction {
@@ -1367,6 +1410,10 @@ impl ViewState<Scrollable> for ScrollableState {
                     viewport_semantics.child(position_semantics.child(listener)),
                 )
                 .boxed()
+            } else {
+                // The anchored drag publishes its own adjustable node, and
+                // is no reveal scope: it is not a view onto its content.
+                listener.boxed()
             };
             let scope = NestedScrollScope::new(Rc::clone(owner.node()), content);
             let key_snap = snap;
@@ -1756,6 +1803,7 @@ fn scroll_semantics(
     reversed: bool,
     move_to: Rc<dyn Fn(f64, ScrollCause)>,
     label: Option<String>,
+    position_label: &'static str,
     item_step: f64,
 ) -> (Semantics, Semantics) {
     let mut semantics = Semantics::new()
@@ -1770,7 +1818,7 @@ fn scroll_semantics(
         .container(true)
         .explicit_child_nodes(true)
         .role(crate::SemanticsRole::Slider)
-        .label("Scroll position")
+        .label(position_label)
         .scroll_source(controller.position(), axis, reversed);
     let reveal_controller = controller.clone();
     let step: Rc<dyn Fn(bool, SemanticsScrollUnit)> = {

@@ -712,7 +712,10 @@ impl UiRuntime {
         };
         let decoded = match flui_semantics::semantics_action_request_for(request) {
             Ok(decoded) => decoded,
-            Err(error @ flui_semantics::ActionDecodeError::UnknownTarget(_)) => {
+            Err(
+                error @ (flui_semantics::ActionDecodeError::UnknownTarget(_)
+                | flui_semantics::ActionDecodeError::UnknownTree(_)),
+            ) => {
                 tracing::warn!(%error, "dropping accessibility action out of contract");
                 return Applied::default();
             }

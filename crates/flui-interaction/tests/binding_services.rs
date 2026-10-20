@@ -15,8 +15,8 @@ use flui_interaction::events::{
     make_up_event_for_id,
 };
 use flui_interaction::{
-    EventPropagation, GestureArenaMember, GestureBinding, HitTestEntry, HitTestResult,
-    InputSurface, InteractionLane, PointerId, PointerRouteHandler, RenderId,
+    ContactlessSource, EventPropagation, GestureArenaMember, GestureBinding, HitTestEntry,
+    HitTestResult, InputSurface, InteractionLane, PointerId, PointerRouteHandler, RenderId,
 };
 use flui_platform_api::pointer::ScrollPhase;
 use static_assertions::{assert_impl_all, assert_not_impl_any};
@@ -307,6 +307,10 @@ fn a_closed_binding_drains_services_after_dispatch() {
             a_close_from_a_callback_retires_after_the_dispatch,
         ),
         (
+            "a_close_from_a_contactless_dispatch_retires_after_it",
+            a_close_from_a_contactless_dispatch_retires_after_it,
+        ),
+        (
             "a_drain_callback_that_dispatches_is_refused",
             a_drain_callback_that_dispatches_is_refused,
         ),
@@ -358,6 +362,24 @@ fn a_close_from_a_callback_retires_after_the_dispatch() {
     );
     assert_eq!(binding.active_pointer_count(), 0);
     assert!(binding.arena().is_empty());
+}
+
+fn a_close_from_a_contactless_dispatch_retires_after_it() {
+    let fixture = closing_binding(|_| {});
+    let binding = &fixture.binding;
+    let action = binding
+        .begin_contactless(ContactlessSource::Assistive)
+        .expect("an id to issue");
+    binding.dispatch_contactless(action.id, || {
+        close_gestures(binding, CloseMode::Ordinary);
+        fixture.log.borrow_mut().push("closed");
+    });
+    fixture.log.borrow_mut().push("returned");
+    assert_eq!(
+        fixture.log(),
+        ["closed", "reject", "returned"],
+        "an assistive action's close rejects the arena only after the action returned"
+    );
 }
 
 fn a_drain_callback_that_dispatches_is_refused() {

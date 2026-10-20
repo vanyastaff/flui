@@ -3,8 +3,13 @@
 //! versions of a hidden textarea's text. The DOM side runs in Chrome
 //! (`tests/web_browser.rs`).
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use flui_platform::shared::ime_text::{PROTECTED_UNIT, document_text, scalar_spans};
 use flui_platform::shared::web_text::{IME_PROCESS_KEY_CODE, TextDiff, diff, key_composition};
 use flui_platform_api::keyboard::ImeComposition;
+use flui_platform_api::text_store::{InMemoryTextStore, LockGrant, LockTiming, TextStore};
 
 const ESCAPE: u32 = 27;
 
@@ -82,6 +87,58 @@ fn a_textarea_change_is_one_edit() {
     );
 }
 
+/// A protected field reads as bullets of the field's length, so the browser's
+/// surface starts with the offsets the field has instead of empty.
+fn a_protected_field_is_mirrored_as_bullets() {
+    let store = InMemoryTextStore::new("secret");
+    store.set_protected(true);
+    let read: Rc<RefCell<String>> = Rc::default();
+    let out = Rc::clone(&read);
+    store
+        .request_lock(
+            LockGrant::read(move |session| *out.borrow_mut() = document_text(session)),
+            LockTiming::Sync,
+        )
+        .map(drop)
+        .expect("a free store grants a read");
+    assert_eq!(*read.borrow(), PROTECTED_UNIT.to_string().repeat(6));
+}
+
+/// A character-bounds request names code units; each lands on the scalar
+/// that holds it, and a surrogate pair is one scalar however it is cut.
+fn character_bounds_follow_scalars() {
+    let span = |start, end| (start, end);
+    let spans = |text: &str, start, end| {
+        scalar_spans(text, start, end)
+            .into_iter()
+            .map(|range| (range.start().get(), range.end().get()))
+            .collect::<Vec<_>>()
+    };
+    // "😀か" is units [D83D, DE00, 304B].
+    assert_eq!(
+        spans("😀か", 0, 3),
+        [span(0, 2), span(2, 3)],
+        "both scalars"
+    );
+    assert_eq!(spans("😀か", 0, 1), [span(0, 2)], "half a pair is the pair");
+    assert_eq!(
+        spans("😀か", 1, 3),
+        [span(0, 2), span(2, 3)],
+        "from the low half"
+    );
+    assert_eq!(spans("😀か", 2, 3), [span(2, 3)]);
+    assert_eq!(
+        spans("ab", 1, 9),
+        [span(1, 2)],
+        "beyond the text is not listed"
+    );
+    assert_eq!(
+        spans("ab", 1, 1),
+        Vec::<(usize, usize)>::new(),
+        "an empty request"
+    );
+}
+
 #[test]
 fn web_text_table() {
     super::run_table(
@@ -94,6 +151,14 @@ fn web_text_table() {
             (
                 "a_textarea_change_is_one_edit",
                 a_textarea_change_is_one_edit,
+            ),
+            (
+                "a_protected_field_is_mirrored_as_bullets",
+                a_protected_field_is_mirrored_as_bullets,
+            ),
+            (
+                "character_bounds_follow_scalars",
+                character_bounds_follow_scalars,
             ),
         ],
     );

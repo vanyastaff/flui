@@ -10,6 +10,7 @@
 use std::rc::Rc;
 
 use flui_interaction::FocusNode;
+use flui_platform_api::text_store::TextInputPurpose;
 use flui_view::prelude::*;
 
 use super::AutovalidateMode;
@@ -43,6 +44,8 @@ pub struct TextFormFieldConfig {
     pub force_error_text: Option<String>,
     /// Whether every character shows as a bullet.
     pub obscure_text: bool,
+    /// What the field is for.
+    pub input_purpose: TextInputPurpose,
     /// A caller-owned focus node for the input.
     pub focus_node: Option<Rc<FocusNode>>,
     /// Called with the text when Enter is pressed.
@@ -86,6 +89,7 @@ impl TextFormFieldConfig {
             autovalidate_mode: AutovalidateMode::Disabled,
             force_error_text: None,
             obscure_text: false,
+            input_purpose: TextInputPurpose::Text,
             focus_node: None,
             on_submitted: None,
             handle: None,
@@ -105,6 +109,8 @@ pub struct TextFormFieldInput {
     pub enabled: bool,
     /// Whether every character shows as a bullet.
     pub obscure_text: bool,
+    /// What the field is for.
+    pub input_purpose: TextInputPurpose,
     /// A caller-owned focus node for the input.
     pub focus_node: Option<Rc<FocusNode>>,
     /// Called with the text when Enter is pressed.
@@ -198,6 +204,7 @@ impl TextFormFieldCore {
         let controller = self.controller.clone();
         let enabled = config.enabled;
         let obscure_text = config.obscure_text;
+        let input_purpose = config.input_purpose;
         let focus_node = config.focus_node.clone();
         let on_submitted = config.on_submitted.clone();
         let sink = self.controller.clone();
@@ -208,6 +215,7 @@ impl TextFormFieldCore {
                 field: field.clone(),
                 enabled,
                 obscure_text,
+                input_purpose,
                 focus_node: focus_node.clone(),
                 on_submitted: on_submitted.clone(),
             })

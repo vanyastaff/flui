@@ -584,6 +584,9 @@ fn the_page_label_comes_from_the_widgets_localizations() {
         fn page_label(&self, page: usize, page_count: usize) -> String {
             format!("Seite {page} von {page_count}")
         }
+        fn scroll_position_label(&self) -> &'static str {
+            "Bildlaufposition"
+        }
     }
     #[derive(Debug)]
     struct GermanDelegate;
@@ -610,4 +613,6 @@ fn the_page_label_comes_from_the_widgets_localizations() {
     let tree = laid.a11y_tree().expect("published semantics");
     assert!(tree.find_by_label("Seite 1 von 3").is_ok());
     assert!(tree.find_by_label("Page 1 of 3").is_err());
+    assert!(tree.find_by_label("Bildlaufposition").is_ok());
+    assert!(tree.find_by_label("Scroll position").is_err());
 }

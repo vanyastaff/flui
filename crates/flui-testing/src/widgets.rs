@@ -1399,14 +1399,19 @@ impl LaidOut {
     /// # Errors
     ///
     /// [`SnapshotError::Gone`](flui_foundation::inspect::SnapshotError::Gone) when the query
-    /// starts at an element that is no longer mounted.
+    /// starts at an element that is no longer mounted, and
+    /// [`SnapshotError::Busy`](flui_foundation::inspect::SnapshotError::Busy) when called from
+    /// code the UI runtime is running, such as a `build`.
     pub fn inspect_elements(
         &self,
         query: flui_foundation::inspect::SnapshotQuery,
     ) -> Result<flui_foundation::inspect::SnapshotNode, flui_foundation::inspect::SnapshotError>
     {
         self.host
-            .with_tree(|tree| flui_foundation::inspect::snapshot(&*tree, query))
+            .ui_runtime()
+            .ui_runtime()
+            .widgets()
+            .inspect_elements(query)
     }
 
     /// A typed snapshot of the committed render tree, each node linked to the semantics node
@@ -1415,14 +1420,15 @@ impl LaidOut {
     /// # Errors
     ///
     /// [`SnapshotError::Gone`](flui_foundation::inspect::SnapshotError::Gone) when the query
-    /// starts at a render object that is no longer in the tree.
+    /// starts at a render object that is no longer in the tree, and
+    /// [`SnapshotError::Busy`](flui_foundation::inspect::SnapshotError::Busy) while a frame
+    /// holds the render tree.
     pub fn inspect_render(
         &self,
         query: flui_foundation::inspect::SnapshotQuery,
     ) -> Result<flui_foundation::inspect::SnapshotNode, flui_foundation::inspect::SnapshotError>
     {
-        self.pipeline_owner
-            .with(|owner| flui_foundation::inspect::snapshot(&owner.inspect(), query))
+        self.pipeline_owner.inspect_render(query)
     }
 
     /// A typed snapshot of [`layer_tree`](Self::layer_tree), the last submitted scene.

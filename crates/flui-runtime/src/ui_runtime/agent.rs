@@ -728,6 +728,7 @@ impl UiRuntime {
                     element,
                     action: request.action,
                 },
+                SemanticsActionError::Disabled { .. } => AgentError::Disabled { element },
                 _ => AgentError::NodeNotFound { element, issued },
             })
     }

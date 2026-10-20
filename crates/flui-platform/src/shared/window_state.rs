@@ -2,7 +2,7 @@
 //! the rule for when it is read from the OS again (ADR-0237), built like
 //! [`DisplaySource`](super::display_source).
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use flui_platform_api::WindowState;
 use parking_lot::Mutex;
@@ -47,6 +47,9 @@ pub(crate) struct Published {
 
 struct Slot {
     state: WindowState,
+    /// The invalidations counted when the published state was read: the
+    /// snapshot is current while no invalidation has come since.
+    read_after: u64,
     /// The revision space was used up: nothing is published any more.
     frozen: bool,
 }
@@ -58,12 +61,20 @@ struct Slot {
 /// command it just issued). The next [`state_with`](Self::state_with) reads the
 /// OS again, with no lock held across the read, and publishes the sample; a
 /// sample equal to the published one keeps its revision.
+///
+/// Threads may read at once. A sample begun before an invalidation that
+/// another read has already published past is discarded, so once the read
+/// after a change has published, no slower read puts the window from before
+/// the change back. Reads begun before the same invalidation may still publish
+/// in either order until then: the samples cannot be ordered without a lock
+/// held across them, and a backend's sample may wait on its owner thread.
 pub(crate) struct WindowStateCell {
     last: Mutex<Slot>,
-    /// Set from any thread when the window may differ from `last`; cleared
-    /// before a sample reads the OS, so an invalidation that lands during the
-    /// read survives it.
-    stale: AtomicBool,
+    /// Counts every invalidation, from any thread. A read takes the count
+    /// before it reads the OS, so an invalidation that lands during the read
+    /// leaves the cell stale. At one per nanosecond it would take centuries to
+    /// wrap.
+    invalidations: AtomicU64,
 }
 
 impl super::system_notice::StaleOnWake for WindowStateCell {
@@ -76,7 +87,7 @@ impl WindowStateCell {
     /// Whether the next read asks the operating system again.
     #[cfg(test)]
     pub(crate) fn is_stale(&self) -> bool {
-        self.stale.load(Ordering::Acquire)
+        self.last.lock().read_after != self.invalidations.load(Ordering::Acquire)
     }
 
     /// A cell publishing `initial`, stale: the first `state_with` reads the OS.
@@ -84,17 +95,18 @@ impl WindowStateCell {
         Self {
             last: Mutex::new(Slot {
                 state: initial,
+                read_after: 0,
                 frozen: false,
             }),
-            stale: AtomicBool::new(true),
+            invalidations: AtomicU64::new(1),
         }
     }
 
-    /// Record that the window may have changed. One atomic store, so a window
-    /// procedure, a notification block or a foreign thread may call it at any
-    /// point.
+    /// Record that the window may have changed. One atomic increment, so a
+    /// window procedure, a notification block or a foreign thread may call it
+    /// at any point.
     pub(crate) fn invalidate(&self) {
-        self.stale.store(true, Ordering::Release);
+        self.invalidations.fetch_add(1, Ordering::Release);
     }
 
     /// The last published snapshot, without reading the OS.
@@ -108,21 +120,32 @@ impl WindowStateCell {
     ///
     /// `sample` runs with no lock held, so it may call the OS.
     pub(crate) fn state_with(&self, sample: impl FnOnce() -> WindowState) -> Published {
-        if !self.stale.load(Ordering::Acquire) {
+        let invalidations = self.invalidations.load(Ordering::Acquire);
+        {
+            let slot = self.last.lock();
+            if slot.read_after == invalidations {
+                return Published {
+                    state: slot.state.clone(),
+                    changed: false,
+                };
+            }
+        }
+        self.publish(sample(), invalidations)
+    }
+
+    /// Publish a sample read after `invalidations`: the previous snapshot when
+    /// nothing differs or a read begun later has published already, otherwise
+    /// the next revision. At the last revision the cell freezes on its final
+    /// snapshot, with one diagnostic, and publishes nothing again.
+    fn publish(&self, sample: WindowState, invalidations: u64) -> Published {
+        let mut slot = self.last.lock();
+        if slot.read_after > invalidations {
             return Published {
-                state: self.last.lock().state.clone(),
+                state: slot.state.clone(),
                 changed: false,
             };
         }
-        self.stale.store(false, Ordering::Release);
-        self.publish(sample())
-    }
-
-    /// Publish a sample: the previous snapshot when nothing differs, otherwise
-    /// the next revision. At the last revision the cell freezes on its final
-    /// snapshot, with one diagnostic, and publishes nothing again.
-    pub(crate) fn publish(&self, sample: WindowState) -> Published {
-        let mut slot = self.last.lock();
+        slot.read_after = invalidations;
         if slot.frozen {
             return Published {
                 state: slot.state.clone(),
@@ -190,18 +213,45 @@ mod tests {
         assert_eq!(samples.get(), 2, "and then the snapshot is kept");
     }
 
+    /// Two threads read at once: the one that began first finishes last, after
+    /// the window changed and the other read published the change.
+    #[test]
+    fn a_read_overtaken_by_a_later_one_publishes_nothing() {
+        let cell = WindowStateCell::new(state(1.0));
+        let _ = cell.state_with(|| state(1.0));
+        cell.invalidate();
+        let overtaken = cell.state_with(|| {
+            // Read before the change, still to be published.
+            let older = state(1.0);
+            cell.invalidate();
+            let newer = cell.state_with(|| state(2.0));
+            assert!(newer.changed);
+            older
+        });
+        assert!(!overtaken.changed, "the older read publishes no revision");
+        assert_eq!(overtaken.state.content_size, Size::new(2.0, 100.0));
+        let kept = cell.state_with(|| panic!("the newer snapshot is current"));
+        assert_eq!(kept.state, overtaken.state);
+    }
+
     #[test]
     fn an_exhausted_revision_freezes_the_cell() {
         let mut last = state(1.0);
         last.revision = WindowRevision::LAST;
         let cell = WindowStateCell::new(last.clone());
         for attempt in 0..3 {
-            let published = cell.publish(state(2.0 + f64::from(attempt)));
+            cell.invalidate();
+            let published = cell.state_with(|| state(2.0 + f64::from(attempt)));
             assert!(!published.changed);
             assert_eq!(published.state, last, "attempt {attempt}");
         }
+        assert!(
+            !cell.is_stale(),
+            "a frozen cell is current until invalidated"
+        );
+        cell.invalidate();
         assert_eq!(
-            cell.publish(state(1.0)).state,
+            cell.state_with(|| state(1.0)).state,
             last,
             "a frozen cell stays frozen even for a sample equal to its state"
         );

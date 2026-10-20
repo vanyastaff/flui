@@ -73,6 +73,7 @@ pub mod platform {
     pub use flui_platform_api::WindowCommandError;
     pub use flui_platform_api::WindowMode;
     pub use flui_platform_api::WindowState;
+    pub use flui_platform_api::text_store::TextInputPurpose;
 
     /// Handle-less input capabilities (ADR-0213). Unstable: present only
     /// under the additive `unstable-input` feature.

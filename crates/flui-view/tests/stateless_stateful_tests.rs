@@ -115,6 +115,13 @@ impl ViewState<HookOrderView> for HookOrderState {
             .push("init".to_owned());
     }
 
+    fn apply_view(&mut self, view: &HookOrderView, _ctx: &dyn BuildContext) {
+        self.log
+            .lock()
+            .expect("the hook log is never poisoned")
+            .push(format!("apply_view {}", view.config));
+    }
+
     fn build(&self, _view: &HookOrderView, _ctx: &dyn BuildContext) -> impl IntoView {
         LeafView.boxed()
     }
@@ -158,8 +165,8 @@ pub(crate) fn an_update_before_the_first_build_follows_init_state() {
     owner.build_scope(&mut tree);
     assert_eq!(
         *log.lock().expect("the hook log is never poisoned"),
-        ["create a", "init", "update a -> c"],
-        "the first build initializes the state, then delivers the update"
+        ["create a", "init", "update a -> c", "apply_view c"],
+        "the first build initializes the state, delivers the update, then applies the view"
     );
 
     tree.update(root, &view("d"), &mut owner.element_owner_mut());
@@ -170,6 +177,45 @@ pub(crate) fn an_update_before_the_first_build_follows_init_state() {
             .map(String::as_str),
         Some("update c -> d"),
         "an initialized state is updated at once"
+    );
+}
+
+/// `apply_view` runs before a build that follows a new configuration, once per
+/// change: not on a plain state rebuild, and with the view the build then sees.
+pub(crate) fn apply_view_runs_once_per_changed_configuration_before_the_build() {
+    let log = HookLog::default();
+    let view = |config| HookOrderView {
+        config,
+        log: Arc::clone(&log),
+    };
+    let entries = || log.lock().expect("the hook log is never poisoned").clone();
+    let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
+    let root = tree.mount_root(&view("a"), &mut owner.element_owner_mut());
+
+    owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
+    assert_eq!(
+        entries(),
+        ["create a", "init", "apply_view a"],
+        "the first build applies the view after init_state"
+    );
+
+    owner.schedule_build_for(root, 0, RebuildReason::StateChange);
+    owner.build_scope(&mut tree);
+    assert_eq!(
+        entries().len(),
+        3,
+        "a rebuild that changed no configuration does not apply the view again"
+    );
+
+    tree.update(root, &view("b"), &mut owner.element_owner_mut());
+    owner.schedule_build_for(root, 0, RebuildReason::ParentUpdate);
+    owner.build_scope(&mut tree);
+    assert_eq!(
+        entries()[3..],
+        ["update a -> b", "apply_view b"],
+        "a new configuration is applied after the update hook, before its build"
     );
 }
 

@@ -120,6 +120,10 @@ impl WidgetsLocalizations for GlobalWidgetsLocalizations {
     fn page_label(&self, page: usize, page_count: usize) -> String {
         DefaultWidgetsLocalizations.page_label(page, page_count)
     }
+
+    fn scroll_position_label(&self) -> &'static str {
+        DefaultWidgetsLocalizations.scroll_position_label()
+    }
 }
 
 /// A [`LocalizationsDelegate`] that resolves a [`GlobalWidgetsLocalizations`]
