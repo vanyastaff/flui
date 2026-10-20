@@ -297,7 +297,7 @@ fn read(request: &Value, shared: &Shared) -> Result<Value, Failure> {
     let root = query.root;
     let fail = |fault: AgentFault| name_handle(fault, window.id(), root);
     let answer = window.read(query).map_err(fail)?;
-    let tree = match wait(answer, shared) {
+    let mut tree = match wait(answer, shared) {
         Some(Ok(tree)) => tree,
         Some(Err(fault)) => return Err(fail(fault)),
         None => {
@@ -308,6 +308,8 @@ fn read(request: &Value, shared: &Shared) -> Result<Value, Failure> {
             )));
         }
     };
+    // The tree is written in flui-protocol's current schema; this endpoint answers in its own.
+    tree.protocol = Some(ENDPOINT_PROTOCOL);
     serde_json::to_value(tree).map_err(|_| {
         (
             AgentFault::new(

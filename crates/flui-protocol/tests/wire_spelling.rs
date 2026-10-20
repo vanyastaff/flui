@@ -208,6 +208,22 @@ fn input_is_a_per_device_action_sequence_and_gestures_flatten_their_options() {
         "snapshot": "delta",
     }));
     assert!(tap.options.force, "gesture options sit beside the target");
+    let session_default: InputParams =
+        round_trips(json!({"window": "w3", "actions": {"sources": []}}));
+    assert_eq!(
+        session_default.via, None,
+        "an omitted path is the session's"
+    );
+    let synthetic: InputParams = round_trips(json!({
+        "window": "w3",
+        "actions": {"sources": []},
+        "via": {},
+    }));
+    assert_eq!(
+        synthetic.via.map(|policy| policy.prefer),
+        Some(InputPath::Synthetic),
+        "an explicit synthetic path stays explicit"
+    );
     round_trips::<TapParams>(json!({"target": {"element": "w3/e12"}, "button": "secondary"}));
     round_trips::<SwipeParams>(json!({
         "target": {"element": "w3/e12"},

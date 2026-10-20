@@ -1585,7 +1585,14 @@
           "$ref": "#/$defs/Snapshot"
         },
         "via": {
-          "$ref": "#/$defs/InputPolicy"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "window": {
           "$ref": "#/$defs/WindowId"

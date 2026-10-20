@@ -435,12 +435,13 @@ pub struct InputParams {
     pub window: WindowId,
     /// The input.
     pub actions: ActionSequence,
-    /// Which path, for `input.perform`; `input.inject` is always synthetic.
+    /// Which path, for `input.perform`; the session's preference when absent. `input.inject` is
+    /// always synthetic.
     #[cfg_attr(
         feature = "serde",
-        serde(default, skip_serializing_if = "crate::skip::is_default")
+        serde(default, skip_serializing_if = "Option::is_none")
     )]
-    pub via: InputPolicy,
+    pub via: Option<InputPolicy>,
     /// What to read back once the input settled.
     #[cfg_attr(
         feature = "serde",
@@ -456,7 +457,7 @@ impl InputParams {
         Self {
             window,
             actions,
-            via: InputPolicy::default(),
+            via: None,
             snapshot: Snapshot::None,
         }
     }

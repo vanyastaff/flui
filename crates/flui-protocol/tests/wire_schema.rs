@@ -278,6 +278,30 @@ fn every_published_schema_is_additive_to_the_next() {
     }
 }
 
+/// Protocol 0.4 published no method table: its operations were the agent endpoint's `op` names
+/// (ADR-0095), which no schema golden records. So 0.5's `BREAKING` entry is checked against that
+/// list here: it renames exactly those operations, each to a method of the table.
+///
+/// Fails when a rename is dropped from `BREAKING`, which the schema comparison cannot see.
+#[test]
+fn protocol_0_5_renames_every_0_4_operation_into_the_method_table() {
+    const OPERATIONS_0_4: [&str; 4] = ["act", "motion", "read", "windows"];
+    let renamed = BREAKING
+        .iter()
+        .find(|change| change.version == ProtocolVersion::new(0, 5))
+        .expect("0.5 lists its renames")
+        .renamed;
+    let mut from: Vec<&str> = renamed.iter().map(|(from, _)| *from).collect();
+    from.sort_unstable();
+    assert_eq!(from, OPERATIONS_0_4, "every 0.4 operation is renamed once");
+    for (from, to) in renamed {
+        assert!(
+            flui_protocol::method::find(to).is_some(),
+            "`{from}` is renamed to `{to}`, which the method table holds"
+        );
+    }
+}
+
 /// The additivity check itself, against a schema changed the ways it must
 /// refuse (a field or method removed, a name respelled, a field made required)
 /// and the ways it must allow (a new field, type or definition, a listed rename).
