@@ -674,10 +674,31 @@ fn dispatch_owner_turn(turn: OwnerTurn) -> Result<(), DispatchError> {
 fn dispatch_owner_turn_delivery(
     turn: OwnerTurn,
 ) -> Result<flui_runtime::owner::Delivery, DispatchError> {
-    // Window commands queued by application code apply at the start of the
-    // turn, before its frame and outside the turn's callback guard: a native
-    // call re-enters the window procedure.
-    apply_queued_window_commands(turn.owner_thread());
+    // Window commands queued by application code apply outside the turn's
+    // callback guard, since a native call re-enters the window procedure. They
+    // apply at the start of a turn. On every host but Android and iOS, a frame
+    // turn applies them after its frame: the frame runs inside the platform's
+    // paint callback, which holds back the resize a command causes, so a frame
+    // drawn after the command would show the old size. The resize then asks
+    // for the next frame. Either way the turn drains the queue, so a command
+    // whose owner wake failed is applied by the redraw it fell back to.
+    let owner_thread = turn.owner_thread();
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let after_frame = false;
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let after_frame = matches!(turn, OwnerTurn::Presentation(_, RuntimeTask::Frame(_)));
+    if !after_frame {
+        apply_queued_window_commands(owner_thread);
+    }
+    let delivered = deliver_owner_turn(turn);
+    if after_frame {
+        apply_queued_window_commands(owner_thread);
+    }
+    delivered
+}
+
+/// One owner turn's work, inside its callback guard.
+fn deliver_owner_turn(turn: OwnerTurn) -> Result<flui_runtime::owner::Delivery, DispatchError> {
     let host = current_host(turn.owner_thread())?;
     let _callback = host
         .logical()

@@ -380,6 +380,29 @@ fn directional_edges_match_linear_scope_outcomes() {
     }
 }
 
+fn directional_navigation_enters_a_scope_with_nothing_focused() {
+    use flui_foundation::geometry::Rect;
+    use flui_interaction::FocusDirection;
+    for (direction, expected) in [
+        (FocusDirection::Down, 0),
+        (FocusDirection::Right, 0),
+        (FocusDirection::Up, 1),
+        (FocusDirection::Left, 1),
+    ] {
+        let manager = FocusManager::new();
+        let nodes = [FocusNode::new(), FocusNode::new()];
+        nodes[0].set_rect(Rect::new(0.0, 0.0, 10.0, 10.0));
+        nodes[1].set_rect(Rect::new(0.0, 20.0, 10.0, 30.0));
+        let _attachments = [
+            manager.root_scope().attach_node(&nodes[0]).expect("first"),
+            manager.root_scope().attach_node(&nodes[1]).expect("last"),
+        ];
+        assert!(manager.primary_focus().is_none());
+        assert!(manager.focus_in_direction(direction), "{direction:?}");
+        assert!(nodes[expected].has_primary_focus(), "{direction:?}");
+    }
+}
+
 fn weak_traversal_links_revalidate_groups_and_registration_generations() {
     use flui_foundation::geometry::Rect;
     use flui_interaction::{FocusTraversalOverrides, ReadingOrderPolicy, TraversalEdgeBehavior};
@@ -1559,6 +1582,10 @@ fn caught_callback_failures_leave_captures_with_their_owner() {
         (
             "directional scope edges",
             directional_edges_match_linear_scope_outcomes,
+        ),
+        (
+            "directional entry with nothing focused",
+            directional_navigation_enters_a_scope_with_nothing_focused,
         ),
         (
             "subscription ownership and independent listeners",

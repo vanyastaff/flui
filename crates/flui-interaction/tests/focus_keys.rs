@@ -124,7 +124,74 @@ fn focus_transition_contracts() {
             "removal inside a unit enters the unit",
             removal_inside_a_unit_enters_the_unit,
         ),
+        (
+            "a first focus asked behind a barred ancestor lands when it reopens",
+            first_focus_behind_a_barred_ancestor_lands_when_it_reopens,
+        ),
+        (
+            "a superseded inner first focus leaves the scope's restoration",
+            superseded_inner_first_focus_leaves_the_scope_restoration,
+        ),
     ]);
+}
+
+/// A scope inside a node that bars its descendants focus, which asked for
+/// its first focus before it had a candidate, and the candidate that came
+/// later.
+struct PendingInnerFirstFocus {
+    _inner: Rc<FocusScopeNode>,
+    field: Rc<FocusNode>,
+    _attachments: Vec<FocusAttachment>,
+}
+
+fn pending_inner_first_focus(outer: &Rc<FocusNode>) -> PendingInnerFirstFocus {
+    let inner = FocusScopeNode::with_debug_label("inner");
+    let field = FocusNode::with_debug_label("field");
+    let mut attachments = vec![outer.attach_node(inner.as_focus_node()).expect("inner")];
+    outer.set_descendants_are_focusable(false);
+    let _ = inner.set_first_focus();
+    attachments.push(inner.attach_node(&field).expect("field"));
+    assert!(
+        !field.has_primary_focus(),
+        "the barred ancestor keeps it out"
+    );
+    PendingInnerFirstFocus {
+        _inner: inner,
+        field,
+        _attachments: attachments,
+    }
+}
+
+/// The request is accepted while barred, and fulfilled once the ancestor
+/// lets its descendants take focus again.
+fn first_focus_behind_a_barred_ancestor_lands_when_it_reopens() {
+    let manager = FocusManager::new();
+    let gate = FocusNode::with_debug_label("gate");
+    let _gate = manager.root_scope().attach_node(&gate).expect("gate");
+    let pending = pending_inner_first_focus(&gate);
+    gate.set_descendants_are_focusable(true);
+    assert!(pending.field.has_primary_focus());
+}
+
+/// A scope that restores its own focus (a route a closing dialog uncovers)
+/// supersedes the intents waiting inside it before it reopens: the focus
+/// returns to what it remembers.
+fn superseded_inner_first_focus_leaves_the_scope_restoration() {
+    let manager = FocusManager::new();
+    let route = FocusScopeNode::with_debug_label("route");
+    let opener = FocusNode::with_debug_label("opener");
+    let _route = manager
+        .root_scope()
+        .attach_node(route.as_focus_node())
+        .expect("route");
+    let _opener = route.attach_node(&opener).expect("opener");
+    let _ = opener.request_focus();
+    let pending = pending_inner_first_focus(route.as_focus_node());
+    route.supersede_inner_first_focus();
+    route.as_focus_node().set_descendants_are_focusable(true);
+    assert!(route.set_first_focus());
+    assert!(opener.has_primary_focus());
+    assert!(!pending.field.has_primary_focus());
 }
 
 /// A listener that requests focus during a notification has its request

@@ -1,67 +1,132 @@
 //! [`ImageCacheKey`] — the typed identity an async [`ImageProvider`](super::ImageProvider)
-//! publishes for caching, in-flight coalescing, and the subscription an
-//! [`Image`](super::Image) holds while it is mounted.
+//! publishes for the subscription an [`Image`](super::Image) holds while it is
+//! mounted.
 
-/// Identifies a decoded image for the sync decode cache, in-flight load
-/// coalescing, and the subscription an async [`Image`](super::Image) holds
-/// while it is mounted.
+use std::any::{Any, TypeId};
+use std::fmt;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+/// Identifies the image an async provider resolves, for the subscription an
+/// [`Image`](super::Image) holds while it is mounted: a rebuild whose provider
+/// has an equal key resolves nothing again.
 ///
-/// A bare `String` cannot serve this role: `AssetImage("x")` and
-/// `NetworkImage("x")` must never alias the same cache slot even though their
-/// path/URL text happens to match. A `dyn ImageProvider` trait object has no
-/// type-plus-equality identity to lean on, so the provider namespace is part
-/// of the key's identity explicitly.
-///
-/// `#[non_exhaustive]`: a future provider (e.g. a `MemoryImage`
-/// with an async decode) adds a variant, not a breaking change
-/// to existing match arms.
+/// Keys are typed, never labels. The built-in providers key by their asset
+/// registry and source, so equal paths in two registries are two images, and
+/// an asset path never equals a URL with the same text. A custom provider keys
+/// by a value of its own type through [`custom`](Self::custom); values of
+/// different types are never equal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum ImageCacheKey {
-    /// Keyed by the asset path — `AssetImage` (`asset-images` feature).
-    Asset(String),
-    /// Keyed by registry ownership and URL — `NetworkImage`.
-    #[cfg(feature = "network-images")]
-    Network(NetworkImageKey),
+pub struct ImageCacheKey(Repr);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Repr {
+    /// `AssetImage` and `NetworkImage`: a source within one registry.
+    #[cfg(feature = "asset-images")]
+    Registry(RegistryImageKey),
+    Custom(CustomKey),
 }
 
-/// Opaque identity of an HTTP image within its owning asset registry.
+impl ImageCacheKey {
+    /// A key for a custom provider, equal to another only when that one was
+    /// made from an equal value of the same type `K`.
+    pub fn custom<K>(key: K) -> Self
+    where
+        K: Hash + Eq + fmt::Debug + Send + Sync + 'static,
+    {
+        Self(Repr::Custom(CustomKey(Arc::new(key))))
+    }
+
+    /// The key of `source` loaded through `registry`.
+    #[cfg(feature = "asset-images")]
+    pub(super) fn registry(
+        registry: &Arc<flui_assets::AssetRegistry>,
+        source: flui_assets::ImageSource,
+    ) -> Self {
+        Self(Repr::Registry(RegistryImageKey {
+            registry: Arc::downgrade(registry),
+            source,
+        }))
+    }
+}
+
+/// A source within one asset registry.
 ///
-/// Obtain this key through [`super::ImageProvider::cache_key`]. Cloned providers
-/// sharing a registry share identity; different registries do not, even at the
-/// same URL. The key keeps a weak allocation reference, preventing address reuse
-/// while it is retained without retaining the registry or its background runtime.
-#[cfg(feature = "network-images")]
+/// The registry is compared by allocation. The key keeps a weak reference to
+/// it, so the address cannot be reused by another registry while the key is
+/// retained, without keeping the registry or its background runtime alive.
+#[cfg(feature = "asset-images")]
 #[derive(Debug, Clone)]
-pub struct NetworkImageKey {
+struct RegistryImageKey {
     registry: std::sync::Weak<flui_assets::AssetRegistry>,
-    url: String,
+    source: flui_assets::ImageSource,
 }
 
-#[cfg(feature = "network-images")]
-impl NetworkImageKey {
-    pub(super) fn new(registry: &std::sync::Arc<flui_assets::AssetRegistry>, url: String) -> Self {
-        Self {
-            registry: std::sync::Arc::downgrade(registry),
-            url,
-        }
-    }
-}
-
-#[cfg(feature = "network-images")]
-impl PartialEq for NetworkImageKey {
+#[cfg(feature = "asset-images")]
+impl PartialEq for RegistryImageKey {
     fn eq(&self, other: &Self) -> bool {
-        self.url == other.url && self.registry.ptr_eq(&other.registry)
+        self.source == other.source && self.registry.ptr_eq(&other.registry)
     }
 }
 
-#[cfg(feature = "network-images")]
-impl Eq for NetworkImageKey {}
+#[cfg(feature = "asset-images")]
+impl Eq for RegistryImageKey {}
 
-#[cfg(feature = "network-images")]
-impl std::hash::Hash for NetworkImageKey {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        std::hash::Hash::hash(&self.registry.as_ptr(), state);
-        std::hash::Hash::hash(&self.url, state);
+#[cfg(feature = "asset-images")]
+impl Hash for RegistryImageKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.registry.as_ptr().hash(state);
+        self.source.hash(state);
+    }
+}
+
+/// A custom provider's key value, compared by type and then by value.
+#[derive(Clone)]
+struct CustomKey(Arc<dyn DynKey>);
+
+trait DynKey: fmt::Debug + Send + Sync {
+    fn as_any(&self) -> &dyn Any;
+    fn dyn_eq(&self, other: &dyn DynKey) -> bool;
+    fn dyn_hash(&self, state: &mut dyn Hasher);
+}
+
+impl<K> DynKey for K
+where
+    K: Hash + Eq + fmt::Debug + Send + Sync + 'static,
+{
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn dyn_eq(&self, other: &dyn DynKey) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<K>()
+            .is_some_and(|other| other == self)
+    }
+
+    fn dyn_hash(&self, mut state: &mut dyn Hasher) {
+        TypeId::of::<K>().hash(&mut state);
+        self.hash(&mut state);
+    }
+}
+
+impl PartialEq for CustomKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.dyn_eq(&*other.0)
+    }
+}
+
+impl Eq for CustomKey {}
+
+impl Hash for CustomKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.dyn_hash(state);
+    }
+}
+
+impl fmt::Debug for CustomKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }

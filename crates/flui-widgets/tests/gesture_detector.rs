@@ -2025,6 +2025,56 @@ pub(crate) fn gesture_detector_fires_on_tap_for_a_down_up_on_the_child() {
     );
 }
 
+/// A child that counts how often its state is created.
+#[derive(Clone, flui_view::prelude::StatefulView)]
+struct CountsMounts(Arc<AtomicUsize>);
+
+struct CountsMountsState;
+
+impl flui_view::StatefulView for CountsMounts {
+    type State = CountsMountsState;
+    fn create_state(&self) -> Self::State {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        CountsMountsState
+    }
+}
+
+impl flui_view::ViewState<CountsMounts> for CountsMountsState {
+    fn build(&self, _: &CountsMounts, _: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+        ColoredBox::new(Color::rgb(10, 20, 30))
+    }
+}
+
+/// Setting and clearing `on_tap` (a button being enabled and disabled)
+/// updates the detector in place: the child keeps its state, and a tap
+/// reaches the handler once one is set again.
+pub(crate) fn toggling_on_tap_keeps_the_child_state() {
+    let mounts = Arc::new(AtomicUsize::new(0));
+    let taps = Arc::new(AtomicUsize::new(0));
+    let detector = |tappable: bool| {
+        let mut detector = GestureDetector::new().child(CountsMounts(Arc::clone(&mounts)));
+        if tappable {
+            let taps = Arc::clone(&taps);
+            detector = detector.on_tap(move |_cx| {
+                taps.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+        detector
+    };
+    let mut laid = lay_out(detector(true), tight(100.0, 100.0));
+    for tappable in [false, true, false, true] {
+        laid.pump_widget(detector(tappable));
+    }
+    assert_eq!(
+        mounts.load(Ordering::SeqCst),
+        1,
+        "the child keeps its state through every toggle"
+    );
+    laid.dispatch_pointer_down(50.0, 50.0);
+    laid.dispatch_pointer_up(50.0, 50.0);
+    assert_eq!(taps.load(Ordering::SeqCst), 1);
+}
+
 /// The gesture arena's rule is that the first member to accept, or the last
 /// member not to reject, wins. A drag past the slop makes the tap recognizer
 /// reject itself, leaving the pan recognizer as the last remaining (and thus

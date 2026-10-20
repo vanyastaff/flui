@@ -46,11 +46,9 @@ fn pump_until(laid: &mut common::LaidOut, mut check: impl FnMut(&mut common::Lai
 //
 // These tests need the two loads' completion ORDER to be a test input rather
 // than a race, so they run against a provider whose async resolution the test
-// completes by hand. Such
-// a provider never routes through `decode_cache::load_coalesced`, so nothing
-// it resolves is ever written to the process-wide sync cache — which is
-// exactly what keeps every one of its keys a permanent cache MISS, and each
-// test's own two loads independent.
+// completes by hand. Such a provider caches nothing (`ImageProvider::cached`
+// stays `None`), which keeps every one of its keys a permanent cache MISS,
+// and each test's own two loads independent.
 
 /// Shared state of one [`ControlledFuture`]: the result the test will hand
 /// it, the waker to fire when that happens, and whether the future was
@@ -144,7 +142,7 @@ impl ControlledProvider {
     fn new(key: &str) -> (Self, Completer) {
         let completer = Completer::default();
         let provider = Self {
-            key: flui_widgets::ImageCacheKey::Asset(format!("controlled://{key}")),
+            key: flui_widgets::ImageCacheKey::custom(key.to_owned()),
             state: Arc::clone(&completer.state),
         };
         (provider, completer)
