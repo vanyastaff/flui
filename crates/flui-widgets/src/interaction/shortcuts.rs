@@ -229,8 +229,12 @@ impl SingleActivator {
         };
         (self.control || self.meta)
             && !produced.as_str().is_ascii()
-            && latin_of_code(event.code)
-                .is_some_and(|latin| trigger.as_str().eq_ignore_ascii_case(latin))
+            && latin_of_code(event.code).is_some_and(|latin| {
+                let shifted = event.modifiers.contains(Modifiers::SHIFT);
+                let wanted = trigger.as_str();
+                wanted.eq_ignore_ascii_case(latin)
+                    || (shifted && shifted_latin(latin).is_some_and(|symbol| wanted == symbol))
+            })
     }
 
     /// Whether one key event can trigger both `self` and `other`, by the
@@ -274,6 +278,34 @@ fn latin_of_code(code: Code) -> Option<&'static str> {
         "Quote" => "'",
         "Backquote" => "`",
         "Backslash" => "\\",
+        _ => return None,
+    })
+}
+
+/// The symbol a US layout puts on the same key as `plain` under Shift.
+fn shifted_latin(plain: &str) -> Option<&'static str> {
+    Some(match plain {
+        "1" => "!",
+        "2" => "@",
+        "3" => "#",
+        "4" => "$",
+        "5" => "%",
+        "6" => "^",
+        "7" => "&",
+        "8" => "*",
+        "9" => "(",
+        "0" => ")",
+        "[" => "{",
+        "]" => "}",
+        "-" => "_",
+        "=" => "+",
+        "," => "<",
+        "." => ">",
+        "/" => "?",
+        ";" => ":",
+        "'" => "\"",
+        "`" => "~",
+        "\\" => "|",
         _ => return None,
     })
 }

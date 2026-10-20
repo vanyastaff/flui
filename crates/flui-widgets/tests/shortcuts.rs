@@ -800,6 +800,14 @@ pub(crate) mod activator_tests {
             "Russian layout, Cmd+Х on the bracket key (the macOS back chord)"
         );
         assert!(
+            SingleActivator::character("{").meta().shift().matches(&on(
+                "Х",
+                Code::BracketLeft,
+                Modifiers::META | Modifiers::SHIFT
+            )),
+            "Russian layout, Cmd+Shift+Х names the shifted US symbol of the bracket key"
+        );
+        assert!(
             !copy.matches(&on("с", Code::KeyC, Modifiers::NONE)),
             "typing с is not the chord"
         );
