@@ -2,6 +2,8 @@
 
 #[path = "annotations.rs"]
 mod annotations;
+#[path = "inspect.rs"]
+mod inspect;
 #[path = "texture_registry.rs"]
 mod texture_registry;
 

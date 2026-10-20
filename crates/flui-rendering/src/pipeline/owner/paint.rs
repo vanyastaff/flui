@@ -333,7 +333,12 @@ impl PipelineOwner<PaintPhase> {
                     self.last_follower_offsets = follower_offsets;
                     self.last_hidden_follower_ids = hidden_follower_ids;
 
-                    self.scenes_painted = self.scenes_painted.saturating_add(1);
+                    // A u64 of frames outlasts any process; reusing the last number instead
+                    // would let a kept layer id read the next scene's layer.
+                    self.scenes_painted = self
+                        .scenes_painted
+                        .checked_add(1)
+                        .expect("BUG: u64 scene numbers exhausted");
                     let scene = std::num::NonZeroU64::new(self.scenes_painted)
                         .expect("BUG: incremented from at least 0 just above");
                     self.last_layer_tree = Some(layer_tree.with_scene(scene));

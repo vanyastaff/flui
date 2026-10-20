@@ -4,12 +4,14 @@
 //! are minted per frame, so a layer of the next frame's tree is a different node even when it
 //! paints the same thing, and an id kept from an earlier scene is gone here. A layer that a
 //! repaint boundary originated links to that boundary's render object. Its rect is the rectangle
-//! the layer defines in its own coordinates, for the variants that define one.
+//! the layer defines in its own coordinates, for the variants that define one; a clip layer adds
+//! how it rasterises the edge.
 
 use flui_foundation::LayerId;
 use flui_foundation::inspect::{
-    Fields, Inspect, InspectId, InspectTree, Link, Links, NodeView, SceneLayer, Unit,
+    Fields, Inspect, InspectId, InspectTree, Link, Links, NodeView, SceneLayer, Unit, Value,
 };
+use flui_painting::paint::Clip;
 
 use crate::{Layer, LayerTree};
 
@@ -33,6 +35,16 @@ impl Inspect for Layer {
             Layer::ClipRect(layer) => {
                 out.field("clip_rect", &layer.clip_rect())
                     .unit(Unit::LogicalPx);
+                out.value("clip_behavior", clip_value(layer.clip_behavior()));
+            }
+            Layer::ClipRRect(layer) => {
+                out.value("clip_behavior", clip_value(layer.clip_behavior()));
+            }
+            Layer::ClipPath(layer) => {
+                out.value("clip_behavior", clip_value(layer.clip_behavior()));
+            }
+            Layer::ClipSuperellipse(layer) => {
+                out.value("clip_behavior", clip_value(layer.clip_behavior()));
             }
             Layer::Picture(layer) => {
                 out.field("commands", &layer.picture().len());
@@ -87,5 +99,18 @@ impl InspectTree for LayerTree {
             .unwrap_or_default()
             .iter()
             .map(|&child| self.in_scene(child).into())
+    }
+}
+
+/// How a clip layer rasterises its edge, which tells clips of the same shape apart.
+fn clip_value(clip: Clip) -> Value<'static> {
+    Value::Variant {
+        ty: "Clip",
+        name: match clip {
+            Clip::None => "None",
+            Clip::HardEdge => "HardEdge",
+            Clip::AntiAlias => "AntiAlias",
+            Clip::AntiAliasWithSaveLayer => "AntiAliasWithSaveLayer",
+        },
     }
 }
