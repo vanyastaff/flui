@@ -2,6 +2,8 @@
 //! trees link to each other, budgets cut a read with counts of what was left out, and an id
 //! from before a removal is gone.
 
+use core::num::NonZeroU32;
+
 use flui_foundation::inspect::{
     Change, DiffOptions, Inspect, Link, OwnedValue, SnapshotError, SnapshotNode, SnapshotQuery,
     Variant, diff,
@@ -307,7 +309,7 @@ fn budgets_truncate_every_tree_with_omitted_children_counts() {
         let one = read(
             &app,
             SnapshotQuery {
-                max_nodes: Some(1),
+                max_nodes: Some(NonZeroU32::MIN),
                 ..everything()
             },
         )

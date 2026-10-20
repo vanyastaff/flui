@@ -1,6 +1,7 @@
 //! The owned snapshot of a tree walk, and typed access to it.
 
 use core::fmt;
+use core::num::NonZeroU32;
 use core::time::Duration;
 
 use crate::geometry::{EdgeInsets, Matrix4, Offset, Rect, Size};
@@ -169,8 +170,9 @@ pub struct SnapshotQuery {
     pub root: Option<InspectId>,
     /// How many levels below the start to descend; `None` for all.
     pub max_depth: Option<u32>,
-    /// How many nodes to take at most; the rest are counted in `omitted_children`.
-    pub max_nodes: Option<u32>,
+    /// How many nodes to take at most, the start node among them, so a snapshot always has one;
+    /// the rest are counted in `omitted_children`.
+    pub max_nodes: Option<NonZeroU32>,
     /// The most detailed fields to keep.
     pub level: Level,
 }
@@ -187,7 +189,6 @@ impl Default for SnapshotQuery {
 }
 
 /// One node of an owned snapshot.
-#[derive(Debug)]
 pub struct SnapshotNode {
     /// The node's id in its tree.
     pub id: InspectId,
@@ -231,7 +232,7 @@ pub enum SnapshotError {
 ///
 /// The walk keeps its own stack, so a deep chain costs no Rust stack; so do the snapshot's own
 /// walks ([`iter`](SnapshotNode::iter), [`diff`](super::diff()), [`render`](super::render())) and
-/// its clone, comparison and drop.
+/// its clone, comparison, `Debug` and drop.
 ///
 /// # Errors
 ///
@@ -245,7 +246,7 @@ pub fn snapshot<T: InspectTree + ?Sized>(
         .root
         .or_else(|| tree.root())
         .ok_or(SnapshotError::Empty)?;
-    let mut budget = query.max_nodes.unwrap_or(u32::MAX);
+    let mut budget = query.max_nodes.map_or(u32::MAX, NonZeroU32::get);
     let mut node = take(tree, start, &query, &mut budget).ok_or(SnapshotError::Gone(start))?;
     let mut children = tree.children(start);
     let mut depth = 0_u32;
@@ -671,5 +672,44 @@ impl Drop for SnapshotNode {
         while let Some(mut node) = pending.pop() {
             pending.append(&mut node.children);
         }
+    }
+}
+
+/// Lists the subtree in tree order, each node with its depth, its own data and how many
+/// children it has, so a deep snapshot costs no Rust stack.
+impl fmt::Debug for SnapshotNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut stack = vec![(self, 0_usize)];
+        let nodes = core::iter::from_fn(move || {
+            let (node, depth) = stack.pop()?;
+            stack.extend(node.children.iter().rev().map(|child| (child, depth + 1)));
+            Some(Shallow { node, depth })
+        });
+        f.debug_list().entries(nodes).finish()
+    }
+}
+
+/// One node of a snapshot's `Debug` list, without its children.
+struct Shallow<'a> {
+    node: &'a SnapshotNode,
+    depth: usize,
+}
+
+impl fmt::Debug for Shallow<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let node = self.node;
+        f.debug_struct("SnapshotNode")
+            .field("depth", &self.depth)
+            .field("id", &node.id)
+            .field("kind", &node.kind)
+            .field("kind_args", &node.kind_args)
+            .field("facts", &node.facts)
+            .field("fields", &node.fields)
+            .field("rect", &node.rect)
+            .field("links", &node.links)
+            .field("children", &node.children.len())
+            .field("omitted_children", &node.omitted_children)
+            .field("debug_fields", &node.debug_fields)
+            .finish()
     }
 }

@@ -92,6 +92,16 @@ pub enum Change {
         /// Its size after.
         to: Size,
     },
+    /// A node whose bounds appeared or disappeared: one snapshot has them and the other does
+    /// not, as a picture's do when it changes between an unbounded fill and a bounded shape.
+    Bounds {
+        /// The node.
+        node: NodePath,
+        /// Its bounds before, `None` when it had none.
+        from: Option<Rect>,
+        /// Its bounds after, `None` when it has none.
+        to: Option<Rect>,
+    },
     /// An object's own field whose value changed, appeared or disappeared.
     Field {
         /// The node.
@@ -251,22 +261,30 @@ fn compare_node(
     options: &DiffOptions,
     changes: &mut Vec<Change>,
 ) {
-    if let (Some(from), Some(to)) = (before.rect, after.rect) {
-        let moved = !close(from.left(), to.left(), options.pixels)
-            || !close(from.top(), to.top(), options.pixels);
-        if moved {
-            changes.push(Change::Moved {
-                node: path_of(after, path),
-                from,
-                to,
-            });
-        } else if !size_close(from.size(), to.size(), options.pixels) {
-            changes.push(Change::Resized {
-                node: path_of(after, path),
-                from: from.size(),
-                to: to.size(),
-            });
+    match (before.rect, after.rect) {
+        (Some(from), Some(to)) => {
+            let moved = !close(from.left(), to.left(), options.pixels)
+                || !close(from.top(), to.top(), options.pixels);
+            if moved {
+                changes.push(Change::Moved {
+                    node: path_of(after, path),
+                    from,
+                    to,
+                });
+            } else if !size_close(from.size(), to.size(), options.pixels) {
+                changes.push(Change::Resized {
+                    node: path_of(after, path),
+                    from: from.size(),
+                    to: to.size(),
+                });
+            }
         }
+        (None, None) => {}
+        (from, to) => changes.push(Change::Bounds {
+            node: path_of(after, path),
+            from,
+            to,
+        }),
     }
 
     let node = || path_of(after, path);

@@ -33,3 +33,8 @@
   Every layer variant reports the parameters that change what it paints (a colour or image
   filter, a shader mask, a texture, a follower's anchors), and a picture a fingerprint of its
   commands, so `diff` sees a changed effect or drawing.
+- `diff` reports bounds that appear or disappear as the new `Change::Bounds`.
+- `SnapshotQuery::max_nodes` is an `Option<NonZeroU32>`: the start node counts toward it, so a
+  limit of zero, which no snapshot could honour, cannot be written.
+- `SnapshotNode`'s `Debug` lists the subtree in tree order, each node with its depth and its
+  number of children, instead of nesting them.

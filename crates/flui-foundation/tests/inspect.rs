@@ -12,7 +12,7 @@ use std::time::Duration;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Rect, Size};
 use flui_foundation::inspect::{
     Change, DiffOptions, Field, FieldError, Fields, Inspect, InspectId, InspectTree, Level, Link,
-    Links, MatchError, Meta, NodeView, OwnedValue, Plain, Rgba, SceneLayer, Seq, Sink,
+    Links, MatchError, Meta, NodePath, NodeView, OwnedValue, Plain, Rgba, SceneLayer, Seq, Sink,
     SnapshotError, SnapshotNode, SnapshotQuery, ToValue, Unit, Value, Variant, diff, kind_args_of,
     kind_of, render, snapshot,
 };
@@ -713,7 +713,7 @@ RenderFlex r1  0,0 360x48
         &sample(8.0),
         SnapshotQuery {
             max_depth: Some(1),
-            max_nodes: Some(3),
+            max_nodes: NonZeroU32::new(3),
             level: Level::Summary,
             ..SnapshotQuery::default()
         },
@@ -929,6 +929,34 @@ fn the_diff_reports_a_moved_node_with_its_delta_and_ignores_a_sub_tolerance_chan
 }
 
 /// The sample with the padding also describing a field named as the tree's fact.
+/// Bounds that appear or disappear are a change, though neither side has a rect to move from.
+///
+/// Fails when the diff compares bounds only where both snapshots have them.
+#[test]
+fn the_diff_reports_bounds_that_appear_or_disappear() {
+    let bounded = whole(&sample(8.0));
+    let mut unbounded = bounded.clone();
+    unbounded.rect = None;
+    let rect = bounded.rect;
+    for (before, after, from, to) in [
+        (&bounded, &unbounded, rect, None),
+        (&unbounded, &bounded, None, rect),
+    ] {
+        assert_eq!(
+            diff(before, after, DiffOptions::default()),
+            vec![Change::Bounds {
+                node: NodePath {
+                    id: bounded.id,
+                    kind: bounded.kind,
+                    path: Vec::new(),
+                },
+                from,
+                to,
+            }]
+        );
+    }
+}
+
 fn with_attached_field(value: f64) -> Tree {
     let mut tree = sample(8.0);
     tree.nodes

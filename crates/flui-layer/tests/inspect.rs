@@ -143,7 +143,7 @@ fn layers_that_differ_only_in_their_effect_diff_apart() {
 }
 
 /// A chain far deeper than the thread's stack would hold a frame per level snapshots, renders,
-/// diffs, clones, compares and drops.
+/// diffs, clones, compares, debug-prints and drops.
 ///
 /// Fails, by overflowing the stack, when any of those walks recurses per level.
 #[test]
@@ -159,10 +159,9 @@ fn a_deep_layer_chain_snapshots_without_recursion() {
     let mut lines = Lines(0);
     render(&root, Level::Summary, &Plain, &mut lines).expect("counting never fails");
     assert_eq!(lines.0, DEPTH);
+    assert_eq!(format!("{root:?}").matches("SnapshotNode {").count(), DEPTH);
     let copy = root.clone();
-    // Not `assert_eq!`: a failure would print the chain through the recursive `Debug`.
-    let equal = copy == root;
-    assert!(equal, "a copy compares equal");
+    assert_eq!(copy, root);
     assert_eq!(diff(&root, &copy, DiffOptions::default()), Vec::new());
 }
 
