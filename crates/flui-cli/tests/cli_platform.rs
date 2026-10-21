@@ -47,6 +47,66 @@ fn platform_remove_with_yes_skips_the_prompt_and_updates_the_config() {
     );
 }
 
+/// The configuration changes the generated Activity declares it handles, so
+/// Android reports each as `ConfigChanged` instead of recreating the Activity
+/// and restarting `android_main`. The host reads again what it takes from
+/// them (window size and insets, displays and density, night mode, text
+/// sizing, bold text and preferences); keyboard and navigation devices only
+/// deliver input, and attaching one must not restart the app. `mcc`, `mnc`,
+/// `touchscreen`, `colorMode` and `grammaticalGender` stay undeclared until
+/// the host follows them: each joins this list with the read it needs.
+const HANDLED_CONFIG_CHANGES: &[&str] = &[
+    "density",
+    "fontScale",
+    "fontWeightAdjustment",
+    "keyboard",
+    "keyboardHidden",
+    "layoutDirection",
+    "locale",
+    "navigation",
+    "orientation",
+    "screenLayout",
+    "screenSize",
+    "smallestScreenSize",
+    "uiMode",
+];
+
+/// Both packaging paths, Gradle's and the SDK build-tools', read this one
+/// manifest, so it is where the declared set is pinned.
+#[test]
+fn the_android_activity_handles_the_configuration_changes_the_host_follows() {
+    let tmp = TempDir::new().expect("temp dir");
+    flui()
+        .args([
+            "create",
+            "config-changes",
+            "--org",
+            "com.test",
+            "--template",
+            "empty",
+            "--platforms",
+            "android",
+            "--no-check",
+        ])
+        .arg("--path")
+        .arg(tmp.path())
+        .assert()
+        .success();
+    let manifest = std::fs::read_to_string(
+        tmp.path()
+            .join("config-changes/platforms/android/app/src/main/AndroidManifest.xml"),
+    )
+    .expect("generated Android manifest");
+
+    let (_, attribute) = manifest
+        .split_once("android:configChanges=\"")
+        .expect("the Activity declares configChanges");
+    let (declared, _) = attribute.split_once('"').expect("a closed attribute");
+    let mut declared: Vec<&str> = declared.split('|').collect();
+    declared.sort_unstable();
+    assert_eq!(declared, HANDLED_CONFIG_CHANGES);
+}
+
 /// A project created with every platform, inside its own git repository.
 fn project_with_every_platform() -> (TempDir, std::path::PathBuf) {
     let tmp = TempDir::new().expect("temp dir");
