@@ -32,15 +32,15 @@ Each has shipped more than once:
 
 ## Codebase map
 
-`docs/crates.md` maps the 24 crates, `packages/` and the facade (`src/`); each manifest's
+`docs/crates.md` maps the crates, `packages/` and the facade (`src/`); each manifest's
 `[package.metadata.flui]` gives tier and layer. Not visible from the layout:
 
 - only `flui-app` depends on `flui-platform`, and `windows::*`/`objc2::*` types stay in it
   (ADR-0082); `flui-runtime` has no host, platform or GPU edge (ADR-0083);
 - official packages build on `flui-sdk` alone (ADR-0088); `flui-hot-reload` is one, still under
   `crates/`, reached only through `DevReloadHook`;
-- a crate's invariants are in its `ARCHITECTURE.md` (under `docs/` for `flui-animation`,
-  `flui-assets`, `flui-interaction`).
+- a crate's invariants are in its `ARCHITECTURE.md` (in the crate's `docs/` for
+  `flui-animation`, `flui-assets`, `flui-interaction`).
 
 ## Working here
 
@@ -121,9 +121,10 @@ only in input join an existing table test, and a crate's integration tests are m
 
 ## Review guidelines
 
-Codex reviews pull requests from this section. Report defects with a concrete failure scenario,
-and code an experienced Rust developer would be embarrassed by, with the better shape. What
-this repository keeps getting wrong:
+Pull request reviewers (Codex, Claude Code Review, a local `/code-review`) work from this
+section; [`REVIEW.md`](REVIEW.md) sets severity and scope for Claude Code Review. Report defects
+with a concrete failure scenario, and code an experienced Rust developer would be embarrassed
+by, with the better shape. What this repository keeps getting wrong:
 
 - a new `pub` item that no production path reaches, unless the PR names the follow-up;
 - a regenerated `*.snap` the PR doesn't explain;
