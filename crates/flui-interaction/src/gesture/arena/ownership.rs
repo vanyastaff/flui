@@ -17,7 +17,7 @@
 
 use std::rc::Rc;
 
-use flui_foundation::geometry::{Axis, Offset};
+use flui_foundation::geometry::{Axis, Matrix4, Offset};
 
 use crate::gesture::constraints::DragAxis;
 
@@ -89,10 +89,105 @@ impl PanClaimNode {
     }
 }
 
+/// How a member sees displacement: the linear part of the transform from the
+/// root's space to the member's own, so an axial member measures a rotated or
+/// scaled route along the axis it drags on, not along the root's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MotionFrame {
+    /// Row-major 2 × 2: `local = [a b; c d] · root`.
+    linear: [f64; 4],
+}
+
+/// The chord that differentiates a route, relative to its coordinates: far
+/// above the rounding of the largest of them, far below any curvature a
+/// perspective route shows within it.
+const STEP_RELATIVE: f64 = 1.0 / 65_536.0;
+
+impl MotionFrame {
+    /// The root's own space.
+    pub(crate) const IDENTITY: Self = Self {
+        linear: [1.0, 0.0, 0.0, 1.0],
+    };
+
+    /// The frame of a Down's target: the transform its events were mapped
+    /// by, differentiated at the root-space contact so a perspective route
+    /// reports the motion it has there, not at the origin.
+    pub(crate) fn of_down(dispatch: crate::pointer::PointerDispatch<'_>) -> Self {
+        use crate::events::PointerEventExt as _;
+        let (Some(transform), Some(at)) = (dispatch.root_to_local(), dispatch.global.position())
+        else {
+            return Self::IDENTITY;
+        };
+        Self::from_root_to_local(transform, at)
+    }
+
+    /// The frame of a target whose events the root-to-local `transform` maps,
+    /// at the root-space point `at`.
+    fn from_root_to_local(transform: &Matrix4, at: Offset<f64>) -> Self {
+        // The chords go through the plane unprojection that localizes every
+        // delivered position, so a perspective route is differentiated by
+        // the mapping the recognizer actually sees.
+        let Some((ox, oy)) = transform.unproject_to_plane(at.dx, at.dy) else {
+            return Self::IDENTITY;
+        };
+        // The step scales with the coordinates in play: a fixed one pixel
+        // vanishes next to a huge translation, on either side of the map.
+        let step = at
+            .dx
+            .abs()
+            .max(at.dy.abs())
+            .max(ox.abs())
+            .max(oy.abs())
+            .max(1.0)
+            * STEP_RELATIVE;
+        let (Some((x_x, x_y)), Some((y_x, y_y))) = (
+            transform.unproject_to_plane(at.dx + step, at.dy),
+            transform.unproject_to_plane(at.dx, at.dy + step),
+        ) else {
+            return Self::IDENTITY;
+        };
+        let linear = [
+            (x_x - ox) / step,
+            (y_x - ox) / step,
+            (x_y - oy) / step,
+            (y_y - oy) / step,
+        ];
+        if linear.iter().all(|value| value.is_finite()) {
+            Self { linear }
+        } else {
+            Self::IDENTITY
+        }
+    }
+
+    /// `root` displacement in the member's own space.
+    ///
+    /// The direction is the member's own; the length stays the root's, so a
+    /// scaled route compares like a rotated one: slop and ownership are both
+    /// in root logical pixels.
+    pub(crate) fn localize(self, root: Offset<f64>) -> Offset<f64> {
+        let [a, b, c, d] = self.linear;
+        let local = Offset::new(a * root.dx + b * root.dy, c * root.dx + d * root.dy);
+        let length = local.dx.hypot(local.dy);
+        if length > 0.0 && length.is_finite() {
+            let scale = root.dx.hypot(root.dy) / length;
+            Offset::new(local.dx * scale, local.dy * scale)
+        } else {
+            local
+        }
+    }
+}
+
+impl Default for MotionFrame {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
 /// One moving member competing for a contact, in route order (innermost
 /// first).
 pub(super) struct MotionCandidate<'a> {
     pub(super) role: MotionRole,
+    pub(super) frame: MotionFrame,
     pub(super) pan_claim: Option<&'a Rc<PanClaimNode>>,
 }
 
@@ -141,8 +236,9 @@ pub(super) fn motion_owner(
         .iter()
         .position(|candidate| matches!(candidate.role, MotionRole::Free | MotionRole::ChannelLeaf));
     // The larger component wins; iteration is innermost first, so only a
-    // strictly larger component displaces an earlier member.
-    let mut best: Option<(usize, f64)> = None;
+    // strictly larger component displaces an earlier member. Each axial
+    // member measures the motion in its own space, along its own axis.
+    let mut best: Option<(usize, f64, f64)> = None;
     for (index, candidate) in candidates.iter().enumerate() {
         let MotionRole::Axial(axis) = candidate.role else {
             continue;
@@ -152,22 +248,44 @@ pub(super) fn motion_owner(
         {
             continue;
         }
-        let projection = component(displacement, axis);
-        if best.is_none_or(|(_, larger)| projection > larger) {
-            best = Some((index, projection));
+        let local = candidate.frame.localize(displacement);
+        let projection = component(local, axis);
+        if best.is_none_or(|(_, larger, _)| projection > larger) {
+            best = Some((index, projection, local.distance_squared()));
         }
     }
     match (free, best) {
-        // |d · axis| ≥ |d| cos 45° ⇔ 2 (d · axis)² ≥ |d|², exact at 45°.
-        (Some(free), Some((axial, projection))) => {
-            if 2.0 * projection * projection >= displacement.distance_squared() {
+        // |d · axis| ≥ |d| cos 45° ⇔ 2 (d · axis)² ≥ |d|², exact at 45°, with
+        // both sides in the axial member's space.
+        (Some(free), Some((axial, projection, magnitude_squared))) => {
+            if 2.0 * projection * projection >= magnitude_squared {
                 Some(axial)
             } else {
                 Some(free)
             }
         }
+        (None, Some((axial, _, _))) => Some(axial),
         (Some(free), None) => Some(free),
-        (None, Some((axial, _))) => Some(axial),
         (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A quarter turn behind a huge translation: a one-pixel chord rounds
+    /// away on the local side, and the frame must still turn root `y` into
+    /// local `x`.
+    #[test]
+    fn frame_survives_a_large_translation() {
+        let transform = Matrix4::translation(-1e20, 0.0, 0.0)
+            * Matrix4::rotation_z(std::f64::consts::FRAC_PI_2);
+        let frame = MotionFrame::from_root_to_local(&transform, Offset::new(1e20, 0.0));
+        let local = frame.localize(Offset::new(0.0, 20.0));
+        assert!(
+            (local.dx.abs() - 20.0).abs() < 1e-3 && local.dy.abs() < 1e-3,
+            "{local:?}"
+        );
     }
 }

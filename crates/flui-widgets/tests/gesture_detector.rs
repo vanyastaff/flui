@@ -2613,3 +2613,108 @@ pub(crate) fn scoped_position_smoothing_reaches_drag_slot_updates() {
     );
     assert!(smoothed < 2.0, "smoothed jitter {smoothed} of 8 px");
 }
+
+/// A tap reports a cancel only for a press it showed: a contact lost before
+/// the press timeout reports nothing, one lost after reports down then
+/// cancel, and a tap reports down, up, tap.
+pub(crate) fn a_tap_cancel_only_follows_a_tap_down() {
+    use flui_widgets::SizedBox;
+    use std::{cell::RefCell, rc::Rc, time::Duration};
+
+    #[derive(Clone, Copy)]
+    enum Row {
+        Tap,
+        LostEarly,
+        LostLate,
+    }
+    for (row, expected) in [
+        (Row::Tap, vec!["down", "up", "tap"]),
+        (Row::LostEarly, vec![]),
+        (Row::LostLate, vec!["down", "cancel"]),
+    ] {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let entry = |name: &'static str| {
+            let log = Rc::clone(&log);
+            move || log.borrow_mut().push(name)
+        };
+        let (down, up, tap, cancel) = (entry("down"), entry("up"), entry("tap"), entry("cancel"));
+        let mut laid = lay_out(
+            GestureDetector::new()
+                .behavior(flui_widgets::HitTestBehavior::Opaque)
+                .on_long_press(|_| {})
+                .child(
+                    GestureDetector::new()
+                        .behavior(flui_widgets::HitTestBehavior::Opaque)
+                        .on_tap_down(move |_, _| down())
+                        .on_tap_up(move |_, _| up())
+                        .on_tap(move |_| tap())
+                        .on_tap_cancel(move |_, _| cancel())
+                        .child(SizedBox::new(100.0, 100.0)),
+                ),
+            tight(100.0, 100.0),
+        );
+        laid.dispatch_pointer_down(50.0, 50.0);
+        match row {
+            Row::Tap => {
+                laid.pump_for(Duration::from_millis(30));
+                laid.dispatch_pointer_up(50.0, 50.0);
+            }
+            Row::LostEarly => {
+                laid.pump_for(Duration::from_millis(30));
+                laid.dispatch_pointer_move_after(50.0, 95.0, Duration::from_millis(10));
+                laid.dispatch_pointer_up(50.0, 95.0);
+            }
+            Row::LostLate => {
+                // The long press takes the contact after its deadline.
+                laid.pump_for(Duration::from_millis(700));
+                laid.dispatch_pointer_up(50.0, 50.0);
+            }
+        }
+        laid.pump_for(Duration::from_millis(16));
+        assert_eq!(*log.borrow(), expected);
+    }
+}
+
+/// An axial drag measures a rotated route along its own axis: a horizontal
+/// drag inside a quarter turn takes a vertical motion of the root, and wins
+/// the tie against an enclosing vertical drag, which is the outer one's axis
+/// only in root space.
+pub(crate) fn a_rotated_axial_drag_claims_motion_along_its_own_axis() {
+    use flui_foundation::geometry::Matrix4;
+    use flui_painting::Alignment;
+    use flui_widgets::{SizedBox, Transform};
+    use std::{cell::Cell, rc::Rc, time::Duration};
+
+    let inner_updates = Rc::new(Cell::new(0_u32));
+    let outer_updates = Rc::new(Cell::new(0_u32));
+    let (inner, outer) = (inner_updates.clone(), outer_updates.clone());
+    let laid = lay_out(
+        GestureDetector::new()
+            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .drag(DragSlot::vertical().on_update(move |_, _| outer.set(outer.get() + 1)))
+            .child(
+                Transform::new(Matrix4::rotation_z(std::f64::consts::FRAC_PI_2))
+                    .alignment(Alignment::CENTER)
+                    .child(
+                        GestureDetector::new()
+                            .behavior(flui_widgets::HitTestBehavior::Opaque)
+                            .drag(
+                                DragSlot::horizontal()
+                                    .on_update(move |_, _| inner.set(inner.get() + 1)),
+                            )
+                            .child(SizedBox::new(100.0, 100.0)),
+                    ),
+            ),
+        tight(100.0, 100.0),
+    );
+    laid.dispatch_pointer_down(50.0, 20.0);
+    for y in [40.0, 60.0, 80.0] {
+        laid.dispatch_pointer_move_after(50.0, y, Duration::from_millis(20));
+    }
+    laid.dispatch_pointer_up(50.0, 80.0);
+    assert_eq!(
+        (inner_updates.get() > 0, outer_updates.get()),
+        (true, 0),
+        "the inner drag owns a motion along its own horizontal axis"
+    );
+}

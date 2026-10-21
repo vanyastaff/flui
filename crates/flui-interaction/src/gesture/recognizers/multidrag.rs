@@ -13,7 +13,9 @@ use crate::gesture::observer::GestureContest;
 use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
-    gesture::arena::{GestureArena, GestureArenaEntry, GestureArenaMember, MotionRole},
+    gesture::arena::{
+        GestureArena, GestureArenaEntry, GestureArenaMember, MotionFrame, MotionRole,
+    },
     gesture::settings::{GestureSettings, GestureSettingsProvider},
     gesture::{PublishedPosition, VelocityTracker},
     ids::PointerId,
@@ -531,7 +533,10 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         if self.pointers.borrow().contains_key(&pointer) {
             return;
         }
-        let Some(entry) = self.membership.join_from(pointer, dispatch.feeder()) else {
+        let Some(entry) =
+            self.membership
+                .join_from(pointer, dispatch.feeder(), MotionFrame::of_down(dispatch))
+        else {
             return;
         };
         let PointerEvent::Down(data) = dispatch.local else {

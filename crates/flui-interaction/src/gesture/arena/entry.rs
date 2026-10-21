@@ -251,6 +251,7 @@ impl ArenaEntryData {
                 movers.push(candidate);
                 candidates.push(MotionCandidate {
                     role,
+                    frame: admission.frame,
                     pan_claim: admission.pan_claim.as_ref(),
                 });
             }
@@ -445,6 +446,7 @@ impl ArenaEntryData {
                 role: context.role,
                 dormant: false,
                 feeder: context.feeder,
+                frame: context.frame,
             },
         ));
         Some(rejected)

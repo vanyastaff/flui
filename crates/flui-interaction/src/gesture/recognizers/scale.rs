@@ -39,7 +39,8 @@ use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{
-        GestureArenaEntry, GestureArenaMember, GestureDisposition, MotionRole, SweepModel,
+        GestureArenaEntry, GestureArenaMember, GestureDisposition, MotionFrame, MotionRole,
+        SweepModel,
     },
     gesture::settings::{GestureSettings, GestureSettingsProvider},
     gesture::{AxisLock, PositionSmoother, TransformLock, Velocity, VelocityTracker, on_rail},
@@ -1651,7 +1652,10 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         let settings = self
             .settings
             .snapshot_for(super::recognizer::admission_kind(down.local));
-        let Some(entry) = self.membership.join_from(pointer, down.feeder()) else {
+        let Some(entry) =
+            self.membership
+                .join_from(pointer, down.feeder(), MotionFrame::of_down(down))
+        else {
             return;
         };
 

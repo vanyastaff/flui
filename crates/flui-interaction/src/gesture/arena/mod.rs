@@ -92,6 +92,7 @@ mod deadline;
 use deadline::{DeadlinePoll, DeadlineRegistry};
 pub use deadline::{GestureDeadlineError, GestureDeadlineRegistration, GestureDeadlineUpdate};
 mod ownership;
+pub(crate) use ownership::MotionFrame;
 use ownership::PanClaimNode;
 pub use ownership::{MotionRole, PanClaim};
 mod entry;
@@ -110,6 +111,8 @@ pub(crate) struct AdmissionContext {
     pub(crate) role: ContactRole,
     /// The route target that delivered the Down to the member.
     pub(crate) feeder: Option<ContactFeeder>,
+    /// How the member sees displacement, for the ownership table.
+    pub(crate) frame: MotionFrame,
 }
 
 /// How a member takes part in its contact's ownership (ADR-0208).
@@ -154,6 +157,7 @@ struct Admission {
     /// table passes it by (a two-contact scale on its lone contact).
     dormant: bool,
     feeder: Option<ContactFeeder>,
+    frame: MotionFrame,
 }
 
 /// One member's vote on its contact.

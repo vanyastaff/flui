@@ -324,6 +324,7 @@ pub struct PointerDispatch<'a> {
     /// target between one event and the next cannot shift it.
     pub global: &'a PointerEvent,
     capture: Option<CaptureRequest<'a>>,
+    root_to_local: Option<&'a Matrix4>,
 }
 
 impl<'a> PointerDispatch<'a> {
@@ -341,6 +342,7 @@ impl<'a> PointerDispatch<'a> {
             local: event,
             global: event,
             capture: None,
+            root_to_local: None,
         }
     }
 
@@ -351,7 +353,22 @@ impl<'a> PointerDispatch<'a> {
             local,
             global,
             capture: None,
+            root_to_local: None,
         }
+    }
+
+    /// Name the transform that rewrote the event from the root's space into
+    /// the target's, so a recognizer measures motion along its own axes.
+    #[must_use]
+    pub const fn with_root_to_local(mut self, transform: &'a Matrix4) -> Self {
+        self.root_to_local = Some(transform);
+        self
+    }
+
+    /// The transform that rewrote the event from the root's space into the
+    /// target's, if the route named one.
+    pub(crate) const fn root_to_local(&self) -> Option<&'a Matrix4> {
+        self.root_to_local
     }
 
     /// The route target delivering this dispatch, as an arena admission
@@ -807,6 +824,10 @@ impl ResolvedHitRoute {
                     contact,
                     target: entry.target,
                 }),
+                root_to_local: match &entry.local_transform {
+                    LocalEventTransform::Local(local) => Some(local),
+                    LocalEventTransform::Global | LocalEventTransform::NonInvertible => None,
+                },
             };
             let delivered = RoutePanic::capture(|| {
                 handler(dispatch);
@@ -2512,7 +2533,15 @@ impl InteractionDispatchHandle {
                 {
                     let handler = cell.snapshot();
                     let dispatch = match local_event.as_ref() {
-                        Some(local) => PointerDispatch::new(local, event),
+                        Some(local) => {
+                            let dispatch = PointerDispatch::new(local, event);
+                            match &transform {
+                                LocalEventTransform::Local(matrix) => {
+                                    dispatch.with_root_to_local(matrix)
+                                }
+                                _ => dispatch,
+                            }
+                        }
                         None => PointerDispatch::at_root(event),
                     };
                     let delivered = RoutePanic::capture(|| {

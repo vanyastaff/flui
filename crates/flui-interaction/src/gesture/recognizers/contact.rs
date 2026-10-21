@@ -19,7 +19,8 @@ use crate::{
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{
         AdmissionContext, ContactRole, GestureArena, GestureArenaEntry, GestureArenaMember,
-        GestureDeadlineRegistration, GestureDisposition, HeldOut, MotionRole, SweepModel,
+        GestureDeadlineRegistration, GestureDisposition, HeldOut, MotionFrame, MotionRole,
+        SweepModel,
     },
     gesture::observer::GestureContest,
     gesture::settings::GestureSettings,
@@ -82,7 +83,7 @@ impl ArenaMembership {
     /// [`PrimaryContact::begin`].
     #[must_use]
     pub fn join(&self, pointer: PointerId) -> Option<GestureArenaEntry> {
-        self.join_from(pointer, None)
+        self.join_from(pointer, None, MotionFrame::IDENTITY)
     }
 
     /// Join for a Down `feeder` delivered: the route target whose other
@@ -91,8 +92,9 @@ impl ArenaMembership {
         &self,
         pointer: PointerId,
         feeder: Option<ContactFeeder>,
+        frame: MotionFrame,
     ) -> Option<GestureArenaEntry> {
-        let (entry, held_out) = self.admit_from(pointer, feeder)?;
+        let (entry, held_out) = self.admit_from(pointer, feeder, frame)?;
         self.arena.deliver_held_out(held_out);
         Some(entry)
     }
@@ -103,6 +105,7 @@ impl ArenaMembership {
         &self,
         pointer: PointerId,
         feeder: Option<ContactFeeder>,
+        frame: MotionFrame,
     ) -> Option<(GestureArenaEntry, HeldOut)> {
         let member = self.this.upgrade()?;
         self.arena.try_add_erased(
@@ -111,6 +114,7 @@ impl ArenaMembership {
             AdmissionContext {
                 role: self.role,
                 feeder,
+                frame,
             },
         )
     }
@@ -321,7 +325,7 @@ impl PrimaryContact {
             .ok_or(BeginContactError::ArenaClosed)?;
         let (entry, held_out) = self
             .membership
-            .admit_from(pointer, down.feeder())
+            .admit_from(pointer, down.feeder(), MotionFrame::of_down(down))
             .ok_or(BeginContactError::ArenaClosed)?;
         let contact = Contact {
             snapshot: ContactSnapshot {
