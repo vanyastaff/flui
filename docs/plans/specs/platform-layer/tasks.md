@@ -323,6 +323,17 @@ graph LR
   --all-targets -D warnings` — зелёные; nextest по контракту и девяти зависимым — 759 из 760 до
   исправления снимка, trybuild `flui-interaction` после него — зелёный; doctest'ы десяти крейтов — 321
   прошли. Повтор команд ничего не меняет.
+- [x] **LY24** — ветка `platform/dead-linux`. Удалены `LinuxPlatform` (заглушка с
+  `unimplemented!()` в конструкторе и большинстве методов) и `LinuxWindowExt` (`window_ext.rs`, без
+  реализаций) с экспортами из `lib.rs` и `platforms/mod.rs`, а с ним и `bitflags` из Linux-зависимостей
+  ядра (первый прогон CI: `cargo shear`). Живой слой `platforms/linux` (`display`, `host_notices`,
+  `lifecycle_model`, `x11_window_probe`, `accessibility`) остался; его модуль описывает, что в нём и
+  кто им пользуется. `is_wayland` стал `Protocol::current()` в `linux/display/protocol.rs`, им
+  пользуется `winit/display_linux.rs`; `is_x11` не звал никто. Строка про `LinuxPlatform` ушла из
+  незавершённого фрагмента changelog дисплеев Linux. Проверки: `rg 'unimplemented!'` по
+  `platforms/` — ноль; `xtask checks`, `workspace`, `deps` — зелёные; clippy `-p flui-native -p
+  flui-app --all-targets -D warnings` — зелёный; ядро под `x86_64-unknown-linux-gnu`
+  (`winit-backend,a11y`) — `cargo check` зелёный; nextest `-p flui-native` — 213 прошли.
 - [x] **LY23** — ветка `platform/contract-paths`. Ядро не реэкспортирует контракт: из
   `traits/mod.rs` ушли 64 имени `flui_platform`, `NamedKey` и три имени
   `flui_semantics::platform`, из корня `lib.rs` — модуль `data_transfer`, имена предпочтений,
@@ -338,8 +349,14 @@ graph LR
   `flui-app`, `flui-runtime`, `flui-testing` под Linux и macOS (`CC`/`AR` из LLVM для `psm`);
   `wasm-check`; clippy `--workspace --all-targets -D warnings`; `xtask checks`, `workspace`,
   `reach`, `deps` — зелёные; nextest пяти изменённых крейтов — 422 прошли; doctest'ы — 80 прошли;
-  `rg` по `flui_native::` с контрактными именами пуст. iOS локально не собирается
+  `rg` по `flui_native::` с контрактными именами пуст; `xtask doc-strict` зелёный после правки
+  относительной doc-ссылки в `traits/owner.rs`, которую нашёл CI. iOS локально не собирается
   (`objc2-exception-helper` требует SDK), его проверяет CI.
+
+## Отступление от порядка, решённое владельцем
+
+- 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не
+  держит их файлы; первыми идут LY24 и LY23.
 
 ## Работа вне серии: LY8 и LY9
 

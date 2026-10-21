@@ -20,6 +20,12 @@ pub(crate) enum Protocol {
 }
 
 impl Protocol {
+    /// The protocol this process speaks, read from its own environment.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn current() -> Option<Self> {
+        Self::from_environment(&Environment::current())
+    }
+
     /// The protocol winit picks from the environment variables, or `None` when
     /// none of them is set (a headless session).
     pub(crate) fn from_environment(environment: &Environment) -> Option<Self> {

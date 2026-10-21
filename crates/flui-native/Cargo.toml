@@ -304,7 +304,6 @@ console_error_panic_hook = "0.1"
 # brings the AT-SPI bridge and its async stack. Linux winit preferences also
 # use D-Bus, independently of whether the screen-reader bridge is enabled.
 [target.'cfg(target_os = "linux")'.dependencies]
-bitflags = { workspace = true }
 # The display source's protocol clients and descriptor primitives, behind the
 # `wayland` and `x11` features (`winit-backend` enables both on Linux).
 x11rb = { workspace = true, optional = true }
