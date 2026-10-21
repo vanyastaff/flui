@@ -1,6 +1,6 @@
 # ADR-0252: The layout walk leases nodes on demand, so its cost follows the work
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-21
 - **Amends:** the render-tree storage entry of `crates/flui-rendering/ARCHITECTURE.md`
   ("Render-tree storage uses a `Slab<RenderNode>`")
@@ -89,3 +89,34 @@ parent can hand a clean boundary new constraints.
   structural change, which is the bug class this walk exists to avoid.
 - **A per-node atomic flag inside `RenderNode`.** Reading it while the node's `&mut` is live up
   the stack is the aliasing read the side bit exists to avoid.
+
+## Slots and lease
+
+```
+ RenderTree
+ +-- generations: [g0, g1, g2, ...]                 id = (index, generation)
+ +-- NodeSlab: Vec<Slot>      base ptr taken ONCE by lease()
+       slot i: +-----------------------+---------------------------------+
+               | in_flight: Cell<bool> | node: UnsafeCell<RenderNode>    |
+               +-----------------------+---------------------------------+
+                  read freely, even       &mut handed out only through
+                  while node is leased    NodeGuard, one per slot
+
+ acquire(parent, child):
+   1. generation matches?           no  -> NodeNotFound
+   2. in_flight[child] already set? yes -> LayoutCycle   (double acquire refused)
+   3. child is a child of parent?   no  -> NodeNotFound  (non-child acquire refused)
+   4. set in_flight, return guard; guard drop clears it, also on unwind
+```
+
+## Safety obligations
+
+`NodeSlab` is a module of `flui-rendering`, not a crate. Every `unsafe` block carries a `SAFETY:`
+comment naming the lease invariant it relies on: the tree is exclusively borrowed for the lease,
+the slot base pointer outlives no insert or remove, and at most one live `&mut` per slot, enforced
+by `in_flight`. The lease and acquire tests run under the `pipeline::owner` Miri job, including a
+double acquire and a non-child acquire, both of which must be refused.
+
+## Follow-up
+
+A persistent layer tree, edited in place across frames, is out of scope here (see ADR-0253).

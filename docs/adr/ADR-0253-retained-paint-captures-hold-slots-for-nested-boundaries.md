@@ -1,6 +1,6 @@
 # ADR-0253: A retained paint capture holds a slot for each nested boundary
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-21
 - **Amends:** `crates/flui-layer/ARCHITECTURE.md` (retained paint, item 3) and the
   "A composited-layer update patches the enclosing capture" entry of
@@ -100,3 +100,8 @@ the repeated copies of the same layers (memory is O(depth x layers)).
   composited-layer updates; it multiplies layers.
 - **A persistent layer tree edited in place.** The larger win, but it changes the engine contract
   for scenes; this ADR is the prerequisite, not the competitor.
+
+## Follow-up
+
+A persistent layer tree edited in place across frames would remove the remaining O(layers)
+re-compose. It changes the scene contract with the engine and is a separate decision.
