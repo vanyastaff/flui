@@ -488,6 +488,20 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `inherited-text-scale.md` исправлен: недопустимый масштаб отклоняется при построении, а не
   заменяется на 1.0.
 
+Шаг 4 идёт отдельным PR на каждую ОС в порядке списка: Web, Linux, macOS, iOS, Android.
+
+- [x] **PR 4** — ветка `platform/preferences-web`. Хост держит по запросу на каждое различаемое
+  значение (`prefers-reduced-motion`, `prefers-contrast` more/less/no-preference, `forced-colors`
+  active/none) и читает `navigator.languages` (пустой список — `navigator.language`); `change`
+  каждого запроса и `languagechange` окна будят владельца, тот читает всё заново вне займа хоста.
+  Правила — в модулях `browser_preferences` (неизвестная браузеру функция остаётся ненаблюдённой)
+  и `preferred_locales` (BCP 47 в порядке приоритета, неразбираемый тег пропускается; его
+  переиспользуют источники Apple, Android и Linux), таблицы `browser_media_contract` и
+  `preferred_locale_tags_contract`. Node-зонд в `tests/wasm32.rs` отвечает на все запросы,
+  `navigator.languages` и события окна; `browser_contrast_and_languages_reach_their_owner` ведёт
+  смены контраста и языков до владельца и снятия (без регистрации `languagechange` падает на
+  «languagechange wakes the owner»). В настоящем браузере не запускалось.
+
 ## Чего нет в этой серии
 
 Часть функций из закрытого списка ядра (R1.4) на части ОС ещё отсутствует. Каждая — отдельная

@@ -184,7 +184,7 @@ request.
 
 > **Environments:** all but Windows · **Who it hurts:** Users who rely on accessibility settings or another locale · **Parity:** [System preferences](platform-parity.md#system-preferences)
 
-- Contrast, languages and regional formats, Linux and Web text scale, accent colour, gesture timings.
+- Contrast and languages on macOS, Linux, iOS and Android (Windows and the Web read both), regional formats everywhere, Linux and Web text scale, accent colour, gesture timings.
 - Windows text scale is applied linearly. WinUI scales larger text less by an undocumented curve, so large text grows more than in a WinUI control at the same setting.
 - Gesture presets per platform and pointer kind, accessibility floors, per-display geometry and headless injection landed with the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (ADR-0212).
 - Layout direction, per-app language, and system fonts and fallback are separate rows, tracked by [entry 37](#37-locale-edge-layout-direction-per-app-language-system-fonts-and-fallback).
