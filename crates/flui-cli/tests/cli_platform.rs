@@ -52,17 +52,18 @@ fn platform_remove_with_yes_skips_the_prompt_and_updates_the_config() {
 /// and restarting `android_main`. The host reads again what it takes from
 /// them (window size and insets, displays and density, night mode, text
 /// sizing, bold text and preferences); keyboard and navigation devices only
-/// deliver input, and attaching one must not restart the app. `mcc`, `mnc`,
-/// `touchscreen`, `colorMode` and `grammaticalGender` stay undeclared until
-/// the host follows them: each joins this list with the read it needs.
+/// deliver input, and attaching one must not restart the app. The rest stay
+/// undeclared until the host follows them, and each joins this list with the
+/// read it needs: `locale` and `layoutDirection` wait for the Android host to
+/// report languages and for the font fallback chain, picked from the locale
+/// when the runtime starts, to follow a change; `mcc`, `mnc`, `touchscreen`,
+/// `colorMode` and `grammaticalGender` are read by nothing yet.
 const HANDLED_CONFIG_CHANGES: &[&str] = &[
     "density",
     "fontScale",
     "fontWeightAdjustment",
     "keyboard",
     "keyboardHidden",
-    "layoutDirection",
-    "locale",
     "navigation",
     "orientation",
     "screenLayout",

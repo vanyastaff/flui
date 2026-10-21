@@ -2,11 +2,12 @@
 
 - **`flui-cli` (Android)**: the generated `AndroidManifest.xml` declares every configuration
   change the host follows in place: `orientation`, `screenSize`, `smallestScreenSize`,
-  `screenLayout`, `density`, `uiMode`, `fontScale`, `fontWeightAdjustment`, `locale`,
-  `layoutDirection`, `keyboard`, `keyboardHidden` and `navigation`. A dark-mode, font-scale,
-  bold-text, density or language change, or an attached keyboard, now arrives as
-  `ConfigChanged` in the running app instead of recreating the Activity and restarting
-  `android_main` with fresh state. A project scaffolded earlier keeps its old list in
+  `screenLayout`, `density`, `uiMode`, `fontScale`, `fontWeightAdjustment`, `keyboard`,
+  `keyboardHidden` and `navigation`. A dark-mode, font-scale, bold-text, density or size
+  change, or an attached keyboard, now arrives as `ConfigChanged` in the running app instead
+  of recreating the Activity and restarting `android_main` with fresh state. A language
+  change still recreates it until the host follows the locale. A project scaffolded earlier
+  keeps its old list in
   `platforms/android/app/src/main/AndroidManifest.xml`; copy the new `android:configChanges`
   value there.
 - **`flui-native` (Android)**: a dark-mode change handled in place reaches
