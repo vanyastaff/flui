@@ -476,7 +476,7 @@ struct Allowlist {
     /// Why the entries exist.
     #[serde(default)]
     reason: String,
-    /// The ADR or plan step whose change removes them.
+    /// The ADR whose change removes them.
     #[serde(default)]
     exit: String,
     #[serde(default)]
@@ -733,7 +733,7 @@ fn missing_from(left: &[String], right: &[String]) -> Vec<String> {
 
 /// The exits the rows resolve against.
 fn row_exits() -> Exits {
-    Exits::from_parts(["0243".to_owned()], "")
+    Exits::from_adrs(["0243".to_owned()])
 }
 
 /// Writes `files` under a fresh directory and scans them as a workspace would:

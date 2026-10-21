@@ -133,4 +133,5 @@ and [package command](https://doc.rust-lang.org/cargo/commands/cargo-package.htm
 are the source contracts. Fixture tests inspect actual tiny archives and preserve
 a separate regression for fresh dev-cycle resolution failure. Closure validity
 is not an assertion that every selected version can already be packaged against
-a registry. See [the beta release record](docs/BETA.md) for remaining blockers.
+a registry. The [release requirements](docs/plans/specs/release/requirements.md) cover the
+remaining distribution work.

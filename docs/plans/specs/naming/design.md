@@ -5,7 +5,7 @@
 - **Требования:** [requirements.md](requirements.md) (реестр, правила N1–N10, гейт, решения
   владельца N1 и N2); полная таблица — [tasks.md](tasks.md)
 - **Уровень 0:** [../release/requirements.md](../release/requirements.md) (D6, R18);
-  связано: [../authoring-styles/requirements.md](../authoring-styles/requirements.md)
+  связано: [../authoring-styles/requirements.md](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/authoring-styles/requirements.md)
 - **База:** `main` @ `4915054c8`
 
 ## 1. Что предлагается
@@ -143,11 +143,11 @@ flui-interaction 13, flui-painting 11, flui-material 10, flui-platform 8, flui-f
 **Затронутые спеки и документы `EventCx` (правятся после утверждения, в PR прохода):**
 
 - спеки: `send-flip/requirements.md` (7 вхождений), `send-flip/design.md` (10),
-  `send-flip/tasks.md` (1), `authoring-styles/requirements.md` (3), `release/requirements.md`
-  (D4, 1), `focus-keyboard/tasks.md` (1), `research/2026-10-05-realm-model-experiment.ru.md` (6). `research/2026-10-05-dx-pain-points.ru.md`
+  `send-flip/tasks.md` (1), [`authoring-styles/requirements.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/authoring-styles/requirements.md) (3), `release/requirements.md`
+  (D4, 1), `focus-keyboard/tasks.md` (1), [`research/2026-10-05-realm-model-experiment.ru.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/realm-model/experiment.md) (6). [`research/2026-10-05-dx-pain-points.ru.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/dx/research.md)
   оставить: это датированное исследование с цитатами. Сама эта спека и requirements.md
   описывают старые имена и не правятся;
-- `design/`: `README.md`, `architecture.md`, `decisions.md`, `open-questions.md`;
+- [`design/`](https://github.com/vanyastaff/flui/tree/083b0f75da003030e908d107825e9f4db4e54437/design): `README.md`, `architecture.md`, `decisions.md`, `open-questions.md`;
 - ADR: ADR-0086 (27 вхождений), ADR-0085 (9), ADR-0023 (5), ADR-0003, ADR-0054, ADR-0074,
   ADR-0124;
 - `ARCHITECTURE.md`: flui-view, flui-widgets (17 со всеми контекстами), flui-rendering (10),
@@ -208,7 +208,7 @@ scope = ["crates/flui-interaction/**", "crates/flui-widgets/**", "packages/**"]
 `old` (R16). В Markdown (неархивном) правятся только code spans и fenced code: проза («Material
 Design») не трогается. В `.toml`, `.wgsl` и `llms.txt` — слово целиком.
 
-**Где не применяется.** `docs/plans/**`, `docs/research/**`, `CHANGELOG.md`, существующие
+**Где не применяется.** `docs/plans/**`, [`docs/research/**`](https://github.com/vanyastaff/flui/tree/083b0f75da003030e908d107825e9f4db4e54437/docs/research), `CHANGELOG.md`, существующие
 `changelog.d/*`, `target/`, `.worktrees/`. Не правятся строки внутри `#[serde(rename…)]` и
 проводные имена `flui-protocol` (ADR-0080). Снимки `.snap` и `.stderr` не правятся текстом:
 они пересоздаются прогоном (`TRYBUILD=overwrite`, `cargo insta review`), и PR объясняет каждое
@@ -234,7 +234,7 @@ Design») не трогается. В `.toml`, `.wgsl` и `llms.txt` — сло�
 7. Привязки и времена жизни (`ctx` → `cx`).
 8. `#[doc(alias)]`.
 9. Имена тестов (tasks.md §5); `rg` каждого старого имени по документам.
-10. Документы: `ARCHITECTURE.md`, `docs/`, книга, `design/`, `llms.txt`, ADR, таблица в
+10. Документы: `ARCHITECTURE.md`, `docs/`, книга, [`design/`](https://github.com/vanyastaff/flui/tree/083b0f75da003030e908d107825e9f4db4e54437/design), `llms.txt`, ADR, таблица в
     AGENTS.md (`focus_manager` → `focus_tree` при О5, `text_store_kit` → `text_store_conformance`
     в «Extending FLUI»).
 11. Снимки и trybuild пересоздаются, каждое изменение объясняется в PR.
@@ -356,7 +356,7 @@ Names say what a thing is or does. `cargo xtask names` checks the first five rul
 читается из `tools/xtask/renames/naming.toml`.
 
 **Вход.** `git ls-files` по `crates packages src examples tools` и Markdown вне архивных корней.
-Вне проверки: `docs/plans`, `docs/research`, `**/generated.rs`, `target/`, `.worktrees/`.
+Вне проверки: `docs/plans`, [`docs/research`](https://github.com/vanyastaff/flui/tree/083b0f75da003030e908d107825e9f4db4e54437/docs/research), `**/generated.rs`, `target/`, `.worktrees/`.
 
 **Классы.** 1–10 — как в requirements.md («Гейт `cargo xtask names`»): `path-word`, `mod-word`,
 `item-word`, `getter`, `acronym`, `case-expect`, `dup-name` (вместе с проверкой литерала
@@ -392,7 +392,7 @@ requirements.md (`src/util.rs` → находка, `src/baseline.rs` → нет,
 `get_layer` → находка, `HSLColor` → находка, `iOS` → находка, `#[expect(non_upper_case_globals)]`
 в `curve.rs` → находка и в `generated.rs` → нет, два `WindowManager` → находка, но не в
 `platforms/macos` против `platforms/windows`, фича `test-utils` → находка, `fn test_x` → находка,
-файл в `docs/research/` не читается, allowlist больше, меньше или без совпадений → три находки)
+файл в [`docs/research/`](https://github.com/vanyastaff/flui/tree/083b0f75da003030e908d107825e9f4db4e54437/docs/research) не читается, allowlist больше, меньше или без совпадений → три находки)
 плюс новые:
 
 - `pub struct PaintCx` → `ctx-spelling`; `pub struct PaintContext` → нет;

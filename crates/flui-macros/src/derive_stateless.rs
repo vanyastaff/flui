@@ -28,7 +28,7 @@
 //! the WHOLE `impl View` block, so an additional `impl View for X`
 //! site would conflict. The `#[view(key = "expr")]` derive attribute
 //! that auto-wires a field-named key is a deferred ergonomics
-//! improvement (post-Catalog.1, plan §"Open Questions").
+//! improvement.
 
 use proc_macro2::TokenStream;
 use quote::quote;

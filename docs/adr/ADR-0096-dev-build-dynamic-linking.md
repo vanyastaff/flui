@@ -7,8 +7,8 @@
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) (the facade's feature set),
   [ADR-0094](ADR-0094-hot-reload-through-subsecond.md) (hot reload),
   [ADR-0097](ADR-0097-no-process-global-state-gate.md) (process-global state)
-- **Refs:** decision L in the [decision index](../../design/decisions.md); the study, with every
-  number, command and error, in [`design/dynamic-linking.md`](../../design/dynamic-linking.md)
+- **Refs:** decision L in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); the study, with every
+  number, command and error, in [`design/dynamic-linking.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/dynamic-linking.md)
 
 Nothing in `crates/` has changed as part of this ADR.
 
@@ -28,10 +28,10 @@ iteration lever.
 FLUI has two pointers to it. `CHANGELOG.md:1098-1104` notes "Bevy-style `dynamic_linking`
 (`flui-dylib`) noted as the next lever if needed" after the move to one integration-test binary
 per heavy crate. The architecture review proposes a dev-only `dynamic-linking` feature on the
-facade (`docs/research/2026-09-25-architecture-review/report-architecture.ru.md:189`). Neither
+facade ([`docs/research/2026-09-25-architecture-review/report-architecture.ru.md:189`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md#L189)). Neither
 was measured, and the review's own verification showed that a facade feature over a crate that
 depends on the facade is a Cargo cycle
-(`docs/research/2026-09-25-architecture-review/judges-and-verification.md:238`).
+([`docs/research/2026-09-25-architecture-review/judges-and-verification.md:238`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/judges-and-verification.md#L238)).
 
 Two prototypes measured it on the Windows dev host (MSVC `link.exe`, rustc 1.98.1, the
 workspace dev profile, which builds workspace crates at opt-level 1 and dependencies at
@@ -166,7 +166,7 @@ Subsecond reads there.
 - The workspace's own build footprint. Dynamic linking changes only the final link of an
   application; it does nothing for the size of `target/`, the number of test binaries, duplicate
   builds of the upper stack, or peak memory. Those belong to the build-footprint study
-  ([open questions, "Still open"](../../design/open-questions.md#still-open)): `target/` size by
+  ([open questions, "Still open"](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/open-questions.md#still-open)): `target/` size by
   artifact kind, test binary count, duplicate builds from per-crate `testing` features, peak
   memory, per-worktree targets, and the levers (test consolidation, sccache, split debuginfo,
   nextest archives, cargo-sweep, a shared target).

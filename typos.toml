@@ -8,8 +8,7 @@ extend-exclude = [
     ".gpui/**",
     ".claude/**",
     "Cargo.lock",
-    "docs/research/**/*.md", # research quotes external code; preserve verbatim
-    "docs/plans/**/*.md",    # plans are reviewed artifacts; preserve verbatim
+    "docs/plans/**/*.md", # plans are reviewed artifacts; preserve verbatim
     # ISO 15924 script codes (`Beng`, `Vaii`) and font family names (`Tai Tham`,
     # `Noto Sans Vai`): the fallback tables and their recording are data.
     "crates/flui-painting/src/text_layout/fallback_tables.rs",

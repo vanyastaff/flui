@@ -31,7 +31,7 @@ pub(crate) const LYCHEE_VERSION: &str = "0.24.2";
 
 /// Dated records AGENTS.md exempts from upkeep: a link there that rotted is
 /// history, not a defect, and neither `docs-links` nor `markers` reads them.
-pub(crate) const ARCHIVAL_ROOTS: [&str; 2] = ["docs/plans/", "docs/research/"];
+pub(crate) const ARCHIVAL_ROOTS: [&str; 1] = ["docs/plans/"];
 
 /// A link to this repository's `main` on GitHub (a regex; the path after it
 /// is the file in the checkout).
@@ -323,8 +323,6 @@ mod tests {
             "docs/testing.md",
             "docs/designs/x.md",
             "docs/plans/x.md",
-            "docs/research/x.md",
-            "docs/research/2026-09-25-architecture-review/synthesis.md",
             // a root, not a prefix: these are live docs
             "docs/plans.md",
             "crates/flui-view/docs/research/x.md",

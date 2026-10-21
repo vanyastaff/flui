@@ -2,7 +2,7 @@
 
 The fifth tree: the accessibility tree assembled from the render tree and
 exported to the platform through AccessKit. Layer rules and the crate's place in
-the workspace DAG live in [`docs/FOUNDATIONS.md`](../../docs/FOUNDATIONS.md) and
+the workspace DAG live in [`docs/architecture.md`](../../docs/architecture.md) and
 this crate's `[package.metadata.flui] layer`; this file
 records the per-decision rules that would otherwise read as drift.
 

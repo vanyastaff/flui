@@ -1,6 +1,6 @@
 //! Platform text input (IME) capability
 //!
-//! FLUI has no standalone `services` layer (`docs/FOUNDATIONS.md`); IME
+//! FLUI has no standalone `services` layer (ADR-0030); IME
 //! text input is a capability trait here instead of a standalone crate.
 //! [`PlatformTextInput`] is reached
 //! through [`PlatformWindow::text_input`](crate::PlatformWindow::text_input) — the same

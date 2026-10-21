@@ -613,7 +613,7 @@ write-context contract rather than an invented ambient writer.
 The user-facing widget catalog: configuration objects over the `flui-objects`
 render catalog, plus the stateful widgets that own gesture, focus, routing and
 overlay behavior. Layer rules, dependency direction, and the crate's place in
-the workspace DAG live in [`docs/FOUNDATIONS.md`](../../docs/FOUNDATIONS.md)
+the workspace DAG live in [`docs/architecture.md`](../../docs/architecture.md)
 and this crate's `[package.metadata.flui] layer`; this file
 records the per-widget design decisions that would otherwise read as drift.
 

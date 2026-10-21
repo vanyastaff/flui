@@ -1,8 +1,8 @@
-//! Reproducible "agent workflow" acceptance test (`docs/BETA.md`'s "Agent
-//! workflow" row): an agent can discover the public API, create a UI, inspect
-//! structure/semantics, drive an interaction, and assert the result — all
-//! through the facade's *documented* interfaces, with no widget-internal
-//! shortcut and no fabricated result.
+//! Reproducible "agent workflow" acceptance test: an agent can discover the
+//! public API, create a UI, inspect structure/semantics, drive an
+//! interaction, and assert the result — all through the facade's
+//! *documented* interfaces, with no widget-internal shortcut and no
+//! fabricated result.
 //!
 //! Everything below is reachable from `use flui::…` alone (the `flui` crate
 //! with its `testing` feature on): no direct dependency on `flui-testing`,

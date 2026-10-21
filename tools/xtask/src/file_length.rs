@@ -144,7 +144,7 @@ struct Entry {
     lines: usize,
     /// Why it is over the limit.
     reason: String,
-    /// The ADR or plan step whose change removes the entry.
+    /// The ADR whose change removes the entry.
     exit: String,
 }
 
@@ -444,8 +444,6 @@ fn planted() -> Vec<(&'static str, String)> {
 
 /// The allowlist the self-test runs with.
 const PLANTED_ALLOWLIST: &str = include_str!("../fixtures/file-length/allowlist.toml.txt");
-/// The plan the self-test's exits resolve against.
-const PLANTED_PLAN: &str = include_str!("../fixtures/ratchet/plan.md.txt");
 
 /// What the self-test must report, and nothing else.
 const EXPECTED: [(&str, &str); 13] = [
@@ -477,7 +475,7 @@ fn self_test_findings() -> anyhow::Result<(ScratchDir, Vec<Finding>)> {
     }
     let tree = modules::walk([root.join("src/lib.rs")]);
     let allow = Allowlist::parse(PLANTED_ALLOWLIST).context("parsing the planted allowlist")?;
-    let exits = Exits::from_parts(["0081".to_owned()], PLANTED_PLAN);
+    let exits = Exits::from_adrs(["0081".to_owned()]);
     let findings = scan(&root, &tree, &allow, &exits);
     Ok((dir, findings))
 }

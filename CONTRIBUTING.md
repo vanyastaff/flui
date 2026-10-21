@@ -5,8 +5,8 @@ Welcome! The rules for a change live in two places:
 - [`AGENTS.md`](AGENTS.md) — the codebase map, how to work (worktrees, commits, PRs, what not
   to touch), the local gate commands, the architecture-constraint table, and the Definition of
   Done. Written for humans and agents alike; `CLAUDE.md` imports it.
-- [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md) — the architecture contract: target architecture,
-  locked contracts, target crate graph.
+- [`docs/adr/`](docs/adr/) — the architecture decision records: the cross-crate decisions the
+  code follows.
 
 This page covers what those two don't: planning a large change, git hygiene beyond the worktree
 rule, and how to report a bug.

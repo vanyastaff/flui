@@ -21,9 +21,9 @@
   [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) (the run-time guard is authoritative),
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (tier and kind of a new crate),
   [ADR-0086](ADR-0086-signal-writes-through-event-context.md) (the write side)
-- **Refs:** decision D4 and owner decision 5 in [`design/decisions.md`](../../design/decisions.md);
+- **Refs:** decision D4 and owner decision 5 in [`design/decisions.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md);
   the panel record in
-  [`report-decisions.ru.md` §5](../research/2026-09-25-architecture-review/report-decisions.ru.md)
+  [`report-decisions.ru.md` §5](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-decisions.ru.md)
 
 ADR-0074 decided *what* a signal is. This record decides *where the graph lives*, *who owns an
 instance of it*, and *what may read it*. It keeps ADR-0074's semantics (read-is-subscribe in
@@ -436,7 +436,7 @@ foundation contract stays, because production element reads use it.
 ## Consequences
 
 - ADR-0074's placement sentence, its `cx.reactive()` read path and its feature gate are replaced
-  by this record; its semantics, guard and measurement stand. `docs/FOUNDATIONS.md` C1 (line 91)
+  by this record; its semantics, guard and measurement stand. [`docs/FOUNDATIONS.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/FOUNDATIONS.md) C1 (line 91)
   loses "`flui-view` feature `signals`" and says "the UI runtime-owned graph" in the same change as §5;
   its sentence "The catalog crates … never take a dependency on a signals crate" stays true,
   because there is no signals crate (§6).
@@ -474,7 +474,7 @@ foundation contract stays, because production element reads use it.
   monotonic counter that [ADR-0097](ADR-0097-no-process-global-state-gate.md) §2 exempts, not an
   allowlist entry.
 - Migration order and milestone mapping live in
-  [the migration plan](../plans/2026-09-25-architecture-migration-plan.md).
+  [the migration plan](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/2026-09-25-architecture-migration-plan.md).
 
 ## Verification
 

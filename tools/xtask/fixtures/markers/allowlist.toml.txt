@@ -1,8 +1,6 @@
 # The allowlist `cargo xtask markers --self-test` judges the planted files by.
-# Its `exit` values are references and are not scanned; the same step id in
-# a comment is prose: W1-A14 here is reported. expect: wave
 reason = "planted markers"
-exit = "W1-A14"
+exit = "ADR-0081"
 
 # exact: one cycle marker in planted.rs
 [[allow]]

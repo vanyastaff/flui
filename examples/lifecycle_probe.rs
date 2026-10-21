@@ -1,5 +1,6 @@
 //! `lifecycle_probe` — a self-driving window-lifecycle probe for
-//! `docs/BETA.md`'s lifecycle rows on macOS (`cargo xtask device macos-lifecycle`).
+//! the visibility and minimize rows of `docs/platform-parity.md` on macOS
+//! (`cargo xtask device macos-lifecycle`).
 //!
 //! Runs a Material tree through the ordinary `flui::app::Application` path
 //! — the same runner, renderer and UI runtime a generated application gets — and
@@ -261,7 +262,7 @@ mod probe {
 
         // The baseline starts at the first frame, not at launch: on a cold
         // launch the GPU stack behind the window takes seconds to build
-        // (2.81 s measured in docs/BETA.md), and the frame loop does not
+        // (2.81 s measured on a Mac), and the frame loop does not
         // run until it exists. The wait itself is reported as the time to
         // the first frame.
         let started = std::time::Instant::now();

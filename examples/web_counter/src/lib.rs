@@ -4,7 +4,7 @@
 //! `run_app`
 //! dispatches to the web runner on `wasm32`, which mounts the tree into the
 //! page's `#flui-canvas` (or appends one) and renders through WebGPU. It is
-//! the Web row's executable evidence in `docs/BETA.md`.
+//! the Web column's executable evidence in `docs/platform-parity.md`.
 //!
 //! Build with
 //! `cargo build -p flui-web-counter --release --target wasm32-unknown-unknown`,

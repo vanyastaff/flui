@@ -68,7 +68,7 @@ while Color and ColorAndOpacity rebuild their property consumers.
 
 The complete paired registry, primitive and mounted results, fixture identities,
 commands and native/GPU boundaries are in
-[the dated acceptance evidence](../../../docs/plans/specs/flui-animation/tasks.md#выпускные-свидетельства).
+[the dated acceptance evidence](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/specs/flui-animation/release-evidence.md).
 They establish measured workload costs, not a uniform speedup or a fixed budget.
 
 ## Registry workload validation

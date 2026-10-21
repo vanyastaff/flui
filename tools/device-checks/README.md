@@ -13,7 +13,7 @@ exit 1). The rest take a probe you build yourself and run directly with
 `check-macos-reopen.py`, `check-owner-wake.py` and `check-resident-reopen.py`.
 `check-macos-exit.py` and `check-macos-reopen.py` take the probe executable
 and optionally the case names; the other three print their options under
-`--help`. `crates/flui-platform/ARCHITECTURE.md` and `docs/BETA.md` record
+`--help`. `crates/flui-platform/ARCHITECTURE.md` and `docs/platform-parity.md` record
 what each proves.
 
 The drivers are Python + Swift rather than Rust because they can only be run,

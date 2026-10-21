@@ -34,8 +34,8 @@
   [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md),
   [ADR-0097](ADR-0097-no-process-global-state-gate.md)
 - **Refs:** decision D2 of the
-  [architecture review](../research/2026-09-25-architecture-review/report-architecture.ru.md);
-  index in [`design/decisions.md`](../../design/decisions.md)
+  [architecture review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md);
+  index in [`design/decisions.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md)
 
 ## Context
 
@@ -250,7 +250,7 @@ a dev edge, and a unit test under `src/` that drives the harness links a second 
 library. That still compiles, since the harness takes a `flui_view::View` and there is one
 `flui_view`, but the UI runtime installs the other copy's inherited scopes, so the test's
 `crate::MediaQuery::maybe_of` and every other lookup of a `flui-widgets` type reads `None`. The
-planned "harness stays above the runtime" gate (`design/architecture.md`) turns this into a check.
+planned "harness stays above the runtime" gate ([`design/architecture.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/architecture.md)) turns this into a check.
 `reach-forbid = ["flui-testing"]` keeps the test driver out of the widgets' normal closure. A moved test that still reads a private item reaches it
 through `flui_widgets::__test_access`: doc-hidden, always compiled (no visibility feature, one type
 layout), for `crates/flui-widgets/tests` only, and **temporary**. It holds probe traits for
@@ -333,7 +333,7 @@ the platform backend and the raster owner remain the three owners of ADR-0037 §
 ## Migration
 
 The crate is created first and filled in five moves, each independently mergeable. The
-[migration plan](../plans/2026-09-25-architecture-migration-plan.md) tracks them.
+[migration plan](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/2026-09-25-architecture-migration-plan.md) tracks them.
 
 | Move | What moves or changes | Waits on |
 |---|---|---|

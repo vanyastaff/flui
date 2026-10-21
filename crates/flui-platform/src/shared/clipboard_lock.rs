@@ -17,7 +17,7 @@
 //! Not covered: third-party code in the same process that opens the
 //! clipboard on its own thread bypasses this lock. It is shut out of a
 //! `WindowsClipboard` session by the owner window, but not out of an
-//! `ArboardClipboard` one (`docs/safety-review.md`).
+//! `ArboardClipboard` one ([safety review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/safety-review.md)).
 
 use parking_lot::{Mutex, MutexGuard};
 

@@ -71,7 +71,7 @@ use-after-free that aborted the process with `STATUS_HEAP_CORRUPTION`.
 
 Every public item is documented (`#![deny(missing_docs)]`); build locally with
 `cargo doc -p flui-platform --open`. Architecture context lives in
-[`docs/FOUNDATIONS.md`](../../docs/FOUNDATIONS.md).
+[`docs/architecture.md`](../../docs/architecture.md).
 
 ## License
 

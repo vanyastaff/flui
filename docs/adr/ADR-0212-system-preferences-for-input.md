@@ -24,7 +24,7 @@ from shortening a long-press or double-click time the user lengthened for access
 the fallback values come from six ad hoc constructors (`for_platform`, `for_device`,
 `android_defaults`, `ios_defaults`, `touch_defaults`, `mouse_defaults`) plus `Default`, whose
 numbers differ from the platforms' own: Flutter's Android touch slop is 18 against AOSP's 8 dp
-([best practices §2.4](../research/2026-10-12-interaction-input-best-practices.md)).
+([best practices §2.4](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-best-practices.md)).
 
 ## Decision
 

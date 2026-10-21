@@ -6,7 +6,7 @@
   assumes: `pkg`'s OS globs, whose `android-*`/`android_*` make
   `flui-hot-reload → android_log-sys` an entry of its own; `flui-engine`'s standing `grant` for
   `wgpu`; and that the ungated graph was red through three edges, none of them through
-  `flui-platform`, where the migration plan expected only `flui-platform` edges. ADR-0082's
+  `flui-platform`, where [the migration plan](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/plans/2026-09-25-architecture-migration-plan.md) expected only `flui-platform` edges. ADR-0082's
   trait move landed first, so the first run on `main` needed no `flui-platform` entry. The
   kind rules of §3 (core never names official, in any dependency kind; an official package's
   normal and build edges go to `flui-sdk` and the contract crates; an edge between official
@@ -37,8 +37,8 @@
   [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md),
   [ADR-0097](ADR-0097-no-process-global-state-gate.md)
 - **Refs:** decisions D8, D11 and D17 and owner decision 4 of the
-  [architecture review](../research/2026-09-25-architecture-review/report-decisions.ru.md);
-  index in [`design/decisions.md`](../../design/decisions.md)
+  [architecture review](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-decisions.ru.md);
+  index in [`design/decisions.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md)
 
 ## Context
 
@@ -92,7 +92,7 @@ Features are used for things features cannot express:
   for every application that links `flui-app`, so the boundary it claims does not exist.
 
 Finally, the B0 exit criterion is a count: "26 crates; no file over 3000 lines in `flui-app`
-and `flui-widgets`" and "`cargo xtask ci` green on a clean Mac" (`docs/ROADMAP.md:11`). The
+and `flui-widgets`" and "`cargo xtask ci` green on a clean Mac" ([`docs/ROADMAP.md:11`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/ROADMAP.md#L11)). The
 count coincides with the target by accident, and a count proves nothing about shape. The
 in-process check list pinned by a test (`tools/xtask/src/tasks/checks.rs:100-123`, the pinning test at
 `:149-172`) has no reach, globals, module-graph or file-length check, and only `wgsl` has a
@@ -323,7 +323,7 @@ its second consumer or the compile or semver seam it buys.
 
 ### 5. The B0 exit is gates, invariants and ratchets
 
-The B0 exit criterion in `docs/ROADMAP.md:11` is replaced by four classes, as owner decision 4
+The B0 exit criterion in [`docs/ROADMAP.md:11`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/ROADMAP.md#L11) is replaced by four classes, as owner decision 4
 recorded:
 
 - **[G] Gates exist and can fail.** The in-process list pinned in `tools/xtask/src/tasks/checks.rs`
@@ -380,7 +380,7 @@ recorded:
   besides the composition roots) lose the feature; the items are reachable at
   `flui_view::__runtime`, not through `flui::view` or `flui_sdk::view`.
 - AGENTS.md's "Crate layering" rows and the "Crate" row of `docs/extending.md` and `docs/crates.md`
-  changed with the tier gate; `docs/ROADMAP.md:11` changes with §5. ADR-0041 carries the
+  changed with the tier gate; [`docs/ROADMAP.md:11`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/ROADMAP.md#L11) changes with §5. ADR-0041 carries the
   `Superseded in part by: ADR-0081` back-link.
 - Migration: one change added the three keys and `edge-exceptions` next to `layer` and taught
   the gate both; a second removes `layer`. `reach` landed with its `reach-exceptions` seeded

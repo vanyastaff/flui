@@ -12,7 +12,7 @@
 //!
 //! A real timer would drive the per-snackbar display duration. FLUI has no
 //! frame-independent virtual-clock timer primitive yet (`flui-scheduler`
-//! only drives the frame loop) — see `docs/ROADMAP.md`. This substrate
+//! only drives the frame loop). This substrate
 //! substitutes a second, per-snackbar [`AnimationController`] whose
 //! `duration` is the snackbar's own configured display duration
 //! ([`crate::SnackBar::duration`]): it is `forward()`-ed when the entrance

@@ -49,9 +49,10 @@ conversation:
 
 - A feature runs on its owner-approved spec in `docs/plans/specs/<feature>/` (`requirements.md`,
   `design.md`, `tasks.md`). `tasks.md` is where the next session resumes: its status line, the
-  checked tasks and the validation evidence. Requirement and task IDs live only there.
+  checked tasks and the validation evidence. Requirement and task IDs live only there. Once the
+  feature is on `main`, its spec is deleted.
 - A decision that outlives the task goes into an ADR or the crate's `ARCHITECTURE.md`. Plans,
-  reviews and session notes stay out of the public repository.
+  roadmaps, research, reviews and session notes stay out of the public repository.
 - A consumer-visible change adds `changelog.d/<branch-slug>.md`
   (`### Added|Changed|Deprecated|Removed|Fixed|Security` and bullets), so parallel PRs never
   edit `CHANGELOG.md`. A platform-support change updates `docs/platform-parity.md` (✅ only
@@ -59,7 +60,7 @@ conversation:
 - Commits are `area: what changed`. CI executes Linux and wasm32 only; native and GPU changes are
   run locally.
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
-  Archival roots are exempt (`docs/{plans,research}`).
+  Archival roots are exempt (`docs/plans`).
 - No Python, Perl or PowerShell scripts for edits.
 
 ## Commands
@@ -115,9 +116,8 @@ only in input join an existing table test, and a crate's integration tests are m
 
 ## Where to read next
 
-`docs/architecture.md` (the code as it is), `design/README.md` (the target),
-`docs/testing.md` (test tiers), `docs/platform-parity.md` and `docs/gaps.md`, `docs/ROADMAP.md`,
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
+`docs/architecture.md` (the code as it is), `docs/adr/` (the decisions), `docs/testing.md` (test
+tiers), `docs/platform-parity.md` and `docs/gaps.md`, [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Review guidelines
 
@@ -129,7 +129,7 @@ by, with the better shape. What this repository keeps getting wrong:
 - a new `pub` item that no production path reaches, unless the PR names the follow-up;
 - a regenerated `*.snap` the PR doesn't explain;
 - the "Recurring defects" above, checked at each failure point alone, two in competition, and
-  the next operation after containment ([matrix](docs/research/signal-unwind-contract.ru.md));
+  the next operation after containment ([matrix](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/signal-unwind-contract.ru.md));
 - `SliverGeometry { ..SliverGeometry::ZERO }` (drops `layout_extent`, `visible`), geometry from a
   stand-in value (ADR-0054), intrinsics, baselines or hit-testing left at defaults;
 - a pixel claim whose readback samples don't distinguish fixed from broken; a `wgpu::Instance`

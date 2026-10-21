@@ -1,4 +1,4 @@
-[← Crates Map](crates.md) · [Foundations](FOUNDATIONS.md) · [Roadmap](ROADMAP.md) · [Back to README](../README.md) · [Contributing →](../CONTRIBUTING.md)
+[← Crates Map](crates.md) · [Back to README](../README.md) · [Contributing →](../CONTRIBUTING.md)
 
 # Testing
 
@@ -321,8 +321,7 @@ multiplies that. To keep it bounded:
   once (AGENTS.md, "Checking a change"). A `--workspace` build or
   `cargo xtask test` is most of a short-lived worktree's disk.
 - **`CARGO_INCREMENTAL=0` in a short-lived worktree.** Incremental caches are
-  over half of a used debug directory (9.30 GB against 4.06 GB without them,
-  [build-footprint.md](../design/build-footprint.md) R2); they pay off only
+  over half of a used debug directory (9.30 GB against 4.06 GB without them); they pay off only
   across many edits to one crate, which a one-PR agent rarely makes.
 - **Delete a worktree's `target/` once its branch is pushed.** From then on CI
   is the proof; a review fix rebuilds in minutes, while keeping the directory
@@ -521,10 +520,9 @@ is a finding too, until `--bless` locks the improvement in — otherwise a later
 regression back up to the old value would pass. Commit a re-blessed baseline
 with the change that moved it and say why in the PR. The run writes the merged
 counts to `<target>/perf/current.toml`. The checked-in baseline was blessed on
-Windows. The CI redesign (`design/ci.md`) places an advisory `perf` job in the
-`wide` and `full` lanes, blocking at the B1 exit; that job is not in
-the workflows yet, so only `perf --self-test` and the budget assertions are on
-the merge path.
+Windows. An advisory `perf` job belongs in the `wide` and `full` lanes; it is
+not in the workflows yet, so only `perf --self-test` and the budget assertions
+are on the merge path.
 
 ## Linting
 
@@ -829,8 +827,8 @@ reach it without an edge.
 
 ## Agent workflow
 
-`tests/agent_workflow.rs` is the acceptance test for the "Agent workflow" row
-of `docs/BETA.md`: evidence that an agent (or a human, working the same way)
+`tests/agent_workflow.rs` is the acceptance test for the agent workflow:
+evidence that an agent (or a human, working the same way)
 can discover the public API, build a UI, inspect it two different ways,
 drive an interaction through it, and assert the result — using only
 `flui::…`, the same surface a consumer of the published crate has. It is

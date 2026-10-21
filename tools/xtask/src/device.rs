@@ -186,10 +186,11 @@ enum DeviceCheck {
     ///
     /// Needs Screen Recording, which is preflighted: without it the checker
     /// exits 2 (cannot verify) rather than reporting a blank window it never
-    /// saw. This closes the LaunchServices half of the blank-window
-    /// observation in docs/BETA.md.
+    /// saw. This covers the LaunchServices half of the blank-window problem
+    /// (docs/platform-parity.md, "Show without a blank first frame").
     MacosLaunchRender,
-    /// Window-lifecycle budget on a real Mac (docs/BETA.md's lifecycle rows).
+    /// Window-lifecycle budget on a real Mac (the visibility and minimize rows
+    /// of docs/platform-parity.md).
     ///
     /// Builds `examples/lifecycle_probe` in release and runs it. The probe runs
     /// a Material tree through the ordinary Application path, then drives its
@@ -202,7 +203,8 @@ enum DeviceCheck {
     /// content size. Prints one JSON line per phase and
     /// `LIFECYCLE_PROBE_RESULT=PASS` or `FAIL`.
     MacosLifecycle,
-    /// Assistive technology on a real Mac (docs/BETA.md's accessibility gap).
+    /// Assistive technology on a real Mac (the accessibility row of
+    /// docs/platform-parity.md).
     ///
     /// Runs `tools/device-checks/check-macos-a11y.py`, which builds
     /// `examples/a11y_probe` — the generated counter with the facade's `a11y`
@@ -216,8 +218,8 @@ enum DeviceCheck {
     /// this process is not trusted for accessibility, since a denied query
     /// decides nothing.
     MacosA11y,
-    /// Representative-workload budget on a real Mac (docs/BETA.md's
-    /// "Performance and resilience" row).
+    /// Representative-workload budget on a real Mac: frame times, memory
+    /// growth and idle frames.
     ///
     /// Runs `tools/device-checks/check-macos-workload.py`, which builds
     /// `examples/workload_probe` in release and samples RSS while the probe
@@ -229,7 +231,7 @@ enum DeviceCheck {
     /// under 10 %, at most 5 idle frames). Every run writes
     /// `target/workload/<timestamp>.json` with the raw phase lines, the RSS
     /// series and the verdict per budget; a failed budget is a finding to
-    /// record in BETA.md, not a number to tune. On another host the driver
+    /// report, not a number to tune. On another host the driver
     /// skips with exit 0.
     MacosWorkload,
     /// `flui run`'s worker hot-reload loop on a real Mac.
@@ -283,7 +285,7 @@ enum DeviceCheck {
     /// `ios-input-check-app`), which proves the resumed screen is live rather
     /// than the system's snapshot of the pre-Home frame. Exits 2 (cannot
     /// verify) when the host cannot take the measurement. This closes the
-    /// "simulator UI automation timed out" gap in docs/BETA.md.
+    /// "simulator UI automation timed out" gap.
     IosInputCheck {
         /// An already booted simulator.
         udid: String,
@@ -324,8 +326,8 @@ enum DeviceCheck {
     /// Builds the sole-facade fixture for aarch64-apple-ios-sim through
     /// `tools/device-checks/check-ios-safe-area.py` and runs it, asserting the
     /// marker the application writes after comparing both laid-out geometries
-    /// against the view's own `safeAreaInsets`. Evidence belongs in
-    /// docs/BETA.md § "iOS safe-area layout". Needs Xcode, the
+    /// against the view's own `safeAreaInsets`. Evidence belongs in the safe
+    /// area row of docs/platform-parity.md. Needs Xcode, the
     /// aarch64-apple-ios-sim target and a booted arm64 simulator.
     IosSafeAreaCheck {
         /// An already booted simulator.
