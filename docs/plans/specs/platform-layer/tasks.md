@@ -369,6 +369,41 @@ graph LR
   `flui-platform` относительно базы PR (R2.7, не гейт). Проверки: самотест — 4 случая; `cargo test
   -p xtask` — 45; nextest контракта, ядра, interaction, widgets и testing — 548; doctest'ы
   контракта — 46; clippy, `checks`, `workspace`, `reach`, `deps`, `actionlint`, `zizmor` — зелёные.
+- [x] **LY22** — ветка `platform/host-mechanism`. `host.rs`: `Host` (`NAME` и 13 позиций),
+  трейты позиций и `Absent<F>` с маркерами `host::position::*`; `platform.rs`: `HostPlatform<H>` —
+  единственная реализация `Platform` (`rg "impl.* Platform for"` по ядру — одна строка), у
+  `Platform` не осталось тел по умолчанию. Семь типов `<Os>Platform` стали `<Os>Loop` (позиция
+  `Loop` и её состояние), публичные имена — `HostPlatform` над таблицами `hosts/{windows,apple,
+  android,web,winit,headless}.rs`; конструкторы — в таблицах, прочие публичные методы (тестовые
+  ручки headless, `app()`, `on_scene_event`, `run_event_loop`) — на `HostPlatform<H: Host<Loop =
+  …>>` в файле платформы. Решения, которых строка не называла: (1) позиции уровня приложения —
+  статические функции над loop'ом хоста `O` (состояние сегодня живёт в loop'е; LY27–LY33 разносят
+  его по фичам); (2) `Absent<F>` отвечает словарём каждой позиции на сегодня (пустая передача,
+  `HapticOutcome::Unavailable`, неизвестные предпочтения, сброс регистрации): `Unsupported` приходит
+  с LY38; (3) оконные позиции (Text, Accessibility, Haptics, Chrome) таблица называет, но их связь
+  с тем, что отдаёт окно, — контракт окна (LY40–LY46); (4) `host` и `HostPlatform` публичны: иначе
+  `private_bounds` (публичный `HostPlatform<H: Host>`), OS-типов в них нет; (5) у winit ввод текста
+  есть (`WinitTextInput`: IME и область курсора), так что позиция `Text` у него не `Absent`;
+  (6) исполнитель, путь приложения, открытие URL и путей, диалоги и имя композитора — трейт
+  `host::Services` loop'а до LY61; (7) `platforms::android` стал `pub(crate)`. Таблицы: `Absent` —
+  drag macOS и iOS, accessibility Android, iOS, Web (и без `a11y` на Windows, macOS, winit), Text
+  iOS, haptics winit, chrome Windows, macOS, Web, winit. `module-dag` получил ось фич
+  (`features`, `platforms`, `groups`, `base`, `hosts`; самотест — 52 находки), `flui-native`
+  объявлен с одним `hosts`, посаженное `crate::hosts::…` в файле платформы отказывает; скан больше не
+  считает `let`, макрос-оператор и выражение под `cfg(test)` production-кодом. trybuild
+  `host_table_names_every_position`: таблица без `Storage` — ровно E0046. Scratch-крейт: посаженный
+  `unsafe` в модуле `cfg(any(target_os = "macos", test))` с `forbid(unsafe_code)` не компилируется
+  в тестовой сборке; `const _: () = assert!(..)` в FFI-модуле `cfg(target_os = "macos")` с неверным
+  размером падает (E0080) под `--target aarch64-apple-darwin` и не собирается на Windows. AGENTS.md
+  «Definition of Done» и `docs/extending.md` (строка «Платформа») дополнены. Проверки на Windows:
+  clippy `-p flui-native -p flui-app --all-targets -D warnings`, с `winit-backend,a11y`; nextest
+  `-p flui-native -p flui-app` — 263 прошли, с `winit-backend` — 243; `wasm-check`, `wasm-test` (48
+  утверждений), `doc-strict`, `checks`, `module-dag` (+ самотест); clippy Android (`aarch64-linux-android`),
+  macOS lib (и с `winit-backend,a11y`), iOS lib (`DOCS_RS=1`: `objc2-exception-helper` без SDK).
+  WSL Ubuntu 24.04: clippy `winit-backend,a11y`, `linux_preferences` — 16 случаев. Galaxy S21:
+  проба собирается, рисует, `MediaQuery` получает отступы и живую смену `animator_duration_scale`
+  (Full → Reduce → Full). Браузер: `flui build web` пробы — платформа стартует, canvas-окно, WebGPU
+  инициализирован, ошибок нет. macOS и iOS — в очереди vanyastaff/flui#1840.
 - [ ] **LY63**, часть `configChanges` — ветка `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
   `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
