@@ -40,6 +40,24 @@ pub enum WindowReveal {
     AfterFirstFrame,
 }
 
+/// How a window trades pointer input latency against batching.
+///
+/// A touch or pen stroke drawn live (ink, a canvas) wants every sample the
+/// hardware produced, as early as the system can deliver it; a list or a form
+/// is served as well by the system's per-frame batches. A backend that cannot
+/// deliver input earlier than it already does ignores [`Self::Low`], and its
+/// [`WindowCapabilities`](crate::WindowCapabilities) are unchanged.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum InputLatency {
+    /// The system's usual delivery: pointer samples batched once per frame.
+    #[default]
+    Balanced,
+    /// Pointer samples as soon as the system has them: Android unbuffered
+    /// dispatch, the web's `pointerrawupdate`.
+    Low,
+}
+
 /// Window creation options.
 ///
 /// Adding an option is not a breaking change: the type is `#[non_exhaustive]`,
@@ -103,6 +121,8 @@ pub struct WindowOptions {
     /// opening mode, so a restored maximized window keeps its earlier bounds.
     /// Measured like [`position`](Self::position).
     pub normal_geometry: Option<WindowGeometry>,
+    /// How early pointer samples reach the window; see [`InputLatency`].
+    pub input_latency: InputLatency,
 }
 
 impl WindowOptions {
@@ -189,6 +209,13 @@ impl WindowOptions {
         self.normal_geometry = normal_geometry;
         self
     }
+
+    /// Set how early pointer samples reach the window.
+    #[must_use]
+    pub const fn with_input_latency(mut self, input_latency: InputLatency) -> Self {
+        self.input_latency = input_latency;
+        self
+    }
 }
 
 impl Default for WindowOptions {
@@ -206,6 +233,7 @@ impl Default for WindowOptions {
             position: None,
             mode: WindowMode::Normal,
             normal_geometry: None,
+            input_latency: InputLatency::Balanced,
         }
     }
 }

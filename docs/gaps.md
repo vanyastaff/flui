@@ -71,3 +71,4 @@ pull request.
 | 2026-10-20 | minor | Gap 1: Windows answers the TSF input scope (password and `TextInputPurpose`); no run with an input method yet, and Android, Web, iOS and Wayland still read none of it except Android's password variation |
 | 2026-10-21 | minor | Gap 1: Android and Web read `TextInputPurpose` (the Android keyboard type, the Web `inputmode`); no device or browser run yet, and iOS and Wayland still read none of it |
 | 2026-10-20 | minor | Entry 2 records the identifier obligation (ADR-0240) for the Android, iOS and Web adapters |
+| 2026-10-21 | minor | `InputLatency` on `WindowOptions`: the web reads `pointerrawupdate` for a `Low` window (type-checked for wasm32, not run in a browser); Android is not wired because `NativeActivity` takes touch from the native input queue and the Java `requestUnbufferedDispatch` does not reach it, so it needs `GameActivity` or a polling mode first |

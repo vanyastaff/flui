@@ -48,6 +48,7 @@ use super::{
 /// Failure rolls back the installed prefix through the registration's Drop.
 pub(super) fn register_event_listeners(
     window: &WebWindow,
+    input_latency: crate::InputLatency,
     transfer: &Arc<super::drag::WebTransfer>,
     registration: &mut Registration,
 ) -> Result<CanvasServices, crate::OpenWindowError> {
@@ -75,7 +76,14 @@ pub(super) fn register_event_listeners(
     // runtime may start a session from inside that dispatch.
     let drag = super::drag::register(canvas, transfer, &callbacks, registration)?;
     let menu = Rc::new(MenuAnswer::default());
-    let loss = register_pointer_events(canvas, &contacts, &pinch, &menu, registration)?;
+    let loss = register_pointer_events(
+        canvas,
+        &contacts,
+        &pinch,
+        &menu,
+        input_latency,
+        registration,
+    )?;
     register_keyboard_events(canvas, &keys, registration)?;
     let focus = register_focus_events(window, &loss, registration)?;
     let text = super::text_input::WebTextInput::new(
@@ -277,11 +285,28 @@ fn register_context_loss_events(
 
 // ==================== Pointer Events ====================
 
+/// The DOM event that carries a pointer's movement: `pointermove` is
+/// coalesced to one per frame, `pointerrawupdate` (Chromium) fires for every
+/// sample, so a [`Low`](crate::InputLatency::Low) window listens to it where
+/// the browser has it, and to `pointermove` otherwise. Never both: a move
+/// would arrive twice.
+fn move_event(input_latency: crate::InputLatency) -> &'static str {
+    let raw = web_sys::window().is_some_and(|window| {
+        js_sys::Reflect::has(&window, &JsValue::from_str("onpointerrawupdate")).unwrap_or(false)
+    });
+    if input_latency == crate::InputLatency::Low && raw {
+        "pointerrawupdate"
+    } else {
+        "pointermove"
+    }
+}
+
 fn register_pointer_events(
     canvas: &web_sys::HtmlCanvasElement,
     contacts: &Rc<RefCell<ContactRegistry>>,
     pinch: &Rc<Pinch>,
     menu: &Rc<MenuAnswer>,
+    input_latency: crate::InputLatency,
     registration: &mut Registration,
 ) -> Result<Rc<PointerLoss>, crate::OpenWindowError> {
     let active = Rc::clone(&registration.pointers);
@@ -337,24 +362,28 @@ fn register_pointer_events(
         let pinch = Rc::clone(pinch);
         let accepting = Rc::clone(&registration.accepting);
         let menu = Rc::clone(menu);
-        registration.listen(canvas.as_ref(), "pointermove", move |e: web_sys::Event| {
-            let pe: web_sys::PointerEvent = e.unchecked_into();
-            let id = pe.pointer_id();
-            if !accepting.get() {
-                return;
-            }
-            let buttons = pe.buttons();
-            let contextual = opens_menu(pe.button(), pe.ctrl_key());
-            if !accepting.get() {
-                return;
-            }
-            if let Some(held) = active.borrow_mut().get_mut(&id) {
-                *held = buttons;
-            }
-            // A chorded press opens the menu as a first one does.
-            let pressed = dispatch(&pinch, &pe, convert_pointer_move(&pe, &contacts));
-            menu.record(contextual, pressed);
-        })?;
+        registration.listen(
+            canvas.as_ref(),
+            move_event(input_latency),
+            move |e: web_sys::Event| {
+                let pe: web_sys::PointerEvent = e.unchecked_into();
+                let id = pe.pointer_id();
+                if !accepting.get() {
+                    return;
+                }
+                let buttons = pe.buttons();
+                let contextual = opens_menu(pe.button(), pe.ctrl_key());
+                if !accepting.get() {
+                    return;
+                }
+                if let Some(held) = active.borrow_mut().get_mut(&id) {
+                    *held = buttons;
+                }
+                // A chorded press opens the menu as a first one does.
+                let pressed = dispatch(&pinch, &pe, convert_pointer_move(&pe, &contacts));
+                menu.record(contextual, pressed);
+            },
+        )?;
     }
 
     // A mouse or pen coming over the canvas and leaving it, outside a press

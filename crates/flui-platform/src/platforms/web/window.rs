@@ -350,6 +350,7 @@ impl WebWindow {
 
     pub(super) fn install(
         &self,
+        input_latency: crate::InputLatency,
         transfer: &Arc<super::drag::WebTransfer>,
         retire_frame_slot: impl FnOnce() + 'static,
     ) -> Result<(), OpenWindowError> {
@@ -358,7 +359,12 @@ impl WebWindow {
             .borrow_mut()
             .take()
             .expect("BUG: newly opened window owns its registration");
-        let services = super::events::register_event_listeners(self, transfer, &mut registration)?;
+        let services = super::events::register_event_listeners(
+            self,
+            input_latency,
+            transfer,
+            &mut registration,
+        )?;
         services.drag.arm();
         *self.drag.borrow_mut() = Some(services.drag);
         *self.text.borrow_mut() = Some(services.text);

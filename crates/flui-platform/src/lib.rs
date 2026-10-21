@@ -241,14 +241,14 @@ pub use task::{Task, TaskLabel};
 pub use traits::{
     AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem,
     CursorError, DispatchEventResult, DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey,
-    DisplayRegistry, DisplayRevision, DisplaySnapshot, HostNotice, HostWindow, MemoryPressureLevel,
-    PathPromptOptions, Platform, PlatformAccessibility, PlatformExecutor, PlatformHaptics,
-    PlatformReadyCallback, PlatformTextInput, PlatformWindow, RefreshPeriod, SessionEndAnswer,
-    SessionEndBlock, SessionEndBlockError, SessionEndPhase, SessionEndRequest, SizeConstraints,
-    SystemNotice, WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
-    WindowCommandError, WindowControl, WindowDisplay, WindowEvent, WindowExecutionState,
-    WindowGeometry, WindowId, WindowMode, WindowOptions, WindowReveal, WindowRevision,
-    WindowRevisionExhausted, WindowShowError, WindowState,
+    DisplayRegistry, DisplayRevision, DisplaySnapshot, HostNotice, HostWindow, InputLatency,
+    MemoryPressureLevel, PathPromptOptions, Platform, PlatformAccessibility, PlatformExecutor,
+    PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow, RefreshPeriod,
+    SessionEndAnswer, SessionEndBlock, SessionEndBlockError, SessionEndPhase, SessionEndRequest,
+    SizeConstraints, SystemNotice, WindowAppearance, WindowBackgroundAppearance,
+    WindowCapabilities, WindowCommand, WindowCommandError, WindowControl, WindowDisplay,
+    WindowEvent, WindowExecutionState, WindowGeometry, WindowId, WindowMode, WindowOptions,
+    WindowReveal, WindowRevision, WindowRevisionExhausted, WindowShowError, WindowState,
 };
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.

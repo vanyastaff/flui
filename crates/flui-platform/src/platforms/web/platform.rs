@@ -395,7 +395,7 @@ impl Platform for WebPlatform {
         let retiring = Arc::clone(&callbacks);
         let state = Arc::downgrade(&self.state);
         let transfer = self.with_state(|s| Arc::clone(&s.transfer));
-        window.install(&transfer, move || {
+        window.install(options.input_latency, &transfer, move || {
             let removed = state.upgrade().and_then(|state| {
                 let mut state = state.lock();
                 if state
