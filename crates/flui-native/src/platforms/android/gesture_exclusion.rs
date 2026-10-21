@@ -10,7 +10,7 @@ use jni::{JValue, jni_sig, jni_str};
 pub(super) fn apply(
     app: &AndroidApp,
     rects: &[[i32; 4]],
-) -> Result<(), crate::PreferenceQueryError> {
+) -> Result<(), flui_platform::PreferenceQueryError> {
     super::preferences::with_activity(app, |env, activity| {
         let window = env
             .call_method(

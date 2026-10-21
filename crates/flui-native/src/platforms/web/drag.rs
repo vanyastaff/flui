@@ -45,7 +45,7 @@ use crate::shared::html_drag_drop::{
     payload_of, payload_of_bytes, serve_stored,
 };
 use crate::shared::panic_boundary::contain_owner_callback;
-use crate::traits::PlatformInput;
+use flui_platform::PlatformInput;
 
 use super::events::{answer, pointer_position};
 use super::registration::Registration;
@@ -530,7 +530,7 @@ pub(super) fn register(
             let accepts = event.type_() == "dragenter" || effect != "none";
             answer(
                 &event,
-                crate::DispatchEventResult::resolved(
+                flui_platform::DispatchEventResult::resolved(
                     result.propagate,
                     result.default_prevented && accepts,
                 ),

@@ -39,13 +39,11 @@ use flui_platform::text_store::TextStoreHost;
 use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
-use super::{
-    Clipboard, ClipboardItem, HostWindow, PathPromptOptions, Platform, PlatformExecutor,
-    WindowEvent, WindowId, WindowOptions,
-};
-use crate::data_transfer::DataTransferSource;
+use super::{HostWindow, PathPromptOptions, Platform, PlatformExecutor};
 use crate::error::PlatformError;
 use crate::task::Task;
+use flui_platform::data_transfer::DataTransferSource;
+use flui_platform::{Clipboard, ClipboardItem, WindowEvent, WindowId, WindowOptions};
 
 // ============================================================================
 // OwnerPlatform
@@ -216,7 +214,7 @@ impl OwnerPlatform {
     /// step 2 once that exists. The runner reads it once, where it reads the
     /// accessibility bridge (`runner::presentation_window`).
     ///
-    /// [`PlatformWindow::text_input`]: super::PlatformWindow::text_input
+    /// [`PlatformWindow::text_input`]: flui_platform::PlatformWindow::text_input
     #[must_use]
     pub fn text_store_host(&self, window: &Arc<dyn HostWindow>) -> Option<Rc<dyn TextStoreHost>> {
         window.text_store_host(super::host_window::OwnerThreadToken::new())

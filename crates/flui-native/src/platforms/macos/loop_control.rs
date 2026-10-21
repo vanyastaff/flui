@@ -27,13 +27,11 @@ use super::{
     window::MacOSWindow,
 };
 use crate::{
-    error::PlatformError,
-    shared::{
-        PlatformHandlers,
-        terminate_gate::{ANNOUNCEMENT_LIFETIME, DEFERRAL_LIMIT, TerminateGate, Termination},
-    },
-    traits::PlatformWindow,
+    error::PlatformError, shared::PlatformHandlers, shared::terminate_gate::ANNOUNCEMENT_LIFETIME,
+    shared::terminate_gate::DEFERRAL_LIMIT, shared::terminate_gate::TerminateGate,
+    shared::terminate_gate::Termination,
 };
+use flui_platform::PlatformWindow;
 
 /// Whether finishing a session end also answers a waiting
 /// `applicationShouldTerminate:`.

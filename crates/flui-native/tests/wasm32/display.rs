@@ -11,8 +11,9 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use flui_native::{HostWindow, OwnerPlatform, Platform, WebPlatform, WindowOpen, WindowOptions};
+use flui_native::{HostWindow, OwnerPlatform, Platform, WebPlatform, WindowOpen};
 use flui_platform::DisplaySnapshot;
+use flui_platform::WindowOptions;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::wasm_bindgen_test;
 

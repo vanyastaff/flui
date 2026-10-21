@@ -19,7 +19,6 @@ use flui_platform::{
     },
 };
 
-use crate::DispatchEventResult;
 use crate::shared::pointer_assembly::{
     Assembled, ContactRegistry, DecodeError, GesturePhase, GestureReading, MoveBatch, NativeCancel,
     NativeClock, NativeContact, NativeReading, NativeSurface, PenAngles, RawSensors, ReadingAction,
@@ -29,13 +28,15 @@ use crate::shared::web_pinch::{
     CtrlWheel, GestureEventKind, GestureTracker, WheelRoute, WheelStep,
 };
 use crate::shared::web_text::key_composition;
+use flui_platform::DispatchEventResult;
 use icu_normalizer::{ComposingNormalizerBorrowed, properties::CanonicalCombiningClassMapBorrowed};
 use icu_properties::{CodePointMapData, props::GeneralCategory};
 
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
-use crate::{WindowExecutionState, shared::WindowCallbacks, traits::PlatformInput};
+use crate::shared::WindowCallbacks;
+use flui_platform::{PlatformInput, WindowExecutionState};
 
 use super::{
     display_events::PixelRatioWatch,
@@ -48,7 +49,7 @@ use super::{
 /// Failure rolls back the installed prefix through the registration's Drop.
 pub(super) fn register_event_listeners(
     window: &WebWindow,
-    input_latency: crate::InputLatency,
+    input_latency: flui_platform::InputLatency,
     transfer: &Arc<super::drag::WebTransfer>,
     registration: &mut Registration,
 ) -> Result<CanvasServices, crate::OpenWindowError> {
@@ -287,14 +288,14 @@ fn register_context_loss_events(
 
 /// The DOM event that carries a pointer's movement: `pointermove` is
 /// coalesced to one per frame, `pointerrawupdate` (Chromium) fires for every
-/// sample, so a [`Low`](crate::InputLatency::Low) window listens to it where
+/// sample, so a [`Low`](flui_platform::InputLatency::Low) window listens to it where
 /// the browser has it, and to `pointermove` otherwise. Never both: a move
 /// would arrive twice.
-fn move_event(input_latency: crate::InputLatency) -> &'static str {
+fn move_event(input_latency: flui_platform::InputLatency) -> &'static str {
     let raw = web_sys::window().is_some_and(|window| {
         js_sys::Reflect::has(&window, &JsValue::from_str("onpointerrawupdate")).unwrap_or(false)
     });
-    if input_latency == crate::InputLatency::Low && raw {
+    if input_latency == flui_platform::InputLatency::Low && raw {
         "pointerrawupdate"
     } else {
         "pointermove"
@@ -306,7 +307,7 @@ fn register_pointer_events(
     contacts: &Rc<RefCell<ContactRegistry>>,
     pinch: &Rc<Pinch>,
     menu: &Rc<MenuAnswer>,
-    input_latency: crate::InputLatency,
+    input_latency: flui_platform::InputLatency,
     registration: &mut Registration,
 ) -> Result<Rc<PointerLoss>, crate::OpenWindowError> {
     let active = Rc::clone(&registration.pointers);

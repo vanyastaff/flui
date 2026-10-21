@@ -9,11 +9,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use flui_native::traits::PlatformWindow;
 use flui_native::{
     DisplayChange, DisplaySpec, HeadlessDisplayControls, HeadlessOwnerTurns, HeadlessPlatform,
     MockWindow, Platform as _,
 };
+use flui_platform::PlatformWindow;
 use flui_platform::{DisplayId, DisplaySnapshot, WindowDisplay};
 
 use super::super::host::{
@@ -120,7 +120,7 @@ fn install_window(
     deadlines: Option<Arc<super::super::desktop::DesktopWakeDeadlines>>,
 ) -> (Win, Option<super::super::frame_driver::FrameBinding>) {
     let host_window =
-        with_owner_platform(|owner| owner.open_window(flui_native::WindowOptions::default()))
+        with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
             .expect("an installed owner")
             .and_then(flui_native::WindowOpen::try_ready)
             .expect("headless windows are ready");
@@ -208,7 +208,7 @@ fn seed_holds_every_display_before_the_first_window() {
         accepted
             .get(rig.ids[LEFT])
             .and_then(|display| display.refresh_period)
-            .map(flui_native::RefreshPeriod::get),
+            .map(flui_platform::RefreshPeriod::get),
         Some(Duration::from_millis(16))
     );
 }

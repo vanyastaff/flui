@@ -13,7 +13,7 @@ use windows::Win32::{
 use super::WindowContext;
 use crate::platforms::windows::events;
 use crate::shared::pointer_assembly::NativeCancel;
-use crate::traits::PlatformInput;
+use flui_platform::PlatformInput;
 
 impl WindowContext {
     /// Record whether the mouse is over the window, raising the hover change

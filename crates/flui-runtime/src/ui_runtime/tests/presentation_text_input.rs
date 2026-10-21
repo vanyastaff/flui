@@ -8,10 +8,10 @@ use super::*;
 /// platform capability supplied to the presentation.
 fn headless_text_input() -> (
     Arc<flui_native::FakeTextInput>,
-    Arc<dyn flui_native::traits::PlatformTextInput>,
+    Arc<dyn flui_platform::PlatformTextInput>,
 ) {
     let fake = Arc::new(flui_native::FakeTextInput::new());
-    let capability: Arc<dyn flui_native::traits::PlatformTextInput> = fake.clone();
+    let capability: Arc<dyn flui_platform::PlatformTextInput> = fake.clone();
     (fake, capability)
 }
 

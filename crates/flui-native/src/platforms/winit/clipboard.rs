@@ -4,7 +4,7 @@
 
 use parking_lot::Mutex;
 
-use crate::traits::Clipboard;
+use flui_platform::Clipboard;
 
 /// Arboard-based clipboard implementation
 ///

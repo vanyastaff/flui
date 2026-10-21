@@ -27,7 +27,8 @@ use windows::{
     core::w,
 };
 
-use crate::{shared::clipboard_lock, traits::Clipboard};
+use crate::shared::clipboard_lock;
+use flui_platform::Clipboard;
 
 /// Windows clipboard implementation
 ///

@@ -9,7 +9,7 @@ const RETRY_INTERVAL: Duration = Duration::from_millis(500);
 #[derive(Default)]
 pub(crate) struct ReadAdmission {
     state: Mutex<State>,
-    accepted: Mutex<Option<crate::SystemPreferences>>,
+    accepted: Mutex<Option<flui_platform::SystemPreferences>>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -29,8 +29,8 @@ impl ReadAdmission {
     pub(crate) fn read_observation(
         &self,
         now: web_time::Instant,
-        sample: impl FnOnce() -> Result<crate::SystemPreferences, PlatformError>,
-    ) -> Result<(crate::SystemPreferences, bool), PlatformError> {
+        sample: impl FnOnce() -> Result<flui_platform::SystemPreferences, PlatformError>,
+    ) -> Result<(flui_platform::SystemPreferences, bool), PlatformError> {
         let attempt = self.begin(now)?;
         let recovering = attempt.recovering;
         let current = sample()?;
@@ -98,7 +98,7 @@ mod tests {
         let now = web_time::Instant::now();
         let cold = ReadAdmission::default();
         let (_, needs_delivery) = cold
-            .read_observation(now, || Ok(crate::SystemPreferences::default()))
+            .read_observation(now, || Ok(flui_platform::SystemPreferences::default()))
             .expect("first legitimate unknown observation");
         assert!(
             needs_delivery,
@@ -115,8 +115,8 @@ mod tests {
             reader.read_observation(now, || panic!("early native retry")),
             Err(PlatformError::PreferencesDeferred)
         ));
-        let observation = crate::SystemPreferences::default().with_gestures(
-            crate::GesturePreferences::default()
+        let observation = flui_platform::SystemPreferences::default().with_gestures(
+            flui_platform::GesturePreferences::default()
                 .with_double_click_interval(Duration::from_millis(700)),
         );
         let (accepted, needs_delivery) = reader

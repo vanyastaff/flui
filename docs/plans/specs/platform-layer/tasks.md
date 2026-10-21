@@ -325,15 +325,33 @@ graph LR
   прошли. Повтор команд ничего не меняет.
 - [x] **LY24** — ветка `platform/dead-linux`. Удалены `LinuxPlatform` (заглушка с
   `unimplemented!()` в конструкторе и большинстве методов) и `LinuxWindowExt` (`window_ext.rs`, без
-  реализаций) с экспортами из `lib.rs` и `platforms/mod.rs`. Живой слой `platforms/linux`
-  (`display`, `host_notices`, `lifecycle_model`, `x11_window_probe`, `accessibility`) остался; его
-  модуль описывает, что в нём и кто им пользуется. `is_wayland` стал `Protocol::current()` в
-  `linux/display/protocol.rs`, им пользуется `winit/display_linux.rs`; `is_x11` не звал никто.
-  Строка про `LinuxPlatform` ушла из незавершённого фрагмента changelog дисплеев Linux. Проверки на
-  Windows: `rg 'unimplemented!'` по `platforms/` — ноль; `xtask checks`, `workspace` — зелёные;
-  clippy `-p flui-native -p flui-app --all-targets -D warnings` — зелёный; nextest `-p flui-native`
-  — 213 прошли. Сборка под Linux на этой машине недоступна (C-сборка `psm` без кросс-компилятора);
-  её доказательство — Linux CI.
+  реализаций) с экспортами из `lib.rs` и `platforms/mod.rs`, а с ним и `bitflags` из Linux-зависимостей
+  ядра (первый прогон CI: `cargo shear`). Живой слой `platforms/linux` (`display`, `host_notices`,
+  `lifecycle_model`, `x11_window_probe`, `accessibility`) остался; его модуль описывает, что в нём и
+  кто им пользуется. `is_wayland` стал `Protocol::current()` в `linux/display/protocol.rs`, им
+  пользуется `winit/display_linux.rs`; `is_x11` не звал никто. Строка про `LinuxPlatform` ушла из
+  незавершённого фрагмента changelog дисплеев Linux. Проверки: `rg 'unimplemented!'` по
+  `platforms/` — ноль; `xtask checks`, `workspace`, `deps` — зелёные; clippy `-p flui-native -p
+  flui-app --all-targets -D warnings` — зелёный; ядро под `x86_64-unknown-linux-gnu`
+  (`winit-backend,a11y`) — `cargo check` зелёный; nextest `-p flui-native` — 213 прошли.
+- [x] **LY23** — ветка `platform/contract-paths`. Ядро не реэкспортирует контракт: из
+  `traits/mod.rs` ушли 64 имени `flui_platform`, `NamedKey` и три имени
+  `flui_semantics::platform`, из корня `lib.rs` — модуль `data_transfer`, имена предпочтений,
+  передачи данных, `CursorIcon` и контрактные имена списка `traits`; корень оставляет только свои
+  (`Platform`, `HostWindow`, owner-типы, хосты, ошибки). Пути переписал одноразовый инструмент на
+  `syn` (вне репозитория): лист `use`-дерева с корнем `flui_native`/`flui_native::traits` (в
+  `crates/flui-native/src` — `crate`/`crate::traits`) и контрактным именем уходит в
+  `flui_platform::…`, `flui_semantics::platform::…` или `flui_platform::data_transfer`; встроенные
+  пути и doc-ссылки — тем же отображением. Руками: относительные `super::` в `traits/`, `$crate::`
+  в `impl_window_callback_setters`, doc-пример `lib.rs`, ARCHITECTURE.md и README обоих крейтов.
+  Проверки: `cargo check --workspace --all-targets` на Windows; ядро под `aarch64-apple-darwin` и
+  `x86_64-unknown-linux-gnu` (`winit-backend,a11y`); ядро и `flui-app` под `aarch64-linux-android`;
+  `flui-app`, `flui-runtime`, `flui-testing` под Linux и macOS (`CC`/`AR` из LLVM для `psm`);
+  `wasm-check`; clippy `--workspace --all-targets -D warnings`; `xtask checks`, `workspace`,
+  `reach`, `deps` — зелёные; nextest пяти изменённых крейтов — 422 прошли; doctest'ы — 80 прошли;
+  `rg` по `flui_native::` с контрактными именами пуст; `xtask doc-strict` зелёный после правки
+  относительной doc-ссылки в `traits/owner.rs`, которую нашёл CI. iOS локально не собирается
+  (`objc2-exception-helper` требует SDK), его проверяет CI.
 
 ## Отступление от порядка, решённое владельцем
 

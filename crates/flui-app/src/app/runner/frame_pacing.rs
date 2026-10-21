@@ -15,7 +15,7 @@
 // one display period after the last present, never a sleep on the loop).
 
 /// Hands the window's frame-pacing signal to the raster backend: the
-/// backend calls [`PlatformWindow::pre_present_notify`](flui_native::traits::PlatformWindow::pre_present_notify) immediately before
+/// backend calls [`PlatformWindow::pre_present_notify`](flui_platform::PlatformWindow::pre_present_notify) immediately before
 /// every present, and only then. On Wayland this is what makes a running
 /// animation compositor-paced (winit withholds the next `RedrawRequested`
 /// until the surface's frame callback) and an occluded window silent; on
@@ -31,7 +31,7 @@
 ))]
 pub(super) fn install_pre_present_hook(
     backend: &mut impl flui_engine::RasterBackend,
-    window: &std::sync::Arc<dyn flui_native::traits::PlatformWindow>,
+    window: &std::sync::Arc<dyn flui_platform::PlatformWindow>,
 ) {
     let window = std::sync::Arc::clone(window);
     backend.set_pre_present_hook(Some(Box::new(move || window.pre_present_notify())));

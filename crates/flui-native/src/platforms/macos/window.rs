@@ -50,12 +50,11 @@ const NO: Bool = Bool::NO;
 
 use super::{display::MacosDisplays, view};
 use crate::{
-    config::WindowConfiguration,
-    shared::{WindowCallbacks, window_state::WindowStateCell},
-    traits::{
-        CursorError, DisplayId, OpenWindowError, PlatformWindow, WindowId, WindowOptions,
-        WindowReveal,
-    },
+    config::WindowConfiguration, shared::WindowCallbacks, shared::window_state::WindowStateCell,
+    traits::OpenWindowError,
+};
+use flui_platform::{
+    CursorError, DisplayId, PlatformWindow, WindowId, WindowOptions, WindowReveal,
 };
 
 /// macOS window wrapper around NSWindow
@@ -969,7 +968,7 @@ impl crate::traits::HostWindow for MacOSWindow {
     /// override the trait default (`None`) leaves every real macOS window
     /// silently invisible to VoiceOver.
     #[cfg(feature = "a11y")]
-    fn accessibility(&self) -> Option<Arc<dyn crate::traits::PlatformAccessibility>> {
+    fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
         self.accessibility
             .get()
             .map(|bridge| Arc::clone(bridge) as _)
@@ -1080,7 +1079,7 @@ impl PlatformWindow for MacOSWindow {
         WindowId(self.ns_window as u64)
     }
 
-    fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
         Some(Arc::new(super::haptics::MacHaptics))
     }
 
@@ -1095,7 +1094,7 @@ impl PlatformWindow for MacOSWindow {
     /// exists, and a window that never attaches a text input never builds one.
     /// `closed` is shared rather than copied so the capability observes the
     /// window's own close.
-    fn text_input(&self) -> Option<Arc<dyn crate::traits::PlatformTextInput>> {
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
         let text_input = self.text_input.get_or_init(|| {
             Arc::new(super::text_input::MacOSTextInput::new(
                 self.view,
@@ -1104,7 +1103,7 @@ impl PlatformWindow for MacOSWindow {
                 self.owner_is_main,
             ))
         });
-        Some(Arc::clone(text_input) as Arc<dyn crate::traits::PlatformTextInput>)
+        Some(Arc::clone(text_input) as Arc<dyn flui_platform::PlatformTextInput>)
     }
 
     fn physical_size(&self) -> Size<i32> {
@@ -1251,8 +1250,8 @@ impl PlatformWindow for MacOSWindow {
             }
             WindowCommand::SetMode(mode) => self.change_mode(mode)?,
             WindowCommand::Show => self.show().map_err(|error| match error {
-                crate::WindowShowError::Closed => WindowCommandError::Closed,
-                crate::WindowShowError::Native { message } => {
+                flui_platform::WindowShowError::Closed => WindowCommandError::Closed,
+                flui_platform::WindowShowError::Native { message } => {
                     WindowCommandError::Backend { message }
                 }
                 _ => WindowCommandError::Unsupported,
@@ -1267,13 +1266,13 @@ impl PlatformWindow for MacOSWindow {
         Ok(())
     }
 
-    fn show(&self) -> Result<(), crate::WindowShowError> {
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
         // An explicit show settles a deferred first reveal: the window is
         // made opaque along with being ordered.
         let settle_reveal = self.take_pending_first_reveal();
         let shown = route_on_owner(self.owner, self.owner_is_main, || {
             if self.closed.load(Ordering::SeqCst) {
-                return Err(crate::WindowShowError::Closed);
+                return Err(flui_platform::WindowShowError::Closed);
             }
             // SAFETY: self retains the native window; routing establishes its
             // owner lane. Deminiaturizing and ordering do not toggle zoom/fullscreen.
@@ -1286,12 +1285,12 @@ impl PlatformWindow for MacOSWindow {
                     let _: () = msg_send![self.ns_window, deminiaturize: NIL];
                 }
                 if self.closed.load(Ordering::SeqCst) {
-                    return Err(crate::WindowShowError::Closed);
+                    return Err(flui_platform::WindowShowError::Closed);
                 }
                 let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: NIL];
             }
             if self.closed.load(Ordering::SeqCst) {
-                Err(crate::WindowShowError::Closed)
+                Err(flui_platform::WindowShowError::Closed)
             } else {
                 Ok(())
             }

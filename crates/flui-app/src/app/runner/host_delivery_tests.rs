@@ -124,21 +124,21 @@ fn runtime_frame_wake_reaches_its_window_after_sibling_installation() {
         .run(Box::new(move |owner| {
             install_owner_platform(owner)?;
             let a_host = with_owner_platform(|owner| {
-                owner.open_window(flui_native::WindowOptions::default())
+                owner.open_window(flui_platform::WindowOptions::default())
             })
             .expect("owner")
             .expect("open A")
             .try_ready()
             .expect("ready A");
             let b_host = with_owner_platform(|owner| {
-                owner.open_window(flui_native::WindowOptions::default())
+                owner.open_window(flui_platform::WindowOptions::default())
             })
             .expect("owner")
             .expect("open B")
             .try_ready()
             .expect("ready B");
-            let a_window: Arc<dyn flui_native::traits::PlatformWindow> = a_host.clone();
-            let b_window: Arc<dyn flui_native::traits::PlatformWindow> = b_host.clone();
+            let a_window: Arc<dyn flui_platform::PlatformWindow> = a_host.clone();
+            let b_window: Arc<dyn flui_platform::PlatformWindow> = b_host.clone();
             a_window.on_request_frame(Box::new(move || {
                 a_seen.fetch_add(1, Ordering::SeqCst);
             }));

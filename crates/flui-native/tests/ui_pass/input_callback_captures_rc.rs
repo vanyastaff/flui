@@ -4,7 +4,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use flui_native::traits::{DispatchEventResult, PlatformInput, PlatformWindow};
+use flui_platform::{DispatchEventResult, PlatformInput, PlatformWindow};
 
 fn register(window: &dyn PlatformWindow) {
     let seen = Rc::new(Cell::new(0_u32));

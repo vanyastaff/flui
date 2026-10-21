@@ -9,8 +9,8 @@ use flui_native::shared::pointer_assembly::{
     NativeDevice, NativeReading, NativeSurface, NativeTime, QpcTicks, ReadingAction, ReadingTime,
     ScrollPhases, ScrollReading, decode,
 };
-use flui_native::traits::PlatformInput;
 use flui_platform::EventTime;
+use flui_platform::PlatformInput;
 use flui_platform::pointer::{
     CancelReason, DeviceId, PanZoomPhase, PointerButton, PointerEvent, PointerKind, PointerRole,
 };

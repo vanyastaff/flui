@@ -24,7 +24,8 @@ use windows_core::Interface as _;
 
 use super::document::{TsfStore, TsfStore_Impl, ts_status};
 use super::{Serving, TextServices, same_object};
-use crate::traits::{Platform, WindowOptions};
+use crate::traits::Platform;
+use flui_platform::WindowOptions;
 
 /// "ab" with "かな" composing after it, as the store sees it.
 fn composing_store() -> Rc<InMemoryTextStore> {

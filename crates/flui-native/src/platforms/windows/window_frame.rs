@@ -11,7 +11,7 @@ use windows::Win32::{
     },
 };
 
-use crate::traits::WindowMode;
+use flui_platform::WindowMode;
 
 /// What is still owed of a window's first show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -46,7 +46,7 @@ use crate::shared::display_link_rate::{FrameRatePreference, ScreenPeriods, frame
 use crate::shared::display_source::DisplaySource;
 use crate::shared::os_version::apple::AppleVersion;
 use crate::shared::owner_signal::OwnerSignal;
-use crate::traits::WindowId;
+use flui_platform::WindowId;
 
 type RetainedScreen = Retained<UIScreen>;
 

@@ -13,8 +13,8 @@ use flui_native::shared::pointer_assembly::{
 use flui_native::shared::web_pinch::{
     CtrlWheel, GestureEventKind, GestureTracker, PINCH_GAP, WheelRoute, WheelStep,
 };
-use flui_native::traits::PlatformInput;
 use flui_platform::EventTime;
+use flui_platform::PlatformInput;
 use flui_platform::pointer::{PanZoomPhase, PointerEvent, PointerKind};
 
 fn at(millis: u64) -> EventTime {

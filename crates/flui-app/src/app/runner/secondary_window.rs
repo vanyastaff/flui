@@ -268,7 +268,7 @@ enum CompletionStage {
 ))]
 pub(super) type OpenedWindow = (
     PresentationDispatcher,
-    Arc<dyn flui_native::traits::PlatformWindow>,
+    Arc<dyn flui_platform::PlatformWindow>,
 );
 
 /// Owns the generic root until preparation and returns its publication receipt.
@@ -823,7 +823,8 @@ pub(super) fn open_secondary_window_impl(
     config: AppConfig,
     policy: WindowPolicy,
 ) -> Result<Option<OpenedWindow>, AppWindowError> {
-    use flui_native::{WindowOpen, WindowOptions};
+    use flui_native::WindowOpen;
+    use flui_platform::WindowOptions;
     warn_window_storage_dir(&config);
     let loop_identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
     if !secondary_install_admitted(&loop_identity) {
@@ -902,7 +903,8 @@ pub(super) fn open_window_with_content_impl<V>(
 where
     V: View + Clone + 'static,
 {
-    use flui_native::{WindowOpen, WindowOptions};
+    use flui_native::WindowOpen;
+    use flui_platform::WindowOptions;
     warn_window_storage_dir(&config);
 
     if policy == WindowPolicy::Shared {
@@ -1045,8 +1047,8 @@ fn finish_open_secondary_window(
     config: SecondaryWindowInstallConfig,
     host: Arc<dyn flui_native::traits::HostWindow>,
 ) -> Result<Option<OpenedWindow>, AppWindowError> {
-    let window: Arc<dyn flui_native::traits::PlatformWindow> = Arc::clone(&host) as _;
-    struct Uninstalled(Option<Arc<dyn flui_native::PlatformWindow>>);
+    let window: Arc<dyn flui_platform::PlatformWindow> = Arc::clone(&host) as _;
+    struct Uninstalled(Option<Arc<dyn flui_platform::PlatformWindow>>);
     impl Drop for Uninstalled {
         fn drop(&mut self) {
             if let Some(window) = self.0.take()
@@ -1282,7 +1284,7 @@ mod tests {
         Box::new(HeadlessPlatform::new())
             .run(Box::new(move |owner| {
                 let window = owner
-                    .open_window(flui_native::WindowOptions::default())
+                    .open_window(flui_platform::WindowOptions::default())
                     .expect("native window");
                 let flui_native::WindowOpen::Ready(window) = window else {
                     panic!("headless ready window")
@@ -1337,7 +1339,7 @@ mod tests {
                             runtime
                                 .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
                                 .expect("root");
-                            let window: Arc<dyn flui_native::traits::PlatformWindow> = window;
+                            let window: Arc<dyn flui_platform::PlatformWindow> = window;
                             let closing_window = Arc::clone(&window);
                             let mut prepared =
                                 super::super::owner_dispatch::prepare_ui_runtime_alongside(
@@ -1533,7 +1535,7 @@ mod tests {
                 let mut requests = Vec::new();
                 for _ in 0..2 {
                     let window = with_owner_platform(|owner| {
-                        owner.open_window(flui_native::WindowOptions::default())
+                        owner.open_window(flui_platform::WindowOptions::default())
                     })
                     .expect("owner")
                     .expect("open")
@@ -1627,7 +1629,7 @@ mod tests {
                 super::super::host::install_owner_platform(owner).expect("owner");
                 for first in [true, false] {
                     let window = with_owner_platform(|owner| {
-                        owner.open_window(flui_native::WindowOptions::default())
+                        owner.open_window(flui_platform::WindowOptions::default())
                     })
                     .expect("owner")
                     .expect("open")
@@ -1649,7 +1651,7 @@ mod tests {
                     let stage = if first {
                         let receipt = super::super::owner_dispatch::prepare_ui_runtime_alongside(
                             UiRuntime::for_test(),
-                            Arc::clone(&window) as Arc<dyn flui_native::traits::PlatformWindow>,
+                            Arc::clone(&window) as Arc<dyn flui_platform::PlatformWindow>,
                         )
                         .submit();
                         assert!(matches!(receipt.outcome(), Some(Ok(()))));
@@ -1721,7 +1723,7 @@ mod tests {
             let _clear = super::super::host::OwnerHostClearGuard::arm();
             Box::new(HeadlessPlatform::new()).run(Box::new(move |owner| {
                 super::super::host::install_owner_platform(owner).expect("owner");
-                let window = with_owner_platform(|owner| owner.open_window(flui_native::WindowOptions::default()))
+                let window = with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
                     .expect("owner").expect("open").try_ready().expect("headless ready");
                 let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
                 let (reply, mut request) = crate::app::WindowRequest::new();

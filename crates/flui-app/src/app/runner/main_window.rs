@@ -863,7 +863,7 @@ mod tests {
                             runtime
                                 .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
                                 .expect("mount root");
-                            let window: Arc<dyn flui_native::traits::PlatformWindow> = window;
+                            let window: Arc<dyn flui_platform::PlatformWindow> = window;
                             let mut prepared =
                                 prepare_ui_runtime_alongside(runtime, Arc::clone(&window));
                             let address = prepared.dispatcher().address;

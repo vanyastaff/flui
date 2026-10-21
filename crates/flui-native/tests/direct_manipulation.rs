@@ -11,8 +11,8 @@ use flui_native::shared::direct_manipulation::{
 use flui_native::shared::pointer_assembly::{
     ContactRegistry, CounterAnchor, NativeClock, NativeSurface, NativeTime, QpcTicks, ReadingTime,
 };
-use flui_native::traits::PlatformInput;
 use flui_platform::EventTime;
+use flui_platform::PlatformInput;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{PanZoomPhase, PointerEvent};
 use std::num::NonZeroU64;

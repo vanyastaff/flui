@@ -11,7 +11,8 @@ use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use flui_foundation::{ClaimHandle, ClaimSlot, claim_slot};
 use parking_lot::Mutex;
 
-use crate::traits::{HostWindow, WindowId, WindowOptions, owner::OpenWindowError};
+use crate::{traits::HostWindow, traits::owner::OpenWindowError};
+use flui_platform::{WindowId, WindowOptions};
 
 pub(super) const CONTROL_CAPACITY: usize = 256;
 
@@ -255,7 +256,7 @@ impl ControlSender {
     }
 
     /// Asks the owner to run the close teardown for `window_id` — the
-    /// programmatic [`PlatformWindow::close`](crate::traits::PlatformWindow::close) route (issue #919). The owner
+    /// programmatic [`PlatformWindow::close`](flui_platform::PlatformWindow::close) route (issue #919). The owner
     /// answers on its next turn with the SAME teardown a compositor close
     /// takes after its should-close veto (per-window close callback, map
     /// removal, cursor/drag cleanup, callback clear, exit-policy consult),
@@ -389,7 +390,7 @@ mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::{CONTROL_CAPACITY, ControlCommand, ControlSendError, control_lane};
-    use crate::traits::WindowOptions;
+    use flui_platform::WindowOptions;
 
     assert_impl_all!(super::ControlSender: Clone, Send, Sync);
     assert_not_impl_any!(super::ControlReceiver: Send, Sync);
@@ -406,9 +407,9 @@ mod tests {
 
     impl crate::traits::HostWindow for StubWindow {}
 
-    impl crate::traits::PlatformWindow for StubWindow {
-        fn id(&self) -> crate::traits::WindowId {
-            crate::traits::WindowId(1)
+    impl flui_platform::PlatformWindow for StubWindow {
+        fn id(&self) -> flui_platform::WindowId {
+            flui_platform::WindowId(1)
         }
 
         fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
@@ -430,7 +431,7 @@ mod tests {
         fn set_cursor(
             &self,
             _cursor: cursor_icon::CursorIcon,
-        ) -> Result<(), crate::traits::CursorError> {
+        ) -> Result<(), flui_platform::CursorError> {
             Ok(())
         }
         fn state(&self) -> flui_platform::WindowState {

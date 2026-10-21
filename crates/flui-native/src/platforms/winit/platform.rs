@@ -123,16 +123,15 @@ use super::{
     events as winit_events,
 };
 use crate::{
-    data_transfer::DataTransferSource,
-    error::{BootstrapError, PlatformError},
-    executor::BackgroundExecutor,
-    shared::{PlatformHandlers, system_notice::SystemNotices},
-    traits::{
-        Clipboard, DisplaySnapshot, HostWindow, OpenWindowError, OwnerPlatform, PendingWindow,
-        Platform, PlatformExecutor, PlatformInput, PlatformReadyCallback, PlatformWindow,
-        ProxySendError, WindowEvent, WindowId, WindowMode, WindowOpen, WindowOptions,
-        owner::{OwnerHooks, ProxyTransport},
-    },
+    error::BootstrapError, error::PlatformError, executor::BackgroundExecutor,
+    shared::PlatformHandlers, shared::system_notice::SystemNotices, traits::HostWindow,
+    traits::OpenWindowError, traits::OwnerPlatform, traits::PendingWindow, traits::Platform,
+    traits::PlatformExecutor, traits::PlatformReadyCallback, traits::ProxySendError,
+    traits::WindowOpen, traits::owner::OwnerHooks, traits::owner::ProxyTransport,
+};
+use flui_platform::{
+    Clipboard, DisplaySnapshot, PlatformInput, PlatformWindow, WindowEvent, WindowId, WindowMode,
+    WindowOptions, data_transfer::DataTransferSource,
 };
 
 #[cfg(target_os = "linux")]
@@ -1047,7 +1046,7 @@ fn presence_dispatch(
 /// their readings revealed: a device is present before its input.
 fn native_batch(
     state: &mut WinitPlatformState,
-    inputs: Vec<(WindowId, crate::traits::PlatformInput)>,
+    inputs: Vec<(WindowId, flui_platform::PlatformInput)>,
 ) -> Vec<(Arc<WinitWindow>, NativeDispatch)> {
     let mut batch = state
         .native_pointer
@@ -2994,10 +2993,8 @@ mod tests {
     };
 
     use super::{SelfCloseRoute, WinitApp, WinitPlatform, WinitRunState};
-    use crate::{
-        platforms::winit::control::control_lane,
-        traits::{Platform, WindowOptions},
-    };
+    use crate::{platforms::winit::control::control_lane, traits::Platform};
+    use flui_platform::WindowOptions;
 
     // ========================================================================
     // combine_shutdown_result

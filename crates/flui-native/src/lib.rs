@@ -107,7 +107,8 @@
 //! ### Example Test
 //!
 //! ```rust
-//! use flui_native::{WindowOptions, headless_platform};
+//! use flui_native::headless_platform;
+//! use flui_platform::WindowOptions;
 //! use flui_foundation::geometry::Size;
 //!
 //! fn test_window_creation() {
@@ -165,14 +166,6 @@
 #![deny(missing_docs)]
 
 pub mod config;
-/// The data-transfer transport (ADR-0038), defined in `flui-platform`
-/// and re-exported here at its old path.
-pub use flui_platform::data_transfer;
-pub use flui_platform::{
-    Distance, DurationScale, FlingSpeeds, GestureGeometry, GesturePreferences, InvalidPreference,
-    MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PreferenceQueryError,
-    SystemPreferences, WheelPreferences, WheelStep,
-};
 pub mod error;
 mod text_sizing;
 pub use text_sizing::{CapturedTextSizing, TextSizingCaptureError, TextSizingCaptureState};
@@ -192,15 +185,10 @@ pub mod traits;
 // ==================== Platform Detection ====================
 
 pub use config::{FullscreenMonitor, WindowConfiguration};
-// Data-transfer transport (ADR-0038): one source per platform instance,
-// reachable via `Platform::data_transfer()`.
-pub use data_transfer::{DataTransferOffer, DataTransferSource, NullDataTransferSource};
 // The typed lifecycle/service error taxonomy — `anyhow` is retired from
 // this crate's public API (the window-open family lives with its
 // capability types in `traits`).
 pub use error::{BootstrapError, PlatformError, PlatformResult};
-// One cursor vocabulary is shared by widgets, interaction, and platforms.
-pub use cursor_icon::CursorIcon;
 // Re-export executor types
 #[cfg(not(target_arch = "wasm32"))]
 pub use executor::BackgroundExecutor;
@@ -235,18 +223,10 @@ pub use platforms::WinitPlatform;
 pub use shared::{PlatformHandlers, WindowCallbacks};
 // Re-export task types
 pub use task::{Task, TaskLabel};
-// Re-export core traits
+// The core host's own traits; the contract's names are imported from
+// `flui_platform`, the accessibility capability from `flui_semantics::platform`.
 pub use traits::{
-    AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem,
-    CursorError, DispatchEventResult, DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey,
-    DisplayRegistry, DisplayRevision, DisplaySnapshot, HostNotice, HostWindow, InputLatency,
-    MemoryPressureLevel, PathPromptOptions, Platform, PlatformAccessibility, PlatformExecutor,
-    PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow, RefreshPeriod,
-    SessionEndAnswer, SessionEndBlock, SessionEndBlockError, SessionEndPhase, SessionEndRequest,
-    SizeConstraints, SystemNotice, WindowAppearance, WindowBackgroundAppearance,
-    WindowCapabilities, WindowCommand, WindowCommandError, WindowControl, WindowDisplay,
-    WindowEvent, WindowExecutionState, WindowGeometry, WindowId, WindowMode, WindowOptions,
-    WindowReveal, WindowRevision, WindowRevisionExhausted, WindowShowError, WindowState,
+    HostWindow, PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback,
 };
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.

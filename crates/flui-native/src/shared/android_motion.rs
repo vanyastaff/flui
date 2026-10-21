@@ -51,7 +51,7 @@ use super::pointer_assembly::{
     NativeReading, NativeSurface, PenAngles, RawSensors, ReadingAction, ReadingTime, ScrollPhases,
     ScrollReading, decode,
 };
-use crate::traits::PlatformInput;
+use flui_platform::PlatformInput;
 
 /// `InputDevice.SOURCE_MOUSE`. A touchpad in pointer mode reports from it.
 pub const SOURCE_MOUSE: u32 = 0x0000_2002;
