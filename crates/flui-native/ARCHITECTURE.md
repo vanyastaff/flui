@@ -20,6 +20,26 @@ trait depends on `flui-platform` instead.
 
 ## Invariants
 
+- **A host is a table, and `Platform` has one implementation (ADR-0151 §10).**
+  `host::Host` names one type for each position of the closed list (loop,
+  window, displays, input, text, accessibility, clipboard, drag, haptics,
+  preferences, lifecycle, chrome, storage), each bounded by its position's
+  trait; `hosts/<os>.rs` holds the table and its constructor and nothing else,
+  and a table that leaves a position out does not compile
+  (`tests/ui/host_table_names_every_position.rs`). A position a platform does
+  not have is `Absent<F>`, which answers in that position's words for "not
+  here" (no drag offered, `HapticOutcome::Unavailable`, unknown preferences);
+  no position method has a default body to fall back on. `HostPlatform<H>`
+  implements `Platform` by asking the position that holds each method; the
+  application-level positions are static functions over the host's loop
+  (`O`), which owns what the operating system hands out once per process, and
+  the window-level positions are the types each window hands out. The public
+  names (`WindowsPlatform`, `HeadlessPlatform`, …) are `HostPlatform` over each
+  table, and what a host offers beyond `Platform` (headless test controls, a
+  scene registration) is an inherent method on `HostPlatform<H>` for the `H`
+  whose loop it is. The executor, the application path, URL and path opening,
+  the file prompts and the compositor name are no position: the loop carries
+  them (`host::Services`) until the system capability crate takes them.
 - **The winit fallback is a desktop backend.** Its module, public re-exports
   and `arboard` clipboard dependency are available only on Windows, macOS and
   Linux under `winit-backend`. The `desktop` compatibility selector enables no
@@ -1034,7 +1054,7 @@ root-window creation API. It needs a macOS host with an active GUI session.
 
 ### Headless explicit quit consumes its callback outside platform state
 
-`HeadlessPlatform::quit` uses the same take-then-invoke discipline as its window
+`HeadlessLoop::quit` uses the same take-then-invoke discipline as its window
 close and exit-policy re-evaluation paths: it marks the loop stopped and takes
 the current quit callback under the state lock, then invokes and drops it after
 the lock is released. Recursive or repeated quit does not re-invoke that
