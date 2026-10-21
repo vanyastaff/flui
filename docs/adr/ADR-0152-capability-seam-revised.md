@@ -32,7 +32,7 @@
   (`flatpak/xdg-desktop-portal@49075617ff`).
 
 Crate names follow ADR-0151: the contract crate is `flui-platform` (today `flui-platform-api`) and
-the core host is `flui-native` (today `flui-platform`).
+the core host is `flui-native`.
 
 ## Context and problem statement
 

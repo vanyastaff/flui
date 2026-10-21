@@ -126,42 +126,42 @@ kind = "double"
 names = ["ScriptedAnimation"]
 
 [[allow]]
-path = "crates/flui-platform/src/platforms/linux/display/source/tests.rs"
+path = "crates/flui-native/src/platforms/linux/display/source/tests.rs"
 kind = "double"
 names = ["ScriptedSession"]
 
 [[allow]]
-path = "crates/flui-platform/src/platforms/windows/direct_manipulation/tests.rs"
+path = "crates/flui-native/src/platforms/windows/direct_manipulation/tests.rs"
 kind = "pump"
 names = ["pump"]
 
 [[allow]]
-path = "crates/flui-platform/src/platforms/windows/drag/tests.rs"
+path = "crates/flui-native/src/platforms/windows/drag/tests.rs"
 kind = "double"
 names = ["Scripted"]
 
 [[allow]]
-path = "crates/flui-platform/src/platforms/windows/text_services/probe.rs"
+path = "crates/flui-native/src/platforms/windows/text_services/probe.rs"
 kind = "pump"
 names = ["pump", "tick"]
 
 [[allow]]
-path = "crates/flui-platform/src/platforms/windows/text_services/probe.rs"
+path = "crates/flui-native/src/platforms/windows/text_services/probe.rs"
 kind = "double"
 names = ["Probe"]
 
 [[allow]]
-path = "crates/flui-platform/src/shared/android_ndk.rs"
+path = "crates/flui-native/src/shared/android_ndk.rs"
 kind = "double"
 names = ["FakeSymbols"]
 
 [[allow]]
-path = "crates/flui-platform/tests/wasm32.rs"
+path = "crates/flui-native/tests/wasm32.rs"
 kind = "double"
 names = ["Probe"]
 
 [[allow]]
-path = "crates/flui-platform/tests/wasm32/display.rs"
+path = "crates/flui-native/tests/wasm32/display.rs"
 kind = "double"
 names = ["Probe"]
 

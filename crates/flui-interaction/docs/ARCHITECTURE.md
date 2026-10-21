@@ -609,14 +609,14 @@ paths, so this guide needs no `DOCS_ONLY` exemption.
 ### Native input evidence
 
 The public native window contract lives in
-[`flui-platform/tests/contract.rs`](../../flui-platform/tests/contract.rs).
+[`flui-native/tests/contract.rs`](../../flui-native/tests/contract.rs).
 On Windows, select one existing child row through its environment variable;
 the top-level test exits after running that row. In PowerShell:
 
 ```powershell
 $env:FLUI_NATIVE_WINDOW_CONTRACT_CHILD = 'fractional_native_wheel_packets_preserve_observed_precision_and_source'
 try {
-    cargo nextest run --locked -p flui-platform --test platform_it test_window_lifecycle_contract --no-capture --build-jobs 6 -j 1
+    cargo nextest run --locked -p flui-native --test platform_it test_window_lifecycle_contract --no-capture --build-jobs 6 -j 1
 } finally {
     Remove-Item Env:FLUI_NATIVE_WINDOW_CONTRACT_CHILD
 }

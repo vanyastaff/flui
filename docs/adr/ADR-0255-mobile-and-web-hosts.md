@@ -81,7 +81,7 @@ host, and the dev server answers 404 to any path that is not a file
 page on focus below 16 px, which Flutter documents and guards against:
 [flutter/flutter@6597889f57
 engine/src/flutter/lib/web_ui/lib/src/engine/semantics/text_field.dart:12-46](https://github.com/flutter/flutter/blob/6597889f57/engine/src/flutter/lib/web_ui/lib/src/engine/semantics/text_field.dart#L12-L46)) and no
-`enterkeyhint` (`crates/flui-platform/src/platforms/web/text_input.rs:559-590`).
+`enterkeyhint` (`crates/flui-native/src/platforms/web/text_input.rs:559-590`).
 
 The question this record answers: how do Android, iOS and the Web host FLUI, so that accessibility,
 back, insets, activity results, permissions, deep links and text input reach the framework from the
@@ -196,7 +196,7 @@ text-input paths its platform requires.
      ([slint-ui/slint@277e7676ce
      internal/backends/android-activity/java/SlintAndroidJavaHelper.java:465-482](https://github.com/slint-ui/slint/blob/277e7676ce/internal/backends/android-activity/java/SlintAndroidJavaHelper.java#L465-L482)), replace the
      polled `safe_area::sample` (one `getRootWindowInsets` read after a resize,
-     system bars and cutout only: `crates/flui-platform/src/platforms/android/safe_area.rs:69-73`)
+     system bars and cutout only: `crates/flui-native/src/platforms/android/safe_area.rs:69-73`)
      and add the IME inset, which exists nowhere in the pipeline today.
      Each change is posted to the owner.
 
@@ -313,7 +313,7 @@ text-input paths its platform requires.
     (decision 8). Flutter's scene delegate forwards the same four
     ([flutter/flutter@6597889f57
     engine/src/flutter/shell/platform/darwin/ios/framework/Source/FlutterSceneDelegate.mm:32-101](https://github.com/flutter/flutter/blob/6597889f57/engine/src/flutter/shell/platform/darwin/ios/framework/Source/FlutterSceneDelegate.mm#L32-L101));
-    FLUI's has none of them (`crates/flui-platform/src/platforms/ios/platform.rs:1192-1219`).
+    FLUI's has none of them (`crates/flui-native/src/platforms/ios/platform.rs:1192-1219`).
 
 14. **Keyboard, back and the plist.**
     - The keyboard's frame arrives through the keyboard notifications, which work at the iOS 13
@@ -381,7 +381,7 @@ text-input paths its platform requires.
 
     | Concern | Rule |
     |---|---|
-    | Android host sources | `crates/flui-platform/android/` (the `android` directory of the `flui-native` crate after the crate rename the platform-layer design plans): `java/`, `classes.dex`, `classes.dex.toml`, the `cargo xtask android-dex` gate, `FluiHost.PROTOCOL` |
+    | Android host sources | `crates/flui-native/android/` (the `android` directory of the core host): `java/`, `classes.dex`, `classes.dex.toml`, the `cargo xtask android-dex` gate, `FluiHost.PROTOCOL` |
     | Why a checked-in dex, not `build.rs` | As in ADR-0247: no JDK or build-tools version in a user's build. The cost, one binary under review, is already accepted |
     | Android build, SDK-tools path | `aapt2 link` the generated manifest, add the native libraries and `classes.dex` from the resolved crate directory, `zipalign`, `apksigner`. No `javac` or `d8` |
     | Android build, Gradle path | The CLI writes the host sources into a generated, git-ignored source directory with a generated-file header on every build, or points a `sourceSets` entry at the crate; R8 keep rules for `dev.flui.**`, whose classes only native code names |
@@ -403,15 +403,15 @@ text-input paths its platform requires.
   | `crates/flui-cli/templates/platforms/android/AndroidManifest.xml` | Becomes the generated manifest of decision 6 |
   | `crates/flui-cli/src/build/android_package.rs` | Adds `classes.dex` as a zip entry; `targetSdk` from `platform-support.toml`; stops describing the path as `hasCode="false"` |
   | `crates/flui-cli/templates/platforms/android/build.gradle.kts` | Host sources through a generated directory or `sourceSets`; keep rules; the `proguard-rules.pro` it names but the template set lacks |
-  | `crates/flui-platform/src/platforms/android/java_view.rs` | Class loading through the Activity's loader; the in-memory and file loaders deleted; the protocol check |
-  | `crates/flui-platform/android/java/` | `FluiActivity`, the host queue, the accessibility delegate, back registration, the inset and IME-animation listeners |
-  | `crates/flui-platform/src/platforms/android/safe_area.rs` | Event-driven, and includes the IME inset |
-  | `crates/flui-platform/src/platforms/android/` | A `PlatformAccessibility` module: the low-level `Adapter`, hover from the native queue, a wake of the owner on activation |
+  | `crates/flui-native/src/platforms/android/java_view.rs` | Class loading through the Activity's loader; the in-memory and file loaders deleted; the protocol check |
+  | `crates/flui-native/android/java/` | `FluiActivity`, the host queue, the accessibility delegate, back registration, the inset and IME-animation listeners |
+  | `crates/flui-native/src/platforms/android/safe_area.rs` | Event-driven, and includes the IME inset |
+  | `crates/flui-native/src/platforms/android/` | A `PlatformAccessibility` module: the low-level `Adapter`, hover from the native queue, a wake of the owner on activation |
   | `platform-support.toml` and the generated floors | `targetSdk` |
-  | `crates/flui-platform/src/platforms/ios/` | The `UITextInput` view, the accessibility adapter, the scene callbacks, keyboard observation, the edge pan |
+  | `crates/flui-native/src/platforms/ios/` | The `UITextInput` view, the accessibility adapter, the scene callbacks, keyboard observation, the edge pan |
   | `crates/flui-cli/src/build/ios_package.rs` | The plist keys of decision 14 |
-  | `crates/flui-platform/src/platforms/web/text_input.rs` | Font-size floor, `enterkeyhint`, the autofill policy, reuse of the semantic field |
-  | `crates/flui-platform/src/platforms/web/` | The semantics host and ARIA DOM, the history strategy, ownership of the root element |
+  | `crates/flui-native/src/platforms/web/text_input.rs` | Font-size floor, `enterkeyhint`, the autofill policy, reuse of the semantic field |
+  | `crates/flui-native/src/platforms/web/` | The semantics host and ARIA DOM, the history strategy, ownership of the root element |
   | `crates/flui-cli/templates/platforms/web/index.html`, `crates/flui-cli/src/serve.rs` | A generated page with `<base>` and `viewport-fit`; a history fallback in the dev server |
 
 - Bad, because a packager other than `flui-cli` (cargo-apk, a hand-written Gradle project) must

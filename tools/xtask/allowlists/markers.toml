@@ -145,37 +145,37 @@ class = "spec-task"
 count = 2
 
 [[allow]]
-path = "crates/flui-platform/ARCHITECTURE.md"
+path = "crates/flui-native/ARCHITECTURE.md"
 class = "tracker-h"
 count = 2
 
 [[allow]]
-path = "crates/flui-platform/src/lib.rs"
+path = "crates/flui-native/src/lib.rs"
 class = "wave"
 count = 1
 
 [[allow]]
-path = "crates/flui-platform/src/platforms/headless/platform.rs"
+path = "crates/flui-native/src/platforms/headless/platform.rs"
 class = "spec-task"
 count = 4
 
 [[allow]]
-path = "crates/flui-platform/src/platforms/windows/platform.rs"
+path = "crates/flui-native/src/platforms/windows/platform.rs"
 class = "spec-task"
 count = 9
 
 [[allow]]
-path = "crates/flui-platform/src/traits/owner.rs"
+path = "crates/flui-native/src/traits/owner.rs"
 class = "slice"
 count = 4
 
 [[allow]]
-path = "crates/flui-platform/src/traits/platform.rs"
+path = "crates/flui-native/src/traits/platform.rs"
 class = "slice"
 count = 1
 
 [[allow]]
-path = "crates/flui-platform/src/traits/platform.rs"
+path = "crates/flui-native/src/traits/platform.rs"
 class = "spec-task"
 count = 4
 

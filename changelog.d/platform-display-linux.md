@@ -1,6 +1,6 @@
 ### Added
 
-- **Linux display source** (`flui-platform`): the outputs of a Wayland compositor (`wl_output`
+- **Linux display source** (`flui-native`): the outputs of a Wayland compositor (`wl_output`
   versions 2 to 4 with `zxdg_output_v1`) or an X server (RandR 1.5 monitors), with the refresh rate
   of each output's current mode and a notice when they change. The `wayland` and `x11` features
   carry the protocol clients (`wayland-client`, `wayland-protocols`, `x11rb`, all already in the
@@ -12,7 +12,7 @@
 
 ### Changed
 
-- **winit display snapshot** (`flui-platform`): the winit backend no longer enumerates winit's
+- **winit display snapshot** (`flui-native`): the winit backend no longer enumerates winit's
   monitors. Linux reads the compositor directly, Windows reads `QueryDisplayConfig` as before, and
   macOS reads `NSScreen` with the screen-parameters notification. A Linux window names its display
   by its monitor's native number (`MonitorHandleExtX11::native_id`, the CRTC; or

@@ -24,8 +24,8 @@ fn counting_wake() -> (Arc<dyn Fn() + Send + Sync>, Arc<AtomicUsize>) {
 /// `runner::presentation_window` does), so the headless backend's bridge is
 /// wired exactly as a production window's would be.
 fn test_window() -> crate::presentation::PresentationWindow {
-    let host = flui_platform::headless_platform()
-        .open_window(flui_platform::traits::WindowOptions::default())
+    let host = flui_native::headless_platform()
+        .open_window(flui_native::traits::WindowOptions::default())
         .expect("headless platform should create a test window");
     let accessibility = host.accessibility();
     crate::presentation::PresentationWindow::new(host, accessibility)

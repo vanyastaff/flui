@@ -142,7 +142,7 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    session never becomes an OS session on any platform, Web and iOS included, so the decision
    reads the type, never widget provenance. `AnchoredDrag` stays a one-dimensional offset
    widget, not DnD.
-10. **Native originating event.** Pointer assembly in `flui-platform` keeps the native event that
+10. **Native originating event.** Pointer assembly in `flui-native` keeps the native event that
     began each contact, because the OS start calls need it (AppKit's dragging-session event,
     the Wayland grab serial). It is dropped when the contact ends.
 11. **Platform limits are types.** On the Web and on iOS and iPadOS the OS-session decision is

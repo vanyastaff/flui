@@ -1,14 +1,14 @@
 //! Installed owner delivery through a private capture failure seam. No SDK calls.
 
 use super::*;
-use flui_platform::{HeadlessPlatform, Platform};
+use flui_native::{HeadlessPlatform, Platform};
 use flui_runtime::ui_runtime::UiRuntime;
 
 fn installed_capture(
     run: impl FnOnce(
         Rc<NativeTextSizing>,
         Rc<Cell<usize>>,
-        flui_platform::HeadlessOwnerTurns,
+        flui_native::HeadlessOwnerTurns,
         super::super::frame_driver::FrameBinding,
     ),
 ) {
@@ -22,11 +22,11 @@ fn installed_capture(
             let owner = Rc::new(owner);
             owner.on_wake(Box::new(refresh_installed_after_wake))?;
             let window = owner
-                .open_window(flui_platform::WindowOptions::default())?
+                .open_window(flui_native::WindowOptions::default())?
                 .try_ready()?;
             let runtime = UiRuntime::new(
                 flui_runtime::presentation::PresentationWindow::new(
-                    Arc::clone(&window) as Arc<dyn flui_platform::traits::PlatformWindow>,
+                    Arc::clone(&window) as Arc<dyn flui_native::traits::PlatformWindow>,
                     None,
                 )
                 .with_text_store_host(Some(flui_testing::RecordingTextStoreHost::new())),
@@ -213,7 +213,7 @@ fn an_unavailable_context_parks_without_a_deadline_or_a_wake() {
         let observed = Rc::clone(&calls);
         *record.capture_sampler.borrow_mut() = Some(Box::new(move || {
             observed.set(observed.get() + 1);
-            Err(flui_platform::TextSizingCaptureError::Unavailable)
+            Err(flui_native::TextSizingCaptureError::Unavailable)
         }));
         record.state.borrow_mut().deadline = Some(web_time::Instant::now());
         // Parking releases the document edits waiting on the geometry, once,
@@ -248,7 +248,7 @@ fn native_acquisition_failures_back_off_to_a_ceiling() {
         let observed = Rc::clone(&calls);
         *record.capture_sampler.borrow_mut() = Some(Box::new(move || {
             observed.set(observed.get() + 1);
-            Err(flui_platform::TextSizingCaptureError::Native {
+            Err(flui_native::TextSizingCaptureError::Native {
                 message: "injected acquisition failure".into(),
             })
         }));
@@ -281,7 +281,7 @@ fn native_acquisition_failures_back_off_to_a_ceiling() {
         let observed = Rc::clone(&calls);
         *record.capture_sampler.borrow_mut() = Some(Box::new(move || {
             observed.set(observed.get() + 1);
-            Err(flui_platform::TextSizingCaptureError::Native {
+            Err(flui_native::TextSizingCaptureError::Native {
                 message: "injected acquisition failure".into(),
             })
         }));
@@ -303,14 +303,14 @@ fn no_flight_retry_releases_waiting_document_edits_without_layout() {
 
 fn native_acquisition_error_releases_waiting_document_edits_without_layout() {
     acquisition_without_progress_releases_document_edits(|| {
-        Err(flui_platform::TextSizingCaptureError::Native {
+        Err(flui_native::TextSizingCaptureError::Native {
             message: "injected acquisition failure".into(),
         })
     });
 }
 
 fn acquisition_without_progress_releases_document_edits(
-    result: fn() -> Result<TextSizingCaptureState, flui_platform::TextSizingCaptureError>,
+    result: fn() -> Result<TextSizingCaptureState, flui_native::TextSizingCaptureError>,
 ) {
     use super::super::owner_dispatch::{
         PresentationDispatcher, RuntimeTask, dispatch_platform_ui_runtime,

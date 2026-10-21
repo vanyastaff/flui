@@ -1,7 +1,7 @@
 ### Changed
 
 - Every native backend (Win32, winit, AppKit, UIKit, Android, Web) assembles
-  pointers through one shared registry in `flui_platform::shared::pointer_assembly`:
+  pointers through one shared registry in `flui_native::shared::pointer_assembly`:
   contact and device identities are minted and never reissued, a mouse keeps one
   identity across presses and visits to the window, a pen's barrel button changes
   within its sequence without starting or ending it, and a device first seen

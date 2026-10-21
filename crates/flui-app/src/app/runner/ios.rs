@@ -26,8 +26,8 @@
 //! inert. See [`super::hot_reload`] for the seam and `docs/hot-reload.md` for
 //! the two-layer model.
 
-use flui_platform::HostWindow;
-use flui_platform::platforms::ios::{IOSSceneEvent, IOSSceneSessionId};
+use flui_native::HostWindow;
+use flui_native::platforms::ios::{IOSSceneEvent, IOSSceneSessionId};
 use flui_view::{StatelessView, View};
 use std::sync::Arc;
 
@@ -118,7 +118,7 @@ fn lease_controller() -> Option<ControllerLease> {
     })
 }
 
-fn scene_event(event: IOSSceneEvent) -> Result<(), flui_platform::BootstrapError> {
+fn scene_event(event: IOSSceneEvent) -> Result<(), flui_native::BootstrapError> {
     let mut lease = lease_controller()
         .ok_or_else(|| anyhow::anyhow!("iOS process controller is unavailable"))?;
     let controller = lease
@@ -203,7 +203,7 @@ fn run_ios<V>(root: V, config: AppConfig)
 where
     V: View + StatelessView + Clone + 'static,
 {
-    use flui_platform::{IOSPlatform, Platform};
+    use flui_native::{IOSPlatform, Platform};
     let platform = match IOSPlatform::new() {
         Ok(platform) => platform,
         Err(error) => {
@@ -221,7 +221,7 @@ where
         with_owner_platform(|owner| {
             owner.on_wake(Box::new(drive_owner))?;
             owner.shared().on_quit(Box::new(stop_process));
-            Ok::<_, flui_platform::WakeRegistrationError>(())
+            Ok::<_, flui_native::WakeRegistrationError>(())
         })
         .expect("BUG: owner installed above")?;
         APP_RUNTIME.with(|slot| {
@@ -274,7 +274,7 @@ where
     use flui_engine::Renderer;
     use parking_lot::Mutex;
 
-    fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
+    fn owner_platform_installed<R>(f: impl FnOnce(&flui_native::OwnerPlatform) -> R) -> R {
         with_owner_platform(f).expect("BUG: bootstrap_ios runs only after install_owner_platform")
     }
 

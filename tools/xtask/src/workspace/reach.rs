@@ -663,13 +663,13 @@ fn self_test_fixture() -> Fixture {
     let exception = |to: &str| json!({ "reach-exceptions": [{ "to": to, "exit": "ADR-0082", "reason": "self-test" }] });
     Fixture::standard()
         .member("flui", "H", &json!(null))
-        .member("flui-platform", "H", &json!(null))
+        .member("flui-native", "H", &json!(null))
         .member("k-plain", "K", &json!(null))
         .member("k-feat", "K", &json!(null))
         .member("k-dev", "K", &json!(null))
         .member("k-ex", "K", &json!(null))
         .member("k-direct", "K", &json!(null))
-        .member("s-int", "S", &exception("flui-platform"))
+        .member("s-int", "S", &exception("flui-native"))
         // planted: an exception whose edge is gone
         .member("s-gone", "S", &exception("gone"))
         .member("s-idle", "S", &exception("harmless"))
@@ -712,11 +712,11 @@ fn self_test_fixture() -> Fixture {
         .dep("k-dev", "winit", Dep::dev())
         // silent: the path runs through s-int, whose exception excuses it
         .dep("k-ex", "s-int", Dep::normal())
-        .dep("s-int", "flui-platform", Dep::normal())
+        .dep("s-int", "flui-native", Dep::normal())
         // planted: a direct edge, which s-int's exception does not cover
-        .dep("k-direct", "flui-platform", Dep::normal())
+        .dep("k-direct", "flui-native", Dep::normal())
         // silent: a host reaches winit
-        .dep("flui-platform", "winit", Dep::normal())
+        .dep("flui-native", "winit", Dep::normal())
         // planted: an exception with nothing forbidden behind it
         .dep("s-idle", "harmless", Dep::normal())
         // planted: V -> tokio
@@ -736,7 +736,7 @@ fn self_test_fixture() -> Fixture {
 const EXPECTED: [(&str, &str, &str); 11] = [
     (
         "k-direct",
-        "flui-platform",
+        "flui-native",
         "reaches under `flui --no-default-features`",
     ),
     (

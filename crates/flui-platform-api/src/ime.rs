@@ -5,7 +5,7 @@
 //! enum (`Enabled` / `Preedit` / `Commit` / `Disabled`) rather than the W3C
 //! `compositionstart`/`compositionupdate`/`compositionend` web events or
 //! Android's `InputConnection` callback set — winit is FLUI's lead desktop
-//! backend (see `flui-platform`'s winit integration), and its four-variant
+//! backend (see `flui-native`'s winit integration), and its four-variant
 //! shape maps *imperfectly* onto both alternatives:
 //!
 //! - The W3C model splits "composition changed" from "commit" as two

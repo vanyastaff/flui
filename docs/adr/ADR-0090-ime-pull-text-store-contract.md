@@ -45,13 +45,13 @@ Three of the platforms FLUI targets are pull models, and the push shape cannot s
   (Win+H) and the candidate window all go through these queries. FLUI's Win32 backend has no IME
   code at all: no `WM_IME*`, `ITextStore*`, `ITfThreadMgr` or `ImmGetContext` anywhere under
   `crates/`, no `text_input()` override (the implementations are headless, macOS and winit only:
-  `crates/flui-platform/src/platforms/headless/platform.rs:1250`,
-  `crates/flui-platform/src/platforms/macos/window.rs:944`,
-  `crates/flui-platform/src/platforms/winit/window.rs:313`), and no text-services feature of the
-  `windows` crate enabled (`crates/flui-platform/Cargo.toml:89-105`).
+  `crates/flui-native/src/platforms/headless/platform.rs:1250`,
+  `crates/flui-native/src/platforms/macos/window.rs:944`,
+  `crates/flui-native/src/platforms/winit/window.rs:313`), and no text-services feature of the
+  `windows` crate enabled (`crates/flui-native/Cargo.toml:89-105`).
 - **macOS.** `NSTextInputClient` is a pull protocol too, and the backend already implements the
   query half with nothing to answer from: `attributedSubstringForProposedRange:actualRange:` returns
-  `nil` (`crates/flui-platform/src/platforms/macos/text_input.rs:435`) and
+  `nil` (`crates/flui-native/src/platforms/macos/text_input.rs:435`) and
   `characterIndexForPoint:` returns `NSNotFound` because "this view owns no text"
   (`text_input.rs:505-514`). `selectedRange` answers `{NSNotFound, 0}` outside a composition
   (`text_input.rs:402`). Reconversion and the Services menu cannot work while the view has no
@@ -62,7 +62,7 @@ Three of the platforms FLUI targets are pull models, and the push shape cannot s
 The framework side has the document but no store surface: `TextEditingController` holds an
 `Arc<Mutex<ControllerInner>>` (`crates/flui-widgets/src/text/controller.rs:263`) whose offsets are
 UTF-8 bytes (`controller.rs:34`), while macOS already converts UTF-16 `NSRange`s at the boundary
-(`crates/flui-platform/src/platforms/macos/text_input.rs:133-136`). The session owner is
+(`crates/flui-native/src/platforms/macos/text_input.rs:133-136`). The session owner is
 `flui_interaction::TextInputOwner`, which imports the platform trait directly
 (`crates/flui-interaction/src/text_input/mod.rs:27`) and routes events through
 `ImeEventCallback = Rc<dyn Fn(&ImeEvent)>` (`text_input.rs:39`).
@@ -268,7 +268,7 @@ set is unverified.
 
 - `PlatformTextInput` grows from two setters into the store contract; it moves with
   [ADR-0082](ADR-0082-platform-api-contract-crate.md), which also removes the
-  `flui-interaction → flui-platform` import at `crates/flui-interaction/src/text_input/mod.rs:27`.
+  `flui-interaction → flui-native` import at `crates/flui-interaction/src/text_input/mod.rs:27`.
 - `TextEditingController`'s locking buffer is replaced by an owner-thread editing state; widget
   code that reads the controller from another thread breaks, which is the intent.
 - UTF-16 conversion becomes one tested helper. The macOS backend's own converter is replaced by
@@ -276,9 +276,9 @@ set is unverified.
 - Multiline editing still needs [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §6's
   single-line limit revisited; the store contract is line-agnostic, the rendering is not.
 - Android IME may need GameActivity rather than the current `native-activity`
-  (`crates/flui-platform/Cargo.toml:162`); that is a hypothesis to test when the Android backend
+  (`crates/flui-native/Cargo.toml:162`); that is a hypothesis to test when the Android backend
   implements the store, not a decision here. **Amended (2026-10-17):** rejected by
-  [ADR-0247](ADR-0247-android-java-view.md); `NativeActivity` stays, and a `flui-platform` view
+  [ADR-0247](ADR-0247-android-java-view.md); `NativeActivity` stays, and a `flui-native` view
   loaded from the native library carries the `InputConnection`.
 - Web has no IME today; a hidden-input bridge would implement this same store.
 

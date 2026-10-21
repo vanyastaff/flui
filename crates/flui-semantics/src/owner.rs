@@ -31,7 +31,7 @@ use crate::{
 /// Two reasons, and the second is structural:
 ///
 /// - The platform capability speaks accesskit types only, because
-///   `flui-platform` (layer 2) cannot depend on `flui-semantics` (layer 3).
+///   `flui-native` (layer 2) cannot depend on `flui-semantics` (layer 3).
 ///   Translating on the producing side is what keeps that edge absent.
 /// - The payload must be keyed by the stable `AccessibilityNodeId` an adapter
 ///   publishes and routes actions back through — never by `SemanticsId`,

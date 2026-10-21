@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use flui_platform::{HeadlessPlatform, Platform, WindowCapabilities, WindowOptions};
+use flui_native::{HeadlessPlatform, Platform, WindowCapabilities, WindowOptions};
 use flui_platform_api::{PlatformWindow, WindowCommand, WindowMode};
 use flui_testing::window_conformance::{self, WindowFixture};
 

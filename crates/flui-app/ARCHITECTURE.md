@@ -29,7 +29,7 @@ the dispatch layer moves there too.
   posts the shared owner signal rather than entering the runtime directly;
   source values reach the ADR-0195 projection through the existing host path.
   WASM platform adapter acceptance uses the controlled JS boundary described
-  in `flui-platform/ARCHITECTURE.md`; rendered browser live-update acceptance
+  in `flui-native/ARCHITECTURE.md`; rendered browser live-update acceptance
   remains separate.
 
 - **Window delivery retains its address.** Runtime wakes and redraw debt are

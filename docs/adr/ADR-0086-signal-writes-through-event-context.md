@@ -105,7 +105,7 @@ lists UI callbacks as `!Send + !Sync`:
 - `PostFrameCallback = Box<dyn FnOnce(&FrameTiming) + Send>`
   (`crates/flui-scheduler/src/frame.rs:729`);
 - platform hooks such as `set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>)`
-  (`crates/flui-platform/src/traits/platform.rs:319`).
+  (`crates/flui-native/src/traits/platform.rs:319`).
 
 The gesture layer is already `!Send`: `TapCallback = Rc<dyn Fn(TapDetails)>`
 (`crates/flui-interaction/src/gesture/recognizers/tap.rs:91`) and the drag aliases

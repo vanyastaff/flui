@@ -79,7 +79,7 @@ js-sys = { workspace = true }
 all-features = true
 
 # Layer 1: depends only on `flui-foundation` (layer 1) among framework
-# crates; its dependents are `flui-interaction`, `flui-platform`,
+# crates; its dependents are `flui-interaction`, `flui-native`,
 # `flui-widgets` and `flui-app`. The contracts sit below every backend
 # (ADR-0082 §1), and on top of its tier's set this crate may never reach
 # AccessKit or tokio (ADR-0082 Verification).

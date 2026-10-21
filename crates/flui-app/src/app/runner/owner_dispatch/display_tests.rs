@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use flui_platform::traits::PlatformWindow;
-use flui_platform::{
+use flui_native::traits::PlatformWindow;
+use flui_native::{
     DisplayChange, DisplaySpec, HeadlessDisplayControls, HeadlessOwnerTurns, HeadlessPlatform,
     MockWindow, Platform as _,
 };
@@ -120,9 +120,9 @@ fn install_window(
     deadlines: Option<Arc<super::super::desktop::DesktopWakeDeadlines>>,
 ) -> (Win, Option<super::super::frame_driver::FrameBinding>) {
     let host_window =
-        with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
+        with_owner_platform(|owner| owner.open_window(flui_native::WindowOptions::default()))
             .expect("an installed owner")
-            .and_then(flui_platform::WindowOpen::try_ready)
+            .and_then(flui_native::WindowOpen::try_ready)
             .expect("headless windows are ready");
     let native = host_window
         .as_any()
@@ -208,7 +208,7 @@ fn seed_holds_every_display_before_the_first_window() {
         accepted
             .get(rig.ids[LEFT])
             .and_then(|display| display.refresh_period)
-            .map(flui_platform::RefreshPeriod::get),
+            .map(flui_native::RefreshPeriod::get),
         Some(Duration::from_millis(16))
     );
 }
@@ -280,7 +280,7 @@ fn snapshot_is_committed_before_observers_run() {
     // One sample, taken directly: owner turns re-sample until they are idle, and
     // a later pass would hide what the first one did.
     rig.period(LEFT, 8);
-    refresh_displays_with(flui_platform::OwnerPlatform::display_snapshot).expect("sample");
+    refresh_displays_with(flui_native::OwnerPlatform::display_snapshot).expect("sample");
 
     assert_eq!(
         *seen.lock(),

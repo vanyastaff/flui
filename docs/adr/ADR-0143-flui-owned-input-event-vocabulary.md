@@ -22,7 +22,7 @@ cannot, which the interaction audit's market matrix lists against the code:
 
 - **Units and sensors lie.** Positions travel in `dpi::PhysicalPosition` holding logical pixels
   (`input.rs:94-106` documents the trap); a mouse reports pressure 0.5 while pressed
-  (`flui-platform/src/platforms/windows/events.rs:182`), indistinguishable from a real
+  (`flui-native/src/platforms/windows/events.rs:182`), indistinguishable from a real
   half-pressure; an untilted pen and a pen without tilt sensing read the same default.
 - **Missing fields.** No eraser tool distinct from a button, no twist, no persistent device
   id with an accessor, no keyboard timestamp, no scroll phase or momentum, no inertia cancel,
@@ -160,7 +160,7 @@ and zero packets remain `Unknown`. Both retain their signed line unit and actual
 hover source. An integral packet alone cannot identify a notched device.
 
 Winit's complete keyboard-event mapping and Android's native keycode tables remain in
-their maintained ecosystem adapters. `flui-platform`'s private `shared::keyboard_adapter`
+their maintained ecosystem adapters. `flui-native`'s private `shared::keyboard_adapter`
 converts those results to owned key events without leaking upstream types through Stable
 signatures. Win32 and AppKit key tables return owned enums directly; Web resolves DOM W3C
 spellings against the generated owned tables. The dependency retention is deliberate:
@@ -218,7 +218,7 @@ adapters; their removal or target-feature selection cannot change the authoritat
 ## Verification
 
 The source audit for the pointer bridge uses
-`rg -n 'ui_events::pointer|ui_events::ScrollDelta|input_vocabulary' crates/flui-platform/src crates/flui-interaction/src`.
+`rg -n 'ui_events::pointer|ui_events::ScrollDelta|input_vocabulary' crates/flui-native/src crates/flui-interaction/src`.
 Runtime dependency inspection uses `cargo tree -p flui-platform-api -e normal`;
 backend adapters are inspected separately so a legitimate keyboard mapping or
 Winit physical geometry dependency is not mistaken for a Stable signature leak.
@@ -226,7 +226,7 @@ Winit physical geometry dependency is not mistaken for a Stable signature leak.
 - `flui-platform-api`'s `input_vocabulary_contract`: sanitization, "no sensor", clamping and
   wrapping, button sets, coalesced ordering, scroll units and phases, pan-zoom transform
   validity, key events, generated spellings.
-- `flui-platform`'s `keyboard_adapter_contract`: every generated `NamedKey` and `Code`,
+- `flui-native`'s `keyboard_adapter_contract`: every generated `NamedKey` and `Code`,
   legacy Meta aliases and preservation of keyboard event fields. Its private placement is
   documented in the crate's mapping decision: Winit's complete native `KeyEvent` contains
   inaccessible platform state.

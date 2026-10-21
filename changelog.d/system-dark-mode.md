@@ -1,6 +1,6 @@
 ### Added
 
-- **Headless appearance injection** (`flui-platform`): `MockWindow::simulate_appearance` reports
+- **Headless appearance injection** (`flui-native`): `MockWindow::simulate_appearance` reports
   a system light/dark change to the window, firing `on_appearance_changed` only when the value
   changes, so a test can drive `MediaQueryData::platform_brightness`.
 - **`Brightness: From<WindowAppearance>`** (`flui-platform-api`): the light/dark half of an
@@ -8,13 +8,13 @@
 
 ### Removed
 
-- **`Platform::window_appearance` and `OwnerPlatform::window_appearance`** (`flui-platform`):
+- **`Platform::window_appearance` and `OwnerPlatform::window_appearance`** (`flui-native`):
   brightness belongs to a presentation (ADR-0172), so `PlatformWindow::appearance` is the one
   source. Most backends answered light here whatever the theme.
 
 ### Fixed
 
-- **Dark mode follows the system on every backend** (`flui-platform`, `flui-app`):
+- **Dark mode follows the system on every backend** (`flui-native`, `flui-app`):
   `MediaQueryData::platform_brightness` starts at the user's theme and follows its changes in
   every window, including secondary windows and the iOS, Android and Web runners, which never
   seeded or observed it.

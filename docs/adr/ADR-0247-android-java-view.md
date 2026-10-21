@@ -1,4 +1,4 @@
-# ADR-0247: Android's Java side is a `flui-platform` view loaded from the native library
+# ADR-0247: Android's Java side is a `flui-native` view loaded from the native library
 
 - **Status:** Accepted (2026-10-17). Implemented: the shim, its loader, the input method host,
   the drop target, the drag source, the content receiver and the handwriting request; run on a
@@ -15,7 +15,7 @@
   platform mapping, and its GameActivity hypothesis), [ADR-0211](ADR-0211-unified-drag-and-drop.md)
   (the Android target and source)
 - **Related:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (every Android and JNI type
-  stays in `flui-platform`), [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md)
+  stays in `flui-native`), [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md)
   (the store's commit gate), [ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md) (the `TextStoreHost` a
   window offers), research note
   [`2026-10-17-android-java-side.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-17-android-java-side.md)
@@ -33,9 +33,9 @@ handwriting, and brings Gradle and AppCompat with it. The research note compares
 
 ## Decision
 
-1. **FLUI ships Java code on Android.** Its sources live in `flui-platform`, under
-   `crates/flui-platform/android/java`, in one package, `dev.flui.platform`. They are compiled to
-   one dex, `crates/flui-platform/android/classes.dex`, which is checked in and embedded in the
+1. **FLUI ships Java code on Android.** Its sources live in `flui-native`, under
+   `crates/flui-native/android/java`, in one package, `dev.flui.platform`. They are compiled to
+   one dex, `crates/flui-native/android/classes.dex`, which is checked in and embedded in the
    native library with `include_bytes!`. Building FLUI for Android needs no JDK and no build
    script, and every packager (`flui build`, Gradle, cargo-apk) ships the dex the library was
    built with. `classes.dex.toml` records the digests of the sources and the dex and the tools

@@ -231,15 +231,15 @@ fn close_refuses_async_publication_without_cancelling_the_accepted_frame() {
 struct ReentrantCapture(Arc<AtomicUsize>);
 
 fn native_terminal_callbacks_refuse_late_publication() {
-    use flui_platform::{Platform, traits::PlatformWindow};
+    use flui_native::{Platform, traits::PlatformWindow};
 
     for quit in [false, true] {
         let _clear = OwnerHostClearGuard::arm();
-        Box::new(flui_platform::HeadlessPlatform::new())
+        Box::new(flui_native::HeadlessPlatform::new())
             .run(Box::new(move |owner| {
                 let owner = Rc::new(owner);
                 let window: Arc<dyn PlatformWindow> = owner
-                    .open_window(flui_platform::WindowOptions::default())?
+                    .open_window(flui_native::WindowOptions::default())?
                     .try_ready()?;
                 owner.shared().set_exit_policy_hook(Box::new(|| false));
                 let runtime = UiRuntime::for_test();
@@ -292,13 +292,13 @@ impl Drop for ReentrantCapture {
 }
 
 fn a_prepared_single_window_rejects_close_and_quit_before_publication() {
-    use flui_platform::{Platform, traits::PlatformWindow};
+    use flui_native::{Platform, traits::PlatformWindow};
     for quit in [false, true] {
         let _clear = OwnerHostClearGuard::arm();
-        Box::new(flui_platform::HeadlessPlatform::new())
+        Box::new(flui_native::HeadlessPlatform::new())
             .run(Box::new(move |owner| {
                 let window: Arc<dyn PlatformWindow> = owner
-                    .open_window(flui_platform::WindowOptions::default())?
+                    .open_window(flui_native::WindowOptions::default())?
                     .try_ready()?;
                 owner.shared().set_exit_policy_hook(Box::new(|| false));
                 let mut prepared =
@@ -1120,7 +1120,7 @@ fn unfinished_installation_closes_its_native_window() {
 
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 fn agent_notification_follows_live_native_initialization() {
-    use flui_platform::traits::PlatformWindow;
+    use flui_native::traits::PlatformWindow;
     use flui_view::dev_agent::{AgentWindow, DevAgentHook};
 
     #[derive(Clone, Copy, Debug)]

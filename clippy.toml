@@ -15,11 +15,11 @@ future-size-threshold = 8192
 
 # The MSRV comes from `rust-version` in Cargo.toml; clippy reads it there.
 
-# An OS version check is a typed gate in `flui-platform`'s `shared::os_version` (ADR-0244): a
+# An OS version check is a typed gate in `flui-native`'s `shared::os_version` (ADR-0244): a
 # marker above the floor and a `Since` proof the call takes, never an inline comparison.
 disallowed-macros = [
-    { path = "objc2::available", reason = "ADR-0244: gate the call on a `Gate` marker in flui-platform's shared::os_version" },
+    { path = "objc2::available", reason = "ADR-0244: gate the call on a `Gate` marker in flui-native's shared::os_version" },
 ]
 disallowed-methods = [
-    { path = "android_activity::AndroidApp::sdk_version", reason = "ADR-0244: ask the platform's `AndroidApi` for a `Gate` in flui-platform's shared::os_version" },
+    { path = "android_activity::AndroidApp::sdk_version", reason = "ADR-0244: ask the platform's `AndroidApi` for a `Gate` in flui-native's shared::os_version" },
 ]

@@ -25,8 +25,8 @@ and data-transfer vocabulary, with no OS backend behind them.
 No OS, winit, AccessKit or tokio type appears here, and the crate has no
 `unsafe`. The OS backends, the host-facing `Platform` trait and `HostWindow`
 (a `PlatformWindow` plus its AccessKit accessibility bridge) live in
-`flui-platform`, which re-exports everything in this crate at its old paths.
-Only composition roots (`flui-app`) depend on `flui-platform`.
+`flui-native`, which re-exports everything in this crate at its old paths.
+Only composition roots (`flui-app`) depend on `flui-native`.
 
 ## Who depends on this
 
@@ -48,5 +48,5 @@ fn focus_text_field(input: &Arc<dyn PlatformTextInput>) {
 ```
 
 Inside the workspace, framework crates that name a capability depend on this
-crate; only composition roots depend on `flui-platform`. See
+crate; only composition roots depend on `flui-native`. See
 [ADR-0082](../../docs/adr/ADR-0082-platform-api-contract-crate.md).

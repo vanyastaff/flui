@@ -9,7 +9,7 @@
 - **`flui-platform-api`**: the `drag` module: `PlatformDragSource` behind
   `PlatformWindow::drag_source`, `OsDragRequest`, `DragSessionKey` and its private identity
   representation, `DragError`, and the shared `plan_os_session` decision.
-- **`flui-platform`**: `HeadlessPlatform::with_os_drag` and `HeadlessDragAndDrop`, which play the
+- **`flui-native`**: `HeadlessPlatform::with_os_drag` and `HeadlessDragAndDrop`, which play the
   OS side of a drag, between windows or from another application, in tests.
 - **`flui-foundation`**: `DragSessionId`, minted by `IdMint` and refused permanently once exhausted.
 

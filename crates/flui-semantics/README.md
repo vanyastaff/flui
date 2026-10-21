@@ -20,7 +20,7 @@ RenderObject (flui-rendering)
 SemanticsNode (this crate)  —  SemanticsTree (slab storage, 1-based SemanticsId)
     │  flush() publishes an accesskit::TreeUpdate keyed by stable AccessibilityNodeId
     ▼
-Platform accessibility API (via flui-platform backends)
+Platform accessibility API (via flui-native backends)
 ```
 
 - `SemanticsTree::remove` cascades to descendants, children before their

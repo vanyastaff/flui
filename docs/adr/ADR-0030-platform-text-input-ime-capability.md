@@ -13,7 +13,7 @@
   (commit-on-blur implemented), for §6's blur rule only: a field losing its input commits its composition
   instead of leaving it in place
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§2: `PlatformTextInput`
-  now lives in `flui-platform-api`, re-exported at its old `flui-platform` path; its contract is
+  now lives in `flui-platform-api`, re-exported at its old `flui-native` path; its contract is
   unchanged); [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (on acceptance; §1: `flui-types` is deleted
   and `ImeEvent` lives in `flui-platform-api`, as `flui_platform_api::ImeEvent`)
 
@@ -21,7 +21,7 @@
 
 Flutter bundles IME, system chrome and haptics behind one `services` layer
 (`TextInputConnection` over a method channel). FLUI does not port that layer:
-each becomes a capability trait on `flui-platform` ([`docs/FOUNDATIONS.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/FOUNDATIONS.md), "No
+each becomes a capability trait on `flui-native` ([`docs/FOUNDATIONS.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/FOUNDATIONS.md), "No
 `flui-services`"). This record fixes the IME vocabulary, the platform
 capability, the client contract a text field implements, how the composing
 region renders, and how the candidate window follows it.
@@ -39,7 +39,7 @@ ADR-0069.
 `Disabled`, mirroring winit 0.30's `Ime` enum. `Preedit.cursor` is a byte range
 into the preedit string, not into the document; `cursor: None` means "hide the
 caret". The type lives in `flui-types` so widgets can name it without
-depending on `flui-platform`.
+depending on `flui-native`.
 
 This is winit's push model, not the W3C
 `compositionstart`/`compositionupdate`/`compositionend` triad and not

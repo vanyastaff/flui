@@ -38,8 +38,8 @@ Upstream types reach public paths today in four ways, each checked in this tree:
   `src/interaction.rs:14-16` (`PointerEvent`, `PointerButtons`, `PointerType`, `CursorIcon`) and
   `src/interaction.rs:42-45` (`Code`, `Key`, `KeyState`, `KeyboardEvent`, `Location`, `Modifiers`,
   `NamedKey`). Their source is `crates/flui-interaction/src/events.rs:93-105` and `:131-142`
-  (`pub use ui_events::…`), and on the platform side `crates/flui-platform/src/traits/input.rs:60-66`
-  and `crates/flui-platform/src/traits/mod.rs:60` (`pub use keyboard_types::…`). ui-events 0.3
+  (`pub use ui_events::…`), and on the platform side `crates/flui-native/src/traits/input.rs:60-66`
+  and `crates/flui-native/src/traits/mod.rs:60` (`pub use keyboard_types::…`). ui-events 0.3
   itself re-exports keyboard-types by glob (`ui-events-0.3.0/src/keyboard/mod.rs:21`,
   `pub use keyboard_types::*;`), so the closure of those paths is keyboard-types' whole surface.
 - **Accessibility.** `flui-testing` re-exports `accesskit::{Action, ActionData, ActionRequest,
@@ -47,7 +47,7 @@ Upstream types reach public paths today in four ways, each checked in this tree:
   facade re-exports that module as `flui::testing::a11y` behind its `testing` feature
   (`src/lib.rs:123-124`, `src/testing.rs:9`).
   `PlatformAccessibility::publish` takes an `accesskit::TreeUpdate`
-  (`crates/flui-semantics/src/platform.rs:79`, moved from `flui-platform` by ADR-0082 §2). FLUI's own vocabulary already exists:
+  (`crates/flui-semantics/src/platform.rs:79`, moved from `flui-native` by ADR-0082 §2). FLUI's own vocabulary already exists:
   `SemanticsRole` has 33 variants including `None` (`crates/flui-semantics/src/role.rs:32`),
   `SemanticsAction` 24 (`crates/flui-semantics/src/action.rs:23`), and neither is
   `#[non_exhaustive]`.
@@ -108,7 +108,7 @@ allowlist, and an upstream crate not on either list fails closed.
 - Naming rule: use the AccessKit or ARIA name when the concept exists there. This is guidance for
   naming, not a 1:1 contract; FLUI does not add the ~150 roles nothing in the catalog produces.
 - The mapping to accesskit stays internal (`flui-semantics`, and `PlatformAccessibility` lives in
-  `flui_semantics::platform`, internal and tier S, re-exported at `flui_platform::traits`; never
+  `flui_semantics::platform`, internal and tier S, re-exported at `flui_native::traits`; never
   in `flui-platform-api`; ADR-0082 §2, amended).
 - Outbound pin (FLUI → accesskit): a generated `const ALL: &[SemanticsRole]` and the same for
   actions. A test asserts that every role except `None` maps to `Some(accesskit::Role)`, and that

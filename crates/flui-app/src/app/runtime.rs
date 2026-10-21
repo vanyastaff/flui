@@ -19,11 +19,11 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::thread::ThreadId;
 
-use flui_painting::{FontCollection, HostFontFeed};
-use flui_platform::OwnerPlatform;
+use flui_native::OwnerPlatform;
 #[cfg(target_os = "android")]
-use flui_platform::traits::WindowExecutionState;
-use flui_platform::traits::{Clipboard, PlatformWindow};
+use flui_native::traits::WindowExecutionState;
+use flui_native::traits::{Clipboard, PlatformWindow};
+use flui_painting::{FontCollection, HostFontFeed};
 use parking_lot::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -137,10 +137,10 @@ fn font_digest(font_bytes: &[u8]) -> FontDigest {
 /// **Live-wired** (issue #555's native-lifecycle follow-up): `AppConfig::
 /// exit_policy` carries this to `run_desktop`'s bootstrap, which installs a
 /// hook (`runner.rs`'s `install_exit_policy_hook`) into
-/// `flui_platform::traits::Platform::set_exit_policy_hook`. The winit
+/// `flui_native::traits::Platform::set_exit_policy_hook`. The winit
 /// backend's `CloseRequested` handling and the headless backend's window
 /// `close()`/`simulate_close()` both consult that hook — via the shared
-/// `flui_platform::shared::PlatformHandlers::exit_policy` slot — instead of
+/// `flui_native::shared::PlatformHandlers::exit_policy` slot — instead of
 /// deciding from their own native window count alone; see
 /// `closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits`
 /// (`owner_dispatch/tests.rs`), which closes the last window through the
@@ -284,7 +284,7 @@ pub(crate) struct AppRuntime {
     /// hold their blocks on this one request, so the answer to the operating
     /// system is the aggregate. Kept from the query until the session end is
     /// cancelled or happens.
-    pub(super) session_end: Option<flui_platform::SessionEndRequest>,
+    pub(super) session_end: Option<flui_native::SessionEndRequest>,
     /// The thread that installed the first UI runtime hosted here; every dispatch
     /// checks against this before touching the registry. Loop-scoped, not
     /// per-UI runtime: every UI runtime this `AppRuntime` ever hosts lives on the same
@@ -1093,7 +1093,7 @@ impl AppRuntime {
     #[must_use = "drop the returned window only after releasing TLS borrows"]
     pub(super) fn release_redraw_window_for(
         &self,
-        id: flui_platform::traits::WindowId,
+        id: flui_native::traits::WindowId,
     ) -> Option<Arc<dyn PlatformWindow>> {
         let mut slot = self.redraw_window.lock();
         if slot.as_ref().is_some_and(|window| window.id() == id) {
@@ -1164,7 +1164,7 @@ impl AppRuntime {
     /// replaces a storage an earlier run on this thread left, whose IO pool
     /// is gone. Its IO runs on this loop's execution services, resolved here
     /// if no runner resolved them yet, so install the host's executors first.
-    pub(super) fn install_host_storage(&mut self, dirs: Option<flui_platform::storage::DataDirs>) {
+    pub(super) fn install_host_storage(&mut self, dirs: Option<flui_native::storage::DataDirs>) {
         self.host_storage = dirs.map(|dirs| {
             let io = Arc::downgrade(self.ensure_execution());
             super::storage_host::host_storage(dirs, io)

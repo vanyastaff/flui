@@ -54,7 +54,7 @@ owns the *when* (only for a frame that will present, never on a skip path — a 
 callback requested with no commit behind it withholds every later redraw); the app layer owns
 the *what*, wiring the window's notify into the backend at bootstrap
 (`install_pre_present_hook`). The hook is a backend capability rather than a direct call
-because `flui-engine` does not depend on `flui-platform`: the raster side takes an owned scene
+because `flui-engine` does not depend on `flui-native`: the raster side takes an owned scene
 and a closure, never a window.
 
 **2. No sleep. What replaces it is a deadline.** `FallbackWake` defers the next ticker-only

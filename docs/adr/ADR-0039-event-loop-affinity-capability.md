@@ -46,7 +46,7 @@ the reference.
 
 ### 1. `OwnerPlatform` is the owner-thread capability
 
-`OwnerPlatform` (`flui-platform`, `traits/owner.rs`) is minted **only by a
+`OwnerPlatform` (`flui-native`, `traits/owner.rs`) is minted **only by a
 backend**, on the thread that owns — or, before the loop starts, will own —
 its event loop, and handed to `on_ready`. It is `!Send + !Sync`, so possession
 proves the thread at compile time. Loop liveness stays a runtime `Result`
@@ -96,7 +96,7 @@ delivery is owner-thread by construction), `clipboard()` and `data_transfer()`
 
 `prompt_for_paths`/`prompt_for_new_path` keep their seat unchanged. The one
 real implementation (Windows) already runs its dialog on a dedicated STA
-thread, and it returns `flui_platform::Task`, whose drop does not cancel; that
+thread, and it returns `flui_native::Task`, whose drop does not cancel; that
 type must not spread onto a new capability. Consolidating prompts onto the
 framework's async mechanism, with the macOS main-thread panel story, is its own
 ADR.

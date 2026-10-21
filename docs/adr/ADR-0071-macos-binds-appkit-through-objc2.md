@@ -6,7 +6,7 @@
 
 ## Context
 
-`flui-platform`'s macOS backend was built on `cocoa` 0.27 / `objc` 0.2, and its
+`flui-native`'s macOS backend was built on `cocoa` 0.27 / `objc` 0.2, and its
 iOS backend was a stub whose module doc planned `objc`, `block`,
 `cocoa-foundation` and `icrate`. None of those could carry the work:
 

@@ -71,10 +71,10 @@ pub(crate) struct GlobalsArgs {
 const HOST: &str = "flui-app";
 
 /// The crate whose backend directories may each hold one trampoline.
-const PLATFORM: &str = "flui-platform";
+const PLATFORM: &str = "flui-native";
 
 /// The backend directories, one per platform.
-const BACKENDS: &str = "crates/flui-platform/src/platforms/";
+const BACKENDS: &str = "crates/flui-native/src/platforms/";
 
 /// `cargo xtask globals`.
 pub(crate) fn globals(args: &GlobalsArgs) -> anyhow::Result<ExitCode> {

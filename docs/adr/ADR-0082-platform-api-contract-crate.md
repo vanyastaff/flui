@@ -1,7 +1,7 @@
-# ADR-0082: `flui-platform-api` is the contract crate; OS backends stay in `flui-platform`
+# ADR-0082: `flui-platform-api` is the contract crate; OS backends stay in `flui-native`
 
 - **Status:** Accepted in part (2026-09-26): §1 for the items both of §3's changes move; §2's
-  rule that only composition roots depend on `flui-platform` (its `allowed-dependents`); §3's
+  rule that only composition roots depend on `flui-native` (its `allowed-dependents`); §3's
   first change. §3's second change (`PlatformWindow`'s move with the host-side window subtrait
   `HostWindow` for `accessibility()`, and the removal of `as_winit`) is accepted on merge,
   pending the evidence Verification lists as outstanding for it. §4 and the remaining §5
@@ -10,7 +10,7 @@
   was revised in place on 2026-09-26, while still Proposed: what step one requires, the
   precondition for step two, and the order of the headless and Win32 backends. Win32 has
   completed step one. §2 was amended on 2026-09-26: `PlatformAccessibility` moves to
-  `flui-semantics` and `flui-platform` moves from layer 2 to layer 3; that placement is accepted
+  `flui-semantics` and `flui-native` moves from layer 2 to layer 3; that placement is accepted
   on merge of the UI runtime-core move (ADR-0083 move 4), which ships it.
 - **Date:** 2026-09-25
 - **Superseded-by:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) for §1 (what the
@@ -45,35 +45,35 @@
 
 ## Context
 
-`flui-platform` holds two different things in one crate: the contracts the framework programs
+`flui-native` holds two different things in one crate: the contracts the framework programs
 against (`PlatformWindow`, `PlatformTextInput`, `PlatformHaptics`, `Clipboard`, the input
 vocabulary) and every OS backend that implements them (`src/platforms/` has `windows`, `macos`,
 `linux`, `winit`, `android`, `ios`, `web` and `headless`). Anything that names a contract links
 all of it.
 
-One import does exactly that below the host tier. `flui-interaction` depends on `flui-platform`
-(`crates/flui-interaction/Cargo.toml:31`) for `use flui_platform::traits::PlatformTextInput;`
-(`crates/flui-interaction/src/text_input/mod.rs:27`), its only `flui_platform` import. The widget
+One import does exactly that below the host tier. `flui-interaction` depends on `flui-native`
+(`crates/flui-interaction/Cargo.toml:31`) for `use flui_native::traits::PlatformTextInput;`
+(`crates/flui-interaction/src/text_input/mod.rs:27`), its only `flui_native` import. The widget
 harness adds a second edge under its `testing` feature (`crates/flui-widgets/Cargo.toml:94`),
 for a fake text input (`crates/flui-widgets/src/testing/harness.rs:157,170`). Because
-`flui-platform`'s default feature is `desktop = ["dep:winit"]`
-(`crates/flui-platform/Cargo.toml:300,303`), winit and the `windows` crate are in the normal
+`flui-native`'s default feature is `desktop = ["dep:winit"]`
+(`crates/flui-native/Cargo.toml:300,303`), winit and the `windows` crate are in the normal
 graph of `flui-interaction`, `flui-view` and everything above them: on this host
 `cargo tree -p flui-interaction -e normal -i winit --locked` prints
-`winit <- flui-platform <- flui-interaction`. Headless and wasm cleanliness of the UI stack is
+`winit <- flui-native <- flui-interaction`. Headless and wasm cleanliness of the UI stack is
 therefore an accident, a plugin that wants one capability trait would link every backend, and
 an edit to the Win32 backend rebuilds the UI stack.
 
 The contracts themselves carry backend and threading assumptions that a contract crate cannot
 keep:
 
-- `Platform: Send + Sync + 'static` (`crates/flui-platform/src/traits/platform.rs:92`) and
-  `PlatformWindow: Send + Sync` (`crates/flui-platform/src/traits/window.rs:80` when this was
+- `Platform: Send + Sync + 'static` (`crates/flui-native/src/traits/platform.rs:92`) and
+  `PlatformWindow: Send + Sync` (`crates/flui-native/src/traits/window.rs:80` when this was
   written) register callbacks as `Box<dyn FnMut(..) + Send>`: `set_exit_policy_hook`,
   `set_wake_deadline_hook`, `on_keyboard_layout_change`, `on_quit`, `on_reopen`,
   `on_window_event`, `on_open_urls` (`platform.rs:158,219,359-386`) and the window's `on_input`,
   `on_request_frame`, `on_resize`, `on_close` and the rest (`window.rs:392-570`; this and the
-  next two `window.rs` citations are to `crates/flui-platform/src/traits/window.rs` as it was
+  next two `window.rs` citations are to `crates/flui-native/src/traits/window.rs` as it was
   before §3's second change removed it). `OwnerPlatform::on_wake` and `SharedPlatform`'s
   forwarding registrations (`traits/owner.rs:95,258-307`) carry the same bound. Delivery is on
   the owner thread by construction (ADR-0039 §2), so the bound only forces callers to be `Send`.
@@ -94,9 +94,9 @@ keep:
   (`linux/mod.rs:120-124`); Linux runs on the winit backend, which `flui-app` enables per target
   (`crates/flui-app/Cargo.toml:159`).
 - More than one backend can serve an OS: `winit-backend` is "optional on Windows/macOS"
-  (`crates/flui-platform/src/platforms/mod.rs:28-32`), so a Windows build can select a backend
+  (`crates/flui-native/src/platforms/mod.rs:28-32`), so a Windows build can select a backend
   CI never exercises there.
-- `flui-platform` starts its own tokio runtime (`crates/flui-platform/src/executor.rs:60-70`),
+- `flui-native` starts its own tokio runtime (`crates/flui-native/src/executor.rs:60-70`),
   which ADR-0047 marked for removal along with `Task` and `BackgroundExecutor`.
 
 ## Decision
@@ -122,9 +122,9 @@ dependencies, and no `ui-events`, `keyboard-types`, `dpi` or `accesskit` type. W
 vocabulary re-exports one of those, the own type is introduced before the crate's first
 release, not in the move.
 
-### 2. `flui-platform` keeps the backends and the host-facing surface
+### 2. `flui-native` keeps the backends and the host-facing surface
 
-`flui-platform` becomes tier H, kind `internal`. It keeps every OS backend, the host-facing
+`flui-native` becomes tier H, kind `internal`. It keeps every OS backend, the host-facing
 `Platform` trait, `OwnerPlatform`, `SharedPlatform`, `PlatformProxy`, `PendingWindow`/`WindowOpen`,
 the prompt APIs, and, until the amendment below, `PlatformAccessibility` (its signatures are
 AccessKit's). Only composition
@@ -133,7 +133,7 @@ roots depend on it: `flui-app`, and tests that drive a backend.
 `PlatformAccessibility` has two consumers in `flui-app`, not one: the runner reads the bridge from
 `HostWindow::accessibility` when a window opens, and the UI runtime core (`PresentationWindow`, and
 `PresentationState`, which wires and withdraws the bridge) holds it. It is the one
-`flui_platform` name the UI runtime core's production code still uses, so moving the UI runtime core into
+`flui_native` name the UI runtime core's production code still uses, so moving the UI runtime core into
 `flui-runtime` (ADR-0083) has to amend this section first: either a runtime-owned accessibility
 port, typed through `flui_semantics`, that a host adapter implements over
 `Arc<dyn PlatformAccessibility>`, or `PlatformAccessibility` itself moved to a crate at tier S
@@ -143,10 +143,10 @@ or below that may depend on `accesskit`.
 (`AccessibilityActivationListener`, `AccessibilityActionListener`) move to
 `flui_semantics::platform`, next to the AccessKit translation that produces what `publish`
 carries (`tree_to_update`, `semantics_action_for`). `flui-semantics` is tier S and already
-depends on `accesskit`. `flui-platform` depends on `flui-semantics` and re-exports the three names
-at `flui_platform::traits`, so no backend or host path changes; its layer becomes 3 so the edge
+depends on `accesskit`. `flui-native` depends on `flui-semantics` and re-exports the three names
+at `flui_native::traits`, so no backend or host path changes; its layer becomes 3 so the edge
 points to the same layer, which amends [ADR-0041](ADR-0041-workspace-topology-contract.md)'s
-layer table. `HostWindow::accessibility` stays in `flui-platform`: only the trait
+layer table. `HostWindow::accessibility` stays in `flui-native`: only the trait
 moved, not the discovery. A runtime-owned port was not chosen because it has one implementation
 and would move the translation in `PresentationState` into the host. The trait is still not in
 `flui-platform-api`: [ADR-0084](ADR-0084-open-capability-seam-and-plugins.md) (Proposed) asks
@@ -169,9 +169,9 @@ moves to `flui-platform-api` with its signature unchanged: `PlatformTextInput`,
 helpers) and the window vocabulary (`WindowId` with its inherent impl, `WindowOptions`,
 `WindowReveal`, `WindowMode`, `WindowEvent`, `WindowExecutionState`, `WindowShowError`,
 `WindowAppearance`, `WindowBackgroundAppearance`, `WindowBounds`, `CursorError`).
-`flui-platform` re-exports every moved item at its old path, so no caller outside the two
+`flui-native` re-exports every moved item at its old path, so no caller outside the two
 edges changes; `flui-interaction` and the widget harness switch to `flui-platform-api`.
-`BasicVelocityTracker`, `TimestampProvider` and `SystemTimestamp` stay in `flui-platform` until
+`BasicVelocityTracker`, `TimestampProvider` and `SystemTimestamp` stay in `flui-native` until
 §5 deletes them.
 
 `PlatformWindow` waits because moving it changes no reach: no crate below `flui-app` names it.
@@ -182,7 +182,7 @@ type-checks.
 
 **Second change (accepted on merge, verification pending).** `PlatformWindow` moves without `as_winit` (nothing calls it) and
 without `accessibility()`, which becomes a method of a backend-side extension trait in
-`flui-platform` that the runner uses: `HostWindow: PlatformWindow`. `Platform::open_window`,
+`flui-native` that the runner uses: `HostWindow: PlatformWindow`. `Platform::open_window`,
 `WindowOpen::Ready`/`try_ready` and `PendingWindow` return `Arc<dyn HostWindow>`, which upcasts
 to `Arc<dyn PlatformWindow>`, and `dyn HostWindow` repeats the raw-handle impls so an
 `open_window` result stays a renderer target. The runner reads the bridge once, when it turns an
@@ -195,14 +195,14 @@ allowed by ADR-0089, and its manifest adds `reach-forbid = ["accesskit", "tokio"
 Acceptance of the first change, until `cargo xtask reach` (ADR-0081 §2) exists to state it as
 a reach fact:
 
-- `flui-platform`'s manifest lists `allowed-dependents = ["flui-app"]`, and
+- `flui-native`'s manifest lists `allowed-dependents = ["flui-app"]`, and
   `cargo xtask workspace` reports no finding (it reported
-  `flui-interaction depends on flui-platform` and `flui-widgets depends on flui-platform` before
+  `flui-interaction depends on flui-native` and `flui-widgets depends on flui-native` before
   the change). Layers already forbid an upward edge to `flui-app` and any edge to an example or
-  tool, so this direct-edge rule means nothing layered below `flui-app` reaches `flui-platform`
+  tool, so this direct-edge rule means nothing layered below `flui-app` reaches `flui-native`
   through a chain of workspace crates.
 - `cargo tree --locked --target all -e normal` for `flui-interaction`,
-  `flui-widgets --features testing` and `flui-platform-api` names none of `flui-platform`,
+  `flui-widgets --features testing` and `flui-platform-api` names none of `flui-native`,
   `winit`, `windows`, `objc2-app-kit`, `android-activity`, `ndk` or `tokio`. That is a grep over
   the full tree rather than a `cargo tree -i` probe, because `-i` errors on an absent package
   instead of printing nothing.
@@ -253,7 +253,7 @@ platform-level handlers and the owner-turn callback in the owner message window'
 thread only (a platform dropped off its owner leaks its owner context rather than free it
 elsewhere). Every setter installs through that gate, an off-owner `open_window` is refused, and
 `WindowContext` and `OwnerControlContext` are pinned `!Send + !Sync`. The tests live in
-`crates/flui-platform/src/platforms/windows/` (`window.rs` `callback_affinity_tests`,
+`crates/flui-native/src/platforms/windows/` (`window.rs` `callback_affinity_tests`,
 `platform.rs` `tests`) and `shared/owner_signal.rs`.
 
 **The input callback, every backend, steps 1 and 2 (2026-10-13).** The shared backends (winit,
@@ -277,7 +277,7 @@ and `SystemTimestamp` are removed. Full source inspection of their modules and
 `rg` across `crates`, `packages`, `src` and `examples` found only definitions and
 re-exports, with no implementation or production caller. Native input timestamp
 sources and the interaction layer's actual velocity tracker remain in place.
-The compile-fail example on `flui_platform::traits` pins the removed imports as
+The compile-fail example on `flui_native::traits` pins the removed imports as
 seen by consumers. The backend selection, capability removal and other deletions
 below remain proposed; this adoption does not silently accept the rest of §5.
 
@@ -295,7 +295,7 @@ below remain proposed; this adoption does not silently accept the rest of §5.
 crate uses them: `LinuxPlatform`, the `src/window.rs` family (including `RawWindowHandle` and
 `fn raw_window_handle`), `PlatformEmbedder`, `PlatformCapabilities` with
 `Platform::capabilities`, `BasicVelocityTracker`, and the `desktop` and `web` features, which
-have zero `cfg` sites in `crates/flui-platform/src` (ADR-0081 §4). The crate's own tokio runtime
+have zero `cfg` sites in `crates/flui-native/src` (ADR-0081 §4). The crate's own tokio runtime
 goes with ADR-0047's consolidation, not here.
 
 ## Alternatives considered
@@ -303,7 +303,7 @@ goes with ADR-0047's consolidation, not here.
 - **Move the backends into `flui-app`.** The composition root would grow by the whole backend
   code base, with `unsafe` OS glue interleaved with runtime code, and plugins would still have no
   small crate to depend on.
-- **One crate per backend** (`flui-platform-windows`, …). The backends share `shared/` modules
+- **One crate per backend** (`flui-native-windows`, …). The backends share `shared/` modules
   and the `OwnerPlatform` minting rule; splitting them now forces that seam open before #560
   designs it, and multiplies release units for no second consumer.
 - **Move `Platform` and `OwnerPlatform` into the contract crate too.** It would freeze about
@@ -319,13 +319,13 @@ goes with ADR-0047's consolidation, not here.
 
 - `flui-interaction` and `flui-widgets` stop linking OS crates; `cargo xtask reach` can gate it.
   An OS-backend edit no longer rebuilds them: measured on the first change by building
-  `flui-widgets --features testing`, touching `crates/flui-platform/src/platforms/windows/window.rs`
+  `flui-widgets --features testing`, touching `crates/flui-native/src/platforms/windows/window.rs`
   and rebuilding with `-v`, which compiled nothing.
-- `flui-platform` sits in tier H with `flui-app`. Its layer-2 position in ADR-0041's table, and
+- `flui-native` sits in tier H with `flui-app`. Its layer-2 position in ADR-0041's table, and
   ADR-0041's `interaction -> platform` edge note, are obsolete.
 - ADR-0030 §2, ADR-0031 §1–§3 and ADR-0038 §4 describe traits that now live in
   `flui-platform-api`; their contracts are unchanged. ADR-0038 §9's required
-  `Platform::clipboard()` stays on `Platform` in `flui-platform`. ADR-0039 §2's "registration
+  `Platform::clipboard()` stays on `Platform` in `flui-native`. ADR-0039 §2's "registration
   writes a `Send` callback" is replaced by §4 above once step 2 lands.
 - Win32, AppKit, UIKit and Android are clippy-only in CI (AGENTS.md). Each backend change in §4
   is unverified unless its PR shows a live run ([`cargo xtask device windows-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) on Windows, the
@@ -335,22 +335,22 @@ goes with ADR-0047's consolidation, not here.
 
 ## Verification
 
-The first change is held by `flui-platform`'s `allowed-dependents` (`cargo xtask workspace`) and
+The first change is held by `flui-native`'s `allowed-dependents` (`cargo xtask workspace`) and
 by the `flui_platform_api` crate doctest, which implements `PlatformTextInput` and
-`PlatformHaptics` with no `flui-platform` in scope. The second change is held by:
+`PlatformHaptics` with no `flui-native` in scope. The second change is held by:
 
-- `cargo xtask reach` (ADR-0081) with `flui-platform`, `winit`, `windows`, `objc2-app-kit`,
+- `cargo xtask reach` (ADR-0081) with `flui-native`, `winit`, `windows`, `objc2-app-kit`,
   `objc2-ui-kit`, `android-activity` and `ndk` forbidden for tier K, and a reach fact for
   `flui-platform-api` itself: its tier C set forbids the OS crates and winit, and its own
   `reach-forbid` entry (ADR-0081 §2) adds `tokio` and `accesskit`;
-- the doctests on `PlatformWindow`: one implements it with no `flui-platform` in scope, and its
+- the doctests on `PlatformWindow`: one implements it with no `flui-native` in scope, and its
   `compile_fail` twin, identical but for an `accessibility` method, is rejected with E0407;
-- `flui-platform`'s `host_window` tests (a headless `open_window` result keeps its bridge and
+- `flui-native`'s `host_window` tests (a headless `open_window` result keeps its bridge and
   upcasts to the same window; `Arc<dyn HostWindow>` is a raw-handle source).
 
 A backend change is checked by `cargo xtask cross-typecheck` for Win32, AppKit, Android and iOS.
 For the second change only Win32 and AppKit (`aarch64-apple-darwin`, with `a11y`) and the Linux
-`winit-backend` build of `flui-platform` with `a11y` were type-checked. Outstanding for it:
+`winit-backend` build of `flui-native` with `a11y` were type-checked. Outstanding for it:
 
 - `cargo xtask cross-typecheck` for Android and iOS (the `android` and `ios` backends, the
   `android.rs`/`ios.rs` runners and `session_controller`), and a wasm32 check of the web

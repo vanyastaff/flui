@@ -53,7 +53,7 @@ Both lanes count in-flight work against a cap; a full lane refuses with `SpawnEr
 
 ### The platform executor is defanged ahead of removal
 
-`BackgroundExecutor` (already slated for removal under #557) no longer claims a full-core pool per platform instance: construction starts zero threads (lazy `OnceLock`), and the pool that starts on first *use* is a small fixed size (2 workers). FLUI-managed runs never use it, so they never start it. Its deletion — together with `flui_platform::Task`/`Priority` — is the follow-up slice, not this one: those surfaces are only lint-gated on Windows/macOS and their internal consumers (prompt marshaling) deserve their own change.
+`BackgroundExecutor` (already slated for removal under #557) no longer claims a full-core pool per platform instance: construction starts zero threads (lazy `OnceLock`), and the pool that starts on first *use* is a small fixed size (2 workers). FLUI-managed runs never use it, so they never start it. Its deletion — together with `flui_native::Task`/`Priority` — is the follow-up slice, not this one: those surfaces are only lint-gated on Windows/macOS and their internal consumers (prompt marshaling) deserve their own change.
 
 ## Alternatives considered
 

@@ -1,6 +1,6 @@
 ### Added
 
-- **Display snapshot** (`flui-platform-api`, `flui-platform`): `Platform::display_snapshot` returns an
+- **Display snapshot** (`flui-platform-api`, `flui-native`): `Platform::display_snapshot` returns an
   immutable `DisplaySnapshot` of every display: id, name, bounds, usable bounds, scale factor and the
   refresh period of the display's current mode. The period is a validated `RefreshPeriod` (1 ms to
   1 s) and `None` when the OS reports nothing that describes a cadence; it is never a guessed 60 Hz.
@@ -24,7 +24,7 @@
 - **`JankLine`** (`flui-devtools`): `JankLine::FramePeriod` judges a frame against the period the
   `frame` span reports; `JankLine::Fixed(ms)` keeps one threshold. `Profiler::set_frame_period`
   feeds it.
-- **Injectable displays in the headless platform** (`flui-platform`): `HeadlessPlatform::with_displays`
+- **Injectable displays in the headless platform** (`flui-native`): `HeadlessPlatform::with_displays`
   takes `DisplaySpec`s, `HeadlessDisplayControls::simulate_display_change` switches a display's mode,
   and `MockWindow::simulate_move_to` moves a window between displays.
 
@@ -32,7 +32,7 @@
 
 - **Breaking: `PlatformDisplay`, `Platform::displays`, `Platform::primary_display`,
   `PlatformWindow::display` and `PlatformWindow::refresh_period` are removed** (`flui-platform-api`,
-  `flui-platform`). Read the snapshot and `PlatformWindow::display_id` instead; `DisplayId` no longer
+  `flui-native`). Read the snapshot and `PlatformWindow::display_id` instead; `DisplayId` no longer
   has a public field and `MockDisplay` is gone. `PlatformError` gains a `Displays` variant.
 - **Breaking: `ProfilerConfig::jank_threshold_ms` is replaced by `jank_line: JankLine`**
   (`flui-devtools`). The default is `JankLine::FramePeriod`, so the profiler's jank line is the

@@ -140,8 +140,8 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
     };
     for (in_query, panics) in [(true, false), (true, true), (false, false), (false, true)] {
         let window = Arc::new(Window {
-            inner: flui_platform::headless_platform()
-                .open_window(flui_platform::traits::WindowOptions::default())
+            inner: flui_native::headless_platform()
+                .open_window(flui_native::traits::WindowOptions::default())
                 .expect("window"),
             answer: Mutex::new(Ok(geometry(10.0))),
             panic_query: AtomicBool::new(false),
@@ -368,8 +368,8 @@ pub(crate) fn haptics_preference_suppresses_both_tiers() {
     };
     let haptics = Arc::new(FakeHaptics::new());
     let window = Arc::new(HapticWindow {
-        inner: flui_platform::headless_platform()
-            .open_window(flui_platform::traits::WindowOptions::default())
+        inner: flui_native::headless_platform()
+            .open_window(flui_native::traits::WindowOptions::default())
             .expect("window"),
         haptics: haptics.clone(),
     });
@@ -460,8 +460,8 @@ pub(crate) fn frame_aligned_haptics_play_only_with_a_presented_frame() {
     ] {
         let haptics = Arc::new(FakeHaptics::new());
         let window = Arc::new(HapticWindow {
-            inner: flui_platform::headless_platform()
-                .open_window(flui_platform::traits::WindowOptions::default())
+            inner: flui_native::headless_platform()
+                .open_window(flui_native::traits::WindowOptions::default())
                 .expect("window"),
             haptics: haptics.clone(),
         });

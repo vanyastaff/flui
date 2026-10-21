@@ -17,7 +17,7 @@ are defined in the [release requirements](docs/plans/specs/release/requirements.
 
 ## Status
 
-- ✅ Foundation: `flui-foundation` (with the `f64` geometry values), `flui-macros`, `flui-log`, `flui-platform`
+- ✅ Foundation: `flui-foundation` (with the `f64` geometry values), `flui-macros`, `flui-log`, `flui-native`
 - ✅ Contracts: `flui-platform-api` (platform capability traits and the window, input and data-transfer vocabulary, no OS backend), `flui-protocol` (semantics roles and actions, the agent-protocol wire names)
 - ✅ Core: `flui-painting`, `flui-engine`, `flui-rendering`, `flui-scheduler`, `flui-layer`, `flui-semantics`, `flui-interaction`
 - ✅ Framework/application: `flui-view`, `flui-objects`, `flui-widgets`, `flui-runtime` (the UI runtime and the per-presentation frame transaction it drives; internal), `flui-testing`, `flui-animation`, `flui-assets`, `flui-app`
@@ -95,7 +95,7 @@ driver.
 - **GPU-first rendering.** `wgpu` 30 backend with `lyon` tessellation, Parley shaping, and an engine-owned glyph atlas for text.
 - **Cross-platform, unevenly verified.** Native Win32 and AppKit backends, headless mode for CI, an Android NDK target, WASM/WebGPU, and a `winit` fallback all build, but how far each has actually been run and checked differs sharply by platform — macOS has live, operator-equivalent input evidence; Windows, Linux, Android, Web/WASM and the iOS Simulator are experimental, each with narrower recorded runs. See the [per-platform status](docs/platform-parity.md) before relying on a platform this project has not verified for you.
 - **Hot-reload scenes.** `dlopen`-based plugin host (`flui-hot-reload`) for desktop iteration without process restarts.
-- **Strict architecture.** Layered crate DAG with no upward edges. `unsafe` is *not* confined to a fixed crate list — it concentrates wherever a crate touches an FFI or ABI boundary. `flui-platform` (Win32/AppKit/Android FFI) holds most of it by a wide margin; `flui-hot-reload` (the `dlopen` ABI boundary) and `flui-rendering` (a miri-audited arena, `subtree_arena.rs`) follow, and a few other crates carry a handful of sites. `flui-engine` denies `unsafe` in its hand-written production code; its generated shader bindings allow it. [`docs/architecture.md`](docs/architecture.md#confinement-of-unsafe) lists the production sites. Reviewed at the workspace level — see `docs/PANIC-POLICY.md` and each crate's `ARCHITECTURE.md`.
+- **Strict architecture.** Layered crate DAG with no upward edges. `unsafe` is *not* confined to a fixed crate list — it concentrates wherever a crate touches an FFI or ABI boundary. `flui-native` (Win32/AppKit/Android FFI) holds most of it by a wide margin; `flui-hot-reload` (the `dlopen` ABI boundary) and `flui-rendering` (a miri-audited arena, `subtree_arena.rs`) follow, and a few other crates carry a handful of sites. `flui-engine` denies `unsafe` in its hand-written production code; its generated shader bindings allow it. [`docs/architecture.md`](docs/architecture.md#confinement-of-unsafe) lists the production sites. Reviewed at the workspace level — see `docs/PANIC-POLICY.md` and each crate's `ARCHITECTURE.md`.
 
 ## Why FLUI
 

@@ -11,7 +11,7 @@
 //! minutes, median of the runs of 2026-09-30), and hosted runners do not queue
 //! for this repository. The scoped arguments:
 //!
-//! - tests exclude flui-platform (its suite needs a display server: a separate
+//! - tests exclude flui-native (its suite needs a display server: a separate
 //!   headless leg runs it when it is in scope);
 //! - the facade's catalogs, none on by default, join the run
 //!   when `flui` is in scope (`--features flui/material,flui/cupertino`);
@@ -387,12 +387,12 @@ pub(super) fn lane_args(repo: &Repo, scope: &Scope, event: Event) -> anyhow::Res
             p(set.iter().copied())
         },
         test_args: if full {
-            "--workspace --exclude flui-platform --lib --bins --tests".to_owned()
+            "--workspace --exclude flui-native --lib --bins --tests".to_owned()
         } else {
             let names: Vec<&str> = set
                 .iter()
                 .copied()
-                .filter(|n| *n != "flui-platform")
+                .filter(|n| *n != "flui-native")
                 .collect();
             if names.is_empty() {
                 String::new()
@@ -410,8 +410,8 @@ pub(super) fn lane_args(repo: &Repo, scope: &Scope, event: Event) -> anyhow::Res
         } else {
             String::new()
         },
-        platform: has("flui-platform"),
-        cross_platform: has("flui-platform"),
+        platform: has("flui-native"),
+        cross_platform: has("flui-native"),
         cross_app: has("flui-app") || has("flui"),
         cross_cli: has("flui-cli"),
         cross_desktop_mcp: has("flui-desktop-mcp"),
@@ -505,8 +505,8 @@ mod tests {
     fn platform_only_scope_has_no_test_args() {
         let only_platform = Scope {
             mode: Mode::Packages,
-            packages: vec!["flui-platform".to_owned()],
-            seeds: vec!["flui-platform".to_owned()],
+            packages: vec!["flui-native".to_owned()],
+            seeds: vec!["flui-native".to_owned()],
             manifests: Vec::new(),
             heavy_required: false,
             reason: String::new(),
@@ -527,12 +527,12 @@ mod tests {
     }
 
     fn cfg_gated_backends_get_their_targets() {
-        let a = args(&["crates/flui-platform/src/lib.rs"]);
+        let a = args(&["crates/flui-native/src/lib.rs"]);
         assert_eq!(
             (a.cross_platform, a.cross_app, a.platform),
             (true, true, true)
         );
-        assert!(!a.test_args.contains("flui-platform")); // its suite runs in the headless leg
+        assert!(!a.test_args.contains("flui-native")); // its suite runs in the headless leg
         let a = args(&["packages/flui-material/src/lib.rs"]);
         assert_eq!(
             (a.cross_platform, a.cross_cli, a.cross_desktop_mcp),
@@ -548,10 +548,10 @@ mod tests {
     fn wasm_scope_skips_packages_that_cannot_target_wasm() {
         let no_wasm = no_wasm_packages(repo().workspace().expect("cargo metadata"));
         assert!(no_wasm.contains("flui-cli")); // from its manifest, not restated
-        assert!(!no_wasm.contains("flui-platform"));
-        let a = args(&["crates/flui-platform/src/lib.rs"]);
+        assert!(!no_wasm.contains("flui-native"));
+        let a = args(&["crates/flui-native/src/lib.rs"]);
         assert!(!a.wasm_args.contains("-p flui-cli"));
-        assert!(a.wasm_args.contains("-p flui-platform"));
+        assert!(a.wasm_args.contains("-p flui-native"));
     }
 
     fn per_feature_pass_covers_feature_gated_dependents() {
@@ -657,7 +657,7 @@ mod tests {
             (a.pkg_args.as_str(), a.test_args.as_str()),
             (
                 "--workspace",
-                "--workspace --exclude flui-platform --lib --bins --tests"
+                "--workspace --exclude flui-native --lib --bins --tests"
             )
         );
         assert!(

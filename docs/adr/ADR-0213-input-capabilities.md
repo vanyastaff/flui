@@ -1,6 +1,6 @@
 # ADR-0213: Input availability comes from handles; `InputCapabilities` covers only what has no handle
 
-- **Status:** Accepted (2026-10-13). Implemented: `InputCapabilities`, `Availability` and `PointerKindSet` in `flui-platform-api::input_capabilities`; the snapshot-then-changes delivery and its recovery rules in `flui-platform`'s `WindowCallbacks`; every backend's availability table in `flui-platform/src/shared/input_availability.rs`; `PlatformCapabilities` removed; the `unstable-input` re-exports in `flui-sdk` and the facade. The per-backend availability rows of `assert_backend_conforms` (ADR-0215) run in CI over each backend's table. Pending: the recording round trip of `PlatformInput::Capabilities`, presence changes from the native Win32, AppKit, UIKit, Android and web backends (they report their initial table; the headless and winit backends report changes), and Win32 DirectManipulation, until which Windows reports precise scrolling and trackpad gestures `Unavailable`; the last two land with the native backend work.
+- **Status:** Accepted (2026-10-13). Implemented: `InputCapabilities`, `Availability` and `PointerKindSet` in `flui-platform-api::input_capabilities`; the snapshot-then-changes delivery and its recovery rules in `flui-native`'s `WindowCallbacks`; every backend's availability table in `flui-native/src/shared/input_availability.rs`; `PlatformCapabilities` removed; the `unstable-input` re-exports in `flui-sdk` and the facade. The per-backend availability rows of `assert_backend_conforms` (ADR-0215) run in CI over each backend's table. Pending: the recording round trip of `PlatformInput::Capabilities`, presence changes from the native Win32, AppKit, UIKit, Android and web backends (they report their initial table; the headless and winit backends report changes), and Win32 DirectManipulation, until which Windows reports precise scrolling and trackpad gestures `Unavailable`; the last two land with the native backend work.
 - **Date:** 2026-10-13
 - **Amends:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §5: adopts the removal of
   `PlatformCapabilities` and `Platform::capabilities`, and names what replaces them.
@@ -21,12 +21,12 @@
 
 ## Context
 
-`PlatformCapabilities` (then in `flui-platform`'s `traits/capabilities.rs`, now removed) was a per-platform
+`PlatformCapabilities` (then in `flui-native`'s `traits/capabilities.rs`, now removed) was a per-platform
 constant answering `supports_touch`, `supports_mouse`, `supports_stylus`,
 `should_coalesce_pointer_moves`, `default_target_fps` and five more. It was wrong in both
 directions: "Windows supports touch" says nothing about whether a touchscreen is attached, and
 "Linux supports pen" is true on Wayland and false on X11 under the same backend. Its only users
-are a `flui-platform` example and doc comments; ADR-0082 §5 already proposed deleting it.
+are a `flui-native` example and doc comments; ADR-0082 §5 already proposed deleting it.
 
 Meanwhile a widget does need to know a few things. Should a drawing surface offer pen
 pressure? Does the backend deliver phased precise scrolling, or only wheel detents? Will
@@ -68,7 +68,7 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
    gestures and outgoing drags on X11).
 2. **Implemented is not present.** `Availability` states what the backend implements. Whether a
    matching device is attached is a separate answer, `present()`, taken from the backend's
-   `DeviceRegistry` (`flui-platform/src/shared/`), the same registry that assigns `DeviceId`s,
+   `DeviceRegistry` (`flui-native/src/shared/`), the same registry that assigns `DeviceId`s,
    so presence and the device ids in events cannot disagree. `Native` with no pen attached is a
    normal state.
 3. **Snapshot, then changes, as events.** Every backend computes an initial
@@ -84,7 +84,7 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
    `OwnerPlatform::capabilities` and the per-backend structs. Its other questions belong
    elsewhere: lifecycle to `WindowExecutionState`, frame pacing to the presentation, move
    coalescing to the binding's coalescer, device kinds to presence (item 2).
-5. **Gate.** `flui-platform-api` and `flui-platform` always build `InputCapabilities` and
+5. **Gate.** `flui-platform-api` and `flui-native` always build `InputCapabilities` and
    `Availability` for internal use, so Cargo's feature unification cannot change them. The
    user-facing gate is the additive `unstable-input` feature on the `flui-sdk` and facade
    re-exports, kept until every backend's rows in `assert_backend_conforms` pass.
@@ -107,7 +107,7 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
   CI (Linux and wasm32 execute; Windows, macOS, Android and iOS are type-checked only). Device
   attach and removal on real hardware run on a native host through
   [`cargo xtask device <os>-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs).
-- Removing `PlatformCapabilities` touches one example and the `flui-platform` docs; nothing
+- Removing `PlatformCapabilities` touches one example and the `flui-native` docs; nothing
   outside the crate calls it.
 
 ## Alternatives rejected

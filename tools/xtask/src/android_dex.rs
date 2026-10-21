@@ -1,8 +1,8 @@
 //! `cargo xtask android-dex`: the dex of the Android backend's `FluiView`
 //! (ADR-0247).
 //!
-//! The view's Java sources live under `crates/flui-platform/android/java`.
-//! Their compiled dex, `crates/flui-platform/android/classes.dex`, is checked
+//! The view's Java sources live under `crates/flui-native/android/java`.
+//! Their compiled dex, `crates/flui-native/android/classes.dex`, is checked
 //! in and `include_bytes!`'d into the backend, so building FLUI for Android
 //! needs no JDK and no build script, and every packager (`flui build`, Gradle,
 //! cargo-apk) gets the dex the library was built with. `classes.dex.toml`
@@ -28,11 +28,11 @@ use sha2::{Digest, Sha256};
 use crate::util::{ScratchDir, repo_root};
 
 /// The Java sources, relative to the repository root.
-const SOURCES: &str = "crates/flui-platform/android/java";
+const SOURCES: &str = "crates/flui-native/android/java";
 /// The checked-in dex.
-const DEX: &str = "crates/flui-platform/android/classes.dex";
+const DEX: &str = "crates/flui-native/android/classes.dex";
 /// Its record.
-const RECORD: &str = "crates/flui-platform/android/classes.dex.toml";
+const RECORD: &str = "crates/flui-native/android/classes.dex.toml";
 /// The oldest API level the dex runs on: FLUI's `minSdk`.
 const MIN_API: u32 = 23;
 /// The Java language level: what `d8` accepts for that API level without desugaring.

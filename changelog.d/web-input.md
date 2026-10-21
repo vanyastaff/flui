@@ -1,16 +1,16 @@
 ### Added
 
-- **`flui-platform`**: the web backend decodes a trackpad pinch into `PanZoom`, from the
+- **`flui-native`**: the web backend decodes a trackpad pinch into `PanZoom`, from the
   Control-held wheel events Chromium and Firefox send for it (reported `Emulated`, classified by a
   sequence's first event, ending at a deadline on the event timeline) and from WebKit's
   `gesture*` events; an application that does not prevent a pinch's first event leaves it to the
   browser's page zoom. A pen reporting only `tiltX`/`tiltY` keeps its tilt.
-- **`flui-platform`**: HTML drag and drop on the web canvas (ADR-0211 §11): drags from the page
+- **`flui-native`**: HTML drag and drop on the web canvas (ADR-0211 §11): drags from the page
   or the OS are offered by their types and files and copied out at the drop, `dragover` answers
   from the target's feedback, and a session the runtime starts on a press before the browser's
   drag threshold becomes an HTML drag with its representations stored at `dragstart`; outgoing
   drags are reported `Native`.
-- **`flui-platform`**: text input on the web (ADR-0090): the web window is a `TextStoreHost`
+- **`flui-native`**: text input on the web (ADR-0090): the web window is a `TextStoreHost`
   serving the focused field's store through an `EditContext` on the canvas, or a hidden textarea
   where the browser has none; a key the input method processes (composing, key code 229, or while
   the field composes) reaches the window marked `ImeComposition::Active`, so Escape cancels a
@@ -28,5 +28,5 @@
 
 ### Changed
 
-- **`flui-platform`**: a web wheel event's default (page scrolling) is cancelled, and its
+- **`flui-native`**: a web wheel event's default (page scrolling) is cancelled, and its
   propagation stopped, only as the input callback's result says, instead of always.

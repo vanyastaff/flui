@@ -49,7 +49,7 @@ The platform side already has more than the widget side can reach:
   ADR-0083). ADR-0031 §4 deferred the widget-facing handle "with the first widget
   consumer, as a lifecycle capability".
 - **Clipboard.** `Platform::clipboard()` is a required method
-  (`crates/flui-platform/src/traits/platform.rs:423`), resolved once per loop into `AppRuntime`
+  (`crates/flui-native/src/traits/platform.rs:423`), resolved once per loop into `AppRuntime`
   (ADR-0038 §9). When this ADR was written the accessor that would hand it out was dead code.
   It now has a caller: every UI runtime takes the platform clipboard at construction
   (`runner::host::runtime_clipboard`) and installs a `ClipboardHandle` in each presentation's
@@ -89,7 +89,7 @@ the registry stood in `crates/flui-view/src/capability/` in place of `flui-platf
     without its plugin it got `NotRegistered`.
   - 3 of 5 external tests fail when `BuildCtx::capability_erased` ignores the scope.
 - **Narrower than the success metric.**
-  - The fixture depended on `flui-view`, `flui-platform` and `flui-types`, not on
+  - The fixture depended on `flui-view`, `flui-native` and `flui-types`, not on
     `flui-platform-api` and `flui-sdk`.
   - Its provider wrapped the in-tree `PlatformWindow::haptics()` and `FakeHaptics`.
   - The tests built the registry by hand. The runner path (`main_window.rs` and the
@@ -101,14 +101,14 @@ the registry stood in `crates/flui-view/src/capability/` in place of `flui-platf
   - It registered `Cursor`, `TextInput` and `Accessibility` as widget capabilities, against §5.
   - It removed the defaults of `text_input()` and `accessibility()` but kept `Option`.
   - It did not edit macOS. `MacOSWindow::accessibility` exists only under `a11y`
-    (`crates/flui-platform/src/platforms/macos/window.rs:926-927`), and `a11y` is off by default
-    (`crates/flui-platform/Cargo.toml:300,310`), so a default macOS build fails with E0046. It
+    (`crates/flui-native/src/platforms/macos/window.rs:926-927`), and `a11y` is off by default
+    (`crates/flui-native/Cargo.toml:300,310`), so a default macOS build fails with E0046. It
     was never compiled for macOS.
   - There are three `cfg`-gated `accessibility` overrides, not two: Windows
     (`windows/window.rs:707-708`), winit (`winit/window.rs:324-325`) and macOS. Their `None`
     without `a11y` was intended behaviour.
   - `build()` walked a `HashMap`, so which of several conflicts it reported varied between runs.
-  - Its `flui-view → flui-platform` edge is not carried forward; ADR-0082 §2 forbids it.
+  - Its `flui-view → flui-native` edge is not carried forward; ADR-0082 §2 forbids it.
 
 ## Decision
 
@@ -304,14 +304,14 @@ it, and rejected a handle with `None` defaults for exactly that reason; this cla
 that rule. The class holds:
 
 - **clipboard** and **data transfer**: `Platform::clipboard()` and `Platform::data_transfer()`
-  (`crates/flui-platform/src/traits/platform.rs:423,435`), already required;
+  (`crates/flui-native/src/traits/platform.rs:423,435`), already required;
 - **cursor**: `PlatformWindow::set_cursor` (`crates/flui-platform-api/src/platform_window.rs`),
   already required;
 - **text input and IME**: `PlatformWindow::text_input()`, today a defaulted method returning
   `None` (same file), becomes required;
 - **accessibility**: the backend-side window extension trait's `accessibility()` (ADR-0082 §3
   moved it off `PlatformWindow`), today `HostWindow::accessibility()` defaulting to `None`
-  (`crates/flui-platform/src/traits/host_window.rs`), becomes required;
+  (`crates/flui-native/src/traits/host_window.rs`), becomes required;
 - **window chrome basics**: title, size, close request and decorations; the exact method list is
   fixed when the traits move into `flui-platform-api` (ADR-0082).
 

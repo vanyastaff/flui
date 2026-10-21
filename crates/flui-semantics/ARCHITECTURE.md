@@ -235,7 +235,7 @@ notifier hooks). Assembly runs in the existing post-paint semantics phase (`run_
   reproduces everything a mark could influence. Anything the graft preconditions cannot prove
   falls back to the whole-tree rebuild, which is the correctness baseline.
 - `accesskit_translation.rs` maps the owner's tree to AccessKit updates with stable
-  `AccessibilityNodeId`s; `flui-platform` hosts the AccessKit adapters per backend.
+  `AccessibilityNodeId`s; `flui-native` hosts the AccessKit adapters per backend.
 - `platform.rs` holds `PlatformAccessibility`, the capability those adapters implement and the
   UI runtime holds per window (ADR-0082 §2). It names only AccessKit types, never a semantics type:
   what crosses it is already translated.

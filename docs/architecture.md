@@ -39,8 +39,8 @@ Layer 5  ── flui-view [K]
 Layer 4  ── flui-rendering [R], flui-objects [R], flui-engine [R]
                 │   (objects → rendering, never the reverse)
 Layer 3  ── flui-layer [R], flui-semantics [S], flui-animation [S],
-                │  flui-platform [H]
-                │  (flui-platform = OS backends; only flui-app depends on it)
+                │  flui-native [H]
+                │  (flui-native = the core host; only flui-app depends on it)
 Layer 2  ── flui-log [S], flui-scheduler [S], flui-painting [S],
                 │  flui-interaction [S], flui-assets [S]
                 │  (flui-log = the subscriber backend; flui-app depends on
@@ -129,7 +129,7 @@ self.nodes.get(id.get() - 1);
 
 ## Platform Abstraction
 
-`flui-platform` exposes a unified `Platform` trait with native and headless backends:
+`flui-native`, the core host, exposes one `Platform` trait over its native and headless hosts:
 
 ```rust
 pub trait Platform: Send + Sync + 'static {
@@ -165,7 +165,7 @@ Text shaping is **not** a `Platform` method — a platform text-system binding (
 
 ## Confinement of `unsafe`
 
-The workspace sets `unsafe_code = "warn"`; `flui-painting` and `flui-platform-api` forbid it outright, and `flui-platform` allows it for its OS bindings. Outside `flui-platform`, compiled production code uses `unsafe` at a few narrow sites: `flui-rendering`'s subtree arena, `flui-foundation`'s unchecked id constructor, `flui-log`'s subscriber backends, `flui-hot-reload`'s dynamic-library loading, `flui-cli`'s Windows std-handle inheritance call (`src/proc.rs`), and `flui-devtools`' Windows user-SID lookup for its agent endpoint (`src/agent/endpoint.rs`). `flui-engine` denies `unsafe` in its hand-written production code; its `*/generated.rs` bridges allow it for the included `wgsl_bindgen` output (its `unsafe impl` of `Pod` and `Zeroable`), and its test code has a fake window target and an allocation-counting `GlobalAlloc`; the `transmute` in `flui-cli`'s hot-reload template is source text emitted into a generated project, not code the CLI runs. Each `unsafe` block carries a `// SAFETY:` comment naming the invariant it relies on. The widget catalog, the design systems and application code are `unsafe`-free.
+The workspace sets `unsafe_code = "warn"`; `flui-painting` and `flui-platform-api` forbid it outright, and `flui-native` allows it for its OS bindings. Outside `flui-native`, compiled production code uses `unsafe` at a few narrow sites: `flui-rendering`'s subtree arena, `flui-foundation`'s unchecked id constructor, `flui-log`'s subscriber backends, `flui-hot-reload`'s dynamic-library loading, `flui-cli`'s Windows std-handle inheritance call (`src/proc.rs`), and `flui-devtools`' Windows user-SID lookup for its agent endpoint (`src/agent/endpoint.rs`). `flui-engine` denies `unsafe` in its hand-written production code; its `*/generated.rs` bridges allow it for the included `wgsl_bindgen` output (its `unsafe impl` of `Pod` and `Zeroable`), and its test code has a fake window target and an allocation-counting `GlobalAlloc`; the `transmute` in `flui-cli`'s hot-reload template is source text emitted into a generated project, not code the CLI runs. Each `unsafe` block carries a `// SAFETY:` comment naming the invariant it relies on. The widget catalog, the design systems and application code are `unsafe`-free.
 
 ## Logging and Errors
 

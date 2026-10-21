@@ -933,7 +933,7 @@ impl Renderer {
         // `Arc<Arc<dyn PlatformWindow>>` here — forced: `Arc<dyn
         // PlatformWindow>` cannot upcast to `Arc<dyn WindowTarget>` without
         // `PlatformWindow: WindowTarget`, which would invert the
-        // flui-platform → flui-engine layer edge (`cargo xtask workspace`).
+        // flui-native → flui-engine layer edge (`cargo xtask workspace`).
         // One extra pointer chase per surface creation; documented, not
         // fixed — see issue #1043.
         let (w, h) = (800u32, 600u32); // Will be updated on first resize
@@ -1087,7 +1087,7 @@ impl Renderer {
             // 2,000-row ListView and a Material TextField, 900×700 logical
             // on a 100 Hz panel) presented at a rock-steady 20.0 ms p50 —
             // exactly two periods, 50 fps — through both its scrolling and
-            // its typing phases, while `flui-platform`'s bare frame pump on
+            // its typing phases, while `flui-native`'s bare frame pump on
             // the same display ran 100 fps. At 2 the same probe ran 10.0 ms
             // p50 (p99 12.3 ms scrolling, 10.05 ms typing). Half the frame
             // rate of every non-trivial app is a measured cost; a possible

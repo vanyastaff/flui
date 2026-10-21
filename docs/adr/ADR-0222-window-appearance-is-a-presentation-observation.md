@@ -35,7 +35,7 @@ dark.
    the Web all use it, so `MediaQueryData::platform_brightness` starts at the user's theme
    in every window.
 
-The native source on each backend is recorded in `crates/flui-platform/ARCHITECTURE.md`.
+The native source on each backend is recorded in `crates/flui-native/ARCHITECTURE.md`.
 
 ## Consequences
 

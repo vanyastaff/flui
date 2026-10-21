@@ -3,8 +3,8 @@
 //!
 //! These are the values the per-window contract,
 //! [`PlatformWindow`](crate::PlatformWindow), and the host-facing
-//! `flui_platform::Platform` that opens windows (which stays in
-//! `flui-platform`, ADR-0082 §2) use in their signatures.
+//! `flui_native::Platform` that opens windows (which stays in
+//! `flui-native`, ADR-0082 §2) use in their signatures.
 
 use flui_foundation::geometry::{Point, Size};
 
@@ -347,7 +347,7 @@ pub enum CursorError {
 
 // ==================== Events ====================
 
-/// Window events that can be observed via `flui_platform::Platform::on_window_event`
+/// Window events that can be observed via `flui_native::Platform::on_window_event`
 #[derive(Debug, Clone)]
 pub enum WindowEvent {
     /// Window was created

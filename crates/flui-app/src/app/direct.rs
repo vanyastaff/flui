@@ -48,7 +48,7 @@ use std::sync::Arc;
 
 use flui_engine::{EngineError, Recoverability, Renderer};
 use flui_layer::{Scene, SceneBuilder};
-use flui_platform::{
+use flui_native::{
     WindowOptions,
     traits::{DispatchEventResult, PlatformInput},
 };
@@ -85,7 +85,7 @@ use super::AppConfig;
 /// Runs on every backend, including winit (Linux) — bootstrap moved inside
 /// `on_ready` (ADR-0039 §1), so the winit backend's requirement of a
 /// running event loop before window creation is satisfied on every target.
-/// Uses `flui_platform::current_platform()` for platform selection.
+/// Uses `flui_native::current_platform()` for platform selection.
 ///
 /// **Experimental**: this is a direct-engine escape hatch, not a supported
 /// application entry point — see the module docs.
@@ -105,7 +105,7 @@ pub fn run_direct(
         "Starting FLUI direct render mode"
     );
 
-    let platform = flui_platform::current_platform()?;
+    let platform = flui_native::current_platform()?;
 
     /// The actual direct-mode bootstrap: window, GPU renderer, and callback
     /// wiring. Runs once, synchronously, inside `on_ready` (ADR-0039
@@ -124,7 +124,7 @@ pub fn run_direct(
     where
         F: FnMut(&mut SceneBuilder, f64, f64) + Send + 'static,
     {
-        fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
+        fn owner_platform_installed<R>(f: impl FnOnce(&flui_native::OwnerPlatform) -> R) -> R {
             crate::app::runner::with_owner_platform(f)
                 .expect("BUG: bootstrap_direct runs only after install_owner_platform")
         }
@@ -133,7 +133,7 @@ pub fn run_direct(
         // (ADR-0039 §1).
         let options: WindowOptions = (&config).into();
         let window = match owner_platform_installed(|owner| owner.open_window(options))
-            .and_then(flui_platform::WindowOpen::try_ready)
+            .and_then(flui_native::WindowOpen::try_ready)
         {
             Ok(window) => window,
             Err(error) => {

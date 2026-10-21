@@ -1,9 +1,9 @@
 //! Gate-visible tests for the data-transfer transport (ADR-0038).
 //!
 //! These live in flui-app rather than next to the code because
-//! flui-platform's tests are excluded from the CI test job — a transport
+//! flui-native's tests are excluded from the CI test job — a transport
 //! test there would be green-by-vacuity at the merge gate. flui-app is
-//! CI-covered and already depends on flui-platform and flui-scheduler, so
+//! CI-covered and already depends on flui-native and flui-scheduler, so
 //! the `OfferTable`, `TransferRequest`/`TransferCompleter`, and
 //! mock-source-through-`AsyncDriver` evidence runs here until the exclusion
 //! lifts.
@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 
 use flui_foundation::DataTransferId;
-use flui_platform::data_transfer::{
+use flui_native::data_transfer::{
     DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, OfferTable,
     RepresentationDescriptor, RepresentationIndex, TransferActions, TransferCompleter,
     TransferError, TransferFormat, TransferLimits, TransferPayload, TransferRequest,

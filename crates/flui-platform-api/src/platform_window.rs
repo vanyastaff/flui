@@ -3,7 +3,7 @@
 //! A thin abstraction over platform windows for testability and
 //! flexibility, including per-window callback registration for event
 //! delivery. It names no OS, winit or AccessKit type (ADR-0082 §1): the
-//! accessibility bridge is reached through `flui_platform::HostWindow`, a
+//! accessibility bridge is reached through `flui_native::HostWindow`, a
 //! host-side subtrait only the composition root sees.
 
 use std::{any::Any, sync::Arc};
@@ -57,7 +57,7 @@ pub enum WindowAt {
 ///
 /// Callback storage locks are released before user code is invoked. Nested
 /// notifications share one causal FIFO across event kinds; see
-/// `flui_platform::WindowCallbacks` for nested input return semantics.
+/// `flui_native::WindowCallbacks` for nested input return semantics.
 ///
 /// # Thread affinity
 ///
@@ -76,17 +76,17 @@ pub enum WindowAt {
 /// `Platform`'s own `on_*` methods.
 ///
 /// A worker that needs the owner to act reaches it through
-/// `flui_platform::PlatformProxy`, the recorded cross-thread-to-owner lane
+/// `flui_native::PlatformProxy`, the recorded cross-thread-to-owner lane
 /// (ADR-0039 §3). Support is operation-specific: signals can support `wake`
 /// and `request_quit` while refusing deferred `open_window` with
-/// `flui_platform::ProxySendError::Unsupported`. The winit lane also transports
+/// `flui_native::ProxySendError::Unsupported`. The winit lane also transports
 /// deferred window creation. Direct backends create windows through their
 /// owner capability; browser signals follow ADR-0196.
 ///
 /// [`close`](Self::close) is the one method that documents itself out of this
 /// default: it is callable from any thread the native API permits, and states
 /// per backend what the cross-thread route costs (AppKit excepted). How each
-/// backend enforces the default is recorded in `flui-platform`'s
+/// backend enforces the default is recorded in `flui-native`'s
 /// `ARCHITECTURE.md`.
 ///
 /// # A window built from this crate alone
@@ -254,7 +254,7 @@ pub trait PlatformWindow: Send + Sync {
     /// as rejected.
     ///
     /// **No supported worker-side route exists yet.** The intended one is a
-    /// redraw verb on `flui_platform::PlatformProxy`, and it is absent
+    /// redraw verb on `flui_native::PlatformProxy`, and it is absent
     /// on *every* backend, not just the lane-less ones: that lane carries only
     /// `open_window` and `request_quit`. So a worker needing a frame today has
     /// no conforming call available — which is precisely why the two paths

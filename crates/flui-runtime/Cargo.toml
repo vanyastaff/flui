@@ -96,7 +96,7 @@ flui-testing = { path = "../flui-testing" }
 # a dev edge only, so the shipped crate still links no backend; the concrete
 # render objects some tests mount; AccessKit action requests driven the way
 # an adapter would; and `!Send` pins on the UI runtime.
-flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
+flui-native = { path = "../flui-native", version = "=0.2.0-dev" }
 flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
 static_assertions = { workspace = true }
 # Exact diagnostics for owner-thread and frame-entry boundaries.

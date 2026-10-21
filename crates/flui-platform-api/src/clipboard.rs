@@ -1,6 +1,6 @@
 //! The plain-text clipboard capability.
 //!
-//! A backend hands out its clipboard through `flui_platform::Platform::clipboard`
+//! A backend hands out its clipboard through `flui_native::Platform::clipboard`
 //! (ADR-0038 §9); the rich, typed transport is [`crate::data_transfer`].
 
 /// Clipboard operations

@@ -87,9 +87,9 @@ API, a CLI and MCP.
    unsettled causes. Retrying assertions are waits, not client polls (default timeout 5 s).
 8. **The crate.** `flui-driver` is a new published crate in tier H, between `flui-app` and
    `flui-cli`, versioned `0.N` (Evolving). It depends on `flui-protocol`, on `flui-testing` behind
-   `headless`, and on OS crates for its lanes. It never depends on `flui-platform` or `flui-app`.
+   `headless`, and on OS crates for its lanes. It never depends on `flui-native` or `flui-app`.
    Its `allowed-dependents` are `flui-cli`, tools and dev-dependencies, so no framework crate can
-   link it. ADR-0082's rule, that OS types stay inside `flui-platform`, governs framework crates;
+   link it. ADR-0082's rule, that OS types stay inside `flui-native`, governs framework crates;
    `flui-driver` is a client that is never linked into an app, which is why its OS code is allowed.
    If `cargo xtask workspace` refuses an Evolving crate in tier H, the implementing PR amends
    ADR-0081's kind table here rather than reshaping the crate.

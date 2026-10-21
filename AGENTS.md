@@ -35,7 +35,7 @@ Each has shipped more than once:
 `docs/crates.md` maps the crates, `packages/` and the facade (`src/`); each manifest's
 `[package.metadata.flui]` gives tier and layer. Not visible from the layout:
 
-- only `flui-app` depends on `flui-platform`, and `windows::*`/`objc2::*` types stay in it
+- only `flui-app` depends on `flui-native`, and `windows::*`/`objc2::*` types stay in it
   (ADR-0082); `flui-runtime` has no host, platform or GPU edge (ADR-0083);
 - official packages build on `flui-sdk` alone (ADR-0088); `flui-hot-reload` is one, still under
   `crates/`, reached only through `DevReloadHook`;
@@ -72,8 +72,8 @@ Cargo runs through heli: `cargo heli <cargo arguments>`, repository tasks as
 
 Before a PR: `cargo fmt --all`, then heli's clippy (`--all-targets -- -D warnings`) and nextest
 on the changed crates, and their dependents when a public API changed. A docs-only change needs
-only `cargo heli xtask checks`. `flui-platform`'s suite runs only on Linux, so a Windows or macOS
-host change needs `cargo heli nextest run -p flui-platform` by hand.
+only `cargo heli xtask checks`. `flui-native`'s suite runs only on Linux, so a Windows or macOS
+host change needs `cargo heli nextest run -p flui-native` by hand.
 
 - Each worktree keeps its own `target/`: a shared `CARGO_TARGET_DIR` links another worktree's
   sources.

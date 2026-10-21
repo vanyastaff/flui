@@ -175,7 +175,7 @@ host.
   `presentation_assembly_reentry_revalidates_its_authorizer` pins that reentry
   cannot publish through a presentation that closed during assembly.
 - **No host, platform or GPU edge.** The crate's normal dependency closure
-  names none of `flui-platform`, `winit`, `android-activity`, `ndk`,
+  names none of `flui-native`, `winit`, `android-activity`, `ndk`,
   `windows`, `objc2-app-kit`, `objc2-ui-kit`, `wgpu`, `flui-engine` or
   `flui-app`: tier K's forbid set in the root
   `[workspace.metadata.flui.reach]`, checked by `cargo xtask reach` over

@@ -121,7 +121,7 @@ resume. No backend delivered a display change.
    `FrameRateHint` (`Default` or `High`) passed to `PlatformWindow::set_frame_rate_hint`, whose
    default is a no-op: a backend without the capability needs no code, and the system may decline
    the request.
-10. **One cache serves every native source.** `flui-platform` keeps a `DisplaySource` per platform
+10. **One cache serves every native source.** `flui-native` keeps a `DisplaySource` per platform
     instance: the id registry, the last published snapshot and a stale flag that any thread may
     set. `display_snapshot` runs on every owner wake, so a backend with change notifications
     invalidates the source and reads the OS again only when it is stale; the flag is cleared before

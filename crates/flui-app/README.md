@@ -58,7 +58,7 @@ AppRuntime (loop-scoped composition root)
   assumption of its own.
 - **Embedder** (`embedder`) — adapter types connecting the framework to
   windowing, GPU, and input on desktop (Win32/AppKit/headless via
-  flui-platform + wgpu); Android/iOS/Web entry points are feature-gated.
+  flui-native + wgpu); Android/iOS/Web entry points are feature-gated.
 
 This crate deliberately owns **no design tokens**. Colours, typography,
 spacing, radius, and motion belong to `flui-material` / `flui-cupertino`;

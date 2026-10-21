@@ -40,7 +40,7 @@ pub(super) fn start_service(
 ///
 /// If no platform clipboard is installed: [`install_owner_platform`] installs
 /// it, and every runner calls that before it builds any ui_runtime.
-pub(super) fn runtime_clipboard() -> Arc<dyn flui_platform::traits::Clipboard> {
+pub(super) fn runtime_clipboard() -> Arc<dyn flui_native::traits::Clipboard> {
     APP_RUNTIME
         .with(|slot| slot.borrow().clipboard())
         .expect("BUG: the runner installs the platform clipboard before it builds a ui_runtime")
@@ -105,9 +105,9 @@ pub(super) fn track_raster_lane(lane: flui_engine::RasterHandle) {
 #[derive(Debug, thiserror::Error)]
 pub(super) enum HostServicesError {
     #[error(transparent)]
-    Preferences(#[from] flui_platform::PlatformError),
+    Preferences(#[from] flui_native::PlatformError),
     #[error("display sampling failed")]
-    Displays(#[source] flui_platform::PlatformError),
+    Displays(#[source] flui_native::PlatformError),
     #[error(transparent)]
     Owner(#[from] flui_runtime::owner::DispatchError),
     #[error(transparent)]
@@ -116,8 +116,8 @@ pub(super) enum HostServicesError {
 
 pub(super) fn refresh_preferences_with(
     read: impl FnOnce(
-        &flui_platform::OwnerPlatform,
-    ) -> Result<flui_platform_api::SystemPreferences, flui_platform::PlatformError>,
+        &flui_native::OwnerPlatform,
+    ) -> Result<flui_platform_api::SystemPreferences, flui_native::PlatformError>,
 ) -> Result<(), HostServicesError> {
     let (owner, host) = APP_RUNTIME.with(|slot| {
         let state = slot.borrow();
@@ -142,7 +142,7 @@ pub(super) fn refresh_preferences_with(
     }
     if matches!(
         observation,
-        Err(flui_platform::PlatformError::PreferencesDeferred)
+        Err(flui_native::PlatformError::PreferencesDeferred)
     ) {
         // A deferred read publishes nothing. The source retains its retry;
         // unrelated owner wakes must not flood diagnostics during backoff.
@@ -165,8 +165,8 @@ pub(super) fn refresh_preferences_with(
 /// next sample offers the same value again.
 pub(super) fn refresh_displays_with(
     read: impl FnOnce(
-        &flui_platform::OwnerPlatform,
-    ) -> Result<flui_platform_api::DisplaySnapshot, flui_platform::PlatformError>,
+        &flui_native::OwnerPlatform,
+    ) -> Result<flui_platform_api::DisplaySnapshot, flui_native::PlatformError>,
 ) -> Result<(), HostServicesError> {
     let (owner, host) = APP_RUNTIME.with(|slot| {
         let state = slot.borrow();
@@ -232,14 +232,14 @@ pub(super) fn drive_native_text_sizing() {
             let mut first = None;
             super::installed_host::contain(&mut first, || {
                 if let Err(error) =
-                    refresh_preferences_with(flui_platform::OwnerPlatform::preferences)
+                    refresh_preferences_with(flui_native::OwnerPlatform::preferences)
                 {
                     tracing::warn!(%error, "mobile system preference refresh failed");
                 }
             });
             super::installed_host::contain(&mut first, || {
                 if let Err(error) =
-                    refresh_displays_with(flui_platform::OwnerPlatform::display_snapshot)
+                    refresh_displays_with(flui_native::OwnerPlatform::display_snapshot)
                 {
                     tracing::warn!(%error, "mobile display refresh failed");
                 }
@@ -269,7 +269,7 @@ pub(super) fn build_ui_runtime(
     let pending = Arc::clone(&redraw);
     let target = Arc::downgrade(window.window());
     #[cfg(target_os = "ios")]
-    let proxy = with_owner_platform(flui_platform::OwnerPlatform::proxy);
+    let proxy = with_owner_platform(flui_native::OwnerPlatform::proxy);
     let wake = Arc::new(move || {
         pending.store(true, std::sync::atomic::Ordering::Release);
         if let Some(window) = target.upgrade() {
@@ -309,7 +309,7 @@ pub(super) fn build_ui_runtime(
 
 /// Answer one phase of the user's session ending (ADR-0237).
 ///
-/// A query becomes one [`flui_platform::HostNotice::SessionEnding`] for every
+/// A query becomes one [`flui_native::HostNotice::SessionEnding`] for every
 /// presentation, all sharing one request: the answer is `Block` while any
 /// subscriber holds a block on it. The request is kept until the session end is
 /// cancelled or happens, so the blocks outlive the query. Cancelling and ending
@@ -324,15 +324,15 @@ pub(super) fn build_ui_runtime(
 ///
 /// When the last block is later released, the platform is told
 /// (`Platform::release_session_end`) so it can let the session go on.
-fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::SessionEndAnswer {
-    use flui_platform::{HostNotice, SessionEndAnswer, SessionEndPhase, SessionEndRequest};
+fn answer_session_end(phase: flui_native::SessionEndPhase) -> flui_native::SessionEndAnswer {
+    use flui_native::{HostNotice, SessionEndAnswer, SessionEndPhase, SessionEndRequest};
 
     match phase {
         SessionEndPhase::Query => {
             let request = SessionEndRequest::new().on_release(|| {
                 // The platform is told the application is done with the
                 // session end it asked to wait for.
-                let _ = with_owner_platform(flui_platform::OwnerPlatform::release_session_end);
+                let _ = with_owner_platform(flui_native::OwnerPlatform::release_session_end);
             });
             let displaced = APP_RUNTIME.with(|slot| {
                 slot.try_borrow_mut()
@@ -385,7 +385,7 @@ fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::S
 /// unwind would abort the process or skip the answer. The first panic is
 /// reported and `None` is returned; otherwise how the notice was delivered.
 fn deliver_contained(
-    notice: &flui_platform::HostNotice,
+    notice: &flui_native::HostNotice,
 ) -> Option<super::owner_dispatch::NoticeDelivery> {
     let mut failure = flui_foundation::panic::FirstPanic::new();
     let delivery = failure.contain(|| super::owner_dispatch::deliver_host_notice(notice));
@@ -404,7 +404,7 @@ fn deliver_contained(
 /// is attached after this returns.
 fn attach_window_control(
     ui_runtime: &crate::app::ui_runtime::UiRuntime,
-    window: &Arc<dyn flui_platform::traits::PlatformWindow>,
+    window: &Arc<dyn flui_native::traits::PlatformWindow>,
 ) {
     let (queues, wake, router) = APP_RUNTIME.with(|slot| {
         let state = slot.borrow();
@@ -474,8 +474,8 @@ thread_local! {
     )
 )]
 pub(crate) fn install_owner_platform(
-    owner: flui_platform::OwnerPlatform,
-) -> Result<(), flui_platform::WakeRegistrationError> {
+    owner: flui_native::OwnerPlatform,
+) -> Result<(), flui_native::WakeRegistrationError> {
     #[cfg(not(target_os = "android"))]
     let owner_turn_wake: Rc<dyn Fn() -> bool> = {
         let proxy = owner.proxy();
@@ -521,14 +521,14 @@ pub(crate) fn install_owner_platform(
                     let mut first = None;
                     super::installed_host::contain(&mut first, || {
                         if let Err(error) =
-                            refresh_preferences_with(flui_platform::OwnerPlatform::preferences)
+                            refresh_preferences_with(flui_native::OwnerPlatform::preferences)
                         {
                             tracing::warn!(%error, "system preference refresh failed");
                         }
                     });
                     super::installed_host::contain(&mut first, || {
                         if let Err(error) =
-                            refresh_displays_with(flui_platform::OwnerPlatform::display_snapshot)
+                            refresh_displays_with(flui_native::OwnerPlatform::display_snapshot)
                         {
                             tracing::warn!(%error, "display refresh failed");
                         }
@@ -622,12 +622,12 @@ pub(crate) fn install_owner_platform(
     ))]
     super::installed_host::contain(&mut first, install_wake_deadline_hook);
     super::installed_host::contain(&mut first, || {
-        if let Err(error) = refresh_preferences_with(flui_platform::OwnerPlatform::preferences) {
+        if let Err(error) = refresh_preferences_with(flui_native::OwnerPlatform::preferences) {
             tracing::warn!(%error, "initial system preference observation failed");
         }
     });
     super::installed_host::contain(&mut first, || {
-        if let Err(error) = refresh_displays_with(flui_platform::OwnerPlatform::display_snapshot) {
+        if let Err(error) = refresh_displays_with(flui_native::OwnerPlatform::display_snapshot) {
             tracing::warn!(%error, "initial display observation failed");
         }
     });
@@ -648,7 +648,7 @@ pub(crate) fn install_owner_platform(
 /// immediately after [`install_owner_platform`], from every backend that
 /// wants this: today, that is `run_desktop` only — Android/web bootstraps
 /// never call this (their platforms don't override
-/// [`flui_platform::traits::Platform::set_exit_policy_hook`] either, so it
+/// [`flui_native::traits::Platform::set_exit_policy_hook`] either, so it
 /// would be inert there anyway; wiring the hook itself into those backends
 /// is unrelated to whether flui-app installs it).
 ///
@@ -757,7 +757,7 @@ pub(super) fn install_platform_quit_hook() {
 /// Installs the wall-clock-wake hook this thread's platform
 /// backend consults, once per idle iteration, for the earliest instant it
 /// should wake at instead of blocking forever — see
-/// [`flui_platform::traits::Platform::set_wake_deadline_hook`]'s doc for the
+/// [`flui_native::traits::Platform::set_wake_deadline_hook`]'s doc for the
 /// full contract. Installed once with the desktop owner platform.
 /// `AppRuntime::next_wake` folds every live runtime and presentation's
 /// deadlines. A window install never replaces this hook; closing a window
@@ -868,7 +868,7 @@ pub(super) fn desktop_secondary_wake_deadline(
 /// # `owner.shared()`'s method list is a compile-time fence too
 ///
 /// Code reached through this accessor that isn't owner-thread-affine goes
-/// through [`OwnerPlatform::shared`](flui_platform::OwnerPlatform::shared),
+/// through [`OwnerPlatform::shared`](flui_native::OwnerPlatform::shared),
 /// which returns `SharedPlatform` — a type whose method list IS the fence
 /// (no owner-affine method, e.g. `open_window`, is ever added to it; see
 /// its own rustdoc). The failing and passing examples share a bootstrap
@@ -877,7 +877,7 @@ pub(super) fn desktop_secondary_wake_deadline(
 /// examples compile in the doctest suite; the valid callback is not run.
 ///
 /// ```compile_fail,E0599
-/// use flui_platform::headless_platform;
+/// use flui_native::headless_platform;
 ///
 /// let _ = headless_platform().run(Box::new(|owner| {
 ///     let shared = owner.shared();
@@ -887,7 +887,7 @@ pub(super) fn desktop_secondary_wake_deadline(
 /// ```
 ///
 /// ```no_run
-/// use flui_platform::headless_platform;
+/// use flui_native::headless_platform;
 ///
 /// let _ = headless_platform().run(Box::new(|owner| {
 ///     let shared = owner.shared();
@@ -905,7 +905,7 @@ pub(super) fn desktop_secondary_wake_deadline(
 /// cross-thread ownership is added to that capability. A native operation's
 /// result must separately be checked against its loop identity and admission.
 pub(crate) fn with_owner_platform<R>(
-    f: impl FnOnce(&flui_platform::OwnerPlatform) -> R,
+    f: impl FnOnce(&flui_native::OwnerPlatform) -> R,
 ) -> Option<R> {
     #[cfg(debug_assertions)]
     {
