@@ -113,7 +113,8 @@ the `testing` feature, and the one execution API an embedder reaches through `fl
 `flui-platform`'s web backend needs a DOM, which node does not have, so `wasm-test` leaves it
 alone. Its `web_browser` target runs in headless Chrome instead, through
 `wasm-bindgen-test-runner` with a ChromeDriver matching the installed Chrome. CI does not run
-it; a change to the web backend's DOM side runs it locally.
+it; a change to the web backend's DOM side runs it locally with
+`CHROMEDRIVER=<path> cargo test -p flui-platform --target wasm32-unknown-unknown --test web_browser --locked`.
 
 ## Quality Gates
 
