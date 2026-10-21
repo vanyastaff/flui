@@ -130,10 +130,9 @@ pub struct RepresentationIndex(pub u16);
 // Actions + feedback
 // ============================================================================
 
-bitflags::bitflags! {
+crate::flag_set::flag_set! {
     /// Drop effects a DnD source permits / a target accepts. The empty set
     /// permits or accepts nothing: a target replying with it refuses the drop.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct TransferActions: u8 {
         /// Copy the data; the source keeps its copy.
         const COPY = 1;

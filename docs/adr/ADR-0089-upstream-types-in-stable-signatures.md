@@ -5,6 +5,8 @@
   vocabulary and its flags; FLUI's roles and actions now cover ARIA 1.2 where AccessKit has a
   counterpart, and role-bearing flags are roles. The rule that stable signatures carry no
   upstream type stands.
+- **Amended:** 2026-10-21 — §6's gate is `cargo xtask api-closure`; its first run moved the
+  contract's two `bitflags` sets into the contract's own type (ADR-0151 §5).
 - **Amended:** 2026-10-11 — verification distinguishes implemented vocabulary checks from the still-proposed API-closure migration.
 - **Date:** 2026-09-25
 - **Related:** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §1 (`ImeEvent` mirrors
@@ -202,10 +204,11 @@ scratch crate with `pub fn f() -> accesskit::Role` must be rejected (its `--self
 ([ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md) §4). The owned input and
 semantics vocabularies also expose their outbound `ALL` sets, and the AccessKit
 translation has exhaustive inbound matches and its outbound role-family test.
-The remaining API-closure and Stable-signature migration checks below are still pending.
+§6's gate exists and passes on every Stable package (`flui`, `flui-platform`, `flui-protocol`).
 
-- `api-closure` with its self-test probe (§6), in `cargo xtask checks`.
+- `cargo xtask api-closure` and its `--self-test` (§6), in CI's `doc` job: the self-test plants a
+  `ui-events` type, a `RawWindowHandle` (§2), an allowed `CursorIcon` and `HandleError`, an
+  unused exception and, under a deny list, an OS type into the contract's real rustdoc output,
+  and the rule reports exactly the violations.
 - The implemented outbound `ALL` role test and exhaustive inbound matches in `flui-semantics` (§3).
 - The generated-key round-trip test and the keyboard-types diff check (§4).
-- A `compile_fail` or closure-gate case showing `RawWindowHandle` cannot appear in a Stable
-  signature (§2).

@@ -15,6 +15,10 @@
   `FluiView.startDragAndDrop` (API 24) with the whole clip at the start; a drag from another app
   permits a copy; `OnReceiveContentListener` receives only pasted and keyboard text.
 - **Date:** 2026-10-13
+- **Superseded-by:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §5, for decision
+  12's type only: `TransferActions` is the contract's own flag set, not a `bitflags` type,
+  because a Stable signature names no upstream type outside ADR-0089 §2; `COPY`, `MOVE`, `LINK`
+  and the set algebra stay.
 - **Amends:** [ADR-0038](ADR-0038-data-transfer-architecture.md) §2 (several concurrent offers
   and sessions where the platform delivers them), §5 (DnD gains a source side and in-window
   sessions) and §8 (the Web gets an HTML DnD target and source)

@@ -12,6 +12,7 @@ mod table_test;
 mod tasks;
 
 mod android_dex;
+mod api_closure;
 mod bench;
 mod change_scope;
 mod changelog;
@@ -133,6 +134,8 @@ enum Command {
     AndroidDex(android_dex::AndroidDexArgs),
     /// Check (or --write) the floors generated from platform-support.toml (ADR-0244).
     PlatformFloor(platform_floor::PlatformFloorArgs),
+    /// Check what Stable crates' public API names from upstream crates (ADR-0089).
+    ApiClosure(api_closure::ApiClosureArgs),
     /// Validate changelog.d fragments; --write merges them into CHANGELOG.md and deletes them.
     Changelog(changelog::ChangelogArgs),
     /// List missing tools for `ci` / `ci-full`.
@@ -194,6 +197,7 @@ fn main() -> ExitCode {
         Command::RecordingVocabulary(args) => recording_vocabulary::recording_vocabulary(&args),
         Command::AndroidDex(args) => android_dex::android_dex(&args),
         Command::PlatformFloor(args) => platform_floor::platform_floor(&args),
+        Command::ApiClosure(args) => api_closure::api_closure(&args),
         Command::Changelog(args) => changelog::changelog(&args),
         Command::Doctor(args) => doctor::doctor(&args),
         Command::BenchCollect(args) => bench::bench_collect(&args),

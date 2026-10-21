@@ -102,6 +102,7 @@ pub mod data_transfer;
 mod display;
 pub mod drag;
 mod event_time;
+mod flag_set;
 mod haptic_feedback;
 pub mod haptics;
 mod host_notice;

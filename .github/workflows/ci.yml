@@ -581,6 +581,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The contract's semver report builds its baseline from the base commit.
+          fetch-depth: 0
 
       - name: Install pinned Rust
         uses: ./.github/actions/rust-toolchain
@@ -588,6 +590,40 @@ jobs:
 
       - name: cargo doc --no-deps (every `testing` feature on)
         run: cargo xtask doc-strict
+
+      # rustdoc's JSON output is nightly-only. The gate runs it through
+      # `rustup run nightly`, so the committed rust-toolchain.toml pin stays the
+      # toolchain of every other step.
+      - name: Install Rust nightly (rustdoc JSON)
+        uses: dtolnay/rust-toolchain@4fd1da8b0805d2d2e936788875a7d65dbd677dc2 # nightly
+
+      # What a Stable crate's public API names from upstream crates (ADR-0089
+      # §2), then the same rule over planted violations. Nightly adds lints
+      # ahead of stable; lints are the stable jobs' business, so its warnings
+      # do not fail this step.
+      - name: cargo xtask api-closure (+ --self-test)
+        env:
+          CARGO_BUILD_WARNINGS: warn
+        run: |
+          set -euo pipefail
+          cargo xtask api-closure
+          cargo xtask api-closure --self-test
+
+      # The contract rides the release train until cargo-semver-checks shows it
+      # stable for two trains in a row (ADR-0153). A report, not a gate: before
+      # the first publication every change to the contract is a break.
+      - name: Install cargo-semver-checks
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-semver-checks@0.51
+
+      - name: cargo semver-checks flui-platform (report)
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        continue-on-error: true
+        env:
+          BASELINE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: cargo semver-checks check-release -p flui-platform --baseline-rev "$BASELINE"
 
   # ─────────────────────────────────────────────────────────────────────────
   # deps — `cargo xtask deps`: cargo-deny over every workspace member (bans,
