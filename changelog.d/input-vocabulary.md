@@ -18,7 +18,7 @@
   the focal point (`PanZoomEvent::position`), refreshed on every update. A two-finger
   trackpad pan is a phased `Scroll` on every backend, winit's `PanGesture` included
   (ADR-0217 §4).
-- `TransferActions` is a `bitflags` set; its `NONE` constant is `empty()`.
+- `TransferActions`' `NONE` constant is `empty()`.
 - Input admitted before a window's input callback is installed is held and delivered
   after the capability snapshot instead of being dropped.
 

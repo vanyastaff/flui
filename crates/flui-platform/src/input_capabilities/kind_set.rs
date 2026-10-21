@@ -1,8 +1,9 @@
 //! A set of pointer kinds.
 
+use crate::flag_set::flag_set;
 use crate::pointer::PointerKind;
 
-bitflags::bitflags! {
+flag_set! {
     /// A set of [`PointerKind`]s, by kind and not by the pen's tool: the devices attached to a
     /// session ([`InputCapabilities::present`](crate::input_capabilities::InputCapabilities::present)), or the
     /// kinds a recognizer admits.
@@ -21,7 +22,6 @@ bitflags::bitflags! {
     /// assert!(!present.contains_kind(PointerKind::Touch));
     /// assert_eq!(PointerKindSet::of(PointerKind::Unknown), PointerKindSet::empty());
     /// ```
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct PointerKindSet: u8 {
         /// [`PointerKind::Mouse`].
         const MOUSE = 1;

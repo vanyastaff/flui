@@ -6,6 +6,9 @@ mod composition_ledger;
 #[path = "drag_plan.rs"]
 mod drag_plan;
 
+#[path = "flag_sets.rs"]
+mod flag_sets;
+
 #[path = "haptics.rs"]
 mod haptics;
 

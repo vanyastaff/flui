@@ -1,0 +1,667 @@
+//! `cargo xtask api-closure`: what a crate's public API may name from crates
+//! outside the workspace (ADR-0089).
+//!
+//! A package is checked when its manifest says so:
+//!
+//! - `[package.metadata.flui] tier-kind = "stable"`: the public API names, from
+//!   outside the workspace and the standard library, only what ADR-0089 §2
+//!   allows: `raw-window-handle`'s `HasWindowHandle`, `HasDisplayHandle`,
+//!   `WindowHandle`, `DisplayHandle` and `HandleError`; `cursor-icon`'s
+//!   `CursorIcon`; `serde` and `schemars` inside an implementation of one of
+//!   their own traits (a derive). Every other upstream item is a finding.
+//! - `[package.metadata.flui.api-closure] deny = ["windows", …]`: the public API
+//!   names none of the listed crates (the core host's OS bindings, ADR-0151 §8),
+//!   whatever else it names.
+//!
+//! `[package.metadata.flui.api-closure] exceptions = [{ crate = "…", exit =
+//! "ADR-NNNN" }]` lets a Stable package name one more upstream crate until the
+//! change in the ADR `exit` names removes it; an exception the scan no longer
+//! needs is a finding, so the list only shrinks.
+//!
+//! What counts: every item of the package that rustdoc's JSON output lists
+//! (public items, hidden ones included, and their implementations), and every
+//! item it refers to: a type in a signature, a bound, a trait an implementation
+//! implements or a public re-export. A blanket implementation and a synthetic
+//! one (an auto trait) belong to the crate that wrote them and are skipped. The
+//! JSON is read through its `index`, `paths` and `external_crates` tables and
+//! every `"id"` an item holds, not through a typed model of one format version,
+//! so a rustdoc format change that keeps those tables keeps the gate working.
+//!
+//! Limit: an item of another workspace crate that a signature names is not
+//! followed; that crate's own rule covers it.
+//!
+//! Why a scan (ADR-0078 §4, condition 1): no type or lint says which crates a
+//! signature may name. It reads rustdoc's JSON, `--self-test` plants
+//! violations into the real output of a checked package, and its exceptions
+//! are manifest data that name an ADR and only shrink.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitCode};
+
+use anyhow::{Context, bail};
+use serde_json::{Value as Json, json};
+
+use crate::util;
+
+/// Arguments for `cargo xtask api-closure`.
+#[derive(Debug, clap::Args)]
+pub(crate) struct ApiClosureArgs {
+    /// Check only this package (repeatable). Default: every package whose
+    /// manifest opts in.
+    #[arg(short = 'p', long = "package", conflicts_with = "self_test")]
+    packages: Vec<String>,
+    /// The toolchain that writes rustdoc's JSON output (`rustup run <toolchain>`).
+    #[arg(long, default_value = "nightly")]
+    toolchain: String,
+    /// Plant violations into the output of a checked package instead of
+    /// checking the workspace; exit 1 unless the rule reports exactly those.
+    #[arg(long)]
+    self_test: bool,
+}
+
+/// The standard library's crates.
+const STD: &[&str] = &["core", "alloc", "std", "proc_macro"];
+
+/// The package `--self-test` plants violations into.
+const SELF_TEST_PACKAGE: &str = "flui-platform";
+
+/// The target kinds that build a library other crates link.
+const LIBRARY_KINDS: &[&str] = &["lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"];
+
+fn is_library(target: &cargo_metadata::Target) -> bool {
+    target
+        .kind
+        .iter()
+        .any(|kind| LIBRARY_KINDS.contains(&kind.to_string().as_str()))
+}
+
+/// What ADR-0089 §2 lets a Stable signature name from an upstream crate.
+enum Allowed {
+    /// These items only, by their last path segment.
+    Items(&'static [&'static str]),
+    /// Anything, inside an implementation of one of the crate's own traits.
+    DeriveOnly,
+}
+
+const ALLOWED: &[(&str, Allowed)] = &[
+    (
+        "raw_window_handle",
+        Allowed::Items(&[
+            "HasWindowHandle",
+            "HasDisplayHandle",
+            "WindowHandle",
+            "DisplayHandle",
+            "HandleError",
+        ]),
+    ),
+    ("cursor_icon", Allowed::Items(&["CursorIcon"])),
+    ("serde", Allowed::DeriveOnly),
+    ("schemars", Allowed::DeriveOnly),
+];
+
+/// What a checked package's public API may name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Mode {
+    /// ADR-0089 §2, plus the package's exceptions.
+    Stable,
+    /// Anything but these crates.
+    Deny(BTreeSet<String>),
+}
+
+/// One upstream crate a Stable package may still name, until the ADR in `exit`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Exception {
+    krate: String,
+    exit: String,
+}
+
+/// A checked package and its rule.
+#[derive(Debug, Clone)]
+struct Rule {
+    package: String,
+    /// The library target's crate name.
+    lib: String,
+    mode: Mode,
+    exceptions: Vec<Exception>,
+}
+
+/// One violation.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Finding {
+    /// `item`, written at `location`, names `named`.
+    Names {
+        package: String,
+        location: String,
+        item: String,
+        named: String,
+    },
+    /// An exception nothing needs any more.
+    UnusedException {
+        package: String,
+        krate: String,
+        exit: String,
+    },
+}
+
+impl fmt::Display for Finding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Names {
+                package,
+                location,
+                item,
+                named,
+            } => write!(f, "{location}: {package}: `{item}` names `{named}`"),
+            Self::UnusedException {
+                package,
+                krate,
+                exit,
+            } => write!(
+                f,
+                "{package}: the exception for `{krate}` ({exit}) is no longer needed; remove it"
+            ),
+        }
+    }
+}
+
+/// `cargo xtask api-closure`. Exit code 1 lists every finding.
+pub(crate) fn api_closure(args: &ApiClosureArgs) -> anyhow::Result<ExitCode> {
+    let root = util::repo_root();
+    let metadata = util::metadata(&root)?;
+    let workspace = workspace_crates(&metadata);
+    let mut rules = rules(&root, &metadata)?;
+    if args.self_test {
+        // The contract is the Stable package with the most upstream items to
+        // tell apart (raw-window-handle, cursor-icon, blanket impls).
+        let stable = rules
+            .iter()
+            .find(|rule| rule.package == SELF_TEST_PACKAGE)
+            .cloned()
+            .with_context(|| format!("`{SELF_TEST_PACKAGE}` is not a checked Stable package"))?;
+        let doc = rustdoc_json(&root, &args.toolchain, &stable)?;
+        return Ok(self_test(&doc, &stable, &workspace));
+    }
+    if !args.packages.is_empty() {
+        for name in &args.packages {
+            if !rules.iter().any(|rule| &rule.package == name) {
+                bail!(
+                    "api-closure: `{name}` is not a checked package (tier-kind stable or an api-closure table)"
+                );
+            }
+        }
+        rules.retain(|rule| args.packages.contains(&rule.package));
+    }
+    let mut all = Vec::new();
+    for rule in &rules {
+        let doc = rustdoc_json(&root, &args.toolchain, rule)?;
+        all.extend(check(&doc, rule, &workspace, &root)?);
+    }
+    all.sort();
+    for finding in &all {
+        println!("{finding}");
+    }
+    if all.is_empty() {
+        let names: Vec<&str> = rules.iter().map(|rule| rule.package.as_str()).collect();
+        println!(
+            "api-closure: {} package(s) clean: {}",
+            rules.len(),
+            names.join(", ")
+        );
+        Ok(ExitCode::SUCCESS)
+    } else {
+        println!("api-closure: {} finding(s)", all.len());
+        Ok(ExitCode::FAILURE)
+    }
+}
+
+/// The library crate names of every workspace package (`flui_platform`, …).
+fn workspace_crates(metadata: &cargo_metadata::Metadata) -> BTreeSet<String> {
+    metadata
+        .workspace_packages()
+        .into_iter()
+        .flat_map(|package| {
+            package
+                .targets
+                .iter()
+                .filter(|target| is_library(target))
+                .map(|target| target.name.replace('-', "_"))
+        })
+        .collect()
+}
+
+/// The checked packages, from their manifests.
+fn rules(root: &Path, metadata: &cargo_metadata::Metadata) -> anyhow::Result<Vec<Rule>> {
+    let adrs = util::adr_files(root);
+    let mut rules = Vec::new();
+    for package in metadata.workspace_packages() {
+        let flui = &package.metadata["flui"];
+        let table = &flui["api-closure"];
+        let stable = flui["tier-kind"].as_str() == Some("stable");
+        let deny: BTreeSet<String> = table["deny"]
+            .as_array()
+            .map(|list| {
+                list.iter()
+                    .filter_map(Json::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mode = match (stable, deny.is_empty()) {
+            (true, true) => Mode::Stable,
+            (false, false) => Mode::Deny(deny),
+            (false, true) => continue,
+            (true, false) => bail!(
+                "{}: a Stable package takes ADR-0089 §2's allowlist, not a `deny` list",
+                package.name
+            ),
+        };
+        let mut exceptions = Vec::new();
+        for entry in table["exceptions"].as_array().into_iter().flatten() {
+            let krate = entry["crate"].as_str().with_context(|| {
+                format!("{}: an api-closure exception needs a `crate`", package.name)
+            })?;
+            let exit = entry["exit"].as_str().unwrap_or_default();
+            if !util::is_adr_number(exit) || !util::adr_exists(&adrs, exit) {
+                bail!(
+                    "{}: the exception for `{krate}` names `{exit}`, which is no ADR in docs/adr",
+                    package.name
+                );
+            }
+            if mode != Mode::Stable {
+                bail!(
+                    "{}: exceptions belong to a Stable package's allowlist",
+                    package.name
+                );
+            }
+            exceptions.push(Exception {
+                krate: krate.to_owned(),
+                exit: exit.to_owned(),
+            });
+        }
+        let lib = package
+            .targets
+            .iter()
+            .find(|target| is_library(target))
+            .with_context(|| format!("{}: a checked package needs a library target", package.name))?
+            .name
+            .replace('-', "_");
+        rules.push(Rule {
+            package: package.name.to_string(),
+            lib,
+            mode,
+            exceptions,
+        });
+    }
+    rules.sort_by(|a, b| a.package.cmp(&b.package));
+    Ok(rules)
+}
+
+/// Runs rustdoc's JSON output for the package's library and reads it.
+fn rustdoc_json(root: &Path, toolchain: &str, rule: &Rule) -> anyhow::Result<Json> {
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| root.join("target"), PathBuf::from)
+        .join("api-closure");
+    println!(
+        "$ rustup run {toolchain} cargo rustdoc -p {} (JSON)",
+        rule.package
+    );
+    let status = Command::new("rustup")
+        .current_dir(root)
+        .args([
+            "run",
+            toolchain,
+            "cargo",
+            "rustdoc",
+            "-p",
+            &rule.package,
+            "--lib",
+            "--locked",
+        ])
+        .arg("--target-dir")
+        .arg(&target_dir)
+        .args([
+            "--",
+            "-Z",
+            "unstable-options",
+            "--output-format",
+            "json",
+            "--document-hidden-items",
+        ])
+        .status()
+        .with_context(|| format!("spawning `rustup run {toolchain} cargo rustdoc`"))?;
+    if !status.success() {
+        bail!(
+            "rustdoc failed for {} (is the `{toolchain}` toolchain installed?)",
+            rule.package
+        );
+    }
+    let path = target_dir.join("doc").join(format!("{}.json", rule.lib));
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+}
+
+/// The findings of `rule` on `doc`, a package's rustdoc JSON.
+fn check(
+    doc: &Json,
+    rule: &Rule,
+    workspace: &BTreeSet<String>,
+    root: &Path,
+) -> anyhow::Result<Vec<Finding>> {
+    let index = doc["index"]
+        .as_object()
+        .context("rustdoc JSON without an `index` table: the format changed")?;
+    let paths = doc["paths"]
+        .as_object()
+        .context("rustdoc JSON without a `paths` table: the format changed")?;
+    let external = doc["external_crates"]
+        .as_object()
+        .context("rustdoc JSON without an `external_crates` table: the format changed")?;
+    let crate_of = |id: &str| -> Option<(String, String)> {
+        let path = paths.get(id)?;
+        let crate_id = path["crate_id"].as_u64()?;
+        if crate_id == 0 {
+            return None;
+        }
+        let name = external.get(&crate_id.to_string())?["name"]
+            .as_str()?
+            .to_owned();
+        let segments: Vec<&str> = path["path"]
+            .as_array()?
+            .iter()
+            .filter_map(Json::as_str)
+            .collect();
+        Some((name, segments.join("::")))
+    };
+
+    // The trait crate of each implementation, for its own items too.
+    let mut impl_trait: BTreeMap<String, String> = BTreeMap::new();
+    for (id, item) in index {
+        let Some(implementation) = item["inner"].get("impl") else {
+            continue;
+        };
+        let Some(trait_id) = implementation["trait"].get("id").map(id_text) else {
+            continue;
+        };
+        if let Some((krate, _)) = crate_of(&trait_id) {
+            impl_trait.insert(id.clone(), krate.clone());
+            for child in implementation["items"].as_array().into_iter().flatten() {
+                impl_trait.insert(id_text(child), krate.clone());
+            }
+        }
+    }
+
+    let mut findings = BTreeSet::new();
+    let mut used_exceptions = BTreeSet::new();
+    for (id, item) in index {
+        if item["crate_id"].as_u64() != Some(0) || skipped(item) {
+            continue;
+        }
+        let mut ids = Vec::new();
+        referenced(&item["inner"], &mut ids);
+        for target in ids {
+            let Some((krate, path)) = crate_of(&target) else {
+                continue;
+            };
+            if STD.contains(&krate.as_str()) || workspace.contains(&krate) {
+                continue;
+            }
+            let allowed = match &rule.mode {
+                Mode::Deny(denied) => !denied.contains(&krate),
+                Mode::Stable => {
+                    let by_adr = ALLOWED.iter().any(|(name, allowed)| {
+                        *name == krate
+                            && match allowed {
+                                Allowed::Items(items) => items
+                                    .iter()
+                                    .any(|item| path.rsplit("::").next() == Some(item)),
+                                Allowed::DeriveOnly => impl_trait.get(id) == Some(&krate),
+                            }
+                    });
+                    let by_exception = !by_adr
+                        && rule
+                            .exceptions
+                            .iter()
+                            .any(|exception| exception.krate == krate);
+                    if by_exception {
+                        used_exceptions.insert(krate.clone());
+                    }
+                    by_adr || by_exception
+                }
+            };
+            if !allowed {
+                findings.insert(Finding::Names {
+                    package: rule.package.clone(),
+                    location: location(item, root),
+                    item: label(id, item, paths),
+                    named: path,
+                });
+            }
+        }
+    }
+    for exception in &rule.exceptions {
+        if !used_exceptions.contains(&exception.krate) {
+            findings.insert(Finding::UnusedException {
+                package: rule.package.clone(),
+                krate: exception.krate.clone(),
+                exit: exception.exit.clone(),
+            });
+        }
+    }
+    Ok(findings.into_iter().collect())
+}
+
+/// A blanket implementation and a synthetic one belong to whoever wrote them.
+fn skipped(item: &Json) -> bool {
+    item["inner"].get("impl").is_some_and(|implementation| {
+        !implementation["blanket_impl"].is_null()
+            || implementation["is_synthetic"].as_bool() == Some(true)
+    })
+}
+
+/// An `"id"` as the key `paths` and `index` use.
+fn id_text(id: &Json) -> String {
+    match id {
+        Json::String(text) => text.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Every `"id"` held by an object inside `value`: the items it refers to.
+/// A bare list of ids (a module's children, an implementation's items) names
+/// items that are checked on their own, so only ids inside objects count.
+fn referenced(value: &Json, out: &mut Vec<String>) {
+    match value {
+        Json::Object(map) => {
+            if let Some(id) = map.get("id").filter(|id| id.is_u64() || id.is_string()) {
+                out.push(id_text(id));
+            }
+            for child in map.values() {
+                referenced(child, out);
+            }
+        }
+        Json::Array(list) => {
+            for child in list {
+                referenced(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Where an item is written, as `path:line` from the repository root.
+fn location(item: &Json, root: &Path) -> String {
+    let span = &item["span"];
+    let file = span["filename"]
+        .as_str()
+        .unwrap_or("<unknown>")
+        .replace('\\', "/");
+    let root = root.to_string_lossy().replace('\\', "/");
+    let file = file
+        .strip_prefix(&root)
+        .map_or(file.as_str(), |rest| rest.trim_start_matches('/'))
+        .to_owned();
+    let line = match &span["begin"] {
+        Json::Array(begin) => begin.first().and_then(Json::as_u64),
+        begin => begin["line"].as_u64(),
+    };
+    line.map_or(file.clone(), |line| format!("{file}:{line}"))
+}
+
+/// An item's path, `use <source>` for a re-export, its name, or `impl` for an
+/// implementation.
+fn label(id: &str, item: &Json, paths: &serde_json::Map<String, Json>) -> String {
+    if let Some(source) = item["inner"]["use"]["source"].as_str() {
+        return format!("use {source}");
+    }
+    if let Some(path) = paths.get(id).and_then(|path| path["path"].as_array()) {
+        return path
+            .iter()
+            .filter_map(Json::as_str)
+            .collect::<Vec<_>>()
+            .join("::");
+    }
+    item["name"]
+        .as_str()
+        .map_or_else(|| "impl".to_owned(), str::to_owned)
+}
+
+/// Plants an upstream crate's item into `doc`: a public function of the
+/// package whose return type names `path` (`crate::…::Item`).
+fn plant(doc: &mut Json, name: &str, path: &[&str]) {
+    let next = |table: &Json| {
+        table.as_object().map_or(0, |map| {
+            map.keys()
+                .filter_map(|key| key.parse::<u64>().ok())
+                .max()
+                .unwrap_or(0)
+        }) + 1
+    };
+    let crate_id = next(&doc["external_crates"]);
+    let path_id = next(&doc["paths"]).max(next(&doc["index"]));
+    let item_id = path_id + 1;
+    doc["external_crates"][crate_id.to_string()] = json!({ "name": path[0] });
+    doc["paths"][path_id.to_string()] =
+        json!({ "crate_id": crate_id, "path": path, "kind": "struct" });
+    doc["index"][item_id.to_string()] = json!({
+        "id": item_id,
+        "crate_id": 0,
+        "name": name,
+        "visibility": "public",
+        "span": { "filename": "planted.rs", "begin": [1, 0], "end": [1, 0] },
+        "inner": { "function": { "sig": { "inputs": [], "output": {
+            "resolved_path": { "path": path[path.len() - 1], "id": path_id, "args": null }
+        } } } }
+    });
+}
+
+/// Runs the rule over the real output of `stable` with planted violations.
+fn self_test(doc: &Json, stable: &Rule, workspace: &BTreeSet<String>) -> ExitCode {
+    let root = Path::new("");
+    let names = |findings: &[Finding]| -> BTreeSet<String> {
+        findings
+            .iter()
+            .map(|finding| match finding {
+                Finding::Names { item, named, .. } => format!("{item} -> {named}"),
+                Finding::UnusedException { krate, .. } => format!("unused exception {krate}"),
+            })
+            .collect()
+    };
+    let case = |label: &str, rule: &Rule, plants: &[(&str, &[&str])], expected: &[&str]| {
+        let mut planted = doc.clone();
+        for (name, path) in plants {
+            plant(&mut planted, name, path);
+        }
+        let found = check(&planted, rule, workspace, root).map(|f| names(&f));
+        let expected: BTreeSet<String> = expected.iter().map(|text| (*text).to_owned()).collect();
+        match found {
+            Ok(found) if found == expected => {
+                println!(
+                    "api-closure self-test: {label}: ok ({} finding(s))",
+                    expected.len()
+                );
+                true
+            }
+            Ok(found) => {
+                println!("api-closure self-test: {label}: expected {expected:?}, found {found:?}");
+                false
+            }
+            Err(error) => {
+                println!("api-closure self-test: {label}: {error:#}");
+                false
+            }
+        }
+    };
+    let with_exceptions = Rule {
+        exceptions: vec![
+            Exception {
+                krate: "ui_events".into(),
+                exit: "ADR-0143".into(),
+            },
+            Exception {
+                krate: "keyboard_types".into(),
+                exit: "ADR-0143".into(),
+            },
+        ],
+        ..stable.clone()
+    };
+    let core = Rule {
+        package: "core-host".into(),
+        mode: Mode::Deny(["windows".to_owned()].into()),
+        exceptions: Vec::new(),
+        ..stable.clone()
+    };
+    let ui_event = (
+        "planted_ui_event",
+        &["ui_events", "pointer", "PointerEvent"][..],
+    );
+    let results = [
+        case(&format!("{} as written", stable.package), stable, &[], &[]),
+        case(
+            "upstream types in a Stable signature",
+            stable,
+            &[
+                ui_event,
+                (
+                    "planted_raw_handle",
+                    &["raw_window_handle", "RawWindowHandle"],
+                ),
+                ("planted_cursor", &["cursor_icon", "CursorIcon"]),
+                (
+                    "planted_handle_error",
+                    &["raw_window_handle", "HandleError"],
+                ),
+            ],
+            &[
+                "planted_ui_event -> ui_events::pointer::PointerEvent",
+                "planted_raw_handle -> raw_window_handle::RawWindowHandle",
+            ],
+        ),
+        case(
+            "an exception in use and one no longer needed",
+            &with_exceptions,
+            &[ui_event],
+            &["unused exception keyboard_types"],
+        ),
+        case(
+            "an OS type in the core host",
+            &core,
+            &[
+                ("planted_hwnd", &["windows", "Win32", "Foundation", "HWND"]),
+                ("planted_span", &["tracing", "Span"]),
+            ],
+            &["planted_hwnd -> windows::Win32::Foundation::HWND"],
+        ),
+    ];
+    if results.iter().all(|ok| *ok) {
+        println!("api-closure: self-test ok ({} cases)", results.len());
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+#[cfg(test)]
+mod tests;

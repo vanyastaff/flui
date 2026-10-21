@@ -9,7 +9,8 @@
   Linux host; section 11 here); and the placement of
   `LockArbiter`, `CompositionLedger` and `EditGeneration` in the contract crate by
   [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md) (its other decisions
-  stand). The boundary ADR-0082 drew between a contract crate and a host crate stands.
+  stand). The boundary ADR-0082 drew between a contract crate and a host crate stands. Also
+  [ADR-0211](ADR-0211-unified-drag-and-drop.md) decision 12's `bitflags` type (section 5).
 - **Related:** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md) (section 13:
   `AppLifecycleState` stays where it is),
   [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) (upstream types in Stable
@@ -353,7 +354,9 @@ that class named once.
   `#[allow]` with the reason its variants can never grow; every other public enum is
   `#[non_exhaustive]`. 26 of 82 are closed today with no such reason.
 - **The API-closure gate** of ADR-0089 §6 is built before the contract's first publication. The
-  size of the promise is the size of the closure; it is not built today.
+  size of the promise is the size of the closure. For the same reason the contract's flag sets
+  (`TransferActions`, `PointerKindSet`) are its own types: the `bitflags` macro puts its `Flags`
+  trait and its iterator types into every set's public API.
 - **Sealing.** `Platform` and `HostWindow` are sealed explicitly, by a private supertrait. They
   are already unimplementable outside the crate (`OwnerPlatform::new` is `pub(crate)`) and only
   host modules implement them, so the seal costs nothing and makes the compile error say what
