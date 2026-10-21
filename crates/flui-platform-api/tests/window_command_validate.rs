@@ -27,6 +27,20 @@ fn valid(command: &WindowCommand) {
     assert_eq!(command.validate(), Ok(()), "{command:?} describes a window");
 }
 
+fn a_window_opens_with_balanced_input_unless_it_asks_for_low_latency() {
+    use flui_platform_api::{InputLatency, WindowOptions};
+    assert_eq!(
+        WindowOptions::default().input_latency,
+        InputLatency::Balanced
+    );
+    assert_eq!(
+        WindowOptions::default()
+            .with_input_latency(InputLatency::Low)
+            .input_latency,
+        InputLatency::Low
+    );
+}
+
 fn position_must_be_finite() {
     invalid(&WindowCommand::SetPosition(Point::new(f64::NAN, 0.0)));
     invalid(&WindowCommand::SetPosition(Point::new(0.0, f64::INFINITY)));
@@ -212,6 +226,10 @@ fn window_command_validate() {
     crate::run_table(
         "window_command_validate",
         &[
+            (
+                "a_window_opens_with_balanced_input_unless_it_asks_for_low_latency",
+                a_window_opens_with_balanced_input_unless_it_asks_for_low_latency,
+            ),
             ("position_must_be_finite", position_must_be_finite),
             (
                 "size_must_be_finite_and_positive",
