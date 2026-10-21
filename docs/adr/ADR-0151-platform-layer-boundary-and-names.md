@@ -697,7 +697,7 @@ turn ✅ while one of them fails on it.
   without linking the core host.
 - **One way to drive an app.** A host's conformance rows that need the OS are `flui-driver`
   scenarios (ADR-0238): the same scenario runs on the headless host in CI, in process, and
-  through the driver's `os` lane on a device (`cargo xtask device <check>` is a scenario on the
+  through the driver's `os` lane on a device (each device check is a scenario on the
   driver). An executed run, the one thing that turns a parity cell ✅, is an `os`-lane scenario on
   that OS or a human run; the headless lane proves the framework's path, not the host. The
   driver's synthetic input enters the host input path in `flui-runtime` (ADR-0239), which is the

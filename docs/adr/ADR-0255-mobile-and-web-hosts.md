@@ -441,13 +441,13 @@ text-input paths its platform requires.
 ### Confirmation
 
 Nothing in this ADR has run. The repository's evidence for it is the Android device run of
-ADR-0247 (a Galaxy S21, Android 15, through `cargo xtask device android-input`), which covered the
+ADR-0247 (a Galaxy S21, Android 15, a manual run), which covered the
 in-memory loader this ADR retires, so the same run repeats with the dex in the APK. The claims below
 are open, with the run that settles each:
 
 | Claim | Run |
 |---|---|
-| The view installs and the S21 input run passes with the dex delivered by the APK | `cargo xtask device android-input` on the S21, and on an API 23 to 25 image, which ADR-0247 never ran |
+| The view installs and the S21 input run passes with the dex delivered by the APK | a manual input run on the S21, and on an API 23 to 25 image, which ADR-0247 never ran |
 | A system dark-mode, font-scale or locale change reaches `ConfigChanged` and no longer replaces the runtime | A device: `adb shell cmd uimode night yes`, `settings put system font_scale 1.3`; watch for a second `android_main` |
 | A warm deep link, an activity result and a permission result reach the owner, including one that arrives before `android_main` | A device, with the location pilot as the first consumer |
 | TalkBack's hover events reach the native queue and are consumed through `Adapter::on_hover_event`; `accesskit_android`'s minimum API; the `viewIdResourceName` mapping for ADR-0240 identifiers | A device with TalkBack, on Android 6 and 15 |
