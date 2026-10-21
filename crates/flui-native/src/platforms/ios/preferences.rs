@@ -1,4 +1,8 @@
 //! Host-owned UIKit observations; notifications only wake the existing owner.
+//!
+//! Text size reaches text as exact `UIFontMetrics` answers per growth profile
+//! (ADR-0183), so the snapshot carries no scalar text scale; the content-size
+//! notification still wakes the owner, whose sizing capture asks again.
 
 use std::cell::RefCell;
 use std::ptr::NonNull;
@@ -10,14 +14,21 @@ use std::sync::{
 use block2::RcBlock;
 use flui_platform::{MotionPreference, SystemPreferences, TextWeightPreference};
 use objc2::{MainThreadMarker, rc::Retained, runtime::ProtocolObject};
-use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol};
+use objc2_foundation::{
+    NSCurrentLocaleDidChangeNotification, NSLocale, NSNotification, NSNotificationCenter,
+    NSObjectProtocol,
+};
 use objc2_ui_kit::{
-    UIAccessibilityBoldTextStatusDidChangeNotification, UIAccessibilityIsBoldTextEnabled,
+    UIAccessibilityBoldTextStatusDidChangeNotification, UIAccessibilityDarkerSystemColorsEnabled,
+    UIAccessibilityDarkerSystemColorsStatusDidChangeNotification, UIAccessibilityIsBoldTextEnabled,
     UIAccessibilityIsReduceMotionEnabled, UIAccessibilityReduceMotionStatusDidChangeNotification,
     UIContentSizeCategoryDidChangeNotification,
 };
 
-use crate::{PlatformError, shared::owner_signal::OwnerSignal};
+use crate::{
+    PlatformError,
+    shared::{owner_signal::OwnerSignal, preferred_locales},
+};
 
 type ObserverToken = Retained<ProtocolObject<dyn NSObjectProtocol>>;
 
@@ -51,15 +62,18 @@ impl Preferences {
         // token instead of leaving a partially installed observation set.
         let preferences = Self {
             center,
-            observers: RefCell::new(Vec::with_capacity(3)),
+            observers: RefCell::new(Vec::with_capacity(5)),
             active,
         };
-        // SAFETY: UIKit owns these immutable notification-name constants.
+        // SAFETY: UIKit and Foundation own these immutable notification-name
+        // constants.
         let names = unsafe {
             [
                 UIAccessibilityBoldTextStatusDidChangeNotification,
                 UIAccessibilityReduceMotionStatusDidChangeNotification,
+                UIAccessibilityDarkerSystemColorsStatusDidChangeNotification,
                 UIContentSizeCategoryDidChangeNotification,
+                NSCurrentLocaleDidChangeNotification,
             ]
         };
         for name in names {
@@ -92,18 +106,29 @@ impl Preferences {
         } else {
             MotionPreference::NoPreference
         };
+        let high_contrast = UIAccessibilityDarkerSystemColorsEnabled();
+        let locales = preferred_locales::from_language_tags(
+            NSLocale::preferredLanguages()
+                .iter()
+                .map(|language| language.to_string()),
+        );
         if !self.active.load(Ordering::Acquire) {
             return Err(PlatformError::Preferences {
                 message: "UIKit preference source closed during sampling".into(),
             });
         }
-        Ok(SystemPreferences::default()
+        let preferences = SystemPreferences::default()
             .with_text_weight(if enabled {
                 TextWeightPreference::Bold
             } else {
                 TextWeightPreference::NoPreference
             })
-            .with_motion(motion))
+            .with_motion(motion)
+            .with_high_contrast(high_contrast);
+        Ok(match locales {
+            Some(locales) => preferences.with_locales(locales),
+            None => preferences,
+        })
     }
 
     pub(super) fn close(&self) {

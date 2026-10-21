@@ -541,6 +541,12 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   Обёртка уведомления вынесена из `system_notices` в `observation`; её `new` безопасна, обработчик
   обязан быть `Send + Sync`. Только проверка типов (`aarch64-apple-darwin`, с хостом winit и без,
   `--all-targets`); запуск на Mac — vanyastaff/flui#1840.
+- [x] **PR 7** — ветка `platform/preferences-ios`. Источник UIKit наблюдает ещё
+  `UIAccessibilityDarkerSystemColorsStatusDidChangeNotification` и
+  `NSCurrentLocaleDidChangeNotification` и читает `UIAccessibilityDarkerSystemColorsEnabled` и
+  `NSLocale.preferredLanguages`. Масштаб текста на iOS — точные ответы `UIFontMetrics` по профилю
+  (ADR-0183), скаляра в снимке нет; уведомление о размере контента по-прежнему будит владельца.
+  Проверка типов — в CI (`cross-typecheck`, `aarch64-apple-ios`, нужен Apple SDK); не запускалось.
 
 ## Чего нет в этой серии
 
