@@ -418,7 +418,8 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `the_platform_preference_source_reaches_installed_consumers`,
   `deferred_native_reads_preserve_accepted_preferences`, `bounded_native_read_admission`;
   диапазоны: `invalid_text_observations_cannot_enter_a_snapshot` и случай
-  `text-scale-out-of-range` (портал сообщает 100 и −1 — ни одно не публикуется); арифметика:
+  `text-scale-out-of-range` (портал сообщает 100 и −1 — ни одно не публикуется, и ход владельца
+  между отказом и следующим значением видит «нет наблюдения»); арифметика:
   `an_exhausted_revision_refuses_without_changing_or_queueing`,
   `native_touch_geometry_projects_each_context_and_refuses_overflow`, строка `drag_metric_is_a_half_extent_of_the_same_magnitude`
   (`i32::MIN` отклоняется); масштаб длительности против скорости:
@@ -431,25 +432,34 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
 - [x] Источник без пользовательского окна: регистрация до sample, invalidation
   во время sample, commit до wake, повтор/замена/отсутствие/panic callback,
   поздний callback после shutdown и новая инкарнация host.
-  Регистрация до первого чтения: `a_change_before_the_first_owner_turn_reaches_consumers_once`
-  и отчёт `FluiView` после регистрации; invalidation во время чтения:
-  `invalidation_during_read_requires_another_observation` (Windows) — у macOS и Android чтение и
-  уведомление идут на одном потоке владельца, уведомление во время чтения встаёт в очередь и
-  читается следующим; commit до wake: `the_platform_preference_source_reaches_installed_consumers`;
-  повтор: `preference_failure_retries_without_a_user_window`, случай `recovery`; замена:
-  `a_replaced_wake_hook_is_the_only_one_later_changes_reach`; отсутствие:
-  `a_change_before_the_wake_hook_exists_reaches_consumers_once`; panic:
-  `a_panicking_preference_delivery_does_not_stop_later_changes`,
-  `panic_preserves_refresh_and_releases_the_reader`; поздний callback:
+  Регистрация до первого чтения: изменение, принятое до первого хода, доходит —
+  `a_change_before_the_first_owner_turn_reaches_consumers_once`; на Android `FluiView`
+  регистрирует наблюдателей до отчёта (`onAttachedToWindow`). Invalidation во время чтения:
+  `invalidation_during_read_requires_another_observation` (Windows); у macOS и Android чтение и
+  уведомление идут на одном потоке владельца, поэтому уведомление не может прийти во время
+  чтения — ОС ставит его в очередь цикла, и отдельной строки нет. Commit до доставки:
+  `a_revision_is_accepted_before_the_turn_that_delivers_it` (ход, доставляющий ревизию, уже
+  видит её принятой; валится, если принять после доставки). Повтор:
+  `preference_failure_retries_without_a_user_window`, случай `recovery`. Замена:
+  `a_replaced_wake_hook_is_the_only_one_later_changes_reach` (и захваты заменённого хука
+  освобождаются там, где могут снова войти в сигнал владельца). Отсутствие: до `start` —
+  `a_change_before_the_wake_hook_exists_reaches_consumers_once`; после `start` —
+  `a_change_with_no_turn_callback_reaches_the_next_one_registered` (`OwnerSignal::drive_in`
+  оставляет долг, пока callback нет, и регистрация планирует ход). Panic:
+  `a_panicking_preference_delivery_does_not_stop_later_changes` (паника потребителя не гасит wake
+  presentation; ход, чей хук запаниковал, не повторяется — иначе вечно паникующий хук зациклил
+  бы владельца, — и принятое значение доставляет следующий ход владельца без нового изменения),
+  `panic_preserves_refresh_and_releases_the_reader`. Поздний callback:
   `browser_motion_observations_wake_replace_and_retire_their_owner`,
   `a_delegate_that_outlives_its_source_is_inert`, `a_receiver_the_os_keeps_stays_registered_and_inert`,
   случай `late-proxy`, `obsolete_native_observation_cannot_update_a_replacement_host`; новая
-  инкарнация: `a_replacement_platform_starts_a_new_preference_owner`. Известное ограничение:
-  `OwnerSignal::drive_in` снимает долг до взятия хука, так что ход с пустым слотом после `start`
-  потерял бы пробуждение; хосты ставят хук до `start`, и строка «отсутствия» закрепляет этот путь.
+  инкарнация: `a_replacement_platform_starts_a_new_preference_owner`. «Один раз» в именах строк
+  app — одна пересборка потребителя; повторную доставку той же ревизии отклоняет
+  `an_older_or_repeated_preference_revision_is_ignored`.
 - [x] Один и два runtime, поздний runtime, поздний presentation, закрытый sibling,
   отказ первого получателя и доставка остальным; старый queued revision не
-  переписывает новый seed. Соседние обновления coalesce только до input/frame barrier.
+  переписывает новый seed. Соседние обновления не склеиваются (ADR-0172 п. 3 это разрешает, но не
+  требует): каждая принятая ревизия — отдельная работа в очереди владельца.
   `preference_fanout_survives_a_failing_runtime`, `preferences_wake_each_isolated_window`,
   `text_scale_reaches_a_late_runtime_and_its_later_presentation`,
   `preference_fanout_passes_a_closed_sibling`, `an_older_preference_revision_cannot_replace_a_newer_seed`,
@@ -654,8 +664,12 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   | Headless | — | CI Linux |
 - [x] **PR 10** — ветка `platform/preferences-acceptance`: строки, которых не хватало приёмке по
   сверке её пунктов с тестами. Linux: случай `text-scale-out-of-range` (портал сообщает 100 до окна
-  и −1 вживую — владелец видит «нет наблюдения», затем 1,5; источник, который зажимает значение
-  вместо отказа, падает на первом засеве). Единицы: строки `normal_and_preserve_use_distinct_duration_timelines`
+  и −1 вживую — владелец видит «нет наблюдения», затем 1,5; ход владельца запускается после того,
+  как источник обработал −1, и до появления 1,5, поэтому источник, который зажимает значение
+  вместо отказа, падает и на засеве, и вживую — 3 прогона из 3). Отсутствие хука после `start`:
+  `OwnerSignal::drive_in` больше не снимает долг при пустом слоте, регистрация планирует ход —
+  `a_change_with_no_turn_callback_reaches_the_next_one_registered`. Commit до доставки:
+  `a_revision_is_accepted_before_the_turn_that_delivers_it`. Единицы: строки `normal_and_preserve_use_distinct_duration_timelines`
   со скоростями часов и контроллера; `native_unit_conversions` на Windows (`wheel_preferences` и
   `drag_extent` вынесены из нативного чтения без изменения поведения). Runtime:
   `an_older_or_repeated_preference_revision_is_ignored`,
