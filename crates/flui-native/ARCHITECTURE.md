@@ -260,12 +260,14 @@ mapping claims no more than that:
 | Android | the SP converter for each authored size, which carries the OS's own nonlinear growth | exact answers |
 | iOS | `UIFontMetrics` for each growth profile | exact answers |
 | Windows | one `UISettings::TextScaleFactor`, 1 to 2.25 | `TextSizing::linear` |
-| macOS, Linux, web, winit | none | `TextSizing::linear(1.0)`, the authored size |
+| Linux, GNOME | the portal's `text-scaling-factor`, which GTK applies to every font size alike | `TextSizing::linear` |
+| macOS, other Linux desktops, web | none | `TextSizing::linear(1.0)`, the authored size |
 
 Windows publishes only the scalar. WinUI scales larger text less, by a curve
 it does not document, so FLUI's large text grows more than a WinUI control's at
 the same setting. FLUI applies the scalar as published rather than guess the
-curve, and does not count the linear mapping as native parity. An exact host
+curve, and does not count the linear mapping as native parity. GNOME's factor
+is linear in GTK too, so there the mapping is the native one. An exact host
 never falls back to the scalar for a missing answer (ADR-0183). A subtree
 or a style opts out with a fixed policy or a fixed intent; the paragraph
 resolves each span once, from its own authored size, which

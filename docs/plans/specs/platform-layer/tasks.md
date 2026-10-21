@@ -501,6 +501,18 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `navigator.languages` и события окна; `browser_contrast_and_languages_reach_their_owner` ведёт
   смены контраста и языков до владельца и снятия (без регистрации `languagechange` падает на
   «languagechange wakes the owner»). В настоящем браузере не запускалось.
+- [x] **PR 5** — ветка `platform/preferences-linux`. Источник портала Settings хоста winit читает
+  `contrast` из `org.freedesktop.appearance` (без ключа — GNOME `high-contrast`) и GNOME
+  `text-scaling-factor`, который GTK применяет ко всем размерам одинаково (поэтому линейная
+  политика здесь — родная); отсутствие обоих ключей — ненаблюдение, без повторов раз в секунду.
+  Языки — из окружения, как читает gettext (`preferred_locales::from_posix_environment`: список
+  `LANGUAGE`, если локаль сообщений из `LC_ALL`/`LC_MESSAGES`/`LANG` не `C`/`POSIX`), один раз
+  при старте. Прогон в WSL Ubuntu 24.04 под `xvfb-run`, каждый случай в своей
+  `dbus-run-session` с подменным порталом: все 15 случаев `linux_preferences`, из них новые
+  `contrast`, `gnome-contrast`, `text-scale` (живая смена через `SettingChanged`), языки
+  `[fr-CA, en]` в первом наблюдении каждого случая, `unsupported` без контраста и масштаба. Без
+  `contrast` в фильтре `SettingChanged` случай `contrast` падает по сторожу через 30 с. В сессии
+  GNOME не запускалось.
 
 ## Чего нет в этой серии
 

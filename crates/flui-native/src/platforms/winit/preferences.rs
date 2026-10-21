@@ -2,6 +2,9 @@
 //!
 //! D-Bus runs on the existing background executor. The owner only reads an
 //! immutable accepted snapshot; no portal request runs in build/layout/paint.
+//! The portal reports motion, contrast, text scale and the color scheme; the
+//! preferred languages come from the process environment, read once, as
+//! gettext reads them.
 
 use std::{
     sync::{Arc, Weak, mpsc},
@@ -13,10 +16,14 @@ use futures_util::StreamExt;
 use parking_lot::Mutex;
 use zbus::{Proxy, zvariant::OwnedValue};
 
-use crate::{executor::BackgroundExecutor, shared::owner_signal::OwnerSignal};
+use crate::{
+    executor::BackgroundExecutor,
+    shared::{owner_signal::OwnerSignal, preferred_locales},
+};
 
 const APPEARANCE: &str = "org.freedesktop.appearance";
 const GNOME: &str = "org.gnome.desktop.interface";
+const GNOME_A11Y: &str = "org.gnome.desktop.a11y.interface";
 const RETRY: Duration = Duration::from_secs(1);
 const READ_TIMEOUT: Duration = Duration::from_millis(200);
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_millis(500);
@@ -37,9 +44,15 @@ pub(super) struct PreferenceSource {
 
 impl PreferenceSource {
     pub(super) fn new(executor: &BackgroundExecutor, signal: &Arc<OwnerSignal>) -> Arc<Self> {
+        // The environment does not change under a running process.
+        let accepted =
+            match preferred_locales::from_posix_environment(|name| std::env::var(name).ok()) {
+                Some(locales) => SystemPreferences::default().with_locales(locales),
+                None => SystemPreferences::default(),
+            };
         let observation = Arc::new(Mutex::new(Observation {
             active: true,
-            accepted: SystemPreferences::default(),
+            accepted,
             appearance: WindowAppearance::Light,
         }));
         let (ready, receiver) = mpsc::sync_channel(1);
@@ -141,8 +154,12 @@ async fn observe_connection(
                 let Ok((namespace, key, _)) = body.deserialize::<(&str, &str, OwnedValue)>() else {
                     continue;
                 };
-                if (namespace == APPEARANCE && matches!(key, "reduced-motion" | "color-scheme"))
-                    || (namespace == GNOME && key == "enable-animations") {
+                if matches!(
+                    (namespace, key),
+                    (APPEARANCE, "reduced-motion" | "color-scheme" | "contrast")
+                        | (GNOME, "enable-animations" | "text-scaling-factor")
+                        | (GNOME_A11Y, "high-contrast")
+                ) {
                     retry = refresh(&proxy, observation, signal).await.is_err();
                 }
             }
@@ -180,7 +197,66 @@ async fn refresh(
             std::mem::replace(&mut observation.appearance, appearance) != appearance
         });
     }
-    motion.and(appearance).map(|_| ())
+    let contrast = read_contrast(proxy).await;
+    if let Ok(Some(high_contrast)) = contrast {
+        publish(observation, signal, |observation| {
+            let changed = observation.accepted.high_contrast() != Some(high_contrast);
+            if changed {
+                observation.accepted = observation
+                    .accepted
+                    .clone()
+                    .with_high_contrast(high_contrast);
+            }
+            changed
+        });
+    }
+    let text_scale = read_text_scale(proxy).await;
+    if let Ok(Some(scale)) = text_scale {
+        publish(observation, signal, |observation| {
+            // A factor outside what a snapshot admits is not an observation.
+            match observation.accepted.clone().with_text_scale(scale) {
+                Ok(accepted) if accepted != observation.accepted => {
+                    observation.accepted = accepted;
+                    true
+                }
+                Ok(_) => false,
+                Err(error) => {
+                    tracing::warn!(scale, %error, "portal text-scaling-factor refused");
+                    false
+                }
+            }
+        });
+    }
+    motion
+        .and(appearance)
+        .and(contrast)
+        .and(text_scale)
+        .map(|_| ())
+}
+
+/// `contrast`: 1 asks for higher contrast, 0 has no preference. Without that
+/// key GNOME's `high-contrast` answers; with neither there is no observation,
+/// and nothing to retry.
+async fn read_contrast(proxy: &Proxy<'_>) -> zbus::Result<Option<bool>> {
+    match read(proxy, APPEARANCE, "contrast").await {
+        Ok(value) => Ok(Some(u32::try_from(value)? == 1)),
+        Err(error) if missing_key(&error) => match read(proxy, GNOME_A11Y, "high-contrast").await {
+            Ok(value) => Ok(Some(bool::try_from(value)?)),
+            Err(error) if missing_key(&error) => Ok(None),
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
+    }
+}
+
+/// GNOME's `text-scaling-factor`, which GTK applies to every font size alike;
+/// a desktop without the key has no observation.
+async fn read_text_scale(proxy: &Proxy<'_>) -> zbus::Result<Option<f64>> {
+    match read(proxy, GNOME, "text-scaling-factor").await {
+        Ok(value) => Ok(Some(f64::try_from(value)?)),
+        Err(error) if missing_key(&error) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// `color-scheme`: 1 prefers dark; 0 (no preference) and 2 (prefers light)
