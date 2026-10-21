@@ -32,7 +32,8 @@ use crate::support::{RefCallback, ref_callback};
 /// link's glyphs, or assistive technology activating the link, calls it with
 /// the span's [`TextLink`]. While it is set, the pointer over a link is a
 /// pointing hand, each link is an accessible link node, and each link is a
-/// focus stop: Tab reaches it in reading order, Enter opens it, and a
+/// focus stop: Tab reaches it in reading order, Enter or Select opens it
+/// ([`ActivateLinkIntent`](crate::ActivateLinkIntent)), and a
 /// [`FocusRing`](crate::FocusRing)-styled ring outlines each line of its
 /// glyphs while the focus is visible. Without it, links are plain text.
 ///
@@ -179,6 +180,7 @@ impl RenderView for ResolvedParagraph {
                 .with_font_weight_adjustment(self.font_weight_adjustment)
                 .with_link_routes(LinkRouting::sync(self.links.as_ref(), ctx, &[]));
         let _ = paragraph.set_link_focus(self.link_focus);
+        paragraph.set_shown_links_listener(self.shown_links_listener());
         paragraph
     }
 
@@ -189,6 +191,7 @@ impl RenderView for ResolvedParagraph {
     ) -> flui_rendering::RenderUpdateImpact {
         let existing = render_object.link_routes().to_vec();
         let routes = LinkRouting::sync(self.links.as_ref(), ctx, &existing);
+        render_object.set_shown_links_listener(self.shown_links_listener());
         render_object.set_text(self.authored.text.clone())
             | render_object.set_text_align(self.authored.align)
             | render_object.set_text_direction(self.authored.direction)
@@ -204,8 +207,16 @@ impl RenderView for ResolvedParagraph {
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) {
-        LinkRouting::release(ctx, render_object.link_routes());
+        LinkRouting::release(self.links.as_ref(), ctx, render_object.link_routes());
         let _ = render_object.set_link_routes(Vec::new());
+    }
+}
+
+impl ResolvedParagraph {
+    fn shown_links_listener(&self) -> Option<flui_objects::ShownLinksListener> {
+        self.links
+            .as_ref()
+            .map(|links| links.shown_links_listener().clone())
     }
 }
 

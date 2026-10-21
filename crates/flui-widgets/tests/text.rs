@@ -999,3 +999,198 @@ pub(crate) fn a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read()
     assert_eq!(after.get(), 1, "then the terms link, then the button after");
     assert_eq!(opened.borrow().len(), 1, "the shadowed link never opened");
 }
+
+/// A focused link inside a button opens on Select as on Enter
+/// (`ActivateLinkIntent`, ADR-0079's amendment for links), and Space neither
+/// opens it nor presses the button around it.
+///
+/// Red-checks: drop the paragraph's Select binding (Select opens nothing),
+/// or the link's declined `ActivateIntent` (Space's release presses the
+/// button).
+pub(crate) fn select_opens_a_link_and_space_activates_nothing_around_it() {
+    use flui_painting::typography::TextSpan;
+    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_widgets::{RawButton, RichText};
+
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let pressed = Rc::new(std::cell::Cell::new(0));
+    let (record, count) = (Rc::clone(&opened), Rc::clone(&pressed));
+    let mut laid = lay_out(
+        RawButton::new(
+            RichText::new(
+                TextSpan::new("see ").with_child(TextSpan::new("help").with_link("app://help")),
+            )
+            .on_link(move |_cx, link| record.borrow_mut().push(link.to_string())),
+        )
+        .on_press(move |_cx| count.set(count.get() + 1)),
+        loose(400.0),
+    );
+    laid.pump();
+    // The button, then the link inside it.
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    press_key(&mut laid, Key::character(" "));
+    assert_eq!(pressed.get(), 0, "Space on the link presses no button");
+    assert!(opened.borrow().is_empty(), "Space opens no link");
+    press_key(&mut laid, Key::Named(NamedKey::Select));
+    assert_eq!(*opened.borrow(), ["app://help"], "Select opens the link");
+    press_key(&mut laid, Key::Named(NamedKey::Enter));
+    assert_eq!(opened.borrow().len(), 2, "and so does Enter");
+    assert_eq!(pressed.get(), 0, "the button is never pressed");
+}
+
+/// A link that `max_lines` cut is no Tab stop: it shows nothing to focus,
+/// ring or announce. The link the line keeps still is one.
+///
+/// Red-check: leave every link focusable (Tab stops on the cut link and
+/// Enter opens it).
+pub(crate) fn a_link_the_layout_cut_takes_no_focus() {
+    use flui_painting::typography::TextSpan;
+    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_view::ViewExt;
+    use flui_widgets::{Column, RawButton, RichText, SizedBox};
+
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let after = Rc::new(std::cell::Cell::new(0));
+    let (record, pressed) = (Rc::clone(&opened), Rc::clone(&after));
+    let mut laid = lay_out(
+        Column::new(vec![
+            RawButton::new(Text::new("before"))
+                .on_press(|_cx| {})
+                .boxed(),
+            SizedBox::new(80.0, 100.0)
+                .child(
+                    RichText::new(
+                        TextSpan::new("")
+                            .with_child(TextSpan::new("shown").with_link("app://shown"))
+                            .with_child(TextSpan::new(" and a long run of words before "))
+                            .with_child(TextSpan::new("cut").with_link("app://cut")),
+                    )
+                    .max_lines(1)
+                    .on_link(move |_cx, link| record.borrow_mut().push(link.to_string())),
+                )
+                .boxed(),
+            RawButton::new(Text::new("after"))
+                .on_press(move |_cx| pressed.set(pressed.get() + 1))
+                .boxed(),
+        ]),
+        loose(400.0),
+    );
+    // The paragraph's first layout reports which links it shows.
+    laid.pump();
+
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    press_key(&mut laid, Key::Named(NamedKey::Enter));
+    assert_eq!(*opened.borrow(), ["app://shown"], "the kept link is a stop");
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    press_key(&mut laid, Key::Named(NamedKey::Enter));
+    assert_eq!(after.get(), 1, "the next stop is the button after");
+    assert_eq!(opened.borrow().len(), 1, "the cut link never opened");
+}
+
+/// `RichText` whose links are `names`, each linking `app://<name>`, between
+/// single spaces.
+fn named_links(opened: &Rc<RefCell<Vec<String>>>, names: &[&str]) -> flui_widgets::RichText {
+    use flui_painting::typography::TextSpan;
+
+    let mut spans = Vec::new();
+    for (position, name) in names.iter().enumerate() {
+        if position > 0 {
+            spans.push(TextSpan::new(" "));
+        }
+        spans.push(TextSpan::new(*name).with_link(format!("app://{name}")));
+    }
+    let opened = Rc::clone(opened);
+    flui_widgets::RichText::new(TextSpan::with_children(spans))
+        .on_link(move |_cx, link| opened.borrow_mut().push(link.to_string()))
+}
+
+/// A link is the same link across rebuilds by what it links to: a link
+/// added before the focused one, or removed from before it, leaves the focus
+/// on it, and a press on a link that spans such a rebuild opens that link.
+///
+/// Red-check: match links to their focus nodes and recognizers by their
+/// place in the text (Enter opens the link now at the focused place, and the
+/// press opens the link that took the pressed one's place).
+pub(crate) fn links_keep_their_focus_and_presses_when_links_before_them_change() {
+    use flui_platform::keyboard::{Key, NamedKey};
+
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let last = || opened.borrow().last().cloned();
+    let mut laid = lay_out(named_links(&opened, &["terms", "privacy"]), loose(400.0));
+    laid.pump();
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+
+    laid.pump_widget(named_links(&opened, &["cookies", "terms", "privacy"]));
+    laid.pump();
+    press_key(&mut laid, Key::Named(NamedKey::Enter));
+    assert_eq!(
+        last().as_deref(),
+        Some("app://privacy"),
+        "a link added before"
+    );
+
+    laid.pump_widget(named_links(&opened, &["terms", "privacy"]));
+    laid.pump();
+    press_key(&mut laid, Key::Named(NamedKey::Enter));
+    assert_eq!(
+        last().as_deref(),
+        Some("app://privacy"),
+        "a link removed before"
+    );
+
+    let paragraph = laid.find_by_render_type("RenderParagraph");
+    let (x, y) = glyph_center(&laid, paragraph, 0.."terms".len());
+    laid.dispatch_pointer_down(x, y);
+    laid.pump_widget(named_links(&opened, &["cookies", "terms", "privacy"]));
+    laid.dispatch_pointer_up(x, y);
+    assert_eq!(
+        last().as_deref(),
+        Some("app://terms"),
+        "the press opens the link it began on"
+    );
+}
+
+/// Unmounting a paragraph with links releases what its links registered in
+/// the owner lane, with the handler they hold, and a press on a link that
+/// spans the unmount opens nothing.
+///
+/// Red-check: leave the links' lane registrations behind at unmount (the
+/// handler outlives the paragraph).
+pub(crate) fn unmounting_a_linked_paragraph_releases_its_links() {
+    use flui_widgets::SizedBox;
+
+    let captured = Rc::new(());
+    let witness = Rc::downgrade(&captured);
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let record = Rc::clone(&opened);
+    let mut laid = lay_out(
+        flui_widgets::RichText::new(
+            flui_painting::typography::TextSpan::new("read ").with_child(
+                flui_painting::typography::TextSpan::new("more").with_link("app://more"),
+            ),
+        )
+        .on_link(move |_cx, link| {
+            std::hint::black_box(&captured);
+            record.borrow_mut().push(link.to_string());
+        }),
+        loose(400.0),
+    );
+    laid.pump();
+    let paragraph = laid.find_by_render_type("RenderParagraph");
+    let (x, y) = glyph_center(&laid, paragraph, 5..9);
+    laid.dispatch_pointer_down(x, y);
+    laid.pump_widget(SizedBox::shrink());
+    laid.dispatch_pointer_up(x, y);
+    laid.pump();
+    assert!(
+        opened.borrow().is_empty(),
+        "the press in flight opened nothing"
+    );
+    assert!(
+        witness.upgrade().is_none(),
+        "the links' handler leaves the owner lane with the paragraph"
+    );
+}

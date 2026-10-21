@@ -88,7 +88,10 @@ pub use interaction::{
 };
 
 // --- flat re-exports (text) ---
-pub use text::{RenderEditable, RenderIcon, RenderParagraph, TextLinkFocus, TextLinkRoute};
+pub use text::{
+    RenderEditable, RenderIcon, RenderParagraph, ShownLinksListener, TextLinkFocus, TextLinkKey,
+    TextLinkRoute,
+};
 
 // --- flat re-exports (image) ---
 pub use image::{RenderImage, RenderTexture};

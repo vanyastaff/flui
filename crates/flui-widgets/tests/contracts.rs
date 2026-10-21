@@ -213,6 +213,10 @@ fn text_editing() {
             ("text::assistive_technology_focuses_a_link", crate::text::assistive_technology_focuses_a_link),
             ("text::tab_to_a_link_below_the_view_scrolls_it_into_view", crate::text::tab_to_a_link_below_the_view_scrolls_it_into_view),
             ("text::a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read", crate::text::a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read),
+            ("text::select_opens_a_link_and_space_activates_nothing_around_it", crate::text::select_opens_a_link_and_space_activates_nothing_around_it),
+            ("text::a_link_the_layout_cut_takes_no_focus", crate::text::a_link_the_layout_cut_takes_no_focus),
+            ("text::links_keep_their_focus_and_presses_when_links_before_them_change", crate::text::links_keep_their_focus_and_presses_when_links_before_them_change),
+            ("text::unmounting_a_linked_paragraph_releases_its_links", crate::text::unmounting_a_linked_paragraph_releases_its_links),
         ],
     );
 }

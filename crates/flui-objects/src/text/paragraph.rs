@@ -21,7 +21,7 @@
 
 mod links;
 
-pub use links::{TextLinkFocus, TextLinkRoute};
+pub use links::{ShownLinksListener, TextLinkFocus, TextLinkKey, TextLinkRoute};
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
@@ -62,6 +62,10 @@ pub struct RenderParagraph {
     link_routes: Vec<TextLinkRoute>,
     /// The link holding the primary keyboard focus.
     link_focus: Option<TextLinkFocus>,
+    /// Told which links have glyphs after a layout that changed it.
+    shown_links_listener: Option<ShownLinksListener>,
+    /// What the listener was last told.
+    shown_links: Vec<bool>,
 }
 
 impl RenderParagraph {
@@ -76,6 +80,8 @@ impl RenderParagraph {
             soft_wrap: true,
             link_routes: Vec::new(),
             link_focus: None,
+            shown_links_listener: None,
+            shown_links: Vec::new(),
         }
     }
 
@@ -126,6 +132,42 @@ impl RenderParagraph {
             flui_rendering::RenderUpdateImpact::PAINT
         } else {
             flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    /// Tells `listener`, after each layout that changes it, which links have
+    /// glyphs (builder form).
+    #[must_use]
+    pub fn with_shown_links_listener(mut self, listener: ShownLinksListener) -> Self {
+        self.shown_links_listener = Some(listener);
+        self
+    }
+
+    /// Replaces the shown-links listener. A new listener is told at the next
+    /// layout, whatever an earlier one was told.
+    pub fn set_shown_links_listener(&mut self, listener: Option<ShownLinksListener>) {
+        let same = match (&self.shown_links_listener, &listener) {
+            (Some(current), Some(new)) => current.same(new),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            self.shown_links_listener = listener;
+            self.shown_links.clear();
+        }
+    }
+
+    /// Tells the listener which links the committed layout shows, when that
+    /// changed. Only a layout that truncated the text can hide a link.
+    fn publish_shown_links(&mut self) {
+        let Some(listener) = &self.shown_links_listener else {
+            return;
+        };
+        let truncated = self.painter.did_exceed_max_lines() || self.painter.ellipsis().is_some();
+        let shown = self.runs.shown_links(&self.painter, truncated);
+        if shown != self.shown_links {
+            listener.notify(&shown);
+            self.shown_links = shown;
         }
     }
 
@@ -378,6 +420,7 @@ impl RenderBox for RenderParagraph {
         ctx.text()?
             .measurement()
             .layout(&mut self.painter, constraints.min_width, max_width)?;
+        self.publish_shown_links();
         // The text's own size, then clamped into the box constraints.
         Ok(constraints.constrain(self.painter.size()))
     }

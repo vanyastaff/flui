@@ -3761,27 +3761,44 @@ around a long-press `Draggable`).
 
 ### A paragraph's links are focus stops of their own
 
-**Choice:** `RichText` with `on_link` mounts one `Focus` per link around its paragraph,
-each hosting a node whose rect is the link's glyph bounds from the committed layout,
-kept within the paragraph's box (`Focus::rect_provider`, `RenderParagraph::link_bounds`;
-a last line's box can end a rounding error past the paragraph, which would put the link
-in one row with whatever touches it), so Tab reaches links in reading
-order among every other control, at any text scale, and the reveal on focus scrolls the
-link, not the paragraph, into view. Enter opens the focused link through the link's own
-key handler; the link declares `ActivateIntent` and `ActivationPressIntent` disabled,
-because the default bindings send `ActivateIntent` for Space's release too: Space neither
-opens a link nor activates a control around it, and keeps bubbling. While the focus is
-visible the paragraph draws the `FocusRingStyle` bands just outside each line of the
-link's glyphs, so a wrapped link gets a ring per line and the letters stay uncovered. The
-link nodes are focusable and focused with the link, and their `Focus` action requests
-assistive focus; the per-link `Focus` widgets publish no semantics of their own. A link
-that `max_lines` or an ellipsis cut is still a stop, measured by the paragraph's box so
-it keeps its place, as a clipped link stays in a browser's tab order.
+**Choice:** `RichText` with `on_link` lays its paragraph in a `Stack` (constraints passed
+through) beside one zero-size focus stop per link. Each stop hosts a node whose rect is the
+link's glyph bounds from the committed layout, kept within the paragraph's box
+(`Focus::rect_provider`, `RenderParagraph::link_bounds`; a last line's box can end a
+rounding error past the paragraph, which would put the link in one row with whatever
+touches it). Tab therefore reaches links in reading order among every other control, at any
+text scale, and the reveal on focus scrolls the link, not the paragraph, into view.
+
+A link is one link across rebuilds by what it links to and which occurrence of that target
+it is, not by its place in the text. Its slot keeps the tap recognizer, the focus node, the
+lane registrations and a `TextLinkKey` for its accessible node, and its stop is keyed by
+that slot. So a link added or removed before the focused one leaves the focus, a press in
+flight and the node with their link.
+
+Enter and Select open the focused link through a `Shortcuts` around the paragraph that binds
+them to `ActivateLinkIntent` (ADR-0079, amendment for links). The link declares
+`ActivateIntent` and `ActivationPressIntent` disabled, because the default bindings send
+`ActivateIntent` for Space's release too: Space neither opens a link nor activates a control
+around it, and keeps bubbling.
+
+While the focus is visible the paragraph draws the `FocusRingStyle` bands just outside each
+line of the link's glyphs, so a wrapped link gets a ring per line and the letters stay
+uncovered. The link nodes are focusable and focused with the link, and their `Focus` action
+requests assistive focus; the stops publish no semantics of their own. A link that
+`max_lines` or an ellipsis cut takes no focus: after each layout that changes it, the
+paragraph tells a `ShownLinksListener` which links have glyphs, and the paragraph's state
+rebuilds its stops.
 
 **Why:** one paragraph stop roving between its links would need to re-run outer traversal
 at its first and last link (resolution stops at the nearest `Actions`) and map entry
 direction and assistive focus by hand; a real node per link gets traversal groups,
-directional focus, reveal and modality from the focus system. **Tests:**
+directional focus, reveal and modality from the focus system. Nesting one `Focus` per link
+around the paragraph would tie each `Focus` element to a place in the text, so a link added
+before the focused one would move the focused node to another element. **Tests:**
 `tab_stops_on_each_link_and_enter_opens_it`, `a_focused_link_rings_each_line_of_its_glyphs`,
 `assistive_technology_focuses_a_link`, `tab_to_a_link_below_the_view_scrolls_it_into_view`,
-`a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read`.
+`a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read`,
+`select_opens_a_link_and_space_activates_nothing_around_it`,
+`a_link_the_layout_cut_takes_no_focus`,
+`links_keep_their_focus_and_presses_when_links_before_them_change`,
+`unmounting_a_linked_paragraph_releases_its_links`.

@@ -74,9 +74,13 @@ or an ellipsis cut has no glyphs and publishes nothing. Link nodes are
 focusable, focused while their link holds the primary focus
 (`set_link_focus`), and take a `Focus` action through the route; with a
 visible focus the paragraph paints the `FocusRingStyle` bands just outside
-each of the link's glyph boxes. The link nodes are counted in order rather
-than keyed by link, because a link that encloses another is cut in two by
-it. A link whose children all set their own links covers no text
+each of the link's glyph boxes. A link's node is keyed by its route's
+`TextLinkKey`, which the router keeps for a link across rebuilds, so
+assistive technology keeps its place when links before it come and go; a
+link that encloses another is cut in two by it, and the later part is counted
+in a key space of its own. After each layout that changes it, the paragraph
+tells its `ShownLinksListener` which links have glyphs, so a link `max_lines`
+or an ellipsis cut can stop taking focus. A link whose children all set their own links covers no text
 (`TextSpan::link_covers_text`): it is no link at all, neither numbered nor
 routed. A textless span's semantics label has no glyphs of its own, so its
 node is bounded by the paragraph and still read in its place. The widget rows

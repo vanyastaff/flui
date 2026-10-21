@@ -195,12 +195,12 @@ pub use image::{
     MemoryImage, Texture, TextureState,
 };
 pub use interaction::{
-    AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, ActivationPressIntent,
-    Alternative, AlternativeKind, AnimatedCrossFade, AnimatedCrossFadeState, BackIntent,
-    ButtonActivateIntent, CallbackAction, CallbackShortcuts, CommandAppearance, CommandHandle,
-    CompanionGap, CompanionLink, CompanionRegistration, CompanionSpec, ContactAdmission,
-    ContentShape, ControlPlacement, ControlSpec, CopySelectionTextIntent, CrossFadeState,
-    DefaultFocusRingStyle, DefaultFocusTraversal, DefaultFocusTraversalState,
+    AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, ActivateLinkIntent,
+    ActivationPressIntent, Alternative, AlternativeKind, AnimatedCrossFade, AnimatedCrossFadeState,
+    BackIntent, ButtonActivateIntent, CallbackAction, CallbackShortcuts, CommandAppearance,
+    CommandHandle, CompanionGap, CompanionLink, CompanionRegistration, CompanionSpec,
+    ContactAdmission, ContentShape, ControlPlacement, ControlSpec, CopySelectionTextIntent,
+    CrossFadeState, DefaultFocusRingStyle, DefaultFocusTraversal, DefaultFocusTraversalState,
     DirectionalFocusAction, DirectionalFocusIntent, DismissIntent, DragAnchor, DragCommands,
     Draggable, DraggableState, DropCommands, DropHover, DropTarget, DropTargetState, ExcludeFocus,
     Focus, FocusChangeHandler, FocusRing, FocusRingStyle, FocusRoot, FocusRootState, FocusScope,

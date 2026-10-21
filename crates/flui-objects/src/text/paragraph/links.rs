@@ -9,6 +9,7 @@
 //! widget's [`TextLinkRoute`]s and the runs share.
 
 use std::ops::Range;
+use std::rc::Rc;
 
 use flui_foundation::geometry::{Offset, Rect};
 use flui_interaction::CursorIcon;
@@ -33,18 +34,35 @@ use crate::{FocusRingStyle, SemanticsActionRoute};
 /// one route per link, in [`InlineSpan::links`] order.
 #[derive(Clone, Debug)]
 pub struct TextLinkRoute {
+    key: TextLinkKey,
     pointer: PointerTarget,
     activation: SemanticsActionRoute,
 }
 
+/// A link's identity across rebuilds, chosen by whoever routes it.
+///
+/// It keys the link's accessible node, so assistive technology keeps its
+/// place on a link when links are added or removed before it. The router
+/// gives each link it keeps across a rebuild the same key, and no two links
+/// of one paragraph the same key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TextLinkKey(pub u64);
+
 impl TextLinkRoute {
-    /// Pair a link's pointer target with its activation route.
+    /// Pair a link's identity with its pointer target and activation route.
     #[must_use]
-    pub fn new(pointer: PointerTarget, activation: SemanticsActionRoute) -> Self {
+    pub fn new(key: TextLinkKey, pointer: PointerTarget, activation: SemanticsActionRoute) -> Self {
         Self {
+            key,
             pointer,
             activation,
         }
+    }
+
+    /// The link's identity across rebuilds.
+    #[must_use]
+    pub fn key(&self) -> TextLinkKey {
+        self.key
     }
 
     /// The target a contact that lands on the link routes to.
@@ -62,9 +80,45 @@ impl TextLinkRoute {
     /// Whether `other` reaches the same lane registrations, so the published
     /// semantics stay valid.
     pub(super) fn same_registration(&self, other: &Self) -> bool {
-        self.pointer == other.pointer
+        self.key == other.key
+            && self.pointer == other.pointer
             && self.activation.target() == other.activation.target()
             && std::sync::Arc::ptr_eq(self.activation.handler(), other.activation.handler())
+    }
+}
+
+/// Told, after a layout that changed it, which of a paragraph's links have
+/// glyphs: one flag per link, in [`InlineSpan::links`] order. A link that
+/// `max_lines` or an ellipsis cut has none, so nothing should focus it.
+///
+/// It runs inside layout, so it records the flags and schedules work; it
+/// does not change the tree.
+#[derive(Clone)]
+pub struct ShownLinksListener(ShownLinksCallback);
+
+/// What a [`ShownLinksListener`] runs: the flags, one per link.
+type ShownLinksCallback = Rc<dyn Fn(&[bool])>;
+
+impl ShownLinksListener {
+    /// A listener that runs `listener` with the flags.
+    #[must_use]
+    pub fn new(listener: impl Fn(&[bool]) + 'static) -> Self {
+        Self(Rc::new(listener))
+    }
+
+    pub(super) fn notify(&self, shown: &[bool]) {
+        (self.0)(shown);
+    }
+
+    /// Whether `other` is this same listener.
+    pub(super) fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for ShownLinksListener {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShownLinksListener").finish_non_exhaustive()
     }
 }
 
@@ -230,6 +284,14 @@ impl SpanRuns {
         boxes
     }
 
+    /// Whether each link has glyphs in the committed layout, in link order.
+    /// Only a layout that `truncated` its text can have cut one.
+    pub(super) fn shown_links(&self, painter: &TextPainter, truncated: bool) -> Vec<bool> {
+        (0..self.link_count)
+            .map(|link| !truncated || !self.link_boxes(painter, link).is_empty())
+            .collect()
+    }
+
     /// The bounds of link `link`'s glyphs in the committed layout; `None`
     /// when it has none (cut by `max_lines` or an ellipsis).
     pub(super) fn link_bounds(&self, painter: &TextPainter, link: usize) -> Option<Rect<f64>> {
@@ -260,9 +322,8 @@ impl SpanRuns {
         bounds: Rect<f64>,
     ) -> Vec<SemanticsRegion> {
         let mut regions = Vec::new();
-        // A link that encloses another one is cut in two by it, so link
-        // regions are counted like the text between them, not keyed by link.
-        let (mut text_ordinal, mut link_ordinal) = (0, 0);
+        let (mut text_ordinal, mut continued_ordinal) = (0, 0);
+        let mut keyed = vec![false; routes.len()];
         let mut runs = self.runs.iter().peekable();
         while let Some(first) = runs.next() {
             let mut range = first.range.clone();
@@ -272,13 +333,22 @@ impl SpanRuns {
                 label.push_str(&next.label);
             }
             let routed = first.link.and_then(|link| Some((link, routes.get(link)?)));
-            let ordinal = if routed.is_some() {
-                &mut link_ordinal
-            } else {
-                &mut text_ordinal
-            };
-            let key = region_key(*ordinal, routed.is_some());
-            *ordinal += 1;
+            // A link keeps its router's key; a link that encloses another one
+            // is cut in two by it, and its later part is counted instead.
+            let key = match routed {
+                Some((link, route)) if !std::mem::replace(&mut keyed[link], true) => {
+                    RegionIdentity::Link(route.key())
+                }
+                Some(_) => {
+                    continued_ordinal += 1;
+                    RegionIdentity::LinkContinued(continued_ordinal - 1)
+                }
+                None => {
+                    text_ordinal += 1;
+                    RegionIdentity::Text(text_ordinal - 1)
+                }
+            }
+            .key();
             let glyphs = painter
                 .get_boxes_for_selection(range.start, range.end)
                 .iter()
@@ -313,10 +383,25 @@ impl SpanRuns {
     }
 }
 
-/// A region's identity: its order among the paragraph's link regions or
-/// among the text regions between them, in two key spaces.
-fn region_key(ordinal: usize, link: bool) -> SemanticsRegionKey {
-    let ordinal =
-        u64::try_from(ordinal).map_or(u64::MAX >> 1, |ordinal| ordinal.min(u64::MAX >> 1));
-    SemanticsRegionKey(ordinal << 1 | u64::from(link))
+/// What identifies an accessible region of a paragraph, in three key spaces.
+enum RegionIdentity {
+    /// The text between links, by its order.
+    Text(usize),
+    /// A link, by its router's key.
+    Link(TextLinkKey),
+    /// The part of a link after a link it encloses, by its order.
+    LinkContinued(usize),
+}
+
+impl RegionIdentity {
+    fn key(self) -> SemanticsRegionKey {
+        const VALUE_LIMIT: u64 = u64::MAX >> 2;
+        let ordinal = |ordinal: usize| u64::try_from(ordinal).unwrap_or(VALUE_LIMIT);
+        let (value, space) = match self {
+            Self::Text(ordinal_in_text) => (ordinal(ordinal_in_text), 0),
+            Self::Link(key) => (key.0, 1),
+            Self::LinkContinued(ordinal_in_links) => (ordinal(ordinal_in_links), 2),
+        };
+        SemanticsRegionKey(value.min(VALUE_LIMIT) << 2 | space)
+    }
 }
