@@ -2,6 +2,8 @@
 //! stands in for the main loop.
 
 use super::*;
+use crate::WindowsPlatform;
+use flui_platform::WindowOptions;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Size;
@@ -30,13 +32,12 @@ fn a_replaced_wake_hook_gets_its_modal_frame() {
     let due = web_time::Instant::now();
     let hook = || -> Arc<WakeDeadlineHook> { Arc::new(move || Some(due)) };
     let handlers = RefCell::new(PlatformHandlers::new());
-    let windows = Arc::downgrade(&platform.windows);
+    let windows = Arc::downgrade(&platform.owner().windows);
     // No frame callback counts into this generation: every delivery below
     // is in the same one.
     let frames = FrameCount::default();
     let delivered = ModalDelivery::default();
-    let deliver =
-        || WindowsPlatform::deliver_modal_frames(&handlers, &windows, &frames, &delivered);
+    let deliver = || WindowsLoop::deliver_modal_frames(&handlers, &windows, &frames, &delivered);
 
     handlers.borrow_mut().wake_deadline = Some(hook());
     let _ = deliver();

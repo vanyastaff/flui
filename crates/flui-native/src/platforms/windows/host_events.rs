@@ -36,11 +36,13 @@ use windows::Win32::{
         },
     },
     UI::WindowsAndMessaging::{
-        EnumThreadWindows, IsWindowVisible, KillTimer, PostMessageW, SetTimer, WM_APP, WM_TIMER,
+        EnumThreadWindows, GetForegroundWindow, IsWindowVisible, KillTimer, PostMessageW,
+        SetForegroundWindow, SetTimer, WM_APP, WM_TIMER,
     },
 };
 use windows::core::{BOOL, PCWSTR};
 
+use super::platform::WindowsLoop;
 use crate::shared::{
     PlatformHandlers,
     panic_boundary::contain_owner_callback,
@@ -57,7 +59,7 @@ const REARM_TIMER: usize = 1;
 
 /// The host's side of the receiver. `!Send`: it is created, used and dropped
 /// on the owner thread.
-pub(super) struct HostEvents {
+pub struct HostEvents {
     handlers: Rc<RefCell<PlatformHandlers>>,
     notices: Arc<SystemNotices>,
     clock_origin: Instant,
@@ -67,6 +69,12 @@ pub(super) struct HostEvents {
     memory: RefCell<Option<LowMemoryWait>>,
     /// The timer that ends a low-memory hold could not be set and is retried.
     rearm_timer_owed: Cell<bool>,
+}
+
+impl std::fmt::Debug for HostEvents {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostEvents").finish_non_exhaustive()
+    }
 }
 
 impl HostEvents {
@@ -344,6 +352,56 @@ impl HostEvents {
     #[cfg(test)]
     pub(super) fn end_low_memory_hold_for_test(&self, receiver: HWND) {
         self.rearm_low_memory_at(receiver, self.now() + HOLD_INTERVAL);
+    }
+}
+
+impl crate::host::Lifecycle<WindowsLoop> for HostEvents {
+    fn on_session_end(
+        owner: &WindowsLoop,
+        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
+    ) {
+        owner.register_handler("on_session_end", callback, |handlers| {
+            &mut handlers.session_end
+        });
+    }
+
+    fn on_host_notice(owner: &WindowsLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {
+        match owner.owner_control.shares("on_host_notice") {
+            Ok(shares) => shares.notices.set_hook(callback),
+            Err(reason) => {
+                tracing::debug!(?reason, "host notice registration refused");
+                drop(callback);
+            }
+        }
+    }
+
+    fn release_session_end(owner: &WindowsLoop) {
+        if let Ok(shares) = owner.owner_control.shares("release_session_end") {
+            shares.host.release_block();
+        }
+    }
+
+    fn on_reopen(_: &WindowsLoop, callback: Box<dyn FnMut() + Send>) {
+        // Windows sends no reopen signal; nothing will call the callback.
+        drop(callback);
+    }
+
+    fn activate(_: &WindowsLoop, _ignoring_other_apps: bool) {
+        // SAFETY: `GetForegroundWindow`/`SetForegroundWindow` take no
+        // pointer arguments — `hwnd` is an opaque value, never dereferenced.
+        unsafe {
+            // Bring the foreground window to front
+            let hwnd = GetForegroundWindow();
+            if !hwnd.is_invalid()
+                && let Err(error) = SetForegroundWindow(hwnd).ok()
+            {
+                tracing::warn!(
+                    ?hwnd,
+                    ?error,
+                    "SetForegroundWindow failed in Platform::activate"
+                );
+            }
+        }
     }
 }
 

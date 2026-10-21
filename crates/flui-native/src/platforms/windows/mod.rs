@@ -38,7 +38,15 @@ mod window_visibility;
 #[cfg(feature = "a11y")]
 pub use accessibility::WindowsAccessibility;
 pub use clipboard::WindowsClipboard;
-pub use platform::WindowsPlatform;
+// The types the Windows host's table names: public where they are defined (a
+// table names only public types), and nameable only inside the crate.
+pub(crate) use display::WindowsDisplays;
+pub(crate) use drag::OleTransfer;
+pub(crate) use haptics::WindowsHaptics;
+pub(crate) use host_events::HostEvents;
+pub(crate) use platform::WindowsLoop;
+pub(crate) use preferences::PreferenceSource;
+pub(crate) use text_services::TextServices;
 pub use window::WindowsWindow;
 pub use window_ext::{
     TaskbarProgressState, WindowCornerPreference, WindowsBackdrop, WindowsTheme, WindowsWindowExt,

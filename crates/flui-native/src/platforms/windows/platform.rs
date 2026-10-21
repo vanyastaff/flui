@@ -26,12 +26,11 @@ use windows::{
             Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
             WindowsAndMessaging::{
                 CS_OWNDC, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-                GWLP_USERDATA, GetClassNameW, GetForegroundWindow, GetWindowLongPtrW,
-                GetWindowThreadProcessId, HICON, HTCLIENT, HWND_MESSAGE, IDC_ARROW, ISMEX_NOSEND,
-                InSendMessageEx, IsWindowVisible, MINMAXINFO, MSG, MWMO_INPUTAVAILABLE,
-                MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW, PostMessageW,
-                PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU, SW_SHOWNORMAL,
-                SetForegroundWindow, SetWindowLongPtrW, TranslateMessage, WINDOW_EX_STYLE,
+                GWLP_USERDATA, GetClassNameW, GetWindowLongPtrW, GetWindowThreadProcessId, HICON,
+                HTCLIENT, HWND_MESSAGE, IDC_ARROW, ISMEX_NOSEND, InSendMessageEx, IsWindowVisible,
+                MINMAXINFO, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE,
+                PeekMessageW, PostMessageW, PostQuitMessage, QS_ALLINPUT, RegisterClassW,
+                SC_KEYMENU, SW_SHOWNORMAL, SetWindowLongPtrW, TranslateMessage, WINDOW_EX_STYLE,
                 WINDOW_STYLE, WINDOWPOS, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_CREATE,
                 WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_INPUTLANGCHANGE,
                 WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
@@ -53,16 +52,13 @@ use super::{
     window::{NativeMode, WindowsWindow},
 };
 use crate::{
-    config::WindowConfiguration, error::PlatformError, executor::BackgroundExecutor,
+    config::WindowConfiguration, error::PlatformError, executor::BackgroundExecutor, host,
     shared::PlatformHandlers, shared::WindowCallbacks, shared::hwnd_affinity::ContextLedger,
     shared::hwnd_affinity::UserDataRefusal, shared::window_state::WindowStateCell,
-    traits::HostWindow, traits::OpenWindowError, traits::OwnerPlatform, traits::Platform,
-    traits::PlatformExecutor, traits::PlatformReadyCallback, traits::owner::OwnerHooks,
+    traits::OwnerPlatform, traits::Platform, traits::PlatformExecutor,
+    traits::PlatformReadyCallback, traits::owner::OwnerHooks,
 };
-use flui_platform::{
-    Clipboard, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice, WindowAppearance,
-    WindowEvent, WindowId, WindowOptions, data_transfer::DataTransferSource,
-};
+use flui_platform::{WindowAppearance, WindowEvent, WindowId};
 
 /// Ensures window class is registered exactly once (sound replacement for
 /// `static mut bool`).
@@ -181,7 +177,7 @@ impl WindowRef {
 }
 
 #[cfg(test)]
-impl WindowsPlatform {
+impl WindowsLoop {
     pub(crate) fn window_identity_exhaustion_permanently_refuses_retries() {
         use std::{
             cell::Cell,
@@ -225,7 +221,7 @@ impl WindowsPlatform {
 }
 
 #[cfg(test)]
-impl WindowsPlatform {
+impl WindowsLoop {
     #[expect(unsafe_code, reason = "COM apartment and message-only window queries")]
     pub(crate) fn platform_identity_exhaustion_acquires_nothing() {
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -771,16 +767,18 @@ pub(super) fn teardown_route(
     )
 }
 
-/// Windows platform state
-pub struct WindowsPlatform {
-    owner_control: super::owner_control::OwnerControl,
+/// The Windows host's loop: the owner thread's message-only window, the
+/// windows it tracks and the state every position of its table reads.
+/// [`WindowsPlatform`](crate::WindowsPlatform) is its platform.
+pub struct WindowsLoop {
+    pub(super) owner_control: super::owner_control::OwnerControl,
     /// OLE drag and drop: the platform's one data-transfer source.
     pub(super) drag: Arc<super::drag::OleTransfer>,
     /// Message-only window for platform messages
     message_window: HWND,
 
     /// All created windows (keyed by HWND)
-    windows: Arc<WindowMap>,
+    pub(super) windows: Arc<WindowMap>,
 
     // The platform-level handlers (callbacks from platform to framework)
     // are not a field: they live in the owner control context, reachable
@@ -789,22 +787,22 @@ pub struct WindowsPlatform {
     background_executor: Arc<BackgroundExecutor>,
 
     /// Window configuration (shared across all windows)
-    config: WindowConfiguration,
+    pub(super) config: WindowConfiguration,
 
     /// The monitors this platform last sampled and the registry of their ids.
-    displays: Arc<WindowsDisplays>,
+    pub(super) displays: Arc<WindowsDisplays>,
 
     /// Records the owner thread so the thread-affine Win32 operations below
     /// can `debug_assert` their caller (ADR-0039). Bound at construction —
     /// the message-only window's queue belongs to the constructing thread —
     /// and re-asserted by `run`. Pre-run window creation on that same
     /// thread (the Win32 examples) stays legal.
-    affinity: flui_foundation::OwnerAffinity,
+    pub(super) affinity: flui_foundation::OwnerAffinity,
 
     /// The owner thread's COM apartment. Declared last, so it is released
     /// after everything above; each window's text services hold their own
     /// clone, so COM outlives the platform while any of them is alive.
-    apartment: super::com_apartment::ApartmentHold,
+    pub(super) apartment: super::com_apartment::ApartmentHold,
 }
 
 // SAFETY, per field: `windows` is an `Arc<Mutex<..>>`, `owner_control` holds
@@ -829,12 +827,12 @@ pub struct WindowsPlatform {
 // rather than memory-safety and stay guarded by `affinity.debug_assert_owner`
 // — see ADR-0039 (event-loop affinity). `apartment` is `Send + Sync` by its
 // own owner-thread gate, and `drag` keeps its COM objects in an owner slot.
-unsafe impl Send for WindowsPlatform {}
-// SAFETY: as for `Send` — `&WindowsPlatform` grants no more than shared access
+unsafe impl Send for WindowsLoop {}
+// SAFETY: as for `Send` — `&WindowsLoop` grants no more than shared access
 // to already-synchronized members plus a never-dereferenced address.
-unsafe impl Sync for WindowsPlatform {}
+unsafe impl Sync for WindowsLoop {}
 
-impl std::fmt::Debug for WindowsPlatform {
+impl std::fmt::Debug for WindowsLoop {
     // Hand-written: the remaining fields are raw platform handles and callback
     // payloads with no useful Debug form.
     //
@@ -845,7 +843,7 @@ impl std::fmt::Debug for WindowsPlatform {
     // exactly where a lock is likely to be held. Same pattern
     // `parking_lot::Mutex<T>: Debug` itself uses.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut out = f.debug_struct("WindowsPlatform");
+        let mut out = f.debug_struct("WindowsLoop");
         match self.windows.try_lock() {
             Some(windows) => out.field("windows", &windows.len()),
             None => out.field("windows", &format_args!("<locked>")),
@@ -854,36 +852,15 @@ impl std::fmt::Debug for WindowsPlatform {
     }
 }
 
-impl WindowsPlatform {
-    /// Create a new Windows platform instance with default configuration
-    pub fn new() -> Result<Self, PlatformError> {
+impl WindowsLoop {
+    /// A loop with the default window configuration.
+    pub(crate) fn new() -> Result<Self, PlatformError> {
         Self::with_config(WindowConfiguration::default())
     }
 
-    /// Create a new Windows platform instance with custom configuration
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - Window configuration (hotkeys, debouncing, fullscreen
-    ///   behavior)
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// use flui_native::{WindowsPlatform, WindowConfiguration, FullscreenMonitor};
-    ///
-    /// // Disable F11 hotkey
-    /// let config = WindowConfiguration::no_hotkey();
-    /// let platform = WindowsPlatform::with_config(config)?;
-    ///
-    /// // Use primary monitor for fullscreen
-    /// let config = WindowConfiguration {
-    ///     fullscreen_monitor: FullscreenMonitor::Primary,
-    ///     ..Default::default()
-    /// };
-    /// let platform = WindowsPlatform::with_config(config)?;
-    /// ```
-    pub fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
+    /// A loop whose windows follow `config` (hotkeys, debouncing, fullscreen
+    /// behavior).
+    pub(crate) fn with_config(config: WindowConfiguration) -> Result<Self, PlatformError> {
         Self::admit_with_config(config, WindowIdentity::source())
     }
 
@@ -2462,7 +2439,7 @@ impl WindowsPlatform {
     /// registration is refused and `callback` is dropped here, on the
     /// calling thread. A replaced handler is dropped after the `RefCell`
     /// borrow ends, since its destructor may re-enter the platform.
-    fn register_handler<H>(
+    pub(super) fn register_handler<H>(
         &self,
         op: &'static str,
         callback: H,
@@ -2495,20 +2472,12 @@ impl WindowsPlatform {
     }
 }
 
-impl Platform for WindowsPlatform {
-    fn window_capabilities(&self) -> flui_platform::WindowCapabilities {
-        super::window::window_capabilities()
-    }
-
-    // ==================== Core System ====================
-
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        Arc::clone(&self.background_executor) as Arc<dyn PlatformExecutor>
-    }
-
-    // ==================== Lifecycle ====================
-
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> Result<(), PlatformError> {
+impl host::Loop for WindowsLoop {
+    fn run(
+        self: Arc<Self>,
+        platform: Arc<dyn Platform>,
+        on_ready: PlatformReadyCallback,
+    ) -> Result<(), PlatformError> {
         tracing::info!("Running Windows platform");
 
         // Idempotent from the constructing thread; a `run` migrated to a
@@ -2516,8 +2485,7 @@ impl Platform for WindowsPlatform {
         // message-only window's queue is bound to the constructing thread).
         self.affinity.bind_current();
 
-        let platform = Arc::new(*self);
-        struct RunGuard(Arc<WindowsPlatform>);
+        struct RunGuard(Arc<WindowsLoop>);
         impl Drop for RunGuard {
             fn drop(&mut self) {
                 // Take the quit callback while the owner context still
@@ -2534,28 +2502,26 @@ impl Platform for WindowsPlatform {
                 }
             }
         }
-        let _guard = RunGuard(Arc::clone(&platform));
-        let erased: Arc<dyn Platform> = platform.clone();
+        let _guard = RunGuard(Arc::clone(&self));
         let hooks: Arc<dyn OwnerHooks> = Arc::new(super::owner_control::WindowsOwnerHooks::new(
-            Arc::clone(&erased),
-            &platform.owner_control,
+            Arc::clone(&platform),
+            &self.owner_control,
         ));
-        on_ready(OwnerPlatform::new(erased, hooks)).map_err(PlatformError::bootstrap)?;
-        platform
-            .owner_control
+        on_ready(OwnerPlatform::new(platform, hooks)).map_err(PlatformError::bootstrap)?;
+        self.owner_control
             .signal
             .start()
             .map_err(|error| PlatformError::EventLoop {
                 message: error.to_string(),
             })?;
-        platform.run_message_loop()
+        self.run_message_loop()
     }
 
     fn quit(&self) {
         self.owner_control.close_signal();
         // PostQuitMessage posts to the CALLING thread's message queue — off
         // the owner thread it silently quits nothing (ADR-0039).
-        self.affinity.debug_assert_owner("WindowsPlatform::quit");
+        self.affinity.debug_assert_owner("WindowsLoop::quit");
         tracing::info!("Quitting Windows platform");
         // SAFETY: `PostQuitMessage` takes a plain `i32` exit code, no
         // pointer arguments; the `debug_assert_owner` above documents (in
@@ -2585,129 +2551,8 @@ impl Platform for WindowsPlatform {
         }
     }
 
-    // ==================== Window Management ====================
-
-    fn active_window(&self) -> Option<WindowId> {
-        self.affinity
-            .debug_assert_owner("WindowsPlatform::active_window");
-        // SAFETY: `GetForegroundWindow` takes no arguments; `hwnd` is just
-        // an opaque value compared/wrapped, never dereferenced.
-        unsafe {
-            let hwnd = GetForegroundWindow();
-            if hwnd.is_invalid() {
-                None
-            } else {
-                Some(WindowId(hwnd.0 as u64))
-            }
-        }
-    }
-
-    // ==================== Display Management ====================
-
-    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        self.displays.snapshot()
-    }
-
-    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
-        if !self.owner_control.signal.accepting() {
-            return Err(OpenWindowError::OwnerGone {
-                rejected: Some(Box::new(options)),
-            });
-        }
-        // An HWND's message queue belongs to the creating thread, and the
-        // window context shares the owner-only platform handlers, so a
-        // window is opened on the owner thread or not at all (ADR-0039).
-        let shares = self.owner_control.shares("open_window").map_err(|reason| {
-            OpenWindowError::Backend {
-                message: format!(
-                    "Win32 windows are opened on the platform's owner thread ({reason:?})"
-                ),
-            }
-        })?;
-        tracing::info!("Opening window: {:?}", options.title);
-
-        let window = WindowsWindow::new(
-            options,
-            self.windows.clone(),
-            shares,
-            self.config.clone(),
-            self.apartment.share(),
-            Arc::clone(&self.drag),
-        )?;
-        let hwnd_value = window.hwnd().0 as isize;
-        let this = WindowRef::new(window.hwnd(), window.identity);
-        let wake = crate::shared::owner_signal::OwnerSignal::input_wake(
-            &self.owner_control.signal,
-            move || {
-                let _ = this.with_context("resume_input_delivery", |context| {
-                    context.callbacks.resume_input_delivery();
-                });
-            },
-        );
-        let _ =
-            with_window_context_checked(window.hwnd(), "input_capabilities", |context| {
-                context.callbacks.set_input_capabilities(
-                    crate::shared::input_availability::windows(context.has_touchpad()),
-                );
-                context.callbacks.set_input_wake(wake);
-            });
-
-        // Store window
-        let _prev = self.windows.lock().insert(hwnd_value, window.clone());
-
-        Ok(window)
-    }
-
-    // ==================== Input & Clipboard ====================
-
-    fn clipboard(&self) -> Arc<dyn Clipboard> {
-        Arc::new(super::WindowsClipboard::new())
-    }
-
-    fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
-        self.drag.clone()
-    }
-
-    fn name(&self) -> &'static str {
-        "Windows"
-    }
-
-    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
-        self.owner_control
-            .shares("read system preferences")
-            .map_err(|reason| PlatformError::Preferences {
-                message: format!("platform owner is unavailable: {reason:?}"),
-            })?
-            .preferences
-            .sample()
-    }
-
-    // ==================== Callbacks ====================
-
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
         self.register_handler("on_quit", callback, |handlers| &mut handlers.quit);
-    }
-
-    fn on_session_end(&self, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {
-        self.register_handler("on_session_end", callback, |handlers| {
-            &mut handlers.session_end
-        });
-    }
-
-    fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        match self.owner_control.shares("on_host_notice") {
-            Ok(shares) => shares.notices.set_hook(callback),
-            Err(reason) => {
-                tracing::debug!(?reason, "host notice registration refused");
-                drop(callback);
-            }
-        }
-    }
-
-    fn release_session_end(&self) {
-        if let Ok(shares) = self.owner_control.shares("release_session_end") {
-            shares.host.release_block();
-        }
     }
 
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
@@ -2719,40 +2564,31 @@ impl Platform for WindowsPlatform {
     fn request_exit_policy_reevaluation(&self) {
         self.owner_control.exit_policy_request().post();
     }
+}
 
-    fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        self.register_handler("on_window_event", callback, |handlers| {
-            &mut handlers.window_event
-        });
+impl host::Services for WindowsLoop {
+    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
+        Arc::clone(&self.background_executor) as Arc<dyn PlatformExecutor>
     }
 
-    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>) {
-        self.register_handler("on_keyboard_layout_change", callback, |handlers| {
-            &mut handlers.keyboard_layout_changed
-        });
-    }
-
-    // ==================== App Activation (US3 T038) ====================
-
-    fn activate(&self, _ignoring_other_apps: bool) {
-        // SAFETY: `GetForegroundWindow`/`SetForegroundWindow` take no
-        // pointer arguments — `hwnd` is an opaque value, never dereferenced.
+    fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {
+        // SAFETY: `buffer` is a stack-local `[u16; MAX_PATH]`; `&mut buffer`
+        // gives `GetModuleFileNameW` a valid, correctly-sized out-parameter,
+        // and only the first `len` code units it reports writing are read
+        // below — a `len == 0` failure returns before any read.
         unsafe {
-            // Bring the foreground window to front
-            let hwnd = GetForegroundWindow();
-            if !hwnd.is_invalid()
-                && let Err(error) = SetForegroundWindow(hwnd).ok()
-            {
-                tracing::warn!(
-                    ?hwnd,
-                    ?error,
-                    "SetForegroundWindow failed in Platform::activate"
-                );
+            let mut buffer = [0u16; 260]; // MAX_PATH, stack-allocated
+            let len = GetModuleFileNameW(None, &mut buffer);
+            if len == 0 {
+                return Err(PlatformError::AppPath {
+                    message: windows::core::Error::from_thread().to_string(),
+                });
             }
+            Ok(std::path::PathBuf::from(String::from_utf16_lossy(
+                &buffer[..len as usize],
+            )))
         }
     }
-
-    // ==================== File Operations (US3 T041) ====================
 
     fn open_url(&self, url: &str) {
         use windows::Win32::UI::Shell::ShellExecuteW;
@@ -2814,8 +2650,6 @@ impl Platform for WindowsPlatform {
             );
         }
     }
-
-    // ==================== File Dialogs (US3 T042-T043) ====================
 
     fn prompt_for_paths(
         &self,
@@ -2995,10 +2829,10 @@ impl Platform for WindowsPlatform {
             Ok(result)
         })
     }
+}
 
-    // ==================== Keyboard (US3 T045) ====================
-
-    fn keyboard_layout(&self) -> String {
+impl host::Input<WindowsLoop> for WindowsLoop {
+    fn keyboard_layout(_: &WindowsLoop) -> String {
         use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyboardLayoutNameW;
         // SAFETY: `buffer` is a stack-local, zero-initialized `[u16; 9]`
         // sized to `KL_NAMELENGTH`, the exact size this API requires;
@@ -3016,31 +2850,16 @@ impl Platform for WindowsPlatform {
         }
     }
 
-    // ==================== File System Integration ====================
-
-    fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {
-        // SAFETY: `buffer` is a stack-local `[u16; MAX_PATH]`; `&mut buffer`
-        // gives `GetModuleFileNameW` a valid, correctly-sized out-parameter,
-        // and only the first `len` code units it reports writing are read
-        // below — a `len == 0` failure returns before any read.
-        unsafe {
-            let mut buffer = [0u16; 260]; // MAX_PATH, stack-allocated
-            let len = GetModuleFileNameW(None, &mut buffer);
-            if len == 0 {
-                return Err(PlatformError::AppPath {
-                    message: windows::core::Error::from_thread().to_string(),
-                });
-            }
-            Ok(std::path::PathBuf::from(String::from_utf16_lossy(
-                &buffer[..len as usize],
-            )))
-        }
+    fn on_keyboard_layout_change(owner: &WindowsLoop, callback: Box<dyn FnMut() + Send>) {
+        owner.register_handler("on_keyboard_layout_change", callback, |handlers| {
+            &mut handlers.keyboard_layout_changed
+        });
     }
 }
 
-impl Drop for WindowsPlatform {
+impl Drop for WindowsLoop {
     fn drop(&mut self) {
-        tracing::debug!("Dropping WindowsPlatform");
+        tracing::debug!("Dropping WindowsLoop");
 
         // Destroy message window
         //

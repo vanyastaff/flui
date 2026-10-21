@@ -7,5 +7,9 @@
 //! module except the crate root, which picks a host.
 
 pub(crate) mod headless;
+#[cfg(windows)]
+pub(crate) mod windows;
 
 pub use headless::HeadlessPlatform;
+#[cfg(windows)]
+pub use windows::WindowsPlatform;

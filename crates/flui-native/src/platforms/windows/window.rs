@@ -34,6 +34,7 @@ use windows::{
     core::HSTRING,
 };
 
+use super::platform::{WindowRef, WindowsLoop, with_window_context_checked};
 use super::util::{
     USER_DEFAULT_SCREEN_DPI, WINDOW_CLASS_NAME, checked_logical_to_device, logical_to_device,
 };
@@ -428,8 +429,9 @@ pub(crate) const fn window_capabilities() -> WindowCapabilities {
 
 impl WindowsWindow {
     /// Create a new Windows window. Crate-internal: windows are opened
-    /// through `WindowsPlatform::open_window`, which refuses a call off the
-    /// owner thread and hands over the platform's own handler set.
+    /// through [`Window::open`](crate::host::Window::open), which refuses a
+    /// call off the owner thread and hands over the platform's own handler
+    /// set.
     ///
     /// # Errors
     /// [`OpenWindowError::Backend`] when Win32 window creation fails.
@@ -487,7 +489,7 @@ impl WindowsWindow {
         // and takes no pointer arguments — always sound. `GetDpiForSystem`
         // reads global state, no preconditions. `CreateWindowExW` requires
         // `WINDOW_CLASS_NAME` to already be registered, which
-        // `WindowsPlatform::with_config` guarantees before any `open_window`
+        // `WindowsLoop::with_config` guarantees before any `open_window`
         // call can reach here; `&title` is a live `HSTRING` owned by this
         // frame. `hwnd.is_invalid()` is checked before the handle is returned.
         unsafe {
@@ -581,7 +583,7 @@ impl WindowsWindow {
         // operate on that same freshly created, still-valid `hwnd`.
         // `Box::into_raw(context)` intentionally leaks the allocation into
         // the `GWLP_USERDATA` slot — ownership transfers to the window and is
-        // reclaimed by `WindowsPlatform::window_proc`'s `WM_DESTROY` arm
+        // reclaimed by `WindowsLoop::window_proc`'s `WM_DESTROY` arm
         // (`platform.rs`, `Box::from_raw`); a window destroyed by any path
         // that skips `WM_DESTROY` (process-exit teardown) leaks the
         // allocation rather than double-frees or dangles it. `ShowWindow`/
@@ -1718,6 +1720,92 @@ impl WindowsWindow {
             SetCursor(Some(handle));
         }
         Ok(())
+    }
+}
+
+impl crate::host::Window<WindowsLoop> for WindowsWindow {
+    fn open(
+        owner: &WindowsLoop,
+        options: WindowOptions,
+    ) -> Result<Arc<dyn crate::traits::HostWindow>, OpenWindowError> {
+        if !owner.owner_control.signal.accepting() {
+            return Err(OpenWindowError::OwnerGone {
+                rejected: Some(Box::new(options)),
+            });
+        }
+        // An HWND's message queue belongs to the creating thread, and the
+        // window context shares the owner-only platform handlers, so a
+        // window is opened on the owner thread or not at all (ADR-0039).
+        let shares = owner
+            .owner_control
+            .shares("open_window")
+            .map_err(|reason| OpenWindowError::Backend {
+                message: format!(
+                    "Win32 windows are opened on the platform's owner thread ({reason:?})"
+                ),
+            })?;
+        tracing::info!("Opening window: {:?}", options.title);
+
+        let window = WindowsWindow::new(
+            options,
+            owner.windows.clone(),
+            shares,
+            owner.config.clone(),
+            owner.apartment.share(),
+            Arc::clone(&owner.drag),
+        )?;
+        let hwnd_value = window.hwnd().0 as isize;
+        let this = WindowRef::new(window.hwnd(), window.identity);
+        let wake = crate::shared::owner_signal::OwnerSignal::input_wake(
+            &owner.owner_control.signal,
+            move || {
+                let _ = this.with_context("resume_input_delivery", |context| {
+                    context.callbacks.resume_input_delivery();
+                });
+            },
+        );
+        let _ =
+            with_window_context_checked(window.hwnd(), "input_capabilities", |context| {
+                context.callbacks.set_input_capabilities(
+                    crate::shared::input_availability::windows(context.has_touchpad()),
+                );
+                context.callbacks.set_input_wake(wake);
+            });
+
+        // Store window
+        let _prev = owner.windows.lock().insert(hwnd_value, window.clone());
+
+        Ok(window)
+    }
+
+    fn active(owner: &WindowsLoop) -> Option<WindowId> {
+        owner.affinity.debug_assert_owner("WindowsWindow::active");
+        // SAFETY: `GetForegroundWindow` takes no arguments; `hwnd` is just
+        // an opaque value compared/wrapped, never dereferenced.
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if hwnd.is_invalid() {
+                None
+            } else {
+                Some(WindowId(hwnd.0 as u64))
+            }
+        }
+    }
+
+    fn capabilities(_: &WindowsLoop) -> WindowCapabilities {
+        window_capabilities()
+    }
+
+    fn frame_inset(_: &WindowsLoop, _: f64) -> Size<f64> {
+        // The frame is not measured before a window exists, so the host
+        // reports the contract's default: no inset.
+        Size::new(0.0, 0.0)
+    }
+
+    fn on_event(owner: &WindowsLoop, callback: Box<dyn FnMut(flui_platform::WindowEvent) + Send>) {
+        owner.register_handler("on_window_event", callback, |handlers| {
+            &mut handlers.window_event
+        });
     }
 }
 
@@ -3028,7 +3116,7 @@ mod open_tests {
     /// A real window opened with a content size reports that content size:
     /// the frame is added to the outer window, not taken out of the content.
     fn a_real_window_opens_with_the_content_size_it_asked_for() {
-        let platform = super::super::WindowsPlatform::new().expect("platform");
+        let platform = crate::WindowsPlatform::new().expect("platform");
         let window = platform
             .open_window(
                 WindowOptions::default()
@@ -3052,7 +3140,7 @@ mod open_tests {
     /// A size set on a maximized window is the size it returns to: the window
     /// stays maximized and restores to the content size asked for.
     fn a_size_set_while_maximized_is_the_size_restored_to() {
-        let platform = super::super::WindowsPlatform::new().expect("platform");
+        let platform = crate::WindowsPlatform::new().expect("platform");
         let window = platform
             .open_window(WindowOptions::default().with_visible(false))
             .expect("window");
@@ -3080,7 +3168,7 @@ mod open_tests {
 
     /// A window that opens maximized returns to the rectangle it was given.
     fn a_window_opened_maximized_returns_to_its_normal_rectangle() {
-        let platform = super::super::WindowsPlatform::new().expect("platform");
+        let platform = crate::WindowsPlatform::new().expect("platform");
         let window = platform
             .open_window(
                 WindowOptions::default()
@@ -3109,7 +3197,7 @@ mod open_tests {
     /// a maximized window does not make the maximized rectangle the one to
     /// return to.
     fn maximized_and_fullscreen_windows_report_their_normal_rectangle() {
-        let platform = super::super::WindowsPlatform::new().expect("platform");
+        let platform = crate::WindowsPlatform::new().expect("platform");
         let window = platform
             .open_window(
                 WindowOptions::default()

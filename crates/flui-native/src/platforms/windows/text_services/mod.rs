@@ -140,7 +140,7 @@ enum Serving {
 }
 
 /// One window's TSF connection; see the module doc.
-pub(super) struct TextServices {
+pub struct TextServices {
     hwnd: HWND,
     /// The window with its identity, for the documents, which TSF may keep
     /// past the window.
@@ -795,6 +795,14 @@ impl TextServices {
         }
     }
 }
+
+impl std::fmt::Debug for TextServices {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TextServices").finish_non_exhaustive()
+    }
+}
+
+impl crate::host::Text for TextServices {}
 
 impl TextStoreHost for TextServices {
     /// Queued when called under a TSF call into a store.

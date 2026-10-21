@@ -217,7 +217,7 @@ pub use platforms::{
 pub use platforms::WebPlatform;
 // Desktop platforms
 #[cfg(windows)]
-pub use platforms::WindowsPlatform;
+pub use hosts::WindowsPlatform;
 // winit fallback backend — primary on Linux until native Wayland/X11 lands
 // (roadmap Cross.P)
 #[cfg(all(

@@ -156,12 +156,18 @@ fn cancel_unstarted(request: OsDragRequest) {
 }
 
 /// The platform's OLE drag-and-drop transport (see the module doc).
-pub(super) struct OleTransfer {
+pub struct OleTransfer {
     offers: Mutex<Offers>,
     owner: OwnerSlot<Rc<OwnerDrag>>,
     /// The owner window's address, shared with its control (`None` once it
     /// is closed): where a session's start is posted.
     owner_window: OnceLock<Arc<Mutex<Option<isize>>>>,
+}
+
+impl std::fmt::Debug for OleTransfer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OleTransfer").finish_non_exhaustive()
+    }
 }
 
 impl OleTransfer {
@@ -455,6 +461,12 @@ impl Drop for ModalPacer {
             }
         }
         let _ = thread.join();
+    }
+}
+
+impl crate::host::Drag<super::platform::WindowsLoop> for OleTransfer {
+    fn data_transfer(owner: &super::platform::WindowsLoop) -> Arc<dyn DataTransferSource> {
+        owner.drag.clone()
     }
 }
 

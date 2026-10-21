@@ -2443,12 +2443,12 @@ mod tests {
             #[cfg(target_os = "windows")]
             (
                 "window identity exhaustion",
-                crate::platforms::windows::WindowsPlatform::window_identity_exhaustion_permanently_refuses_retries,
+                crate::platforms::windows::WindowsLoop::window_identity_exhaustion_permanently_refuses_retries,
             ),
             #[cfg(target_os = "windows")]
             (
                 "platform identity exhaustion",
-                crate::platforms::windows::WindowsPlatform::platform_identity_exhaustion_acquires_nothing,
+                crate::platforms::windows::WindowsLoop::platform_identity_exhaustion_acquires_nothing,
             ),
             (
                 "clear multiple panicking captures",

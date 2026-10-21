@@ -59,8 +59,6 @@ pub use ios::IOSPlatform;
 pub use macos::MacOSPlatform;
 #[cfg(target_arch = "wasm32")]
 pub use web::WebPlatform;
-#[cfg(windows)]
-pub use windows::WindowsPlatform;
 #[cfg(all(
     feature = "winit-backend",
     any(target_os = "windows", target_os = "macos", target_os = "linux")

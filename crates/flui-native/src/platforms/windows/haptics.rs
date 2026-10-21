@@ -374,7 +374,7 @@ fn play<S: PenSink>(mailbox: &Mailbox<Playback<S>>) {
 }
 
 /// One window's haptic actuator.
-pub(super) struct WindowsHaptics {
+pub struct WindowsHaptics {
     /// The window, reached only on its owner thread and only while its
     /// handle still names it.
     window: WindowRef,
@@ -520,9 +520,10 @@ mod tests {
     };
     use flui_platform::pointer::{PenTool, PointerKind};
 
+    use super::super::WindowsWindow;
     use super::super::events::SURFACE;
     use super::super::platform::{WindowRef, with_window_context};
-    use super::super::{WindowsPlatform, WindowsWindow};
+    use crate::WindowsPlatform;
     use crate::shared::pointer_assembly::{
         NativeContact, NativeDevice, NativeReading, ReadingAction, ReadingTime, decode,
     };

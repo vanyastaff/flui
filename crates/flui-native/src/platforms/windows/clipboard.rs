@@ -57,6 +57,12 @@ impl Default for WindowsClipboard {
     }
 }
 
+impl crate::host::Clipboard<super::platform::WindowsLoop> for WindowsClipboard {
+    fn clipboard(_: &super::platform::WindowsLoop) -> std::sync::Arc<dyn Clipboard> {
+        std::sync::Arc::new(WindowsClipboard::new())
+    }
+}
+
 impl Clipboard for WindowsClipboard {
     fn read_text(&self) -> Option<String> {
         let Some(_session) = ClipboardSession::open() else {

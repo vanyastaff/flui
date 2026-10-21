@@ -721,7 +721,7 @@ fn the_document_status_follows_the_store_status() {
 fn a_window_offers_its_text_services_as_its_host() {
     use crate::traits::{HostWindow as _, OwnerThreadToken};
 
-    let platform = super::super::WindowsPlatform::new().expect("platform");
+    let platform = crate::WindowsPlatform::new().expect("platform");
     let window = platform
         .open_window(
             WindowOptions::default()
@@ -829,7 +829,7 @@ fn a_moved_window_tells_tsf_its_layout_changed() {
         WM_DPICHANGED, WM_EXITSIZEMOVE,
     };
 
-    let platform = super::super::WindowsPlatform::new().expect("platform");
+    let platform = crate::WindowsPlatform::new().expect("platform");
     let window = platform
         .open_window(
             WindowOptions::default()
@@ -940,7 +940,7 @@ type Row = (&'static str, fn(HWND));
 
 #[test]
 fn the_text_services_answer_a_completion_for_its_store() {
-    let platform = super::super::WindowsPlatform::new().expect("platform");
+    let platform = crate::WindowsPlatform::new().expect("platform");
     let window = platform
         .open_window(
             WindowOptions::default()
@@ -1191,7 +1191,7 @@ fn orphan_detection_ignores_a_foreign_owner_but_still_finds_its_own_window() {
 #[test]
 fn a_panicking_activation_diagnostic_orphans_no_window() {
     const TITLE: &str = "flui panicking TSF diagnostic";
-    let platform = super::super::WindowsPlatform::new().expect("platform");
+    let platform = crate::WindowsPlatform::new().expect("platform");
     let opened = tracing::subscriber::with_default(PanicsOn("ITfThreadMgr activated"), || {
         catch_unwind(AssertUnwindSafe(|| {
             platform.open_window(
@@ -1241,7 +1241,7 @@ fn a_window_destroyed_during_activation_fails_the_open() {
         // SAFETY: the owner thread, on the window being built.
         let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
     }
-    let platform = super::super::WindowsPlatform::new().expect("platform");
+    let platform = crate::WindowsPlatform::new().expect("platform");
     super::super::window::BEFORE_TSF_ACTIVATION.set(Some(destroy));
     let opened = platform.open_window(
         WindowOptions::default()
@@ -1262,7 +1262,7 @@ fn a_window_destroyed_during_activation_fails_the_open() {
 /// platform's drop does not leave COM under them, and the apartment ends
 /// once the window is gone.
 ///
-/// Red-check: have `WindowsPlatform`'s drop leave COM itself (the services
+/// Red-check: have `WindowsLoop`'s drop leave COM itself (the services
 /// then shut down outside any apartment).
 #[test]
 fn a_window_dropped_after_its_platform_retires_tsf_inside_com() {
@@ -1289,7 +1289,7 @@ fn a_window_dropped_after_its_platform_retires_tsf_inside_com() {
     }
 
     assert!(!thread_in_apartment(), "the test thread starts outside STA");
-    let platform = super::super::WindowsPlatform::new().expect("platform");
+    let platform = crate::WindowsPlatform::new().expect("platform");
     let window = platform
         .open_window(
             WindowOptions::default()
