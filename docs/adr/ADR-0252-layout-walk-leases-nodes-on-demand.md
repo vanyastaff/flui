@@ -26,9 +26,15 @@ parent can hand a clean boundary new constraints.
 
 ## Decision
 
-1. **Own the slot storage.** `RenderTree` keeps nodes in a `NodeSlab`: a `Vec` of slots with a
-   free list, each slot `{ in_flight: Cell<bool>, node: UnsafeCell<RenderNode> }`. The
-   generation table stays where it is. The `slab` dependency leaves `flui-rendering`.
+1. **Own the slot storage.** `RenderTree` keeps nodes in a `NodeSlab`: a `Vec` of slots, each
+   `{ in_flight: Cell<bool>, state: UnsafeCell<SlotState> }` with
+   `enum SlotState { Vacant { next_free: Option<u32> }, Occupied(RenderNode) }`. Inserting and
+   removing go through `&mut NodeSlab` only, never during a lease: `remove` swaps the state to
+   `Vacant` (dropping the node, in that call) and pushes the slot on the free list, `insert` pops
+   it, so a vacant slot owns no `RenderNode` and nothing is double-dropped or left to `MaybeUninit`.
+   The generation table stays where it is and is bumped on remove, so a stale id fails
+   resolution before the state is read; `acquire` still checks `Occupied` as a second guard. The
+   `slab` dependency leaves `flui-rendering`.
 
 2. **One lease per walk.** `RenderTree::lease(&mut self) -> TreeLease<'_>` takes the slot base
    pointer once (from `Vec::as_mut_ptr`, so every slot pointer has whole-allocation provenance)
@@ -75,7 +81,8 @@ parent can hand a clean boundary new constraints.
   `a_scroll_frame_acquires_only_the_nodes_it_lays_out` (a 10k-item list, one viewport mark:
   `nodes_acquired` equals laid-out plus cache-hit roots, not the item count), re-entry of an
   ancestor still reports `LayoutCycle`, an id outside the walked subtree still reports
-  `NodeNotFound`, a panicking `perform_layout` leaves no `in_flight` bit set, and the existing
+  `NodeNotFound`, remove-then-insert churn reuses a slot under a new generation without leaking or
+  double-dropping a node, a panicking `perform_layout` leaves no `in_flight` bit set, and the existing
   poison and degradation tests run unchanged. The `pipeline::owner` Miri sweep covers the new
   `unsafe`, which stays in the one sanctioned file.
 - `layout/scroll_10k` joins the frame benches.
@@ -96,14 +103,15 @@ parent can hand a clean boundary new constraints.
  RenderTree
  +-- generations: [g0, g1, g2, ...]                 id = (index, generation)
  +-- NodeSlab: Vec<Slot>      base ptr taken ONCE by lease()
-       slot i: +-----------------------+---------------------------------+
-               | in_flight: Cell<bool> | node: UnsafeCell<RenderNode>    |
-               +-----------------------+---------------------------------+
+       slot i: +-----------------------+-------------------------------------+
+               | in_flight: Cell<bool> | state: UnsafeCell<SlotState>        |
+               +-----------------------+-------------------------------------+
+                                         Vacant{next_free} | Occupied(RenderNode)
                   read freely, even       &mut handed out only through
                   while node is leased    NodeGuard, one per slot
 
  acquire(parent, child):
-   1. generation matches?           no  -> NodeNotFound
+   1. generation matches, slot Occupied?  no -> NodeNotFound
    2. in_flight[child] already set? yes -> LayoutCycle   (double acquire refused)
    3. child is a child of parent?   no  -> NodeNotFound  (non-child acquire refused)
    4. set in_flight, return guard; guard drop clears it, also on unwind

@@ -37,16 +37,22 @@ the repeated copies of the same layers (memory is O(depth x layers)).
        slots: Vec<NestedSlot>,              // one per nested boundary directly inside
        effect_slots, content,
    }
-   NestedSlot { boundary: RenderId, parent: Option<usize>, anchor: Option<AnchorFrame> }
+   NestedSlot { boundary: RenderId, parent: Option<usize>, origin: Offset }
    ```
 
-   The nested boundary's `OffsetLayer` (position, stamp) is part of the *enclosing* capture's
-   `own`; its content is the slot's, found under `retained_boundaries[boundary]`.
+   The nested boundary's `OffsetLayer` is **not** part of the enclosing capture's `own`: the slot
+   owns it. At replay the slot mints that layer from the boundary's *current* layout offset and
+   its *current* content token (kept when the boundary is clean, freshly minted when it was
+   repainted), so a repainted nested boundary always carries a new stamp for the damage differ,
+   and a boundary that moved needs only the new offset. `origin` is the slot's position in its
+   parent's layer space; the stored value is relative, never an absolute anchor.
 
 2. **Replay recurses through slots.** Grafting a capture mints its own nodes, and at each slot
    either grafts the nested boundary's capture or, when that boundary is queued for a repaint or has
-   no capture, runs `paint_subtree` for it with the slot's stored anchor frame and records a fresh
-   capture. A missing capture is a per-slot repaint, not an eviction of its ancestors.
+   no capture, runs `paint_subtree` for it and records a fresh capture. The replay carries the
+   parent's `AnchorFrame` down and rebases it at each slot (`frame.rebased(origin + current
+   offset)`), exactly as the painting walk does, so a nested painter that reads `paint_anchor`
+   sees the position after an ancestor moved the boundary. A missing capture is a per-slot repaint, not an eviction of its ancestors.
 
 3. **A clean boundary is replayed whatever is nested.** The graft-time `nested_boundaries` check,
    `note_boundary` and `capture_scopes`, the two ancestor-evicting `retain` loops and the "re-note on
@@ -86,7 +92,8 @@ the repeated copies of the same layers (memory is O(depth x layers)).
   `nested_boundary_mark_paints_only_that_boundary` (`nodes_painted` equals the dirty boundary's
   subtree), a differential test that runs random trees with random marks and compares every frame's
   layer tree with a fresh owner's full repaint (the oracle that the retained output is the painted
-  output), a missing nested capture repaints that slot only, the layer-update cases of the
+  output), a repainted nested boundary re-stamps its offset layer with the new token, a moved
+  boundary replays with a rebased anchor, a missing nested capture repaints that slot only, the layer-update cases of the
   existing suite (nested, two levels, patch then repaint), and the root retained when clean.
   Existing graft tests that assert eviction of ancestors are rewritten to assert replay.
 - `RetainedSubtree` loses `nested_boundaries`; the `paint` bench gains a nested-caret arm.
