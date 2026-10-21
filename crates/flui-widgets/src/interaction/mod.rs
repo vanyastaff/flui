@@ -35,11 +35,11 @@ mod visibility_gate;
 pub use crate::paint::IgnorePointer;
 pub use absorb_pointer::AbsorbPointer;
 pub use actions::{
-    Action, ActionOutcome, Actions, ActivateIntent, ActivationPressIntent, BackIntent,
-    ButtonActivateIntent, CallbackAction, CopySelectionTextIntent, DirectionalFocusAction,
-    DirectionalFocusIntent, DismissIntent, Intent, NextFocusAction, NextFocusIntent,
-    PasteTextIntent, PreviousFocusAction, PreviousFocusIntent, SelectAllTextIntent,
-    ShowContextMenuIntent,
+    Action, ActionOutcome, Actions, ActivateIntent, ActivateLinkIntent, ActivationPressIntent,
+    BackIntent, ButtonActivateIntent, CallbackAction, CopySelectionTextIntent,
+    DirectionalFocusAction, DirectionalFocusIntent, DismissIntent, Intent, NextFocusAction,
+    NextFocusIntent, PasteTextIntent, PreviousFocusAction, PreviousFocusIntent,
+    SelectAllTextIntent, ShowContextMenuIntent,
 };
 pub use animated_cross_fade::{AnimatedCrossFade, AnimatedCrossFadeState, CrossFadeState};
 pub use companion::{CompanionGap, CompanionLink, CompanionRegistration};

@@ -7,6 +7,8 @@
   lane (ADR-0086 §3), so the focus node never crosses the `Send + Sync` handler seam.
 - **Amended:** below ("Amendment: activation keys, navigation keys and the focus indicator"),
   for §1 and the `Escape` item of "Not implemented".
+- **Amended:** 2026-10-21, below ("Amendment: links"), for §1: a link opens on Enter and Select
+  through `ActivateLinkIntent`, not `ActivateIntent`.
 - **Supersedes:** ADR-0023's resolve-at-own-position divergence (a `Shortcuts` resolves its
   intent at the primary focus), and ADR-0026 §4's nesting rule `Actions(Shortcuts(child))`,
   which that divergence forced.
@@ -114,6 +116,24 @@ Amends §1 and the `Escape` item of "Not implemented"; the rest stands.
   `on_press`, answers the activation intents and draws the ring.
 
 Handlers for `BackIntent` and `DismissIntent` (the navigator and modal routes) are not wired yet.
+
+## Amendment: links
+
+Amends §1 for the links of a `RichText` that `on_link` handles; the rest stands.
+
+A link opens on Enter and Select, as on every platform's links, and not on Space: a link is not
+a button, and Space is left to what encloses it. §1's bindings cannot say that, because Space's
+release sends `ActivateIntent` too. So a paragraph with links wraps them in a `Shortcuts` that
+binds Enter and Select, on key-down and once per press, to `ActivateLinkIntent`, and each link
+answers it with the paragraph's handler. Each link also declares `ActivateIntent` and
+`ActivationPressIntent` disabled, so Space neither opens it nor activates a control around it
+(resolution stops at the link, and the key keeps bubbling). An app rebinds a link's key by
+binding `ActivateLinkIntent`.
+
+Each link is a focus node of its own, measured by its glyphs; a link that `max_lines` or an
+ellipsis cut takes no focus, since it shows nothing to focus or announce (§4). The rows are
+`tab_stops_on_each_link_and_enter_opens_it` and `select_opens_a_link_and_space_activates_nothing_around_it`
+(`text_editing` in `flui-widgets`).
 
 ## Consequences
 

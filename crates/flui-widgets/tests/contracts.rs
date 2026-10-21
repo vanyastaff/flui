@@ -205,6 +205,18 @@ fn text_editing() {
             ("text::media_text_scaling_changes_the_laid_out_text", crate::text::media_text_scaling_changes_the_laid_out_text),
             ("text::icon_text_sizing_keeps_box_and_glyph_together", crate::text::icon_text_sizing_keeps_box_and_glyph_together),
             ("text::icon_labels_reach_the_assembled_accessibility_tree", crate::text::icon_labels_reach_the_assembled_accessibility_tree),
+            ("text::a_tap_on_a_link_reaches_on_link_at_the_current_text_scale", crate::text::a_tap_on_a_link_reaches_on_link_at_the_current_text_scale),
+            ("text::a_link_shows_a_pointing_hand_and_a_span_its_own_cursor", crate::text::a_link_shows_a_pointing_hand_and_a_span_its_own_cursor),
+            ("text::a_handled_link_is_a_link_node_assistive_technology_clicks", crate::text::a_handled_link_is_a_link_node_assistive_technology_clicks),
+            ("text::tab_stops_on_each_link_and_enter_opens_it", crate::text::tab_stops_on_each_link_and_enter_opens_it),
+            ("text::a_focused_link_rings_each_line_of_its_glyphs", crate::text::a_focused_link_rings_each_line_of_its_glyphs),
+            ("text::assistive_technology_focuses_a_link", crate::text::assistive_technology_focuses_a_link),
+            ("text::tab_to_a_link_below_the_view_scrolls_it_into_view", crate::text::tab_to_a_link_below_the_view_scrolls_it_into_view),
+            ("text::a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read", crate::text::a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read),
+            ("text::select_opens_a_link_and_space_activates_nothing_around_it", crate::text::select_opens_a_link_and_space_activates_nothing_around_it),
+            ("text::a_link_the_layout_cut_takes_no_focus", crate::text::a_link_the_layout_cut_takes_no_focus),
+            ("text::links_keep_their_focus_and_presses_when_links_before_them_change", crate::text::links_keep_their_focus_and_presses_when_links_before_them_change),
+            ("text::unmounting_a_linked_paragraph_releases_its_links", crate::text::unmounting_a_linked_paragraph_releases_its_links),
         ],
     );
 }

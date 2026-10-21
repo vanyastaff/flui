@@ -28,6 +28,11 @@ Widgets register owner-local handlers through `RenderObjectContext`, render
 objects store the returned `PointerTarget`, and dispatch resolves those targets
 through the active `InteractionLane`.
 
+An entry's `pointer_target` and `cursor` come from the render object's
+node-wide hooks unless its `hit_test` chose them for the part hit
+(`HitTestContext::set_self_hit_pointer_target`, `set_self_hit_cursor`): a
+paragraph routes a hit on a link to that link's target and asks for its cursor.
+
 ## Ordinary pointer dispatch
 
 Ordinary pointer dispatch has no stop/continue result. A `HitTestResult` is
