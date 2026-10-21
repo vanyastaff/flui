@@ -105,6 +105,7 @@ pub mod linux {
         "contrast",
         "gnome-contrast",
         "text-scale",
+        "text-scale-out-of-range",
     ];
 
     /// The parent runs each case with `LANG=fr_CA.UTF-8` and `LANGUAGE=fr_CA:en`.
@@ -128,6 +129,8 @@ pub mod linux {
         high_contrast: AtomicBool,
         /// `f64` bits; zero is no key.
         text_scale: std::sync::atomic::AtomicU64,
+        /// Wakes whoever waits for the source to read `text-scaling-factor`.
+        scale_read: Arc<tokio::sync::Notify>,
     }
 
     #[zbus::interface(name = "org.freedesktop.portal.Settings")]
@@ -138,6 +141,9 @@ pub mod linux {
             key: &str,
         ) -> Result<zbus::zvariant::OwnedValue, SettingsError> {
             let scale = f64::from_bits(self.text_scale.load(Ordering::SeqCst));
+            if key == "text-scaling-factor" {
+                self.scale_read.notify_waiters();
+            }
             match (namespace, key) {
                 ("org.freedesktop.appearance", "reduced-motion" | "color-scheme") => {
                     Ok(0u32.into())
@@ -160,30 +166,65 @@ pub mod linux {
     #[derive(Clone, Copy, Debug, PartialEq)]
     enum Value {
         Contrast(bool),
-        TextScale(f64),
+        /// `None` is no accepted observation.
+        TextScale(Option<f64>),
     }
 
     impl Value {
         fn observed(self, preferences: &flui_platform::SystemPreferences) -> bool {
             match self {
                 Self::Contrast(value) => preferences.high_contrast() == Some(value),
-                Self::TextScale(value) => preferences.text_scale() == Some(value),
+                Self::TextScale(value) => preferences.text_scale() == value,
             }
         }
     }
 
+    async fn emit_value(
+        connection: &zbus::Connection,
+        namespace: &str,
+        key: &str,
+        value: zbus::zvariant::Value<'_>,
+    ) {
+        connection
+            .emit_signal(
+                None::<&str>,
+                "/org/freedesktop/portal/desktop",
+                "org.freedesktop.portal.Settings",
+                "SettingChanged",
+                &(namespace, key, value),
+            )
+            .await
+            .expect("native setting change");
+    }
+
     /// A portal value read before any window, then changed live through
-    /// `SettingChanged` until the owner observes the new value.
+    /// `SettingChanged` until the owner observes the new value. Out of range,
+    /// the portal first reports a scale `SystemPreferences` refuses, before
+    /// any window and again live: the owner sees no observation, then the
+    /// next valid one, and never a value the portal made up.
     fn run_value_case(case: &str) {
         let gnome = case == "gnome-contrast";
-        let (before, after) = match case {
-            "text-scale" => (Value::TextScale(1.25), Value::TextScale(1.5)),
-            _ => (Value::Contrast(true), Value::Contrast(false)),
+        let (initial_scale, refused, before, after) = match case {
+            "text-scale" => (
+                1.25,
+                None,
+                Value::TextScale(Some(1.25)),
+                Value::TextScale(Some(1.5)),
+            ),
+            "text-scale-out-of-range" => (
+                100.0,
+                Some(-1.0_f64),
+                Value::TextScale(None),
+                Value::TextScale(Some(1.5)),
+            ),
+            _ => (1.25, None, Value::Contrast(true), Value::Contrast(false)),
         };
+        let scale_read = Arc::new(tokio::sync::Notify::new());
         let values = Values {
             gnome,
             high_contrast: AtomicBool::new(true),
-            text_scale: std::sync::atomic::AtomicU64::new(1.25f64.to_bits()),
+            text_scale: std::sync::atomic::AtomicU64::new(f64::to_bits(initial_scale)),
+            scale_read: Arc::clone(&scale_read),
         };
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -210,6 +251,26 @@ pub mod linux {
                 .interface::<_, Values>("/org/freedesktop/portal/desktop")
                 .await
                 .expect("served values");
+            if let Some(refused) = refused {
+                server
+                    .get()
+                    .await
+                    .text_scale
+                    .store(refused.to_bits(), Ordering::SeqCst);
+                // Wait until the source has read the refused value, so the
+                // valid one below is a second, separate observation.
+                let read = scale_read.notified();
+                tokio::pin!(read);
+                read.as_mut().enable();
+                emit_value(
+                    &connection,
+                    "org.gnome.desktop.interface",
+                    "text-scaling-factor",
+                    zbus::zvariant::Value::from(refused),
+                )
+                .await;
+                read.await;
+            }
             let (namespace, key, value) = match after {
                 Value::Contrast(high) => {
                     server
@@ -232,6 +293,7 @@ pub mod linux {
                     }
                 }
                 Value::TextScale(scale) => {
+                    let scale = scale.expect("BUG: a case changes to an observed scale");
                     server
                         .get()
                         .await
@@ -244,16 +306,7 @@ pub mod linux {
                     )
                 }
             };
-            connection
-                .emit_signal(
-                    None::<&str>,
-                    "/org/freedesktop/portal/desktop",
-                    "org.freedesktop.portal.Settings",
-                    "SettingChanged",
-                    &(namespace, key, value),
-                )
-                .await
-                .expect("native setting change");
+            emit_value(&connection, namespace, key, value).await;
         });
         let watchdog = runtime.spawn(async {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
@@ -344,7 +397,10 @@ pub mod linux {
     }
 
     pub fn run_case(case: &str) {
-        if matches!(case, "contrast" | "gnome-contrast" | "text-scale") {
+        if matches!(
+            case,
+            "contrast" | "gnome-contrast" | "text-scale" | "text-scale-out-of-range"
+        ) {
             return run_value_case(case);
         }
         let live = matches!(case, "live" | "recovery" | "restart");
