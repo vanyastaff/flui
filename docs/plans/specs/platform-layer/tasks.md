@@ -334,6 +334,19 @@ graph LR
   clippy `-p flui-native -p flui-app --all-targets -D warnings` — зелёный; nextest `-p flui-native`
   — 213 прошли. Сборка под Linux на этой машине недоступна (C-сборка `psm` без кросс-компилятора);
   её доказательство — Linux CI.
+- [x] **LY39** — ветка `platform/api-closure`. `cargo xtask api-closure` читает rustdoc JSON
+  (nightly, `rustup run`) каждого пакета с `tier-kind = "stable"` (`flui`, `flui-platform`,
+  `flui-protocol`) через таблицы `index`, `paths`, `external_crates` и все `"id"` элемента;
+  blanket и synthetic impl пропускаются; разрешено ADR-0089 §2, `serde`/`schemars` — только внутри
+  impl их трейта; `[package.metadata.flui.api-closure] exceptions` (с ADR в `exit`, неиспользуемое —
+  находка) и `deny` (режим для OS-типов ядра, LY36). Исключений `ui-events`, `keyboard-types`, `dpi`
+  не понадобилось: контракт их уже не называет, они вошли в его `reach-forbid`. Первый прогон нашёл
+  два множества на `bitflags` (`TransferActions`, `PointerKindSet`) — они стали своими (`flag_set!`),
+  `bitflags` ушёл из контракта; ADR-0211 п. 12 — `Superseded-by` ADR-0151 §5, ADR-0089 — поправка.
+  CI: job `doc` ставит nightly, гоняет гейт и `--self-test`, затем отчёт `cargo semver-checks` по
+  `flui-platform` относительно базы PR (R2.7, не гейт). Проверки: самотест — 4 случая; `cargo test
+  -p xtask` — 45; nextest контракта, ядра, interaction, widgets и testing — 548; doctest'ы
+  контракта — 46; clippy, `checks`, `workspace`, `reach`, `deps`, `actionlint`, `zizmor` — зелёные.
 
 ## Отступление от порядка, решённое владельцем
 
