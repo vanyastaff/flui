@@ -100,7 +100,7 @@ pub enum DisplayChangeError {
 /// The snapshot the platform last published. The registry that issued its ids is
 /// only needed while the specs are turned into displays, so it is not kept.
 #[derive(Debug)]
-pub(super) struct HeadlessDisplays {
+pub struct HeadlessDisplays {
     snapshot: DisplaySnapshot,
 }
 

@@ -58,10 +58,18 @@ struct Inner {
     open: HashMap<DataTransferId, Arc<OwnerSlot<OsDragProvider>>>,
 }
 
-pub(crate) struct DragDouble {
+/// The headless host's drag-and-drop transport and the OS drag session it
+/// simulates.
+pub struct DragDouble {
     inner: Mutex<Inner>,
     windows: Mutex<Weak<Mutex<HeadlessState>>>,
     start: Mutex<Option<OsDragStart>>,
+}
+
+impl std::fmt::Debug for DragDouble {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DragDouble").finish_non_exhaustive()
+    }
 }
 
 impl DragDouble {

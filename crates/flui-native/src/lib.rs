@@ -171,6 +171,9 @@ mod text_sizing;
 pub use text_sizing::{CapturedTextSizing, TextSizingCaptureError, TextSizingCaptureState};
 #[cfg(not(target_arch = "wasm32"))]
 pub mod executor;
+pub mod host;
+mod hosts;
+mod platform;
 pub mod platforms;
 #[cfg(any(test, target_os = "android"))]
 mod redraw_poll;
@@ -192,6 +195,9 @@ pub use error::{BootstrapError, PlatformError, PlatformResult};
 // Re-export executor types
 #[cfg(not(target_arch = "wasm32"))]
 pub use executor::BackgroundExecutor;
+// Each host's platform: the one implementation of `Platform` over its table.
+pub use hosts::HeadlessPlatform;
+pub use platform::HostPlatform;
 // Mobile platforms
 #[cfg(target_os = "android")]
 pub use platforms::AndroidPlatform;
@@ -204,7 +210,7 @@ pub use platforms::{
     DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeHaptics,
     FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessDisplayControls,
     HeadlessDragAndDrop, HeadlessExitReevaluation, HeadlessHostEvents, HeadlessInputDevices,
-    HeadlessOwnerTurns, HeadlessPlatform, HeadlessPreferences, HeadlessWindowPolicy, MockWindow,
+    HeadlessOwnerTurns, HeadlessPreferences, HeadlessWindowPolicy, MockWindow,
 };
 // Web platform
 #[cfg(target_arch = "wasm32")]

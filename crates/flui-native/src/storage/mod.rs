@@ -36,10 +36,13 @@ mod os_error;
 #[cfg(target_arch = "wasm32")]
 mod page_store;
 
+mod user_dirs;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use file_store::FileStore;
 #[cfg(target_arch = "wasm32")]
 pub use page_store::FileStore;
+pub(crate) use user_dirs::UserDataDirs;
 
 /// The two directories a [`FileStore`] writes under.
 #[derive(Clone, Debug, PartialEq, Eq)]

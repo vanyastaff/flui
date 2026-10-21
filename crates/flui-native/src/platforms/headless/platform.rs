@@ -24,6 +24,8 @@ use parking_lot::Mutex;
 
 use super::display::{DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplays};
 use super::window_policy::HeadlessWindowPolicy;
+use crate::host::{self, Host};
+use crate::platform::HostPlatform;
 use crate::{
     error::PlatformError, shared::PlatformHandlers, shared::WindowCallbacks,
     shared::window_state::WindowStateCell, traits::HostWindow, traits::OpenWindowError,
@@ -32,9 +34,9 @@ use crate::{
     traits::owner::OwnerHooks, traits::owner::ProxyTransport,
 };
 use flui_platform::{
-    Clipboard, ClipboardItem, CursorError, DispatchEventResult, DisplayId, DisplaySnapshot,
-    PlatformHaptics, PlatformInput, PlatformTextInput, PlatformWindow, SessionEndAnswer,
-    SessionEndPhase, SizeConstraints, SystemNotice, WindowAppearance, WindowBackgroundAppearance,
+    Clipboard, CursorError, DispatchEventResult, DisplayId, DisplaySnapshot, PlatformHaptics,
+    PlatformInput, PlatformTextInput, PlatformWindow, SessionEndAnswer, SessionEndPhase,
+    SizeConstraints, SystemNotice, WindowAppearance, WindowBackgroundAppearance,
     WindowCapabilities, WindowCommand, WindowCommandError, WindowEvent, WindowGeometry, WindowId,
     WindowMode, WindowOptions, WindowState, data_transfer::DataTransferSource,
 };
@@ -67,14 +69,12 @@ fn next_headless_window_id() -> WindowId {
     WindowId(raw)
 }
 
-/// Headless platform for testing
+/// The headless host's loop: the state every position of its table reads.
 ///
-/// This platform implementation doesn't create any real windows or graphics
-/// contexts. It's designed for:
-/// - Unit tests that need a Platform implementation
-/// - CI environments without display servers
-/// - Benchmarking without rendering overhead
-pub struct HeadlessPlatform {
+/// The headless host creates no real windows or graphics contexts; it serves
+/// unit tests, CI without a display server and benchmarks without rendering.
+/// [`HeadlessPlatform`](crate::HeadlessPlatform) is its platform.
+pub struct HeadlessLoop {
     signal: Arc<crate::shared::owner_signal::OwnerSignal>,
     wake_failure: Arc<std::sync::atomic::AtomicBool>,
     state: Arc<Mutex<HeadlessState>>,
@@ -149,9 +149,8 @@ pub(super) struct HeadlessState {
     preference_failure: Option<String>,
 }
 
-impl HeadlessPlatform {
-    /// Create a new headless platform
-    pub fn new() -> Self {
+impl HeadlessLoop {
+    pub(crate) fn new() -> Self {
         let state = HeadlessState {
             drag: Arc::new(super::drag::DragDouble::new()),
             owner_signal: Weak::new(),
@@ -203,13 +202,26 @@ impl HeadlessPlatform {
         platform
     }
 
+    fn with_state<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut HeadlessState) -> R,
+    {
+        let mut state = self.state.lock();
+        f(&mut state)
+    }
+}
+
+/// The headless platform's test controls: builders and handles taken before
+/// [`Platform::run`] consumes it.
+impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     /// Obtain the manual owner-turn driver before `run` consumes this platform.
     #[must_use]
     pub fn owner_turns(&self) -> HeadlessOwnerTurns {
+        let owner = self.owner();
         HeadlessOwnerTurns {
-            signal: Arc::downgrade(&self.signal),
-            wake_failure: Arc::downgrade(&self.wake_failure),
-            state: Arc::downgrade(&self.state),
+            signal: Arc::downgrade(&owner.signal),
+            wake_failure: Arc::downgrade(&owner.wake_failure),
+            state: Arc::downgrade(&owner.state),
             owner_affinity: std::marker::PhantomData,
         }
     }
@@ -222,7 +234,7 @@ impl HeadlessPlatform {
     #[must_use]
     pub fn exit_reevaluation(&self) -> HeadlessExitReevaluation {
         HeadlessExitReevaluation {
-            state: Arc::downgrade(&self.state),
+            state: Arc::downgrade(&self.owner().state),
         }
     }
 
@@ -236,9 +248,10 @@ impl HeadlessPlatform {
     /// on demand, via [`HeadlessDeferredWindowOpens::resolve_next`].
     #[must_use]
     pub fn enable_deferred_window_open(&self) -> HeadlessDeferredWindowOpens {
-        self.with_state(|state| state.deferred_window_open = true);
+        self.owner()
+            .with_state(|state| state.deferred_window_open = true);
         HeadlessDeferredWindowOpens {
-            state: Arc::downgrade(&self.state),
+            state: Arc::downgrade(&self.owner().state),
         }
     }
 
@@ -253,7 +266,8 @@ impl HeadlessPlatform {
         self,
         factory: impl Fn() -> Rc<dyn TextStoreHost> + Send + Sync + 'static,
     ) -> Self {
-        self.with_state(|state| state.text_store_host = Some(Arc::new(factory)));
+        self.owner()
+            .with_state(|state| state.text_store_host = Some(Arc::new(factory)));
         self
     }
     /// Report `availability` as what this backend implements (its device
@@ -267,7 +281,8 @@ impl HeadlessPlatform {
         self,
         availability: flui_platform::input_capabilities::InputCapabilities,
     ) -> Self {
-        self.with_state(|state| state.input_availability = availability);
+        self.owner()
+            .with_state(|state| state.input_availability = availability);
         self
     }
 
@@ -278,7 +293,7 @@ impl HeadlessPlatform {
     /// [`drag_and_drop`](Self::drag_and_drop).
     #[must_use]
     pub fn with_os_drag(self, timing: flui_platform::drag::OsDragStart) -> Self {
-        self.with_state(|state| {
+        self.owner().with_state(|state| {
             state.drag.enable(timing);
             state.input_availability = state
                 .input_availability
@@ -299,14 +314,16 @@ impl HeadlessPlatform {
     /// [`WindowAt::Unknown`](flui_platform::WindowAt::Unknown), as on Wayland.
     #[must_use]
     pub fn with_window_placement(self) -> Self {
-        self.with_state(|state| state.placement = true);
+        self.owner().with_state(|state| state.placement = true);
         self
     }
 
     /// The simulated OS side of drag-and-drop, valid across [`Platform::run`].
     #[must_use]
     pub fn drag_and_drop(&self) -> super::drag::HeadlessDragAndDrop {
-        super::drag::HeadlessDragAndDrop::new(self.with_state(|state| Arc::clone(&state.drag)))
+        super::drag::HeadlessDragAndDrop::new(
+            self.owner().with_state(|state| Arc::clone(&state.drag)),
+        )
     }
 
     /// A handle that attaches and removes simulated input devices, valid
@@ -316,7 +333,7 @@ impl HeadlessPlatform {
     #[must_use]
     pub fn input_devices(&self) -> HeadlessInputDevices {
         HeadlessInputDevices {
-            state: Arc::downgrade(&self.state),
+            state: Arc::downgrade(&self.owner().state),
         }
     }
 
@@ -325,7 +342,8 @@ impl HeadlessPlatform {
     /// the primary display.
     #[must_use]
     pub fn with_displays(self, displays: Vec<DisplaySpec>) -> Self {
-        self.with_state(|state| state.displays = HeadlessDisplays::new(displays));
+        self.owner()
+            .with_state(|state| state.displays = HeadlessDisplays::new(displays));
         self
     }
 
@@ -335,7 +353,8 @@ impl HeadlessPlatform {
     /// capability is `false` is refused as unsupported and changes nothing.
     #[must_use]
     pub fn with_window_capabilities(self, capabilities: WindowCapabilities) -> Self {
-        self.with_state(|state| state.window_capabilities = capabilities);
+        self.owner()
+            .with_state(|state| state.window_capabilities = capabilities);
         self
     }
 
@@ -344,7 +363,8 @@ impl HeadlessPlatform {
     /// The default imposes nothing.
     #[must_use]
     pub fn with_window_policy(self, limits: HeadlessWindowPolicy) -> Self {
-        self.with_state(|state| state.window_policy = limits);
+        self.owner()
+            .with_state(|state| state.window_policy = limits);
         self
     }
 
@@ -352,7 +372,7 @@ impl HeadlessPlatform {
     /// window exists. The default reports every field unknown.
     #[must_use]
     pub fn with_preferences(self, values: flui_platform::SystemPreferences) -> Self {
-        self.with_state(|state| state.preferences = values);
+        self.owner().with_state(|state| state.preferences = values);
         self
     }
 
@@ -362,8 +382,8 @@ impl HeadlessPlatform {
     #[must_use]
     pub fn preference_source(&self) -> HeadlessPreferences {
         HeadlessPreferences {
-            signal: Arc::downgrade(&self.signal),
-            state: Arc::downgrade(&self.state),
+            signal: Arc::downgrade(&self.owner().signal),
+            state: Arc::downgrade(&self.owner().state),
         }
     }
 
@@ -373,8 +393,8 @@ impl HeadlessPlatform {
     #[must_use]
     pub fn display_controls(&self) -> HeadlessDisplayControls {
         HeadlessDisplayControls {
-            signal: Arc::downgrade(&self.signal),
-            state: Arc::downgrade(&self.state),
+            signal: Arc::downgrade(&self.owner().signal),
+            state: Arc::downgrade(&self.owner().state),
         }
     }
 
@@ -384,7 +404,7 @@ impl HeadlessPlatform {
     #[must_use]
     pub fn host_events(&self) -> HeadlessHostEvents {
         HeadlessHostEvents {
-            state: Arc::downgrade(&self.state),
+            state: Arc::downgrade(&self.owner().state),
         }
     }
 
@@ -398,39 +418,22 @@ impl HeadlessPlatform {
     pub fn simulate_host_notice(&self, notice: SystemNotice) {
         self.host_events().notice(notice);
     }
-
-    fn with_state<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut HeadlessState) -> R,
-    {
-        let mut state = self.state.lock();
-        f(&mut state)
-    }
 }
 
-impl std::fmt::Debug for HeadlessPlatform {
+impl std::fmt::Debug for HeadlessLoop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HeadlessPlatform").finish_non_exhaustive()
+        f.debug_struct("HeadlessLoop").finish_non_exhaustive()
     }
 }
 
-impl Default for HeadlessPlatform {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Platform for HeadlessPlatform {
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        self.with_state(|state| state.background_executor.clone())
-    }
-
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> Result<(), PlatformError> {
+impl host::Loop for HeadlessLoop {
+    fn run(
+        self: Arc<Self>,
+        platform: Arc<dyn Platform>,
+        on_ready: PlatformReadyCallback,
+    ) -> Result<(), PlatformError> {
         tracing::info!("Starting headless platform (no event loop)");
 
-        // Captured before `*self` moves into the `Arc` below -- same
-        // underlying `Mutex<HeadlessState>`, just a durable handle to it
-        // that survives the move.
         let state_handle = Arc::clone(&self.state);
         let signal = Arc::clone(&self.signal);
         signal.bind_owner();
@@ -459,7 +462,6 @@ impl Platform for HeadlessPlatform {
         let deferred_window_open = state_handle.lock().deferred_window_open;
         let owner_thread = thread::current().id();
 
-        let platform: Arc<dyn Platform> = Arc::new(*self);
         let hooks: Arc<dyn OwnerHooks> = if deferred_window_open {
             Arc::new(HeadlessDeferredOwnerHooks {
                 state: state_handle,
@@ -518,89 +520,28 @@ impl Platform for HeadlessPlatform {
         self.with_state(|state| state.exit_reevaluation_requested = true);
     }
 
-    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
-        tracing::info!(?options, "Creating mock window");
-
-        let platform_state = Arc::downgrade(&self.state);
-        Ok(self.with_state(|state| create_mock_window(state, platform_state, options)))
-    }
-
-    fn active_window(&self) -> Option<WindowId> {
-        self.with_state(|state| state.active_window)
-    }
-
-    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        Ok(self.with_state(|state| state.displays.snapshot()))
-    }
-
-    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
-        self.with_state(|state| match state.preference_failure.take() {
-            Some(message) => Err(PlatformError::Preferences { message }),
-            None => Ok(state.preferences.clone()),
-        })
-    }
-
-    fn clipboard(&self) -> Arc<dyn Clipboard> {
-        self.with_state(|state| state.clipboard.clone())
-    }
-
-    fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
-        // The headless backend's one source: it serves the drags the test plays
-        // through `HeadlessDragAndDrop`; it has no clipboard transport yet.
-        self.with_state(|state| Arc::clone(&state.drag) as Arc<dyn DataTransferSource>)
-    }
-
-    fn name(&self) -> &'static str {
-        "Headless"
-    }
-
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
         self.with_state(|state| {
             state.handlers.quit = Some(callback);
         });
     }
 
-    fn on_session_end(&self, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {
-        self.with_state(|state| {
-            state.handlers.session_end = Some(callback);
-        });
+    fn set_wake_deadline_hook(
+        &self,
+        hook: Box<dyn Fn() -> Option<web_time::Instant> + Send + Sync>,
+    ) {
+        // No idle wait to bound: the test drives every owner turn.
+        drop(hook);
+    }
+}
+
+impl host::Services for HeadlessLoop {
+    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
+        self.with_state(|state| state.background_executor.clone())
     }
 
-    fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        let notices = self.with_state(|state| Arc::clone(&state.notices));
-        notices.set_hook(callback);
-    }
-
-    fn release_session_end(&self) {
-        self.with_state(|state| state.session_end_releases += 1);
-    }
-
-    fn window_capabilities(&self) -> WindowCapabilities {
-        self.with_state(|state| state.window_capabilities)
-    }
-
-    fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        self.with_state(|state| {
-            state.handlers.window_event = Some(callback);
-        });
-    }
-
-    // ==================== US3 Methods ====================
-
-    fn activate(&self, _ignoring_other_apps: bool) {
-        // No-op in headless mode
-    }
-
-    fn write_to_clipboard(&self, item: ClipboardItem) {
-        if let Some(text) = item.text_content() {
-            self.with_state(|state| {
-                state.clipboard.write_text(text.to_string());
-            });
-        }
-    }
-
-    fn read_from_clipboard(&self) -> Option<ClipboardItem> {
-        self.with_state(|state| state.clipboard.read_text().map(ClipboardItem::text))
+    fn app_path(&self) -> Result<PathBuf, PlatformError> {
+        Ok(PathBuf::from("/mock/app/path"))
     }
 
     fn open_url(&self, url: &str) {
@@ -608,19 +549,108 @@ impl Platform for HeadlessPlatform {
             state.opened_urls.push(url.to_string());
         });
     }
+}
 
-    fn keyboard_layout(&self) -> String {
-        self.with_state(|state| state.keyboard_layout.clone())
+impl host::Window<HeadlessLoop> for MockWindow {
+    fn open(
+        owner: &HeadlessLoop,
+        options: WindowOptions,
+    ) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
+        tracing::info!(?options, "Creating mock window");
+
+        let platform_state = Arc::downgrade(&owner.state);
+        Ok(owner.with_state(|state| create_mock_window(state, platform_state, options)))
     }
 
-    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>) {
-        self.with_state(|state| {
+    fn active(owner: &HeadlessLoop) -> Option<WindowId> {
+        owner.with_state(|state| state.active_window)
+    }
+
+    fn capabilities(owner: &HeadlessLoop) -> WindowCapabilities {
+        owner.with_state(|state| state.window_capabilities)
+    }
+
+    fn frame_inset(_: &HeadlessLoop, _: f64) -> Size<f64> {
+        // A headless window draws no frame.
+        Size::new(0.0, 0.0)
+    }
+
+    fn on_event(owner: &HeadlessLoop, callback: Box<dyn FnMut(WindowEvent) + Send>) {
+        owner.with_state(|state| {
+            state.handlers.window_event = Some(callback);
+        });
+    }
+}
+
+impl host::Displays<HeadlessLoop> for HeadlessDisplays {
+    fn snapshot(owner: &HeadlessLoop) -> Result<DisplaySnapshot, PlatformError> {
+        Ok(owner.with_state(|state| state.displays.snapshot()))
+    }
+}
+
+impl host::Input<HeadlessLoop> for HeadlessInputDevices {
+    fn keyboard_layout(owner: &HeadlessLoop) -> String {
+        owner.with_state(|state| state.keyboard_layout.clone())
+    }
+
+    fn on_keyboard_layout_change(owner: &HeadlessLoop, callback: Box<dyn FnMut() + Send>) {
+        owner.with_state(|state| {
             state.handlers.keyboard_layout_changed = Some(callback);
         });
     }
+}
 
-    fn app_path(&self) -> Result<PathBuf, PlatformError> {
-        Ok(PathBuf::from("/mock/app/path"))
+impl host::Text for FakeTextInput {}
+
+impl host::Clipboard<HeadlessLoop> for InMemoryClipboard {
+    fn clipboard(owner: &HeadlessLoop) -> Arc<dyn Clipboard> {
+        owner.with_state(|state| state.clipboard.clone())
+    }
+}
+
+impl host::Drag<HeadlessLoop> for super::drag::DragDouble {
+    fn data_transfer(owner: &HeadlessLoop) -> Arc<dyn DataTransferSource> {
+        // The headless backend's one source: it serves the drags the test plays
+        // through `HeadlessDragAndDrop`; it has no clipboard transport yet.
+        owner.with_state(|state| Arc::clone(&state.drag) as Arc<dyn DataTransferSource>)
+    }
+}
+
+impl host::Preferences<HeadlessLoop> for HeadlessPreferences {
+    fn sample(owner: &HeadlessLoop) -> Result<flui_platform::SystemPreferences, PlatformError> {
+        owner.with_state(|state| match state.preference_failure.take() {
+            Some(message) => Err(PlatformError::Preferences { message }),
+            None => Ok(state.preferences.clone()),
+        })
+    }
+}
+
+impl host::Lifecycle<HeadlessLoop> for HeadlessHostEvents {
+    fn on_session_end(
+        owner: &HeadlessLoop,
+        callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>,
+    ) {
+        owner.with_state(|state| {
+            state.handlers.session_end = Some(callback);
+        });
+    }
+
+    fn on_host_notice(owner: &HeadlessLoop, callback: Box<dyn FnMut(SystemNotice) + Send>) {
+        let notices = owner.with_state(|state| Arc::clone(&state.notices));
+        notices.set_hook(callback);
+    }
+
+    fn release_session_end(owner: &HeadlessLoop) {
+        owner.with_state(|state| state.session_end_releases += 1);
+    }
+
+    fn on_reopen(_: &HeadlessLoop, callback: Box<dyn FnMut() + Send>) {
+        // Nothing reopens a headless application.
+        drop(callback);
+    }
+
+    fn activate(_: &HeadlessLoop, _: bool) {
+        // Nothing is shown, so nothing comes to the front.
     }
 }
 
@@ -2481,12 +2511,13 @@ impl PlatformExecutor for TestExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::Loop as _;
 
     #[test]
     fn explicit_quit_reenters_and_drops_its_callback_outside_the_state_lock() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         struct CallbackDrop {
-            platform: std::sync::Weak<HeadlessPlatform>,
+            platform: std::sync::Weak<HeadlessLoop>,
             released: Arc<AtomicBool>,
         }
         impl Drop for CallbackDrop {
@@ -2501,7 +2532,7 @@ mod tests {
                     .store(platform.state.try_lock().is_some(), Ordering::SeqCst);
             }
         }
-        let platform = Arc::new(HeadlessPlatform::new());
+        let platform = Arc::new(HeadlessLoop::new());
         platform.state.lock().is_running = true;
         let calls = Arc::new(AtomicUsize::new(0));
         let released = Arc::new(AtomicBool::new(false));
