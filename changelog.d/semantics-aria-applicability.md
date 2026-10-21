@@ -13,7 +13,7 @@
 
 ### Added
 
-- `flui_semantics::{RoleAttribute, InapplicableAttribute, report_inapplicable}`,
+- `flui_semantics::{RoleAttribute, InapplicableAttribute, SemanticsDiagnostic, report_diagnostic}`,
   `SemanticsOwner::take_diagnostics`,
   `PipelineOwner::{take_semantics_diagnostics, restore_semantics_diagnostics}` and
   `PipelineCell::report_semantics_diagnostics`, `PipelineOwner::restore_layer_tree`; with the `testing`

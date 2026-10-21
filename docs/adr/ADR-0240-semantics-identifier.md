@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-17
+- **Amended:** 2026-10-21 — §4: an identifier is unique among its siblings, as AccessKit's
+  `author_id` requires; a clash is reported, not repaired.
 - **Related:** [ADR-0238](ADR-0238-flui-driver-protocol.md),
   [ADR-0203](ADR-0203-semantics-vocabulary.md),
   [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) (`automation_id`)
@@ -29,7 +31,13 @@ its driver), Compose's `testTag`, Android `resource-id`, iOS `accessibilityIdent
 3. The wire `Node` gains `identifier` (schema `0.5`), and `Locator.identifier` matches it exactly.
    When the OS reports an `automation_id` equal to the identifier, the normalized projection
    (ADR-0095 §4) treats the two as one field.
-4. Identifiers are not required to be unique. A strict locator on a duplicated identifier fails
+4. An identifier is unique among its siblings by contract, as AccessKit requires of `author_id`:
+   an OS automation client matching it on two siblings finds only one. It need not be unique
+   anywhere else, so a row template can name its "delete" button in every row. A clash is the
+   author's defect and is reported, never repaired: translation publishes the identifiers as
+   written, debug builds report the clash to the log naming the parent, and a wire read lists a
+   `duplicate_identifier` diagnostic naming the parent and the siblings (schema `0.6`), so a test
+   or agent can assert on it. A strict locator on an identifier more than one node carries fails
    `ambiguous` like any other criterion.
 
 ## Consequences

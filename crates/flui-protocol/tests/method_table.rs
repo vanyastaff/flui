@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use flui_protocol::method::{self, MAX_CORE};
 use flui_protocol::version::BREAKING;
 use flui_protocol::{
-    METHODS, Method, MethodEffect, MethodInfo, PROTOCOL_VERSION, ServedBy, Tier,
+    METHODS, Method, MethodEffect, MethodInfo, ProtocolVersion, ServedBy, Tier,
     method::SemanticsRead,
 };
 
@@ -137,7 +137,7 @@ fn only_session_close_is_destructive_and_reads_never_act() {
 fn the_ops_protocol_0_5_renamed_are_methods_now() {
     let break_0_5 = BREAKING
         .iter()
-        .find(|change| change.version == PROTOCOL_VERSION)
+        .find(|change| change.version == ProtocolVersion::new(0, 5))
         .expect("0.5 is listed in BREAKING");
     assert_eq!(break_0_5.adr, "ADR-0238");
     for (old, new) in break_0_5.renamed {

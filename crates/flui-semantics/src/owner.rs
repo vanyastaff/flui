@@ -347,9 +347,25 @@ pub struct SemanticsOwner {
     #[cfg(any(test, feature = "testing"))]
     examined_last_flush: usize,
 
-    /// What publications left unpublished because a node's declared role does
-    /// not support it and the frame driver has not yet reported, oldest first.
-    diagnostics: std::collections::VecDeque<InapplicableAttribute>,
+    /// What publications found wrong with what authors declared and the frame
+    /// driver has not yet reported, oldest first.
+    diagnostics: std::collections::VecDeque<SemanticsDiagnostic>,
+
+    /// The identifier clashes the last check found, so each is reported once
+    /// for as long as it lasts (debug builds only).
+    #[cfg(debug_assertions)]
+    reported_clashes: Vec<DuplicateIdentifier>,
+}
+
+/// An author error a publication found: published as declared, or left out,
+/// and reported by the frame driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SemanticsDiagnostic {
+    /// An attribute the node's role does not support, left out of the update.
+    InapplicableAttribute(InapplicableAttribute),
+    /// Siblings that share an identifier, published as written.
+    DuplicateIdentifier(DuplicateIdentifier),
 }
 
 /// A role-dependent attribute a published node declared and its role does
@@ -365,16 +381,38 @@ pub struct InapplicableAttribute {
     pub attribute: crate::applicability::RoleAttribute,
 }
 
-/// Reports `finding` as a warning: a semantics attribute its role does not
-/// support, left out of the update. Called by the frame driver with no borrow
-/// of the pipeline held, since a `tracing` subscriber is user code.
-pub fn report_inapplicable(finding: &InapplicableAttribute) {
-    tracing::warn!(
-        node = ?finding.node,
-        role = %finding.role,
-        attribute = finding.attribute.aria_name(),
-        "a semantics attribute its role does not support is not published"
-    );
+/// Siblings in the published tree, as assistive technology sees it, that share
+/// an identifier, which must be unique among siblings (ADR-0240 §4). Found by
+/// debug builds after a publication that reshaped the tree or changed an
+/// identifier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DuplicateIdentifier {
+    /// The identifier they share.
+    pub identifier: Arc<str>,
+    /// Their parent.
+    pub parent: AccessibilityNodeId,
+    /// The siblings carrying it, in tree order.
+    pub siblings: Vec<AccessibilityNodeId>,
+}
+
+/// Reports `diagnostic` as a warning. Called by the frame driver with no
+/// borrow of the pipeline held, since a `tracing` subscriber is user code.
+pub fn report_diagnostic(diagnostic: &SemanticsDiagnostic) {
+    match diagnostic {
+        SemanticsDiagnostic::InapplicableAttribute(finding) => tracing::warn!(
+            node = ?finding.node,
+            role = %finding.role,
+            attribute = finding.attribute.aria_name(),
+            "a semantics attribute its role does not support is not published"
+        ),
+        SemanticsDiagnostic::DuplicateIdentifier(clash) => tracing::warn!(
+            identifier = &*clash.identifier,
+            parent = ?clash.parent,
+            siblings = ?clash.siblings,
+            "siblings share a semantics identifier, which must be unique among siblings"
+        ),
+    }
 }
 
 /// The inapplicable attributes `node` declares, when it is published.
@@ -693,6 +731,8 @@ impl SemanticsOwner {
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
             diagnostics: std::collections::VecDeque::new(),
+            #[cfg(debug_assertions)]
+            reported_clashes: Vec::new(),
         }
     }
 
@@ -716,6 +756,8 @@ impl SemanticsOwner {
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
             diagnostics: std::collections::VecDeque::new(),
+            #[cfg(debug_assertions)]
+            reported_clashes: Vec::new(),
         }
     }
 
@@ -733,6 +775,8 @@ impl SemanticsOwner {
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
             diagnostics: std::collections::VecDeque::new(),
+            #[cfg(debug_assertions)]
+            reported_clashes: Vec::new(),
         }
     }
 
@@ -1383,7 +1427,7 @@ impl SemanticsOwner {
         }
         // Diagnostics follow node changes, not publication: a reconnect
         // republishes every node, and a clean one was reported when it changed.
-        let findings: Vec<InapplicableAttribute> = self
+        let findings: Vec<SemanticsDiagnostic> = self
             .tree
             .rooted_nodes()
             .unwrap_or_default()
@@ -1391,10 +1435,63 @@ impl SemanticsOwner {
             .filter_map(|sid| self.tree.get(sid))
             .filter(|node| node.is_dirty())
             .flat_map(inapplicable_of)
+            .map(SemanticsDiagnostic::InapplicableAttribute)
             .collect();
         self.queue_diagnostics(findings);
+        #[cfg(debug_assertions)]
+        self.check_identifier_clashes();
         self.tree.mark_all_clean();
         published
+    }
+
+    /// Queues each identifier clash in the delivered tree, as assistive
+    /// technology filters it, that the last check did not find: a clash is
+    /// reported once for as long as it lasts, and again if it comes back.
+    ///
+    /// Debug builds only, after a publication that reshaped the tree (always
+    /// a full one) or changed an identifier, since the check reads the whole
+    /// tree. A clash that only a change of clipping brings into or out of view
+    /// is found by the next such publication; an agent read
+    /// ([`Self::read_wire`]) always reports the tree it reads.
+    #[cfg(debug_assertions)]
+    fn check_identifier_clashes(&mut self) {
+        let Some(state) = self.published.as_ref() else {
+            return;
+        };
+        let identified = state
+            .nodes
+            .values()
+            .filter(|node| node.author_id().is_some());
+        if identified.take(2).count() < 2 {
+            self.reported_clashes.clear();
+            return;
+        }
+        let update = crate::TreeUpdate {
+            nodes: state
+                .nodes
+                .iter()
+                .map(|(id, node)| (*id, node.clone()))
+                .collect(),
+            tree: Some(accesskit::TreeInfo::new(state.root)),
+            tree_id: accesskit::TreeId::ROOT,
+            focus: state.focus,
+        };
+        // The delivered tree passed the full publish's shape checks; a
+        // consumer panic here is a defect the adapter meets first.
+        let Ok(tree) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            accesskit_consumer::Tree::new(update, true)
+        })) else {
+            return;
+        };
+        let clashes = crate::agent::identifier_clashes(tree.state());
+        let new: Vec<SemanticsDiagnostic> = clashes
+            .iter()
+            .filter(|clash| !self.reported_clashes.contains(clash))
+            .cloned()
+            .map(SemanticsDiagnostic::DuplicateIdentifier)
+            .collect();
+        self.reported_clashes = clashes;
+        self.queue_diagnostics(new);
     }
 
     /// Every node currently claiming the focused flag — publishable or not,
@@ -1482,7 +1579,7 @@ impl SemanticsOwner {
         // What each examined node now offers beyond its payload, recorded once
         // the update carrying it is delivered (or found unchanged).
         let mut offer_updates: Vec<(accesskit::NodeId, OfferRecord)> = Vec::new();
-        let mut findings: Vec<InapplicableAttribute> = Vec::new();
+        let mut findings: Vec<SemanticsDiagnostic> = Vec::new();
         for sid in dirty {
             // The set is a conservative superset: skip members that died
             // since marking or whose bit a caller cleaned through a borrow.
@@ -1515,7 +1612,7 @@ impl SemanticsOwner {
             let Some(data) = self.tree.publish_view(node) else {
                 continue;
             };
-            findings.extend(inapplicable_of(node));
+            findings.extend(inapplicable_of(node).map(SemanticsDiagnostic::InapplicableAttribute));
             let translated = crate::accesskit_translation::to_published_node(
                 &data,
                 id == state.root,
@@ -1628,6 +1725,10 @@ impl SemanticsOwner {
             callback(&update);
         }
 
+        #[cfg(debug_assertions)]
+        let identifiers_changed = update.nodes.iter().any(|(id, node)| {
+            state.nodes.get(id).map(accesskit::Node::author_id) != Some(node.author_id())
+        });
         // The mirror describes delivery, not the attempted update. A failed
         // callback leaves the dirty nodes available to retry unchanged input.
         for (id, node) in &update.nodes {
@@ -1643,6 +1744,10 @@ impl SemanticsOwner {
 
         self.tree.mark_all_clean();
         self.queue_diagnostics(findings);
+        #[cfg(debug_assertions)]
+        if identifiers_changed {
+            self.check_identifier_clashes();
+        }
         update.nodes.len()
     }
 
@@ -1663,7 +1768,7 @@ impl SemanticsOwner {
     /// queue ([`Self::take_diagnostics`]) and reports it once they are
     /// released. A finding from an earlier publication that is still queued
     /// is a separate change: it is not merged with a new one.
-    fn queue_diagnostics(&mut self, findings: Vec<InapplicableAttribute>) {
+    fn queue_diagnostics(&mut self, findings: impl IntoIterator<Item = SemanticsDiagnostic>) {
         let queued = self.diagnostics.len();
         for finding in findings {
             if !self
@@ -1678,10 +1783,10 @@ impl SemanticsOwner {
 
     /// Takes every diagnostic not yet reported, oldest first. The pipeline
     /// moves them onto itself after each flush, so they outlive this owner,
-    /// and its frame driver reports them ([`report_inapplicable`]) with no
+    /// and its frame driver reports them ([`report_diagnostic`]) with no
     /// lock held.
     #[must_use]
-    pub fn take_diagnostics(&mut self) -> Vec<InapplicableAttribute> {
+    pub fn take_diagnostics(&mut self) -> Vec<SemanticsDiagnostic> {
         self.diagnostics.drain(..).collect()
     }
 
@@ -1848,11 +1953,13 @@ mod tests {
         let root = owner.insert(button("Send"));
         owner.set_root(Some(root));
         owner.flush();
-        let expected = [InapplicableAttribute {
-            node: AccessibilityNodeId::from(render),
-            role: crate::SemanticsRole::Button,
-            attribute: crate::RoleAttribute::Selected,
-        }];
+        let expected = [SemanticsDiagnostic::InapplicableAttribute(
+            InapplicableAttribute {
+                node: AccessibilityNodeId::from(render),
+                role: crate::SemanticsRole::Button,
+                attribute: crate::RoleAttribute::Selected,
+            },
+        )];
         assert_eq!(
             owner.take_diagnostics(),
             expected,
@@ -1936,10 +2043,12 @@ mod tests {
             node.config_mut().set_selected(true);
             node
         };
-        let finding = |index: usize| InapplicableAttribute {
-            node: AccessibilityNodeId::from(RenderId::new(index)),
-            role: crate::SemanticsRole::Button,
-            attribute: crate::RoleAttribute::Selected,
+        let finding = |index: usize| {
+            SemanticsDiagnostic::InapplicableAttribute(InapplicableAttribute {
+                node: AccessibilityNodeId::from(RenderId::new(index)),
+                role: crate::SemanticsRole::Button,
+                attribute: crate::RoleAttribute::Selected,
+            })
         };
         let root = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(1)));
         let first = owner.insert(selected_button(2));

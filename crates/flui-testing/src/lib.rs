@@ -1250,7 +1250,7 @@ impl HeadlessBinding {
         let layer_tree = result.expect("headless pump_frame: pipeline run_frame should succeed");
         // Reported with the checkout released, as the production frame does.
         tree_binding.pipeline_owner.report_semantics_diagnostics();
-        assert_semantics_applicable(&tree_binding.pipeline_owner);
+        assert_semantics_clean(&tree_binding.pipeline_owner);
 
         // Lazy-sliver child requests are serviced INSIDE the fixpoint above,
         // so a fresh scroll band is built, laid out, and painted in this same
@@ -1565,19 +1565,20 @@ impl Default for HeadlessBinding {
     }
 }
 
-/// Fails the test when the last frame left a semantics attribute unpublished
-/// because the node's declared role does not support it: an author error the
-/// test should report, where an application only logs it. Every harness frame
-/// driver calls it after the frame. It reads what the pipeline recorded, not
-/// the report queue, so a reporting subscriber that drains the queue, replaces
-/// the semantics owner or disables semantics hides nothing from it.
-pub(crate) fn assert_semantics_applicable(pipeline: &flui_rendering::pipeline::PipelineCell) {
+/// Fails the test when the last frame's publication found an author error: a
+/// semantics attribute its node's role does not support, left unpublished, or
+/// (in debug builds) siblings sharing an identifier. The test should report
+/// it, where an application only logs it. Every harness frame driver calls it
+/// after the frame. It reads what the pipeline recorded, not the report queue,
+/// so a reporting subscriber that drains the queue, replaces the semantics
+/// owner or disables semantics hides nothing from it.
+pub(crate) fn assert_semantics_clean(pipeline: &flui_rendering::pipeline::PipelineCell) {
     use flui_rendering::pipeline::PipelineOwner;
 
     let findings = pipeline.with_mut(PipelineOwner::take_unchecked_semantics_diagnostics);
     assert!(
         findings.is_empty(),
-        "semantics attributes their role does not support, left unpublished: {findings:?}"
+        "the frame's semantics publication found author errors: {findings:?}"
     );
 }
 

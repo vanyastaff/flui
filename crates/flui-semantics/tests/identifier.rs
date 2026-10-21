@@ -8,8 +8,8 @@ use flui_foundation::RenderId;
 use flui_foundation::geometry::{DevicePixelRatio, Rect};
 use flui_protocol::{ElementId, ReadQuery, WindowId};
 use flui_semantics::{
-    AccessibilityNodeId, Placement, SemanticsConfiguration, SemanticsNode, SemanticsOwner,
-    SemanticsRole, TreeUpdate,
+    AccessibilityNodeId, DuplicateIdentifier, Placement, SemanticsConfiguration,
+    SemanticsDiagnostic, SemanticsNode, SemanticsOwner, SemanticsRole, TreeUpdate,
 };
 use parking_lot::Mutex;
 
@@ -184,5 +184,165 @@ fn the_identifier_is_exported_unannounced_unmerged_and_no_boundary() {
     assert!(
         failed.is_empty(),
         "these identifier claims fail: {failed:#?}"
+    );
+}
+
+/// Siblings that share an identifier break its one rule (ADR-0240 §4): the
+/// read reports the clash beside the tree, naming the parent and every
+/// sibling carrying it, and publishes the identifiers as written. The same
+/// identifier on nodes that are not siblings is no clash, siblings are the
+/// children an agent sees (a child lifted out of an unlabelled container is
+/// one), and the check covers the children of a node whose children the
+/// budget leaves out.
+#[test]
+fn siblings_sharing_an_identifier_are_reported_and_published_as_written() {
+    let mut owner = SemanticsOwner::new(Arc::new(|_: &TreeUpdate| {}));
+    let node = |index: u32, label: &str, identifier: Option<&str>| {
+        let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
+        node.set_rect(Rect::from_ltwh(0.0, f64::from(index) * 10.0, 80.0, 10.0));
+        let config = node.config_mut();
+        if !label.is_empty() {
+            config.set_label(label);
+        }
+        if let Some(identifier) = identifier {
+            config.set_identifier(identifier);
+        }
+        node
+    };
+    let root = owner.insert(node(1, "List", None));
+    let first = owner.insert(node(2, "Delete", Some("delete")));
+    let second = owner.insert(node(3, "Delete", Some("delete")));
+    let other = owner.insert(node(4, "Archive", Some("archive")));
+    let group = owner.insert(node(5, "Group", None));
+    let cousin = owner.insert(node(6, "Delete", Some("delete")));
+    let container = owner.insert(node(7, "", None));
+    let lifted = owner.insert(node(8, "Delete", Some("delete")));
+    for child in [first, second, other, group, container] {
+        owner.add_child(root, child);
+    }
+    owner.add_child(group, cousin);
+    owner.add_child(container, lifted);
+    owner.set_root(Some(root));
+    owner.flush();
+
+    let element = |index: u32| {
+        ElementId::from_u64(AccessibilityNodeId::from(render_id(index)).as_u64())
+            .expect("an accessibility id is non-zero")
+    };
+    let placement = Placement::new(
+        DevicePixelRatio::new(1.0).expect("1 is a ratio"),
+        WindowId::from_u64(1).expect("non-zero"),
+    );
+    let clash = vec![flui_protocol::TreeDiagnostic::DuplicateIdentifier {
+        identifier: "delete".into(),
+        parent: element(1),
+        elements: vec![element(2), element(3), element(8)],
+    }];
+
+    let tree = owner
+        .read_wire(&ReadQuery::new(), placement)
+        .expect("the published tree reads");
+    assert_eq!(tree.diagnostics, clash, "the whole read");
+    let published: Vec<Option<&str>> = tree.roots[0]
+        .children
+        .iter()
+        .map(|child| child.identifier.as_deref())
+        .collect();
+    assert_eq!(
+        published,
+        [
+            Some("delete"),
+            Some("delete"),
+            Some("archive"),
+            None,
+            Some("delete")
+        ],
+        "the identifiers are published as their authors wrote them"
+    );
+
+    let shallow = owner
+        .read_wire(&ReadQuery::new().with_max_depth(0), placement)
+        .expect("the published tree reads");
+    assert!(shallow.truncated);
+    assert_eq!(
+        shallow.diagnostics, clash,
+        "a read that leaves the children out"
+    );
+
+    let below = owner
+        .read_wire(&ReadQuery::new().with_root(element(5)), placement)
+        .expect("the group reads");
+    assert_eq!(below.diagnostics, Vec::new(), "an only child is no clash");
+}
+
+/// Debug builds queue a clash for the frame driver to report once it is
+/// published, not on every flush, and again when an incremental publish
+/// changes who shares the identifier.
+#[test]
+fn debug_builds_queue_a_published_clash_once_per_shape() {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let mut owner = SemanticsOwner::new(Arc::new(|_: &TreeUpdate| {}));
+    let node = |index: u32, identifier: &str| {
+        let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
+        node.set_rect(Rect::from_ltwh(0.0, f64::from(index) * 10.0, 80.0, 10.0));
+        let config = node.config_mut();
+        config.set_label("Row");
+        config.set_identifier(identifier);
+        node
+    };
+    let mut root = SemanticsNode::new().with_source_render_id(render_id(1));
+    root.set_rect(Rect::from_ltwh(0.0, 0.0, 200.0, 100.0));
+    root.config_mut().set_label("List");
+    let root = owner.insert(root);
+    let rows: Vec<_> = [(2, "delete"), (3, "delete"), (4, "archive")]
+        .into_iter()
+        .map(|(index, identifier)| owner.insert(node(index, identifier)))
+        .collect();
+    for &row in &rows {
+        owner.add_child(root, row);
+    }
+    owner.set_root(Some(root));
+    let id = |index: u32| AccessibilityNodeId::from(render_id(index));
+    type Clash = (String, AccessibilityNodeId, Vec<AccessibilityNodeId>);
+    let clashes = |owner: &mut SemanticsOwner| -> Vec<Clash> {
+        owner
+            .take_diagnostics()
+            .into_iter()
+            .map(|diagnostic| match diagnostic {
+                SemanticsDiagnostic::DuplicateIdentifier(DuplicateIdentifier {
+                    identifier,
+                    parent,
+                    siblings,
+                    ..
+                }) => (identifier.to_string(), parent, siblings),
+                other => panic!("only clashes are expected, got {other:?}"),
+            })
+            .collect()
+    };
+    let clash = |siblings: Vec<AccessibilityNodeId>| vec![("delete".to_owned(), id(1), siblings)];
+
+    owner.flush();
+    assert_eq!(
+        clashes(&mut owner),
+        clash(vec![id(2), id(3)]),
+        "first publish"
+    );
+
+    owner.mark_dirty(rows[0]);
+    owner.flush();
+    assert_eq!(clashes(&mut owner), Vec::new(), "an unchanged clash");
+
+    owner
+        .get_mut(rows[2])
+        .expect("the row is in the tree")
+        .config_mut()
+        .set_identifier("delete");
+    owner.flush();
+    assert_eq!(
+        clashes(&mut owner),
+        clash(vec![id(2), id(3), id(4)]),
+        "a sibling joining the clash"
     );
 }

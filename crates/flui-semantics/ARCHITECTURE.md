@@ -648,6 +648,27 @@ a merged parent would collect its children's.
 **Test.** `the_identifier_is_exported_unannounced_unmerged_and_no_boundary` in
 `tests/identifier.rs`; the `identifier` row of `every_published_attribute_reads_through_the_consumer`.
 
+### Siblings sharing an identifier are reported, not repaired
+
+**Rule.** An identifier is unique among its siblings (ADR-0240 §4), and nothing enforces it:
+translation publishes every identifier as its author wrote it. Siblings are the children an
+agent or OS client sees: `accesskit_consumer::common_filter`'s, where an unlabelled container's
+children join its parent's. `read_wire` lists a `TreeDiagnostic::DuplicateIdentifier` for each
+clash, naming the parent and the siblings in tree order, and checks the children of every node
+it reaches, including those its budget leaves out. In debug builds, a publish that changes an
+identifier checks the published tree and queues a `SemanticsDiagnostic::DuplicateIdentifier`
+for each clash it has not reported in that shape; the frame driver logs it with no lock held,
+like every owner diagnostic, and the testing kit fails a frame that leaves it unchecked. The
+same identifier on nodes that are not siblings is no clash.
+
+**Why.** Dropping or rewriting a duplicate would change what the author wrote, and a locator
+matching the written value would then miss it; reporting the clash as data lets a test or agent
+assert on it, where a log alone would not. Logging inside `flush` would run a subscriber, which
+is user code, under the pipeline's borrows.
+
+**Test.** `siblings_sharing_an_identifier_are_reported_and_published_as_written` and
+`debug_builds_queue_a_published_clash_once_per_shape` in `tests/identifier.rs`.
+
 ## Numeric and directional input
 
 ADR-0124 distinguishes expand/collapse from activation and numeric setters from

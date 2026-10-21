@@ -212,13 +212,13 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// Semantics diagnostics the frame driver has not yet reported, moved
     /// here from the semantics owner after each flush so a disposed or
     /// replaced owner cannot take them with it.
-    semantics_diagnostics: std::collections::VecDeque<flui_semantics::InapplicableAttribute>,
+    semantics_diagnostics: std::collections::VecDeque<flui_semantics::SemanticsDiagnostic>,
 
     /// Every semantics diagnostic queued since a test harness last checked,
     /// kept apart from the report queue so a reporting subscriber cannot
     /// hide a finding from the harness.
     #[cfg(any(test, feature = "testing"))]
-    unchecked_semantics_diagnostics: Vec<flui_semantics::InapplicableAttribute>,
+    unchecked_semantics_diagnostics: Vec<flui_semantics::SemanticsDiagnostic>,
 
     /// The platform-publish callback for semantics owners this pipeline
     /// creates.

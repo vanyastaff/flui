@@ -37,14 +37,17 @@
 //! as [`Node::surface_rect`] and `rect`, which is screen pixels, is left out:
 //! the UI runtime knows no window position.
 
+use std::collections::hash_map::Entry;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use accesskit::{Action, NodeId, Toggled, TreeId};
 use accesskit_consumer::{FilterResult, NodeRef, common_filter};
 use flui_foundation::geometry::{DevicePixelRatio, Rect as LogicalRect, device_rect_covering};
 use flui_protocol::{
-    ActionName, ActionRequest, Checked, ElementId, Node, ReadQuery, Rect, Role, Tree, WindowId,
+    ActionName, ActionRequest, Checked, ElementId, Node, ReadQuery, Rect, Role, Tree,
+    TreeDiagnostic, WindowId,
 };
+use rustc_hash::FxHashMap;
 
 use crate::action::{ActionCall, SemanticsAction, SemanticsActionRequest};
 use crate::identity::AccessibilityNodeId;
@@ -433,6 +436,7 @@ struct Walk<'q> {
     /// Whether the node AccessKit is told is focused really claims focus:
     /// AccessKit falls back to the root when nothing does.
     root_claims_focus: bool,
+    diagnostics: Vec<TreeDiagnostic>,
 }
 
 impl Walk<'_> {
@@ -466,6 +470,19 @@ impl Walk<'_> {
         if children.is_empty() {
             return out;
         }
+        // Every child of a node the read reaches is checked, even one the
+        // budget then leaves out: the clash is the parent's, and its ids
+        // read on with `root`.
+        let siblings = children
+            .iter()
+            .filter_map(|child| Some((element_id(child)?, child.author_id())));
+        for (identifier, elements) in duplicate_sibling_identifiers(siblings) {
+            self.diagnostics.push(TreeDiagnostic::DuplicateIdentifier {
+                identifier: identifier.to_owned(),
+                parent: id,
+                elements,
+            });
+        }
         if self.query.max_depth.is_some_and(|max| depth >= max) {
             out.omitted_children = Some(children.len());
             self.truncated = true;
@@ -486,6 +503,59 @@ impl Walk<'_> {
         }
         out
     }
+}
+
+/// The identifiers `siblings` share, each with the siblings carrying it, in
+/// the order each first appears. ADR-0240 §4 makes an identifier unique among
+/// its siblings, as AccessKit's `author_id` requires; it is not required to
+/// be unique anywhere else.
+fn duplicate_sibling_identifiers<'a, K>(
+    siblings: impl IntoIterator<Item = (K, Option<&'a str>)>,
+) -> Vec<(&'a str, Vec<K>)> {
+    let mut seen: Vec<(&'a str, Vec<K>)> = Vec::new();
+    let mut index: FxHashMap<&'a str, usize> = FxHashMap::default();
+    for (key, identifier) in siblings {
+        let Some(identifier) = identifier else {
+            continue;
+        };
+        match index.entry(identifier) {
+            Entry::Occupied(at) => seen[*at.get()].1.push(key),
+            Entry::Vacant(slot) => {
+                slot.insert(seen.len());
+                seen.push((identifier, vec![key]));
+            }
+        }
+    }
+    seen.retain(|(_, keys)| keys.len() > 1);
+    seen
+}
+
+/// Every identifier clash in a published tree, among the children as an
+/// agent read and assistive technology filter them, parents in tree order.
+#[cfg(debug_assertions)]
+pub(crate) fn identifier_clashes(
+    state: &accesskit_consumer::TreeState,
+) -> Vec<crate::owner::DuplicateIdentifier> {
+    let accessibility_id = |node: &NodeRef<'_>| AccessibilityNodeId::from_u64(node.locate().0.0);
+    let mut clashes = Vec::new();
+    let mut pending = vec![state.root()];
+    while let Some(node) = pending.pop() {
+        let children: Vec<NodeRef<'_>> = node.filtered_children(common_filter).collect();
+        if let Some(parent) = accessibility_id(&node) {
+            let siblings = children
+                .iter()
+                .filter_map(|child| Some((accessibility_id(child)?, child.author_id())));
+            for (identifier, siblings) in duplicate_sibling_identifiers(siblings) {
+                clashes.push(crate::owner::DuplicateIdentifier {
+                    identifier: identifier.into(),
+                    parent,
+                    siblings,
+                });
+            }
+        }
+        pending.extend(children.into_iter().rev());
+    }
+    clashes
 }
 
 /// The wire handle of a published node: its generational accessibility id.
@@ -609,6 +679,7 @@ impl SemanticsOwner {
                 remaining: query.max_nodes.unwrap_or(usize::MAX),
                 truncated: false,
                 root_claims_focus,
+                diagnostics: Vec::new(),
             };
             if walk.remaining == 0 {
                 return Ok(Tree::new(Vec::new(), true));
@@ -618,7 +689,7 @@ impl SemanticsOwner {
             if is_window_root {
                 root.window = Some(placement.window);
             }
-            Ok(Tree::new(vec![root], walk.truncated))
+            Ok(Tree::new(vec![root], walk.truncated).with_diagnostics(walk.diagnostics))
         });
         match read {
             Ok(result) => result,

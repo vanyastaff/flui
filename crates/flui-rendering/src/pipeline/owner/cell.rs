@@ -205,7 +205,7 @@ impl PipelineCell {
         /// The findings taken and not yet reported; put back on unwind.
         struct Unreported<'a> {
             cell: &'a PipelineCell,
-            rest: std::collections::VecDeque<flui_semantics::InapplicableAttribute>,
+            rest: std::collections::VecDeque<flui_semantics::SemanticsDiagnostic>,
         }
         impl Drop for Unreported<'_> {
             fn drop(&mut self) {
@@ -225,7 +225,7 @@ impl PipelineCell {
             rest: taken.into(),
         };
         while let Some(finding) = unreported.rest.front() {
-            flui_semantics::report_inapplicable(finding);
+            flui_semantics::report_diagnostic(finding);
             unreported.rest.pop_front();
         }
     }

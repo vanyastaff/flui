@@ -428,7 +428,7 @@ impl HeadlessBinding {
             build_owner.service_child_requests(&mut tree, &pipeline_owner);
             // Reported with the checkout released, as the production frame does.
             pipeline_owner.report_semantics_diagnostics();
-            crate::assert_semantics_applicable(&pipeline_owner);
+            crate::assert_semantics_clean(&pipeline_owner);
             layer_tree
         });
 

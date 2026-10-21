@@ -19,6 +19,7 @@ use std::{
     any::Any,
     cell::{Cell, RefCell},
     rc::Rc,
+    sync::Arc,
 };
 
 /// A controlled horizontal slider. Input proposes a value through `on_changed`;
@@ -30,6 +31,7 @@ pub struct Slider {
     range: NumericRange,
     direction: Option<TextDirection>,
     label: String,
+    identifier: Option<Arc<str>>,
     on_changed: Terminal<Option<ValueCallback<f64>>>,
 }
 impl Clone for Slider {
@@ -39,6 +41,7 @@ impl Clone for Slider {
             range: self.range,
             direction: self.direction,
             label: self.label.clone(),
+            identifier: self.identifier.clone(),
             on_changed,
         }
     }
@@ -49,6 +52,7 @@ impl std::fmt::Debug for Slider {
             .field("range", &self.range)
             .field("direction", &self.direction)
             .field("label", &self.label)
+            .field("identifier", &self.identifier)
             .field("enabled", &self.on_changed.is_some())
             .finish()
     }
@@ -61,6 +65,7 @@ impl Slider {
             range,
             direction: None,
             label: String::new(),
+            identifier: None,
             on_changed: Terminal::new(None),
         }
     }
@@ -87,6 +92,13 @@ impl Slider {
     #[must_use]
     pub fn label(mut self, label: impl Into<String>) -> Self {
         self.label = label.into();
+        self
+    }
+    /// Name the slider's node for tests and automation (ADR-0240); see
+    /// [`Semantics::identifier`]. Never announced.
+    #[must_use]
+    pub fn identifier(mut self, identifier: impl Into<Arc<str>>) -> Self {
+        self.identifier = Some(identifier.into());
         self
     }
 }
@@ -245,7 +257,6 @@ impl ViewState<Slider> for SliderState {
             .unwrap_or_else(|| Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr));
         self.live.direction.set(direction);
         let live = Terminal::new(Rc::clone(&self.live));
-        let label = view.label.clone();
         let layout = LayoutBuilder::new(move |_ctx, constraints| {
             let width = if constraints.max_width.is_finite() {
                 constraints.max_width
@@ -270,7 +281,7 @@ impl ViewState<Slider> for SliderState {
             let paint = CustomPaint::new()
                 .size(size)
                 .painter(std::rc::Rc::new(painter));
-            let child = if enabled {
+            if enabled {
                 let detector = GestureDetector::new()
                     .behavior(HitTestBehavior::Opaque)
                     .child(paint);
@@ -303,26 +314,31 @@ impl ViewState<Slider> for SliderState {
                 // Disablement retires the recognizers and any pending contact;
                 // re-enablement mounts a fresh arena participant.
                 paint.boxed()
-            };
-            let mut semantics = Semantics::new()
-                .numeric_range(range)
-                .label(label.clone())
-                .enabled(enabled)
-                .text_direction(match live.direction.get() {
-                    TextDirection::Ltr => crate::SemanticsTextDirection::Ltr,
-                    TextDirection::Rtl => crate::SemanticsTextDirection::Rtl,
-                });
-            if enabled {
-                let increase = Terminal::new(Rc::clone(&live));
-                let decrease = Terminal::new(Rc::clone(&live));
-                let set = Terminal::new(Rc::clone(&live));
-                semantics = semantics
-                    .on_increment(move |cx| increase.stepped(cx, true))
-                    .on_decrement(move |cx| decrease.stepped(cx, false))
-                    .on_set_numeric_value(move |cx, value| set.propose(cx, value));
             }
-            semantics.child(child)
         });
+        // The slider's semantics wrap its focus, so its own configuration
+        // forms the node and absorbs the focus flags and action from below;
+        // under the focus they were absorbed instead, identifier included.
+        let range = self.live.range.get();
+        let enabled = self.live.usable();
+        let mut semantics = Semantics::new()
+            .numeric_range(range)
+            .label(view.label.clone())
+            .identifier_if(view.identifier.as_ref())
+            .enabled(enabled)
+            .text_direction(match direction {
+                TextDirection::Ltr => crate::SemanticsTextDirection::Ltr,
+                TextDirection::Rtl => crate::SemanticsTextDirection::Rtl,
+            });
+        if enabled {
+            let increase = Terminal::new(Rc::clone(&self.live));
+            let decrease = Terminal::new(Rc::clone(&self.live));
+            let set = Terminal::new(Rc::clone(&self.live));
+            semantics = semantics
+                .on_increment(move |cx| increase.stepped(cx, true))
+                .on_decrement(move |cx| decrease.stepped(cx, false))
+                .on_set_numeric_value(move |cx, value| set.propose(cx, value));
+        }
         let key = Terminal::new(Rc::clone(&self.live));
         let focus_live = Terminal::new(Rc::clone(&self.live));
         let rebuild = Terminal::new(
@@ -330,7 +346,7 @@ impl ViewState<Slider> for SliderState {
                 .clone()
                 .expect("BUG: Slider built before initialization"),
         );
-        Focus::new(layout)
+        let focus = Focus::new(layout)
             .focus_node(Rc::clone(&self.live.focus))
             .can_request_focus(self.live.usable())
             .skip_traversal(!self.live.usable())
@@ -372,7 +388,8 @@ impl ViewState<Slider> for SliderState {
                     _ => return KeyEventResult::Ignored,
                 }
                 KeyEventResult::Handled
-            })
+            });
+        semantics.child(focus)
     }
 }
 
