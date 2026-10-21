@@ -481,7 +481,9 @@ crates/flui-native/
     platform.rs             Platform (sealed), AppHandler
     host_window.rs          HostWindow (sealed), as_any
     owner/                  OwnerPlatform, SharedPlatform, PlatformProxy, the owner signal and slot,
-                            the panic boundary, the one call point for user code
+                            the panic boundary, the one call point for user code,
+                            journal/ (the native input journal and its codec, ADR-0215 §4, built
+                            under the driver feature; its schema is declared in flui-protocol)
     translate/              what two or more OS families use to turn OS facts into the contract's
                             vocabulary: pointer_assembly, keys, window_state, system_notice,
                             haptic_degradation, input_availability, keyboard_adapter, scroll,
@@ -638,7 +640,23 @@ turn ✅ while one of them fails on it.
 - **Conformance is executed with assistive technology** (Narrator, VoiceOver, Orca, TalkBack),
   not only by reading one control through UI Automation or AX.
 - **Native recordings replay on the headless backend** deterministically and cover IME, lifecycle,
-  preferences and displays, not only the pointer.
+  preferences and displays, not only the pointer. The native journal that produces them is a
+  module of the core host (`owner/journal/`), written at run time under the `driver` feature, not
+  a test-only codec; `flui-protocol` declares its schema so `flui-driver` reads a recording
+  without linking the core host.
+- **One way to drive an app.** A backend's conformance rows that need the OS are `flui-driver`
+  scenarios (ADR-0238): the same scenario runs on the headless backend in CI, in process, and
+  through the driver's `os` lane on a device (`cargo xtask device <check>` is a scenario on the
+  driver). An executed run, the one thing that turns a parity cell ✅, is an `os`-lane scenario on
+  that OS or a human run; the headless lane proves the framework's path, not the backend. The
+  driver's synthetic input enters the host input path in `flui-runtime` (ADR-0239), which is the
+  same `WindowHandler::input` obligation ADR-0254 gives every window, so a driven app and a real
+  one share one path.
+- **Scripted providers are reachable from a driven app.** The scripting primitive of ADR-0154 sits
+  behind the contract's `scripted` feature, which `flui-testing` and `flui-app` under `driver`
+  both enable, so a driver scenario can answer a dialog or a permission without the OS. The
+  window double is one, `flui-testing`'s (ADR-0243); the 15 implementations of `PlatformWindow`
+  outside the core host collapse into it when ADR-0254's shape lands.
 
 These are properties of areas already on the closed list (displays, input, text, lifecycle, data
 directories). They add no area to it.

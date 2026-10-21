@@ -255,6 +255,9 @@ host-global logical геометрией. Сигнатуры эскиза §6 de
 | R11.9 | Активация следует правилам ОС о фокусе: `xdg-activation` на Wayland, передача права на передний план на Windows; окно не крадёт фокус | тесты на токене и порядке команд; Dev: Wayland, Windows |
 | R11.10 | Conformance каждой ОС исполняется с настоящей ассистивной технологией (Narrator, VoiceOver, Orca, TalkBack) через `cargo heli xtask device` | записанный прогон в `docs/platform-parity.md` |
 | R11.11 | Записи нативного ввода воспроизводятся на headless детерминированно и покрывают IME, lifecycle, предпочтения и дисплеи, а не только указатель, клавиши и колесо | `native_recording` и `cargo xtask recording-vocabulary`; replay-тест на каждый вид записи |
+| R11.12 | Conformance-таблица бэкенда исполняется сценариями `flui-driver`: на headless в CI и через `os`-lane на устройстве; зелёная ячейка parity — `os`-lane или ручной прогон | сценарии в `tools/xtask/src/device/` (спека flui-driver); отчёт драйвера называет lane |
+| R11.13 | Журнал нативного ввода — модуль ядра (`owner/journal/`), пишется во время работы под фичей `driver`; схема записи объявлена во `flui-protocol`, `flui-driver` читает записи без ядра | `cargo xtask workspace` (у `flui-driver` нет ребра к ядру); golden-записи читаются драйвером |
+| R11.14 | Сценарный примитив контракта — под фичей `scripted`, доступен `flui-testing` и `flui-app[driver]`; двойник `PlatformWindow` один — во `flui-testing` | `cargo xtask testing` (ADR-0243); `rg "impl .*PlatformWindow for"` вне ядра и kit даёт ноль |
 
 ## Вне объёма
 
