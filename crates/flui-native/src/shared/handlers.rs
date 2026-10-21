@@ -336,7 +336,7 @@ impl PlatformHandlers {
     /// when unset — the pre-#555 unconditional "last window closed -> exit"
     /// default a real native backend (winit) had. Nothing calls this
     /// directly: winit's own `CloseRequested` handling
-    /// leases the hook out of the lock first (`WinitPlatform::
+    /// leases the hook out of the lock first (`WinitLoop::
     /// lease_exit_policy_hook`) rather than calling this while the lock is
     /// held, and AppKit and Win32 likewise take the hook out of their handler
     /// set before running it, with the same "no hook allows the exit"

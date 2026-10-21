@@ -43,11 +43,17 @@ use crate::error::PlatformError;
 use crate::shared::owner_signal::OwnerSignal;
 
 /// The platform's outputs, shared with every window.
-pub(super) struct WinitDisplaySource {
+pub struct WinitDisplaySource {
     native: Arc<LinuxDisplays>,
     /// The connection and thread, and the protocol they read. Dropping the
     /// watcher stops the thread, so it is never dropped under this lock.
     watcher: Mutex<Option<(Protocol, DisplayWatcher)>>,
+}
+
+impl std::fmt::Debug for WinitDisplaySource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WinitDisplaySource").finish_non_exhaustive()
+    }
 }
 
 impl WinitDisplaySource {

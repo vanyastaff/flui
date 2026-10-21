@@ -224,7 +224,7 @@ pub use hosts::WindowsPlatform;
     feature = "winit-backend",
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 ))]
-pub use platforms::WinitPlatform;
+pub use hosts::WinitPlatform;
 // Re-export shared infrastructure
 pub use shared::{PlatformHandlers, WindowCallbacks};
 // Re-export task types

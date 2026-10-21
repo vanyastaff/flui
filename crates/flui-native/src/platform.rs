@@ -49,6 +49,11 @@ impl<H: Host> HostPlatform<H> {
     pub(crate) fn owner(&self) -> &H::Loop {
         &self.owner
     }
+
+    /// A handle on the host's loop, for a host whose loop runs as an `Arc`.
+    pub(crate) fn shared_owner(&self) -> Arc<H::Loop> {
+        Arc::clone(&self.owner)
+    }
 }
 
 impl<H: Host> std::fmt::Debug for HostPlatform<H> {
@@ -65,7 +70,7 @@ impl<H: Host> Platform for HostPlatform<H> {
     }
 
     fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> Result<(), PlatformError> {
-        let owner = Arc::clone(&self.owner);
+        let owner = self.shared_owner();
         let platform: Arc<dyn Platform> = Arc::<Self>::from(self);
         owner.run(platform, on_ready)
     }

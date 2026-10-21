@@ -15,6 +15,11 @@ pub(crate) mod headless;
 pub(crate) mod web;
 #[cfg(windows)]
 pub(crate) mod windows;
+#[cfg(all(
+    feature = "winit-backend",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
+pub(crate) mod winit;
 
 #[cfg(target_os = "android")]
 pub use android::AndroidPlatform;
@@ -27,3 +32,8 @@ pub use headless::HeadlessPlatform;
 pub use web::WebPlatform;
 #[cfg(windows)]
 pub use windows::WindowsPlatform;
+#[cfg(all(
+    feature = "winit-backend",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
+pub use winit::WinitPlatform;

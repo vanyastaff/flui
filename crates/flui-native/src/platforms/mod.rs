@@ -53,8 +53,3 @@ pub use headless::{
 };
 #[cfg(target_arch = "wasm32")]
 pub use web::WebPlatform;
-#[cfg(all(
-    feature = "winit-backend",
-    any(target_os = "windows", target_os = "macos", target_os = "linux")
-))]
-pub use winit::WinitPlatform; // winit fallback backend — see `platforms::winit` docs

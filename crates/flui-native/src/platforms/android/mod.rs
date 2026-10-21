@@ -152,7 +152,7 @@ pub struct AndroidLoop {
     api: AndroidApi,
 }
 
-// Opaque on purpose, matching `HeadlessLoop` and `WinitPlatform`. A
+// Opaque on purpose, matching `HeadlessLoop` and `WinitLoop`. A
 // derived `Debug` here traverses `Arc<MockClipboard>`'s
 // `Mutex<Option<String>>` and prints the user's entire clipboard contents
 // into whatever sink formatted the platform — a log line, a panic message,

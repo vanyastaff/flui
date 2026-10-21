@@ -1615,7 +1615,7 @@ impl MockWindow {
     ///
     /// Every user-supplied callback (the hook itself, and `on_quit`) is taken
     /// out of the lock and called OUTSIDE it (ADR-0039) — the same
-    /// take/invoke/restore-if-none discipline `WinitPlatform`'s own
+    /// take/invoke/restore-if-none discipline `WinitLoop`'s own
     /// window-event-handler lease uses, and for the identical reason: the
     /// hook's body (`flui-app`'s `AppRuntime::should_exit`) drops removed
     /// UI runtime state, whose destructors may call back into this platform (a
@@ -1633,7 +1633,7 @@ impl MockWindow {
     /// opening a window) — so calling it while holding `platform_state` would
     /// deadlock the moment it did. This is the discipline
     /// [`Self::notify_closed`] already applies to the exit-policy hook
-    /// (ADR-0039), and the one `WinitPlatform::lease_window_event_handler`
+    /// (ADR-0039), and the one `WinitLoop::lease_window_event_handler`
     /// exists for.
     ///
     /// Note the consequence of leasing: an event emitted from *inside* the
@@ -1650,7 +1650,7 @@ impl MockWindow {
         // Restored by the guard's `Drop`, not by a line after the call: a
         // panicking handler would otherwise be dropped on the floor and every
         // later event silently lost, which is a worse failure than the panic.
-        // `WinitPlatform`'s own lease restores in `Drop` for the same reason.
+        // `WinitLoop`'s own lease restores in `Drop` for the same reason.
         let mut lease = WindowEventLease {
             platform_state: &platform_state,
             handler: Some(handler),

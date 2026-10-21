@@ -149,9 +149,17 @@ pub(super) fn shell_of(window: &impl HasDisplayHandle) -> WindowShell {
 /// `Arc<dyn PlatformTextInput>` from `&self`. Cloning the exact inner
 /// `Arc<Window>` gives the capability independent ownership without cloning
 /// or forwarding the platform-window object itself.
-struct WinitTextInput {
+pub struct WinitTextInput {
     window: Arc<Window>,
 }
+
+impl std::fmt::Debug for WinitTextInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WinitTextInput").finish_non_exhaustive()
+    }
+}
+
+impl crate::host::Text for WinitTextInput {}
 
 impl PlatformTextInput for WinitTextInput {
     fn set_ime_allowed(&self, allowed: bool) {

@@ -29,5 +29,7 @@ mod window_plan;
 
 pub use clipboard::ArboardClipboard;
 pub use data_transfer::WinitDataTransfer;
-pub use platform::WinitPlatform;
+pub(crate) use display::WinitDisplaySource;
+pub(crate) use platform::WinitLoop;
+pub(crate) use window::WinitTextInput;
 pub use window::WinitWindow;

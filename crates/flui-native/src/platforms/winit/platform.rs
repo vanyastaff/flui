@@ -92,10 +92,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use flui_foundation::{ClaimOutcome, ClaimSlot};
-use flui_platform::SystemNotice;
-#[cfg(target_os = "linux")]
-use flui_platform::{SessionEndAnswer, SessionEndPhase};
+use flui_foundation::ClaimSlot;
 use parking_lot::Mutex;
 use ui_events_winit::keyboard::from_winit_modifier_state;
 use winit::{
@@ -123,19 +120,20 @@ use super::{
     events as winit_events,
 };
 use crate::{
-    error::BootstrapError, error::PlatformError, executor::BackgroundExecutor,
-    shared::PlatformHandlers, shared::system_notice::SystemNotices, traits::HostWindow,
-    traits::OpenWindowError, traits::OwnerPlatform, traits::PendingWindow, traits::Platform,
-    traits::PlatformExecutor, traits::PlatformReadyCallback, traits::ProxySendError,
-    traits::WindowOpen, traits::owner::OwnerHooks, traits::owner::ProxyTransport,
+    error::BootstrapError, error::PlatformError, executor::BackgroundExecutor, host, host::Host,
+    platform::HostPlatform, shared::PlatformHandlers, shared::system_notice::SystemNotices,
+    traits::HostWindow, traits::OpenWindowError, traits::OwnerPlatform, traits::PendingWindow,
+    traits::Platform, traits::PlatformExecutor, traits::PlatformReadyCallback,
+    traits::ProxySendError, traits::WindowOpen, traits::owner::OwnerHooks,
+    traits::owner::ProxyTransport,
 };
 use flui_platform::{
-    Clipboard, DisplaySnapshot, PlatformInput, PlatformWindow, WindowEvent, WindowId, WindowMode,
-    WindowOptions, data_transfer::DataTransferSource,
+    PlatformInput, PlatformWindow, WindowEvent, WindowId, WindowMode, WindowOptions,
 };
 
 #[cfg(target_os = "linux")]
 mod linux_notices;
+mod positions;
 
 /// Convert a tracked physical cursor position to logical pixels.
 fn logical_cursor_point(
@@ -188,23 +186,10 @@ impl WinitRunState {
     }
 }
 
-/// Winit-based platform implementation
-///
-/// This is the primary cross-platform implementation using winit for window
-/// management. It supports Windows, macOS, and Linux desktop environments.
-///
-/// # Usage
-///
-/// ```rust,ignore
-/// let platform = WinitPlatform::new();
-/// platform.run(Box::new(|owner| {
-///     // `open_window` is guaranteed `Ready` here — see the module-level
-///     // doc on same-thread window creation.
-///     let _window = owner.open_window(Default::default())?.try_ready()?;
-///     Ok(())
-/// }))?;
-/// ```
-pub struct WinitPlatform {
+/// The winit host's loop: the event loop's run state, the windows it tracks
+/// and the state every position of the host's table reads.
+/// [`WinitPlatform`](crate::WinitPlatform) is its platform.
+pub struct WinitLoop {
     owner_signal: Mutex<Option<Arc<crate::shared::owner_signal::OwnerSignal>>>,
     /// The monitors last sampled and the snapshot built from them. Shared with
     /// every window so each can name its display; outside the state lock so a
@@ -225,14 +210,14 @@ pub struct WinitPlatform {
     #[cfg(target_os = "linux")]
     x11_probe: std::sync::OnceLock<Option<Arc<X11WindowProbe>>>,
 
-    state: Arc<Mutex<WinitPlatformState>>,
+    state: Arc<Mutex<WinitLoopState>>,
 }
 
-impl std::fmt::Debug for WinitPlatform {
+impl std::fmt::Debug for WinitLoop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // `WinitPlatformState` holds boxed callbacks and channel endpoints
+        // `WinitLoopState` holds boxed callbacks and channel endpoints
         // that don't implement `Debug`; print the immutable descriptor only.
-        f.debug_struct("WinitPlatform").finish_non_exhaustive()
+        f.debug_struct("WinitLoop").finish_non_exhaustive()
     }
 }
 
@@ -244,8 +229,8 @@ enum PreferenceObservation {
     Failed(String),
 }
 
-/// Internal state for WinitPlatform
-struct WinitPlatformState {
+/// Internal state for WinitLoop
+struct WinitLoopState {
     /// Delivery values only; native observation remains on the event-loop owner.
     #[cfg(windows)]
     preferences: PreferenceObservation,
@@ -300,7 +285,7 @@ struct WinitPlatformState {
     current_modifiers: ModifiersState,
 }
 
-impl WinitPlatformState {
+impl WinitLoopState {
     fn new() -> Self {
         // Initialize clipboard (may fail in headless environments).
         // `inert()` explicitly, not `default()`: init just failed, and
@@ -362,15 +347,9 @@ impl WinitPlatformState {
     }
 }
 
-impl Default for WinitPlatform {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl WinitPlatform {
-    /// Create a new winit platform
-    pub fn new() -> Self {
+impl WinitLoop {
+    /// A loop that has not run yet.
+    pub(crate) fn new() -> Self {
         let platform = Self {
             owner_signal: Mutex::new(None),
             displays: WinitDisplaySource::new(),
@@ -378,7 +357,7 @@ impl WinitPlatform {
             notices: Arc::new(SystemNotices::default()),
             #[cfg(target_os = "linux")]
             x11_probe: std::sync::OnceLock::new(),
-            state: Arc::new(Mutex::new(WinitPlatformState::new())),
+            state: Arc::new(Mutex::new(WinitLoopState::new())),
         };
         #[cfg(target_os = "linux")]
         platform
@@ -441,13 +420,15 @@ impl WinitPlatform {
     /// Get mutable access to state (for internal use)
     fn with_state<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut WinitPlatformState) -> R,
+        F: FnOnce(&mut WinitLoopState) -> R,
     {
         let mut state = self.state.lock();
         f(&mut state)
     }
 
-    /// Create and run the event loop
+    /// Create and run the event loop for `platform`, the
+    /// [`HostPlatform`](crate::HostPlatform) over this loop that `on_ready`'s
+    /// owner capability wraps
     ///
     /// This is the main entry point for the platform. It creates the event
     /// loop, initializes the platform, and runs until quit is requested.
@@ -456,8 +437,9 @@ impl WinitPlatform {
     /// Same contract as [`Platform::run`]: [`PlatformError::Bootstrap`] for
     /// an `on_ready` failure, [`PlatformError::EventLoop`] for a loop-level
     /// failure (including a second `run` on the same platform).
-    pub fn run_event_loop(
+    pub(crate) fn run_event_loop(
         self: Arc<Self>,
+        platform: Arc<dyn Platform>,
         on_ready: PlatformReadyCallback,
     ) -> Result<(), PlatformError> {
         tracing::info!("Creating winit event loop");
@@ -490,6 +472,7 @@ impl WinitPlatform {
 
         let mut app = WinitApp {
             platform: Arc::clone(&self),
+            owner_platform: platform,
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
             #[cfg(target_os = "macos")]
@@ -632,7 +615,7 @@ impl WinitPlatform {
         // Allocate the platform identity before constructing the wrapper so
         // `WinitWindow` can carry its own `id()` from the start, rather than
         // being registered under an identity it cannot itself report.
-        let platform_id = self.with_state(WinitPlatformState::allocate_window_id);
+        let platform_id = self.with_state(WinitLoopState::allocate_window_id);
         let winit_window = Arc::new(WinitWindow::new(
             platform_id,
             raw_window,
@@ -744,9 +727,9 @@ impl WinitPlatform {
     }
 }
 
-/// See [`WinitPlatform::lease_window_event_handler`].
+/// See [`WinitLoop::lease_window_event_handler`].
 struct WindowEventHandlerLease<'a> {
-    platform: &'a WinitPlatform,
+    platform: &'a WinitLoop,
     handler: Option<Box<dyn FnMut(WindowEvent) + Send>>,
 }
 
@@ -773,9 +756,9 @@ impl Drop for WindowEventHandlerLease<'_> {
     }
 }
 
-/// See [`WinitPlatform::lease_exit_policy_hook`].
+/// See [`WinitLoop::lease_exit_policy_hook`].
 struct ExitPolicyHookLease<'a> {
-    platform: &'a WinitPlatform,
+    platform: &'a WinitLoop,
     hook: Option<Box<dyn Fn() -> bool + Send>>,
 }
 
@@ -960,7 +943,9 @@ struct WinitApp {
     /// Marks the screens stale when AppKit reports a change; owner-thread only.
     #[cfg(target_os = "macos")]
     screen_observer: Option<super::super::macos::display::ScreenObserver>,
-    platform: Arc<WinitPlatform>,
+    platform: Arc<WinitLoop>,
+    /// The platform over `platform` that `on_ready`'s owner capability wraps.
+    owner_platform: Arc<dyn Platform>,
     on_ready: Option<PlatformReadyCallback>,
     control: ControlReceiver,
     quit_notified: bool,
@@ -1036,7 +1021,7 @@ enum NativeDispatch {
 
 /// One `Present` per tracked window, sorted by window.
 fn presence_dispatch(
-    state: &WinitPlatformState,
+    state: &WinitLoopState,
     present: flui_platform::input_capabilities::PointerKindSet,
 ) -> Vec<(Arc<WinitWindow>, NativeDispatch)> {
     let mut windows: Vec<_> = state.windows.iter().collect();
@@ -1050,7 +1035,7 @@ fn presence_dispatch(
 /// `inputs` addressed to the windows still open, after the presence change
 /// their readings revealed: a device is present before its input.
 fn native_batch(
-    state: &mut WinitPlatformState,
+    state: &mut WinitLoopState,
     inputs: Vec<(WindowId, flui_platform::PlatformInput)>,
 ) -> Vec<(Arc<WinitWindow>, NativeDispatch)> {
     let mut batch = state
@@ -1216,12 +1201,11 @@ impl ApplicationHandler for WinitApp {
         if let Some(on_ready) = self.on_ready.take() {
             tracing::info!("Calling on_ready callback");
             let owner_thread = thread::current().id();
-            let platform: Arc<dyn Platform> = Arc::clone(&self.platform) as Arc<dyn Platform>;
             let hooks: Arc<dyn OwnerHooks> = Arc::new(WinitOwnerHooks {
                 platform: Arc::clone(&self.platform),
                 owner_thread,
             });
-            let owner = OwnerPlatform::new(platform, hooks);
+            let owner = OwnerPlatform::new(Arc::clone(&self.owner_platform), hooks);
             if let Err(error) = with_active_event_loop(event_loop, || on_ready(owner)) {
                 // A fallible bootstrap (window creation, GPU init,
                 // root-widget attach) failed with no return path back to
@@ -2461,90 +2445,23 @@ impl Drop for WinitApp {
     }
 }
 
-impl Platform for WinitPlatform {
-    #[cfg(target_os = "linux")]
-    fn on_session_end(&self, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {
-        self.with_state(|state| state.handlers.session_end = Some(callback));
-    }
-
-    fn on_host_notice(&self, callback: Box<dyn FnMut(SystemNotice) + Send>) {
-        self.notices.set_hook(callback);
-    }
-
-    fn window_capabilities(&self) -> flui_platform::WindowCapabilities {
-        self.expected_shell().capabilities()
-    }
-
-    fn window_frame_inset(&self, scale_factor: f64) -> flui_foundation::geometry::Size<f64> {
-        self.frame_inset.logical(scale_factor)
-    }
-
-    #[cfg(target_os = "linux")]
-    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
-        let signal = self.owner_signal.lock().clone();
-        if !signal
-            .as_ref()
-            .is_some_and(|signal| signal.accepting() && signal.owner() == thread::current().id())
-        {
-            return Err(PlatformError::Preferences {
-                message: "Linux preferences require the live winit event-loop owner".into(),
-            });
-        }
-        let source = self.with_state(|state| state.preferences.upgrade());
-        source
-            .map(|source| source.read())
-            .ok_or(PlatformError::PreferencesDeferred)
-    }
-
-    #[cfg(target_os = "macos")]
-    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
-        let signal = self.owner_signal.lock().clone();
-        if !signal
-            .as_ref()
-            .is_some_and(|signal| signal.accepting() && signal.owner() == thread::current().id())
-        {
-            return Err(PlatformError::Preferences {
-                message: "AppKit preferences require the live winit event-loop owner".into(),
-            });
-        }
-        let source = self.with_state(|state| state.preferences.upgrade());
-        source.ok_or(PlatformError::PreferencesDeferred)?.read()
-    }
-
-    #[cfg(windows)]
-    fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError> {
-        let signal = self.owner_signal.lock().clone();
-        if !signal
-            .as_ref()
-            .is_some_and(|signal| signal.accepting() && signal.owner() == thread::current().id())
-        {
-            return Err(PlatformError::Preferences {
-                message: "Windows preferences require the live winit event-loop owner".into(),
-            });
-        }
-        match self.with_state(|state| state.preferences.clone()) {
-            PreferenceObservation::Observed(values) => Ok(values),
-            PreferenceObservation::Deferred => Err(PlatformError::PreferencesDeferred),
-            PreferenceObservation::Failed(message) => Err(PlatformError::Preferences { message }),
-        }
-    }
-
-    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
-        self.with_state(|state| state.background_executor.clone())
-    }
-
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> Result<(), PlatformError> {
+impl host::Loop for WinitLoop {
+    fn run(
+        self: Arc<Self>,
+        platform: Arc<dyn Platform>,
+        on_ready: PlatformReadyCallback,
+    ) -> Result<(), PlatformError> {
         tracing::info!("Starting winit event loop via Platform::run()");
-        let platform = Arc::new(*self);
         // Generic wording, not "Winit event loop error": the propagated
         // error may be a stashed `on_ready` bootstrap failure (window
         // creation, GPU init, root-widget attach), a genuine winit-level
         // error from `event_loop.run_app`, or both combined -- see
         // `run_event_loop`'s `combine_shutdown_result`. This is the sole
         // `error`-level log for whichever of those it turns out to be.
-        platform.run_event_loop(on_ready).inspect_err(|error| {
-            tracing::error!("winit Platform::run exited with an error: {:?}", error);
-        })
+        self.run_event_loop(platform, on_ready)
+            .inspect_err(|error| {
+                tracing::error!("winit Platform::run exited with an error: {:?}", error);
+            })
     }
 
     fn quit(&self) {
@@ -2568,6 +2485,12 @@ impl Platform for WinitPlatform {
         if let Some(control) = control {
             control.request_quit();
         }
+    }
+
+    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
+        self.with_state(|state| {
+            state.handlers.quit = Some(callback);
+        });
     }
 
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
@@ -2601,159 +2524,17 @@ impl Platform for WinitPlatform {
             state.handlers.wake_deadline = Some(Arc::from(hook));
         });
     }
+}
 
-    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
-        tracing::info!(?options, "Requesting window creation");
-
-        // Same-thread fast path: called synchronously from inside `on_ready`
-        // (see `WinitApp::resumed`), where a live `ActiveEventLoop` is
-        // published for exactly this nested call. Create the window
-        // directly instead of enqueuing — the lane's `user_event` consumer
-        // cannot run until this call returns, and would
-        // deadlock forever otherwise (see the module-level doc).
-        if let Some(event_loop_ptr) = ACTIVE_EVENT_LOOP.with(Cell::get) {
-            tracing::debug!("Creating window on event-loop thread (same-thread fast path)");
-            // SAFETY: `event_loop_ptr` is non-null only while
-            // `with_active_event_loop` has published it on THIS thread, for
-            // the exact nested `on_ready` call currently executing (see
-            // `WinitApp::resumed`). The referent is `resumed`'s live
-            // `&ActiveEventLoop` parameter, which outlives that whole call —
-            // and this call is strictly nested inside it — so the reference
-            // constructed here is valid for the borrow's entire duration.
-            let event_loop = unsafe { event_loop_ptr.as_ref() };
-            let window_id = self.create_window_now(event_loop, options)?;
-            return self.window_by_id(window_id);
-        }
-
-        let control = match self.with_state(|state| {
-            state
-                .run_state
-                .control_for_open_window(thread::current().id())
-        }) {
-            Ok(control) => control,
-            // The loop has stopped: the owner is genuinely gone, and the
-            // untouched options ride back so the caller can retry against a
-            // fresh platform without rebuilding them.
-            Err(OpenWindowStateError::Stopped) => {
-                return Err(OpenWindowError::OwnerGone {
-                    rejected: Some(Box::new(options)),
-                });
-            }
-            // Lifecycle refusals: the loop is not (yet) in a state that can
-            // service this call site — typed as `Unavailable`, distinct
-            // from a dead owner.
-            Err(state_error) => {
-                return Err(OpenWindowError::Unavailable {
-                    message: match state_error {
-                        OpenWindowStateError::NotRunning => {
-                            "open_window called before Platform::run — on the winit backend, \
-                             create the first windows inside run()'s on_ready callback"
-                        }
-                        OpenWindowStateError::Starting => {
-                            "open_window called from another thread before winit finished \
-                             on_ready"
-                        }
-                        OpenWindowStateError::OwnerWouldBlock => {
-                            "open_window cannot block the winit event-loop owner outside \
-                             on_ready"
-                        }
-                        OpenWindowStateError::Stopped => unreachable!("BUG: handled above"),
-                    }
-                    .to_string(),
-                });
-            }
-        };
-
-        // The command crosses threads as data only. The owner creates the
-        // window and completes this claim-slot request (ADR-0039 §3)
-        // without exposing winit's thread-affine event-loop capability.
-        let handle = control
-            .request_open_window(options)
-            .map_err(|error| match error {
-                ControlSendError::Full { capacity, rejected } => {
-                    OpenWindowError::LaneFull { capacity, rejected }
-                }
-                ControlSendError::OwnerGone { rejected } => OpenWindowError::OwnerGone {
-                    rejected: Some(rejected),
-                },
-            })?;
-
-        tracing::debug!("Waiting for window creation response");
-
-        // This `handle` is freshly minted above and never offered to any
-        // other caller, so `try_take` cannot have claimed it already —
-        // `AlreadyClaimed` here would mean this fast path itself raced a
-        // second claim attempt, which the code above never performs.
-        // `OwnerGone` is real, though: the event-loop owner can disconnect
-        // (quit, panic-unwind) while this request is in flight on the lane.
-        let window = match handle.wait() {
-            ClaimOutcome::Delivered(result) => result?,
-            ClaimOutcome::AlreadyClaimed => {
-                unreachable!("BUG: this handle is never polled by another caller before wait")
-            }
-            ClaimOutcome::OwnerGone => {
-                return Err(OpenWindowError::OwnerGone { rejected: None });
-            }
-        };
-
-        tracing::info!("Window created successfully");
-        Ok(window)
+impl host::Services for WinitLoop {
+    fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
+        self.with_state(|state| state.background_executor.clone())
     }
 
-    fn active_window(&self) -> Option<WindowId> {
-        self.with_state(|state| state.active_window)
-    }
-
-    // The answer is the native source of the OS (Windows: `QueryDisplayConfig`,
-    // macOS: `NSScreen`, Linux: the compositor), kept between calls and read
-    // again only after an event marked it stale: the host asks on every owner
-    // wake. It needs no event loop, so it answers before `Platform::run`; on
-    // Linux that first answer is read once on a connection that then closes,
-    // and the display thread takes over when the loop resumes.
-    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        self.displays.snapshot()
-    }
-
-    fn clipboard(&self) -> Arc<dyn Clipboard> {
-        self.with_state(|state| state.clipboard.clone())
-    }
-
-    fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
-        // Clones of the ONE source constructed at platform init (ADR-0038
-        // §2): every id it mints stays redeemable at every clone.
-        self.with_state(|state| Arc::clone(&state.data_transfer) as Arc<dyn DataTransferSource>)
-    }
-
-    fn name(&self) -> &'static str {
-        #[cfg(target_os = "windows")]
-        return "Winit (Windows)";
-
-        #[cfg(target_os = "macos")]
-        return "Winit (macOS)";
-
-        #[cfg(target_os = "linux")]
-        return "Winit (Linux)";
-
-        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-        return "Winit";
-    }
-
-    fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        self.with_state(|state| {
-            state.handlers.quit = Some(callback);
-        });
-    }
-
-    fn on_reopen(&self, callback: Box<dyn FnMut() + Send>) {
-        self.with_state(|state| {
-            state.handlers.reopen = Some(callback);
-        });
-    }
-
-    fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        self.with_state(|state| {
-            state.handlers.window_event = Some(callback);
-        });
+    fn app_path(&self) -> Result<PathBuf, PlatformError> {
+        std::env::current_exe().map_err(|error| PlatformError::AppPath {
+            message: error.to_string(),
+        })
     }
 
     fn reveal_path(&self, path: &Path) {
@@ -2816,11 +2597,23 @@ impl Platform for WinitPlatform {
             let _ = std::process::Command::new("xdg-open").arg(path).spawn();
         }
     }
+}
 
-    fn app_path(&self) -> Result<PathBuf, PlatformError> {
-        std::env::current_exe().map_err(|error| PlatformError::AppPath {
-            message: error.to_string(),
-        })
+impl<H: Host<Loop = WinitLoop>> HostPlatform<H> {
+    /// Create and run the event loop
+    ///
+    /// This is the main entry point for the platform. It creates the event
+    /// loop, initializes the platform, and runs until quit is requested.
+    ///
+    /// # Errors
+    /// Same contract as [`Platform::run`]: [`PlatformError::Bootstrap`] for
+    /// an `on_ready` failure, [`PlatformError::EventLoop`] for a loop-level
+    /// failure (including a second `run` on the same platform).
+    pub fn run_event_loop(
+        self: Arc<Self>,
+        on_ready: PlatformReadyCallback,
+    ) -> Result<(), PlatformError> {
+        self.shared_owner().run_event_loop(self, on_ready)
     }
 }
 
@@ -2832,7 +2625,7 @@ impl Platform for WinitPlatform {
 /// [`WinitApp::window_event`], now hoisted outside the state lock) neither
 /// deadlock nor mutate the platform window map mid-frame.
 struct WinitOwnerHooks {
-    platform: Arc<WinitPlatform>,
+    platform: Arc<WinitLoop>,
     owner_thread: ThreadId,
 }
 
@@ -2921,7 +2714,7 @@ impl OwnerHooks for WinitOwnerHooks {
 /// path already did — enqueue-and-wake, claim-slot reply.
 struct WinitProxyTransport {
     signal: std::sync::Weak<crate::shared::owner_signal::OwnerSignal>,
-    platform: Arc<WinitPlatform>,
+    platform: Arc<WinitLoop>,
     owner_thread: ThreadId,
 }
 
@@ -3005,8 +2798,8 @@ mod tests {
         },
     };
 
-    use super::{SelfCloseRoute, WinitApp, WinitPlatform, WinitRunState};
-    use crate::{platforms::winit::control::control_lane, traits::Platform};
+    use super::{SelfCloseRoute, WinitApp, WinitRunState};
+    use crate::{WinitPlatform, platforms::winit::control::control_lane, traits::Platform};
     use flui_platform::WindowOptions;
 
     // ========================================================================
@@ -3020,7 +2813,8 @@ mod tests {
 
     #[test]
     fn winit_panicking_quit_callback_runs_after_idempotent_owner_close() {
-        let platform = Arc::new(WinitPlatform::new());
+        let host = Arc::new(WinitPlatform::new());
+        let platform = host.shared_owner();
         let (sender, receiver) = control_lane(Arc::new(|| {}));
         platform.with_state(|state| {
             state.run_state = WinitRunState::Running {
@@ -3040,7 +2834,7 @@ mod tests {
         let callback_count = Arc::new(AtomicUsize::new(0));
         let callback_count_for_handler = Arc::clone(&callback_count);
         let platform_for_handler = Arc::clone(&platform);
-        platform.on_quit(Box::new(move || {
+        host.on_quit(Box::new(move || {
             callback_count_for_handler.fetch_add(1, Ordering::Relaxed);
             assert!(
                 platform_for_handler
@@ -3050,6 +2844,7 @@ mod tests {
         }));
         let mut app = WinitApp {
             platform: Arc::clone(&platform),
+            owner_platform: host,
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
             #[cfg(target_os = "macos")]

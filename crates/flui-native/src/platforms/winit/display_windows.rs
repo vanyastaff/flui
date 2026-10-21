@@ -21,8 +21,14 @@ use super::super::windows::display::WindowsDisplays;
 use crate::error::PlatformError;
 
 /// The platform's native monitors, shared with every window.
-pub(super) struct WinitDisplaySource {
+pub struct WinitDisplaySource {
     native: Arc<WindowsDisplays>,
+}
+
+impl std::fmt::Debug for WinitDisplaySource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WinitDisplaySource").finish_non_exhaustive()
+    }
 }
 
 impl WinitDisplaySource {
