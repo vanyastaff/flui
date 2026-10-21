@@ -764,22 +764,29 @@ metrics using the Activity context and its resource density; its presentation
 query samples that context again. Neither backend invents unsupported mouse or
 touch geometry. iOS and web retain unknown numeric gesture observations.
 
-Neither verified public API provides a complete external-setting notification
-for these observations. The host therefore attempts a refresh every 500ms while
-its owner loop can run, including without user windows. This is a sampling
-cadence, not an immediate OS notification or a bound on a blocked owner's latency.
-Android also invalidates on `ConfigChanged` and delivers accepted configuration
-changes before subsequent input. AppKit timer captures hold only a weak source;
-owner closure or source retirement makes queued work inert. Its next attempt is
-armed before native work and contained diagnostics. Errors preserve the accepted
-observation and the next refresh attempt.
-AppKit installs this sampler before its first native getter. A cold source has
+AppKit posts nothing when the double-click interval changes. The macOS host
+wakes its owner on the workspace's accessibility display-options notification
+(reduce motion, increase contrast), the current-locale notification (preferred
+languages) and the application becoming active, and the owner samples every
+value again. The interval therefore refreshes when the user comes back from
+System Settings; a change written while the application stays active waits for
+its next activation. The observers hold only a weak owner signal and end before
+the source, with the platform or at the winit loop's shutdown. A failed or
+unwound read schedules one owner wake at its retry deadline, since no timer
+would otherwise come back for it.
+Android has no complete external-setting notification for its observations
+either: its host attempts a refresh every 500ms while its owner loop can run,
+including without user windows. This is a sampling cadence, not an immediate OS
+notification or a bound on a blocked owner's latency. Android also invalidates
+on `ConfigChanged` and delivers accepted configuration changes before subsequent
+input. Errors preserve the accepted observation and the next refresh attempt.
+AppKit registers its observers before its first native getter. A cold source has
 no accepted observation; an initial query error cannot abort platform bootstrap,
 publish a fabricated default, or discard its retry. The shared production read
 path's `cold_native_observation_recovers_without_forged_defaults` covers failed
 initial observation, deferred retry, first successful publication and recovery
 without a stale-success response. This portable seam does not execute AppKit's
-native constructor or its GCD timer.
+native constructor or its notification observers.
 Successful recovery requests owner delivery even when the comparison value is
 unchanged: a prior failed consumer read must not strand the accepted observation.
 Healthy unchanged observations remain quiet.

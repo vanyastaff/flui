@@ -36,7 +36,7 @@ request.
 | 20 | [Window looks](#20-window-looks) | desktop; mobile for capture | Apps with a native look; apps showing sensitive data |
 | 21 | [Unaudited rows](#21-unaudited-rows) | desktop, Web | Unknown |
 | 22 | [Version floors not enforced, and one GPU backend per environment](#22-version-floors-not-enforced-and-one-gpu-backend-per-environment) | all | Users on older systems or GPUs without Vulkan or WebGPU |
-| 23 | [Preferences are polled on macOS and Android](#23-preferences-are-polled-on-macos-and-android) | macOS, Android | Every user on battery; the first thing a reviewer measures |
+| 23 | [Preferences are polled on Android](#23-preferences-are-polled-on-android) | Android | Every user on battery; the first thing a reviewer measures |
 | 24 | [No presentation feedback](#24-no-presentation-feedback) | all | Every animated app; every latency claim |
 | 25 | [No HDR, wide gamut or colour management](#25-no-hdr-wide-gamut-or-colour-management) | all | Photo, video and design apps; every app on an HDR display |
 | 26 | [Sandbox-aware file access is absent](#26-sandbox-aware-file-access-is-absent) | all desktop and mobile | Every app distributed through a store or Flatpak |
@@ -184,7 +184,7 @@ request.
 
 > **Environments:** all but Windows · **Who it hurts:** Users who rely on accessibility settings or another locale · **Parity:** [System preferences](platform-parity.md#system-preferences)
 
-- Contrast and languages on macOS, iOS and Android (Windows, Linux and the Web read both), regional formats everywhere, text scale on the Web and on Linux desktops other than GNOME, accent colour, gesture timings.
+- Contrast and languages on iOS and Android (Windows, macOS, Linux and the Web read both; macOS is type-checked only), regional formats everywhere, text scale on the Web and on Linux desktops other than GNOME, accent colour, gesture timings.
 - Windows text scale is applied linearly. WinUI scales larger text less by an undocumented curve, so large text grows more than in a WinUI control at the same setting.
 - Gesture presets per platform and pointer kind, accessibility floors, per-display geometry and headless injection landed with the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (ADR-0212).
 - Layout direction, per-app language, and system fonts and fallback are separate rows, tracked by [entry 37](#37-locale-edge-layout-direction-per-app-language-system-fonts-and-fallback).
@@ -256,13 +256,14 @@ request.
 - Windows links a 1607 API unconditionally; the Linux release glibc is the runner's.
 - No GLES or WebGL2 fallback is compiled (ADR-0244).
 
-### 23. Preferences are polled on macOS and Android
+### 23. Preferences are polled on Android
 
-> **Environments:** macOS, Android · **Who it hurts:** Every user on battery; the first thing a reviewer measures · **Parity:** [Quality bar](platform-parity.md#quality-bar)
+> **Environments:** Android · **Who it hurts:** Every user on battery; the first thing a reviewer measures · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
 - An idle app wakes every 500 ms.
-- `macos/preferences.rs` and `android/preferences.rs` sample on a timer instead of `NSWorkspace`/`UIAccessibility`/`NSNotificationCenter` and `ContentObserver`/`ComponentCallbacks2`.
+- `android/preferences.rs` samples on a timer instead of `ContentObserver` and `ComponentCallbacks2`.
 - The Galaxy S21 run saw the loop wake twice a second after Home.
+- macOS wakes on AppKit notifications and application activation instead; that is type-checked, not yet run on a Mac.
 
 ### 24. No presentation feedback
 

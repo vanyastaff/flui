@@ -7,11 +7,7 @@
 //! session-end announcement to the loop control that answers the terminate
 //! request. Each source is removed when [`SystemNoticeSources`] drops.
 
-use std::ptr::NonNull;
-use std::sync::{
-    Arc, Weak,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, Weak};
 
 use block2::RcBlock;
 use dispatch2::{
@@ -19,19 +15,15 @@ use dispatch2::{
     DispatchSource,
 };
 use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{
     NSWorkspace, NSWorkspaceDidWakeNotification, NSWorkspaceWillPowerOffNotification,
     NSWorkspaceWillSleepNotification,
 };
-use objc2_foundation::{
-    NSDistributedNotificationCenter, NSNotification, NSNotificationCenter, NSNotificationName,
-    NSObjectProtocol, NSString,
-};
+use objc2_foundation::{NSDistributedNotificationCenter, NSNotificationCenter, NSString};
 
 use flui_platform::SystemNotice;
 
-use super::loop_control::LoopControl;
+use super::{loop_control::LoopControl, observation::Observation};
 use crate::shared::{
     dispatch_memory_pressure::{SUBSCRIBED, level_of},
     panic_boundary::contain_owner_callback,
@@ -42,60 +34,6 @@ use crate::shared::{
 const SCREEN_LOCKED: &str = "com.apple.screenIsLocked";
 /// The distributed notification the lock screen posts when the session unlocks.
 const SCREEN_UNLOCKED: &str = "com.apple.screenIsUnlocked";
-
-/// One observer on a notification centre, removed on drop.
-struct Observation {
-    center: Retained<NSNotificationCenter>,
-    token: Retained<ProtocolObject<dyn NSObjectProtocol>>,
-    /// Cleared on drop, so a delivery already under way finds the source gone.
-    active: Arc<AtomicBool>,
-}
-
-impl Observation {
-    /// Run `handler` for each `name` that `center` posts, on the posting
-    /// thread (the main thread for these centres).
-    fn new(
-        center: Retained<NSNotificationCenter>,
-        name: &NSNotificationName,
-        handler: impl Fn() + 'static,
-    ) -> Self {
-        let active = Arc::new(AtomicBool::new(true));
-        let block = {
-            let active = Arc::clone(&active);
-            RcBlock::new(move |_: NonNull<NSNotification>| {
-                contain_owner_callback(|| {
-                    if active.load(Ordering::Acquire) {
-                        handler();
-                    }
-                });
-            })
-        };
-        // SAFETY: no object filter and no queue, so the block runs on the
-        // posting thread, which is the main thread for the workspace and the
-        // distributed centre alike. It ignores its argument and captures only
-        // an atomic and the handler, which holds weak handles.
-        let token = unsafe {
-            center.addObserverForName_object_queue_usingBlock(Some(name), None, None, &block)
-        };
-        Self {
-            center,
-            token,
-            active,
-        }
-    }
-}
-
-impl Drop for Observation {
-    fn drop(&mut self) {
-        self.active.store(false, Ordering::Release);
-        let token: &ProtocolObject<dyn NSObjectProtocol> = &self.token;
-        // SAFETY: `token` is the exact observer this centre returned when it
-        // was registered.
-        unsafe {
-            self.center.removeObserver(token.as_ref());
-        }
-    }
-}
 
 /// A memory-pressure dispatch source on the main queue.
 struct MemoryPressureSource {
@@ -212,6 +150,8 @@ impl SystemNoticeSources {
         };
 
         // SAFETY: the names are AppKit's immutable notification-name constants.
+        // The workspace and distributed centres post them on the main thread,
+        // where each handler forwards through weak handles.
         let observations = unsafe {
             vec![
                 Observation::new(
