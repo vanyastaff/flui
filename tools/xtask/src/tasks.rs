@@ -178,10 +178,16 @@ fn hack_passes(packages: &str) -> [Cmd; 2] {
 /// `FLUI_HEADLESS=1` routes `current_platform()` to the `HeadlessPlatform`
 /// mock, so most of the suite needs no display server; the few winit-internals
 /// tests that construct `WinitPlatform::new()` need a real (if virtual) X11
-/// connection for clipboard init, which `xvfb-run` supplies.
+/// connection for clipboard init, which `xvfb-run` supplies. The server runs
+/// with `-noreset`: by default Xvfb resets when its last client leaves and
+/// drops a client still in its connection handshake, and with one process per
+/// test that is a test failing with `ECONNRESET` when another test's process
+/// exits. The screen is `xvfb-run`'s default, which the X11 tests lay their
+/// windows out on.
 fn platform_suite_linux() -> Cmd {
     Cmd::new("xvfb-run")
-        .args(["-a", "cargo", "nextest", "run", "-p", "flui-native"])
+        .args(["-a", "-s", "-screen 0 1280x1024x24 -noreset"])
+        .args(["cargo", "nextest", "run", "-p", "flui-native"])
         .args(["--locked", "--all-features", "--no-fail-fast"])
         .env("FLUI_HEADLESS", "1")
 }
@@ -1051,7 +1057,7 @@ mod tests {
         assert_eq!(
             lines(&native_platform_plan(Host::Linux)),
             [
-                "$ FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild))'"
+                "$ FLUI_HEADLESS=1 xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild))'"
             ]
         );
         assert_eq!(
@@ -1112,7 +1118,7 @@ mod tests {
             [
                 "$ cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked".to_owned(),
                 format!("$ cargo nextest run {SCOPE} -E 'not (group(nested-cargo) | group(trybuild))'"),
-                "$ FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild))'".to_owned(),
+                "$ FLUI_HEADLESS=1 xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild))'".to_owned(),
                 format!("$ cargo nextest run {SCOPE} -E 'group(nested-cargo) | group(trybuild)'"),
                 "$ cargo nextest run -p flui-native --test compiler_guards --locked --no-fail-fast".to_owned(),
             ]
