@@ -9,14 +9,16 @@
 //! (and unit-tested, on Linux, where tests actually execute) exactly once
 //! instead of re-derived per OS.
 //!
-//! [`PlatformAccessibility`]: crate::traits::PlatformAccessibility
+//! [`PlatformAccessibility`]: flui_semantics::platform::PlatformAccessibility
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use accesskit::{ActionRequest, TreeUpdate};
 use parking_lot::Mutex;
 
-use crate::traits::{AccessibilityActionListener, AccessibilityActivationListener};
+use flui_semantics::{
+    platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
+};
 
 /// The adapter-side shared state: activation, retention, listeners.
 #[derive(Default)]

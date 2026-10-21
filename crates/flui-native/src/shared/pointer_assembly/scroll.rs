@@ -13,7 +13,7 @@ use flui_platform::pointer::{
 };
 
 use super::{ContactRegistry, GesturePhase, NativeContact, NativeDevice, NativeSurface};
-use crate::traits::PlatformInput;
+use flui_platform::PlatformInput;
 
 /// A scroll event's native phases, as plain data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

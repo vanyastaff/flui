@@ -40,7 +40,7 @@ pub(super) fn start_service(
 ///
 /// If no platform clipboard is installed: [`install_owner_platform`] installs
 /// it, and every runner calls that before it builds any ui_runtime.
-pub(super) fn runtime_clipboard() -> Arc<dyn flui_native::traits::Clipboard> {
+pub(super) fn runtime_clipboard() -> Arc<dyn flui_platform::Clipboard> {
     APP_RUNTIME
         .with(|slot| slot.borrow().clipboard())
         .expect("BUG: the runner installs the platform clipboard before it builds a ui_runtime")
@@ -309,7 +309,7 @@ pub(super) fn build_ui_runtime(
 
 /// Answer one phase of the user's session ending (ADR-0237).
 ///
-/// A query becomes one [`flui_native::HostNotice::SessionEnding`] for every
+/// A query becomes one [`flui_platform::HostNotice::SessionEnding`] for every
 /// presentation, all sharing one request: the answer is `Block` while any
 /// subscriber holds a block on it. The request is kept until the session end is
 /// cancelled or happens, so the blocks outlive the query. Cancelling and ending
@@ -324,8 +324,8 @@ pub(super) fn build_ui_runtime(
 ///
 /// When the last block is later released, the platform is told
 /// (`Platform::release_session_end`) so it can let the session go on.
-fn answer_session_end(phase: flui_native::SessionEndPhase) -> flui_native::SessionEndAnswer {
-    use flui_native::{HostNotice, SessionEndAnswer, SessionEndPhase, SessionEndRequest};
+fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::SessionEndAnswer {
+    use flui_platform::{HostNotice, SessionEndAnswer, SessionEndPhase, SessionEndRequest};
 
     match phase {
         SessionEndPhase::Query => {
@@ -385,7 +385,7 @@ fn answer_session_end(phase: flui_native::SessionEndPhase) -> flui_native::Sessi
 /// unwind would abort the process or skip the answer. The first panic is
 /// reported and `None` is returned; otherwise how the notice was delivered.
 fn deliver_contained(
-    notice: &flui_native::HostNotice,
+    notice: &flui_platform::HostNotice,
 ) -> Option<super::owner_dispatch::NoticeDelivery> {
     let mut failure = flui_foundation::panic::FirstPanic::new();
     let delivery = failure.contain(|| super::owner_dispatch::deliver_host_notice(notice));
@@ -404,7 +404,7 @@ fn deliver_contained(
 /// is attached after this returns.
 fn attach_window_control(
     ui_runtime: &crate::app::ui_runtime::UiRuntime,
-    window: &Arc<dyn flui_native::traits::PlatformWindow>,
+    window: &Arc<dyn flui_platform::PlatformWindow>,
 ) {
     let (queues, wake, router) = APP_RUNTIME.with(|slot| {
         let state = slot.borrow();

@@ -281,7 +281,7 @@ mod message_clock_contract {
             EventTime::from_nanos(25_400_000),
             CancelReason::Platform,
         ));
-        clock.observe(&[crate::traits::PlatformInput::Pointer(precise)]);
+        clock.observe(&[flui_platform::PlatformInput::Pointer(precise)]);
         assert_eq!(
             [clock.stamp_at(110, 200), clock.stamp_at(130, 200)],
             [25_400_000, 31_000_000],
@@ -291,7 +291,8 @@ mod message_clock_contract {
 }
 
 use super::util::{get_x_lparam, get_y_lparam};
-use crate::{shared::events::event_timestamp_ns, shared::keys, traits::PlatformInput};
+use crate::{shared::events::event_timestamp_ns, shared::keys};
+use flui_platform::PlatformInput;
 
 /// Every Win32 registry serves one window.
 pub(super) const SURFACE: NativeSurface = NativeSurface(0);

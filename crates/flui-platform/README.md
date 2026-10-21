@@ -25,8 +25,8 @@ and data-transfer vocabulary, with no OS backend behind them.
 No OS, winit, AccessKit or tokio type appears here, and the crate has no
 `unsafe`. The OS backends, the host-facing `Platform` trait and `HostWindow`
 (a `PlatformWindow` plus its AccessKit accessibility bridge) live in
-`flui-native`, which re-exports everything in this crate at its old paths.
-Only composition roots (`flui-app`) depend on `flui-native`.
+`flui-native`, which does not re-export this crate: every item here has one
+path. Only composition roots (`flui-app`) depend on `flui-native`.
 
 ## Who depends on this
 

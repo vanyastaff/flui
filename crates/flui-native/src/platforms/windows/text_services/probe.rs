@@ -56,7 +56,8 @@ use windows_core::{BOOL, GUID, PWSTR};
 
 use super::TextServices;
 use crate::shared::text_geometry::range_rect_to_screen;
-use crate::traits::{Platform, WindowOptions};
+use crate::traits::Platform;
+use flui_platform::WindowOptions;
 
 /// Microsoft IME ja-JP: its TIP class and profile.
 const MS_IME_JA: (GUID, GUID) = (

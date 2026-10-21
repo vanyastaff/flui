@@ -11,9 +11,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use flui_native::{
-    Platform as _, SessionEndAnswer, SessionEndPhase, SystemNotice, WindowsPlatform,
-};
+use flui_native::{Platform as _, WindowsPlatform};
+use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice};
 use windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM},
     System::Shutdown::ShutdownBlockReasonQuery,
@@ -299,7 +298,7 @@ fn a_block_is_registered_on_the_visible_window() {
     let host = hosted(|_| SessionEndAnswer::Block);
     let window = host
         .platform
-        .open_window(flui_native::WindowOptions::default().with_visible(true))
+        .open_window(flui_platform::WindowOptions::default().with_visible(true))
         .expect("a window");
     let window_hwnd = window
         .as_any()

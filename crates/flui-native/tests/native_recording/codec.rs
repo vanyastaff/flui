@@ -24,8 +24,8 @@ use flui_native::shared::pointer_assembly::{
     NativeContact, NativeDevice, NativeReading, NativeSurface, NativeTime, PenAngles, QpcTicks,
     RawPoint, RawSensors, ReadingAction, ReadingTime, WheelAxis, WheelReading, decode,
 };
-use flui_native::traits::PlatformInput;
 use flui_platform::EventTime;
+use flui_platform::PlatformInput;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
     PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollDelta, ScrollPhase,

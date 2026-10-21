@@ -7,8 +7,8 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use flui_foundation::PresentationAddress;
-use flui_native::WindowOptions;
 use flui_platform::DisplaySnapshot;
+use flui_platform::WindowOptions;
 
 use super::host::{APP_RUNTIME, runtime_storage, with_owner_platform};
 use crate::app::AppConfig;

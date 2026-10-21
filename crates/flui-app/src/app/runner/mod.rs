@@ -348,7 +348,7 @@ mod tests {
 
         let platform = flui_native::headless_platform();
         let window = platform
-            .open_window(flui_native::traits::WindowOptions::default().with_size(marker_size))
+            .open_window(flui_platform::WindowOptions::default().with_size(marker_size))
             .expect("headless platform always opens a window");
 
         // `on_request_frame` requires `Send` on the callback; `AppRuntime` is
@@ -463,7 +463,7 @@ mod tests {
             .run(Box::new(|owner| {
                 install_owner_platform(owner).expect("install owner wake transport");
                 let window = with_owner_platform(|owner| {
-                    owner.open_window(flui_native::WindowOptions::default())
+                    owner.open_window(flui_platform::WindowOptions::default())
                 })
                 .expect("BUG: install_owner_platform just ran above")
                 .and_then(flui_native::WindowOpen::try_ready)

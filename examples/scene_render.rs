@@ -48,8 +48,9 @@ use flui_engine::Renderer;
 use flui_foundation::geometry::{Rect, Size};
 use flui_hot_reload::HotReloadDriver;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
-use flui_native::{WindowOptions, current_platform};
+use flui_native::current_platform;
 use flui_painting::{paint::Paint, styling::Color};
+use flui_platform::WindowOptions;
 
 /// Build a scene with colored rectangles (fallback when no plugin is loaded).
 fn build_test_scene(width: f64, height: f64) -> Scene {

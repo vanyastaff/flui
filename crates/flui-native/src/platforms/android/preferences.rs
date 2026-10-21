@@ -11,7 +11,7 @@ use flui_platform::{MotionPreference, TextWeightPreference};
 use jni::{JValue, JavaVM, jni_sig, jni_str, objects::JObject, refs::Global};
 
 use crate::shared::os_version::android::{AndroidApi, TextWeight};
-use crate::{
+use flui_platform::{
     GestureGeometry, GesturePreferences, NativeTouchGeometry, PreferenceQueryError,
     SystemPreferences,
 };
@@ -242,8 +242,8 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
             text_weight,
             duration_scale_and_haptics,
         )| {
-            let ratio =
-                DevicePixelRatio::new(density).ok_or(crate::InvalidPreference::PixelRatio)?;
+            let ratio = DevicePixelRatio::new(density)
+                .ok_or(flui_platform::InvalidPreference::PixelRatio)?;
             let (duration_scale, haptics) = duration_scale_and_haptics.unzip();
             Ok(Reading {
                 ratio,
@@ -285,7 +285,8 @@ pub(super) fn pixel_ratio(app: &AndroidApp) -> Result<DevicePixelRatio, Preferen
             .f()
             .map(f64::from)
     })?;
-    DevicePixelRatio::new(density).ok_or_else(|| crate::InvalidPreference::PixelRatio.into())
+    DevicePixelRatio::new(density)
+        .ok_or_else(|| flui_platform::InvalidPreference::PixelRatio.into())
 }
 
 /// Public API26 factors, or the public theme attribute on API21–25, projected
@@ -391,7 +392,8 @@ pub(super) fn scroll_factors(
     let (horizontal, vertical, density) = factors.ok_or_else(|| PreferenceQueryError::Native {
         message: "Activity theme has no scroll factor observation".into(),
     })?;
-    let ratio = DevicePixelRatio::new(density).ok_or(crate::InvalidPreference::PixelRatio)?;
+    let ratio =
+        DevicePixelRatio::new(density).ok_or(flui_platform::InvalidPreference::PixelRatio)?;
     PixelFactors::from_physical(horizontal, vertical, ratio).ok_or_else(|| {
         PreferenceQueryError::Native {
             message: "Android returned invalid scroll factors".into(),

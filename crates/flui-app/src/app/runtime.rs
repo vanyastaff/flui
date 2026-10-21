@@ -20,10 +20,10 @@ use std::sync::atomic::AtomicBool;
 use std::thread::ThreadId;
 
 use flui_native::OwnerPlatform;
-#[cfg(target_os = "android")]
-use flui_native::traits::WindowExecutionState;
-use flui_native::traits::{Clipboard, PlatformWindow};
 use flui_painting::{FontCollection, HostFontFeed};
+#[cfg(target_os = "android")]
+use flui_platform::WindowExecutionState;
+use flui_platform::{Clipboard, PlatformWindow};
 use parking_lot::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -284,7 +284,7 @@ pub(crate) struct AppRuntime {
     /// hold their blocks on this one request, so the answer to the operating
     /// system is the aggregate. Kept from the query until the session end is
     /// cancelled or happens.
-    pub(super) session_end: Option<flui_native::SessionEndRequest>,
+    pub(super) session_end: Option<flui_platform::SessionEndRequest>,
     /// The thread that installed the first UI runtime hosted here; every dispatch
     /// checks against this before touching the registry. Loop-scoped, not
     /// per-UI runtime: every UI runtime this `AppRuntime` ever hosts lives on the same
@@ -1093,7 +1093,7 @@ impl AppRuntime {
     #[must_use = "drop the returned window only after releasing TLS borrows"]
     pub(super) fn release_redraw_window_for(
         &self,
-        id: flui_native::traits::WindowId,
+        id: flui_platform::WindowId,
     ) -> Option<Arc<dyn PlatformWindow>> {
         let mut slot = self.redraw_window.lock();
         if slot.as_ref().is_some_and(|window| window.id() == id) {

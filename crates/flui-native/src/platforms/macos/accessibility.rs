@@ -38,8 +38,9 @@ use accesskit_macos::SubclassingAdapter;
 use parking_lot::Mutex;
 
 use crate::shared::accessibility_bridge::BridgeShared;
-use crate::traits::{
-    AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
+use flui_semantics::{
+    platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
+    platform::PlatformAccessibility,
 };
 
 struct Activation(Arc<BridgeShared>);

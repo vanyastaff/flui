@@ -9,10 +9,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
-use flui_native::traits::PlatformWindow;
-use flui_native::{
-    HeadlessHostEvents, HeadlessPlatform, HostNotice, Platform as _, SessionEndAnswer,
-    SessionEndBlock, SessionEndBlockError, SessionEndPhase, SystemNotice,
+use flui_native::{HeadlessHostEvents, HeadlessPlatform, Platform as _};
+use flui_platform::PlatformWindow;
+use flui_platform::{
+    HostNotice, SessionEndAnswer, SessionEndBlock, SessionEndBlockError, SessionEndPhase,
+    SystemNotice,
 };
 use flui_view::__runtime::BindingRuntime as _;
 use flui_view::LifecycleHandle;
@@ -59,7 +60,7 @@ struct Win {
 
 fn open_window() -> Win {
     let host_window =
-        with_owner_platform(|owner| owner.open_window(flui_native::WindowOptions::default()))
+        with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
             .expect("an installed owner")
             .and_then(flui_native::WindowOpen::try_ready)
             .expect("headless windows are ready");
@@ -185,7 +186,7 @@ fn a_query_that_arrives_while_the_owner_is_busy_proceeds_and_closes_the_book() {
 fn a_panicking_subscriber_still_gets_the_platform_answered_and_the_book_closed() {
     let rig = boot();
     let win = open_window();
-    let seen: Rc<RefCell<Option<flui_native::SessionEndRequest>>> = Rc::default();
+    let seen: Rc<RefCell<Option<flui_platform::SessionEndRequest>>> = Rc::default();
     let kept = Rc::clone(&seen);
     let _subscription = win
         .lifecycle

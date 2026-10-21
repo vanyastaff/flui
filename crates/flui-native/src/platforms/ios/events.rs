@@ -23,7 +23,7 @@ use crate::shared::pointer_assembly::{
     ContactRegistry, DecodeError, NativeCancel, NativeClock, NativeContact, NativeReading,
     NativeTime, PenAngles, RawSensors, ReadingAction, ReadingTime, decode,
 };
-use crate::traits::PlatformInput;
+use flui_platform::PlatformInput;
 
 /// Which native callback delivered a batch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

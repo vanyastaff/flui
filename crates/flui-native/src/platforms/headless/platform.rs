@@ -25,18 +25,18 @@ use parking_lot::Mutex;
 use super::display::{DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplays};
 use super::window_policy::HeadlessWindowPolicy;
 use crate::{
-    data_transfer::DataTransferSource,
-    error::PlatformError,
-    shared::{PlatformHandlers, WindowCallbacks, window_state::WindowStateCell},
-    traits::{
-        Clipboard, ClipboardItem, CursorError, DispatchEventResult, DisplayId, DisplaySnapshot,
-        HostWindow, OpenWindowError, OwnerPlatform, PendingWindow, Platform, PlatformExecutor,
-        PlatformHaptics, PlatformInput, PlatformReadyCallback, PlatformTextInput, PlatformWindow,
-        SessionEndAnswer, SessionEndPhase, SizeConstraints, SystemNotice, WindowAppearance,
-        WindowBackgroundAppearance, WindowCapabilities, WindowCommand, WindowCommandError,
-        WindowEvent, WindowGeometry, WindowId, WindowMode, WindowOpen, WindowOptions, WindowState,
-        owner::{DirectOwnerHooks, OwnerHooks, ProxyTransport},
-    },
+    error::PlatformError, shared::PlatformHandlers, shared::WindowCallbacks,
+    shared::window_state::WindowStateCell, traits::HostWindow, traits::OpenWindowError,
+    traits::OwnerPlatform, traits::PendingWindow, traits::Platform, traits::PlatformExecutor,
+    traits::PlatformReadyCallback, traits::WindowOpen, traits::owner::DirectOwnerHooks,
+    traits::owner::OwnerHooks, traits::owner::ProxyTransport,
+};
+use flui_platform::{
+    Clipboard, ClipboardItem, CursorError, DispatchEventResult, DisplayId, DisplaySnapshot,
+    PlatformHaptics, PlatformInput, PlatformTextInput, PlatformWindow, SessionEndAnswer,
+    SessionEndPhase, SizeConstraints, SystemNotice, WindowAppearance, WindowBackgroundAppearance,
+    WindowCapabilities, WindowCommand, WindowCommandError, WindowEvent, WindowGeometry, WindowId,
+    WindowMode, WindowOptions, WindowState, data_transfer::DataTransferSource,
 };
 
 /// The value a deferred (or synchronous) window-open request resolves to —
@@ -1285,7 +1285,7 @@ struct MockWindowState {
     scale_factor: f64,
     focused: bool,
     visible: bool,
-    execution: crate::WindowExecutionState,
+    execution: flui_platform::WindowExecutionState,
     safe_area: flui_foundation::geometry::EdgeInsets,
     closed: bool,
     hovered: bool,
@@ -1425,7 +1425,7 @@ impl MockWindow {
             decorated: options.decorated,
             scale_factor: 1.0,
             focused: true,
-            execution: crate::WindowExecutionState::Running,
+            execution: flui_platform::WindowExecutionState::Running,
             safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
             visible: options.visible,
             closed: false,
@@ -1557,7 +1557,7 @@ impl MockWindow {
     /// `forget_window` has nothing to forget because this backend's data
     /// transfer is the null source.
     ///
-    /// Reached from both routes — [`crate::traits::PlatformWindow::close`] and
+    /// Reached from both routes — [`flui_platform::PlatformWindow::close`] and
     /// [`Self::simulate_close`] — so the two cannot drift apart.
     fn complete_close(&self) {
         {
@@ -1734,7 +1734,7 @@ impl MockWindow {
         {
             let mut state = self.state.lock();
             if state.closed
-                || state.execution == crate::WindowExecutionState::Detached
+                || state.execution == flui_platform::WindowExecutionState::Detached
                 || state.safe_area == insets
             {
                 return;
@@ -1745,7 +1745,7 @@ impl MockWindow {
     }
 
     /// Simulate reversible native execution eligibility; terminal close stays terminal.
-    pub fn simulate_execution_state(&self, execution: crate::WindowExecutionState) {
+    pub fn simulate_execution_state(&self, execution: flui_platform::WindowExecutionState) {
         {
             let mut state = self.state.lock();
             if state.closed {
@@ -1910,10 +1910,10 @@ impl PlatformWindow for MockWindow {
         self.state.lock().safe_area
     }
 
-    fn execution_state(&self) -> crate::WindowExecutionState {
+    fn execution_state(&self) -> flui_platform::WindowExecutionState {
         let state = self.state.lock();
         if state.closed {
-            crate::WindowExecutionState::Detached
+            flui_platform::WindowExecutionState::Detached
         } else {
             state.execution
         }
@@ -2094,11 +2094,11 @@ impl PlatformWindow for MockWindow {
 
     // ==================== Control Methods (US2) ====================
 
-    fn show(&self) -> Result<(), crate::WindowShowError> {
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
         {
             let mut state = self.state.lock();
             if state.closed {
-                return Err(crate::WindowShowError::Closed);
+                return Err(flui_platform::WindowShowError::Closed);
             }
             if state.mode == WindowMode::Minimized {
                 state.enter_mode(WindowMode::Normal, &self.limits, None);
@@ -2138,8 +2138,9 @@ impl PlatformWindow for MockWindow {
 }
 
 impl HostWindow for MockWindow {
-    fn accessibility(&self) -> Option<Arc<dyn crate::traits::PlatformAccessibility>> {
-        Some(Arc::clone(&self.accessibility) as Arc<dyn crate::traits::PlatformAccessibility>)
+    fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
+        Some(Arc::clone(&self.accessibility)
+            as Arc<dyn flui_semantics::platform::PlatformAccessibility>)
     }
 
     fn text_store_host(
@@ -2150,7 +2151,7 @@ impl HostWindow for MockWindow {
     }
 }
 
-/// Recording fake for [`PlatformAccessibility`](crate::traits::PlatformAccessibility),
+/// Recording fake for [`PlatformAccessibility`](flui_semantics::platform::PlatformAccessibility),
 /// backing the headless backend's [`HostWindow::accessibility`].
 ///
 /// Records every published tree so a test can assert what an assistive
@@ -2168,8 +2169,8 @@ pub struct FakeAccessibility {
 struct FakeAccessibilityState {
     active: bool,
     published: Vec<accesskit::TreeUpdate>,
-    activation_listener: Option<crate::traits::AccessibilityActivationListener>,
-    action_listener: Option<crate::traits::AccessibilityActionListener>,
+    activation_listener: Option<flui_semantics::platform::AccessibilityActivationListener>,
+    action_listener: Option<flui_semantics::platform::AccessibilityActionListener>,
 }
 
 impl FakeAccessibility {
@@ -2246,7 +2247,7 @@ impl std::fmt::Debug for FakeAccessibility {
     }
 }
 
-impl crate::traits::PlatformAccessibility for FakeAccessibility {
+impl flui_semantics::platform::PlatformAccessibility for FakeAccessibility {
     fn publish(&self, update: accesskit::TreeUpdate) {
         let mut state = self.state.lock();
         // Inactive means nothing is listening: the update is dropped rather
@@ -2260,11 +2261,14 @@ impl crate::traits::PlatformAccessibility for FakeAccessibility {
         self.state.lock().active
     }
 
-    fn set_activation_listener(&self, listener: crate::traits::AccessibilityActivationListener) {
+    fn set_activation_listener(
+        &self,
+        listener: flui_semantics::platform::AccessibilityActivationListener,
+    ) {
         self.state.lock().activation_listener = Some(listener);
     }
 
-    fn set_action_listener(&self, listener: crate::traits::AccessibilityActionListener) {
+    fn set_action_listener(&self, listener: flui_semantics::platform::AccessibilityActionListener) {
         self.state.lock().action_listener = Some(listener);
     }
 }

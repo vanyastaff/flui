@@ -33,16 +33,19 @@ use std::collections::HashMap;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
 
 use crate::{
-    shared::events::event_timestamp_ns,
-    shared::input_availability::WinitSession,
-    shared::keyboard_adapter::keyboard_input,
-    shared::pointer_assembly::{
-        ContactRegistry, DecodeError, GestureComponent, GestureDelta, GesturePhase, GestureReading,
-        NativeCancel, NativeClock, NativeContact, NativeDevice, NativeReading, NativeSurface,
-        PenAngles, RawSensors, ReadingAction, ReadingTime, ScrollPhases, ScrollReading, decode,
-    },
-    traits::PlatformInput,
+    shared::events::event_timestamp_ns, shared::input_availability::WinitSession,
+    shared::keyboard_adapter::keyboard_input, shared::pointer_assembly::ContactRegistry,
+    shared::pointer_assembly::DecodeError, shared::pointer_assembly::GestureComponent,
+    shared::pointer_assembly::GestureDelta, shared::pointer_assembly::GesturePhase,
+    shared::pointer_assembly::GestureReading, shared::pointer_assembly::NativeCancel,
+    shared::pointer_assembly::NativeClock, shared::pointer_assembly::NativeContact,
+    shared::pointer_assembly::NativeDevice, shared::pointer_assembly::NativeReading,
+    shared::pointer_assembly::NativeSurface, shared::pointer_assembly::PenAngles,
+    shared::pointer_assembly::RawSensors, shared::pointer_assembly::ReadingAction,
+    shared::pointer_assembly::ReadingTime, shared::pointer_assembly::ScrollPhases,
+    shared::pointer_assembly::ScrollReading, shared::pointer_assembly::decode,
 };
+use flui_platform::PlatformInput;
 
 /// The cursor of a device on a window. Touch labels are the platform's touch
 /// ids, which no winit backend reports near the top of the `u64` range.
@@ -225,7 +228,7 @@ impl DeviceLabels {
 /// A move held until the next event shows whether it is the last of its run.
 #[derive(Debug, Clone, Copy)]
 struct HeldMove {
-    window: crate::traits::WindowId,
+    window: flui_platform::WindowId,
     reading: NativeReading,
 }
 
@@ -266,7 +269,7 @@ impl NativePointerState {
 
     /// Deliver the held move: the loop turn ended, or an event other than
     /// pointer input is about to be delivered after it.
-    pub(super) fn flush(&mut self) -> Vec<(crate::traits::WindowId, PlatformInput)> {
+    pub(super) fn flush(&mut self) -> Vec<(flui_platform::WindowId, PlatformInput)> {
         self.settle(None)
     }
 
@@ -275,8 +278,8 @@ impl NativePointerState {
     /// X11 touch it was synthesized for, and otherwise deliver it.
     fn settle(
         &mut self,
-        next: Option<(crate::traits::WindowId, &winit::event::WindowEvent)>,
-    ) -> Vec<(crate::traits::WindowId, PlatformInput)> {
+        next: Option<(flui_platform::WindowId, &winit::event::WindowEvent)>,
+    ) -> Vec<(flui_platform::WindowId, PlatformInput)> {
         use winit::event::{TouchPhase, WindowEvent};
         let Some(held) = self.held else {
             return Vec::new();
@@ -360,11 +363,11 @@ impl NativePointerState {
     /// may belong to another window); `None` when `event` is no pointer input.
     pub(super) fn window_event(
         &mut self,
-        window: crate::traits::WindowId,
+        window: flui_platform::WindowId,
         event: &winit::event::WindowEvent,
         scale: f64,
         modifiers: KeyboardModifiers,
-    ) -> Option<Vec<(crate::traits::WindowId, PlatformInput)>> {
+    ) -> Option<Vec<(flui_platform::WindowId, PlatformInput)>> {
         let mut output = self.settle(Some((window, event)));
         let inputs = self.translate(window, event, scale, modifiers)?;
         output.extend(inputs.into_iter().map(|input| (window, input)));
@@ -373,7 +376,7 @@ impl NativePointerState {
 
     fn translate(
         &mut self,
-        window: crate::traits::WindowId,
+        window: flui_platform::WindowId,
         event: &winit::event::WindowEvent,
         scale: f64,
         modifiers: KeyboardModifiers,
@@ -528,7 +531,7 @@ impl NativePointerState {
 
     fn scroll(
         &mut self,
-        window: crate::traits::WindowId,
+        window: flui_platform::WindowId,
         device_id: &winit::event::DeviceId,
         step: ScrollStep,
         phase: winit::event::TouchPhase,
@@ -572,7 +575,7 @@ impl NativePointerState {
 
     pub(super) fn cancel_window(
         &mut self,
-        window: crate::traits::WindowId,
+        window: flui_platform::WindowId,
         reason: NativeCancel,
     ) -> Vec<PlatformInput> {
         // The sequence a held move belongs to ends here; the move goes with it.
@@ -591,8 +594,8 @@ impl NativePointerState {
         &mut self,
         native: winit::event::DeviceId,
         event: &winit::event::DeviceEvent,
-        windows: &[crate::traits::WindowId],
-    ) -> Vec<(crate::traits::WindowId, PlatformInput)> {
+        windows: &[flui_platform::WindowId],
+    ) -> Vec<(flui_platform::WindowId, PlatformInput)> {
         use winit::event::DeviceEvent;
         let time = EventTime::from_nanos(event_timestamp_ns());
         if !matches!(event, DeviceEvent::Added | DeviceEvent::Removed) {
@@ -631,7 +634,7 @@ impl NativePointerState {
                     events.extend(
                         ended
                             .into_iter()
-                            .map(|(surface, input)| (crate::traits::WindowId(surface.0), input)),
+                            .map(|(surface, input)| (flui_platform::WindowId(surface.0), input)),
                     );
                     changes.extend(removed.map(owned::PointerEvent::DeviceRemoved));
                 }
@@ -713,7 +716,7 @@ mod pointer_translation_tests {
         /// without the announcement of a device first seen through it.
         fn window_input(
             &mut self,
-            window: crate::traits::WindowId,
+            window: flui_platform::WindowId,
             event: &winit::event::WindowEvent,
             scale: f64,
             modifiers: KeyboardModifiers,
@@ -726,7 +729,7 @@ mod pointer_translation_tests {
         /// The input of `events`, dispatched in one loop turn on `window`.
         fn turn(
             &mut self,
-            window: crate::traits::WindowId,
+            window: flui_platform::WindowId,
             events: &[winit::event::WindowEvent],
         ) -> Vec<PlatformInput> {
             let mut inputs = Vec::new();
@@ -742,7 +745,7 @@ mod pointer_translation_tests {
     }
 
     fn announced_elsewhere(
-        inputs: Vec<(crate::traits::WindowId, PlatformInput)>,
+        inputs: Vec<(flui_platform::WindowId, PlatformInput)>,
     ) -> Vec<PlatformInput> {
         inputs
             .into_iter()
@@ -821,7 +824,7 @@ mod pointer_translation_tests {
     fn session_quirks_translate_to_one_grammar() {
         use winit::event::{TouchPhase, WindowEvent};
         let id = winit::event::DeviceId::dummy();
-        let window = crate::traits::WindowId(1);
+        let window = flui_platform::WindowId(1);
         let session = |session| {
             let mut state = NativePointerState::default();
             if let Some(session) = session {
@@ -976,7 +979,7 @@ mod pointer_translation_tests {
         native_identity_exhaustion_never_reissues_a_contact();
         use winit::event::{DeviceEvent, Touch, TouchPhase, WindowEvent};
         let native = winit::event::DeviceId::dummy();
-        let windows = [crate::traits::WindowId(1), crate::traits::WindowId(2)];
+        let windows = [flui_platform::WindowId(1), flui_platform::WindowId(2)];
         let mut state = NativePointerState::default();
         let added = state.device_event(native, &DeviceEvent::Added, &windows);
         let PlatformInput::Pointer(PointerEvent::DeviceAdded(first)) = &added[0].1 else {
@@ -1079,7 +1082,7 @@ mod pointer_translation_tests {
         let last_hardware =
             std::num::NonZeroU64::new(owned::DeviceId::KEYBOARD.get().get() - 1).expect("nonzero");
         let native = winit::event::DeviceId::dummy();
-        let window = crate::traits::WindowId(1);
+        let window = flui_platform::WindowId(1);
         let mut state = NativePointerState::with_registry(
             ContactRegistry::new(NativeClock::epoch_only())
                 .with_first_pointer(std::num::NonZeroU64::MAX)
@@ -1150,7 +1153,7 @@ mod pointer_translation_tests {
     fn native_scroll_units_precision_and_phases() {
         use winit::event::{TouchPhase, WindowEvent};
         let native = winit::event::DeviceId::dummy();
-        let window = crate::traits::WindowId(1);
+        let window = flui_platform::WindowId(1);
         for pixels in [false, true] {
             let mut state = NativePointerState::default();
             state.window_input(
@@ -1289,7 +1292,7 @@ mod pointer_translation_tests {
         use winit::event::{TouchPhase, WindowEvent};
 
         let native = winit::event::DeviceId::dummy();
-        let window = crate::traits::WindowId(1);
+        let window = flui_platform::WindowId(1);
         let pinch = |delta, phase| WindowEvent::PinchGesture {
             device_id: native,
             delta,
@@ -1375,7 +1378,7 @@ mod pointer_translation_tests {
     fn winit_pan_gesture_is_a_phased_scroll() {
         use winit::event::{TouchPhase, WindowEvent};
         let native = winit::event::DeviceId::dummy();
-        let window = crate::traits::WindowId(1);
+        let window = flui_platform::WindowId(1);
         let mut state = NativePointerState::default();
         state.window_input(
             window,
@@ -1428,7 +1431,7 @@ mod pointer_translation_tests {
     fn native_pan_zoom_converter_keeps_terminal_after_invalid_position() {
         use winit::event::{TouchPhase, WindowEvent};
         let native = winit::event::DeviceId::dummy();
-        let window = crate::traits::WindowId(1);
+        let window = flui_platform::WindowId(1);
         let mut state = NativePointerState::default();
         state.window_input(
             window,
@@ -1557,7 +1560,7 @@ mod pointer_translation_tests {
             let mut state = NativePointerState::default();
             let mut inputs = state
                 .window_input(
-                    crate::traits::WindowId(1),
+                    flui_platform::WindowId(1),
                     &winit::event::WindowEvent::Touch(touch),
                     2.0,
                     KeyboardModifiers::empty(),
@@ -1597,7 +1600,7 @@ mod pointer_translation_tests {
     pub(super) fn translated_events_meet_the_pointer_field_contract() {
         let position = winit::dpi::PhysicalPosition::new(10.0, 10.0);
         let mut state = NativePointerState::default();
-        let window = crate::traits::WindowId(1);
+        let window = flui_platform::WindowId(1);
         let device = winit::event::DeviceId::dummy();
         let moved = winit::event::WindowEvent::CursorMoved {
             device_id: device,

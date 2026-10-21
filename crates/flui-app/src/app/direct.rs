@@ -48,10 +48,7 @@ use std::sync::Arc;
 
 use flui_engine::{EngineError, Recoverability, Renderer};
 use flui_layer::{Scene, SceneBuilder};
-use flui_native::{
-    WindowOptions,
-    traits::{DispatchEventResult, PlatformInput},
-};
+use flui_platform::{DispatchEventResult, PlatformInput, WindowOptions};
 use parking_lot::Mutex;
 
 use super::AppConfig;

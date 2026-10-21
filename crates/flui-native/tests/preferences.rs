@@ -50,7 +50,7 @@ fn windows_reads_preferences_before_a_user_window_exists() {
         assert_eq!(
             observed
                 .motion()
-                .map(|motion| motion == flui_native::MotionPreference::NoPreference),
+                .map(|motion| motion == flui_platform::MotionPreference::NoPreference),
             Some(
                 native_ui
                     .AnimationsEnabled()
@@ -74,7 +74,7 @@ fn windows_reads_preferences_before_a_user_window_exists() {
     // Repeated sampling must preserve the platform's outer COM lifetime so
     // a subsequent real native window can still initialize its text services.
     let window = platform
-        .open_window(flui_native::WindowOptions::default().with_visible(false))
+        .open_window(flui_platform::WindowOptions::default().with_visible(false))
         .expect("native window after preference reads");
     let projected = window
         .gesture_geometry()
@@ -119,11 +119,14 @@ fn windows_reads_preferences_before_a_user_window_exists() {
             .join()
             .expect("foreign query returned")
     });
-    assert_eq!(refused, Err(flui_native::PreferenceQueryError::WrongThread));
+    assert_eq!(
+        refused,
+        Err(flui_platform::PreferenceQueryError::WrongThread)
+    );
     window.close();
     assert_eq!(
         window.gesture_geometry(),
-        Err(flui_native::PreferenceQueryError::Unavailable)
+        Err(flui_platform::PreferenceQueryError::Unavailable)
     );
 }
 

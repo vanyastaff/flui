@@ -27,7 +27,8 @@ use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
 };
 
-use super::{PlatformAccessibility, PlatformWindow};
+use flui_platform::PlatformWindow;
+use flui_semantics::platform::PlatformAccessibility;
 
 mod sealed {
     use std::marker::PhantomData;

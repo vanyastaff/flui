@@ -22,15 +22,12 @@ use flui_platform::{
 use parking_lot::Mutex;
 
 use crate::{
-    shared::{
-        WindowCallbacks,
-        input_availability::AndroidInputApis,
-        os_version::android::{AndroidApi, DragSource, GestureExclusion, TouchpadGestures},
-        owner_slot::OwnerSlot,
-        window_state::WindowStateCell,
-    },
-    traits::{CursorError, PlatformWindow, WindowExecutionState, WindowId},
+    shared::WindowCallbacks, shared::input_availability::AndroidInputApis,
+    shared::os_version::android::AndroidApi, shared::os_version::android::DragSource,
+    shared::os_version::android::GestureExclusion, shared::os_version::android::TouchpadGestures,
+    shared::owner_slot::OwnerSlot, shared::window_state::WindowStateCell,
 };
+use flui_platform::{CursorError, PlatformWindow, WindowExecutionState, WindowId};
 
 /// Android window wrapping the native ANativeWindow via `AndroidApp`
 ///
@@ -493,9 +490,9 @@ impl PlatformWindow for AndroidWindow {
 
     fn gesture_geometry(
         &self,
-    ) -> Result<Option<crate::GestureGeometry>, crate::PreferenceQueryError> {
+    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
         if self.owner != std::thread::current().id() {
-            return Err(crate::PreferenceQueryError::WrongThread);
+            return Err(flui_platform::PreferenceQueryError::WrongThread);
         }
         if !self.geometry_live.load(Ordering::Acquire)
             || self.app.native_window().is_none()
@@ -504,7 +501,7 @@ impl PlatformWindow for AndroidWindow {
                 .upgrade()
                 .is_some_and(|signal| signal.accepting())
         {
-            return Err(crate::PreferenceQueryError::Unavailable);
+            return Err(flui_platform::PreferenceQueryError::Unavailable);
         }
         super::preferences::geometry(&self.app).map(Some)
     }
@@ -560,8 +557,8 @@ impl PlatformWindow for AndroidWindow {
         Err(CursorError::Unsupported)
     }
 
-    fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
-        Some(Arc::clone(&self.haptics) as Arc<dyn crate::traits::PlatformHaptics>)
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        Some(Arc::clone(&self.haptics) as Arc<dyn flui_platform::PlatformHaptics>)
     }
 
     /// `FluiView.startDragAndDrop`, once the view is installed, from API 24:

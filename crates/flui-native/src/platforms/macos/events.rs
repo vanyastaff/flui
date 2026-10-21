@@ -24,7 +24,7 @@ use crate::shared::pointer_assembly::{
     GestureReading, NativeCancel, NativeClock, NativeContact, NativeReading, NativeSurface,
     NativeTime, RawSensors, ReadingAction, ReadingTime, ScrollPhases, ScrollReading, decode,
 };
-use crate::traits::PlatformInput;
+use flui_platform::PlatformInput;
 
 /// The view's cursor.
 const MOUSE: NativeContact = NativeContact(0);

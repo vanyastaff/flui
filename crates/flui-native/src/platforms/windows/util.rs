@@ -7,7 +7,7 @@ use windows::{
     core::{PCWSTR, w},
 };
 
-use crate::traits::CursorError;
+use flui_platform::CursorError;
 
 /// Windows platform window class name (shared across platform.rs and window.rs)
 pub const WINDOW_CLASS_NAME: PCWSTR = w!("FluiWindowClass");

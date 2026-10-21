@@ -11,9 +11,10 @@ use std::sync::Mutex;
 
 use flui_foundation::geometry::{Point, Size};
 use flui_foundation::{PresentationId, UiRuntimeId};
-use flui_native::traits::WindowId;
-use flui_native::{HeadlessPlatform, Platform as _, WindowMode, WindowOptions};
+use flui_native::{HeadlessPlatform, Platform as _};
+use flui_platform::WindowId;
 use flui_platform::{CursorError, CursorIcon};
+use flui_platform::{WindowMode, WindowOptions};
 use flui_view::{WindowClosed, WindowHandle};
 
 use super::*;
@@ -238,7 +239,7 @@ impl PlatformWindow for RecordingWindow {
     }
     fn state(&self) -> WindowState {
         WindowState::new(
-            flui_native::WindowGeometry::new(None, Size::new(10.0, 10.0)),
+            flui_platform::WindowGeometry::new(None, Size::new(10.0, 10.0)),
             Size::new(10.0, 10.0),
         )
     }

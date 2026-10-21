@@ -52,13 +52,14 @@ pub(super) const REQUEST_FRAME: u32 = WM_APP + 1;
 pub(super) const TOGGLE_FULLSCREEN: u32 = WM_APP + 3;
 use crate::shared::window_state::WindowStateCell;
 use crate::{
-    shared::{PlatformHandlers, WindowCallbacks, hwnd_affinity::UserDataRefusal},
-    traits::{
-        CursorError, DispatchEventResult, OpenWindowError, PlatformInput, PlatformWindow,
-        SizeConstraints, WindowAppearance, WindowBackgroundAppearance, WindowCapabilities,
-        WindowCommand, WindowCommandError, WindowExecutionState, WindowGeometry, WindowId,
-        WindowMode, WindowOptions, WindowReveal, WindowState,
-    },
+    shared::PlatformHandlers, shared::WindowCallbacks, shared::hwnd_affinity::UserDataRefusal,
+    traits::OpenWindowError,
+};
+use flui_platform::{
+    CursorError, DispatchEventResult, PlatformInput, PlatformWindow, SizeConstraints,
+    WindowAppearance, WindowBackgroundAppearance, WindowCapabilities, WindowCommand,
+    WindowCommandError, WindowExecutionState, WindowGeometry, WindowId, WindowMode, WindowOptions,
+    WindowReveal, WindowState,
 };
 
 /// Windows window wrapper
@@ -1726,7 +1727,7 @@ impl crate::traits::HostWindow for WindowsWindow {
     /// default (`None`) leaves every real Windows window silently invisible
     /// to UI Automation clients.
     #[cfg(feature = "a11y")]
-    fn accessibility(&self) -> Option<Arc<dyn crate::traits::PlatformAccessibility>> {
+    fn accessibility(&self) -> Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>> {
         Some(Arc::clone(&self.accessibility) as _)
     }
 
@@ -1758,8 +1759,8 @@ impl PlatformWindow for WindowsWindow {
         WindowId(self.hwnd.0 as u64)
     }
 
-    fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
-        Some(Arc::clone(&self.haptics) as Arc<dyn crate::traits::PlatformHaptics>)
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+        Some(Arc::clone(&self.haptics) as Arc<dyn flui_platform::PlatformHaptics>)
     }
 
     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
@@ -1946,8 +1947,8 @@ impl PlatformWindow for WindowsWindow {
             WindowCommand::SetMode(mode) => self.set_mode(mode)?,
             WindowCommand::Hide => self.hide_native(),
             WindowCommand::Show => self.show().map_err(|error| match error {
-                crate::WindowShowError::Closed => WindowCommandError::Closed,
-                crate::WindowShowError::Native { message } => {
+                flui_platform::WindowShowError::Closed => WindowCommandError::Closed,
+                flui_platform::WindowShowError::Native { message } => {
                     WindowCommandError::Backend { message }
                 }
                 _ => WindowCommandError::Unsupported,
@@ -2014,7 +2015,7 @@ impl PlatformWindow for WindowsWindow {
         self.displays.display_of_window(self.hwnd)
     }
 
-    fn show(&self) -> Result<(), crate::WindowShowError> {
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
         use windows::Win32::UI::WindowsAndMessaging::{
             SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, WPF_RESTORETOMAXIMIZED,
         };
@@ -2047,7 +2048,7 @@ impl PlatformWindow for WindowsWindow {
                     // ShowWindow reentry; placement is an initialized out pointer.
                     unsafe {
                         let placement = placement_of(self.hwnd).map_err(|error| {
-                            crate::WindowShowError::Native {
+                            flui_platform::WindowShowError::Native {
                                 message: error.to_string(),
                             }
                         })?;
@@ -2073,7 +2074,7 @@ impl PlatformWindow for WindowsWindow {
                         Ok(())
                     }
                 })
-                .unwrap_or(Err(crate::WindowShowError::Closed))
+                .unwrap_or(Err(flui_platform::WindowShowError::Closed))
             },
             || {
                 // SAFETY: the adapter rechecked wrapper identity after ShowWindow,

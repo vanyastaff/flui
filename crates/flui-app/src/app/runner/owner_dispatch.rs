@@ -37,7 +37,7 @@ impl RuntimeDispatcher {
 
     pub(super) fn host_notice(
         self,
-        notice: flui_native::HostNotice,
+        notice: flui_platform::HostNotice,
     ) -> Result<flui_runtime::owner::Delivery, DispatchError> {
         dispatch_owner_turn_delivery(OwnerTurn::Runtime(
             self,
@@ -141,7 +141,7 @@ pub(in crate::app) enum RuntimeEvent {
     /// [`WindowVisibility`](Self::WindowVisibility).
     WindowFocus(bool),
     /// Reversible native execution eligibility for one presentation.
-    WindowExecution(flui_native::WindowExecutionState),
+    WindowExecution(flui_platform::WindowExecutionState),
     /// Addressed logical content-view safe area.
     ///
     /// Android and iOS runners produce this report; this module's own tests construct
@@ -259,7 +259,7 @@ impl RuntimeEvent {
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) fn install_platform_ui_runtime(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: &std::sync::Arc<dyn flui_native::traits::PlatformWindow>,
+    window: &std::sync::Arc<dyn flui_platform::PlatformWindow>,
 ) -> PresentationDispatcher {
     let prepared = prepare_replacement_ui_runtime(ui_runtime, std::sync::Arc::clone(window));
     let dispatcher = prepared.dispatcher();
@@ -274,7 +274,7 @@ pub(super) fn install_platform_ui_runtime(
 #[cfg(any(test, target_os = "android", target_arch = "wasm32"))]
 pub(super) fn prepare_platform_ui_runtime(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: std::sync::Arc<dyn flui_native::traits::PlatformWindow>,
+    window: std::sync::Arc<dyn flui_platform::PlatformWindow>,
 ) -> super::window_install::WindowInstall {
     APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
@@ -292,7 +292,7 @@ pub(super) fn prepare_platform_ui_runtime(
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) fn prepare_replacement_ui_runtime(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: std::sync::Arc<dyn flui_native::traits::PlatformWindow>,
+    window: std::sync::Arc<dyn flui_platform::PlatformWindow>,
 ) -> super::window_install::WindowInstall {
     let host = super::InstalledHost::new();
     let prepared = host.logical().prepare_runtime(ui_runtime);
@@ -314,7 +314,7 @@ pub(super) fn prepare_replacement_ui_runtime(
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) fn install_ui_runtime_alongside(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: &std::sync::Arc<dyn flui_native::traits::PlatformWindow>,
+    window: &std::sync::Arc<dyn flui_platform::PlatformWindow>,
 ) -> Result<PresentationDispatcher, super::installed_host::InstallError> {
     let prepared = prepare_ui_runtime_alongside(ui_runtime, std::sync::Arc::clone(window));
     let dispatcher = prepared.dispatcher();
@@ -327,7 +327,7 @@ pub(super) fn install_ui_runtime_alongside(
 
 pub(super) fn prepare_ui_runtime_alongside(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
-    window: std::sync::Arc<dyn flui_native::traits::PlatformWindow>,
+    window: std::sync::Arc<dyn flui_platform::PlatformWindow>,
 ) -> super::window_install::WindowInstall {
     let host = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
@@ -503,7 +503,7 @@ pub(super) fn close_this_window(dispatcher: PresentationDispatcher) {
 /// each runner installs.
 pub(super) fn install_input_wiring(
     dispatcher: PresentationDispatcher,
-    window: &(impl flui_native::traits::PlatformWindow + ?Sized),
+    window: &(impl flui_platform::PlatformWindow + ?Sized),
 ) {
     window.on_input(Box::new(move |input| {
         dispatch_platform_input(dispatcher, input)
@@ -521,8 +521,8 @@ pub(super) fn install_input_wiring(
 /// doing so.
 fn dispatch_platform_input(
     dispatcher: PresentationDispatcher,
-    input: flui_native::traits::PlatformInput,
-) -> flui_native::DispatchEventResult {
+    input: flui_platform::PlatformInput,
+) -> flui_platform::DispatchEventResult {
     let outcome = current_host(dispatcher.owner_thread).and_then(|host| {
         let _callback = host
             .logical()
@@ -537,7 +537,7 @@ fn dispatch_platform_input(
         result
     });
     let default_prevented = !matches!(outcome, Ok(flui_runtime::owner::InputOutcome::Unhandled));
-    flui_native::DispatchEventResult::resolved(false, default_prevented)
+    flui_platform::DispatchEventResult::resolved(false, default_prevented)
 }
 
 /// A delivered frame's vsync on the event timeline: the host's reading of the
@@ -575,7 +575,7 @@ pub(super) fn apply_queued_window_commands(owner_thread: std::thread::ThreadId) 
 
 /// Deliver a system notice to every UI runtime this host runs, each on its own
 /// owner turn.
-pub(super) fn deliver_host_notice(notice: &flui_native::HostNotice) -> NoticeDelivery {
+pub(super) fn deliver_host_notice(notice: &flui_platform::HostNotice) -> NoticeDelivery {
     // The process may be gone before a subscriber has finished: write what the
     // host itself keeps first.
     #[cfg(all(
@@ -583,14 +583,14 @@ pub(super) fn deliver_host_notice(notice: &flui_native::HostNotice) -> NoticeDel
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
-    if matches!(notice, flui_native::HostNotice::SessionEnded) {
+    if matches!(notice, flui_platform::HostNotice::SessionEnded) {
         super::placement::flush_all();
     }
     // The host's shared memory is reclaimed once, ahead of every runtime's own
     // caches and of every subscriber: the notice reaches subscribers on later
     // owner turns.
     let mut failure = flui_foundation::panic::FirstPanic::new();
-    if let flui_native::HostNotice::MemoryPressure(level) = notice {
+    if let flui_platform::HostNotice::MemoryPressure(level) = notice {
         failure.contain(|| reclaim_host_memory(*level));
     }
     let dispatchers = APP_RUNTIME.with(|slot| {

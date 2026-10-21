@@ -629,7 +629,7 @@ fn accessibility_input_reaches_the_semantics_owner() {
 
     let bridge = std::sync::Arc::new(RecordingBridge::default());
     let window = flui_native::headless_platform()
-        .open_window(flui_native::WindowOptions::default())
+        .open_window(flui_platform::WindowOptions::default())
         .expect("headless window");
     let wakes = std::sync::Arc::new(AtomicUsize::new(0));
     let runtime = UiRuntime::new(

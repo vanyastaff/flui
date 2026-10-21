@@ -11,7 +11,7 @@ use windows::Win32::{
 
 use super::util::{USER_DEFAULT_SCREEN_DPI, logical_to_device};
 use super::window_frame::to_screen;
-use crate::traits::WindowOptions;
+use flui_platform::WindowOptions;
 
 /// The window's placement: its show state and the rectangles it returns to.
 pub(super) fn placement_of(hwnd: HWND) -> windows::core::Result<WINDOWPLACEMENT> {
@@ -219,7 +219,7 @@ impl super::platform::WindowContext {
         // window once, at its new size.
         let hold = self.hold_publishing();
         self.update_window_state(|state| state.scale_factor = new_scale);
-        self.dispatch_event(crate::traits::WindowEvent::ScaleFactorChanged {
+        self.dispatch_event(flui_platform::WindowEvent::ScaleFactorChanged {
             window_id: self.window_id,
             scale_factor: new_scale,
         });

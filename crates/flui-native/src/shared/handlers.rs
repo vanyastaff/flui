@@ -18,7 +18,7 @@ use parking_lot::Mutex;
 
 use flui_platform::input_capabilities::InputCapabilities;
 
-use crate::traits::{
+use flui_platform::{
     DispatchEventResult, PlatformInput, SessionEndAnswer, SessionEndPhase, WindowEvent,
     WindowExecutionState,
 };
@@ -480,7 +480,7 @@ pub struct WindowCallbacks {
     /// Distinct from the lifecycle callbacks above: a window can be resumed
     /// and still have no usable swapchain, and Android's `Pause` does not
     /// clear `AndroidApp::native_window()` at all. See
-    /// [`crate::traits::PlatformWindow::on_surface_status_change`] for the contract and for
+    /// [`flui_platform::PlatformWindow::on_surface_status_change`] for the contract and for
     /// why a backend that never emits it is harmless while one that emits only
     /// `false` is not.
     pub on_surface_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>,
@@ -1779,7 +1779,7 @@ impl WindowCallbacks {
     /// while the platform has the native window in hand and is about to lose
     /// it, so the callback it reaches must drop the surface synchronously
     /// rather than schedule the drop for later. See
-    /// [`crate::traits::PlatformWindow::on_surface_status_change`] for the full contract.
+    /// [`flui_platform::PlatformWindow::on_surface_status_change`] for the full contract.
     pub fn dispatch_surface_status_change(&self, has_surface: bool) {
         let Some(drain) = DispatchDrain::begin(
             &self.event_dispatch,
@@ -1821,7 +1821,7 @@ macro_rules! impl_window_callback_setters {
         fn on_input(
             &self,
             callback: Box<
-                dyn FnMut($crate::traits::PlatformInput) -> $crate::traits::DispatchEventResult,
+                dyn FnMut(::flui_platform::PlatformInput) -> ::flui_platform::DispatchEventResult,
             >,
         ) {
             self.$callbacks_field.set_input_callback(callback);
@@ -1859,7 +1859,7 @@ macro_rules! impl_window_callback_setters {
 
         fn on_execution_state_change(
             &self,
-            callback: Box<dyn FnMut($crate::WindowExecutionState) + Send>,
+            callback: Box<dyn FnMut(::flui_platform::WindowExecutionState) + Send>,
         ) {
             self.$callbacks_field.set_execution_state_callback(callback);
         }

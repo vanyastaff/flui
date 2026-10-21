@@ -526,8 +526,9 @@ mod tests {
     use crate::shared::pointer_assembly::{
         NativeContact, NativeDevice, NativeReading, ReadingAction, ReadingTime, decode,
     };
-    use crate::traits::{Platform as _, WindowOptions};
+    use crate::traits::Platform as _;
     use flui_platform::HapticFeedback;
+    use flui_platform::WindowOptions;
 
     fn taps() -> HapticPattern {
         HapticPattern::builder()

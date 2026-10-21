@@ -75,7 +75,8 @@ where
     use std::sync::Arc;
 
     use flui_engine::Renderer;
-    use flui_native::{AndroidPlatform, Platform, WindowOptions};
+    use flui_native::{AndroidPlatform, Platform};
+    use flui_platform::WindowOptions;
     use parking_lot::Mutex;
 
     use crate::app::hot_reload::ScenePlugin;

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_native::WindowOptions;
+use flui_platform::WindowOptions;
 use flui_platform::{
     DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot, StorageError, StorageName,
     WindowCapabilities, WindowGeometry, WindowMode, WindowPlacement, WindowState,

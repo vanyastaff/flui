@@ -20,7 +20,8 @@ use crate::platforms::windows::platform::{WindowContext, with_window_context};
 use crate::platforms::windows::{WindowsPlatform, WindowsWindow};
 use crate::shared::direct_manipulation::{ContentTransform, ViewportReading, ViewportStatus};
 use crate::shared::input_availability;
-use crate::traits::{DispatchEventResult, HostWindow, Platform as _, PlatformInput, WindowOptions};
+use crate::{traits::HostWindow, traits::Platform as _};
+use flui_platform::{DispatchEventResult, PlatformInput, WindowOptions};
 
 use ViewportStatus::{Ready, Running};
 

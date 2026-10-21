@@ -11,7 +11,7 @@ static_assertions::assert_not_impl_any!(OwnerHost: Send, Sync);
 
 pub(super) fn window() -> PresentationWindow {
     let window = flui_native::headless_platform()
-        .open_window(flui_native::WindowOptions::default())
+        .open_window(flui_platform::WindowOptions::default())
         .expect("headless window");
     let accessibility = window.accessibility();
     PresentationWindow::new(window, accessibility)

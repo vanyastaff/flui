@@ -33,10 +33,8 @@ use winit::{
 };
 
 use super::{SelfCloseRoute, WinitApp, WinitPlatform, WinitRunState};
-use crate::{
-    platforms::winit::control::control_lane,
-    traits::{HostWindow, Platform, WindowEvent, WindowId, WindowOptions},
-};
+use crate::{platforms::winit::control::control_lane, traits::HostWindow, traits::Platform};
+use flui_platform::{WindowEvent, WindowId, WindowOptions};
 
 fn options(title: impl Into<String>) -> WindowOptions {
     WindowOptions::default()
@@ -451,7 +449,7 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
                 if let flui_platform::PlatformInput::Pointer(PointerEvent::Scroll(scroll)) = input {
                     sink.lock().push(scroll);
                 }
-                crate::DispatchEventResult::default()
+                flui_platform::DispatchEventResult::default()
             }));
             // SAFETY: this exact owned hidden HWND remains tracked until loop shutdown;
             // every queued message contains only by-value coordinates/wheel distance.
@@ -999,15 +997,15 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
                 return;
             }
             let seen = Arc::clone(&self.seen);
-            crate::traits::PlatformWindow::on_input(
+            flui_platform::PlatformWindow::on_input(
                 host,
                 Box::new(move |input| {
                     use flui_platform::input_capabilities::PointerKindSet;
                     match input {
-                        crate::traits::PlatformInput::Pointer(
+                        flui_platform::PlatformInput::Pointer(
                             flui_platform::pointer::PointerEvent::Move(_),
                         ) => seen.lock().push("move"),
-                        crate::traits::PlatformInput::Capabilities(capabilities) => {
+                        flui_platform::PlatformInput::Capabilities(capabilities) => {
                             seen.lock().push(
                                 if capabilities.present().contains(PointerKindSet::MOUSE) {
                                     "mouse present"
@@ -1018,7 +1016,7 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
                         }
                         _ => {}
                     }
-                    crate::DispatchEventResult::resolved(false, true)
+                    flui_platform::DispatchEventResult::resolved(false, true)
                 }),
             );
         }
@@ -1290,12 +1288,9 @@ mod x11_window {
     };
 
     use super::*;
-    use crate::{
-        platforms::winit::window::WinitWindow,
-        traits::{
-            WindowCapabilities, WindowCommand, WindowGeometry, WindowMode, WindowReveal,
-            WindowState,
-        },
+    use crate::platforms::winit::window::WinitWindow;
+    use flui_platform::{
+        WindowCapabilities, WindowCommand, WindowGeometry, WindowMode, WindowReveal, WindowState,
     };
 
     fn build_x11_event_loop() -> EventLoop<()> {
@@ -1881,7 +1876,7 @@ mod wayland_window {
     use flui_foundation::geometry::Point;
 
     use super::*;
-    use crate::traits::{WindowCapabilities, WindowCommand, WindowCommandError, WindowMode};
+    use flui_platform::{WindowCapabilities, WindowCommand, WindowCommandError, WindowMode};
 
     fn build_wayland_event_loop() -> EventLoop<()> {
         use winit::platform::wayland::EventLoopBuilderExtWayland;

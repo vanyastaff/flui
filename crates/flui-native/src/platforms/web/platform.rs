@@ -12,14 +12,14 @@ use wasm_bindgen::prelude::*;
 use flui_platform::{SessionEndAnswer, SessionEndPhase};
 
 use crate::{
+    error::PlatformError, shared::PlatformHandlers, shared::WindowCallbacks,
+    shared::owner_signal::OwnerSignal, traits::HostWindow, traits::OpenWindowError,
+    traits::OwnerPlatform, traits::Platform, traits::PlatformExecutor,
+    traits::PlatformReadyCallback, traits::owner::DirectOwnerHooks, traits::owner::OwnerHooks,
+};
+use flui_platform::{
+    Clipboard, DisplaySnapshot, WindowEvent, WindowId, WindowOptions,
     data_transfer::DataTransferSource,
-    error::PlatformError,
-    shared::{PlatformHandlers, WindowCallbacks, owner_signal::OwnerSignal},
-    traits::{
-        Clipboard, DisplaySnapshot, HostWindow, OpenWindowError, OwnerPlatform, Platform,
-        PlatformExecutor, PlatformReadyCallback, WindowEvent, WindowId, WindowOptions,
-        owner::{DirectOwnerHooks, OwnerHooks},
-    },
 };
 
 use super::{

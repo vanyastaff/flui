@@ -4,7 +4,7 @@
 
 use flui_app::AppConfig;
 use flui_foundation::geometry::{Point, Size};
-use flui_native::{WindowMode, WindowOptions, WindowReveal};
+use flui_platform::{WindowMode, WindowOptions, WindowReveal};
 
 fn options(config: &AppConfig) -> WindowOptions {
     WindowOptions::from(config)

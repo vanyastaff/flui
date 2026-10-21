@@ -15,11 +15,8 @@ use flui_platform::{
 };
 
 use super::{HostWindow, OpenWindowError, OwnerPlatform};
-use crate::{
-    data_transfer::DataTransferSource,
-    error::{BootstrapError, PlatformError},
-    task::Task,
-};
+use crate::{error::BootstrapError, error::PlatformError, task::Task};
+use flui_platform::data_transfer::DataTransferSource;
 
 /// [`Platform::run`]'s ready callback: invoked once, synchronously, with the
 /// owner-thread capability (ADR-0039). Named to keep
@@ -296,7 +293,7 @@ pub trait Platform: Send + Sync + 'static {
     /// the id space and let cross-table ids pass each other's generation
     /// checks). Deliberately a required method with no default body so a
     /// new backend must make that choice explicitly. Backends without a
-    /// transport return [`crate::data_transfer::NullDataTransferSource`]
+    /// transport return [`flui_platform::data_transfer::NullDataTransferSource`]
     /// (inert, honest — not fake success).
     fn data_transfer(&self) -> Arc<dyn DataTransferSource>;
 

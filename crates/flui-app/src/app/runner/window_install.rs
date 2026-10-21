@@ -5,7 +5,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use flui_native::traits::PlatformWindow;
+use flui_platform::PlatformWindow;
 use flui_runtime::owner::{InstallInitialization, PreparedInstall, WindowObservation};
 
 #[cfg(all(

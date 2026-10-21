@@ -11,7 +11,9 @@
 use std::sync::Arc;
 
 #[cfg(not(target_os = "android"))]
-use flui_native::traits::{HostWindow, PlatformWindow};
+use flui_native::traits::HostWindow;
+#[cfg(not(target_os = "android"))]
+use flui_platform::PlatformWindow;
 pub(crate) use flui_runtime::testing::TestWindow;
 
 /// A REAL window from the headless platform, for tests that exercise the
@@ -26,6 +28,6 @@ pub(crate) fn headless_test_window() -> Arc<dyn PlatformWindow> {
 #[cfg(not(target_os = "android"))]
 pub(crate) fn headless_test_host_window() -> Arc<dyn HostWindow> {
     flui_native::headless_platform()
-        .open_window(flui_native::traits::WindowOptions::default())
+        .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create a test window")
 }

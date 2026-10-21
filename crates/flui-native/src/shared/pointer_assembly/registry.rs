@@ -21,7 +21,7 @@ use super::{
     Assembled, DecodeError, DecodeFault, Ending, NativeCancel, NativeContact, NativeDevice,
     NativeReading, NativeSurface, PenAngles, RawPoint, ReadingAction,
 };
-use crate::traits::PlatformInput;
+use flui_platform::PlatformInput;
 
 /// Assemble one reading into owned input, committing it to `contacts`.
 ///

@@ -18,7 +18,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::geometry::Point;
-use flui_native::WindowOptions;
 use flui_native::shared::android_ime;
 use flui_native::shared::haptic_degradation::{
     AndroidHapticsApi, AndroidVibrator, CoreHapticsEngine, PenController, PenWaveform,
@@ -36,9 +35,9 @@ use flui_native::shared::pointer_assembly::{
     ScrollReading, decode,
 };
 use flui_native::shared::web_text::key_composition;
-use flui_native::traits::{DispatchEventResult, PlatformInput};
 use flui_native::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
 use flui_platform::EventTime;
+use flui_platform::WindowOptions;
 use flui_platform::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTicket, PatternPlayback,
@@ -50,6 +49,7 @@ use flui_platform::pointer::{
     PointerPosition, PointerRole, ScrollDelta, ScrollEvent, ScrollPrecision, ScrollUnit,
 };
 use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
+use flui_platform::{DispatchEventResult, PlatformInput};
 use flui_testing::backend_conformance::HostInput;
 use flui_testing::backend_conformance::{
     BackendUnderTest, ClockProfile, ContactAction, ContactStep, KeyStep, PanStep, PinchChange,

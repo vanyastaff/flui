@@ -1,6 +1,7 @@
 use crate::app::hot_reload::WorkerReload;
 use flui_engine::Renderer;
-use flui_native::traits::{HostWindow, PlatformWindow};
+use flui_native::traits::HostWindow;
+use flui_platform::PlatformWindow;
 use flui_scheduler::AppLifecycleState;
 use flui_view::{StatelessView, View};
 use parking_lot::Mutex;
@@ -53,9 +54,9 @@ impl Drop for InstallRollback {
 /// and a content-bearing secondary window — ask for it. `run_direct` and the
 /// bare `open_secondary_window` convert `AppConfig` directly and reveal at
 /// open, because nothing in them would ever perform the reveal.
-pub(super) fn rendered_window_options(config: &AppConfig) -> flui_native::WindowOptions {
-    let mut options = flui_native::WindowOptions::from(config)
-        .with_reveal(flui_native::WindowReveal::AfterFirstFrame);
+pub(super) fn rendered_window_options(config: &AppConfig) -> flui_platform::WindowOptions {
+    let mut options = flui_platform::WindowOptions::from(config)
+        .with_reveal(flui_platform::WindowReveal::AfterFirstFrame);
     // Read before the window opens, so its first reveal is already in place.
     super::placement::restore(&mut options, config);
     options

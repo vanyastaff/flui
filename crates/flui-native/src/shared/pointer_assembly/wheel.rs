@@ -14,7 +14,7 @@ use flui_platform::pointer::{PointerEvent, PointerPosition, ScrollEvent, ScrollP
 use super::ContactRegistry;
 use crate::shared::events::primary_mouse_info;
 use crate::shared::scroll::{from_win32_hwheel, from_win32_wheel};
-use crate::traits::PlatformInput;
+use flui_platform::PlatformInput;
 
 /// The distance of one wheel detent (Win32's `WHEEL_DELTA`).
 pub const WHEEL_DETENT: i16 = 120;

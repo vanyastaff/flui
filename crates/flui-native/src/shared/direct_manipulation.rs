@@ -33,7 +33,7 @@ use super::pointer_assembly::{
     GestureReading, NativeContact, NativeReading, NativeSurface, ReadingAction, ReadingTime,
     ScrollPhases, ScrollReading, decode_derived,
 };
-use crate::traits::PlatformInput;
+use flui_platform::PlatformInput;
 
 /// Translation, in device pixels, a pan must travel before it is a pan.
 pub const PAN_SLOP: f64 = 2.0;
