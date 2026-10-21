@@ -43,9 +43,11 @@ use accesskit::{Action, NodeId, Toggled, TreeId};
 use accesskit_consumer::{FilterResult, NodeRef, common_filter};
 use flui_foundation::geometry::{DevicePixelRatio, Rect as LogicalRect, device_rect_covering};
 use flui_protocol::{
-    ActionName, ActionRequest, Checked, ElementId, Node, ReadQuery, Rect, Role, Tree, WindowId,
+    ActionName, ActionRequest, Checked, ElementId, Node, ReadQuery, Rect, Role, Tree,
+    TreeDiagnostic, WindowId,
 };
 
+use crate::accesskit_translation::duplicate_sibling_identifiers;
 use crate::action::{ActionCall, SemanticsAction, SemanticsActionRequest};
 use crate::identity::AccessibilityNodeId;
 use crate::owner::SemanticsOwner;
@@ -433,6 +435,7 @@ struct Walk<'q> {
     /// Whether the node AccessKit is told is focused really claims focus:
     /// AccessKit falls back to the root when nothing does.
     root_claims_focus: bool,
+    diagnostics: Vec<TreeDiagnostic>,
 }
 
 impl Walk<'_> {
@@ -465,6 +468,19 @@ impl Walk<'_> {
         let children: Vec<NodeRef<'_>> = node.filtered_children(common_filter).collect();
         if children.is_empty() {
             return out;
+        }
+        // Every child of a node the read reaches is checked, even one the
+        // budget then leaves out: the clash is the parent's, and its ids
+        // read on with `root`.
+        let siblings = children
+            .iter()
+            .filter_map(|child| Some((element_id(child)?, child.author_id())));
+        for (identifier, elements) in duplicate_sibling_identifiers(siblings) {
+            self.diagnostics.push(TreeDiagnostic::DuplicateIdentifier {
+                identifier: identifier.to_owned(),
+                parent: id,
+                elements,
+            });
         }
         if self.query.max_depth.is_some_and(|max| depth >= max) {
             out.omitted_children = Some(children.len());
@@ -609,6 +625,7 @@ impl SemanticsOwner {
                 remaining: query.max_nodes.unwrap_or(usize::MAX),
                 truncated: false,
                 root_claims_focus,
+                diagnostics: Vec::new(),
             };
             if walk.remaining == 0 {
                 return Ok(Tree::new(Vec::new(), true));
@@ -618,7 +635,7 @@ impl SemanticsOwner {
             if is_window_root {
                 root.window = Some(placement.window);
             }
-            Ok(Tree::new(vec![root], walk.truncated))
+            Ok(Tree::new(vec![root], walk.truncated).with_diagnostics(walk.diagnostics))
         });
         match read {
             Ok(result) => result,

@@ -2311,7 +2311,8 @@ fn identifier_tree(root: impl View) -> flui_testing::A11yTree {
 pub(crate) fn controls_publish_their_identifier_on_the_node_they_form() {
     use flui_view::{BoxedView, ViewExt as _};
     use flui_widgets::{
-        Column, Disclosure, ExpansionState, RawButton, RawTextField, Text, TextEditingController,
+        Column, Disclosure, ExpansionState, RawButton, RawTextField, Slider, Text,
+        TextEditingController,
     };
 
     struct Row {
@@ -2387,6 +2388,20 @@ pub(crate) fn controls_publish_their_identifier_on_the_node_they_form() {
                     .boxed()
             },
         },
+        Row {
+            control: "Slider",
+            identifier: "volume",
+            role: Some(flui_testing::a11y::Role::Slider),
+            view: || {
+                let range = flui_rendering::semantics::NumericRange::new(25.0, 0.0, 100.0, 10.0)
+                    .expect("valid range");
+                Slider::new(range)
+                    .label("Volume")
+                    .on_changed(|_cx, _value| {})
+                    .identifier("volume")
+                    .boxed()
+            },
+        },
     ];
 
     let mut failed = Vec::new();
@@ -2416,6 +2431,18 @@ pub(crate) fn controls_publish_their_identifier_on_the_node_they_form() {
         {
             failed.push(format!("{}: announced: {announced:?}", row.control));
         }
+    }
+
+    // The slider's node is the one its focus folds into: the identified node
+    // is also the focusable one with the numeric actions.
+    let slider = identifier_tree((rows[5].view)());
+    if !identified_node(&slider, "volume").is_some_and(|node| {
+        node.supports_action(Action::Focus) && node.supports_action(Action::Increment)
+    }) {
+        failed.push(format!(
+            "Slider: the identifier is not on its focusable numeric node\n{}",
+            slider.describe()
+        ));
     }
 
     // A merge keeps its own identifier and drops its descendant's.

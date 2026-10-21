@@ -446,6 +446,38 @@ pub struct Tree {
     /// Whether the read left anything out (its depth, its node budget): then
     /// read a subtree with `root`, or more nodes.
     pub truncated: bool,
+    /// What the read found wrong with the published tree, in the order it
+    /// walked it. Reported, never repaired: the nodes read as published.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
+    pub diagnostics: Vec<TreeDiagnostic>,
+}
+
+/// A defect in a published tree that a read reports beside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(tag = "kind", rename_all = "snake_case")
+)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum TreeDiagnostic {
+    /// Siblings share an identifier, which must be unique among siblings
+    /// (ADR-0240 §4): an OS automation client matching it finds only one.
+    DuplicateIdentifier {
+        /// The identifier they share.
+        identifier: String,
+        /// Their parent.
+        parent: ElementId,
+        /// The siblings carrying it, in tree order.
+        elements: Vec<ElementId>,
+    },
+    /// A diagnostic a newer schema added.
+    #[cfg_attr(feature = "serde", serde(other))]
+    Unknown,
 }
 
 /// The action names of a node, less those this build does not know.
@@ -470,7 +502,15 @@ impl Tree {
             count: count(&roots),
             roots,
             truncated,
+            diagnostics: Vec::new(),
         }
+    }
+
+    /// The tree, reporting what the read found wrong with it.
+    #[must_use]
+    pub fn with_diagnostics(mut self, diagnostics: Vec<TreeDiagnostic>) -> Self {
+        self.diagnostics = diagnostics;
+        self
     }
 
     /// The tree, saying which revision it read.
@@ -736,7 +776,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&tree).ok(),
             Some(serde_json::json!({
-                "protocol": "0.5",
+                "protocol": "0.6",
                 "roots": [{"id": "e1", "role": "window", "native_role": "Window"}],
                 "count": 1,
                 "truncated": false
@@ -749,6 +789,36 @@ mod tests {
         )
         .expect("the version is optional on the way in");
         assert_eq!(older.protocol, None);
+        assert_eq!(older.diagnostics, Vec::new());
+    }
+
+    /// A diagnostic is tagged by its kind, and one a newer schema added reads
+    /// as unknown rather than failing the whole read.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn diagnostics_are_tagged_and_an_unknown_kind_still_reads() {
+        let tree = Tree::new(Vec::new(), false).with_diagnostics(vec![
+            TreeDiagnostic::DuplicateIdentifier {
+                identifier: "delete".into(),
+                parent: e(1),
+                elements: vec![e(2), e(3)],
+            },
+        ]);
+        let wire = serde_json::to_value(&tree).expect("a tree serializes");
+        assert_eq!(
+            wire["diagnostics"],
+            serde_json::json!([{
+                "kind": "duplicate_identifier",
+                "identifier": "delete",
+                "parent": "e1",
+                "elements": ["e2", "e3"]
+            }])
+        );
+        assert_eq!(serde_json::from_value::<Tree>(wire).ok(), Some(tree));
+        let newer: Vec<TreeDiagnostic> =
+            serde_json::from_value(serde_json::json!([{"kind": "from_the_future", "x": 1}]))
+                .expect("an unknown kind reads");
+        assert_eq!(newer, vec![TreeDiagnostic::Unknown]);
     }
 
     /// Surface-relative bounds travel under their own name, so a client that

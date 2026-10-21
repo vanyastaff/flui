@@ -110,7 +110,8 @@ pub use session::{
 };
 pub use snapshot::{ChangedField, NodeChange, Snapshot, SnapshotDelta, SnapshotReading};
 pub use tree::{
-    ElementId, ElementRef, Node, ReadParams, ReadQuery, Rect, Tree, TreeRevision, WindowId, outline,
+    ElementId, ElementRef, Node, ReadParams, ReadQuery, Rect, Tree, TreeDiagnostic, TreeRevision,
+    WindowId, outline,
 };
 pub use verdict::Verdict;
 pub use version::{PROTOCOL_VERSION, ProtocolVersion};

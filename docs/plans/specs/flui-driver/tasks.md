@@ -172,9 +172,13 @@ graph LR
     `Disclosure` (through its header's merge), `EditableText`, `RawTextField`; Material's
     `ButtonStyleButton` family, `IconButton`, `Checkbox`, `Switch`, `Radio`, `Chip`,
     `FilterChip`, `TextField`; `CupertinoButton`, whose button semantics moved above its gesture
-    detector so its own configuration forms the node.
-  - `Slider` has no `identifier` builder: its node is formed by the `Focus` above its semantics,
-    which absorbs them. It needs its semantics to wrap the focus first.
+    detector so its own configuration forms the node; `Slider`, whose semantics moved above its
+    `Focus` for the same reason (under it, the focus formed the node and absorbed them).
+  - Siblings sharing an identifier break ADR-0240 §4 (amended 2026-10-21: unique among siblings,
+    as AccessKit requires of `author_id`). The clash is reported, not repaired: translation
+    publishes the identifiers as written, debug builds log a warning, and the wire read lists a
+    `duplicate_identifier` diagnostic naming the parent and the siblings (protocol `0.6`,
+    `Tree.diagnostics`).
   - ADR-0240 §3's normalization of an equal `automation_id` does not exist yet: `flui-protocol`
     has no ADR-0095 §4 projection, and `desktop-mcp` reads UIA into its own node type. It lands
     with the locator work (FD3) or the OS lanes.
@@ -184,16 +188,21 @@ graph LR
       export (`author_id`, wire `identifier`), not announced (adapter and wire), not merged
       (label without identifier, merged parent keeps its own) and no boundary; the `identifier`
       row of `every_published_attribute_reads_through_the_consumer`;
+      `identifier::siblings_sharing_an_identifier_are_reported_and_published_as_written`;
+    - `flui-protocol`: `diagnostics_are_tagged_and_an_unknown_kind_still_reads`, and the `0.6`
+      schema golden;
     - `flui-rendering`'s `semantics_assembly_matrix`:
       `an_identifier_names_only_the_node_its_configuration_forms`, through assembly;
     - `flui-widgets`' `semantics_translation_and_routing`:
-      `controls_publish_their_identifier_on_the_node_they_form`;
+      `controls_publish_their_identifier_on_the_node_they_form`, whose `Slider` row also requires
+      the identified node to be the focusable one with the numeric actions;
     - `flui-material`'s `action_component_contracts`:
       `material_controls_publish_their_identifier`;
     - `flui-cupertino`'s `component_contracts`: `button_publishes_its_identifier`.
   - `windows-a11y` requires the probe's Increment button (`.identifier("increment")`) to report
-    that `AutomationId` before invoking it. Written on Linux and not compiled for Windows here: it
-    still needs a run of `cargo xtask device windows-a11y` on Windows.
+    that `AutomationId` before invoking it. CI's Native xtask job compiles and lints it on
+    `windows-latest`; it has not run against a live UIA tree yet, which needs
+    `cargo xtask device windows-a11y` on a Windows desktop.
 
 ### FD3. Locator and actionability
 

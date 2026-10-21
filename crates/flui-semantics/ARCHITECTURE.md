@@ -648,6 +648,22 @@ a merged parent would collect its children's.
 **Test.** `the_identifier_is_exported_unannounced_unmerged_and_no_boundary` in
 `tests/identifier.rs`; the `identifier` row of `every_published_attribute_reads_through_the_consumer`.
 
+### Siblings sharing an identifier are reported, not repaired
+
+**Rule.** An identifier is unique among its siblings (ADR-0240 §4), and nothing enforces it:
+translation publishes every identifier as its author wrote it. Debug builds log a warning for each
+identifier a published parent's children share, and `read_wire` lists a
+`TreeDiagnostic::DuplicateIdentifier` for each, naming the parent and the siblings in tree order.
+The read checks the children of every node it reaches, including those its budget leaves out. The
+same identifier on nodes that are not siblings is no clash.
+
+**Why.** Dropping or rewriting a duplicate would change what the author wrote, and a locator
+matching the written value would then miss it; reporting the clash as data lets a test or agent
+assert on it, where a log alone would not.
+
+**Test.** `siblings_sharing_an_identifier_are_reported_and_published_as_written` in
+`tests/identifier.rs`.
+
 ## Numeric and directional input
 
 ADR-0124 distinguishes expand/collapse from activation and numeric setters from

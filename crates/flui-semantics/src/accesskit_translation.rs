@@ -1072,12 +1072,68 @@ pub(crate) fn tree_to_scaled_update(
         .filter(|wanted| nodes.iter().any(|(id, _)| id == wanted))
         .unwrap_or(root_node_id);
 
+    #[cfg(debug_assertions)]
+    warn_duplicate_sibling_identifiers(&nodes);
+
     Some(TreeUpdate {
         nodes,
         tree: Some(TreeInfo::new(root_node_id)),
         tree_id: TreeId::ROOT,
         focus,
     })
+}
+
+/// The identifiers `siblings` share, each with the siblings carrying it, in
+/// the order each first appears. ADR-0240 §4 makes an identifier unique among
+/// its siblings, as AccessKit's `author_id` requires; it is not required to
+/// be unique anywhere else.
+pub(crate) fn duplicate_sibling_identifiers<'a, K>(
+    siblings: impl IntoIterator<Item = (K, Option<&'a str>)>,
+) -> Vec<(&'a str, Vec<K>)> {
+    let mut seen: Vec<(&'a str, Vec<K>)> = Vec::new();
+    let mut index: std::collections::HashMap<&'a str, usize> = std::collections::HashMap::new();
+    for (key, identifier) in siblings {
+        let Some(identifier) = identifier else {
+            continue;
+        };
+        match index.entry(identifier) {
+            std::collections::hash_map::Entry::Occupied(at) => seen[*at.get()].1.push(key),
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(seen.len());
+                seen.push((identifier, vec![key]));
+            }
+        }
+    }
+    seen.retain(|(_, keys)| keys.len() > 1);
+    seen
+}
+
+/// Debug builds name each identifier a published parent's children share:
+/// the update publishes them as written, which leaves an OS automation
+/// client matching one of them finding only the first.
+#[cfg(debug_assertions)]
+fn warn_duplicate_sibling_identifiers(nodes: &[(NodeId, Node)]) {
+    let author_ids: std::collections::HashMap<NodeId, &str> = nodes
+        .iter()
+        .filter_map(|(id, node)| node.author_id().map(|author_id| (*id, author_id)))
+        .collect();
+    if author_ids.len() < 2 {
+        return;
+    }
+    for (parent, node) in nodes {
+        let siblings = node
+            .children()
+            .iter()
+            .map(|child| (child.0, author_ids.get(child).copied()));
+        for (identifier, children) in duplicate_sibling_identifiers(siblings) {
+            tracing::warn!(
+                parent = parent.0,
+                ?children,
+                identifier,
+                "siblings share a semantics identifier, which must be unique among siblings (ADR-0240)"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
