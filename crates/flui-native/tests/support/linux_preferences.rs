@@ -102,7 +102,200 @@ pub mod linux {
         "no-service",
         "late-proxy",
         "color-scheme",
+        "contrast",
+        "gnome-contrast",
+        "text-scale",
     ];
+
+    /// The parent runs each case with `LANG=fr_CA.UTF-8` and `LANGUAGE=fr_CA:en`.
+    fn assert_environment_languages(preferences: &flui_platform::SystemPreferences) {
+        assert_eq!(
+            preferences.locales().map(|locales| locales
+                .iter()
+                .map(flui_platform::Locale::to_language_tag)
+                .collect::<Vec<_>>()),
+            Some(vec!["fr-CA".to_owned(), "en".to_owned()]),
+            "LANGUAGE's order, read once from the environment"
+        );
+    }
+
+    /// A portal answering the contrast and text-scale keys: `contrast` in
+    /// `org.freedesktop.appearance`, or GNOME's `high-contrast`, and GNOME's
+    /// `text-scaling-factor`. Motion and color scheme are present so a refresh
+    /// has nothing to retry.
+    struct Values {
+        gnome: bool,
+        high_contrast: AtomicBool,
+        /// `f64` bits; zero is no key.
+        text_scale: std::sync::atomic::AtomicU64,
+    }
+
+    #[zbus::interface(name = "org.freedesktop.portal.Settings")]
+    impl Values {
+        fn read_one(
+            &self,
+            namespace: &str,
+            key: &str,
+        ) -> Result<zbus::zvariant::OwnedValue, SettingsError> {
+            let scale = f64::from_bits(self.text_scale.load(Ordering::SeqCst));
+            match (namespace, key) {
+                ("org.freedesktop.appearance", "reduced-motion" | "color-scheme") => {
+                    Ok(0u32.into())
+                }
+                ("org.freedesktop.appearance", "contrast") if !self.gnome => {
+                    Ok(u32::from(self.high_contrast.load(Ordering::SeqCst)).into())
+                }
+                ("org.gnome.desktop.a11y.interface", "high-contrast") if self.gnome => {
+                    Ok(self.high_contrast.load(Ordering::SeqCst).into())
+                }
+                ("org.gnome.desktop.interface", "text-scaling-factor") if scale != 0.0 => {
+                    Ok(scale.into())
+                }
+                _ => Err(SettingsError::NotFound("unknown setting".into())),
+            }
+        }
+    }
+
+    /// The value a case changes live, before and after.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Value {
+        Contrast(bool),
+        TextScale(f64),
+    }
+
+    impl Value {
+        fn observed(self, preferences: &flui_platform::SystemPreferences) -> bool {
+            match self {
+                Self::Contrast(value) => preferences.high_contrast() == Some(value),
+                Self::TextScale(value) => preferences.text_scale() == Some(value),
+            }
+        }
+    }
+
+    /// A portal value read before any window, then changed live through
+    /// `SettingChanged` until the owner observes the new value.
+    fn run_value_case(case: &str) {
+        let gnome = case == "gnome-contrast";
+        let (before, after) = match case {
+            "text-scale" => (Value::TextScale(1.25), Value::TextScale(1.5)),
+            _ => (Value::Contrast(true), Value::Contrast(false)),
+        };
+        let values = Values {
+            gnome,
+            high_contrast: AtomicBool::new(true),
+            text_scale: std::sync::atomic::AtomicU64::new(1.25f64.to_bits()),
+        };
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("fixture runtime");
+        let service = runtime
+            .block_on(async {
+                zbus::connection::Builder::session()?
+                    .name("org.freedesktop.portal.Desktop")?
+                    .serve_at("/org/freedesktop/portal/desktop", values)?
+                    .build()
+                    .await
+            })
+            .expect("isolated portal service");
+        let (start, begin) = tokio::sync::oneshot::channel::<()>();
+        let connection = service.clone();
+        let update = runtime.spawn(async move {
+            if begin.await.is_err() {
+                return;
+            }
+            let server = connection
+                .object_server()
+                .interface::<_, Values>("/org/freedesktop/portal/desktop")
+                .await
+                .expect("served values");
+            let (namespace, key, value) = match after {
+                Value::Contrast(high) => {
+                    server
+                        .get()
+                        .await
+                        .high_contrast
+                        .store(high, Ordering::SeqCst);
+                    if gnome {
+                        (
+                            "org.gnome.desktop.a11y.interface",
+                            "high-contrast",
+                            zbus::zvariant::Value::from(high),
+                        )
+                    } else {
+                        (
+                            "org.freedesktop.appearance",
+                            "contrast",
+                            zbus::zvariant::Value::from(u32::from(high)),
+                        )
+                    }
+                }
+                Value::TextScale(scale) => {
+                    server
+                        .get()
+                        .await
+                        .text_scale
+                        .store(scale.to_bits(), Ordering::SeqCst);
+                    (
+                        "org.gnome.desktop.interface",
+                        "text-scaling-factor",
+                        zbus::zvariant::Value::from(scale),
+                    )
+                }
+            };
+            connection
+                .emit_signal(
+                    None::<&str>,
+                    "/org/freedesktop/portal/desktop",
+                    "org.freedesktop.portal.Settings",
+                    "SettingChanged",
+                    &(namespace, key, value),
+                )
+                .await
+                .expect("native setting change");
+        });
+        let watchdog = runtime.spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            eprintln!("Linux preference owner did not complete within 30 seconds");
+            std::process::exit(2);
+        });
+        let platform = Arc::new(WinitPlatform::new());
+        let reader = Arc::clone(&platform);
+        let changed = Arc::new(AtomicBool::new(false));
+        let witness = Arc::clone(&changed);
+        platform
+            .run_event_loop(Box::new(move |owner| {
+                let initial = owner.preferences().expect("initial owner observation");
+                assert!(
+                    before.observed(&initial),
+                    "the first runtime seed must observe {before:?}, got {initial:?}"
+                );
+                assert_environment_languages(&initial);
+                let proxy = owner.proxy();
+                owner.on_wake(Box::new(move || {
+                    let current = reader.preferences().expect("live owner observation");
+                    if after.observed(&current) {
+                        witness.store(true, Ordering::SeqCst);
+                        proxy.request_quit().expect("value owner quit");
+                    } else if !before.observed(&current) {
+                        eprintln!("owner observed neither {before:?} nor {after:?}: {current:?}");
+                        proxy.request_quit().expect("stop failed observation");
+                    }
+                }))?;
+                start.send(()).expect("start live change");
+                Ok(())
+            }))
+            .expect("owner loop");
+        drop(service);
+        update.abort();
+        watchdog.abort();
+        assert!(
+            changed.load(Ordering::SeqCst),
+            "a live {after:?} change must reach the owner"
+        );
+        println!("Linux preference case {case} passed");
+    }
 
     async fn emit_change(connection: &zbus::Connection, value: u32) {
         emit_setting(connection, "reduced-motion", value).await;
@@ -151,10 +344,14 @@ pub mod linux {
     }
 
     pub fn run_case(case: &str) {
+        if matches!(case, "contrast" | "gnome-contrast" | "text-scale") {
+            return run_value_case(case);
+        }
         let live = matches!(case, "live" | "recovery" | "restart");
         let recovery = case == "recovery";
         let restart = case == "restart";
         let scheme = case == "color-scheme";
+        let unsupported = case == "unsupported";
         let initial = match case {
             "full" => 0,
             "unknown-number" => 42,
@@ -291,14 +488,25 @@ pub mod linux {
         };
         platform
             .run_event_loop(Box::new(move |owner| {
+                let initial = owner.preferences().expect("initial owner observation");
                 assert_eq!(
-                    owner
-                        .preferences()
-                        .expect("initial owner observation")
-                        .motion(),
+                    initial.motion(),
                     expected,
                     "the first runtime seed must observe the portal before a user window exists"
                 );
+                assert_environment_languages(&initial);
+                if unsupported {
+                    assert_eq!(
+                        initial.high_contrast(),
+                        None,
+                        "no contrast key is unobserved"
+                    );
+                    assert_eq!(
+                        initial.text_scale(),
+                        None,
+                        "no text scale key is unobserved"
+                    );
+                }
                 let foreign = std::thread::scope(|scope| {
                     scope
                         .spawn(|| reader.preferences())
