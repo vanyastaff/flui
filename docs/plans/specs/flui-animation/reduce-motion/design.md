@@ -76,8 +76,8 @@ Normal (не ломающее изменение).
 ### (b) Что значит Reduce
 
 Решение (принято здесь; в прежней редакции motion-clock было его «(d)», ныне там «(d)» — скрытая
-презентация): конец в следующем кадре (Compose scale 0, market.md [axui-mds];
-GPUI oneshot → конец, repeat → начало, market.md [gpui-animation]); ×0.05 Flutter отвергнут.
+презентация): конец в следующем кадре (Compose scale 0, ../requirements.md [axui-mds];
+GPUI oneshot → конец, repeat → начало, ../requirements.md [gpui-animation]); ×0.05 Flutter отвергнут.
 Нативные запуски с объявленной конечной точкой завершаются точно в ней:
 property motion — в цели, fling — на границе. Пробная сетка не определяет их endpoint.
 Для произвольных пользовательских симуляций сетка одна для Reduce и ownership «нет часов»

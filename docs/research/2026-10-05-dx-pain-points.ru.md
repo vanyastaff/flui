@@ -3,7 +3,7 @@
 - **Статус:** исследование
 - **Дата:** 2026-10-05
 - **База:** `main` @ `4915054c8`
-- **Уровень 0:** [../release/requirements.md](../release/requirements.md) (R13 измерения, R17 docs, R18 три стиля)
+- **Уровень 0:** [../release/requirements.md](../plans/specs/release/requirements.md) (R13 измерения, R17 docs, R18 три стиля)
 - **Цель владельца (2026-10-05):** самый удобный DX среди UI-библиотек, без повторения известных
   болей Flutter, Slint, egui, Leptos (для контраста: Dioxus, Iced, Xilem, GPUI, Compose, SwiftUI).
   Никакой разметки (`rsx!`/`view!`/JSX, отдельный DSL): дерево — обычные Rust-значения в трёх

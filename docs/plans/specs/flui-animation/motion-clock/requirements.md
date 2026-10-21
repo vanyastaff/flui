@@ -3,7 +3,7 @@
 - **Статус:** черновик
 - **Дата:** 2026-10-06
 - **База:** `main` @ `9a4daa3ed`
-- **Закрывает:** D-25, D-33 ([../tasks.md](../tasks.md)); строки [../market.md](../market.md)
+- **Закрывает:** D-25, D-33 ([../tasks.md](../tasks.md)); строки [../requirements.md](../requirements.md)
   M-TIME-2, M-TIME-3, M-TIME-5, M-TIME-7, M-TIME-9 (время на границе контроллера и реестра),
   M-TIME-12 (скорость на анимацию), M-INTG-9 (slow-motion из devtools).
 - **Не здесь:** reduce motion (D-05, M-A11Y-1…5) — отдельная спека
@@ -36,7 +36,7 @@
 `MotionClock::frame(raw)` с явными `Duration`, `ManualClock`. Эталоны — аналитика: время =
 Σ Δraw_i · rate_i в целых наносекундах, линейная интерполяция tween без кривой, фаза repeat по
 модулю; не production-формула. **PB** — property-based (proptest из Q0). Факты `[U]` из
-market.md контрактными тестами не закрепляются.
+../requirements.md контрактными тестами не закрепляются.
 
 ### Часы презентации
 

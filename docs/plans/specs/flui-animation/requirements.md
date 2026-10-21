@@ -2,8 +2,8 @@
 
 > Историческая матрица восстановлена из `801543a3f` от 2026-10-06.
 > Статусы и ссылки на строки ниже относятся к старой базе. Текущая маршрутизация всех
-> требований: [readiness-status.md](readiness-status.md); выпускные доказательства:
-> [release-evidence.md](release-evidence.md). [readiness-matrix.md](readiness-matrix.md)
+> требований: [контракты](tasks.md#контракты-требований); выпускные доказательства:
+> [свидетельства](tasks.md#выпускные-свидетельства). [readiness-matrix.md](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-animation/readiness-matrix.md)
 > сохраняет исходный маршрут проверки.
 
 - **Статус:** черновик, на согласовании у владельца
@@ -17,7 +17,7 @@
   `file:line` перепроверена по дереву на базе.
 
 Строка закрывается, когда её статус становится «есть» или владелец утверждает scope-решение
-([orchestration.md](orchestration.md), «Scope-решения»).
+([orchestration.md](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-animation/orchestration.md), «Scope-решения»).
 
 **Статусы.** `есть` — код и тест, который упал бы без него (тест назван). `частично` — код без
 такого теста, тест не независимый, или покрыта часть требования. `нет` — кода нет. `сломано` —

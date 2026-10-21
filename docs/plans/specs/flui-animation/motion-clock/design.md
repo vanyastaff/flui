@@ -41,7 +41,7 @@
   `:113` `set_now_secs_for_test(f64)` без проверки. Скрытость — `FrameClock::set_hidden`
   (`presentations.rs:506`). В Hidden/Paused кадров нет (`flui-app/src/app/runner/frame_pacing.rs:47`,
   `desktop.rs:448`): при возврате time-запуски прыгают по стене — не выбрано и не закреплено.
-- Скорости на анимацию нет (market.md M-TIME-12). Таймер SnackBar — контроллер длительности
+- Скорости на анимацию нет (../requirements.md M-TIME-12). Таймер SnackBar — контроллер длительности
   показа (`packages/flui-material/src/scaffold_messenger.rs:549-569`), наведения указателя
   messenger не видит.
 - Devtools-агент знает `windows | read | act` (`packages/flui-devtools/src/agent/session.rs:254`);

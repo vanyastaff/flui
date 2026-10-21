@@ -12,11 +12,11 @@
   **Новых крейтов нет.**
 - **Исследования:** [best-practices](../../../../research/2026-10-12-interaction-input-best-practices.md),
   [followups](../../../../research/2026-10-12-interaction-input-followups.md)
-- **Предыдущая волна:** [../matrix.md](../matrix.md), [../scope-closure.md](../scope-closure.md), [../tasks.md](../tasks.md);
+- **Предыдущая волна:** [../matrix.md](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-interaction/matrix.md), [../scope-closure.md](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-interaction/scope-closure.md), [../tasks.md](../tasks.md);
   спеки [../recognizer-api/](../recognizer-api/requirements.md), [../pointer-vocabulary/](../pointer-vocabulary/requirements.md)
 - **Смежные спеки (зависимости, не охват):** [focus-keyboard](../../focus-keyboard/tasks.md),
   [semantics-model](../../semantics-model/tasks.md), [text-ime](../../text-ime/requirements.md),
-  [web-canvas-input-ownership](../../web-canvas-input-ownership/requirements.md), [naming](../../naming/renames.md)
+  [web-canvas-input-ownership](../../web-canvas-input-ownership/requirements.md), [naming](../../naming/tasks.md)
 
 ## Зачем
 

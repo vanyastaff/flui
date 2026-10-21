@@ -1,8 +1,8 @@
 # flui-animation / composition — задачи
 
 - **Статус:** исторический план; текущие контракты —
-  [readiness-status](../readiness-status.md), выпускная приёмка —
-  [release-evidence](../release-evidence.md). Строки ниже сохраняют исходный маршрут,
+  [контракты](../tasks.md#контракты-требований), выпускная приёмка —
+  [свидетельства](../tasks.md#выпускные-свидетельства). Строки ниже сохраняют исходный маршрут,
   а не список незавершённой реализации.
 - **Дата:** 2026-10-06
 - **Design:** [design.md](design.md), [requirements.md](requirements.md), [../tasks.md](../tasks.md).
@@ -101,4 +101,4 @@ T2..T7 ─► T8 поверхность SDK, changelog, docs (строки ARCHI
   `StaggerOrigin` в `measured`), `changelog.d/<branch-slug>.md` (текст — design), `README.md` и
   `docs/GUIDE.md` крейта (раздел keyframes); строки для `docs/ARCHITECTURE.md` (решения и имена
   тестов) — задаче Z.
-- **DoD:** `cargo xtask checks`; `market.md` M-CMP-1/2/4, M-CRV-9 → «есть» с именами тестов.
+- **DoD:** `cargo xtask checks`; `../requirements.md` M-CMP-1/2/4, M-CRV-9 → «есть» с именами тестов.

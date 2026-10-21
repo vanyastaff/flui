@@ -6,7 +6,7 @@
 - **Требования:** [requirements.md](requirements.md)
 - **Связанные:** [persistence/design.md](../persistence/design.md) (ждёт owner-local
   `AsyncDriver`), [teardown/design.md](../teardown/design.md) (порядок уничтожения полей realm,
-  `DropLedger`), [realm-model/experiment.md](../realm-model/experiment.md) (граф на
+  `DropLedger`), [research/2026-10-05-realm-model-experiment.ru.md](../../../research/2026-10-05-realm-model-experiment.ru.md) (граф на
   presentation, `ForeignGraph`, wake не того окна), [authoring-styles/requirements.md](../authoring-styles/requirements.md) R9, R19.
 
 ## Текущее состояние

@@ -4,7 +4,7 @@
 - **Дата:** 2026-10-06
 - **База:** `main` 9a4daa3ed; `curve.rs` = `crates/flui-animation/src/curve.rs`
 - **Закрывает:** D-17, D-18, D-19, D-37, D-38; строки матрицы M-CRV-1…7, 9, 11, 12
-  ([../market.md](../market.md)). ADR не нужен: межкрейтовый контракт — документ трейта `Curve`.
+  ([../requirements.md](../requirements.md)). ADR не нужен: межкрейтовый контракт — документ трейта `Curve`.
 - **Решения владельца (2026-10-06):** `steps()` реализуется вместе с production-потребителем;
   удаляются `CatmullRomCurve`, `CatmullRomSpline`, `Curve2D`, `Curve2DSample`, `ParametricCurve`,
   `ReverseCurve`/`Curve::reversed`; удаление Catmull-Rom — **после** того, как тема composition
@@ -184,7 +184,7 @@ flag), t = 1 → 1. Before flag не моделируется: у FLUI нет ф
 |----|---------------------------|--------------------------|
 | C1 | КОГДА берётся любая константа `Curves::*` или кривая из допустимого домена конструктора, она ДОЛЖНА давать ровно 0 и 1 на концах и конечные значения внутри | `curve_catalog_endpoints_and_monotonicity` (`run_table`, proptest по домену) |
 | C2 | КОГДА кривая объявлена монотонной, для t1 < t2 ДОЛЖНО быть f(t1) ≤ f(t2) | там же, proptest; список монотонных — в строках таблицы |
-| C3 | КОГДА `Cubic` задан точками CSS `ease`, `ease-in`, `ease-out`, `ease-in-out`, `(0.05,0.7,0.1,1)`, вывод ДОЛЖЕН совпадать с эталоном y(x) (market.md, 200 итераций бисекции) с |Δy| < 1e-6 | `cubic_bezier_matches_css_reference_values` (`run_table`) |
+| C3 | КОГДА `Cubic` задан точками CSS `ease`, `ease-in`, `ease-out`, `ease-in-out`, `(0.05,0.7,0.1,1)`, вывод ДОЛЖЕН совпадать с эталоном y(x) (../requirements.md, 200 итераций бисекции) с |Δy| < 1e-6 | `cubic_bezier_matches_css_reference_values` (`run_table`) |
 | C4 | КОГДА x близок к вертикальной касательной `EaseInOutExpo` (x = 0.5 ± 1e-6, ± 9e-7), |Δy| ДОЛЖНА быть < 1e-6 против аналитики s = 0.5 + ∛((x − 0.5)/4), y = 3s² − 2s³ | там же |
 | C5 | КОГДА x1, x2, y1, y2 случайны в допустимом домене, |y − y_ref| ДОЛЖНА быть < 1e-6, где y_ref — тестовая бисекция 200 шагов | `cubic_solver_bounds_output_error` (proptest) |
 | C6 | КОГДА параметр нарушает правило (x вне [0,1], NaN, ±∞, period ≤ 0, begin > end, midpoint на границе, `count = 0`, `None` с 1 шагом), `try_new` ДОЛЖЕН вернуть соответствующий `CurveError`, `new` — panic, serde — ошибку decode с тем же текстом | `curve_parameters_reject_invalid_input` (`run_table`, строка на правило × способ) |
@@ -197,7 +197,7 @@ flag), t = 1 → 1. Before flag не моделируется: у FLUI нет ф
 | C13 | КОГДА индикатор удаляется во время тика, контроллер ДОЛЖЕН быть освобождён (Drop == 1), следующий кадр не помечает paint удалённого узла | `cupertino_activity_indicator_releases_its_controller` (там же) |
 | C14 | КОГДА константа заявлена как точка CSS/Material (`Ease`, `EaseIn`, `EaseOut`, `EaseInOut`, `FastOutSlowIn`), её контрольные точки ДОЛЖНЫ совпадать с эталоном | строка C3 (через выход в 5 точках) |
 
-Эталоны — только из market.md (бисекция, независимая от солвера), CSS-алгоритма, выполненного
+Эталоны — только из ../requirements.md (бисекция, независимая от солвера), CSS-алгоритма, выполненного
 вручную, и аналитики; формула production не используется как оракул. Каждый фикс поведения —
 прогон с откатом production-ханка в отдельном worktree (падает по названной причине).
 
@@ -211,7 +211,7 @@ flag), t = 1 → 1. Before flag не моделируется: у FLUI нет ф
 - `README.md:129-131,171-183`, `docs/GUIDE.md:172,203-217`, `docs/PERFORMANCE.md:33,184,324,463`,
   `docs/ARCHITECTURE.md:108`, `docs/PATTERNS.md:146` — убрать удалённые типы, исправить
   `flipped`, точность солвера, контракт NaN. `GUIDE.md`/`PERFORMANCE.md` — doctest-источники.
-- `docs/plans/specs/naming/renames.md:98` (`Curve2D`) — строка снимается.
+- `docs/plans/specs/naming/tasks.md:98` (`Curve2D`) — строка снимается.
 - `packages/` — вызовов нет (rg по удалённым именам пуст).
 
 ## Changelog (`changelog.d/<branch-slug>.md`)

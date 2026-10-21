@@ -151,7 +151,7 @@ xtask задаёт clang и target flags. Более специфичная пе
 Финальный запуск embedded_gpu_scene --capture завершился с exit 0: analytical readback подтвердил depth, rotation, 2D overlay и progress. PNG foundation-gpu-scene.png визуально проверен; журнал foundation-gpu-scene.log в target/engine-audit. Это проверка конкретной сцены на DX12, не общий 3D API contract.
 
 После открытия PR опубликованные reviews выявили дополнительные дефекты;
-[аудит](engine-capability-audit.ru.md#исправления-после-inline-review) фиксирует
+[аудит](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/research/engine-capability-audit.ru.md#исправления-после-inline-review) фиксирует
 исправления, GPU проверки и mutation failures. Таблицы времени выше относятся к
 версии до этих исправлений; удаление recording mutex и adjacent tess merge не
 выдаются за измеренное ускорение без нового benchmark run.

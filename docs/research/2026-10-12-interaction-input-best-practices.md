@@ -5,7 +5,7 @@
   `rust-toolchain.toml`).
 - **Scope:** `flui-interaction`, the input half of `flui-platform-api`, and the
   `flui-platform` backends. The current inventory lives in
-  [`docs/plans/specs/flui-interaction/matrix.md`](../plans/specs/flui-interaction/matrix.md) and is
+  [`docs/plans/specs/flui-interaction/matrix.md`](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-interaction/matrix.md) and is
   only summarized here.
 - **Method:** every claim cites a primary source: a platform vendor's reference page, a W3C or
   WHATWG specification, or framework source at a file and line. Source code was read on the

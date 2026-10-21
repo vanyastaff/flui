@@ -5,7 +5,7 @@
 - **База:** `main` @ `4915054c8`
 - **Уровень 0:** [../release/requirements.md](../release/requirements.md) R18, D3, D5
 - **Связанные:** [../send-flip/requirements.md](../send-flip/requirements.md) (event-callback
-  `Fn(&mut EventCx<'_>) -> R`, `!Send`-захваты); [../dx/research.md](../dx/research.md) P1–P4,
+  `Fn(&mut EventCx<'_>) -> R`, `!Send`-захваты); [research/2026-10-05-dx-pain-points.ru.md](../../../research/2026-10-05-dx-pain-points.ru.md) P1–P4,
   P8, P14, P17; `docs/FOUNDATIONS.md` C2, C3; ADR-0086, ADR-0088; RFC 3681.
 
 ## Зачем

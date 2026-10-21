@@ -1,8 +1,8 @@
 # curves — задачи
 
 - **Статус:** исторический план; текущие контракты —
-  [readiness-status](../readiness-status.md), выпускная приёмка —
-  [release-evidence](../release-evidence.md). Строки ниже сохраняют исходный маршрут,
+  [контракты](../tasks.md#контракты-требований), выпускная приёмка —
+  [свидетельства](../tasks.md#выпускные-свидетельства). Строки ниже сохраняют исходный маршрут,
   а не список незавершённой реализации.
 - **Дата:** 2026-10-06
 - **Design:** [design.md](design.md) (контракт, API, сценарии C1–C14)
@@ -36,7 +36,7 @@ composition T3 (cubic-сегменты, M-CRV-9) ─► T8 удаление Catm
 | T7 | потребитель `Steps`: сегменты дорожки `CupertinoActivityIndicator` — `to(A[k], 125 мс, Steps::new(1, JumpAt::Start))` (вместе с composition T6, одна ветка); каретка не делается — `editable_text.rs` у text-ime (решение владельца) | C12, C13 (переписаны на индикатор) | T5; composition T6 | — |
 | T9 | `Curve::slope` (provided: центральная/односторонняя разность второго порядка, неконечное → 0; `Linear` = 1, `Cubic` — аналитика с пределом `y''/x''` при `x'(s)=0`, `Steps` = 0, `FlippedCurve`/`Interval` — цепное правило, стёртая кривая делегирует); первым среди потребителей (X13) | slope-строки C15 | T1 | ‖ T2–T4 |
 | T6 | `README.md`, `docs/{GUIDE,PERFORMANCE,ARCHITECTURE,PATTERNS}.md` крейта; `changelog.d/` | — | T2–T5 | — |
-| T8 | удалить `ParametricCurve`, `Curve2D`, `Curve2DSample`, `CatmullRomCurve`, `CatmullRomSpline`; документация; строка `renames.md:98`; changelog | — | composition T3 (cubic-сегменты ключевых кадров, M-CRV-9) | — |
+| T8 | удалить `ParametricCurve`, `Curve2D`, `Curve2DSample`, `CatmullRomCurve`, `CatmullRomSpline`; документация; строка `naming/tasks.md:98`; changelog | — | composition T3 (cubic-сегменты ключевых кадров, M-CRV-9) | — |
 
 ## Разрешённые файлы
 
@@ -46,7 +46,7 @@ composition T3 (cubic-сегменты, M-CRV-9) ─► T8 удаление Catm
 | T2–T5 | `crates/flui-animation/src/curve.rs`, `tests/contracts/curve.rs`; T3 — ещё `benches/animation_bench.rs` (строка `curved_value`) |
 | T7 | `packages/flui-cupertino/src/activity_indicator.rs` (ветка composition T6) |
 | T9 | `crates/flui-animation/src/curve.rs`, `tests/contracts/curve.rs` |
-| T6, T8 | `crates/flui-animation/{README.md,docs/*.md,src/curve.rs,src/lib.rs}`, `docs/plans/specs/naming/renames.md`, `changelog.d/<branch-slug>.md` |
+| T6, T8 | `crates/flui-animation/{README.md,docs/*.md,src/curve.rs,src/lib.rs}`, `docs/plans/specs/naming/tasks.md`, `changelog.d/<branch-slug>.md` |
 
 ## Definition of Done (каждая задача)
 
@@ -55,7 +55,7 @@ composition T3 (cubic-сегменты, M-CRV-9) ─► T8 удаление Catm
 - Каждая строка-фикс падает при откате production-ханка в отдельном worktree по названной
   причине (C3/C4 — по величине |Δy|, C10 — по скачку 2⁻¹⁰, C11 — по 0 вместо 1, C12 — по
   `elements_built > 0` или неизменной видимости).
-- Эталоны: market.md (бисекция), ручной расчёт CSS-алгоритма, аналитика; не формула production.
+- Эталоны: ../requirements.md (бисекция), ручной расчёт CSS-алгоритма, аналитика; не формула production.
   Непроверенные [U]-факты ledger'ов контрактом не закрепляются.
 - Удаление проверено против `crates/flui-sdk/tests/surface.rs` (ADR-0088 §4); rg по удалённым
   именам в `crates/`, `packages/`, `src/`, `examples/`, `docs/` пуст; `packages/` мигрированы в

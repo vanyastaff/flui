@@ -1,14 +1,14 @@
 # Распознаватели жестов: API — требования
 
-- **Статус:** дизайн утверждён; API и production-потребители интегрированы, итоговая приёмка остаётся открытой ([tasks.md](tasks.md)); scope подтверждён владельцем 2026-10-06 ([../orchestration.md](../orchestration.md), «Scope-решения»)
+- **Статус:** дизайн утверждён; API и production-потребители интегрированы, итоговая приёмка остаётся открытой ([tasks.md](tasks.md)); scope подтверждён владельцем 2026-10-06 ([../orchestration.md](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-interaction/orchestration.md), «Scope-решения»)
 - **Дата:** 2026-10-06
 - **База:** `main` @ `9a4daa3ed` (worktree оркестратора @ `814d77e8d`); строится **поверх** веток
   I1 `interaction/arena-recognizer-lifecycle` @ `2c7e48c00` и I2 `interaction/multi-pointer-recognizers`
   @ `8c234f670`
 - **Design:** [design.md](design.md); задачи — [tasks.md](tasks.md)
-- **Источники фактов:** [../trait-table.md](../trait-table.md) §2.1–2.8, §2.17–2.19, §3;
-  [../ownership-table.md](../ownership-table.md) §A–C, F; [../panic-matrix.md](../panic-matrix.md) R1, R2, D1–D5;
-  [../patterns.md](../patterns.md); [../conventions-audit.md](../conventions-audit.md) B (I1, I2)
+- **Источники фактов:** [../trait-table.md](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-interaction/trait-table.md) §2.1–2.8, §2.17–2.19, §3;
+  [../ownership-table.md](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-interaction/ownership-table.md) §A–C, F; [../panic-matrix.md](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-interaction/panic-matrix.md) R1, R2, D1–D5;
+  [../patterns.md](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-interaction/patterns.md); [../conventions-audit.md](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-interaction/conventions-audit.md) B (I1, I2)
 - **Связанные ADR:** ADR-0027 (owner-local realm), ADR-0086 §4 (арена «не меняется» — заменяется этой
   спекой), ADR-0089 (словарь указателя), ADR-0097, ADR-0127 (удержание на исключительном пути),
   ADR-0151 §4 (Proposed, `SystemPreferences`)

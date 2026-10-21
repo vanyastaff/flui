@@ -1,8 +1,8 @@
 # retarget — задачи
 
 - **Статус:** исторический план; текущие контракты —
-  [readiness-status](../readiness-status.md), выпускная приёмка —
-  [release-evidence](../release-evidence.md). Строки ниже сохраняют исходный маршрут,
+  [контракты](../tasks.md#контракты-требований), выпускная приёмка —
+  [свидетельства](../tasks.md#выпускные-свидетельства). Строки ниже сохраняют исходный маршрут,
   а не список незавершённой реализации.
 - **Дата:** 2026-10-06
 - **Design:** [design.md](design.md); [requirements.md](requirements.md)
@@ -14,7 +14,7 @@
   только в этом каталоге.
 - **Готово для задачи:** каждый названный тест падает с откатом production-ханка (отдельный
   worktree, вывод в PR) по названной причине и проходит с ним; property-тесты — с зафиксированным
-  seed в `.proptest-regressions`; эталоны — из `../market.md` или независимого метода в тесте;
+  seed в `.proptest-regressions`; эталоны — из `../requirements.md` или независимого метода в тесте;
   `[U]`-факты market не закрепляются; `cargo xtask check-changed` зелёный.
 
 ## Граф
@@ -36,7 +36,7 @@ T1 контракт ─▶ T2 slope + velocity ─▶ T3 сегмент, retarge
 | T5 | Implicit: `ImplicitAnimation` → `AnimatedValue` для `TwoWayConverter`, прогресс + §3.1 для остальных; `ContainerGeometry` с derive; `AnimatedOpacity` → `AnimatedValueView<f64>` в `ProxyAnimation`; ужесточить `animated_opacity_retargets_from_the_current_value_midflight`; `ScrollController::animate_to` → `retarget` | R20, R21 | `flui-widgets/src/animated/{implicitly_animated,animated_opacity,animated_padding,animated_align,animated_container}.rs`, `scroll/scroll_controller.rs`, `tests/implicit_animations.rs` | T4 | ‖ T6 |
 | T6 | `fling_across` в `Dismissible` (удалить `FLING_VELOCITY_SCALE`) и `DrawerController`; `InvalidExtent` через controller-robustness (`error.rs`) | R18 | `flui-widgets/src/interaction/dismissible.rs`, `packages/flui-material/src/drawer.rs`, тесты | T3 | ‖ T4, T5 |
 | T7 | (если владелец утвердит) back gesture: `PopPacing` со скоростью, settle `fling_across` при `|v| ≥` порога | R19 | `flui-widgets/src/navigator/{back_gesture,binding,transition_route}.rs`, `tests/back_gesture.rs` | T6 | — |
-| T8 | ADR «retarget сохраняет значение и скорость»; `changelog.d/<branch>.md`; строки `../market.md` M-INT-1/2/3/5/6, M-TIME-10 → «есть» со ссылкой на тесты; `flui-sdk/tests/surface.rs`; раздел для `docs/ARCHITECTURE.md` крейта — задаче Z | — | `docs/adr/ADR-NNNN-*.md`, `changelog.d/`, `crates/flui-sdk/tests/surface.rs` | T5, T6 | — |
+| T8 | ADR «retarget сохраняет значение и скорость»; `changelog.d/<branch>.md`; строки `../requirements.md` M-INT-1/2/3/5/6, M-TIME-10 → «есть» со ссылкой на тесты; `flui-sdk/tests/surface.rs`; раздел для `docs/ARCHITECTURE.md` крейта — задаче Z | — | `docs/adr/ADR-NNNN-*.md`, `changelog.d/`, `crates/flui-sdk/tests/surface.rs` | T5, T6 | — |
 
 ### T1 — красный прогон
 - `cargo nextest run -p flui-animation -E 'test(/retarget|slope|velocity|interruption|fling_across/)'`

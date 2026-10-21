@@ -2,7 +2,7 @@
 
 - **Статус:** основная реализация и I11 gesture/wheel merged; заключительный локальный gate, Win32 wheel smoke и CI прошли
 - **Дата:** 2026-10-06, база `main` @ `9a4daa3ed`
-- **Источник:** [orchestration.md](orchestration.md), [matrix.md](matrix.md); ledger'ы этапа 1 — вне репозитория.
+- **Источник:** [orchestration.md](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-interaction/orchestration.md), [matrix.md](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-interaction/matrix.md); ledger'ы этапа 1 — вне репозитория.
 - **Правила:** задача = ветка `interaction/<slug>` = worktree = draft-PR. Каждый фикс: тест через
   публичный API, красный с откатом фикса (вывод в PR), `cargo xtask check-changed` зелёный.
   ID задач — только здесь.
@@ -336,7 +336,7 @@ Up. Публичные Mouse/Touch строки проверяют 39 ms bounce,
 
 ## Поправки по «Конвенциям Rust» в ветках волны 1
 
-Источник — [conventions-audit.md](conventions-audit.md), раздел B. Исполняются новыми коммитами
+Источник — [conventions-audit.md](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-interaction/conventions-audit.md), раздел B. Исполняются новыми коммитами
 в тех же ветках (без force-push), до перевода PR из draft.
 
 | ID | Ветка | Поправка |

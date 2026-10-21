@@ -20,7 +20,7 @@ callbacks, конкурирующие panics и следующий кадр им
 стоимость правильного порядка, candidate copy/reuse и mutation failures.
 Это завершение конкретного первого фундамента, а не всей программы ниже:
 Engine-local resource descriptors и allocation leases уже реализованы;
-[проверки resource contract](../research/engine-resource-contract-validation.ru.md)
+[проверки resource contract](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/research/engine-resource-contract-validation.ru.md)
 фиксируют их поведение. Это не snapshot texels и не managed producer. Tagged color/linear
 working space, managed producer capabilities, bounded diagnostic resolver и
 closing service ещё требуют реализации. Текущие квоты явно исключают legacy caches/pools,
@@ -33,7 +33,7 @@ instance/shader, сохраняющий порядок linear/radial/sweep бе�
 
 ## Исходная точка и доказательства
 
-[Аудит возможностей](../research/engine-capability-audit.ru.md) фиксирует пять
+[Аудит возможностей](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/research/engine-capability-audit.ru.md) фиксирует пять
 исправлений: owning Image cache key, размеры content key, ordered ImageFilter
 items, удаление alpha cutoff и adapter-gated feature selection. Там приведены
 GPU readbacks и mutation runs, а также точные ignored logs. Их green baseline
@@ -53,10 +53,10 @@ superseding ADR; Proposed части уточняются до принятия,
 
 ## Обязательные поправки после adversarial review
 
-[Решения review](engine-plan-review.ru.md) имеют приоритет над первоначальной
+[Решения review](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/engine-plan-review.ru.md) имеют приоритет над первоначальной
 декомпозицией ниже. Три независимых проверки дали 24 замечания с повторяющимися
-сценариями: [correctness](engine-plan-review-correctness.ru.md),
-[recovery](engine-plan-review-recovery.ru.md), [API](engine-plan-review-api.ru.md).
+сценариями: [correctness](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/engine-plan-review-correctness.ru.md),
+[recovery](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/engine-plan-review-recovery.ru.md), [API](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/engine-plan-review-api.ru.md).
 Это проверка плана и текущего кода, не доказательство прогноза 2031.
 
 1. До implementation снять warm/cold baseline для solid, alternating gradients,
@@ -113,7 +113,7 @@ superseding ADR; Proposed части уточняются до принятия,
 
 ## Уточнения после повторного независимого review
 
-[Второй review](engine-plan-rereview.ru.md) проверил закрытие прежних замечаний и
+[Второй review](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/engine-plan-rereview.ru.md) проверил закрытие прежних замечаний и
 обнаружил дополнительные границы. Следующие решения уточняют требования выше:
 
 - Opaque consuming PreparedSubmission связывает command buffers, charges,
@@ -203,7 +203,7 @@ Scene-level lease/TextureId contract меняется отдельным ADR и 
 ### 3. Привести clip и effects к одной ordered композиции
 
 Уточнённые failure scenarios, внешние исследования и порядок приёмки:
-[точная композиция clips/effects](engine-clip-effects.ru.md).
+[точная композиция clips/effects](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/engine-clip-effects.ru.md).
 
 **Владелец: flui-engine; зависит от 1/2.** `state_stack.rs`, layer traversal,
 `layer_offscreen.rs`, `offscreen/`, replay: immutable clip dependency chain,
@@ -239,12 +239,12 @@ GPU readbacks, ограниченные requested limits и восстановл
 affine gradient coordinates, source halo, partial dependency closure и typed
 refusal неподдерживаемых эффектов. До color foundation остаются directional
 affine blur, foreground input вне viewport и измерения nested effect costs;
-подробности — в [плане clip/effects](engine-clip-effects.ru.md).
+подробности — в [плане clip/effects](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/engine-clip-effects.ru.md).
 
 ### 4. Внедрить color foundation через реальный gradient/image путь
 
 **Владельцы: flui-painting → flui-layer → flui-engine; зависит от 1/2/3.**
-[Color proposal](../research/color-foundation-adoption.ru.md) определяет собственный
+[Color proposal](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/research/color-foundation-adoption.ru.md) определяет собственный
 public FLUI source-space tagged finite float color; внутреннюю математику выполняет
 Linebender color 0.3.3. Linear premultiplied working representation отделена от
 source values и presentation mapping; >1 headroom не clamp до presentation.
@@ -309,7 +309,7 @@ No credentials/external billing; это transport/lifecycle test, не LLM quali
 
 ## Что брать из ecosystem сейчас
 
-[Ecosystem memo](../research/wgpu-ecosystem-adoption.ru.md) содержит registry/API
+[Ecosystem memo](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/research/wgpu-ecosystem-adoption.ru.md) содержит registry/API
 доказательства. color — первый новый foundation с production gradient consumer.
 Kurbo, glam, lyon, etagere, smallvec, Parley, Naga/naga_oil/wgsl_bindgen и profiler
 уже используются: расширяем их production contract, не добавляем дубль.

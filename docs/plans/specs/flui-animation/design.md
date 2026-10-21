@@ -7,12 +7,12 @@
   прошла validation CI. Контракт и доказательство каждой
   из 110 строк назначены в актуальной матрице. CPU/allocation измерения,
   Windows native/GPU и локальный consumer gate исполнены 2026-10-12.
-  Другие native-платформы и CI каждой validation revision имеют отдельные границы в release-evidence.
-- **Основание:** [актуальные контракты](readiness-status.md),
-  [выпускные свидетельства](release-evidence.md). Исторические
-  [аудит](readiness-audit.md), [прогоны](readiness-evidence.md),
-  [маршрут требований](readiness-matrix.md) и 12 тематических спек сохраняют исходную постановку.
-- **Сравнение:** [анимация у конкурентов](animation-competitors.md), включая проверку утверждений
+  Другие native-платформы и CI каждой validation revision имеют отдельные границы в tasks.md («Выпускные свидетельства»).
+- **Основание:** [актуальные контракты](tasks.md#контракты-требований),
+  [выпускные свидетельства](tasks.md#выпускные-свидетельства). Исторические
+  [аудит](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-animation/readiness-audit.md), [прогоны](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-animation/readiness-evidence.md),
+  [маршрут требований](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-animation/readiness-matrix.md) и 12 тематических спек сохраняют исходную постановку.
+- **Сравнение:** [анимация у конкурентов](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-animation/animation-competitors.md), включая проверку утверждений
   приложенного архитектурного обзора. Это источник acceptance-сценариев, не автоматическое
   расширение scope и не основание копировать интерфейсы.
 - **Определение готовности:** реальные пользователи animation через widgets/runtime получают
@@ -74,8 +74,8 @@ send-flip T* в графе — исторический маршрут, не н�
 | A5 | Системная и app motion policy | A1–A3; merged SystemPreferences producer | platform owner → realm projection → animation/widgets | Первый кадр и live update; User/Always/Never; Preserve; конечный scale; completion ровно раз; два realm независимы |
 | A6 | Согласованная геометрия paint/hit/semantics и жест→settle | A1/A2; motion часть A4 | objects/rendering + Drawer/Dismissible | Loose/tight/RTL/vertical, resize/cancel; экранная скорость; semantics bounds; hit coordinate snapshot; GPU readback и build count |
 | A7 | Замкнуть composition и public surface | A2/A4/A5 | animation/macros/sdk/packages | Каждый сохраняемый pub имеет caller или явное принятое решение; cubic-track consumer; derive nested; indicators Normal и видимая статичная загрузка при Reduce/запрете TickerMode/отсутствии привязки (ADR-0192); delete/migrate старые экспорты |
-| A8 | Измерение готового пути и актуальные docs | A1–A7 | benches, perf scenarios, README/GUIDE/PATTERNS/PERFORMANCE | Завершён 2026-10-12: paired registry/primitive/mounted CPU и allocation requests/bytes; результаты и границы в release-evidence |
-| A9 | Выпускная проверка | A8 | whole consumer graph + CI/native owners | Завершён в принятом scope: code revision `71f13790b` прошла CI. Required GPU, Windows preferences/input/UIA и code-head consumer gate выполнены; receipts каждой revision и ограничения платформ в release-evidence |
+| A8 | Измерение готового пути и актуальные docs | A1–A7 | benches, perf scenarios, README/GUIDE/PATTERNS/PERFORMANCE | Завершён 2026-10-12: paired registry/primitive/mounted CPU и allocation requests/bytes; результаты и границы в tasks.md («Выпускные свидетельства») |
+| A9 | Выпускная проверка | A8 | whole consumer graph + CI/native owners | Завершён в принятом scope: code revision `71f13790b` прошла CI. Required GPU, Windows preferences/input/UIA и code-head consumer gate выполнены; receipts каждой revision и ограничения платформ в tasks.md («Выпускные свидетельства») |
 
 ```mermaid
 flowchart LR
@@ -181,7 +181,7 @@ production caller, не закрывает пользовательское тр
 
 ## Scope и решения, которые нельзя потерять
 
-Из [historical-orchestration.md](historical-orchestration.md) сохранены owner decisions
+Из [historical-orchestration.md](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-animation/historical-orchestration.md) сохранены owner decisions
 2026-10-06: FLIP сверх Hero, full WAAPI, platform spline decay, OkLCh, discrete opt-in,
 preferred frame rate и отдельный cross-fade-флаг вынесены. Additive и phase animator
 вынесены **условно**, при доказанном покрытии retarget и keyframes соответственно.
@@ -223,7 +223,7 @@ CompoundAnimation предписано удалить, а не оставить 
       retry debt и failure custody описаны и проверены, включая следующий кадр.
 - [x] Исторические 32 отказа связаны с текущими исполняемыми контрактами или
       типизированными ограничениями; 29 имён сохранены, три замены явно отражены
-      в release-evidence. Соответствующих ignore нет.
+      в tasks.md («Выпускные свидетельства»). Соответствующих ignore нет.
 - [x] Все 110 исходных market-ID имеют актуальный consumer/test/evidence либо принятое scope-решение;
       условные исключения имеют доказательство выполнения условия.
 - [x] A1–A7 проверены через пользовательские швы; future/cancellation, reentry, competing failures,
@@ -231,22 +231,13 @@ CompoundAnimation предписано удалить, а не оставить 
 - [x] Полный scope gate зелёный на code head `e0961a73` с base `61ea71338`;
       follow-up gate на code head `b1c8c2fea` с base `e7dadda5c` тоже успешен.
       Package/facade, serde, doctests и SDK surface проверены. Windows self-rebuild
-      обойдён byte-identical runner copy с обычным host lock, см. release-evidence.
+      обойдён byte-identical runner copy с обычным host lock, см. tasks.md («Выпускные свидетельства»).
 - [x] Финальная code revision `71f13790b` прошла workspace/wasm/cross-typecheck CI.
       Production-база `61ea71338`, предыдущие validation revisions и конечный
-      input driver имеют отдельные успешные receipts в release-evidence.
+      input driver имеют отдельные успешные receipts в tasks.md («Выпускные свидетельства»).
 - [x] Windows native и GPU readback имеют датированные прогоны; другие native-пути обозначены
       как выполненные, только compiled или unavailable, без расширения результатов Linux CI.
 - [x] Performance и allocations измерены на одинаковом хосте/профиле; workloads и исходные результаты
       воспроизводимы, параметры не берутся из старых scratch-прототипов.
 - [x] Документация не обещает behavior, которого нет; нужные cross-crate ADR приняты; нового
       unwired public surface нет; deprecated path и старые handoff-заметки убраны после миграции.
-
-## Handoff для следующей сессии
-
-Прочитать актуальную матрицу и выпускные свидетельства, получить fresh `origin/main`
-и зафиксировать SHA. Остатки определяются непроверенными строками текущего release
-checklist; исторические red receipts остаются привязаны к своим revisions.
-Для нового дефекта повторить публичный reproducer на свежей базе и записать
-consumer → red → change → green → counterfactual → SHA. Не возобновлять старые
-агентские ветки и не запускать A1 заново только по аудиту 2026-10-08.

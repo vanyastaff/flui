@@ -3,7 +3,7 @@
 - **Статус:** черновик
 - **Дата:** 2026-10-06
 - **База:** `main` 9a4daa3ed
-- **Закрывает:** D-16, D-41; строка M-INTG-1 ([../market.md](../market.md)). M-INTG-6 (литерал
+- **Закрывает:** D-16, D-41; строка M-INTG-1 ([../requirements.md](../requirements.md)). M-INTG-6 (литерал
   ±8000 px/s и единый максимум fling) принадлежит задаче I3 темы flui-interaction другой
   сессии; эта тема его только потребляет. Вне объёма: M-INTG-10 (настройка hit-testing).
 - **Design:** [design.md](design.md); **задачи:** [tasks.md](tasks.md).

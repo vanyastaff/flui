@@ -4,7 +4,7 @@
 - **Дата:** 2026-10-06
 - **База:** `main` @ `9a4daa3ed`; `file:line` — на этот коммит
 - **Закрывает:** D-08, D-30, D-36; строки рынка M-INT-1, M-INT-2, M-INT-3, M-INT-5, M-INT-6,
-  M-TIME-10 ([../market.md](../market.md)); условие владельца для scope-out M-INT-13 (аддитивные
+  M-TIME-10 ([../requirements.md](../requirements.md)); условие владельца для scope-out M-INT-13 (аддитивные
   анимации): retarget с сохранением позиции и скорости покрывает прерывание — доказывает R6
 - **Зависит от:** physics (построение и вычисление пружины: `SpringSimulation`, её `x`/`dx`,
   конечность, допуски покоя), controller-robustness (builder, Vsync — единственные часы),
@@ -38,7 +38,7 @@
 - Время — виртуальное: явные `Vsync::tick_all(now)`; ряды — `run_table`
   (`crates/flui-animation/tests/main.rs` после Q0), `run_cases`
   (`crates/flui-widgets/tests/contracts.rs`, семейство `animation_retarget`). Эталоны — из
-  [../market.md](../market.md) «Эталонные значения» или вычислены в тесте независимым методом
+  [../requirements.md](../requirements.md) «Эталонные значения» или вычислены в тесте независимым методом
   (бисекция 200 итераций, конечная разность высокого порядка), никогда production-формулой.
 
 ## Требования

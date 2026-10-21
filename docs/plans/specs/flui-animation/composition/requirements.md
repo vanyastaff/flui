@@ -3,8 +3,8 @@
 - **Статус:** черновик
 - **Дата:** 2026-10-06
 - **База:** `main` 9a4daa3ed; `file:line` — на этот коммит.
-- **Оркестрация:** [../orchestration.md](../orchestration.md) («Делается в этом проходе»:
-  keyframes/sequence/stagger), [../tasks.md](../tasks.md); матрица — [../market.md](../market.md)
+- **Оркестрация:** [../orchestration.md](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-animation/orchestration.md) («Делается в этом проходе»:
+  keyframes/sequence/stagger), [../tasks.md](../tasks.md); матрица — [../requirements.md](../requirements.md)
   M-CMP-1, M-CMP-2, M-CMP-4, M-CMP-5, M-CMP-11, M-CRV-9.
 - **Связанные спеки:** `curves` (удаляет `CatmullRom*` после этой), `interpolation`
   (`tween_types.rs`), `physics`, `retarget`, `ownership`, `motion-clock`, `integration`.

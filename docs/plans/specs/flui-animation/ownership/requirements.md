@@ -5,7 +5,7 @@
 - **База:** `main` @ `9a4daa3ed`; `file:line` — на этот коммит
 - **Закрывает:** D-21, D-22, D-42; ручные пары `register`/`unregister`/`dispose` у 12 владельцев
   (список — [design.md](design.md) «Миграция»); строки рынка M-OWN-2, M-OWN-4
-  ([../market.md](../market.md))
+  ([../requirements.md](../requirements.md))
 - **Зависит от:** controller-robustness (builder — основной способ создать контроллер, `Ticker`
   удалён, Vsync — единственные часы), frame-path-state (состояние анимации realm-local, без
   per-animation `Arc<Mutex>`), listener-delivery (раздача статуса и сдерживание panic),

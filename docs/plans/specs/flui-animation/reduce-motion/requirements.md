@@ -3,7 +3,7 @@
 - **Статус:** черновик
 - **Дата:** 2026-10-06
 - **База:** `main` @ `9a4daa3ed`
-- **Закрывает:** D-05 ([../tasks.md](../tasks.md)); строки [../market.md](../market.md) M-A11Y-1…5.
+- **Закрывает:** D-05 ([../tasks.md](../tasks.md)); строки [../requirements.md](../requirements.md) M-A11Y-1…5.
   M-A11Y-6 (отдельный флаг cross-fade) вынесена владельцем 2026-10-06.
 - **Контракты:** [ADR-0078](../../../../adr/ADR-0078-rules-live-in-types-and-lints.md) (почему не
   метод `LifecycleContext`, design «Варианты (d)»),

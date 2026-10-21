@@ -3,7 +3,7 @@
 - **Статус:** эксперимент, вход для ADR (решение за владельцем)
 - **Дата:** 2026-10-05
 - **База:** `main` @ `2c067bbc5`
-- **Прототип:** [`examples/two_window_notes.rs`](../../../../examples/two_window_notes.rs)
+- **Прототип:** `examples/two_window_notes.rs`, локальный, в репозиторий не попал
   (`cargo run --example two_window_notes --features material`)
 - **Связанные:** ADR-0027, ADR-0043, ADR-0074, ADR-0085, ADR-0086, ADR-0091, ADR-0097;
   спека `send-flip` (`docs/plans/specs/send-flip/requirements.md` на ветке `plans/release-spec`)

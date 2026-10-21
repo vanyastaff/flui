@@ -4,7 +4,7 @@
 - **Дата:** 2026-10-06
 - **База:** `main` @ `9a4daa3ed`
 - **Решение владельца (2026-10-06):** замки на per-animation состоянии в пути кадра нарушают AGENTS.md
-  «Frame path is synchronous» и чинятся в этом проходе ([../orchestration.md](../orchestration.md)).
+  «Frame path is synchronous» и чинятся в этом проходе ([../orchestration.md](https://github.com/vanyastaff/flui/blob/deb9faea20fe6beb23c9ea0724f5a75e0f42595f/docs/plans/specs/flui-animation/orchestration.md)).
 - **Связанные:** [send-flip](../../send-flip/design.md) (строки 11–14, 17–22, 31; T4, T5, T6b, T6c),
   [controller-robustness](../controller-robustness/requirements.md), listener-delivery, ownership, retarget.
 
