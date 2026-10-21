@@ -359,6 +359,7 @@ impl WebTextInput {
         drop(listeners);
         match &*surface {
             Surface::Context(_) => {
+                let _ = self.canvas.remove_attribute("inputmode");
                 if let Err(error) = attach_edit_context(self.canvas.unchecked_ref(), &JsValue::NULL)
                 {
                     tracing::debug!(?error, "the EditContext could not be detached");
@@ -428,11 +429,10 @@ impl WebTextInput {
     ) -> Result<Attached, JsValue> {
         let selected = selection.range();
         let context = create_edit_context(text, as_u32(selected.start()), as_u32(selected.end()))?;
-        js_sys::Reflect::set(
-            context.as_ref(),
-            &JsValue::from_str("inputMode"),
-            &JsValue::from_str(input_mode(store.status().purpose)),
-        )?;
+        // The browser reads the keyboard hints from the element the context
+        // is associated with, not from the context.
+        self.canvas
+            .set_attribute("inputmode", input_mode(store.status().purpose))?;
         let target: &web_sys::EventTarget = context.as_ref();
         let mut listeners = Vec::new();
         let listen = |kind: &'static str, body: Box<dyn Fn(web_sys::Event)>| {
@@ -522,6 +522,25 @@ impl WebTextInput {
             surface: Rc::new(Surface::Context(context)),
             _listeners: listeners,
         })
+    }
+
+    /// The attached field's purpose changed (a rebuild of the focused field):
+    /// the browser's keyboard hint follows it without a blur and refocus.
+    fn refresh_input_mode(&self, surface: &Surface) {
+        let Ok(attached) = self.attached.try_borrow() else {
+            return;
+        };
+        let Some(attached) = attached.as_ref() else {
+            return;
+        };
+        let mode = input_mode(attached.store.status().purpose);
+        let result = match surface {
+            Surface::Context(_) => self.canvas.set_attribute("inputmode", mode),
+            Surface::TextArea { element, .. } => element.set_attribute("inputmode", mode),
+        };
+        if let Err(error) = result {
+            tracing::debug!(?error, "the keyboard hint could not be updated");
+        }
     }
 
     fn attach_textarea(
@@ -1036,5 +1055,7 @@ impl TextStoreObserver for SurfaceObserver {
         self.with(|input, _| input.push_bounds());
     }
 
-    fn status_changed(&self) {}
+    fn status_changed(&self) {
+        self.with(WebTextInput::refresh_input_mode);
+    }
 }
