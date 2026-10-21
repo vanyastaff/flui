@@ -69,4 +69,5 @@ pull request.
 | 2026-10-19 | minor | Entry 22 narrows: the floors are declared in `platform-support.toml` and the [version map](version-map.md) is generated from it; enforcing them is still open |
 | 2026-10-20 | minor | Entry 9 says what remains now that the window commands and state readback ship (ADR-0237): runs on macOS and on a real X11 window manager, a Linux title readback, live resize; entry 5 notes the idle check for a same-scale Wayland move; entry 4 names the 0 Hz macOS panel |
 | 2026-10-20 | minor | Gap 1: Windows answers the TSF input scope (password and `TextInputPurpose`); no run with an input method yet, and Android, Web, iOS and Wayland still read none of it except Android's password variation |
+| 2026-10-21 | minor | Gap 1: Android and Web read `TextInputPurpose` (the Android keyboard type, the Web `inputmode`); no device or browser run yet, and iOS and Wayland still read none of it |
 | 2026-10-20 | minor | Entry 2 records the identifier obligation (ADR-0240) for the Android, iOS and Web adapters |

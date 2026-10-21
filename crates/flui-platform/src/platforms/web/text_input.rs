@@ -31,14 +31,14 @@ use flui_platform_api::keyboard::KeyState;
 use flui_platform_api::text_store::Composition;
 use flui_platform_api::text_store::{
     CompositionEnd, LockGrant, LockTiming, Selection, TextChange, TextStore, TextStoreEdit,
-    TextStoreHost, TextStoreHostError, TextStoreObserver, Utf16Offset, Utf16Range,
+    TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreStatus, Utf16Offset, Utf16Range,
     commit_composition_in_place,
 };
 use wasm_bindgen::{JsCast, prelude::*};
 
 use crate::shared::ime_text::{document_text, scalar_spans};
 use crate::shared::panic_boundary::contain_owner_callback;
-use crate::shared::web_text::diff;
+use crate::shared::web_text::{diff, input_mode};
 
 use super::events::{KeyRoute, is_focus_handoff};
 use super::registration::{EditorSlot, Listener};
@@ -359,6 +359,7 @@ impl WebTextInput {
         drop(listeners);
         match &*surface {
             Surface::Context(_) => {
+                let _ = self.canvas.remove_attribute("inputmode");
                 if let Err(error) = attach_edit_context(self.canvas.unchecked_ref(), &JsValue::NULL)
                 {
                     tracing::debug!(?error, "the EditContext could not be detached");
@@ -428,6 +429,10 @@ impl WebTextInput {
     ) -> Result<Attached, JsValue> {
         let selected = selection.range();
         let context = create_edit_context(text, as_u32(selected.start()), as_u32(selected.end()))?;
+        // The browser reads the keyboard hints from the element the context
+        // is associated with, not from the context.
+        self.canvas
+            .set_attribute("inputmode", input_mode(store.status().purpose))?;
         let target: &web_sys::EventTarget = context.as_ref();
         let mut listeners = Vec::new();
         let listen = |kind: &'static str, body: Box<dyn Fn(web_sys::Event)>| {
@@ -518,6 +523,30 @@ impl WebTextInput {
             _listeners: listeners,
         })
     }
+    /// The attached field's purpose or protection changed (a rebuild of the
+    /// focused field): the browser's hints follow it without a blur and
+    /// refocus.
+    fn refresh_input_hints(&self, surface: &Surface) {
+        // The store is user code and may call back into the host: ask it with
+        // no borrow of the attachment held.
+        let store = match self.attached.try_borrow() {
+            Ok(attached) => attached.as_ref().map(|attached| Rc::clone(&attached.store)),
+            Err(_) => None,
+        };
+        let Some(store) = store else {
+            return;
+        };
+        let status = store.status();
+        let result = match surface {
+            Surface::Context(_) => self
+                .canvas
+                .set_attribute("inputmode", input_mode(status.purpose)),
+            Surface::TextArea { element, .. } => set_textarea_hints(element, &status),
+        };
+        if let Err(error) = result {
+            tracing::debug!(?error, "the keyboard hints could not be updated");
+        }
+    }
 
     fn attach_textarea(
         &self,
@@ -540,6 +569,8 @@ impl WebTextInput {
         ] {
             element.set_attribute(name, value)?;
         }
+        let status = store.status();
+        set_textarea_hints(&element, &status)?;
         let style = element.style();
         for (property, value) in [
             ("position", "fixed"),
@@ -1025,5 +1056,25 @@ impl TextStoreObserver for SurfaceObserver {
         self.with(|input, _| input.push_bounds());
     }
 
-    fn status_changed(&self) {}
+    fn status_changed(&self) {
+        self.with(WebTextInput::refresh_input_hints);
+    }
+}
+
+/// The hints a textarea editor gives the browser for the field's status: the
+/// keyboard its purpose asks for, and, for a protected field, that a password
+/// manager must not treat the editor as a login field.
+fn set_textarea_hints(
+    element: &web_sys::HtmlTextAreaElement,
+    status: &TextStoreStatus,
+) -> Result<(), JsValue> {
+    element.set_attribute("inputmode", input_mode(status.purpose))?;
+    element.set_attribute(
+        "autocomplete",
+        if status.protected {
+            "new-password"
+        } else {
+            "off"
+        },
+    )
 }

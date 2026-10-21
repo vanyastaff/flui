@@ -7,9 +7,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_platform::shared::ime_text::{PROTECTED_UNIT, document_text, scalar_spans};
-use flui_platform::shared::web_text::{IME_PROCESS_KEY_CODE, TextDiff, diff, key_composition};
+use flui_platform::shared::web_text::{
+    IME_PROCESS_KEY_CODE, TextDiff, diff, input_mode, key_composition,
+};
 use flui_platform_api::keyboard::ImeComposition;
-use flui_platform_api::text_store::{InMemoryTextStore, LockGrant, LockTiming, TextStore};
+use flui_platform_api::text_store::{
+    InMemoryTextStore, LockGrant, LockTiming, TextInputPurpose, TextStore,
+};
 
 const ESCAPE: u32 = 27;
 
@@ -139,6 +143,23 @@ fn character_bounds_follow_scalars() {
     );
 }
 
+/// The purpose a field was built with picks the virtual keyboard the browser
+/// shows; free text and a purpose this backend has no keyboard for get plain
+/// text.
+fn the_purpose_picks_the_input_mode() {
+    let rows = [
+        (TextInputPurpose::Text, "text"),
+        (TextInputPurpose::Email, "email"),
+        (TextInputPurpose::Url, "url"),
+        (TextInputPurpose::Phone, "tel"),
+        (TextInputPurpose::Number, "numeric"),
+        (TextInputPurpose::Search, "search"),
+    ];
+    for (purpose, expected) in rows {
+        assert_eq!(input_mode(purpose), expected, "{purpose:?}");
+    }
+}
+
 #[test]
 fn web_text_table() {
     super::run_table(
@@ -159,6 +180,10 @@ fn web_text_table() {
             (
                 "character_bounds_follow_scalars",
                 character_bounds_follow_scalars,
+            ),
+            (
+                "the_purpose_picks_the_input_mode",
+                the_purpose_picks_the_input_mode,
             ),
         ],
     );

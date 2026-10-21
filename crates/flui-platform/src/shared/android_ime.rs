@@ -21,8 +21,8 @@
 use flui_foundation::geometry::{Bounds, Point};
 use flui_platform_api::keyboard::{ImeComposition, NamedKey};
 use flui_platform_api::text_store::{
-    Composition, Selection, TextStoreEdit, TextStoreError, TextStoreRead, TextStoreStatus,
-    Utf16Offset, Utf16Range,
+    Composition, Selection, TextInputPurpose, TextStoreEdit, TextStoreError, TextStoreRead,
+    TextStoreStatus, Utf16Offset, Utf16Range,
 };
 
 use super::ime_text::document_text;
@@ -286,18 +286,40 @@ pub const IME_FLAG_NO_ENTER_ACTION: i32 = 0x4000_0000;
 /// `EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING`.
 pub const IME_FLAG_NO_PERSONALIZED_LEARNING: i32 = 0x0100_0000;
 
-/// The `EditorInfo` input type and options a field of `status` asks for: a
+/// `EditorInfo.TYPE_CLASS_NUMBER`.
+pub const TYPE_CLASS_NUMBER: i32 = 0x2;
+/// `EditorInfo.TYPE_CLASS_PHONE`.
+pub const TYPE_CLASS_PHONE: i32 = 0x3;
+/// `EditorInfo.TYPE_TEXT_VARIATION_URI`.
+pub const TYPE_TEXT_VARIATION_URI: i32 = 0x10;
+/// `EditorInfo.TYPE_TEXT_VARIATION_EMAIL_ADDRESS`.
+pub const TYPE_TEXT_VARIATION_EMAIL_ADDRESS: i32 = 0x20;
+/// `EditorInfo.IME_ACTION_SEARCH`.
+pub const IME_ACTION_SEARCH: i32 = 3;
+
+/// The `EditorInfo` input type and options a field of `status` asks for: the
+/// keyboard its purpose names (email, web address, number, phone, search), a
 /// password variation that the keyboard does not learn from for a protected
-/// field, a multi-line field whose Enter breaks lines, and Done otherwise.
+/// field (which wins over the purpose), a multi-line field whose Enter breaks
+/// lines, and Done otherwise.
 #[must_use]
 pub const fn editor_info(status: TextStoreStatus) -> (i32, i32) {
     let mut input_type = TYPE_CLASS_TEXT;
     let mut options = IME_ACTION_DONE;
+    match status.purpose {
+        TextInputPurpose::Email => input_type |= TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+        TextInputPurpose::Url => input_type |= TYPE_TEXT_VARIATION_URI,
+        TextInputPurpose::Number => input_type = TYPE_CLASS_NUMBER,
+        TextInputPurpose::Phone => input_type = TYPE_CLASS_PHONE,
+        TextInputPurpose::Search => options = IME_ACTION_SEARCH,
+        // Free text, and any purpose added later that has no keyboard here.
+        _ => {}
+    }
     if status.protected {
-        input_type |= TYPE_TEXT_VARIATION_PASSWORD;
+        input_type = TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_PASSWORD;
         options |= IME_FLAG_NO_PERSONALIZED_LEARNING;
     }
-    if !status.single_line {
+    if !status.single_line && input_type & 0xf == TYPE_CLASS_TEXT {
         input_type |= TYPE_TEXT_FLAG_MULTI_LINE;
         options |= IME_FLAG_NO_ENTER_ACTION;
     }
