@@ -173,6 +173,7 @@ objc2-foundation = { workspace = true, features = [
     "NSRange",
     "NSNotification",
     "NSDistributedNotificationCenter",
+    "NSLocale",
     "NSOperation",
     "block2",
 ] }

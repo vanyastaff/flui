@@ -44,6 +44,17 @@ impl ReadAdmission {
         Ok((current, changed || recovering))
     }
 
+    /// When the read a failure postponed may run, while one is owed. A source
+    /// that has no timer of its own wakes its owner then.
+    #[cfg(any(target_os = "macos", test))]
+    pub(crate) fn retry_deadline(&self) -> Option<web_time::Instant> {
+        let state = *self.state.lock();
+        match state {
+            State::RetryAt(deadline) => Some(deadline),
+            State::Ready | State::Reading => None,
+        }
+    }
+
     pub(crate) fn begin(&self, now: web_time::Instant) -> Result<ReadAttempt<'_>, PlatformError> {
         let mut state = self.state.lock();
         match *state {
@@ -162,7 +173,17 @@ mod tests {
             admission.begin(now),
             Err(PlatformError::PreferencesDeferred)
         ));
+        assert_eq!(
+            admission.retry_deadline(),
+            None,
+            "a read in flight owes nothing yet"
+        );
         drop(failed);
+        assert_eq!(
+            admission.retry_deadline(),
+            Some(now + RETRY_INTERVAL),
+            "a failed read owes a retry"
+        );
         for elapsed in [0, 10, 100, 499] {
             assert!(matches!(
                 admission.begin(now + Duration::from_millis(elapsed)),
@@ -173,6 +194,11 @@ mod tests {
             .begin(now + RETRY_INTERVAL)
             .expect("bounded retry")
             .accept();
+        assert_eq!(
+            admission.retry_deadline(),
+            None,
+            "an accepted read owes nothing"
+        );
         admission
             .begin(now + RETRY_INTERVAL)
             .expect("healthy reads remain admitted")
@@ -184,6 +210,11 @@ mod tests {
             panic!("native sampling panic");
         }));
         assert!(failure.is_err());
+        assert_eq!(
+            admission.retry_deadline(),
+            Some(now + RETRY_INTERVAL * 2),
+            "an unwound read owes a retry too"
+        );
         assert!(matches!(
             admission.begin(now + RETRY_INTERVAL),
             Err(PlatformError::PreferencesDeferred)

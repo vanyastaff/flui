@@ -1,9 +1,10 @@
 //! The running OS version of each environment, and the gates above its floor (ADR-0244).
 //!
 //! Each environment has one version type, read once when its platform is built and kept there
-//! (never in a `static`): [`WindowsBuild`](windows::WindowsBuild),
-//! [`AppleVersion`](apple::AppleVersion), [`AndroidApi`](android::AndroidApi). The number inside
-//! is private to the type, so no code outside this module compares a version with a literal.
+//! (never in a `static`): `windows::WindowsBuild`, `apple::AppleVersion`, `android::AndroidApi`.
+//! A doc build compiles only its target's submodule, so they are named here, not linked. The
+//! number inside is private to the type, so no code outside this module compares a version with
+//! a literal.
 //!
 //! A feature newer than the floor is a marker type implementing [`Gate`], declared next to the
 //! code that uses it, with a doc line saying what that code does without it. The version's

@@ -525,6 +525,22 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `[fr-CA, en]` в первом наблюдении каждого случая, `unsupported` без контраста и масштаба. Без
   `contrast` в фильтре `SettingChanged` случай `contrast` падает по сторожу через 30 с. В сессии
   GNOME не запускалось.
+- [x] **PR 5a** — ветка `platform/preferences-locale-scripts`, по ревью: модификатор письменности в
+  имени POSIX называет письменность (`sr_RS@latin` → `sr-Latn-RS`, `@cyrillic`, `@devanagari`),
+  остальные модификаторы и кодировка отбрасываются; строки в
+  `a_posix_environment_is_read_as_gettext_reads_it`.
+- [x] **PR 6** — ветка `platform/preferences-macos`. Опрос раз в 500 мс снят: источник делится на
+  `Send + Sync` `PreferenceSource` (сигнал и `ReadAdmission`) и главнопоточные
+  `PreferenceObservers`, которыми владеет хост (`MacOSPlatform` и цикл winit). Владельца будят три
+  уведомления: параметры отображения рабочего стола (уменьшение движения и, новое, повышение
+  контраста), смена текущей локали (новое: `NSLocale.preferredLanguages` через `preferred_locales`)
+  и активация приложения — двойной щелчок не уведомляет, его меняют в System Settings, поэтому он
+  перечитывается при возвращении. Неудачное или размотанное чтение ставит одно пробуждение на свой
+  срок повтора (`ReadAdmission::retry_deadline`), иначе к нему никто бы не вернулся. Наблюдатели
+  кончаются раньше источника — в `MacOSPlatform` порядком полей, в цикле winit при остановке.
+  Обёртка уведомления вынесена из `system_notices` в `observation`; её `new` безопасна, обработчик
+  обязан быть `Send + Sync`. Только проверка типов (`aarch64-apple-darwin`, с хостом winit и без,
+  `--all-targets`); запуск на Mac — vanyastaff/flui#1840.
 
 ## Чего нет в этой серии
 
