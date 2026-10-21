@@ -401,10 +401,16 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
 - [ ] Один и два runtime, поздний runtime, поздний presentation, закрытый sibling,
   отказ первого получателя и доставка остальным; старый queued revision не
   переписывает новый seed. Соседние обновления coalesce только до input/frame barrier.
-- [ ] Text/RichText/EditableText: styled spans разных размеров, unstyled text,
+- [x] Text/RichText/EditableText: styled spans разных размеров, unstyled text,
   layout/intrinsics/hit testing/caret, live change и subtree override. Политика
   sizing зафиксирована по действительным producer mappings без заявления native
   parity из одного scalar; собственные authored стили не масштабируются дважды.
+  Строки `the_system_text_scale_grows_each_span_once`,
+  `a_field_measures_and_hit_tests_the_current_text_scale` вместе с прежними
+  `media_text_scaling_changes_the_laid_out_text`,
+  `a_text_scale_change_relayouts_a_preserved_text_subtree` и
+  `inherited_text_sizing_updates_editable_glyphs_and_caret`; политика — таблица
+  в `crates/flui-native/ARCHITECTURE.md` («Native text sizing…»).
 - [x] GestureArenaScope и mounted consumers: double tap/drag/long press/fling/wheel,
   настройки на текущую и следующую последовательность, per-kind fallback,
   авторские overrides, обратная смена настройки.
@@ -468,6 +474,19 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `the_re_exports_are_the_facades_types`); фасад их уже экспортировал. Фрагмент changelog
   описывает публичные `OwnerHost::{update_preferences, preferences}` и
   `RuntimeHostServices::with_preferences`.
+- [x] **PR 3** — ветка `platform/preferences-text`. Системный масштаб, поданный через runtime без
+  собственного провайдера теста: `the_system_text_scale_grows_each_span_once` — спаны разных
+  размеров, текст без стиля, фиксированный спан посередине, ambient-стиль `Text` масштабируется один
+  раз, фиксированный ambient-стиль держит поддерево; intrinsics совпадают с layout, снятие
+  наблюдения возвращает исходную геометрию. `a_field_measures_and_hit_tests_the_current_text_scale`
+  — intrinsics поля и касание после живой смены в обе стороны. Мутации: фиксированный спан в
+  выравнивании ответов и один множитель на все спаны валят первую строку; вторая падает, когда
+  смена не доходит до layout ни через виджет, ни через конвейер (каждый путь в одиночку закрывает
+  другой). Windows публикует один `TextScaleFactor`, а WinUI масштабирует крупный текст меньше по
+  недокументированной кривой, поэтому линейное применение не заявлено как parity (таблица в
+  `flui-native/ARCHITECTURE.md`, строка parity, запись 14 gaps). Фрагмент
+  `inherited-text-scale.md` исправлен: недопустимый масштаб отклоняется при построении, а не
+  заменяется на 1.0.
 
 ## Чего нет в этой серии
 

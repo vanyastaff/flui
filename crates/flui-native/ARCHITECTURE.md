@@ -252,6 +252,25 @@ obtain numeric point sizes; portable shaping still selects the authored face.
 Neither backend samples a sparse curve or substitutes a scalar for missing
 native answers.
 
+Each host maps the system text size the way its OS exposes it, and the
+mapping claims no more than that:
+
+| Host | Observation | Policy the runtime applies |
+|:--|:--|:--|
+| Android | the SP converter for each authored size, which carries the OS's own nonlinear growth | exact answers |
+| iOS | `UIFontMetrics` for each growth profile | exact answers |
+| Windows | one `UISettings::TextScaleFactor`, 1 to 2.25 | `TextSizing::linear` |
+| macOS, Linux, web, winit | none | `TextSizing::linear(1.0)`, the authored size |
+
+Windows publishes only the scalar. WinUI scales larger text less, by a curve
+it does not document, so FLUI's large text grows more than a WinUI control's at
+the same setting. FLUI applies the scalar as published rather than guess the
+curve, and does not count the linear mapping as native parity. An exact host
+never falls back to the scalar for a missing answer (ADR-0183). A subtree
+or a style opts out with a fixed policy or a fixed intent; the paragraph
+resolves each span once, from its own authored size, which
+`the_system_text_scale_grows_each_span_once` pins.
+
 The private `android_capture_delivery_receipt` matrix exercises dropped and
 stale receipts, bounded retry, settled inboxes, deadline expiry and late healing
 through the acquisition protocol. It also runs on a non-Android test host, which

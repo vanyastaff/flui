@@ -280,7 +280,7 @@ secrets).
 |:--|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:--|
 | Dark mode and its changes | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ✅ | Every window seeds `MediaQueryData::platform_brightness` and follows changes; only Windows and Android ran a live flip. |
 | Accent colour | ❌ | ❌ | ❌ | ❌ | — | ❌ | — | ❌ | Not in the contract |
-| Text scale | 🟡 | — | ❌ | ❌ | 🟡 | 🟡 | ❌ | ❌ | iOS and Android go through native text sizing; Linux doesn't read `text-scaling-factor` |
+| Text scale | 🟡 | — | ❌ | ❌ | 🟡 | 🟡 | ❌ | ✅ | iOS and Android answer each size natively; Windows applies its one `TextScaleFactor` linearly, while WinUI scales larger text less; Linux doesn't read `text-scaling-factor`. Headless: `the_system_text_scale_grows_each_span_once`, `a_field_measures_and_hit_tests_the_current_text_scale` |
 | Reduce motion | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | Headless injects preferences through `HeadlessHost::set_system_preferences`; no reduce-motion row drives it yet |
 | Contrast | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |  |
 | Bold text | — | — | — | — | 🟡 | 🟡 | — | ❌ |  |

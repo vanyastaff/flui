@@ -1037,6 +1037,105 @@ pub(crate) fn a_tap_places_the_caret_where_it_landed() {
     assert!(!controller.has_selection(), "a tap collapses");
 }
 
+/// A field measures and hit-tests the glyphs of the current system text scale.
+///
+/// Its intrinsics follow the laid-out line under every scale. A tap at the
+/// same point, 1.4 scaled glyphs in, is one glyph in at twice the size and
+/// 2.8 glyphs in at the authored size, so a tap resolved against stale
+/// geometry lands on the wrong boundary in either direction.
+pub(crate) fn a_field_measures_and_hit_tests_the_current_text_scale() {
+    use flui_painting::typography::TextStyle;
+    use flui_platform::SystemPreferences;
+    use flui_rendering::storage::IntrinsicDimension;
+    use std::time::Duration;
+
+    let controller = TextEditingController::with_text("mmmm");
+    let focus_node = FocusNode::with_debug_label("scaled field");
+    let mut harness = crate::common::harness::mount_with_ime(
+        EditableText::new(controller.clone(), Rc::clone(&focus_node))
+            .text_style(TextStyle::default().with_font_size(16.0)),
+    );
+    // The laid-out glyphs, and the width the field's intrinsics add to them
+    // for the caret.
+    let measure = |harness: &crate::common::harness::Harness| {
+        let glyphs = with_render_editable(harness, |render| {
+            render.local_rect_for_range(0..4).expect("laid out glyphs")
+        })
+        .expect("mounted editable");
+        let (width, height) = harness.pipeline_owner().with_mut(|owner| {
+            let id = owner
+                .render_tree()
+                .iter()
+                .find_map(|(id, node)| {
+                    node.as_box()
+                        .and_then(|b| b.render_object().downcast_ref::<RenderEditable>())
+                        .map(|_| id)
+                })
+                .expect("mounted editable");
+            let mut query = |dimension| {
+                owner
+                    .box_intrinsic_dimension(id, dimension, f64::INFINITY)
+                    .expect("editable intrinsics")
+            };
+            (
+                query(IntrinsicDimension::MaxWidth),
+                query(IntrinsicDimension::MinHeight),
+            )
+        });
+        assert!(
+            (height - glyphs.height()).abs() < 0.01,
+            "the intrinsic height is the laid-out line: height={height}, glyphs={glyphs:?}"
+        );
+        (glyphs, width - glyphs.width())
+    };
+    let (unscaled, caret_margin) = measure(&harness);
+    harness.set_system_preferences(
+        SystemPreferences::default()
+            .with_text_scale(2.0)
+            .expect("supported scale"),
+    );
+    harness.tick();
+    let (glyphs, _) = measure(&harness);
+    assert!(
+        glyphs.width() > unscaled.width() * 1.9,
+        "precondition: the scale reached the field: unscaled={unscaled:?}, scaled={glyphs:?}"
+    );
+    // Half the authored line height is inside the field at either size.
+    let (x, y) = (glyphs.width() * 0.35, unscaled.height() / 2.0);
+
+    for (preferences, expected) in [
+        (None, 1),
+        (Some(SystemPreferences::default()), 3),
+        (
+            Some(
+                SystemPreferences::default()
+                    .with_text_scale(2.0)
+                    .expect("supported scale"),
+            ),
+            1,
+        ),
+    ] {
+        if let Some(preferences) = preferences {
+            harness.set_system_preferences(preferences);
+            harness.tick();
+        }
+        let (_, margin) = measure(&harness);
+        assert!(
+            (margin - caret_margin).abs() < 0.01,
+            "the intrinsic width is the laid-out glyphs plus the caret"
+        );
+        harness.dispatch_pointer_down(x, y);
+        harness.dispatch_pointer_up(x, y);
+        assert_eq!(
+            controller.caret_byte_offset(),
+            expected,
+            "a tap at {x} resolves against the current glyphs"
+        );
+        // Past the double-tap window, so the next tap places a caret again.
+        harness.pump_for(Duration::from_secs(1));
+    }
+}
+
 /// A pointer-down on a composing field and a paste into one commit the
 /// composition before they act, keeping its text, through the window's
 /// input-method host (ADR-0142 item 4): the caret lands where the tap did,
