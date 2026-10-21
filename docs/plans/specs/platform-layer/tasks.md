@@ -439,10 +439,13 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
 - [ ] Motion и остальные значения имеют production-потребителей; политика
   приложения остаётся runtime-owned. Существующий animation spec сверяется перед
   реализацией, отдельный SystemMotion producer не появляется.
-- [ ] Windows native query/refresh через настоящий owned receiver без изменения
+- [x] Windows native query/refresh через настоящий owned receiver без изменения
   пользовательских настроек, zero-window lifetime и teardown. Искусственно
   адресованное сообщение доказывает refresh/routing, а не происхождение от ОС.
   Для остальных платформ записываются точные build/execute ограничения.
+  `windows_reads_preferences_before_a_user_window_exists`,
+  `setting_messages_wake_the_owner_without_a_user_window` и `preference_receiver_retirement`;
+  ограничения по ОС — таблица в записи **PR 9**.
 - [ ] Полный поиск и миграция AccessibilityFeatures, старых источников и exports;
   SDK/facade, docs, optional features, cross-typecheck, meaningful revert proofs,
   self-review и заключительный `cargo xtask check-changed`. CI — отдельное доказательство.
@@ -570,6 +573,27 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   нажатия читается из настройки, а не из копии `ViewConfiguration`. Повторный прогон на том же
   S21: `long_press_timeout 1000` → 1 с и обратно 500 мс, контраст, высококонтрастный текст,
   движение и поворот доходят вживую; 0 оборотов цикла за 15 с простоя после установления.
+- [x] **PR 9** — ветка `platform/preferences-windows`. Снятие приёмника получает вызовы
+  уничтожения окна и снятия класса параметрами; `preference_receiver_retirement` проваливает
+  `DestroyWindow` на настоящем скрытом окне: окно остаётся, класс не снимается, контекст (и
+  разделяемая им инвалидация) жив, поздний `WM_SETTINGCHANGE` ничего не помечает и никого не
+  будит. `a_delegate_that_outlives_its_source_is_inert`: делегат WinRT держит только инвалидацию
+  источника, которую тот закрывает до отзыва, — переживший источник делегат (как при неудачном
+  отзыве) инертен, а преемник будит; сам отказ отзыва не вызывается — WinRT не даёт его
+  спровоцировать. Мутации: освобождение контекста при отказе, снятие класса после отказа и
+  источник, не закрывающий приём при сбросе, валят каждую свою строку.
+
+  Что собрано и что исполнено для LY8/LY9:
+
+  | Среда | Собрано | Исполнено |
+  |:--|:--|:--|
+  | Windows | clippy, nextest | на этой машине: источник без окна, адресованный `WM_SETTINGCHANGE`, снятие с отказами |
+  | Linux | кросс-clippy с хостом winit и без | WSL Ubuntu 24.04, `xvfb-run`, подменный портал в `dbus-run-session` (15 случаев) |
+  | macOS | кросс-clippy `aarch64-apple-darwin` | нет; очередь `needs-mac` |
+  | iOS | `cross-typecheck` в CI (нужен Apple SDK) | нет; очередь `needs-mac` |
+  | Android | кросс-clippy, dex | Galaxy S21, Android 15 / API 35 |
+  | Web | wasm32 clippy, `wasm-check` | Node против подменной границы браузера; не в браузере |
+  | Headless | — | CI Linux |
 
 ## Чего нет в этой серии
 

@@ -152,6 +152,47 @@ impl Receiver {
 
 impl Drop for Receiver {
     fn drop(&mut self) {
+        self.retire(
+            |hwnd| {
+                // SAFETY: only this owner can destroy its live HWND. WM_NCDESTROY
+                // clears the handle before reuse; context stays live through this call.
+                unsafe { DestroyWindow(hwnd) }
+            },
+            |class, instance| {
+                // SAFETY: `retire` asks only once no live HWND refers to this
+                // private class.
+                unsafe { UnregisterClassW(class, Some(instance)) }
+            },
+        );
+    }
+}
+
+impl Receiver {
+    #[cfg(test)]
+    pub(super) fn class_for_test(&self) -> (Vec<u16>, HINSTANCE) {
+        (self.class.clone(), self.instance)
+    }
+
+    /// Retire with `destroy` and `unregister` standing in for `DestroyWindow`
+    /// and `UnregisterClassW`.
+    #[cfg(test)]
+    pub(super) fn retire_for_test(
+        mut self,
+        destroy: impl FnOnce(HWND) -> windows::core::Result<()>,
+        unregister: impl FnOnce(PCWSTR, HINSTANCE) -> windows::core::Result<()>,
+    ) {
+        self.retire(destroy, unregister);
+    }
+
+    /// Detach the host, destroy the window with `destroy`, then retire the
+    /// class with `unregister`. A window the OS still owns keeps its context
+    /// and unique class name reserved, so its procedure still finds a live,
+    /// already-closed source.
+    fn retire(
+        &mut self,
+        destroy: impl FnOnce(HWND) -> windows::core::Result<()>,
+        unregister: impl FnOnce(PCWSTR, HINSTANCE) -> windows::core::Result<()>,
+    ) {
         let Some(context) = self.context.take() else {
             return;
         };
@@ -159,9 +200,7 @@ impl Drop for Receiver {
             if let Some(host) = &context.host {
                 host.detach(hwnd);
             }
-            // SAFETY: only this owner can destroy its live HWND. WM_NCDESTROY
-            // clears the handle before reuse; context stays live through this call.
-            if let Err(error) = unsafe { DestroyWindow(hwnd) } {
+            if let Err(error) = destroy(hwnd) {
                 // Keep both userdata and its unique class name reserved if the
                 // OS still owns the HWND. The already-closed source is inert.
                 std::mem::forget(context);
@@ -171,10 +210,7 @@ impl Drop for Receiver {
                 return;
             }
         }
-        // SAFETY: no live HWND refers to this private class after destruction.
-        if let Err(error) =
-            unsafe { UnregisterClassW(PCWSTR(self.class.as_ptr()), Some(self.instance)) }
-        {
+        if let Err(error) = unregister(PCWSTR(self.class.as_ptr()), self.instance) {
             contain_owner_callback(
                 || tracing::warn!(%error, "preference receiver class retirement failed"),
             );
