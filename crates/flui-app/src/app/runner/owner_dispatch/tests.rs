@@ -1286,16 +1286,19 @@ fn linear_sizing(scale: f64) -> TextSizing {
     TextSizing::linear(scale).expect("valid scale")
 }
 
+/// What a frame turn of an installed presentation needs.
+struct Presented {
+    dispatcher: PresentationDispatcher,
+    frame: super::super::frame_driver::FrameBinding,
+}
+
 /// Mounts a reader of the system text sizing over `runtime` and installs it as the
-/// primary presentation, returning what a frame turn needs.
-fn install_sizing_reader(
+/// primary presentation.
+fn present_sizing_reader(
     runtime: crate::app::ui_runtime::UiRuntime,
     window: Arc<dyn PlatformWindow>,
     log: &SizingLog,
-) -> (
-    PresentationDispatcher,
-    super::super::frame_driver::FrameBinding,
-) {
+) -> Presented {
     use super::super::frame_driver::{FrameDriver, TestFrameDriver};
     use flui_view::prelude::*;
 
@@ -1326,23 +1329,20 @@ fn install_sizing_reader(
         .outcome()
         .expect("idle publication")
         .expect("installed");
-    (dispatcher, frame.binding)
+    Presented {
+        dispatcher,
+        frame: frame.binding,
+    }
 }
 
-/// [`install_sizing_reader`] over the runtime the runner builds, seeded from the
+/// [`present_sizing_reader`] over the runtime the runner builds, seeded from the
 /// preferences the installed host has accepted so far.
-fn mount_sizing_reader(
+fn present_built_sizing_reader(
     log: &SizingLog,
-) -> Result<
-    (
-        PresentationDispatcher,
-        super::super::frame_driver::FrameBinding,
-    ),
-    super::super::host::HostServicesError,
-> {
+) -> Result<Presented, super::super::host::HostServicesError> {
     let window = test_window();
     let runtime = super::super::host::build_ui_runtime(Arc::clone(&window), 1.0)?;
-    Ok(install_sizing_reader(runtime, window, log))
+    Ok(present_sizing_reader(runtime, window, log))
 }
 
 /// A headless owner whose preference source feeds a mounted text-sizing reader. The
@@ -1350,27 +1350,21 @@ fn mount_sizing_reader(
 struct SourceDrivenReader {
     source: flui_native::HeadlessPreferences,
     turns: flui_native::HeadlessOwnerTurns,
-    dispatcher: PresentationDispatcher,
-    frame: super::super::frame_driver::FrameBinding,
+    presented: Presented,
     log: SizingLog,
 }
 
 impl SourceDrivenReader {
     /// Runs `platform`; `bootstrap` receives the loop's owner, the platform's
-    /// preference source and the log, and installs the owner and mounts the reader.
+    /// preference source and the log, and installs the owner and presents the reader.
     fn boot(
         platform: flui_native::HeadlessPlatform,
         bootstrap: impl FnOnce(
             flui_native::OwnerPlatform,
             &flui_native::HeadlessPreferences,
             &SizingLog,
-        ) -> Result<
-            (
-                PresentationDispatcher,
-                super::super::frame_driver::FrameBinding,
-            ),
-            flui_native::BootstrapError,
-        > + 'static,
+        ) -> Result<Presented, flui_native::BootstrapError>
+        + 'static,
     ) -> Self {
         use flui_native::Platform;
 
@@ -1386,19 +1380,21 @@ impl SourceDrivenReader {
                 Ok(())
             }))
             .expect("headless bootstrap");
-        let (dispatcher, frame) = mounted.take().expect("mounted frame");
+        let presented = mounted.take().expect("presented reader");
         Self {
             source,
             turns,
-            dispatcher,
-            frame,
+            presented,
             log,
         }
     }
 
     fn frame(&self) {
-        dispatch_platform_ui_runtime(self.dispatcher, RuntimeTask::Frame(self.frame))
-            .expect("frame");
+        dispatch_platform_ui_runtime(
+            self.presented.dispatcher,
+            RuntimeTask::Frame(self.presented.frame),
+        )
+        .expect("frame");
     }
 
     /// The owner turn the source's wake asked for, then the frame it requested.
@@ -1418,7 +1414,7 @@ fn the_platform_preference_source_reaches_installed_consumers() {
         flui_native::HeadlessPlatform::new().with_preferences(text_scale_preferences(2.0)),
         |owner, _, log| {
             install_owner_platform(owner)?;
-            Ok(mount_sizing_reader(log)?)
+            Ok(present_built_sizing_reader(log)?)
         },
     );
     reader.frame();
@@ -1460,7 +1456,7 @@ fn a_change_before_the_first_owner_turn_reaches_consumers_once() {
             // The hook is installed and the first value accepted, but the loop has
             // not started: this change is owed to a turn that has not run.
             source.set(text_scale_preferences(3.0));
-            Ok(mount_sizing_reader(log)?)
+            Ok(present_built_sizing_reader(log)?)
         },
     );
     reader.frame();
@@ -1479,7 +1475,7 @@ fn a_change_before_the_first_owner_turn_reaches_consumers_once() {
     assert_eq!(
         reader.sizings(),
         [linear_sizing(2.0), linear_sizing(3.0)],
-        "the change was delivered again by a later turn"
+        "a later turn rebuilt the consumer with the same change"
     );
     teardown_platform_ui_runtime();
 }
@@ -1495,7 +1491,7 @@ fn a_change_before_the_wake_hook_exists_reaches_consumers_once() {
             source.fail_next_read("the settings service was not up yet");
             source.set(text_scale_preferences(3.0));
             install_owner_platform(owner)?;
-            Ok(mount_sizing_reader(log)?)
+            Ok(present_built_sizing_reader(log)?)
         },
     );
     reader.frame();
@@ -1514,20 +1510,20 @@ fn a_change_before_the_wake_hook_exists_reaches_consumers_once() {
     assert_eq!(
         reader.sizings(),
         [linear_sizing(1.0), linear_sizing(3.0)],
-        "the change was delivered again by a later turn"
+        "a later turn rebuilt the consumer with the same change"
     );
     teardown_platform_ui_runtime();
 }
 
 fn a_replaced_wake_hook_is_the_only_one_later_changes_reach() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     let _clear = OwnerHostClearGuard::arm();
     let reader = SourceDrivenReader::boot(
         flui_native::HeadlessPlatform::new().with_preferences(text_scale_preferences(2.0)),
         |owner, _, log| {
             install_owner_platform(owner)?;
-            Ok(mount_sizing_reader(log)?)
+            Ok(present_built_sizing_reader(log)?)
         },
     );
     reader.frame();
@@ -1539,12 +1535,30 @@ fn a_replaced_wake_hook_is_the_only_one_later_changes_reach() {
         "the installed hook did not deliver"
     );
 
+    /// Wakes the owner when the hook holding it is dropped: a hook retired under
+    /// the signal's lock would deadlock here.
+    struct WakesOnRetire {
+        proxy: flui_native::PlatformProxy,
+        woke: Arc<AtomicBool>,
+    }
+    impl Drop for WakesOnRetire {
+        fn drop(&mut self) {
+            self.woke.store(self.proxy.wake().is_ok(), Ordering::SeqCst);
+        }
+    }
+
     // The replacement only counts its turns: if the installed hook still ran,
     // the change would reach the consumers.
     let runs = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&runs);
+    let retired = Arc::new(AtomicBool::new(false));
+    let retire = WakesOnRetire {
+        proxy: with_owner_platform(flui_native::OwnerPlatform::proxy).expect("owner installed"),
+        woke: Arc::clone(&retired),
+    };
     with_owner_platform(|owner| {
         owner.on_wake(Box::new(move || {
+            let _ = &retire;
             counted.fetch_add(1, Ordering::SeqCst);
         }))
     })
@@ -1564,6 +1578,13 @@ fn a_replaced_wake_hook_is_the_only_one_later_changes_reach() {
             "the replaced hook ran again"
         );
     }
+    with_owner_platform(|owner| owner.on_wake(Box::new(|| {})))
+        .expect("owner installed")
+        .expect("the loop accepts a replacement hook");
+    assert!(
+        retired.load(Ordering::SeqCst),
+        "the replaced hook's captures were kept, or retired where they could not re-enter"
+    );
     teardown_platform_ui_runtime();
 }
 
@@ -1574,26 +1595,28 @@ fn a_panicking_preference_delivery_does_not_stop_later_changes() {
     enum Failure {
         /// The mounted presentation's wake panics while the host publishes the change.
         Consumer,
-        /// The owner's wake hook panics before it reads the change.
+        /// The owner's wake hook panics before it reads the change. The turn is not
+        /// retried, which a hook that always panics would turn into an endless loop;
+        /// the source keeps the value it accepted, and the next owner turn, for
+        /// whatever reason it runs, delivers it.
         WakeHook,
     }
-    for (failure, delivered) in [
-        (Failure::Consumer, [2.0, 3.0, 4.0].as_slice()),
-        (Failure::WakeHook, [2.0, 4.0].as_slice()),
-    ] {
+    for failure in [Failure::Consumer, Failure::WakeHook] {
         let _clear = OwnerHostClearGuard::arm();
         let armed = Arc::new(AtomicBool::new(false));
         let consumer_armed = Arc::clone(&armed);
+        // Set by the presentation's wake each time the host asks it for a frame.
+        let redraw = Arc::new(AtomicBool::new(false));
+        let woken = Arc::clone(&redraw);
         let reader = SourceDrivenReader::boot(
             flui_native::HeadlessPlatform::new().with_preferences(text_scale_preferences(2.0)),
             move |owner, _, log| {
                 install_owner_platform(owner)?;
                 if matches!(failure, Failure::WakeHook) {
-                    return Ok(mount_sizing_reader(log)?);
+                    return Ok(present_built_sizing_reader(log)?);
                 }
                 let window = test_window();
-                let redraw = Arc::new(AtomicBool::new(false));
-                let pending = Arc::clone(&redraw);
+                let pending = Arc::clone(&woken);
                 let fonts = super::super::host::runtime_font_collection();
                 let mut services = crate::app::ui_runtime::RuntimeHostServices::new(
                     Arc::new(move || {
@@ -1603,7 +1626,7 @@ fn a_panicking_preference_delivery_does_not_stop_later_changes() {
                             "injected consumer failure"
                         );
                     }),
-                    redraw,
+                    woken,
                     super::super::host::runtime_clipboard(),
                     &fonts,
                     flui_scheduler::ClockSource::Platform,
@@ -1615,7 +1638,7 @@ fn a_panicking_preference_delivery_does_not_stop_later_changes() {
                 }
                 let runtime =
                     crate::app::ui_runtime::UiRuntime::new(Arc::clone(&window), 1.0, services)?;
-                Ok(install_sizing_reader(runtime, window, log))
+                Ok(present_sizing_reader(runtime, window, log))
             },
         );
         if matches!(failure, Failure::WakeHook) {
@@ -1645,15 +1668,36 @@ fn a_panicking_preference_delivery_does_not_stop_later_changes() {
             !armed.swap(false, Ordering::SeqCst),
             "{failure:?}: the injected failure never ran, so nothing was contained"
         );
-        reader.source.set(text_scale_preferences(4.0));
-        reader.next_frame();
+        if matches!(failure, Failure::WakeHook) {
+            assert_eq!(
+                reader.sizings(),
+                [linear_sizing(2.0)],
+                "the turn whose hook panicked delivered a value it never read"
+            );
+            // A turn with no new change: only the value the source accepted can arrive.
+            with_owner_platform(|owner| owner.proxy().wake())
+                .expect("owner installed")
+                .expect("the owner accepts a wake");
+            reader.next_frame();
+        }
         assert_eq!(
             reader.sizings(),
-            delivered
-                .iter()
-                .copied()
-                .map(linear_sizing)
-                .collect::<Vec<_>>(),
+            [linear_sizing(2.0), linear_sizing(3.0)],
+            "{failure:?}: the change the contained panic interrupted never reached the consumer"
+        );
+        redraw.store(false, Ordering::SeqCst);
+        reader.source.set(text_scale_preferences(4.0));
+        reader.turns.drive();
+        if matches!(failure, Failure::Consumer) {
+            assert!(
+                redraw.load(Ordering::SeqCst),
+                "the contained panic left the presentation's wake dead"
+            );
+        }
+        reader.frame();
+        assert_eq!(
+            reader.sizings(),
+            [linear_sizing(2.0), linear_sizing(3.0), linear_sizing(4.0)],
             "{failure:?}: a change after the contained panic did not reach the consumer once"
         );
         teardown_platform_ui_runtime();

@@ -179,6 +179,23 @@ pub mod linux {
         }
     }
 
+    /// What a case changes the portal to, live.
+    #[derive(Clone, Copy, Debug)]
+    enum Change {
+        Contrast(bool),
+        TextScale(f64),
+    }
+
+    impl Change {
+        /// The observation the owner makes once the change is accepted.
+        fn observation(self) -> Value {
+            match self {
+                Self::Contrast(high) => Value::Contrast(high),
+                Self::TextScale(scale) => Value::TextScale(Some(scale)),
+            }
+        }
+    }
+
     async fn emit_value(
         connection: &zbus::Connection,
         namespace: &str,
@@ -200,8 +217,10 @@ pub mod linux {
     /// A portal value read before any window, then changed live through
     /// `SettingChanged` until the owner observes the new value. Out of range,
     /// the portal first reports a scale `SystemPreferences` refuses, before
-    /// any window and again live: the owner sees no observation, then the
-    /// next valid one, and never a value the portal made up.
+    /// any window and again live; an owner turn that runs after the live
+    /// refusal has been processed, and before the valid value exists, still
+    /// sees no observation, so a source that clamped instead of refusing fails
+    /// the case.
     fn run_value_case(case: &str) {
         let gnome = case == "gnome-contrast";
         let (initial_scale, refused, before, after) = match case {
@@ -209,15 +228,15 @@ pub mod linux {
                 1.25,
                 None,
                 Value::TextScale(Some(1.25)),
-                Value::TextScale(Some(1.5)),
+                Change::TextScale(1.5),
             ),
             "text-scale-out-of-range" => (
                 100.0,
                 Some(-1.0_f64),
                 Value::TextScale(None),
-                Value::TextScale(Some(1.5)),
+                Change::TextScale(1.5),
             ),
-            _ => (1.25, None, Value::Contrast(true), Value::Contrast(false)),
+            _ => (1.25, None, Value::Contrast(true), Change::Contrast(false)),
         };
         let scale_read = Arc::new(tokio::sync::Notify::new());
         let values = Values {
@@ -240,12 +259,14 @@ pub mod linux {
                     .await
             })
             .expect("isolated portal service");
-        let (start, begin) = tokio::sync::oneshot::channel::<()>();
+        let (start, begin) = tokio::sync::oneshot::channel::<PlatformProxy>();
+        // One message per owner turn that saw `before`.
+        let (turned, mut turns) = tokio::sync::mpsc::unbounded_channel::<()>();
         let connection = service.clone();
         let update = runtime.spawn(async move {
-            if begin.await.is_err() {
+            let Ok(owner) = begin.await else {
                 return;
-            }
+            };
             let server = connection
                 .object_server()
                 .interface::<_, Values>("/org/freedesktop/portal/desktop")
@@ -257,22 +278,31 @@ pub mod linux {
                     .await
                     .text_scale
                     .store(refused.to_bits(), Ordering::SeqCst);
-                // Wait until the source has read the refused value, so the
-                // valid one below is a second, separate observation.
-                let read = scale_read.notified();
-                tokio::pin!(read);
-                read.as_mut().enable();
-                emit_value(
-                    &connection,
-                    "org.gnome.desktop.interface",
-                    "text-scaling-factor",
-                    zbus::zvariant::Value::from(refused),
-                )
-                .await;
-                read.await;
+                // The source reads the refused value, and a second change makes it
+                // read again: its observations run one after another, so by the
+                // second read the first has been refused or, wrongly, accepted.
+                for _ in 0..2 {
+                    let read = scale_read.notified();
+                    tokio::pin!(read);
+                    read.as_mut().enable();
+                    emit_value(
+                        &connection,
+                        "org.gnome.desktop.interface",
+                        "text-scaling-factor",
+                        zbus::zvariant::Value::from(refused),
+                    )
+                    .await;
+                    read.await;
+                }
+                // An owner turn now reads what the source accepted, before the
+                // valid value exists: the turn's hook stops the case on anything
+                // but `before`.
+                while turns.try_recv().is_ok() {}
+                owner.wake().expect("owner turn after the refusal");
+                turns.recv().await.expect("the owner ran its turn");
             }
             let (namespace, key, value) = match after {
-                Value::Contrast(high) => {
+                Change::Contrast(high) => {
                     server
                         .get()
                         .await
@@ -292,8 +322,7 @@ pub mod linux {
                         )
                     }
                 }
-                Value::TextScale(scale) => {
-                    let scale = scale.expect("BUG: a case changes to an observed scale");
+                Change::TextScale(scale) => {
                     server
                         .get()
                         .await
@@ -317,6 +346,7 @@ pub mod linux {
         let reader = Arc::clone(&platform);
         let changed = Arc::new(AtomicBool::new(false));
         let witness = Arc::clone(&changed);
+        let after = after.observation();
         platform
             .run_event_loop(Box::new(move |owner| {
                 let initial = owner.preferences().expect("initial owner observation");
@@ -331,12 +361,14 @@ pub mod linux {
                     if after.observed(&current) {
                         witness.store(true, Ordering::SeqCst);
                         proxy.request_quit().expect("value owner quit");
-                    } else if !before.observed(&current) {
+                    } else if before.observed(&current) {
+                        let _ = turned.send(());
+                    } else {
                         eprintln!("owner observed neither {before:?} nor {after:?}: {current:?}");
                         proxy.request_quit().expect("stop failed observation");
                     }
                 }))?;
-                start.send(()).expect("start live change");
+                start.send(owner.proxy()).expect("start live change");
                 Ok(())
             }))
             .expect("owner loop");
