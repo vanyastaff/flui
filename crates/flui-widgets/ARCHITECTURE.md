@@ -436,7 +436,12 @@ restores the current outer authority. Raw system text-scale observations retain
 their separate admitted range `1/64..=64`. Initial sizing is pinned by
 `media_text_scaling_changes_the_laid_out_text`; live updates, restoration from
 authored size and nested override retention by
-`a_text_scale_change_relayouts_a_preserved_text_subtree`.
+`a_text_scale_change_relayouts_a_preserved_text_subtree`. Each span resolves
+once, from its own authored size: unstyled text from the default, ambient
+styles after `Text` merges them, and fixed spans not at all. The paragraph's
+intrinsics measure the same resolved sizes as its layout.
+`the_system_text_scale_grows_each_span_once` pins this under the runtime's root
+policy, with no provider of the test's own.
 
 `Icon` resolves its square and glyph from one logical size. Its default stays
 fixed; `IconThemeData::apply_text_scaling` opts both into the nearest inherited
@@ -460,7 +465,10 @@ authored font sizes, through `RenderEditable`'s automatic-height policy.
 `RawTextField` preserves that default. An explicitly configured caret height
 remains a logical length; removing the override restores automatic height. Mount/update
 equivalence and restoration of glyph/caret geometry are pinned by
-`inherited_text_sizing_updates_editable_glyphs_and_caret`.
+`inherited_text_sizing_updates_editable_glyphs_and_caret`. The field's
+intrinsics and a tap both resolve against the glyphs of the current scale,
+after a live change in either direction:
+`a_field_measures_and_hit_tests_the_current_text_scale`.
 
 ## Accessibility of hidden retained children
 

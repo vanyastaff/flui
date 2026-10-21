@@ -196,6 +196,117 @@ pub(crate) fn icon_labels_reach_the_assembled_accessibility_tree() {
     }
 }
 
+/// The system text scale grows each span once, from that span's own size.
+///
+/// Spans of different sizes, unstyled text, ambient styles and a fixed span
+/// sit under the runtime's root policy with no provider of their own. The
+/// paragraph's intrinsics agree with its layout under every scale, and
+/// clearing the observation restores the authored geometry.
+pub(crate) fn the_system_text_scale_grows_each_span_once() {
+    use flui_foundation::TextSizingIntent;
+    use flui_painting::display_list::DrawOp;
+    use flui_painting::glyphs::FontRegistry;
+    use flui_painting::typography::TextSpan;
+    use flui_platform::SystemPreferences;
+    use flui_rendering::storage::IntrinsicDimension;
+    use flui_view::ViewExt;
+    use flui_widgets::RichText;
+
+    fn fixed(size: f64) -> TextStyle {
+        sized(size).with_sizing(TextSizingIntent::Fixed)
+    }
+    fn sized(size: f64) -> TextStyle {
+        TextStyle::default().with_font_size(size)
+    }
+    let cases = [
+        (
+            "spans of different sizes, unstyled text and a fixed span",
+            RichText::new(TextSpan::with_children(vec![
+                TextSpan::new("unstyled "),
+                TextSpan::styled("fixed ", fixed(20.0)),
+                TextSpan::styled("small ", sized(12.0)),
+                TextSpan::styled("large", sized(20.0)),
+            ]))
+            .boxed(),
+            vec![14.0, 20.0, 12.0, 20.0],
+            vec![28.0, 20.0, 24.0, 40.0],
+        ),
+        (
+            "an ambient style is scaled by the paragraph, not before it",
+            DefaultTextStyle::new(sized(18.0), Text::new("ambient")).boxed(),
+            vec![18.0],
+            vec![36.0],
+        ),
+        (
+            "an ambient fixed style keeps its subtree at the authored size",
+            DefaultTextStyle::new(fixed(18.0), Text::new("ambient")).boxed(),
+            vec![18.0],
+            vec![18.0],
+        ),
+    ];
+    // Painted glyph sizes span by span: runs come in visual order, and a
+    // fallback face can split one span into neighbouring runs of one size.
+    let glyph_sizes = |laid: &crate::common::LaidOut| {
+        let mut registry = FontRegistry::new();
+        let mut sizes = Vec::new();
+        for command in laid.draw_ops() {
+            let DrawOp::Paragraph { paragraph, .. } = command.op else {
+                continue;
+            };
+            for run in paragraph.runs() {
+                let key = registry.prepare_run(&run).expect("real text face");
+                sizes.extend(
+                    run.placed_glyphs(key, (0.0, 0.0), 1.0)
+                        .map(|glyph| glyph.key.size()),
+                );
+            }
+        }
+        sizes.dedup();
+        sizes
+    };
+    // Intrinsics and layout must measure the same resolved sizes.
+    let geometry = |laid: &crate::common::LaidOut, id| {
+        let size = laid.size(id);
+        let max_width = laid.intrinsic_dimension(id, IntrinsicDimension::MaxWidth, f64::INFINITY);
+        let height = laid.intrinsic_dimension(id, IntrinsicDimension::MinHeight, size.width);
+        assert!(
+            (max_width - size.width).abs() < 0.01 && (height - size.height).abs() < 0.01,
+            "intrinsics measure what layout laid out: size={size:?}, max width={max_width}, height={height}"
+        );
+        size
+    };
+
+    for (case, view, authored, doubled) in cases {
+        let mut laid = lay_out(view, loose(10_000.0));
+        let id = laid.find_by_render_type("RenderParagraph");
+        assert_eq!(glyph_sizes(&laid), authored, "{case}");
+        let original = geometry(&laid, id);
+
+        laid.set_system_preferences(
+            SystemPreferences::default()
+                .with_text_scale(2.0)
+                .expect("supported scale"),
+        );
+        laid.tick();
+        assert_eq!(laid.find_by_render_type("RenderParagraph"), id, "{case}");
+        assert_eq!(glyph_sizes(&laid), doubled, "{case}");
+        let scaled = geometry(&laid, id);
+        if authored == doubled {
+            assert_eq!(scaled, original, "{case}");
+        } else {
+            assert!(
+                scaled.width > original.width && scaled.height > original.height,
+                "{case}: original={original:?}, scaled={scaled:?}"
+            );
+        }
+
+        laid.set_system_preferences(SystemPreferences::default());
+        laid.tick();
+        assert_eq!(glyph_sizes(&laid), authored, "{case}");
+        assert_eq!(geometry(&laid, id), original, "{case}");
+    }
+}
+
 /// A preference must reach paragraph layout, not merely a data-reader widget.
 pub(crate) fn media_text_scaling_changes_the_laid_out_text() {
     // Invalid policies cannot be authored through a writable scalar field.
