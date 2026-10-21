@@ -387,9 +387,9 @@ mod tests {
     }
 
     #[test]
-    fn host_notice_coalescing() {
+    fn queued_work_merging() {
         crate::table_test::run_table(
-            "host_notice_coalescing",
+            "queued_work_merging",
             &[
                 (
                     "two_preference_deliveries_for_one_runtime_never_merge",
