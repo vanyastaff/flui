@@ -30,9 +30,7 @@ graph before withdrawing sparse residency, then visits descendants before
 removing their host render object. It does not enqueue still-active lazy
 children for a second teardown after their render objects have disappeared.
 
-`replacing_material_demo_with_notes_keeps_retained_render_nodes_live` in the
-facade's Material example tests pins replacement without contained lifecycle
-failures. `sparse_children_global_key_matrix`,
+`sparse_children_global_key_matrix`,
 `sparse_reconcile_containment_matrix` and `element_tree_contract_matrix` cover
 retake, recovery and identity refusal.
 

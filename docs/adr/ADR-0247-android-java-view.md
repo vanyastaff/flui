@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-10-17). Implemented: the shim, its loader, the input method host,
   the drop target, the drag source, the content receiver and the handwriting request; run on a
-  Galaxy S21 (Android 15) through `cargo xtask device android-input`.
+  Galaxy S21 (Android 15) through [`cargo xtask device android-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs).
 - **Date:** 2026-10-17
 - **Superseded-by:** [ADR-0255](ADR-0255-mobile-and-web-hosts.md) for item 1's embedding of the dex
   in the library with `include_bytes!` and its "every packager ships that copy" (the sources, the
@@ -128,7 +128,7 @@ handwriting, and brings Gradle and AppCompat with it. The research note compares
   `input_capabilities_contracts` states the outgoing drag per API level.
   `flui_testing::text_store_kit::assert_conforms` certifies stores; the view is a host, not a
   store, and replays into stores that pass it.
-- `cargo xtask device android-input` on a Galaxy S21 (Android 15, API 35): the in-memory loader
+- [`cargo xtask device android-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) on a Galaxy S21 (Android 15, API 35): the in-memory loader
   installed the view; a system drag the probe started from a held touch dropped its text on the
   probe's own window and the source heard `Dropped(COPY)`, so `startDragAndDrop` works under
   `NativeActivity`'s `takeSurface` (the research note's open risk 3); Samsung Keyboard opened on

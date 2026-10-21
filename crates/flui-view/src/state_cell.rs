@@ -4,8 +4,7 @@
 //! # What this is
 //!
 //! Every hand-written stateful view in this codebase (the CLI's generated
-//! `counter` template, `examples/multi_window_demo.rs`,
-//! `examples/vertical_slice_demo/tree.rs`) repeats the same four-line shape:
+//! `counter` template) repeats the same four-line shape:
 //!
 //! ```rust,ignore
 //! struct CounterState {

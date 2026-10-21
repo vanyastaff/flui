@@ -87,13 +87,6 @@ debug playback and registry muting still apply. Changing policy commits clock
 state without sampling controllers or invoking their listeners.
 
 The [guide](docs/GUIDE.md#motion-preferences) gives an executable clock example.
-The interactive `motion_lab` example at the workspace root compares property
-interruption, independent deadlines, gestures and preserved timers:
-
-```bash
-cargo run --example motion_lab --features material -- --full
-cargo run --example motion_lab --features material -- --reduce
-```
 
 ### The Animation Model
 
@@ -888,5 +881,3 @@ Each implemented from the canonical published source:
 | Perceptually uniform color interpolation | Ottosson, Oklab (2020) | `Tween<Color>`, `Color::lerp` (premultiplied alpha, ADR-0149) |
 | Emphasized easing and polynomial-style presets | Bézier approximations; elastic and bounce formulas | `curves`, `ThreePointCubic`, `Split` |
 | Interruptible springs with velocity-preserving retarget | analytic closed forms | `AnimatedValue`, `#[derive(TwoWayConverter)]` |
-
-See `examples/oklab_gradient.rs`.

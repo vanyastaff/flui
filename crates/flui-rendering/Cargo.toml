@@ -102,13 +102,6 @@ harness = false
 name = "semantics_assembly"
 harness = false
 
-# Headless render-object inspection runner. Gated on `testing` so the
-# example only builds when the harness module is compiled in. Run with
-# `cargo run -p flui-rendering --example render_inspector --features testing`.
-[[example]]
-name = "render_inspector"
-required-features = ["testing"]
-
 [dev-dependencies]
 criterion.workspace = true
 # Compile-fail fixtures (`tests/compile_fail/*.rs`) pinning the

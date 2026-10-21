@@ -4,7 +4,11 @@
   FD31 (#1804) have merged; FD2 is in review (the semantics identifier, see its card's evidence);
   FD3 is next. `interaction/completeness` has merged (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
-  that endpoint and `flui mcp` start from them.
+  that endpoint and `flui mcp` start from them. The owner deleted `interaction_gallery`, the
+  probes, `tools/device-checks` and `cargo xtask device` (#1827) to write fresh ones: FD11 and
+  FD19 build a new gallery scenario instead of porting `windows-gallery`, and FD19's deletion
+  list is already done. The old versions are at
+  [`e8a42673a`](https://github.com/vanyastaff/flui/tree/e8a42673ad23a2e88614940a266cd01224dcb25f/examples/interaction_gallery).
 - **Date:** 2026-10-17
 - **Design:** [design.md](design.md); requirements: [requirements.md](requirements.md); ADRs:
   [ADR-0238](../../../adr/ADR-0238-flui-driver-protocol.md),

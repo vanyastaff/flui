@@ -20,7 +20,7 @@ An app is a `View` that builds other views — the widget layer drives the whole
 pipeline (element tree → render objects → layout → paint → `wgpu`):
 
 ```rust
-//! examples/widgets_gallery.rs (excerpt)
+//! a widget tree (excerpt)
 use flui::prelude::*;
 // `column!`/`row!` are imported explicitly (not via the prelude glob) to shadow
 // std's same-named macros.

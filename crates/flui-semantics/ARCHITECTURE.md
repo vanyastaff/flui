@@ -305,8 +305,7 @@ AccessKit's `Label` has one text slot on UIA and AT-SPI, so the label and the va
 joined with a newline, the same separator used when merged labels are concatenated.
 
 **Test.** `advertised_actions_follow_the_uia_patterns` in `src/agent/tests.rs` reads a static
-text's name through `accesskit_consumer` the way the adapters do; `cargo xtask device
-windows-a11y` is the live check that found the defect. For the joined label and value:
+text's name through `accesskit_consumer` the way the adapters do. For the joined label and value:
 **Unasserted:** no test pins this.
 
 ### 5. The ADR-0080 tools reach FLUI through AccessKit's Windows adapter: `expand`/`collapse` are discrete, with a click fallback
@@ -449,7 +448,7 @@ role, VoiceOver's `AXHeading` and AT-SPI's `Heading`. The level is an enum rathe
 integer because the six levels are the ones every platform names and a zero or out-of-range
 level is not a state to validate at run time.
 
-**Limit.** Measured through `cargo xtask device windows-a11y` on an `H2`: `accesskit_windows`
+**Limit.** Measured through UI Automation on an `H2`: `accesskit_windows`
 0.35 reports `AriaRole` `heading` and UIA `Level` 2, but `AriaProperties` `level=1` (AccessKit's
 zero-based value written raw) and `HeadingLevel` `HeadingLevel_None`. FLUI publishes AccessKit's
 documented zero-based level rather than compensating for one adapter; a client reading
@@ -457,8 +456,7 @@ documented zero-based level rather than compensating for one adapter; a client r
 
 **Test.** `a_header_publishes_a_heading_at_its_level` in `accesskit_translation.rs`;
 `the_title_announces_as_a_level_one_heading` in `packages/flui-material/tests/app_bar.rs` for
-the mounted path; `every_interactive_role_reads_as_the_role_uia_reports` for the wire fold;
-the probe's `Probe heading` in `cargo xtask device windows-a11y` for UI Automation.
+the mounted path; `every_interactive_role_reads_as_the_role_uia_reports` for the wire fold.
 
 ### Where a node sits in a set, a tree and a table
 
@@ -509,8 +507,7 @@ and pinned through `accesskit_consumer`; a UI Automation fixture for them waits 
 `an_inapplicable_attribute_is_not_published`, `a_member_reads_its_size_from_its_container`
 in `src/accesskit_translation/coverage_matrix.rs`; `collection_places_conflict_one_by_one` in
 `src/configuration.rs`; the lists, tables and trees of `collection_semantics` in
-`crates/flui-widgets/tests`; and the `steps list`, `level two tree item`, `sorted column` and
-`lazy row` fixtures of `cargo xtask device windows-a11y`.
+`crates/flui-widgets/tests`.
 
 ### 7. The in-process wire read projects the published AccessKit node; roles fold to what UIA reports
 

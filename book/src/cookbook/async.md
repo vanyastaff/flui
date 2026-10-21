@@ -1,14 +1,5 @@
 # Async
 
-`examples/material_demo` includes a scheduler-driven simulated fetch: loading state, an
-error-with-Retry path, and cancellation when the route is popped mid-fetch.
-
-```bash
-cargo run --example material_demo --features material
-```
-
-Source: [`examples/material_demo/tree.rs`](https://github.com/vanyastaff/flui/blob/main/examples/material_demo/tree.rs).
-
-This is scheduler-driven rather than `tokio`-driven — FLUI's frame scheduler
-(`flui-scheduler`) is what actually paces the simulated fetch, which is the pattern to follow for
-async work that needs to interact with the frame/rebuild cycle rather than run detached from it.
+FLUI's frame scheduler (`flui-scheduler`) paces async work that interacts with the frame and
+rebuild cycle, rather than `tokio` running it detached. Loading state, an error-with-Retry path
+and cancellation when a route is popped mid-fetch are each built on that scheduler.

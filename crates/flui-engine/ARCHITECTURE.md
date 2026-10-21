@@ -118,9 +118,6 @@ charged through completion. Native admission first polls nonblockingly so reject
 frames cannot starve completion callbacks; browser progress uses its event loop.
 Recoverable failure publishes reliable retry debt to the application and UI runtime
 (ADR-0101), while an impossible frame footprint remains a terminal error.
-`examples/embedded_gpu_scene.rs` exercises the public lifecycle with an external
-GPU texture, a depth-tested producer pass and foreground 2D drawing on the same
-device; its `--capture` mode asserts fixed-angle pixels after two frames.
 
 ## One frame
 

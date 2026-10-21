@@ -12,6 +12,3 @@
   the `builder` hook. It returns a `WidgetsApp<RouterForm>`, which has no `navigator` or
   `observer` builder; `WidgetsApp` alone still names the navigator form
   (`WidgetsApp<NavigatorForm>`), and the sealed `AppForm` trait bounds the two.
-- **`two_screens` example**: a derived route enum, `WidgetsApp::router`, and pages that push
-  and pop through the `RouterHandle` they take in `init_state`
-  (`cargo run --example two_screens --features material`).

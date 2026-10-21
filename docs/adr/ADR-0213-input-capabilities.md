@@ -106,7 +106,7 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
 - The headless backend's rows, and every backend's availability table as pure functions, run in
   CI (Linux and wasm32 execute; Windows, macOS, Android and iOS are type-checked only). Device
   attach and removal on real hardware run on a native host through
-  `cargo xtask device <os>-input`.
+  [`cargo xtask device <os>-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs).
 - Removing `PlatformCapabilities` touches one example and the `flui-platform` docs; nothing
   outside the crate calls it.
 

@@ -173,7 +173,7 @@ fn sensors(sample: &flui_platform_api::pointer::PointerSample) -> String {
 /// checked-in golden `<name>.jsonl`: the two must have the same [`shape`].
 ///
 /// With `FLUI_NATIVE_RECORDING_BLESS` set, the capture replaces the golden
-/// instead (`cargo xtask device windows-input --bless`). With
+/// instead. With
 /// `FLUI_NATIVE_RECORDING_DIR` set, it is also written there, for a reader
 /// to diff the rows themselves.
 pub fn hold_against_golden(name: &str, fresh: &NativeRecording) {
@@ -215,10 +215,10 @@ fn hold(name: &str, fresh: &NativeRecording, compare: fn(&NativeRecording) -> Ve
     eprintln!("NATIVE_RECORDING_HELD={name}");
 }
 
-/// Hold the sessions a device run pulled into `FLUI_DEVICE_RECORDING_DIR`
-/// (`cargo xtask device android-input`): each `<name>.jsonl` must replay
+/// Hold the sessions a device run pulled into `FLUI_DEVICE_RECORDING_DIR`:
+/// each `<name>.jsonl` must replay
 /// through the shared decoder to exactly the pointer events the backend
-/// delivered on the device, which the probe wrote beside it as
+/// delivered on the device, which the device run wrote beside it as
 /// `<name>.delivered.txt` (one `Debug` line each), and then to the shape of
 /// its [`grammar`]. Returns how many sessions were held; none without the
 /// variable.

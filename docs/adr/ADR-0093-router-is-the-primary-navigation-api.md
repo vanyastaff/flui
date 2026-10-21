@@ -226,7 +226,7 @@ agent protocol from naming a widget-catalog type.
    which has no `navigator` or `observer` builder, so the configuration Flutter asserts against
    does not compile. That Router is the one that will own the presentation's URL once step 3
    gives the outermost Router its `RouterScope` (§2); nothing marks it outermost yet.
-   `examples/two_screens.rs` is the program of [`design/architecture.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/architecture.md) §13.3 on that root.
+   [`examples/two_screens.rs`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/examples/two_screens.rs) is the program of [`design/architecture.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/architecture.md) §13.3 on that root.
 3. **Nested routes.** `#[nest("/settings")] Settings(SettingsRoute)` composes a child enum into
    the parent's path: one stack, one URL. A nested `Router` widget is a local stack saved with
    its page (§2); a `RouterScope` marker gives the outermost Router per presentation the URL.

@@ -145,8 +145,7 @@ In widgets, `Listener::recognizer` and `recognizer_when` use this mechanism.
 `GestureDetector` mounts its typed slots (`on_tap`, `drag(DragSlot)`,
 `transform(TransformSlot)` and the rest) through `RawGestureDetector`. Explicit `cancel()` delivers cancellation and leaves a recognizer reusable.
 Dropping the last owner releases membership silently, without invoking gesture
-callbacks. See [GESTURES.md](docs/GESTURES.md) and the
-[custom recognizer example](examples/custom_recognizer.rs).
+callbacks. See [GESTURES.md](docs/GESTURES.md).
 
 ## Focus
 
@@ -227,8 +226,7 @@ selects smoothing. `OneEuroTuning::new` validates parameters with a typed
 error; filtering rejects invalid samples the same way. Invalid input leaves
 accepted history unchanged; the 2D filter commits both axes together, and a
 duplicate or regressed timestamp holds its accepted result and clock anchor.
-See [the pointer filtering example](examples/pointer_filtering.rs) for tuning
-and sample admission. Interpolating a position keeps the preceding measured
+Interpolating a position keeps the preceding measured
 sensor reading, including missing pressure; it does not measure a new pressure.
 Recognizers use event timing anchored to their arena
 clock; replayed sample spacing determines the gesture's velocity.

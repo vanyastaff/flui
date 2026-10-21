@@ -143,7 +143,7 @@ axis; `TransformLock` locks rotation or scale in a gesture that begins as a pan.
   widget. `assert_backend_conforms`
   has a row that no backend emits `CancelReason::Claimed`.
 - All rows run headless in CI; native touch, pen and touchpad paths run only on a native host
-  (`cargo xtask device <os>-input`, recorded traces).
+  ([`cargo xtask device <os>-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs), recorded traces).
 
 ## Alternatives rejected
 

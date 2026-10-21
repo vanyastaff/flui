@@ -101,7 +101,7 @@ driver.
 
 - **Constraint-based box and sliver layout, not CSS.** The Rust GUI stacks that are not game engines lay out with Taffy (flexbox/grid): GPUI, Dioxus Native, Bevy UI, Vexo. FLUI uses box and sliver protocols — constraints down, sizes up, one pass, with intrinsic dimensions, baselines, relayout boundaries, and `RenderSliver` for pinned, floating, and overlapping scrolling — the model Jetpack Compose also converged on. Test files adapted from Flutter's rendering and widget tests name the Flutter test they follow (see [`NOTICE`](NOTICE)).
 - **Pure Rust, one toolchain.** Bridges such as rinf and flutter_rust_bridge put Rust logic inside a Flutter app, so the Dart VM, the Flutter SDK, and a second build system ship with it. FLUI offers declarative widgets over retained trees, keys, and lifecycle as ordinary crates: `cargo build` is the whole build, `wgpu` is the one renderer on every platform, and there is no VM in the binary.
-- **Resilience that is tested, not assumed.** The renderer recovers from GPU device loss and rebuilds its surface; a window reported as fully occluded stops submitting GPU work while input is still serviced; and both are exercised by a live end-to-end smoke test that drives a real window with real X11 input under Xvfb, checks the captured pixels and the exit code, and verifies occlusion against a real cover window — plus a Wayland variant for the close-path teardown order. Synthetic-event tests stayed green through every one of the platform-layer regressions that suite now catches.
+- **Resilience.** The renderer recovers from GPU device loss and rebuilds its surface, and a window reported as fully occluded stops submitting GPU work while input is still serviced.
 
 ## Hello World
 
@@ -170,9 +170,7 @@ fn main() {
 ```
 
 Run with `cargo run --example counter`. For a tour of the wider widget
-catalog, see `examples/widgets_gallery.rs`; for the platform layer without
-widgets (raw window + event loop, useful when debugging platform integration
-itself), see `examples/platform_window.rs`. More examples live under
+catalog, see the `flui-widgets` crate. More examples live under
 `examples/` and per-target crates (`examples/desktop_scene/`,
 `examples/web_demo/`, `examples/painting_demo/`) — see
 [`examples/README.md`](examples/README.md) for the full index.

@@ -23,8 +23,6 @@
   reports the window's pixel ratio as its scale, page zoom included, with and without screen access,
   while bounds stay the physical screen's under zoom. When screen access is granted, the window's
   display keeps its id and gains its name.
-- **`browser_display_probe` example** (`flui-platform`): logs the Web display snapshot and every change to
-  it, for checking a real browser by hand.
 
 ### Changed
 

@@ -64,7 +64,7 @@ request.
 
 - No IME connection, soft keyboard, keyboard insets or input hints.
 - **Missing on iOS:** no `UITextInput`.
-- **Runs on Android:** it serves fields through `FluiView`'s `InputConnection` (ADR-0247), run with Samsung Keyboard on a Galaxy S21 (composition, commit, Escape, the action key, the keyboard shown and hidden, and through `device android-gallery` a field submitted by Done while the keyboard still composed).
+- **Runs on Android:** it serves fields through `FluiView`'s `InputConnection` (ADR-0247), run with Samsung Keyboard on a Galaxy S21 (composition, commit, Escape, the action key, the keyboard shown and hidden, and through a manual Android run a field submitted by Done while the keyboard still composed).
 - **Missing on Android:** never run with Gboard, `CursorAnchorInfo` placement, keyboard insets, paste through `OnReceiveContentListener` or stylus handwriting.
 - **Runs on the Web:** it now serves fields through `EditContext` or a hidden textarea, run only through Chrome's own input-method path in headless Chrome.
 - **Missing on the Web:** no soft keyboard, insets or input hints.
@@ -193,8 +193,8 @@ request.
 > **Environments:** various · **Who it hurts:** Pen, trackpad and iPad users · **Parity:** [Input](platform-parity.md#input)
 
 - **Missing:** no pen on macOS or Linux; iPad pointer and hardware keyboard missing; no cursors on mobile; keyboard layout read on Windows only.
-- Windows: the precision-touchpad pan and pinch (DirectManipulation) have never run on a touchpad, and no injector reaches it, so its golden recording can only come from a `native-capture` run on one (injected touch, pen, mouse and wheel already record theirs through `cargo xtask device windows-input`).
-- Android: touchpad pinch and two-finger scroll and its pen hover and tilt ran only from `uinput` devices through `cargo xtask device android-input`, with no hardware touchpad or stylus. Its widgets ran with `uinput` touches, `input` stylus and mouse events and hardware key events through `cargo xtask device android-gallery`, with no physical keyboard, key repeat or dead key.
+- Windows: the precision-touchpad pan and pinch (DirectManipulation) have never run on a touchpad, and no injector reaches it, so its golden recording can only come from a `native-capture` run on one (injected touch, pen, mouse and wheel already record theirs through a manual Windows run).
+- Android: touchpad pinch and two-finger scroll and its pen hover and tilt ran only from `uinput` devices through a manual Android run, with no hardware touchpad or stylus. Its widgets ran with `uinput` touches, `input` stylus and mouse events and hardware key events through a manual Android run, with no physical keyboard, key repeat or dead key.
 - Web: no precise-scroll phases, and its trackpad pinch (decoded from Control-held wheel and WebKit gesture events) ran only with constructed events in headless Chrome.
 - The winit X11 and Wayland pointer rules (X11's first-touch cursor and fractional touchpad lines, a Wayland leave mid-press) ran only as unit rows, never on a native session with a touchscreen or touchpad.
 - Pointer, scroll and pinch work is planned per OS in the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (T36 DirectManipulation is implemented and awaits a touchpad run; T40–T44).
@@ -336,7 +336,7 @@ request.
 - No environment has been audited: the row "Live resize without jitter" is ❔ on Windows, macOS, Wayland, X11 and the Web, and entries 9 and 21 mention it only in passing.
 - Windows has no `WM_ENTERSIZEMOVE` handling outside the DirectManipulation tests. That message opens a modal loop inside `DefWindowProc` that lasts until the drag ends ([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-entersizemove)); winit reports that its `ControlFlow` is ignored there and that continuous redraws make a drag choppy ([rust-windowing/winit#3272](https://github.com/rust-windowing/winit/issues/3272), [#4708](https://github.com/rust-windowing/winit/issues/4708)).
 - Metal presents asynchronously to Core Animation transactions unless `CAMetalLayer.presentsWithTransaction` is set ([Apple](https://developer.apple.com/documentation/quartzcore/cametallayer/presentswithtransaction)); Wayland needs an `ack_configure` before the committing frame and frame callbacks to pace the redraw; X11 has `_NET_WM_SYNC_REQUEST`. None of these is audited here.
-- The engine presents with `Fifo`, which blocks on vsync and ghosts a stale frame during the Windows modal resize loop; its own notes name `DXGI_SCALING_NONE` as the only real fix, which wgpu 30 does not expose. `examples/resize_jitter_probe.rs` saw no size-mismatched acquire in a 40-resize burst into the Metal swapchain; the compositor-side half is unobserved.
+- The engine presents with `Fifo`, which blocks on vsync and ghosts a stale frame during the Windows modal resize loop; its own notes name `DXGI_SCALING_NONE` as the only real fix, which wgpu 30 does not expose. A resize-jitter probe saw no size-mismatched acquire in a 40-resize burst into the Metal swapchain; the compositor-side half is unobserved.
 - It is among the most-reported defects of comparable frameworks ([emilk/egui#903](https://github.com/emilk/egui/issues/903) is a fast-resize flicker). A reference run should record its trade-off in the row note: Flutter's Windows embedder blocks the platform thread for up to 100 ms for a frame at the new size.
 - Pass criteria: a scripted two-second border drag with every presented frame captured, content size equal to window size in every captured frame, callbacks counted during the modal loop, and the p99 frame time recorded.
 
@@ -412,7 +412,7 @@ request.
 - No gamepad in the contract or on any host: no buttons, sticks, triggers or rumble from XInput or GameInput on Windows, `GCController` on macOS and iOS (and tvOS's remote), Android's `SOURCE_GAMEPAD` and `SOURCE_JOYSTICK` axes (`AXIS_X`, `AXIS_HAT_X`, `KEYCODE_BUTTON_*`), the Web Gamepad API (polled through `navigator.getGamepads()`, with only connect and disconnect events) or evdev on Linux (Wayland has no gamepad protocol; a Steam Deck under gamescope has a controller as its only input).
 - Android's D-pad arrives: the `ui_events` key table maps `KEYCODE_DPAD_UP`, `DOWN`, `LEFT` and `RIGHT` to the arrow keys and `KEYCODE_DPAD_CENTER` to Enter, and `DefaultFocusTraversal` binds unmodified arrows to `DirectionalFocusIntent`, so a remote can move focus; it never ran on Android TV or Fire OS, and a TV app also needs the `leanback` feature declaration and a banner that the Android packaging does not write.
 - Without a pointer (Android TV, tvOS, a console) focus navigation is the whole input model: every widget must be reachable by direction with a visible focus ring, which no run has shown.
-- The check is a remote on an Android TV device and a controller on Windows and a Steam Deck: every control of the interaction gallery reached by direction and activated by the centre button, and a controller's sticks and buttons recorded and replayed.
+- The check is a remote on an Android TV device and a controller on Windows and a Steam Deck: every control of the interaction widgets reached by direction and activated by the centre button, and a controller's sticks and buttons recorded and replayed.
 
 ### 41. No rotary input
 
@@ -437,7 +437,7 @@ request.
 | 2026-10-17 | minor | Gap 9: drags between the windows of one runtime stay on the source's capture where the host places its windows |
 | 2026-10-17 | minor | Gap 16: Windows injected input records golden native recordings; the touchpad's must come from hardware |
 | 2026-10-17 | minor | Gap 9: the `Draggable` and `DropTarget` widgets on the drag sessions, run headless |
-| 2026-10-17 | minor | Gaps 1, 16, 17: `device android-input` on a Galaxy S21 runs touch, a `uinput` pen and touchpad, gesture exclusion, preferences and haptics; Android IME, drag and drop and handwriting wait for a Java side |
+| 2026-10-17 | minor | Gaps 1, 16, 17: a manual Android run on a Galaxy S21 runs touch, a `uinput` pen and touchpad, gesture exclusion, preferences and haptics; Android IME, drag and drop and handwriting wait for a Java side |
 | 2026-10-17 | minor | Gaps 9 and 16: Web HTML drag and drop and trackpad pinch, run with constructed events in headless Chrome |
 | 2026-10-17 | minor | Gaps 9 and 17: the Web's drags and Vibration API ran with trusted input in headless Chrome |
 | 2026-10-17 | minor | Gap 1: the Web serves text fields through `EditContext` or a hidden textarea, run through Chrome's input-method path |
@@ -451,7 +451,7 @@ request.
 | 2026-10-18 | minor | Displays and frame pacing narrows: Linux reads the outputs and refresh rates from the compositor (Wayland `wl_output`/`zxdg_output_v1`, X11 RandR 1.5) and winit windows name their display by native number; X11 ran live (XWayland under WSLg, `xrandr` changes under an Xorg dummy server); what remains is a live Wayland change, the Apple hosts not run and two-monitor moves not run; the same-scale Wayland move joins the native Linux host entry |
 | 2026-10-18 | minor | Displays and frame pacing leaves the list: every host reads its displays and refresh rate and delivers changes, and a second monitor connected live on Windows was told apart by id, followed by the window and by live rate changes. What remains is runs, not code (the Apple hosts, a two-monitor move off Windows, a Windows monitor disconnect), so they join "Most implemented rows never ran on their environment" (entry 4); entries 18 to 22 are renumbered 17 to 21 |
 | 2026-10-18 | minor | The live Wayland output change ran under WSLg (an output grown, a second one added); it leaves the display runs still owed in entry 4 |
-| 2026-10-18 | minor | Gaps 1 and 16: `device android-gallery` runs the interaction gallery's widgets on a Galaxy S21 through the development agent; an editor action commits the keyboard's composition before its Enter |
+| 2026-10-18 | minor | Gaps 1 and 16: a manual Android run runs the interaction widgets's widgets on a Galaxy S21 through the development agent; an editor action commits the keyboard's composition before its Enter |
 | 2026-10-18 | minor | The interaction and display work merged: Dark mode, Storage and Displays left the list, so the interaction entries renumber (text input 1, accessibility 2, drag and drop 8, preferences 14, pointer 15, mobile system UI 16); haptic frame deadlines read the presentation's refresh period from the display snapshot |
 | 2026-10-18 | minor | Apps controlling their windows narrows on macOS and iOS: window state and commands, sleep, lock, session end and memory pressure are written and type-checked, and [#1736](https://github.com/vanyastaff/flui/issues/1736) is the owed run; the entries stay open |
 | 2026-10-19 | minor | Version floors and the GPU fallback join the list (ADR-0244) |

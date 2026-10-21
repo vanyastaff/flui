@@ -240,7 +240,7 @@ flui build ios --simulator <UDID>           # native app for one simulator
 flui build ios --lib --universal            # XCFramework instead of an app
 flui build android --release                # signed APK, no Gradle needed
 flui build web --release
-flui build desktop --example widgets_gallery   # inside the FLUI checkout
+flui build desktop --example counter   # inside the FLUI checkout
 flui build desktop --package my-app-host
 flui build desktop --output dist/
 ```

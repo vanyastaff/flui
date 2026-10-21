@@ -216,7 +216,7 @@ GestureAlternatives::handle(&self, &dyn BuildContext) -> CommandHandle   // the 
   `flui-widgets` (`gesture_key_collision_table`).
 - CI runs all of this headless against the in-process semantics tree and the produced AccessKit
   nodes. Delivery through UIA, NSAccessibility, AT-SPI, UIAccessibility and Android adapters runs
-  only on native hosts (`cargo xtask device`), and the adapter-version check gates dropping the
+  only on native hosts ([`cargo xtask device`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs)), and the adapter-version check gates dropping the
   focus-revealed control slot. Upstream AccessKit support for custom actions is a contribution,
   not a dependency.
 

@@ -62,10 +62,7 @@ Full resumes it from a new zero-time anchor. A saturated selected timeline
 also settles finite work and parks infinite work; that timeline cannot
 resume until the owner is rebound to a registry with time available.
 
-For interactive inspection, run the workspace `motion_lab` example with
-`--full`, `--reduce` or `--system`. On Windows, `--system` follows the existing
-host Animation effects preference while the window is open. In headless
-tests, `HeadlessHost::set_motion_override` and `LaidOut::set_motion_override`
+In headless tests, `HeadlessHost::set_motion_override` and `LaidOut::set_motion_override`
 use the runtime's application override path; pump a frame after changing it.
 
 ## AnimationController

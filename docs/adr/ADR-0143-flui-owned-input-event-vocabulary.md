@@ -249,7 +249,7 @@ Winit physical geometry dependency is not mistaken for a Stable signature leak.
   `synthetic_touch_and_pen_reach_native_pointer_dispatch` exercises native injection
   only when the host admits it: foreground refusal, an occluded target or unavailable
   injection capability reports `CANNOT_VERIFY`, which is not proof of touch/pen
-  delivery. `cargo xtask device windows-input` is an application mouse/keyboard
+  delivery. [`cargo xtask device windows-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) is an application mouse/keyboard
   smoke check, not a replacement for that touch/pen path. The browser input probe's
   `owned-wheel-check`, `owned-keyboard-check`, fractional, sensor, capture and reentry
   checks exercise its DOM producer separately. These references describe available

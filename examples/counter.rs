@@ -3,8 +3,7 @@
 //! `flui create` generates for the `counter` template
 //! (`crates/flui-cli/src/templates/counter.rs`'s `LIB` constant) — kept in
 //! sync deliberately, so this example and the generated project never drift
-//! apart. For a tour of the wider widget catalog, see
-//! `examples/widgets_gallery.rs`.
+//! apart.
 //!
 //! The count is a `Signal`: created in `init_state`, read in `build` (which
 //! rebuilds this view when it changes), and written by the button's press,

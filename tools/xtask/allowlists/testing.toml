@@ -304,18 +304,3 @@ names = ["Probe"]
 path = "packages/flui-material/tests/tab_bar_view.rs"
 kind = "double"
 names = ["Probe", "ProbeState"]
-
-[[allow]]
-path = "tests/cupertino_demo.rs"
-kind = "pump"
-names = ["pump"]
-
-[[allow]]
-path = "tests/material_demo.rs"
-kind = "pump"
-names = ["pump"]
-
-[[allow]]
-path = "tests/vertical_slice_demo.rs"
-kind = "pump"
-names = ["pump"]

@@ -368,7 +368,7 @@ The changes land one at a time, each with the pre-PR checks (AGENTS.md, "Checkin
    pilot surface is one new catalog widget, `flui_widgets::RawButton` (its `on_press` takes
    `Fn(&mut EventCx<'_>)` and wraps an unchanged `GestureDetector::on_tap` through a
    `WriterSource`), and the application code that uses it: the `counter` and `todo` examples
-   (`examples/counter.rs`, `examples/todo.rs`) and the `flui create` counter template
+   (`examples/counter.rs`, [`examples/todo.rs`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/examples/todo.rs)) and the `flui create` counter template
    (`crates/flui-cli/src/templates/counter.rs`). Those examples previously used only Material
    setters and `StateCell`/`StateHandle` (untyped by §7), so they move to the widgets catalog
    and to `Signal<T>` state. `flui-cupertino`'s three setters move to the crate-by-crate

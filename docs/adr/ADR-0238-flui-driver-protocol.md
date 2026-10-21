@@ -25,7 +25,7 @@ Three stacks drive FLUI apps and none of them composes with the others:
 - `tools/desktop-mcp` observes any Windows app from outside, through MCP;
 - the devtools agent serves one app's semantics from inside it (`windows`, `read`, `act`,
   `motion`);
-- the xtask device drivers each hand-roll their input, their result channel and their verdict
+- the [xtask device drivers](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) each hand-roll their input, their result channel and their verdict
   format, together with Python and Swift scripts.
 
 Rust tests use a fourth shape again, `flui-testing`'s AccessKit queries. ADR-0080 made MCP the wire
@@ -143,7 +143,7 @@ API, a CLI and MCP.
   the app (`flui-semantics::agent`), not re-implemented per client.
 - Schema `0.5` renames the agent ops (`semantics.read`, `semantics.act`, `motion.set`,
   `windows.list`); pre-1.0 the rename is a `version::BREAKING` entry citing this ADR.
-- The xtask device drivers and the scripts under `tools/device-checks/` are deleted once their
+- The xtask device drivers and the scripts under [`tools/device-checks/`](https://github.com/vanyastaff/flui/tree/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/device-checks) are deleted once their
   scenarios run on `flui-driver`.
 - A coordinate in a public call is the exception: points exist (`Target::Point`) but are never
   produced by codegen from a locator-based trace.

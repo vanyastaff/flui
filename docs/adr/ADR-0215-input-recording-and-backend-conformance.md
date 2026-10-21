@@ -8,7 +8,7 @@
   readings, availability and ownership (`flui_testing::backend_conformance`), with its DnD,
   haptics and IME rows pending (`docs/plans/specs/flui-interaction/completeness/tasks.md`). §5's `--keep-text`
   is the API's `Privacy::KeepText`; the command-line flag arrives with a recording tool. §8 is
-  implemented on Windows: `cargo xtask device windows-input` injects touch and pen
+  implemented on Windows: [`cargo xtask device windows-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) injects touch and pen
   (`InjectSyntheticPointerInput`) and mouse and wheel (`SendInput`) into a real window, records
   each session and holds it against its golden native recording; the precision touchpad is
   journaled but certified only by a hardware recording, and the other OSes are pending.
@@ -159,7 +159,7 @@ and put `serde` on the Stable contract crate.
    and is never `dyn`. Rows run through `run_table`: pointer assembly, clocks (per-device and
    per-sequence clock choice, QPC on Win32, monotonic order, counter wrap), the `Scroll` and
    `PanZoom` grammar, DnD, haptics and IME event order. Each feature adds its own rows.
-8. **Native injection.** `cargo xtask device <os>-input` exists for every OS: `SendInput` and
+8. **Native injection.** [`cargo xtask device <os>-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) exists for every OS: `SendInput` and
    `InjectSyntheticPointerInput` on Windows, `CGEvent` on macOS, XCUITest on iOS, the shell's
    `input` and `uinput` commands on Android, uinput/libei on Linux, WebDriver BiDi on the web.
    Android does not use instrumentation: an event injected through `Instrumentation` or
@@ -196,7 +196,7 @@ vocabulary evolves without a wire freeze, at the cost of a DTO layer kept in ste
   contact kinds and availability table (`every_backend_passes_the_conformance_table` in
   `flui-platform`); each row also fails against a backend broken for it
   (`each_conformance_row_fails_against_a_broken_backend`). The OS translation in front of the
-  decoders runs on a native host or device only, as do all `xtask device` checks.
+  decoders runs on a native host or device only, as do all [`xtask device` checks](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs).
 
 ## Alternatives rejected
 

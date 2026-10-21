@@ -14,8 +14,7 @@
 //! because it is exercising the `flui` package's own public surface — the
 //! facade re-exports under test only exist on this package. The mount
 //! sequence (`mount_root_with_pipeline_owner` → set root constraints → run
-//! one frame) mirrors `tests/material_demo.rs` and `tests/vertical_slice_demo.rs`'s
-//! own `MountedDemo::mount` helpers, trimmed to the minimum needed to prove a
+//! one frame) is trimmed to the minimum needed to prove a
 //! `flui::prelude`-authored tree mounts and lays out — this test is not
 //! another acceptance test for a sample app, just a compile-and-mount
 //! smoke check for the facade surface itself.

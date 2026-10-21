@@ -11,8 +11,7 @@
 //! - the `flui` golden-screenshot suite bootstrapped with a bare
 //!   `PipelineOwner::run_frame` instead of the layout↔build fixpoint, so any
 //!   build-during-layout content (a `SliverAppBar`'s delegate child, a
-//!   persistent-header body) was captured unbuilt — while `examples/screenshot.rs`,
-//!   derived from the same code, carried a comment warning about exactly that;
+//!   persistent-header body) was captured unbuilt;
 //! - no copy ran the lazy-sliver service pass, so the bootstrap frame was not
 //!   the same frame [`HeadlessBinding::pump_frame`] runs.
 //!

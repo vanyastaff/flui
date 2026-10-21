@@ -9,7 +9,6 @@ mod util;
 #[cfg(test)]
 mod table_test;
 
-mod device;
 mod tasks;
 
 mod android_dex;
@@ -82,18 +81,12 @@ enum Command {
     WasmLink(tasks::WasmLinkArgs),
     /// Run the wasm32 tests under wasm-bindgen-test-runner.
     WasmTest(tasks::WasmTestArgs),
-    /// Real-window smoke test under X11 (or Wayland).
-    LiveSmoke(tasks::LiveSmokeArgs),
     /// The GPU readback suites.
     GpuTest(tasks::GpuTestArgs),
     /// The unsafe-code paths under Miri.
     Miri(tasks::MiriArgs),
-    /// The demo layer snapshot suite.
-    DemoSnapshots(tasks::DemoSnapshotsArgs),
     /// Remove the nested-cargo test caches under the target directory.
     CleanNested(tasks::CleanNestedArgs),
-    /// Run a macOS, iOS or Windows device check (drivers in tools/device-checks).
-    Device(device::DeviceArgs),
     /// Check crate layers, manifests, test reachability and ADR numbers.
     Workspace(workspace::WorkspaceArgs),
     /// Check that no crate reaches what its tier forbids (ADR-0081 §2).
@@ -175,12 +168,9 @@ fn main() -> ExitCode {
         Command::WasmCheck(args) => tasks::wasm_check(&args),
         Command::WasmLink(args) => tasks::wasm_link(&args),
         Command::WasmTest(args) => tasks::wasm_test(&args),
-        Command::LiveSmoke(args) => tasks::live_smoke(&args),
         Command::GpuTest(args) => tasks::gpu_test(&args),
         Command::Miri(args) => tasks::miri(&args),
-        Command::DemoSnapshots(args) => tasks::demo_snapshots(&args),
         Command::CleanNested(args) => tasks::clean_nested(&args),
-        Command::Device(args) => device::device(&args),
         Command::Workspace(args) => workspace::workspace(&args),
         Command::Reach(args) => workspace::reach(&args),
         Command::ModuleDag(args) => module_dag::module_dag(&args),

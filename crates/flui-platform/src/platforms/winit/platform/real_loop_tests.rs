@@ -1873,7 +1873,7 @@ mod x11_window {
 }
 
 /// A Wayland window on a real compositor (skipped without `WAYLAND_DISPLAY`;
-/// the live-smoke job runs a headless weston for the Wayland close path).
+/// a headless weston covers the Wayland close path).
 ///
 /// A compositor places windows and a client cannot hide, focus or place one,
 /// so those commands are refused and the capabilities say so; what it does let
