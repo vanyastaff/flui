@@ -694,7 +694,7 @@ fn secondary_window_paces_by_its_own_display() {
     );
 }
 
-fn a_deadline_ten_ms_late_is_abandoned_after_a_move_to_an_8_ms_display() {
+fn a_deadline_unanswered_for_ten_ms_is_abandoned_after_a_move_to_an_8_ms_display() {
     let rig = boot();
     rig.period(RIGHT, 8);
     rig.turns.drive();
@@ -703,25 +703,29 @@ fn a_deadline_ten_ms_late_is_abandoned_after_a_move_to_an_8_ms_display() {
     dispatch_platform_ui_runtime(win.dispatcher, RuntimeTask::Frame(frame)).expect("frame");
     let deadline = frame_deadline().expect("armed on the 16 ms display");
 
-    // Let the deadline pass by 10 ms.
+    // Let the deadline pass by 10 ms; the loop looks at it then, which reports
+    // it due (the first report starts the period the platform has to answer).
     let wait =
         (deadline + Duration::from_millis(10)).saturating_duration_since(web_time::Instant::now());
     std::thread::sleep(wait);
     let late = web_time::Instant::now().saturating_duration_since(deadline);
+    let reported = frame_deadline();
     if late < Duration::from_millis(16) {
         assert!(
-            frame_deadline().is_some(),
+            reported.is_some(),
             "{late:?} late on a 16 ms display is still a wake to answer"
         );
     }
 
+    // The report goes unanswered for another 10 ms, then the window moves.
+    std::thread::sleep(Duration::from_millis(10));
     win.native.simulate_move_to(rig.ids[RIGHT]).expect("move");
     rig.turns.drive();
 
     assert_eq!(
         frame_deadline(),
         None,
-        "{late:?} late on an 8 ms display is a wake that is not coming"
+        "10 ms unanswered on an 8 ms display is a wake that is not coming"
     );
 }
 
@@ -743,8 +747,9 @@ fn display_pacing_contract() {
                 secondary_window_paces_by_its_own_display as fn(),
             ),
             (
-                "a_deadline_ten_ms_late_is_abandoned_after_a_move_to_an_8_ms_display",
-                a_deadline_ten_ms_late_is_abandoned_after_a_move_to_an_8_ms_display as fn(),
+                "a_deadline_unanswered_for_ten_ms_is_abandoned_after_a_move_to_an_8_ms_display",
+                a_deadline_unanswered_for_ten_ms_is_abandoned_after_a_move_to_an_8_ms_display
+                    as fn(),
             ),
         ],
     );
