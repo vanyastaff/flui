@@ -5,13 +5,17 @@
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
   [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md), используя
   текущие имена крейтов и owner-local runtime. Это не утверждает остальные задачи,
-  переименование крейтов или шов возможностей. LY8/LY9 пока не завершены.
+  переименование крейтов или шов возможностей. LY8/LY9 завершены: все пункты «Приёмки LY8/LY9»
+  отмечены, ход — «Доведение до приёмки». Запуск на Mac — vanyastaff/flui#1840. Суть LY89
+  (уведомления вместо опроса на macOS и Android, ноль пробуждений после Home на устройстве)
+  сделана на текущей раскладке; за LY89 остаются headless-счётчик пробуждений в виртуальном
+  времени и перенос в `preferences/`.
 - **Дата:** 2026-10-20
 - **Design:** [design.md](design.md); требования — [requirements.md](requirements.md)
 - **База:** `main` @ `deb9faea2`
 - **Итог:** 82 задачи LY20–LY102 одной упорядоченной серией (идентификатор LY77 не занят). Порядок
   задаёт колонка «Зависит от»; сроков, выпусков и оценок трудозатрат у задач нет, серия идёт до
-  последней задачи. LY8/LY9 — работа вне серии, она уже идёт.
+  последней задачи. LY8/LY9 — работа вне серии, завершена.
 
 ## Правила исполнения
 
@@ -406,15 +410,52 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
 Незавершённые пункты требуют проверки полной цепочки. Нативная проба,
 исправление существующего линейного текста или чтение getter не закрывают задачу.
 
-- [ ] Валидация значений и единиц: неизвестно/не поддержано/ошибка обновления;
+- [x] Валидация значений и единиц: неизвестно/не поддержано/ошибка обновления;
   диапазоны и промежуточная арифметика; motion duration scale отдельно от rate;
   mouse rectangle отдельно от touch slop; wheel disabled/lines/characters/page.
-- [ ] Источник без пользовательского окна: регистрация до sample, invalidation
+  Неизвестно и не поддержано: `unavailable_observations_do_not_claim_system_defaults`,
+  `unsupported_features_are_unobserved`, случай `unsupported` Linux; ошибка обновления:
+  `the_platform_preference_source_reaches_installed_consumers`,
+  `deferred_native_reads_preserve_accepted_preferences`, `bounded_native_read_admission`;
+  диапазоны: `invalid_text_observations_cannot_enter_a_snapshot` и случай
+  `text-scale-out-of-range` (портал сообщает 100 и −1 — ни одно не публикуется); арифметика:
+  `an_exhausted_revision_refuses_without_changing_or_queueing`,
+  `native_touch_geometry_projects_each_context_and_refuses_overflow`, строка `drag_metric_is_a_half_extent_of_the_same_magnitude`
+  (`i32::MIN` отклоняется); масштаб длительности против скорости:
+  `normal_and_preserve_use_distinct_duration_timelines` (Normal — `clock_rate × controller_rate /
+  scale`, Preserve — без масштаба); прямоугольник мыши против slop касания:
+  `native_mouse_geometry_preserves_full_area_and_half_extents`; колесо:
+  `wheel_observations_keep_lines_pages_and_characters_apart`,
+  `vertical_wheel_count_is_lines_until_the_page_sentinel` (0 → `Lines(0)`, только `u32::MAX` →
+  `Page`), `horizontal_wheel_characters_are_never_a_page`.
+- [x] Источник без пользовательского окна: регистрация до sample, invalidation
   во время sample, commit до wake, повтор/замена/отсутствие/panic callback,
   поздний callback после shutdown и новая инкарнация host.
-- [ ] Один и два runtime, поздний runtime, поздний presentation, закрытый sibling,
+  Регистрация до первого чтения: `a_change_before_the_first_owner_turn_reaches_consumers_once`
+  и отчёт `FluiView` после регистрации; invalidation во время чтения:
+  `invalidation_during_read_requires_another_observation` (Windows) — у macOS и Android чтение и
+  уведомление идут на одном потоке владельца, уведомление во время чтения встаёт в очередь и
+  читается следующим; commit до wake: `the_platform_preference_source_reaches_installed_consumers`;
+  повтор: `preference_failure_retries_without_a_user_window`, случай `recovery`; замена:
+  `a_replaced_wake_hook_is_the_only_one_later_changes_reach`; отсутствие:
+  `a_change_before_the_wake_hook_exists_reaches_consumers_once`; panic:
+  `a_panicking_preference_delivery_does_not_stop_later_changes`,
+  `panic_preserves_refresh_and_releases_the_reader`; поздний callback:
+  `browser_motion_observations_wake_replace_and_retire_their_owner`,
+  `a_delegate_that_outlives_its_source_is_inert`, `a_receiver_the_os_keeps_stays_registered_and_inert`,
+  случай `late-proxy`, `obsolete_native_observation_cannot_update_a_replacement_host`; новая
+  инкарнация: `a_replacement_platform_starts_a_new_preference_owner`. Известное ограничение:
+  `OwnerSignal::drive_in` снимает долг до взятия хука, так что ход с пустым слотом после `start`
+  потерял бы пробуждение; хосты ставят хук до `start`, и строка «отсутствия» закрепляет этот путь.
+- [x] Один и два runtime, поздний runtime, поздний presentation, закрытый sibling,
   отказ первого получателя и доставка остальным; старый queued revision не
   переписывает новый seed. Соседние обновления coalesce только до input/frame barrier.
+  `preference_fanout_survives_a_failing_runtime`, `preferences_wake_each_isolated_window`,
+  `text_scale_reaches_a_late_runtime_and_its_later_presentation`,
+  `preference_fanout_passes_a_closed_sibling`, `an_older_preference_revision_cannot_replace_a_newer_seed`,
+  `an_older_or_repeated_preference_revision_is_ignored`; обновления предпочтений не склеиваются
+  вовсе: `two_preference_deliveries_for_one_runtime_never_merge` и
+  `queued_preferences_are_not_coalesced_across_an_input` (A, ввод, B, ввод — каждый ввод видит свои).
 - [x] Text/RichText/EditableText: styled spans разных размеров, unstyled text,
   layout/intrinsics/hit testing/caret, live change и subtree override. Политика
   sizing зафиксирована по действительным producer mappings без заявления native
@@ -436,9 +477,18 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   All-features clippy/compile-fail и Win32 wheel smoke прошли. Заключительный
   `check-changed` прошёл на `38f9d5238` относительно `b357bc903`; CI ещё ожидается.
   Остальные пункты LY8/LY9 этой отметкой не закрываются.
-- [ ] Motion и остальные значения имеют production-потребителей; политика
+- [x] Motion и остальные значения имеют production-потребителей; политика
   приложения остаётся runtime-owned. Существующий animation spec сверяется перед
   реализацией, отдельный SystemMotion producer не появляется.
+  Масштаб текста и вес — `RichText`, `EditableText`, `Icon`; движение — `MotionClock` и
+  `MediaQuery::motion_of` (swipe, `page_view`, `shimmer`, индикаторы, переходы, material и
+  cupertino); высокий контраст — выбор темы в `flui-material` и цвета `flui-cupertino`; тактильный
+  отклик — `ctx.haptics()` в `draggable` и `anchored_drag`; языки — `WidgetsApp`; жесты —
+  распознаватели через `GestureArenaScope`; колесо — `Scrollable` и `InteractiveViewer`.
+  `native_mouse_geometry`/`native_touch_geometry` читает только снимок — так задумано. Отдельного
+  производителя `SystemMotion` нет; политика `set_motion_override` принадлежит runtime
+  (`system_motion_change_reaches_media_query_and_the_clock`,
+  `motion_policy_resolves_preference_against_the_system`).
 - [x] Windows native query/refresh через настоящий owned receiver без изменения
   пользовательских настроек, zero-window lifetime и teardown. Искусственно
   адресованное сообщение доказывает refresh/routing, а не происхождение от ОС.
@@ -446,9 +496,17 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `windows_reads_preferences_before_a_user_window_exists`,
   `setting_messages_wake_the_owner_without_a_user_window` и `preference_receiver_retirement`;
   ограничения по ОС — таблица в записи **PR 9**.
-- [ ] Полный поиск и миграция AccessibilityFeatures, старых источников и exports;
+- [x] Полный поиск и миграция AccessibilityFeatures, старых источников и exports;
   SDK/facade, docs, optional features, cross-typecheck, meaningful revert proofs,
   self-review и заключительный `cargo xtask check-changed`. CI — отдельное доказательство.
+  `AccessibilityFeatures` нигде не осталось; старые хуки и экспорты — **PR 2**; хост winit
+  проверен с фичей и без на каждой цели; у каждой новой строки есть мутация, которая её валит
+  (записи PR); ревью всей стопки против «Recurring defects» нашло девять дефектов, все исправлены
+  до слияния (записи PR 5a, 6, 8, 9). Заключительный прогон на Windows вместо снятого
+  `check-changed`: `xtask platform-test` (216 и 242 пройдены), `xtask gate` — проверки и clippy
+  рабочего пространства зелёные, `doc-strict` падает только на ссылках `shared/os_version`,
+  которые уже есть на `main` и ломаются лишь на Windows; `xtask cross-typecheck` требует `zig` и
+  идёт в CI.
 
 ### Доведение до приёмки
 
@@ -588,12 +646,25 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   | Среда | Собрано | Исполнено |
   |:--|:--|:--|
   | Windows | clippy, nextest | на этой машине: источник без окна, адресованный `WM_SETTINGCHANGE`, снятие с отказами |
-  | Linux | кросс-clippy с хостом winit и без | WSL Ubuntu 24.04, `xvfb-run`, подменный портал в `dbus-run-session` (15 случаев) |
-  | macOS | кросс-clippy `aarch64-apple-darwin` | нет; очередь `needs-mac` |
-  | iOS | `cross-typecheck` в CI (нужен Apple SDK) | нет; очередь `needs-mac` |
+  | Linux | кросс-clippy с хостом winit и без | WSL Ubuntu 24.04, `xvfb-run`, подменный портал в `dbus-run-session` (16 случаев с **PR 10**) |
+  | macOS | кросс-clippy `aarch64-apple-darwin` | нет; vanyastaff/flui#1840 |
+  | iOS | `cross-typecheck` в CI (нужен Apple SDK) | нет; vanyastaff/flui#1840 |
   | Android | кросс-clippy, dex | Galaxy S21, Android 15 / API 35 |
   | Web | wasm32 clippy, `wasm-check` | Node против подменной границы браузера; не в браузере |
   | Headless | — | CI Linux |
+- [x] **PR 10** — ветка `platform/preferences-acceptance`: строки, которых не хватало приёмке по
+  сверке её пунктов с тестами. Linux: случай `text-scale-out-of-range` (портал сообщает 100 до окна
+  и −1 вживую — владелец видит «нет наблюдения», затем 1,5; источник, который зажимает значение
+  вместо отказа, падает на первом засеве). Единицы: строки `normal_and_preserve_use_distinct_duration_timelines`
+  со скоростями часов и контроллера; `native_unit_conversions` на Windows (`wheel_preferences` и
+  `drag_extent` вынесены из нативного чтения без изменения поведения). Runtime:
+  `an_older_or_repeated_preference_revision_is_ignored`,
+  `an_exhausted_revision_refuses_without_changing_or_queueing`,
+  `two_preference_deliveries_for_one_runtime_never_merge`,
+  `queued_preferences_are_not_coalesced_across_an_input`. App: четыре строки `owner_dispatch_matrix`
+  — изменение до первого хода, до появления хука, замена хука, паника доставки. Каждую строку валит
+  своя мутация (сохранение порога ревизии, насыщение вместо отказа, слияние или вытеснение
+  предпочтений в очереди, хук без восстановления после паники, зажим масштаба и т. д.).
 
 ## Чего нет в этой серии
 
