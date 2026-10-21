@@ -245,7 +245,7 @@ The live check — a Japanese IME composing and converting (for example "toukyou
 Narrator reading the label and the field — belongs to roadmap exit B1 and is recorded as platform
 evidence, not run as a merge gate: a human session cannot gate a merge. Until it is recorded, the
 Windows row in [`docs/BETA.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/BETA.md) says "no IME". An automated Windows IME device check
-(`cargo xtask device windows-ime`: romaji through virtual keys with the IME open, read back
+([`cargo xtask device windows-ime`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs): romaji through virtual keys with the IME open, read back
 through UIA `TextPattern`) runs on a maintainer host or VM, because the hosted runner's language
 set is unverified.
 
@@ -315,5 +315,5 @@ Outstanding:
 - A winit backend test that a `Preedit`/`Commit` sequence produces the same store edits as the
   kit's `tsf_style_conversion_script` (§2). The projection's own tests pin each event; nothing
   yet compares the two paths end to end.
-- `cargo xtask device windows-ime` on a host with ja-JP installed, and the recorded B1 evidence
+- [`cargo xtask device windows-ime`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) on a host with ja-JP installed, and the recorded B1 evidence
   (§5).

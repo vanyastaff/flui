@@ -16,8 +16,7 @@ playback. The registry retains that obligation across gates and rebinding.
 Property owners keep independent timelines: retargeting one property does not
 restart unchanged properties. Render-owned opacity, rotation, Drawer and
 Dismissible transitions invalidate their retained render path instead of
-rebuilding content on every sample. The workspace `motion_lab` example makes
-these paths interactive; its activity indicator intentionally keeps frames
+rebuilding content on every sample. An activity indicator intentionally keeps frames
 running, so it is not an idle-frame benchmark.
 
 The dated comparisons below identify the revisions and workloads they measure;

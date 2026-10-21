@@ -18,12 +18,6 @@
 - **`flui-testing`**: the conformance table's IME group has its first row,
   `a_key_during_composition_is_the_input_methods`, with `Step::ComposingKey` and `StepKey::Escape`
   for a backend to drive it.
-- **`cargo xtask device web-input`**: runs the web backend's browser tests in headless Chrome,
-  fetching the ChromeDriver that matches the installed Chrome, then drives the `web_input_probe`
-  page over WebDriver BiDi with trusted mouse, pen and touch input recorded into the golden
-  native recording `web_bidi_mouse_pen_touch` (`--bless` rewrites it), the Vibration API before
-  and after user activation, HTML drags in both directions, and Chrome's input-method path into
-  a focused field through both text surfaces.
 
 ### Fixed
 

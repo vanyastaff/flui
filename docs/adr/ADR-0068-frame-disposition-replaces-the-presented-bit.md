@@ -25,7 +25,7 @@ nothing to wake it (no scheduled frame) and nothing to draw if it did (the
 scene was taken). The window never paints again.
 
 This is reachable on ordinary cold start. Under the native AppKit back end,
-`sliver_demo` cold starts presented 0 or 1 frames in ~8 s: the surface's first
+[`sliver_demo`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/examples/sliver_demo.rs) cold starts presented 0 or 1 frames in ~8 s: the surface's first
 drawable reported `Occluded`, the frame was classified as finished, and the
 process parked at 0% CPU on a window that had never drawn. With the retention
 below (and later with the cap of §4 as well) the same runs presented hundreds

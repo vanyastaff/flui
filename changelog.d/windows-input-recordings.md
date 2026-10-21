@@ -6,7 +6,7 @@
   ([ADR-0215](/docs/adr/ADR-0215-input-recording-and-backend-conformance.md) §4). Golden
   recordings of a touch and a pen injected through `InjectSyntheticPointerInput`, and of mouse
   buttons and both wheels sent through `SendInput`, are checked in and re-recorded by
-  `cargo xtask device windows-input` (§8).
+  `FLUI_NATIVE_RECORDING_BLESS` (§8).
 
 ### Fixed
 

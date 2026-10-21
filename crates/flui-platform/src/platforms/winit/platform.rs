@@ -979,10 +979,10 @@ struct WinitApp {
     /// Harness self-close deadline, armed from `FLUI_SELF_CLOSE_AFTER_MS` at
     /// loop start. When it expires, [`WinitApp::fire_self_close_if_due`]
     /// synthesizes `WindowEvent::CloseRequested` for one tracked window —
-    /// the exact arm a compositor close takes. This exists for the Wayland
-    /// live-smoke harness: unlike X11 (where XTEST + a `WM_DELETE_WINDOW`
-    /// client message can drive a real close from outside, see
-    /// `tools/live-smoke`), Wayland has no protocol a third-party client can
+    /// the exact arm a compositor close takes. This exists for Wayland test
+    /// harnesses: unlike X11 (where XTEST + a `WM_DELETE_WINDOW`
+    /// client message can drive a real close from outside), Wayland has no
+    /// protocol a third-party client can
     /// use to close another client's toplevel — `xdg_toplevel.close` is
     /// compositor→client only — so the close-path teardown ordering is
     /// untestable on Wayland without this in-process trigger. Unset (the
@@ -992,7 +992,7 @@ struct WinitApp {
     /// Which close route the armed self-close drives
     /// (`FLUI_SELF_CLOSE_ROUTE`): the synthesized compositor
     /// `CloseRequested` by default, or [`PlatformWindow::close`] on the
-    /// tracked window — so the live-smoke harnesses can prove the
+    /// tracked window — so a harness can prove the
     /// programmatic route's teardown (issue #919) against a real app, real
     /// GPU surface, and the embedder's real exit-policy hook, which no
     /// in-crate test can host. Irrelevant while `self_close_deadline` is
@@ -2319,8 +2319,8 @@ impl WinitApp {
                 );
                 continue;
             };
-            // `route` is the live-smoke harnesses' oracle for this path
-            // (`tools/live-smoke`): matched on the field, not the message.
+            // `route` is a harness's oracle for this path:
+            // matched on the field, not the message.
             tracing::info!(
                 ?window_id,
                 route = "programmatic",

@@ -347,8 +347,8 @@ lazy host, an authored `SemanticsCollection` or a `Semantics` with
 
 `collection_semantics` in `crates/flui-widgets/tests` reads tables, trees,
 levels, sorted headers, hand-built lists and these limits the way an adapter
-does, and the `lazy row`, `tree item level` and `sorted column` fixtures of
-`cargo xtask device windows-a11y` read them from UI Automation.
+does.
+
 ### A layout stamps the children it laid out; paint and hit-test skip the rest
 
 **Rule:** a multi-child render object that lays out a *subset* of its children — a lazy sliver's

@@ -11,7 +11,7 @@ This page covers prerequisites, the first build, and how to run the bundled exam
 | Rust | 1.99 | MSRV floor in `workspace.package.rust-version`; development toolchain pinned separately in `rust-toolchain.toml`. `rustup` installs/selects it automatically on first `cargo` invocation. |
 | Cargo | bundled with Rust | Workspace uses `resolver = "3"` (MSRV-aware) and edition 2024. |
 | Git | any recent | Required to clone the repo. |
-| Python | 3.10+ | Only for the font-fixture generator (`tools/decoy-face/generate.py`, which `cargo xtask checks` re-runs to verify the committed bytes) and the macOS/iOS drivers in `tools/device-checks/`. Not required to build or run an application. |
+| Python | 3.10+ | Only for the font-fixture generator (`tools/decoy-face/generate.py`, which `cargo xtask checks` re-runs to verify the committed bytes). Not required to build or run an application. |
 | `cargo-ndk` | 3.x | Required only for Android targets. |
 | `wasm-pack` | 0.13+ | Required only for `examples/web_demo` and `examples/painting_demo`. |
 | Native toolchain | platform-specific | MSVC on Windows, Xcode CLT on macOS, NDK on Android. |
@@ -109,23 +109,13 @@ cargo run --locked --example counter
 ```
 
 A window should open showing a count and an "Increment" button; press it to
-watch the count go up. Close the window to terminate the process. For a
-tour of the wider widget catalog, run the gallery instead:
-
-```bash
-cargo run --example widgets_gallery
-```
-
-A window titled "FLUI App" (the `AppConfig` default) should open, showing a
-dark padded surface with a title, a row of circular avatars, and a centred
-card. Close it to terminate the process.
+watch the count go up. Close the window to terminate the process.
 
 ### Other bundled examples
 
 | Example | Command | Purpose |
 |---------|---------|---------|
 | `counter` | `cargo run --example counter` | Minimal stateful app — one `Signal` and a `RawButton` that writes it (start here) |
-| `widgets_gallery` | `cargo run --example widgets_gallery` | Widget catalog through `flui::prelude` + `run_app` |
 | `scene_render` | `cargo run --example scene_render` | Scene graph rendering |
 | `desktop_scene` | `cargo build -p flui-desktop-scene` | Build the hot-reload scene library; this plugin is loaded by a host, not run as an executable |
 

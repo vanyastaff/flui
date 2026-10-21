@@ -9,10 +9,10 @@
 //! `flui-widgets`, `flui-rendering`, or any other implementation crate. That
 //! is the point of the test — it is written the way an outside consumer of
 //! the published `flui` crate would have to write it, not the way this
-//! workspace's own internal tests do (compare `tests/material_demo.rs` or
-//! `packages/flui-material/tests/elevated_button.rs`, both of which reach past
-//! the facade into `flui_rendering`/`flui_interaction` directly, and both of
-//! which drive taps through a widget-testing convenience
+//! workspace's own internal tests do (compare
+//! `packages/flui-material/tests/elevated_button.rs`, which reaches past
+//! the facade into `flui_rendering`/`flui_interaction` directly, and
+//! drives taps through a widget-testing convenience
 //! (`flui_testing::widgets::lay_out`'s `dispatch_pointer_down`) rather than
 //! the general pointer-replay path this test uses).
 //!

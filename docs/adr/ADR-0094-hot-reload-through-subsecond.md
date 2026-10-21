@@ -335,7 +335,7 @@ into `flui-hot-reload`'s crate docs.
   dynamic linking study found them compatible after
   [dioxus#4174](https://github.com/DioxusLabs/dioxus/pull/4174) but did not test the pair on
   Windows.
-- The macOS device check of the worker loop (`cargo xtask device`, `MacosHotReloadLoop`, `tools/xtask/src/device.rs:201-212`)
+- The macOS device check of the worker loop ([`cargo xtask device`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs), `MacosHotReloadLoop`, [`tools/xtask/src/device.rs:201-212`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs#L201-L212))
   is rewritten for the Subsecond loop when the dlopen path is deleted.
 - Web keeps no in-process hot reload (`docs/hot-reload.md`, "WASM / Web"). iOS support depends on
   the spike.

@@ -170,7 +170,7 @@ fn main() {
 ```
 
 Run with `cargo run --example counter`. For a tour of the wider widget
-catalog, see `examples/widgets_gallery.rs`. More examples live under
+catalog, see the `flui-widgets` crate. More examples live under
 `examples/` and per-target crates (`examples/desktop_scene/`,
 `examples/web_demo/`, `examples/painting_demo/`) — see
 [`examples/README.md`](examples/README.md) for the full index.

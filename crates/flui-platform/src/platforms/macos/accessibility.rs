@@ -25,7 +25,7 @@
 //!
 //! # Verification scope
 //!
-//! The native `exit_policy_probe`, built with `a11y`, executes adapter creation
+//! The native exit-policy check, built with `a11y`, executes adapter creation
 //! and last-window/explicit-quit teardown on macOS. Its native weak references
 //! must clear after autorelease-pool drain. `BridgeShared` tests cover retention
 //! and dispatch mechanics independently. These checks do not certify a VoiceOver

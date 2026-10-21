@@ -87,13 +87,6 @@ debug playback and registry muting still apply. Changing policy commits clock
 state without sampling controllers or invoking their listeners.
 
 The [guide](docs/GUIDE.md#motion-preferences) gives an executable clock example.
-The interactive `motion_lab` example at the workspace root compares property
-interruption, independent deadlines, gestures and preserved timers:
-
-```bash
-cargo run --example motion_lab --features material -- --full
-cargo run --example motion_lab --features material -- --reduce
-```
 
 ### The Animation Model
 

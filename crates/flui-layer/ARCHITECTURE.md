@@ -117,8 +117,8 @@ presentation's frame history) are computed in `flui-runtime`, beside the present
 composited; `PerformanceOverlayLayer::record` composes the numbers it is handed through the
 caller's `TextContext` into the display list the layer carries, so the engine replays shaped
 labels and shapes nothing (ADR-0092). `record` stays here, beside the layer, because it is the
-one recorder of the layer's readout and `examples/screenshot.rs` records one with no runtime
-behind it; it holds no state, and the numbers stay with their owner. `PerformanceOverlayOption`
+one recorder of the layer's readout; it holds no state.
+`PerformanceOverlayOption`
 crosses the engine boundary as itself rather than as a `u32`
 (`performance_overlay_readout_rows`).
 

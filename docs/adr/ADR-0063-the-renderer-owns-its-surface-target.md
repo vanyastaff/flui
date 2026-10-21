@@ -134,7 +134,7 @@ borrowed-safe `create_surface(&W)` that #1043 names, sound only by GPUI's owners
      unit tests; the Android arms that emit the signal are type-checked only; the renderer-side
      mechanics need a GPU. Release and rebuild emit their own trace events
      (`surface_released_by_owner`, `surface_recreated`), separate from the lease-drop line the
-     desktop live-smoke harnesses assert at window close.
+     desktop [live-smoke harnesses](https://github.com/vanyastaff/flui/tree/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/live-smoke) assert at window close.
 
 ## Alternatives rejected
 

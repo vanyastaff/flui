@@ -2,20 +2,8 @@
 
 The framework crates are not yet published to crates.io (only the `flui-cli` tool is), so there
 is no docs.rs page for the widgets to link to yet — until there is, this page points at the source
-tree and the runnable catalog instead of listing every widget by name here (a hand-maintained list
-would go stale the moment a widget is added; the source directories and the gallery example do
-not). This page has no screenshots yet.
-
-## See it running
-
-```bash
-cargo run --example widgets_gallery
-```
-
-opens a window walking the catalog live — see [Getting Started](../getting-started/installation.md) for
-how to build and run it. [`examples/README.md`](https://github.com/vanyastaff/flui/blob/main/examples/README.md)
-indexes every bundled example by category, several of which exercise a specific widget or widget
-group in isolation.
+tree instead of listing every widget by name here (a hand-maintained list would go stale the
+moment a widget is added; the source directories do not). This page has no screenshots yet.
 
 ## Controlled values: Slider and Disclosure
 

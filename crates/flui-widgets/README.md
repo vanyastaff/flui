@@ -24,9 +24,6 @@ Container::new()
 # ;
 ```
 
-See [`examples/widgets_gallery.rs`](../../examples/widgets_gallery.rs) for a
-runnable demo (`cargo run -p flui --example widgets_gallery`).
-
 ## What's in the box
 
 | Family | Widgets |

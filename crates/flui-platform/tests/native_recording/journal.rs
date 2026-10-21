@@ -1,8 +1,8 @@
 //! The capture sink that folds registry calls into native recordings
 //! (`native-capture`).
 //!
-//! Self-contained beside [`codec`](super::codec) so a probe that runs the
-//! backend on a device (`examples/android_input_probe.rs`) journals with
+//! Self-contained beside [`codec`](super::codec) so a run of the
+//! backend on a device journals with
 //! the same code the in-process captures use.
 
 use std::sync::Arc;

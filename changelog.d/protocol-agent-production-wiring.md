@@ -11,7 +11,6 @@
   `AgentWindow`, and a hook whose `attach` answers `false` is handed none.
 - **`flui-devtools`**: the `agent` feature (off by default) adds `agent::AgentServer`, which
   serves the application's windows over a named pipe or Unix socket with a launch token, as
-  newline-delimited JSON, in debug builds only; `cargo run -p flui-devtools --example
-  agent_counter --features agent` runs the counter behind it.
+  newline-delimited JSON, in debug builds only.
 - **`flui-testing`**: `HeadlessDevAgent` attaches a development agent hook the way a runner's
   loop does, and `HeadlessHost::with_dev_agent` hands it the realm's window.

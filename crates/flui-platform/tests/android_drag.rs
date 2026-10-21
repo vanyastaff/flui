@@ -2,7 +2,7 @@
 //! (`shared::android_drag`, ADR-0247, ADR-0211): what a `DragEvent`'s clip
 //! offers, what a drop holds and answers, what a FLUI drag puts in its
 //! `ClipData`, and how its source learns the end. The JNI side runs on a
-//! device (`cargo xtask device android-input`).
+//! device.
 
 use std::num::NonZeroU64;
 use std::sync::Arc;

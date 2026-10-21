@@ -436,7 +436,7 @@ menu is answered as the application answered the secondary press that opened
 it; one no secondary press opened (the menu key) is prevented.
 
 `web_pinch_table` pins the decoders in Linux CI. `tests/web_browser.rs` runs
-in headless Chrome through `cargo xtask device web-input`:
+in headless Chrome:
 `a_wheel_scroll_is_answered_with_its_dispatch_result`,
 `a_ctrl_wheel_pinch_reaches_the_application_as_a_pan_zoom` (End from the
 timer, stamped with the deadline), `a_refused_pinch_is_left_to_the_browser`,
@@ -487,7 +487,7 @@ waiting or running session cancelled.
 `dragstart_runs_a_waiting_session_and_refuses_otherwise` use constructed
 `DragEvent`s with a real `DataTransfer`, whose effects a constructed object
 ignores, so the harness supplies them as plain properties. With trusted input
-over WebDriver BiDi (`cargo xtask device web-input`) Chrome itself runs both
+over WebDriver BiDi Chrome itself runs both
 directions within one page: a session started from the press's dispatch
 becomes an HTML drag a page element takes the text of, and a page element's
 drag drops onto the canvas, whose target reads it after the drop. The drag
@@ -534,7 +534,7 @@ the canvas forwards focus to it, and detaching gives focus back to the canvas.
 profile. In headless Chrome, `an_edit_context_serves_the_focused_field`,
 `escape_while_the_field_composes_is_the_input_methods` and
 `a_textarea_serves_the_field_without_edit_context` drive constructed events;
-`cargo xtask device web-input` drives Chrome's own input-method path
+a manual run drove Chrome's own input-method path
 (`Input.imeSetComposition` and `Input.insertText` over ChromeDriver's DevTools
 channel, a trusted Escape and key over BiDi) through both surfaces. No OS
 input method, candidate window or soft keyboard has run.
@@ -578,7 +578,7 @@ derives once per turn, so they coalesce. Rows: `os_display_classification` and `
 native contract rows `refresh_is_the_rational_active_mode`,
 `window_display_is_a_display_of_the_snapshot`, `dpi_change_raises_the_display_hint` and
 `moves_within_one_monitor_raise_no_display_hint`. A transition between two monitors needs a second monitor and
-is not a CI row; it ran by hand with `examples/displays.rs` (see
+is not a CI row; it ran by hand (see
 `docs/platform-parity.md`). Unplugging a monitor on Windows was not run.
 
 ### Windows preferences have a window-independent owner lifetime
@@ -666,10 +666,9 @@ The same host observation set also reads motion. AppKit samples
 timer. The same timer also serves the macOS winit fallback: `WinitApp` owns the
 source and the platform stores only a weak lookup. Reads lease it outside platform state;
 no AppKit query is added to `about_to_wait`. Shutdown and unwinding fence the
-signal before retiring that source. `winit_preferences_probe` checks initial
-native observations, foreign-thread refusal and reentrant retirement without a
-user window. It requires a macOS main-thread process; local cross-compilation
-does not establish that the probe passes.
+signal before retiring that source. Initial native observations,
+foreign-thread refusal and reentrant retirement without a user window need a
+macOS main-thread process; local cross-compilation does not establish them.
 
 Android reads `Settings.Global.ANIMATOR_DURATION_SCALE` through the
 Activity's ContentResolver during preference sampling, validates it before
@@ -726,8 +725,7 @@ sampling without a window, live changes, unknown values, unsupported observation
 GNOME and legacy portal reads, service replacement, failed-read recovery without
 another notification, foreign-thread refusal and reentrant capture retirement.
 `libtest-mimic` keeps execution on winit's required main thread and supplies the
-Cargo/nextest protocol. `linux_preferences_probe` runs the same fixture scenarios
-manually. These tests execute Linux D-Bus and winit, but do not change a desktop's
+Cargo/nextest protocol. These tests execute Linux D-Bus and winit, but do not change a desktop's
 actual OS settings or establish live behavior of the other native platforms.
 
 Thread-safe residual handles may outlive the event-loop owner. The background
@@ -985,17 +983,11 @@ handlers-then-state lock order. Callback, destructor and native/dispatch boundar
 panics use hostile-payload-safe containment; a panicking registration does not
 prevent another pending signal from reaching its replacement or restored slot.
 
-`reopen_probe` and `tools/device-checks/check-macos-reopen.py` separate direct delegate
-routing from actual LaunchServices reopen AppleEvents. The latter invokes
-`open -a` on the exact running temporary bundle and requires callback and normal
-return in the original PID. These checks cover the platform signal, not a
-rendered resident application or a framework root-window creation API.
-Run the native matrix on macOS with an active GUI session:
-
-```sh
-cargo build -p flui-platform --locked --example reopen_probe
-python3 tools/device-checks/check-macos-reopen.py target/debug/examples/reopen_probe
-```
+A manual macOS run separated direct delegate routing from actual LaunchServices
+reopen AppleEvents. The latter invoked `open -a` on the exact running temporary
+bundle and required callback and normal return in the original PID. That run
+covered the platform signal, not a rendered resident application or a framework
+root-window creation API. It needs a macOS host with an active GUI session.
 
 ### Headless explicit quit consumes its callback outside platform state
 
@@ -1010,7 +1002,6 @@ consumed callback is not restored. Tests exercise the actual `Platform::quit`
 seam with a reentrant getter/quit, a captured-data drop sentinel, and an original
 panic payload. Their first nonblocking lock assertion makes a regression fail
 immediately instead of hanging while trying to re-enter the same mutex.
-
 
 ### Standalone AppKit stops its loop and returns through Rust cleanup
 
@@ -1056,16 +1047,13 @@ That prevents deallocation under the native close stack. Worker drops remain
 nonblocking queued tails; if the owner no longer services them, that existing
 fallback can leak native resources and never releases them off-main.
 
-**Verification:** `cargo build -p flui-platform --locked --example exit_policy_probe`
-then `python3 tools/device-checks/check-macos-exit.py target/debug/examples/exit_policy_probe`
-stages a fresh bundled subprocess per case with an eight-second kill/reap limit.
-Cases require post-return, quit, callback-drop and stack-drop markers, and weak
-NSWindow references must be nil after an explicit autorelease pool drains.
-Replacement windows must survive a later owner turn before the probe closes them;
-replacement hooks must actually execute. Foreign ownership, pre-run/bootstrap
-quit, bootstrap failure/unwind and quit panic each have their own case. Unsupported
-hosts and unknown case names fail explicitly. The older close-path and frame-pump
-probes retain their narrower lifecycle/frame assertions.
+**Verification:** a manual macOS run staged a fresh bundled subprocess per case
+with an eight-second kill/reap limit. Cases required post-return, quit,
+callback-drop and stack-drop markers, and weak NSWindow references had to be nil
+after an explicit autorelease pool drained. Replacement windows had to survive a
+later owner turn before being closed; replacement hooks had to actually execute.
+Foreign ownership, pre-run/bootstrap quit, bootstrap failure/unwind and quit
+panic each had their own case.
 
 ### An AppKit window's mode, the host's notices and a session end (ADR-0237)
 
@@ -1411,8 +1399,7 @@ visible bit):
   this). Deleted, not deferred: it contradicts ADR-0058 — the platform paces
   production, a sleep never does — and it pre-empts the `PlatformProxy` redraw
   verb ADR-0045 decision 5 scopes to #559 by shipping a second, private frame
-  source. The primer that starts a measurement belongs to the probe, which is
-  where it now lives (`examples/frame_pump_probe.rs`).
+  source. The primer that starts a measurement belongs to the measuring harness.
 
 **Market lineage:** nobody shipping a Rust macOS UI builds its frame loop this
 way. gpui-ce (`crates/gpui_macos/src/display_link.rs`, `main` @ `8e36ac0`,
@@ -1460,8 +1447,7 @@ inside a frame request must be deferred to the platform's next frame turn, not
 serviced in place.** Web now serves `request_redraw` from its
 `requestAnimationFrame` loop alone, which requests a frame on every animation
 frame (`a_redraw_waits_for_the_next_animation_frame` in `tests/web_browser.rs`,
-run in headless Chrome by `cargo xtask device web-input`, and the gallery's
-screens by `cargo xtask device web-gallery`). The concept still lives per
+run in headless Chrome). The concept still lives per
 backend rather than in a shared place, so a third backend writing a frame loop
 has to rediscover it.
 
@@ -1473,8 +1459,7 @@ without an NSWindow
 complement — deleting the deferral branch fails the first, checked by mutation:
 with `dispatch_redraw_request`'s body replaced by an unconditional inline send,
 that test fails and the other five in scope still pass), because a bare test
-process cannot construct an NSWindow at all. The behavioural end-to-end pin is
-`examples/frame_pump_probe.rs` (`cargo xtask device macos-frame-pump`): a real visible window
+process cannot construct an NSWindow at all. The behavioural end-to-end pin was a manual macOS run: a real visible window
 on the real AppKit run loop, whose frame callback re-arms the way the engine's
 frame does, behind a primer that stops at the first frame so the measurement
 cannot be explained by it. Measured 2026-09-17: 301 frames in 3.010 s (100.0 fps
@@ -1551,8 +1536,8 @@ such a panel ran: the display this was measured on has one fixed mode.
 ±infinity — are unknown rather than an infinite or panicking period) and by
 `macos_shim_keeps_the_period_it_reports_today`, which holds the shim
 to the value this backend reported before the snapshot. The live path is
-pinned behaviourally by the same bundled probe that pins the frame pump
-(`cargo xtask device macos-frame-pump`), which reports `FRAME_PUMP_PROBE_REFRESH_PERIOD` from
+pinned behaviourally by the same manual run that pins the frame pump,
+which reported the refresh period from
 the real backend on the real display: measured 2026-09-17 as `period_us=10000
 hz=100.0`, matching the independent AppKit probe's `CGDisplayModeGetRefreshRate`
 of 100.000 Hz on the same panel. Like every macOS-gated test here, these run
@@ -1624,13 +1609,12 @@ UTF-16 and `ImeEvent::Preedit.cursor` is a **byte** range, so the conversion is
 under a bare `cargo test` (an unbundled `NSWindow` throws
 `_CFBundleGetValueForInfoKey`), so every encoding and selector here was
 hand-checked against `objc-0.2.7`'s `add_method` preconditions until the bundled
-probe executed them — which it now has, on a real Mac, with all five assertions
-passing. What the probe measures about the rect is that it is non-zero and
+a bundled run executed them — which it now has, on a real Mac, with all five assertions
+passing. What that run measured about the rect is that it is non-zero and
 screen-relative; the **direction** of the `firstRectForCharacterRange:` Y-flip is
 still designed rather than measured, because a flip of the wrong sign produces a
 non-zero screen rect too. Measuring which side of the caret the candidate window
-would land on needs a real input method to ask, which is the same gap the probe's
-own module doc states.
+would land on needs a real input method to ask, which is the same gap as for real composition below.
 
 **Replacement coverage.** The conversion carries seven always-run tests
 (ASCII identity, multi-byte divergence from UTF-16 offsets, CJK unit-vs-byte, a
@@ -1639,8 +1623,8 @@ range splitting a surrogate pair, past-the-end, empty text, and AppKit's real
 states it distinguishes — unattached, attached-but-idle, composing, and a
 composition that has just ended. It is mutation-checked against the gate a
 reader would first reach for (`!ime_allowed` alone fails it on the
-attached-but-idle case). `cargo xtask device macos-ime` drives the live path from a bundled
-`.app` and reports `IME_PROBE_RESULT=PASS` on a real Mac: the inverse pair
+attached-but-idle case). A manual run drove the live path from a bundled
+`.app` on a real Mac and passed: the inverse pair
 (attached → one `Commit` and no key event; detached → one key event and no
 `ImeEvent`), the `Preedit` → `Commit` sequence with the byte cursor asserted, the
 empty-`Preedit` that ends a composition, a non-zero cursor rect whose
@@ -1649,7 +1633,7 @@ end-to-end — a release reported while a text input is attached with nothing
 composing, and the same call suppressed while a composition is open. The gate's
 arm is mutation-checked against the ungated `key_up`: removing the check leaks a
 `KeyboardEvent { state: Up, key: Character("a") }` into that arm and fails the
-probe. Its own module doc states that a synthesized `NSEvent` proves the
+run. A synthesized `NSEvent` proves the
 *routing* and is not a genuine input method, so real composition (press-and-hold
 or a CJK source) remains **not driven**.
 
@@ -1694,12 +1678,12 @@ quit handler from it and the runner runs the teardown.
 0.6.4/0.3.2 (already there via `wgpu-hal`), while `winit` 0.30 and
 `accesskit_macos` 0.27 still pull 0.5.2/0.2.2. The duplicate resolves when
 those move (H10 / winit 0.31), not by anything here. A real device is not
-covered — the simulator slice is, via `cargo xtask device ios-sim` — and no CI job boots a
+covered — the simulator slice is, by a manual run — and no CI job boots a
 simulator; `cross-typecheck` gained an `aarch64-apple-ios` clippy line so a
 broken iOS build is at least loud.
 
-**Replacement coverage.** `cargo xtask device ios-sim` (executing; asserts a Metal device
-and a rendered frame from the app's own log, plus a screenshot) for the
+**Replacement coverage.** A manual simulator run (a Metal device and a rendered
+frame from the app's own log, plus a screenshot) for the
 end-to-end path, and three host-run unit tests on `display.rs`'s bounds
 arithmetic. The engine-side portability fix this uncovered —
 `required_limits` clamped to the adapter's own, because the simulator's Metal
@@ -1775,14 +1759,7 @@ leaves the retained logical owner alive; failed bootstrap, quit and destruction
 close it. The app uses this transport for pending-window completion without a
 window or UI runtime frame. It is not a generic closure executor.
 
-Run the live macOS oracle with a GUI session:
-
-```sh
-cargo build -p flui-platform --locked --example owner_wake_probe
-python3 tools/device-checks/check-owner-wake.py target/debug/examples/owner_wake_probe
-```
-
-External counters assert owner affinity, nonrecursive delivery, shutdown capture
+A live macOS run needs a GUI session. External counters assert owner affinity, nonrecursive delivery, shutdown capture
 release and rejected work after quit. On Windows, a turn through the real
 message loop runs on the owner and is released there. **Unasserted:** no test
 pins this. CI only type-checks Win32. Mobile/web registration remains explicitly
@@ -1890,21 +1867,14 @@ will be refused; `Resume` makes the callback deliverable again. The app also ret
 a logical continuation when the initial actuator refuses it and retries from the
 next fresh native root.
 
-The iOS protocol probe is reproducible with a dedicated booted simulator:
-
-```sh
-CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo build -p flui-platform --example ios_execution_probe --target aarch64-apple-ios-sim --no-default-features
-python3.12 tools/device-checks/check-ios-execution.py <UDID> target/aarch64-apple-ios-sim/debug/examples/ios_execution_probe
-```
-
-Use `--case foreground-reentered-background`, `background-reentered-foreground`,
-`duplicate-foreground`, or `foreground-callback-panic` for the original cases.
-Additional cases cover `background-nested-active`, `background-nested-inactive`,
-`foreground-nested-active`, `foreground-nested-inactive`,
-`nested-foreground-then-panic`, `superseded-foreground`, and
-`background-nested-run-loop`. The latter verifies that a queued background stops
-frames before the observer pumps a nested native run loop.
-The runner terminates only its owned probe after marker completion; this is not a
+A manual run on a dedicated booted iOS simulator covered the cases
+foreground-reentered-background, background-reentered-foreground,
+duplicate-foreground, foreground-callback-panic, nested background and
+foreground transitions while active or inactive, nested-foreground-then-panic,
+superseded-foreground, and background-nested-run-loop. The last verified that a
+queued background stops frames before the observer pumps a nested native run
+loop.
+The run terminated only its owned process after marker completion; this is not a
 claim of normal UIKit loop return or a real OS background transition. Xcode 26.2
 is the verified SDK. UIScene ownership and migration remain separate work.
 
@@ -1919,7 +1889,7 @@ Terminal close fences callbacks and retires the attachment before disposal.
 
 `MainThreadBound` protects native storage. Final worker drops enqueue retirement
 on main rather than synchronously waiting for it. Plain cached metrics remain
-readable without touching UIKit. The native weak-view probe verifies both
+readable without touching UIKit. A native weak-view check verified both
 retention through logical close and eventual release after a worker's final drop.
 OwnerSignal/GCD carries typed process wake/quit independently of display links;
 it grants no operating-system background execution entitlement.
@@ -1949,10 +1919,7 @@ outside the mutex. Quit commits stopped state and consumes its callback before
 invoking it, so reentry cannot invoke the same quit callback again. Owning
 callback envelopes remain outside the caught invocation; a failed displaced
 callback is retained rather than destroyed while propagating its first failure.
-`created_callback_probe` and `quit_callback_probe` in that example exercise
-reentrant clipboard access. Each probe requires a fresh page and an external
-deadline: the previous implementation blocks or aborts the browser thread under the
-state mutex. Source inspection and type checking do not prove browser execution
+Source inspection and type checking do not prove browser execution
 or arbitrary aggregate destructor containment.
 
 ### The Web display period is measured from animation frames and is an estimate
@@ -2047,7 +2014,7 @@ re-derives each window's display from the snapshot.
 (`web_refresh_estimate_table`, `dpr_change_arms_the_query_for_the_new_ratio`,
 `retained_screen_keeps_its_id`, `web_feature_absent_gives_no_handle`); the browser
 glue runs on Node in the wasm lane against a controlled boundary
-(`tests/wasm32/display.rs`) and by hand through the `browser_display_probe` example.
+(`tests/wasm32/display.rs`) and by hand in a browser.
 
 ### Web logical keys validate their source grammar
 
@@ -2058,8 +2025,8 @@ normalize to Meta. No source inference from Ctrl+Alt, AltRight or a named-key
 sequence is made; raw facts remain distinct from widget command interpretation
 (ADR-0201). Native observation completeness is not implied by the owned DTO.
 
-The browser probe's `observed-modifiers`, `modifier-getter-reentry` and
-`modifier-getter-retirement` controls test registered DOM delivery through public
+The browser page's `observed-modifiers`, `modifier-getter-reentry` and
+`modifier-getter-retirement` controls tested registered DOM delivery through public
 input, source metadata, same-family reentry and retired-owner silence followed
 by healthy replacement delivery. FnLock/SymbolLock and legacy source overrides
 are explicitly controlled-getter cases. Constructor delivery is not a physical
@@ -2171,7 +2138,6 @@ client-origin observations across a native move beyond signed16 coordinates
 and a subsequent ordinary move. Cache and Moved events use `ClientToScreen`;
 packed message coordinates remain a fallback only if that query fails. These rows do not
 exercise monitor DPI migration or interactive focus changes.
-
 
 `resize_callback_preserves_large_native_dimensions` pins unsigned `WM_SIZE`
 decoding in the same bounded native family. A hidden popup is resized separately
@@ -2472,7 +2438,7 @@ cancels its sequences) (`the_device_is_queried_for_every_event_but_a_move`).
 
 Android has no counterpart to `PointerRevision`: a `MotionEvent` carries no
 estimated properties to revise, so the backend never emits `Revise`.
-`cargo xtask device android-input` holds the translation on a device (see the
+A run on a device held the translation (see the
 native recording section below).
 
 ### A native recording is the journal of one pointer registry
@@ -2508,8 +2474,7 @@ derives them again. The codec reads every number back to the bits it was
 written from (serde_json's `float_roundtrip`): a cumulative pinch scale read
 one ulp off replays a different transform than the device delivered.
 
-On a Windows host `cargo xtask device windows-input` records the injected
-goldens: each child row of the native window contract
+On a Windows host the injected goldens are recorded: each child row of the native window contract
 (`a_captured_native_pointer_session_replays_to_what_it_delivered` for a touch
 and a pen from `InjectSyntheticPointerInput`,
 `a_captured_native_mouse_session_replays_to_what_it_delivered` for mouse buttons
@@ -2521,14 +2486,13 @@ also writes the fresh recording there, and `FLUI_NATIVE_RECORDING_BLESS`
 (`--bless`) writes it over the golden. On another host, install `capture` on
 the owner thread before the backend opens its windows.
 
-On a host with the Android SDK and a device, `cargo xtask device
-android-input` does that on the device: `examples/android_input_probe.rs` is a
-`NativeActivity` library that installs the capture before `AndroidPlatform`
-creates its registry and shares the test codec and sink
-(`tests/native_recording/journal.rs`) through `#[path]`. Each session, in a
+The Android goldens were recorded on a device by a `NativeActivity` library
+that installed the capture before `AndroidPlatform` created its registry and
+shared the test codec and sink (`tests/native_recording/journal.rs`) through
+`#[path]`. Each session, in a
 fresh launch, is injected by the system (`adb shell input`, and `uinput`
 devices the real `InputReader` reads: a pen with pressure, tilt and hover, a
-touchpad in pointer mode), and the probe writes its journal and the `Debug`
+touchpad in pointer mode), and the library wrote its journal and the `Debug`
 of every pointer event its window delivered. The host test
 `pulled_device_recordings_replay_to_what_they_delivered` requires the replay
 to equal what the device delivered exactly, then holds the recording against
@@ -2537,15 +2501,15 @@ pinched or scrolled, in order, with each press's sensors), not by shape: the
 device batches and resamples moves by its frame timing, so their number and
 positions change from run to run.
 
-A browser page has no file system, so `cargo xtask device web-input` splits
-the same steps between the page and the host. The `web_input_probe` example
-opens the web backend under a `Recorder` (the capture, kept installed across
-the event-loop turns the driver's input arrives on) and reports the
-recording as JSON Lines with the pointer events the window delivered and the
-recording's replay; the driver sends trusted mouse, pen and touch input over
-WebDriver BiDi, requires the replay to equal what was delivered (DOM wheel
-scrolls excepted: they have no contact, so the registry never sees them),
-writes the recording on the host and holds it against
+A browser page has no file system, so the web goldens were recorded by
+splitting the same steps between the page and the host. The page opened the web
+backend under a `Recorder` (the capture, kept installed across the event-loop
+turns the driver's input arrives on) and reported the recording as JSON Lines
+with the pointer events the window delivered and the recording's replay; the
+driver sent trusted mouse, pen and touch input over WebDriver BiDi, required
+the replay to equal what was delivered (DOM wheel scrolls excepted: they have
+no contact, so the registry never sees them), wrote the recording on the host
+and held it against
 `web_bidi_mouse_pen_touch.jsonl` natively
 (`browser_sessions_hold_against_their_goldens`, given
 `FLUI_NATIVE_RECORDING_FRESH`). Its moves are single steps between pauses
@@ -2623,7 +2587,7 @@ before ended (`ios_pattern_parts`). The engine is created on the first pattern;
 its stopped and reset handlers only record the restart obligation and wake the
 main thread, which restarts it, and a pattern requested meanwhile plays its
 fallback (ADR-0210 §8). The macOS and iOS paths have only been compiled. The
-Web path ran in headless Chrome (`cargo xtask device web-input`): before the
+Web path ran in headless Chrome: before the
 page's first trusted click `navigator.vibrate` is refused for want of user
 activation and the window's actuator reports `Unavailable` with no
 capabilities; after it a request is `Submitted`. Chrome's own answer is all
@@ -2649,8 +2613,8 @@ no permission, rather than claiming what the vibrator would refuse. Every
 pattern carries the touch usage, `VibrationAttributes.USAGE_TOUCH` from API 33
 and sonification audio attributes before it (`android_vibration_usage`), so the
 touch-feedback setting and intensity govern it. On a Galaxy S21 (Android 15,
-amplitude control, no primitives) `cargo xtask device android-input` plays the
-semantic feedback and a continuous swell as touch vibrations of the probe, and
+amplitude control, no primitives) a device run played the
+semantic feedback and a continuous swell as touch vibrations, and
 a two-tap pattern falls back, as the table says. Android 15 also files a short
 effect sent without attributes as touch, so the usage is not observable there;
 `haptic_degradation_table` pins it.
@@ -2878,9 +2842,9 @@ window reports no drag source and `outgoing_drag()` `Unavailable`.
 
 `android_ime_adapter` and `android_drag_mapping` (`tests/android_ime.rs`,
 `tests/android_drag.rs`) pin the pure halves in Linux CI, with the Android rows of
-`backend_conformance` and `input_capabilities_contracts`. `cargo xtask device android-input`
-runs the JNI half on a device: a drag the probe starts drops on its own window, and the default
-keyboard composes, commits, passes Escape on while composing and sends its action key.
+`backend_conformance` and `input_capabilities_contracts`. A run on a device
+covered the JNI half: a drag started there dropped on its own window, and the default
+keyboard composed, committed, passed Escape on while composing and sent its action key.
 
 ### The platform names the data roots; the Web keeps values in IndexedDB
 

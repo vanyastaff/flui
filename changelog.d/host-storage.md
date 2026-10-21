@@ -26,7 +26,7 @@
 ### Changed
 
 - **Storage needs no Cargo feature.** `AppConfig::with_storage_dir` alone turns it on, and the
-  `two_screens` and `notes_faults` examples need only `material`. `dirs` and `tempfile` are
+  `dirs` and `tempfile` are
   always linked on native targets.
 
 ### Removed

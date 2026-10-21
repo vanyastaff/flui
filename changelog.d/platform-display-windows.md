@@ -7,8 +7,6 @@
 - **A Windows window names the display it is on** (`flui-platform`): `PlatformWindow::display_id`
   resolves the window's nearest monitor to its display by native key instead of reporting none, and
   `on_display_changed` fires when the window moves to another monitor or its DPI changes.
-- **`examples/displays` watches the displays** (`flui-platform`): set `FLUI_DISPLAYS_WATCH_SECS` to keep
-  it running and print each snapshot change and window display hint.
 
 ### Changed
 

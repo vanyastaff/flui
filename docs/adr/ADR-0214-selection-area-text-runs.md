@@ -78,7 +78,7 @@ each paragraph while one ancestor holds a selection spanning several paragraphs.
   baseline that must not move.
 - CI executes the tests through `accesskit_consumer` and runs the benchmark build. A screen
   reader reading and selecting the text runs on a native host only: a `TextPattern` row in
-  `cargo xtask device windows-a11y`, VoiceOver and Orca by hand, each recorded in the PR.
+  [`cargo xtask device windows-a11y`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs), VoiceOver and Orca by hand, each recorded in the PR.
 - Native Orca row: a `SelectionArea` with the `Document` role must not switch Orca into a browse
   mode that takes arrow keys away from the controls inside it. If it does, the area wraps text
   only and keeps controls outside its `Document` node.

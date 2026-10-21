@@ -58,8 +58,7 @@ because each corrected a real flaw in the one before it:
    made `pub` and exported from `flui-widgets` so `flui_material::TextField`
    reuses the same type instead of declaring its own copy.
 
-The codebase's every real caller of `flui::material::TextField`
-(`examples/material_demo` and `examples/workload_probe.rs`)
+Every real caller of `flui::material::TextField` in the codebase
 already imported it explicitly under all three revisions and needed no
 changes across any of them — every fix here was about what an *unqualified*
 `TextField` resolves to for code that hasn't been written yet, never about
