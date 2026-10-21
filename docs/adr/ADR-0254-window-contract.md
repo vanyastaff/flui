@@ -53,7 +53,7 @@
   (`gfx-rs/wgpu@3050396df2`). Counts and lines of FLUI's own tree are at `main` `083b0f75d`.
 
 Crate names. The contract crate is `flui-platform-api` today and `flui-platform` after ADR-0151's
-rename; the host crate is `flui-platform` today and `flui-native` after it. This record says
+second rename; the host crate is `flui-native`. This record says
 "contract crate" and "host crate".
 
 ## Context and problem statement
@@ -101,13 +101,13 @@ The triad is the best shape of the group. `PlatformWindow` around it is not fini
 - **Nine spellings of "not here".** Nine enums each define their own `Unsupported` or
   `Unavailable` (ADR-0151 lists them with their lines). The per-frame verbs return `()`: the Win32
   host logs a failed backdrop call, so an app cannot know Mica was ignored
-  (`crates/flui-platform/src/platforms/windows/window.rs:2165-2196`).
+  (`crates/flui-native/src/platforms/windows/window.rs:2165-2196`).
   `WindowBackgroundAppearance` carries two Windows-only variants in a Stable contract and has no
   caller.
 - **An escape hatch nobody can reach.** `as_any` is a required method of the open window trait
   (`platform_window.rs:899`); the per-OS extension traits sit in the host crate, which the facade
-  does not publish (`crates/flui-platform/src/platforms/windows/window.rs:2518`,
-  `crates/flui-platform/src/platforms/macos/window.rs:1657`; `src/lib.rs:147`).
+  does not publish (`crates/flui-native/src/platforms/windows/window.rs:2518`,
+  `crates/flui-native/src/platforms/macos/window.rs:1657`; `src/lib.rs:147`).
   `WindowEvent` and `Platform::on_window_event` have no production caller above the host.
 
 winit pairs a `Send + Sync` window with a single handler trait and pays with blocking

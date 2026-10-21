@@ -14,7 +14,7 @@ wasm-opt = false
 
 [dependencies]
 flui-foundation = { path = "../../crates/flui-foundation" }
-flui-platform = { path = "../../crates/flui-platform", default-features = false }
+flui-native = { path = "../../crates/flui-native", default-features = false }
 flui-platform-api.workspace = true
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = ["console"] }

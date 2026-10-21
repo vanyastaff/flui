@@ -33,7 +33,7 @@
 //!   set of crates allowed a normal or build dependency on it, and
 //!   `allowed-dev-dependents`, the same for dev-dependencies. Three crates list
 //!   `allowed-dependents`: `flui-log`, which only composition roots link, and
-//!   `flui-platform` (ADR-0082) and `flui-runtime` (ADR-0047), which only the
+//!   `flui-native` (ADR-0082) and `flui-runtime` (ADR-0047), which only the
 //!   host links; their dev-dependents are not restricted. No manifest lists
 //!   `allowed-dev-dependents` since the design systems moved to the kind rule
 //!   (ADR-0088); the key stays as the dev-edge restriction ADR-0041 and

@@ -16,8 +16,8 @@ use std::sync::{Arc, Weak};
 
 use flui_foundation::PresentationAddress;
 use flui_foundation::panic::FirstPanic;
-use flui_platform::traits::PlatformWindow;
-use flui_platform::{
+use flui_native::traits::PlatformWindow;
+use flui_native::{
     WindowCapabilities, WindowCommand, WindowCommandError, WindowControl, WindowState,
 };
 use flui_view::__runtime::WindowSource;

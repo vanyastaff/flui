@@ -29,14 +29,14 @@
 //! is the point of the crate: naming a contract must not link a backend, so a
 //! framework crate or plugin that names or implements a capability depends on
 //! this crate, stays free of every OS stack and builds without
-//! `flui-platform`. The one AccessKit-speaking window capability, the
-//! accessibility bridge, is reached through `flui_platform::HostWindow`, a
+//! `flui-native`. The one AccessKit-speaking window capability, the
+//! accessibility bridge, is reached through `flui_native::HostWindow`, a
 //! subtrait of [`PlatformWindow`] that only the composition root sees.
 //!
 //! The host-facing `Platform` trait, the owner-thread capability, the
-//! host-side window subtrait and every OS backend live in `flui-platform`,
+//! host-side window subtrait and every OS backend live in `flui-native`,
 //! which re-exports everything defined here at its old paths. Only
-//! composition roots depend on `flui-platform` (ADR-0082 §2).
+//! composition roots depend on `flui-native` (ADR-0082 §2).
 //!
 //! [`PlatformInput`] carries FLUI's owned vocabulary (ADR-0143), defined in
 //! [`pointer`](mod@pointer), [`keyboard`] and [`EventTime`]. Upstream translator

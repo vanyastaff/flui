@@ -295,7 +295,7 @@ leaks a native window as well as a thread.
 - The Android hot-reload plugin path requires the inline lane: its `Scene` would drop on the raster
   thread while the dylib may unload on the owner thread. Un-gating needs an unsafe audit.
 - Web runs inline, with no pacing feedback (no visibility signal, no compositor tick).
-- `flui-platform`'s window `Send`/`Sync` wrappers, `MacOSWindow` first, need an unsafe audit before
+- `flui-native`'s window `Send`/`Sync` wrappers, `MacOSWindow` first, need an unsafe audit before
   the relay ships.
 
 ## Alternatives considered

@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::{Arc, Weak};
 
-use flui_platform::storage::{DataDirs, FileStore};
+use flui_native::storage::{DataDirs, FileStore};
 use flui_platform_api::{
     Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
 };
@@ -258,7 +258,7 @@ mod tests {
     use std::future::Future;
     use std::sync::Arc;
 
-    use flui_platform::storage::DataDirs;
+    use flui_native::storage::DataDirs;
     use flui_platform_api::{Storage, StorageError, StorageName, Stored, StoredVersion, WriteMode};
     use flui_runtime::execution::{DeterministicExecutors, ExecutionServices};
 

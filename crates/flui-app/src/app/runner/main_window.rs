@@ -17,7 +17,7 @@ use crate::app::{
     dev_agent::DevAgent,
     hot_reload::{WorkerReload, WorkerWatcherGuard},
 };
-use flui_platform::{PendingWindow, PlatformProxy, WindowOpen, traits::HostWindow};
+use flui_native::{PendingWindow, PlatformProxy, WindowOpen, traits::HostWindow};
 use flui_runtime::dev_agent::DevAgentAttachment;
 use flui_view::View;
 use std::{
@@ -80,7 +80,7 @@ enum CompletionState {
 }
 struct OpenWake {
     proxy: PlatformProxy,
-    shared: flui_platform::SharedPlatform,
+    shared: flui_native::SharedPlatform,
     ingress: std::sync::Weak<Ingress>,
     batch: Arc<()>,
     ready: AtomicBool,
@@ -272,9 +272,9 @@ impl MainController {
             Some(Ok(WindowOpen::Pending(pending))) => {
                 self.pending = Some(pending);
                 self.pending_wake = Some(Arc::new(OpenWake {
-                    proxy: with_owner_platform(flui_platform::OwnerPlatform::proxy)
+                    proxy: with_owner_platform(flui_native::OwnerPlatform::proxy)
                         .expect("BUG: current owner"),
-                    shared: with_owner_platform(flui_platform::OwnerPlatform::shared)
+                    shared: with_owner_platform(flui_native::OwnerPlatform::shared)
                         .expect("BUG: current owner"),
                     ingress: Arc::downgrade(&self.ingress),
                     batch: self.ingress.active_batch(),
@@ -590,7 +590,7 @@ where
     F: FnMut(&AppHandle) -> V + 'static,
 {
     run_with_platform_factory(application, || {
-        flui_platform::current_platform().map_err(|error| AppRunError::Platform {
+        flui_native::current_platform().map_err(|error| AppRunError::Platform {
             source: Arc::new(error),
         })
     })
@@ -599,7 +599,7 @@ where
 #[cfg(test)]
 fn run_with_platform<V, F>(
     application: Application<V, F>,
-    platform: Box<dyn flui_platform::traits::Platform>,
+    platform: Box<dyn flui_native::traits::Platform>,
 ) -> Result<(), AppRunError>
 where
     V: View + Clone + 'static,
@@ -610,7 +610,7 @@ where
 
 fn run_with_platform_factory<V, F>(
     application: Application<V, F>,
-    platform: impl FnOnce() -> Result<Box<dyn flui_platform::traits::Platform>, AppRunError>,
+    platform: impl FnOnce() -> Result<Box<dyn flui_native::traits::Platform>, AppRunError>,
 ) -> Result<(), AppRunError>
 where
     V: View + Clone + 'static,
@@ -753,12 +753,12 @@ mod tests {
 
     use std::sync::atomic::AtomicUsize;
 
-    use flui_platform::{HeadlessPlatform, Platform};
+    use flui_native::{HeadlessPlatform, Platform};
 
     use crate::app::runtime::ExitPolicy;
 
     fn install_test_controller(
-        owner: flui_platform::OwnerPlatform,
+        owner: flui_native::OwnerPlatform,
         installer: Installer,
         observer: Option<WindowErrorObserver>,
     ) -> AppHandle {
@@ -863,7 +863,7 @@ mod tests {
                             runtime
                                 .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
                                 .expect("mount root");
-                            let window: Arc<dyn flui_platform::traits::PlatformWindow> = window;
+                            let window: Arc<dyn flui_native::traits::PlatformWindow> = window;
                             let mut prepared =
                                 prepare_ui_runtime_alongside(runtime, Arc::clone(&window));
                             let address = prepared.dispatcher().address;

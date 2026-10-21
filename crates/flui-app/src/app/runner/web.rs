@@ -18,16 +18,16 @@ where
     use std::sync::Arc;
 
     use flui_engine::Renderer;
-    use flui_platform::WindowOptions;
+    use flui_native::WindowOptions;
     use parking_lot::Mutex;
 
-    tracing::info!("Starting web platform via flui-platform");
+    tracing::info!("Starting web platform via flui-native");
 
     // Platform init is an environment failure (unsupported browser, missing
     // wasm feature, driver problem), not a `BUG:` invariant — see the
     // matching comment in `run_desktop` above for why this is a `match` +
     // `panic!` with a full error log instead of a bare `.expect()`.
-    let platform = match flui_platform::current_platform() {
+    let platform = match flui_native::current_platform() {
         Ok(platform) => platform,
         Err(error) => {
             tracing::error!(%error, "Failed to initialize platform");
@@ -48,7 +48,7 @@ where
     where
         V: View + StatelessView + Clone + 'static,
     {
-        fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
+        fn owner_platform_installed<R>(f: impl FnOnce(&flui_native::OwnerPlatform) -> R) -> R {
             with_owner_platform(f)
                 .expect("BUG: bootstrap_web runs only after install_owner_platform")
         }
@@ -60,7 +60,7 @@ where
         // `on_ready` (ADR-0039 §1).
         let options: WindowOptions = (&config).into();
         let host = match owner_platform_installed(|owner| owner.open_window(options))
-            .and_then(flui_platform::WindowOpen::try_ready)
+            .and_then(flui_native::WindowOpen::try_ready)
         {
             Ok(window) => window,
             Err(error) => {
@@ -194,7 +194,7 @@ where
 
 pub(super) struct WebFrameDriver {
     renderer: std::sync::Arc<parking_lot::Mutex<Option<flui_engine::Renderer>>>,
-    window: std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+    window: std::sync::Arc<dyn flui_native::traits::PlatformWindow>,
     /// What the browser or the renderer reported lost, and not yet rebuilt.
     gpu_loss: std::sync::Arc<GpuLossLedger>,
     /// Wakes the owner: the next turn rebuilds without waiting for a frame.
@@ -278,7 +278,7 @@ impl WebFrameDriver {
                 // No `NO_PRESENT_FALLBACK_PACE` sleep here, unlike
                 // desktop/Android: this callback is driven by the
                 // browser's `requestAnimationFrame` loop
-                // (`start_raf_loop`, `flui-platform`'s web backend),
+                // (`start_raf_loop`, `flui-native`'s web backend),
                 // which fires unconditionally once per animation
                 // frame regardless of whether a redraw was
                 // requested — the browser's own vsync-paced RAF

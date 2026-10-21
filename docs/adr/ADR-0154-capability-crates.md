@@ -29,7 +29,7 @@
   (`flatpak/xdg-desktop-portal@49075617ff`) and the Cargo book (`rust-lang/cargo@d4a2c5853b`).
 
 Crate names follow ADR-0151: the contract crate is `flui-platform` (today `flui-platform-api`) and
-the core host is `flui-native` (today `flui-platform`).
+the core host is `flui-native`.
 
 ## Context and problem statement
 

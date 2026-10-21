@@ -12,7 +12,7 @@ use super::store::TextStore;
 ///
 /// Owner thread only: shared as `Rc<dyn TextStoreHost>` and not `Send`.
 /// A backend hands one out only to a caller holding owner-thread proof
-/// (`flui_platform::OwnerPlatform::text_store_host`).
+/// (`flui_native::OwnerPlatform::text_store_host`).
 ///
 /// # Reentry
 ///

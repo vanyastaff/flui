@@ -5,14 +5,14 @@
 - **Superseded-by:** [ADR-0210](ADR-0210-two-tier-haptics.md), §1–§4 only; §5 (system chrome
   deferral) stands, except the overlay style: [ADR-0232](ADR-0232-annotated-regions-and-overlay-style.md)
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§1–§3: `PlatformHaptics`
-  now lives in `flui-platform-api`, re-exported at its old `flui-platform` path; its contract is
+  now lives in `flui-platform-api`, re-exported at its old `flui-native` path; its contract is
   unchanged); [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (on acceptance; §1: `flui-types` is deleted
   and `HapticFeedback` lives in `flui-platform-api`, as `flui_platform_api::HapticFeedback`)
 
 ## Context
 
 Flutter's `services` layer groups text input, system chrome and haptics.
-FLUI dissolves it into capability traits on `flui-platform` (ADR-0030). This
+FLUI dissolves it into capability traits on `flui-native` (ADR-0030). This
 record delivers haptics and defers system chrome in full rather than doing a
 partial pass on both.
 
@@ -31,7 +31,7 @@ platform, OS version or device cannot do it. That is Flutter's own contract
 (its API returns `Future<void>` and never reports "unsupported"), and like
 Flutter there is no availability query.
 
-The type lives in `flui-types`, below `flui-platform`, so a widget that fires
+The type lives in `flui-types`, below `flui-native`, so a widget that fires
 feedback (a Material switch or ink response) can name it without depending on
 the platform layer — the `ImeEvent` precedent.
 

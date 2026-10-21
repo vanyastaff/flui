@@ -1,7 +1,7 @@
 # Платформенный слой — задачи
 
-- **Статус:** черновик, редакция 3; исполнение после утверждения design.md и ADR-0151, 0152, 0153,
-  0154, 0254, 0255
+- **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21;
+  исполнение идёт, ход — в разделе «Ход исполнения»
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
   [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md), используя
   текущие имена крейтов и owner-local runtime. Это не утверждает остальные задачи,
@@ -287,6 +287,26 @@ graph LR
 | **LY100** | **Фича `scripted` и один двойник окна** (D29, R11.14). Сценарный примитив контракта — под `scripted`; `flui-testing` и `flui-app[driver]` включают её; 15 реализаций `PlatformWindow` вне ядра сводятся к `flui_testing::MockWindow` | LY44, LY50, LY54 | `crates/flui-platform/src/capability/`, `crates/flui-testing/src/`, `crates/flui-app/Cargo.toml`, тесты `flui-interaction`, `flui-runtime`, `flui-app` | `testing` (ADR-0243), `workspace` | `rg "impl .*PlatformWindow for"` вне ядра и kit — ноль; сценарий диалога через драйвер на headless | L |
 | **LY101** | **Фасад: `flui::services::<name>` за фичами** (D31, R5.15, ADR-0154 п. 8). Фасад `flui` получает по фиче на каждый официальный крейт возможности: сейчас `system` для `flui-system` — фича подключает крейт необязательной зависимостью и реэкспортирует его как `flui::services::system`; каждый следующий крейт возможности добавляет свою фичу тем же образцом в своём PR (`flui = { features = ["location", "bluetooth"] }` даёт `flui::services::location::*`). Крейты остаются отдельными: несовместимое изменение в одном задевает только приложения, включившие его фичу. `flui add <capability>` (команда и декларации — LY56) включает фичу фасада, а не добавляет зависимость на крейт напрямую. Kind-правило `workspace` допускает ребро «фасад → крейт возможности» только необязательное, за фичей, и требует фичу фасада у каждого официального крейта возможности | LY57 | `Cargo.toml` (фичи фасада), `src/lib.rs` (`pub mod services`), `crates/flui-cli/src/add*`, `tests/surface.rs`, `docs/crates.md`, `tools/xtask/src/workspace/*` | `workspace` (+ `--self-test`), `facade-combos`, `feature-matrix`, `doc-strict` | `tests/surface.rs`: `flui::services::system` есть ровно при включённой фиче; `facade-combos` собирает каждую фичу отдельно и все вместе; golden-тест `flui add` на fixture-крейте включает фичу фасада и пишет декларации; самотест: обязательная зависимость фасада на крейт возможности и такая же зависимость другого крейта фреймворка отказывают | L + T |
 | **LY102** | **Контракт по областям** (D26, R2.10). Модули `flui-platform` группируются: `window/` (опции, состояние, команды, возможности, размещение, трейт окна, `SurfaceTarget`, яркость), `input/`, `text/`, `display/`, `preferences/`, `transfer/`, `haptics/`, `capability/`, `menu/` (резерв), `unsupported`, `notice`, `system_chrome`, `storage`, `target_platform`; корневые реэкспорты имён, которыми пользуются фасад и `flui-sdk`, остаются (`flui::platform::WindowOptions` не меняется) | LY100, LY101 | `crates/flui-platform/src/**`, `docs/crates.md` | `workspace`, `doc-strict`, `docs-paths` | `cargo public-api diff`: корневые пути без изменений; workspace собирается | L |
+
+## Ход исполнения
+
+- [x] **LY20** — ветка `platform/flui-native`. Команды: `git mv crates/flui-platform
+  crates/flui-native`; затем по файлам, которые находит `rg -l --hidden` вне `target/`, `.git/`,
+  `Cargo.lock`, `docs/plans/**`, текста ADR-0151, `CHANGELOG.md` и `*.stderr`: `sd -s` по порядку
+  `flui-platform-api` → заглушка, `flui_platform_api` → заглушка, `flui-platform` → `flui-native`,
+  `flui_platform` → `flui_native`, заглушки обратно; `cargo metadata` обновляет `Cargo.lock`;
+  `TRYBUILD=overwrite cargo test -p flui-native --test compiler_guards` перегенерирует пять
+  `.stderr`; `cargo fmt --all` и `taplo fmt`. По смыслу переписаны: описание ядра в
+  `docs/architecture.md`, `docs/crates.md` и комментарий корневого `Cargo.toml`; ADR-0152, 0153,
+  0154 и 0254, где `flui-platform` означает будущий контракт, возвращены к этому имени. 17 путей
+  ADR-0151 на дерево `083b0f75d` внесены в allowlist `docs-paths` с причиной. Проверки на
+  Windows: `cargo heli xtask checks`, `workspace`, `reach`, `deps`, `wasm-check` — зелёные;
+  clippy `--workspace --all-targets -D warnings` — зелёный; `cargo check` под
+  `aarch64-linux-android` — зелёный; nextest `-p flui-native -p flui-app -p flui-runtime
+  -p flui-testing` — 388 прошли; doctest'ы `flui-native` и `flui-app` — 19 прошли. Повтор
+  команд на результате ничего не меняет (`rg` по `flui-platform` вне исключений и имени контракта
+  пуст). `cross-typecheck` для Apple на этой машине не собирается без `cargo-zigbuild`
+  (C-сборка `psm`, `objc2-exception-helper`); его доказательство — job CI.
 
 ## Работа вне серии: LY8 и LY9
 

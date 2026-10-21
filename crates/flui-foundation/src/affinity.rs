@@ -8,8 +8,8 @@
 //! the runtime backstop beneath it: a recordable owner identity plus a debug
 //! assertion backends place at the entry of their affine operations.
 //!
-//! It lives in `flui-foundation` — not `flui-platform` — so its behavior is
-//! exercised by a test suite CI actually runs (`flui-platform`'s suite is
+//! It lives in `flui-foundation` — not `flui-native` — so its behavior is
+//! exercised by a test suite CI actually runs (`flui-native`'s suite is
 //! excluded from the CI gate; see AGENTS.md). The backend wiring is
 //! compile-checked by cross-typecheck and verified locally on the native OS.
 

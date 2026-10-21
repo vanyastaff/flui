@@ -1817,9 +1817,9 @@ dependencies = [
  "flui-layer",
  "flui-macros",
  "flui-material",
+ "flui-native",
  "flui-objects",
  "flui-painting",
- "flui-platform",
  "flui-platform-api",
  "flui-rendering",
  "flui-testing",
@@ -1869,9 +1869,9 @@ dependencies = [
  "flui-interaction",
  "flui-layer",
  "flui-log",
+ "flui-native",
  "flui-objects",
  "flui-painting",
- "flui-platform",
  "flui-platform-api",
  "flui-rendering",
  "flui-runtime",
@@ -2156,63 +2156,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "flui-objects"
-version = "0.2.0-dev"
-dependencies = [
- "flui-animation",
- "flui-foundation",
- "flui-interaction",
- "flui-objects",
- "flui-painting",
- "flui-rendering",
- "insta",
- "parking_lot",
- "serde",
- "static_assertions",
- "thiserror 2.0.21",
- "tracing",
-]
-
-[[package]]
-name = "flui-painting"
-version = "0.2.0-dev"
-dependencies = [
- "color",
- "criterion",
- "flui-foundation",
- "flui-painting",
- "fontdb",
- "icu_properties",
- "icu_segmenter",
- "kurbo",
- "lru",
- "parley",
- "proptest",
- "serde",
- "serde_json",
- "swash",
- "sys-locale",
- "thiserror 2.0.21",
- "tracing",
- "trybuild",
-]
-
-[[package]]
-name = "flui-painting-demo"
-version = "0.2.0-dev"
-dependencies = [
- "console_error_panic_hook",
- "flui-engine",
- "flui-foundation",
- "flui-painting",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "wgpu",
-]
-
-[[package]]
-name = "flui-platform"
+name = "flui-native"
 version = "0.2.0-dev"
 dependencies = [
  "accesskit",
@@ -2277,6 +2221,62 @@ dependencies = [
  "winit",
  "x11rb",
  "zbus",
+]
+
+[[package]]
+name = "flui-objects"
+version = "0.2.0-dev"
+dependencies = [
+ "flui-animation",
+ "flui-foundation",
+ "flui-interaction",
+ "flui-objects",
+ "flui-painting",
+ "flui-rendering",
+ "insta",
+ "parking_lot",
+ "serde",
+ "static_assertions",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
+name = "flui-painting"
+version = "0.2.0-dev"
+dependencies = [
+ "color",
+ "criterion",
+ "flui-foundation",
+ "flui-painting",
+ "fontdb",
+ "icu_properties",
+ "icu_segmenter",
+ "kurbo",
+ "lru",
+ "parley",
+ "proptest",
+ "serde",
+ "serde_json",
+ "swash",
+ "sys-locale",
+ "thiserror 2.0.21",
+ "tracing",
+ "trybuild",
+]
+
+[[package]]
+name = "flui-painting-demo"
+version = "0.2.0-dev"
+dependencies = [
+ "console_error_panic_hook",
+ "flui-engine",
+ "flui-foundation",
+ "flui-painting",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu",
 ]
 
 [[package]]
@@ -2350,9 +2350,9 @@ dependencies = [
  "flui-foundation",
  "flui-interaction",
  "flui-layer",
+ "flui-native",
  "flui-objects",
  "flui-painting",
- "flui-platform",
  "flui-platform-api",
  "flui-protocol",
  "flui-rendering",
@@ -2436,9 +2436,9 @@ dependencies = [
  "flui-animation",
  "flui-foundation",
  "flui-interaction",
+ "flui-native",
  "flui-objects",
  "flui-painting",
- "flui-platform",
  "flui-platform-api",
  "flui-rendering",
  "flui-runtime",
@@ -2490,7 +2490,7 @@ version = "0.2.0-dev"
 dependencies = [
  "console_error_panic_hook",
  "flui-foundation",
- "flui-platform",
+ "flui-native",
  "flui-platform-api",
  "wasm-bindgen",
  "web-sys",

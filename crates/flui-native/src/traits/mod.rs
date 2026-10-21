@@ -1,0 +1,57 @@
+//! Core trait definitions for platform abstraction
+//!
+//! This module defines the contract between the framework and platform-specific
+//! embedders. The traits are designed for maximum code reuse while allowing
+//! platform-specific customization.
+//!
+//! Input prediction and velocity tracking belong to the interaction layer.
+//! The unused platform tracker and embedder abstraction are retired (ADR-0082 §5).
+//! `trybuild_ui::ui_tests` checks each absent name separately, so one retired
+//! export cannot return unnoticed while another import still fails.
+//!
+//! ```compile_fail,E0432
+//! use flui_native::traits::{
+//!     BasicVelocityTracker, PlatformEmbedder, SystemTimestamp, TimestampProvider,
+//! };
+//! ```
+
+mod host_window;
+// The owner-thread capability (ADR-0039): `OwnerPlatform`, `PlatformProxy`,
+// `PendingWindow`, and their typed errors. `pub(crate)` (not private): the
+// `pub(crate)` seams inside it — `OwnerHooks`, `ProxyTransport`,
+// `DirectOwnerHooks` — are wired up by the direct backends
+// module, not just this crate's own `traits` tree.
+pub(crate) mod owner;
+mod platform;
+
+// The contracts live in `flui-platform-api` (ADR-0082) and are re-exported
+// here as the same owned vocabulary the public platform boundary carries.
+pub use flui_platform_api::{
+    Clipboard, ClipboardItem, CursorError, DispatchEventResult, DisplayId, DisplayIdsExhausted,
+    DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision, DisplaySnapshot, DragDropEvent,
+    HostNotice, InputLatency, Key, KeyEvent, MemoryPressureLevel, Modifiers, PlacementError,
+    PlatformHaptics, PlatformInput, PlatformTextInput, PlatformWindow, PointerButton,
+    PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove, RefreshPeriod,
+    ResolvedPlacement, ScrollDelta, SessionEndAnswer, SessionEndBlock, SessionEndBlockError,
+    SessionEndPhase, SessionEndRequest, SizeConstraints, SystemNotice, WindowAppearance,
+    WindowBackgroundAppearance, WindowCapabilities, WindowCommand, WindowCommandError,
+    WindowControl, WindowDisplay, WindowEvent, WindowExecutionState, WindowGeometry, WindowId,
+    WindowMode, WindowOptions, WindowPlacement, WindowReveal, WindowRevision,
+    WindowRevisionExhausted, WindowShowError, WindowState, delta_offset_from_coords,
+    device_to_logical, logical_to_device, offset_from_coords,
+};
+
+// The accessibility capability lives with the semantics tree it publishes
+// (ADR-0082 §2); re-exported here at its old path for the backends and the
+// composition root.
+pub use flui_platform_api::keyboard::NamedKey;
+pub use flui_semantics::platform::{
+    AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
+};
+pub use host_window::HostWindow;
+pub(crate) use host_window::OwnerThreadToken;
+pub use owner::{
+    OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,
+    WaitError, WakeRegistrationError, WindowOpen,
+};
+pub use platform::{PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback};

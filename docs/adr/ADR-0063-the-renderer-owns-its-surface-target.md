@@ -101,7 +101,7 @@ borrowed-safe `create_surface(&W)` that #1043 names, sound only by GPUI's owners
 6. **The renderer releases its surface on a signal and rebuilds unconditionally when a window
    returns.** `Renderer::release_surface()` and `Renderer::recreate_surface() -> EngineResult<()>`;
    a frame acquired while released sees `SurfaceAcquireOutcome::Released` (a skip, distinct from
-   `Lost`, which would churn generations through a deliberately absent surface). `flui-platform`
+   `Lost`, which would churn generations through a deliberately absent surface). `flui-native`
    carries the signal as the per-window `on_surface_status_change(Box<dyn FnMut(bool) + Send>)`:
    `false` before the handle dies, `true` when one is available again. It defaults to a no-op, so a
    backend that never emits it conforms by absence (the surface is never released). `flui-app`

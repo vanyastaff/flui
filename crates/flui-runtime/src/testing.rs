@@ -9,11 +9,11 @@
 //!   (redraws, pre-present notifications, the cursor).
 //! - [`ScriptedSink`]: a [`FrameSink`] whose submit verdicts a test scripts.
 //!
-//! Neither the window nor the sink is `flui_platform`'s `MockWindow` or a raster backend: those are
+//! Neither the window nor the sink is `flui_native`'s `MockWindow` or a raster backend: those are
 //! minted by a live headless platform or a GPU device, and a state-level
 //! UI runtime test wants a value with no platform or device ceremony. A test that
 //! needs the real headless window's capabilities opens one from
-//! `flui_platform::headless_platform()` (a dev dependency here).
+//! `flui_native::headless_platform()` (a dev dependency here).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};

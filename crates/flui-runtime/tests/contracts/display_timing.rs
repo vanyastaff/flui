@@ -436,8 +436,8 @@ fn haptic_frame_deadline_follows_the_display() {
 fn display_change_runs_the_dpi_geometry_barrier() {
     let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let window: Arc<dyn PlatformWindow> = Arc::new(CountingWindow {
-        inner: flui_platform::headless_platform()
-            .open_window(flui_platform::WindowOptions::default())
+        inner: flui_native::headless_platform()
+            .open_window(flui_native::WindowOptions::default())
             .expect("headless window"),
         geometry_reads: Arc::clone(&reads),
     });

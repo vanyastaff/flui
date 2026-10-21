@@ -414,23 +414,23 @@ fn trampoline_limits() {
     let (win, mac, shared) = (cell("WIN"), cell("MAC"), cell("SHARED"));
     let files = [
         (
-            "crates/flui-platform/src/lib.rs",
+            "crates/flui-native/src/lib.rs",
             "mod platforms; mod shared;",
         ),
         (
-            "crates/flui-platform/src/platforms/mod.rs",
+            "crates/flui-native/src/platforms/mod.rs",
             "mod windows; mod macos;",
         ),
         (
-            "crates/flui-platform/src/platforms/windows/mod.rs",
+            "crates/flui-native/src/platforms/windows/mod.rs",
             win.as_str(),
         ),
-        ("crates/flui-platform/src/platforms/macos.rs", "mod queue;"),
+        ("crates/flui-native/src/platforms/macos.rs", "mod queue;"),
         (
-            "crates/flui-platform/src/platforms/macos/queue.rs",
+            "crates/flui-native/src/platforms/macos/queue.rs",
             mac.as_str(),
         ),
-        ("crates/flui-platform/src/shared.rs", shared.as_str()),
+        ("crates/flui-native/src/shared.rs", shared.as_str()),
     ];
     assert_eq!(
         problems(

@@ -30,7 +30,7 @@ const ANDROID_TARGET: &str = "aarch64-linux-android";
 const IOS_TARGET: &str = "aarch64-apple-ios";
 const WASM_TARGET: &str = "wasm32-unknown-unknown";
 
-/// flui-platform's backends as they ship: MSVC (what `gpu-test` runs on), not
+/// flui-native's backends as they ship: MSVC (what `gpu-test` runs on), not
 /// the GNU ABI, and aarch64 for macOS, Android and iOS.
 const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGET, IOS_TARGET];
 
@@ -52,11 +52,11 @@ const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGE
 ///   Examples still compile in `lint` (`--all-targets`);
 ///   [`build_all_targets`] links them with the same features, so after a test
 ///   run it rebuilds nothing but the example and bench targets.
-/// - flui-platform is excluded: it runs on its own (see [`platform_suite`]).
+/// - flui-native is excluded: it runs on its own (see [`platform_suite`]).
 pub(crate) const TEST_SCOPE: [&str; 10] = [
     "--workspace",
     "--exclude",
-    "flui-platform",
+    "flui-native",
     "--locked",
     "--no-fail-fast",
     "--lib",
@@ -74,11 +74,11 @@ const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui-devtools/agent";
 /// it reuses what that run built and compiles only the example and bench
 /// targets. Any other package set resolves features differently, and every
 /// workspace crate above the changed dependency is built a second time:
-/// selecting flui-platform turns on its dev-dependency serde_json's
+/// selecting flui-native turns on its dev-dependency serde_json's
 /// `float_roundtrip`, and leaving out the driver drops its proc-macro2
 /// `span-locations`. On Windows the test run leaves the driver out, since
 /// Windows cannot replace its running executable, and so does this build.
-/// flui-platform's examples link in its own suite on Linux and Windows,
+/// flui-native's examples link in its own suite on Linux and Windows,
 /// which builds them under `--all-features` ([`platform_suite`]). Cargo skips
 /// a target whose `required-features` the test features leave off (the
 /// engine's `testing` benches): `feature-matrix`
@@ -88,7 +88,7 @@ fn build_all_targets(host: Host) -> Cmd {
         "build",
         "--workspace",
         "--exclude",
-        "flui-platform",
+        "flui-native",
         "--all-targets",
         "--locked",
         "--features",
@@ -173,7 +173,7 @@ fn hack_passes(packages: &str) -> [Cmd; 2] {
     ]
 }
 
-/// flui-platform's suite on Linux. `--all-features` is needed just to compile
+/// flui-native's suite on Linux. `--all-features` is needed just to compile
 /// the winit backend (invisible under `default = ["desktop"]`);
 /// `FLUI_HEADLESS=1` routes `current_platform()` to the `HeadlessPlatform`
 /// mock, so most of the suite needs no display server; the few winit-internals
@@ -181,7 +181,7 @@ fn hack_passes(packages: &str) -> [Cmd; 2] {
 /// connection for clipboard init, which `xvfb-run` supplies.
 fn platform_suite_linux() -> Cmd {
     Cmd::new("xvfb-run")
-        .args(["-a", "cargo", "nextest", "run", "-p", "flui-platform"])
+        .args(["-a", "cargo", "nextest", "run", "-p", "flui-native"])
         .args(["--locked", "--all-features", "--no-fail-fast"])
         .env("FLUI_HEADLESS", "1")
 }
@@ -192,14 +192,14 @@ fn platform_compiler_tests() -> Cmd {
         "nextest",
         "run",
         "-p",
-        "flui-platform",
+        "flui-native",
         "--test",
         "compiler_guards",
     ])
     .args(["--locked", "--no-fail-fast"])
 }
 
-/// flui-platform's suite on `host`: under Xvfb on Linux, directly on Windows
+/// flui-native's suite on `host`: under Xvfb on Linux, directly on Windows
 /// (native Windows needs neither), skipped elsewhere. Compiler checks run
 /// separately in the nested stage.
 fn platform_suite(host: Host) -> Step {
@@ -207,11 +207,11 @@ fn platform_suite(host: Host) -> Step {
         Host::Linux => platform_suite_linux()
             .args(["-E", "not (group(trybuild))"])
             .into(),
-        Host::Windows => Cmd::cargo(["nextest", "run", "-p", "flui-platform"])
+        Host::Windows => Cmd::cargo(["nextest", "run", "-p", "flui-native"])
             .args(["--locked", "--all-features", "--no-fail-fast", "-E", "not (group(trybuild))"])
             .into(),
         Host::MacOs | Host::Other => Step::Note(
-            "Skipping native flui-platform tests on this host: the CI-mirroring invocation needs xvfb-run (Linux-only) for the winit backend X11-dependent tests; see docs/testing.md."
+            "Skipping native flui-native tests on this host: the CI-mirroring invocation needs xvfb-run (Linux-only) for the winit backend X11-dependent tests; see docs/testing.md."
                 .to_owned(),
         ),
     }
@@ -226,7 +226,7 @@ fn native_platform_plan(host: Host) -> Vec<Step> {
                     "nextest",
                     "run",
                     "-p",
-                    "flui-platform",
+                    "flui-native",
                     "--locked",
                     "--no-fail-fast",
                 ]);
@@ -328,7 +328,7 @@ enum Stages {
     NoTrybuild,
 }
 
-/// The test suite: everything outside the nested tests, flui-platform on its
+/// The test suite: everything outside the nested tests, flui-native on its
 /// own, then the nested tests (they run a `cargo` or `rustc` of their own and
 /// dominate the wall-clock, so they run last). Same scope in every stage, so
 /// nothing is rebuilt, and the filtersets are complements, so together they
@@ -606,7 +606,7 @@ fn gate_stage(runner: Runner) -> anyhow::Result<()> {
 fn ci_stage(runner: Runner) -> anyhow::Result<()> {
     gate_stage(runner)?;
     runner.steps(&test_plan(Host::current(), Stages::All))?;
-    // nextest executes no doctests; flui-platform's need neither
+    // nextest executes no doctests; flui-native's need neither
     // `--all-features` nor a display server, so it is not carved out
     runner.run(&Cmd::cargo(["test", "--workspace", "--locked", "--doc"]))
 }
@@ -1031,27 +1031,27 @@ mod tests {
         steps.iter().map(ToString::to_string).collect()
     }
 
-    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui-devtools/agent";
+    const SCOPE: &str = "--workspace --exclude flui-native --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui-devtools/agent";
 
     fn native_host_suites_only_build_their_packages() {
         assert_eq!(
             lines(&native_platform_plan(Host::Windows)),
             [
-                "$ cargo nextest run -p flui-platform --locked --no-fail-fast -E 'not (group(trybuild))'",
-                "$ cargo nextest run -p flui-platform --locked --no-fail-fast --all-features -E 'not (group(trybuild))'",
+                "$ cargo nextest run -p flui-native --locked --no-fail-fast -E 'not (group(trybuild))'",
+                "$ cargo nextest run -p flui-native --locked --no-fail-fast --all-features -E 'not (group(trybuild))'",
             ]
         );
         assert_eq!(
             lines(&native_platform_plan(Host::MacOs)),
             [
-                "$ FLUI_HEADLESS=1 cargo nextest run -p flui-platform --locked --no-fail-fast -E 'not (group(trybuild))'",
-                "$ FLUI_HEADLESS=1 cargo nextest run -p flui-platform --locked --no-fail-fast --all-features -E 'not (group(trybuild))'",
+                "$ FLUI_HEADLESS=1 cargo nextest run -p flui-native --locked --no-fail-fast -E 'not (group(trybuild))'",
+                "$ FLUI_HEADLESS=1 cargo nextest run -p flui-native --locked --no-fail-fast --all-features -E 'not (group(trybuild))'",
             ]
         );
         assert_eq!(
             lines(&native_platform_plan(Host::Linux)),
             [
-                "$ FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast -E 'not (group(trybuild))'"
+                "$ FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild))'"
             ]
         );
         assert_eq!(
@@ -1084,7 +1084,7 @@ mod tests {
                 assert_eq!(
                     commands
                         .iter()
-                        .filter(|line| line.contains("-p flui-platform --test compiler_guards"))
+                        .filter(|line| line.contains("-p flui-native --test compiler_guards"))
                         .count(),
                     expected,
                     "{host:?} {stage:?}: {commands:?}"
@@ -1112,18 +1112,18 @@ mod tests {
             [
                 "$ cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked".to_owned(),
                 format!("$ cargo nextest run {SCOPE} -E 'not (group(nested-cargo) | group(trybuild))'"),
-                "$ FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast -E 'not (group(trybuild))'".to_owned(),
+                "$ FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild))'".to_owned(),
                 format!("$ cargo nextest run {SCOPE} -E 'group(nested-cargo) | group(trybuild)'"),
-                "$ cargo nextest run -p flui-platform --test compiler_guards --locked --no-fail-fast".to_owned(),
+                "$ cargo nextest run -p flui-native --test compiler_guards --locked --no-fail-fast".to_owned(),
             ]
         );
         assert_eq!(
             lines(&test_plan(Host::Windows, Stages::All))[3],
-            "$ cargo nextest run -p flui-platform --locked --all-features --no-fail-fast -E 'not (group(trybuild))'"
+            "$ cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild))'"
         );
         assert!(
             lines(&test_plan(Host::MacOs, Stages::All))[2]
-                .starts_with("Skipping native flui-platform")
+                .starts_with("Skipping native flui-native")
         );
         let fast = lines(&test_plan(Host::Linux, Stages::Fast));
         assert_eq!(fast.len(), 4);
@@ -1138,7 +1138,8 @@ mod tests {
             lines(&test_plan(Host::Linux, Stages::Nested)),
             [
                 format!("$ cargo nextest run {SCOPE} -E 'group(nested-cargo) | group(trybuild)'"),
-                "$ cargo nextest run -p flui-platform --test compiler_guards --locked --no-fail-fast".to_owned(),
+                "$ cargo nextest run -p flui-native --test compiler_guards --locked --no-fail-fast"
+                    .to_owned(),
             ]
         );
         for (group, filter) in [
@@ -1147,7 +1148,7 @@ mod tests {
         ] {
             let mut expected = vec![format!("$ cargo nextest run {SCOPE} -E '{filter}'")];
             if group == NestedGroup::Trybuild {
-                expected.push("$ cargo nextest run -p flui-platform --test compiler_guards --locked --no-fail-fast".to_owned());
+                expected.push("$ cargo nextest run -p flui-native --test compiler_guards --locked --no-fail-fast".to_owned());
             }
             assert_eq!(
                 lines(&test_plan(Host::Linux, Stages::NestedGroup(group))),
@@ -1171,13 +1172,13 @@ mod tests {
         assert_eq!(
             lines(&[build_all_targets(Host::Linux).into()]),
             [format!(
-                "$ cargo build --workspace --exclude flui-platform --all-targets --locked --features {TEST_FEATURES}"
+                "$ cargo build --workspace --exclude flui-native --all-targets --locked --features {TEST_FEATURES}"
             )]
         );
         assert_eq!(
             lines(&[build_all_targets(Host::Windows).into()]),
             [format!(
-                "$ cargo build --workspace --exclude flui-platform --all-targets --locked --features {TEST_FEATURES} --exclude xtask"
+                "$ cargo build --workspace --exclude flui-native --all-targets --locked --features {TEST_FEATURES} --exclude xtask"
             )]
         );
         assert!(SCOPE.ends_with(&format!("--features {TEST_FEATURES}")));

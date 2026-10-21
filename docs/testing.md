@@ -110,11 +110,11 @@ next to its definition, the `default_pools_started` probe it reads exists only u
 the `testing` feature, and the one execution API an embedder reaches through `flui-app`
 (`DeterministicExecutors`) is a target-independent FIFO that would pass identically on native.
 
-`flui-platform`'s web backend needs a DOM, which node does not have, so `wasm-test` leaves it
+`flui-native`'s web backend needs a DOM, which node does not have, so `wasm-test` leaves it
 alone. Its `web_browser` target runs in headless Chrome instead, through
 `wasm-bindgen-test-runner` with a ChromeDriver matching the installed Chrome. CI does not run
 it; a change to the web backend's DOM side runs it locally with
-`CHROMEDRIVER=<path> cargo test -p flui-platform --target wasm32-unknown-unknown --test web_browser --locked`.
+`CHROMEDRIVER=<path> cargo test -p flui-native --target wasm32-unknown-unknown --test web_browser --locked`.
 
 ## Quality Gates
 
@@ -130,8 +130,8 @@ It runs, in order (`tools/xtask/src/tasks.rs` is the authority):
 cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), the paths, packages and llms.txt links the docs name (docs-paths), workspace (tiers, layers, manifests, test reachability, ADR numbers), reach (what each crate's resolved graph may contain, and the hot-reload facts), module-dag (import direction between a crate's modules), toolchain, wgsl, globals (process-global state, ADR-0097), the docs-only allowlist, font assets, file-length, markers and changelog fragments (each with its self-test); builds only xtask
 cargo xtask lint                          # clippy -D warnings, as the CI clippy job runs it: the workspace, then flui-engine's `testing` code
 cargo xtask doc-strict                    # cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
-cargo xtask test                          # nextest over the local scope, flui-platform headless, then the nested-cargo group (see "What `cargo xtask test` runs")
-cargo test --workspace --locked --doc     # doc-tests (flui-platform included — its doctests need no display server)
+cargo xtask test                          # nextest over the local scope, flui-native headless, then the nested-cargo group (see "What `cargo xtask test` runs")
+cargo test --workspace --locked --doc     # doc-tests (flui-native included — its doctests need no display server)
 ```
 
 The reload-lifecycle fixture is a real plugin image. `test`
@@ -149,7 +149,7 @@ macro expansion or conditional module graphs.
 
 The first three are `cargo xtask gate`, the non-test half. Locally, `checks`
 skips typos, taplo or lychee with a message when they are not installed; CI
-passes `--strict`, which makes a missing one a failure. The flui-platform step
+passes `--strict`, which makes a missing one a failure. The flui-native step
 of `test` needs `xvfb-run` on Linux (`apt install xvfb`), runs without it on
 Windows, and is skipped with a message on macOS.
 
@@ -171,7 +171,7 @@ only runs when someone remembers to run it by hand.
 ### What `cargo xtask test` runs
 
 One scope for the whole local suite:
-`--workspace --exclude flui-platform --lib --bins --tests
+`--workspace --exclude flui-native --lib --bins --tests
 --features flui/material,flui/cupertino,flui-devtools/agent`, run as the two
 stages below. Text-size tests measure on Parley because the default build does
 (ADR-0092 §10 step 4a); no feature selects another measurement.
@@ -242,7 +242,7 @@ Platform compiler diagnostics need no display or event loop. Exact diagnostics
 require the pinned toolchain's `rust-src` component
 (`rustup component add rust-src`), because exact snapshots include standard-library
 declarations. CI installs it in the diagnostic test job.
-The nested and trybuild stages run `flui-platform`'s `compiler_guards` target separately on
+The nested and trybuild stages run `flui-native`'s `compiler_guards` target separately on
 every host; the native platform leg excludes that group.
 
 To narrow either stage, combine with `&` inside the single `-E`:
@@ -374,7 +374,7 @@ cargo test --workspace --release                  # run tests against the releas
 ```bash
 cargo test -p flui-foundation
 cargo test -p flui-painting
-cargo test -p flui-platform
+cargo test -p flui-native
 ```
 
 ### A single test or filter
@@ -390,7 +390,7 @@ cargo test -p flui-foundation -- --test-threads=1          # serialize tests (de
 All FLUI code logs through `tracing`. To see `debug!` traces during a test:
 
 ```bash
-RUST_LOG=debug cargo test -p flui-platform
+RUST_LOG=debug cargo test -p flui-native
 RUST_LOG=flui_engine=trace cargo test -p flui-engine
 ```
 
@@ -401,7 +401,7 @@ The constitution sets minimum coverage thresholds per crate category:
 | Category | Minimum | Examples |
 |----------|---------|----------|
 | Core | 80 % | `flui-foundation`, `flui-painting`, `flui-rendering`, `flui-view` |
-| Platform | 70 % | `flui-platform` |
+| Platform | 70 % | `flui-native` |
 | Widget | 85 % | (future widget crates) |
 
 Generate a coverage report with [`cargo-llvm-cov`](https://crates.io/crates/cargo-llvm-cov),
@@ -895,11 +895,11 @@ geometry depends on the machine.
 
 ## Native recording goldens
 
-Each injected native session runs in its own process as a child row of `flui-platform`'s
+Each injected native session runs in its own process as a child row of `flui-native`'s
 native window contract, built with `native-capture` (a debug build), and its
 registry journal must replay through the shared decoder to exactly what the
 window delivered (ADR-0215 §4 and §8). Each run is held against its golden in
-`crates/flui-platform/tests/native_recording/` by shape: the replayed events
+`crates/flui-native/tests/native_recording/` by shape: the replayed events
 with times left out and positions in device pixels, since the OS stamps every
 run anew. `FLUI_NATIVE_RECORDING_DIR` also writes the fresh recordings to a
 directory to diff the rows themselves; `FLUI_NATIVE_RECORDING_BLESS` writes them
@@ -907,7 +907,7 @@ over the goldens instead. One session by hand:
 
 ```bash
 FLUI_NATIVE_WINDOW_CONTRACT_CHILD=a_captured_native_mouse_session_replays_to_what_it_delivered \
-  cargo test -p flui-platform --test platform_it --features native-capture -- --exact contract::test_window_lifecycle_contract --nocapture
+  cargo test -p flui-native --test platform_it --features native-capture -- --exact contract::test_window_lifecycle_contract --nocapture
 ```
 
 `native_recording_contracts` replays every golden through the shared decoders
@@ -945,12 +945,12 @@ cargo xtask feature-matrix --slice combinations               # same job: each f
 cargo check --workspace --locked --target wasm32-unknown-unknown --exclude ...                   # wasm-capable set — cargo xtask wasm-check
 cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown --exclude ... -- -D warnings  # the only lint pass over the wasm32-only web backend — cargo xtask wasm-check
 cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32              # the only step that EXECUTES wasm — cargo xtask wasm-test
-cargo check -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc            # cross-typecheck job — cargo xtask cross-typecheck
-cargo check -p flui-platform --locked --all-targets --target aarch64-apple-darwin              # (type-check only: no link, no tests)
+cargo check -p flui-native --locked --all-targets --target x86_64-pc-windows-msvc            # cross-typecheck job — cargo xtask cross-typecheck
+cargo check -p flui-native --locked --all-targets --target aarch64-apple-darwin              # (type-check only: no link, no tests)
 cargo xtask deps --strict --only policy                       # deps job: cargo-deny bans / licenses / sources + cargo-shear
 cargo xtask deps --strict --only advisories                   # same job: RustSec advisories, blocking in the wide and full lanes; advisories.yml runs it daily on main
 cargo xtask doc-strict                                        # doc job
-cargo xtask test --fast                                       # test job: nextest over the test scope, then flui-platform under Xvfb (FLUI_HEADLESS=1)
+cargo xtask test --fast                                       # test job: nextest over the test scope, then flui-native under Xvfb (FLUI_HEADLESS=1)
 cargo xtask build-all-targets                                 # same job: links the examples and benches the test scope reaches
 cargo xtask test --nested --nested-group native               # test-nested: generated projects and facade consumers
 cargo xtask test --nested --nested-group trybuild             # test-trybuild: compile-fail suites
@@ -999,9 +999,9 @@ runs `checks`, `plan` and the `ci` aggregator:
   you changed one command at a time (AGENTS.md, "Checking a change"), and
   their dependents' clippy when you changed a public API. CI runs the rest
   — the dependents' tests, the feature matrix, wasm32, cross-typecheck,
-  rustdoc, doctests, trybuild — and is the proof. `flui-platform`'s suite
+  rustdoc, doctests, trybuild — and is the proof. `flui-native`'s suite
   runs only on Linux, so a Windows or macOS backend change still needs
-  `cargo nextest run -p flui-platform` by hand; CI only type-checks those
+  `cargo nextest run -p flui-native` by hand; CI only type-checks those
   backends.
 - **Tooling lane**: nothing in the workspace compiles; `checks` and `deps`
   cover the change.
@@ -1041,7 +1041,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `checks` | `cargo xtask checks` + `cargo test -p xtask`, then `actionlint` and `zizmor .` (`ci-full` runs both, skipping one that is not installed) | CI passes `--strict`: a missing typos, taplo or lychee fails there instead of being skipped with a message |
 | `plan` | `cargo xtask affected --worktree` | decides the lane and the affected packages; CI passes `--event` and the PR's base SHA, the local run diffs against `origin/main` (or `--base`) and `--worktree` adds uncommitted files |
 | `clippy` | `cargo xtask lint` (in `gate`) | — |
-| `test` | `cargo xtask test --fast`, then `cargo xtask build-all-targets` | the same commands; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-platform leg needs `xvfb-run` (Linux) and also links flui-platform's examples, which the all-targets build leaves out with the rest of flui-platform |
+| `test` | `cargo xtask test --fast`, then `cargo xtask build-all-targets` | the same commands; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native leg needs `xvfb-run` (Linux) and also links flui-native's examples, which the all-targets build leaves out with the rest of flui-native |
 | `test-nested` | `cargo xtask test --nested --nested-group native` | generated projects and facade consumers, beside `test` and `test-trybuild` |
 | `test-trybuild` | `cargo xtask test --nested --nested-group trybuild` | compile-fail suites; plain `--nested` still runs both groups |
 | `test-features` | the job's `cargo nextest run` lines (`ci-full` runs them) | — |

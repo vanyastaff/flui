@@ -11,7 +11,7 @@
 //! SemanticsTree / SemanticsOwner                    (this crate)
 //!     │  flush(): one validated AccessKit TreeUpdate, full or incremental
 //!     ▼
-//! PlatformAccessibility → AccessKit adapters        (flui-platform)
+//! PlatformAccessibility → AccessKit adapters        (flui-native)
 //! ```
 //!
 //! ## Key types

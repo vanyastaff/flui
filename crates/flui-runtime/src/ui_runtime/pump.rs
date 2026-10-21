@@ -32,7 +32,7 @@ pub(super) fn rejected_nested_pump_preserves_outer_commits_and_animation_time() 
     use std::{cell::Cell, panic::AssertUnwindSafe, rc::Rc, sync::Arc, time::Duration};
 
     let input: Arc<dyn flui_platform_api::PlatformTextInput> =
-        Arc::new(flui_platform::FakeTextInput::new());
+        Arc::new(flui_native::FakeTextInput::new());
     let runtime = Rc::new(UiRuntime::for_test_with_text_input(Some(input)));
     runtime
         .enter(|runtime| runtime.attach_root_widget(&flui_widgets::SizedBox::square(10.0)))

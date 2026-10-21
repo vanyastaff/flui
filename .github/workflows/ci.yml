@@ -310,7 +310,7 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────
   # test — the workspace suite on Linux (`cargo xtask test --fast`: nextest
-  # over TEST_SCOPE, then flui-platform under Xvfb), then the build that
+  # over TEST_SCOPE, then flui-native under Xvfb), then the build that
   # links the examples and benches with the same packages and features, so it compiles
   # nothing twice (a target whose `required-features` the test scope leaves
   # off is compiled per feature by `feature-matrix`, not linked). The nested-cargo group runs beside it in `test-nested`.
@@ -355,14 +355,14 @@ jobs:
         with:
           tool: cargo-nextest@0.9
 
-      # flui-platform's suite runs under Xvfb (see `cargo xtask test`):
+      # flui-native's suite runs under Xvfb (see `cargo xtask test`):
       # `--all-features` compiles its winit backend, `FLUI_HEADLESS=1` routes
       # `current_platform()` to the headless mock, and the winit-internals
       # tests that construct `WinitPlatform::new()` need a real (if virtual)
       # X11 connection. Unconditional install: a preinstalled xvfb-run must
       # not short-circuit the library install — winit's keyboard layer
       # dlopens libxkbcommon-x11, which the hosted runners do not ship.
-      - name: Ensure Xvfb + xkbcommon are available (flui-platform winit-backend X11 tests)
+      - name: Ensure Xvfb + xkbcommon are available (flui-native winit-backend X11 tests)
         run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb libxkbcommon-x11-0 libxkbcommon0
 
       # The local command, so CI and a local run cannot drift. nextest gives
@@ -651,7 +651,7 @@ jobs:
   # doc-test — run every rustdoc example as a test. nextest does NOT execute
   # doctests (cargo-nextest#16), so the `test` job above never covers them;
   # without this job the 700+ doc code fences in the workspace are unverified
-  # prose. Unlike the `test` job, flui-platform is NOT excluded here: its
+  # prose. Unlike the `test` job, flui-native is NOT excluded here: its
   # doctests need neither `--all-features` nor a display server (verified
   # locally with and without DISPLAY set — identical 12 passed/0 failed
   # either way), so there is no green-by-construction reason to carve it out.
@@ -796,7 +796,7 @@ jobs:
   #                wasm32 (a package opts out with `[package.metadata.flui]
   #                wasm = false`, a reason beside it), plus the facade's
   #                hot-reload feature. The clippy pass is the only lint over
-  #                flui-platform's wasm32-only web backend.
+  #                flui-native's wasm32-only web backend.
   #   wasm-link  — really links the two web demos and checks their import
   #                surface against tools/xtask/fixtures/wasm/import-allowlist.txt:
   #                on wasm32 an undefined symbol becomes an import, not a link

@@ -38,9 +38,9 @@ members = [
     "crates/flui-testing", # Headless UI runtime host, widget harness, substrate driver
 
     # H: hosts
-    "crates/flui-platform", # Platform backends: windows, input, IME, clipboard
-    "crates/flui-app",      # Per-window UiRuntimes and the run loop
-    "crates/flui-cli",      # `flui` CLI: create, run, build, doctor, devices
+    "crates/flui-native", # The core host: native, headless and winit hosts
+    "crates/flui-app",    # Per-window UiRuntimes and the run loop
+    "crates/flui-cli",    # `flui` CLI: create, run, build, doctor, devices
 
     # pkg: official packages, built on flui-sdk alone (ADR-0088)
     "packages/flui-material",  # Material Design theming and the M3 widget catalog
@@ -129,7 +129,7 @@ generic-ffi = [
 
 [workspace.metadata.flui.reach.tier.K]
 forbid = [
-    "flui-platform",
+    "flui-native",
     "winit",
     "android-activity",
     "ndk",
@@ -223,7 +223,7 @@ windows-sys = { version = "0.61", default-features = false }
 web-time = "1.1"
 
 # ACCESSIBILITY - the cross-platform a11y tree model. Data model only here;
-# the per-OS `accesskit_*` platform adapters are feature-gated in flui-platform,
+# the per-OS `accesskit_*` platform adapters are feature-gated in flui-native,
 # and the `PlatformAccessibility` trait they implement is flui-semantics'.
 # One required dependency of its own (uuid), MIT OR Apache-2.0.
 accesskit = "0.25.1"
@@ -256,7 +256,7 @@ sha2 = { version = "0.11", default-features = false }
 # Parity-inventory manifest parsing (flui-widgets dev-dep) + flui-cli config.
 toml = "1.1"
 
-# APPLE BINDINGS - the versions wgpu-hal already pins; flui-platform's macOS
+# APPLE BINDINGS - the versions wgpu-hal already pins; flui-native's macOS
 # backend and the facade's lifecycle probe both take them from here, with
 # their own feature lists, so the pin cannot drift between the two.
 objc2 = { version = "0.6.4", features = ["std"] }
@@ -267,7 +267,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false }
 objc2-core-haptics = { version = "0.3.2", default-features = false }
 dispatch2 = "0.3.1"
 block2 = "0.6.2"
-# ANDROID - the NativeActivity glue flui-platform and flui-app share.
+# ANDROID - the NativeActivity glue flui-native and flui-app share.
 android-activity = { version = "0.6", features = ["native-activity"] }
 jni = "0.22.4"
 # Android's dynamic loader: the NDK functions newer than minSdk are looked up by name.
@@ -280,7 +280,7 @@ core-graphics = "0.25"
 tempfile = "3" # scratch dirs/files (build staging and tests)
 which = "8"    # locate toolchain executables (build/cli)
 
-# PERSISTENCE — the per-user data directories `flui-platform`'s `storage`
+# PERSISTENCE — the per-user data directories `flui-native`'s `storage`
 # feature writes documents under (roaming and machine-local roots, which follow
 # a redirected AppData or OneDrive folder).
 dirs = "6"
@@ -311,7 +311,7 @@ flui-sdk = { path = "crates/flui-sdk", version = "=0.1.0-dev" }
 
 # PLATFORM CONTRACTS — the capability traits and the window/input vocabulary,
 # with no OS backend (ADR-0082). Framework crates that name a platform
-# contract depend on this; only composition roots depend on flui-platform.
+# contract depend on this; only composition roots depend on flui-native.
 flui-platform-api = { path = "crates/flui-platform-api", version = "=0.2.0-dev" }
 
 # ERROR HANDLING - Used everywhere
@@ -354,7 +354,7 @@ wgpu-profiler = { version = "0.28", default-features = false }
 # Used by flui-engine to compose blend_helpers.wgsl into mode.wgsl / advanced_blend.wgsl.
 naga_oil = { version = "0.23", default-features = false }
 winit = "0.30.12"
-# Linux display source (flui-platform `wayland` / `x11` features): the output
+# Linux display source (flui-native `wayland` / `x11` features): the output
 # list and refresh rate from the compositor, on a connection of its own next to
 # winit's. The X11 and Wayland client versions are the ones winit already pulls
 # into the lock, so the tree gains no second copy. `x11rb` runs on its pure-Rust
@@ -555,7 +555,7 @@ unwrap_used = "warn"
 # cli-macos. Confirmed real, annotatable sites (each job aborts on its
 # first error, so this is a floor, not the true total — appkit/android
 # were never even reached before windows/ios aborted the job that would
-# have checked them): flui-platform/src/window.rs:328,332;
+# have checked them): flui-native/src/window.rs:328,332;
 # platforms/{windows/{accessibility.rs:96, platform.rs:382,1998,
 # owner_control.rs:109, window.rs:117}, web/{clipboard.rs:26,
 # display.rs:13-14, executor.rs:15, platform.rs:49, window.rs:40},
@@ -736,7 +736,7 @@ flui-objects = { path = "crates/flui-objects", version = "=0.2.0-dev" }
 flui-interaction = { path = "crates/flui-interaction", version = "=0.2.0-dev" }
 
 # === Platform Layer (for examples) ===
-flui-platform = { path = "crates/flui-platform", version = "=0.2.0-dev" }
+flui-native = { path = "crates/flui-native", version = "=0.2.0-dev" }
 
 # === Hot-Reload (for examples) ===
 flui-hot-reload = { path = "crates/flui-hot-reload", version = "=0.2.0-dev" }

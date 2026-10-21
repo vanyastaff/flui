@@ -9,7 +9,7 @@
 
 ### Changed
 
-- **`flui-platform` (Android)**: the display snapshot reports the real size, density, display id and
+- **`flui-native` (Android)**: the display snapshot reports the real size, density, display id and
   refresh rate of every display, read through JNI, instead of a fixed 1080x2340 placeholder; the
   rate follows an adaptive 60/120 Hz switch through the choreographer's refresh-rate callback
   on API 30+ and configuration changes and resume below. The idle loop waits for the display's

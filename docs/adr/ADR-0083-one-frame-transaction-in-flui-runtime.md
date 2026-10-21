@@ -145,7 +145,7 @@ before `flui-testing` and `flui-sdk`. It owns:
   an OS callback find it.
 
 `flui-runtime` depends only on crates in tiers V–K and on `flui-platform-api` (ADR-0082). Its
-normal graph must not reach `flui-platform`, `winit`, `wgpu`, `flui-engine` or `flui-app`
+normal graph must not reach `flui-native`, `winit`, `wgpu`, `flui-engine` or `flui-app`
 (ADR-0081's K set). It talks to windows through `Arc<dyn PlatformWindow>` handles the runner
 passes in, and hands frames out through `FrameSink`; the wgpu raster lane and `RasterOwner` stay
 in `flui-app` and `flui-engine`.
@@ -352,7 +352,7 @@ The crate is created first and filled in five moves, each independently mergeabl
 not wait on 5c or 5d: §4 keeps the test driver off `OwnerHost`, so it needs only the pump.
 
 `cargo xtask reach` (ADR-0081 §2) checks the K-set fact for `flui-runtime` over every root
-build: its tier K forbids `flui-platform`, `winit`, `android-activity`, `ndk`, `windows`,
+build: its tier K forbids `flui-native`, `winit`, `android-activity`, `ndk`, `windows`,
 `objc2-app-kit`, `objc2-ui-kit`, `wgpu`, `flui-engine` and `flui-app`, and no
 `reach-exceptions` entry excuses any of them.
 

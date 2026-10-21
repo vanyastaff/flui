@@ -6,7 +6,7 @@
 
 use wasm_bindgen::prelude::*;
 
-use flui_platform::traits::{DispatchEventResult, PlatformInput};
+use flui_native::traits::{DispatchEventResult, PlatformInput};
 
 /// Entry point invoked by the generated JS glue on module load: brings up the
 /// web platform, logs every input event it dispatches, and requests frames.
@@ -18,12 +18,12 @@ pub fn start() {
     // Log to browser console
     web_sys::console::log_1(&"FLUI Web Demo starting...".into());
 
-    let platform = flui_platform::current_platform().expect("Failed to initialize web platform");
+    let platform = flui_native::current_platform().expect("Failed to initialize web platform");
 
     web_sys::console::log_1(&format!("Platform: {}", platform.name()).into());
 
     // Create canvas window before running the event loop
-    let options = flui_platform::WindowOptions::default()
+    let options = flui_native::WindowOptions::default()
         .with_title("FLUI Web Demo".to_string())
         .with_size(flui_foundation::geometry::Size::new(800.0, 600.0));
 

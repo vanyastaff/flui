@@ -31,7 +31,7 @@ and mode were configurable only through `AppConfig`, and part of that was lost c
 `WindowOptions`. `PlatformWindow` carried a dozen per-feature methods whose defaults looked like
 answers (`false`, `Bounds::default()`, an empty title), so "unsupported" and "done" were
 indistinguishable and state readback was fiction on macOS and Linux. A second window trait
-(`flui_platform::window::Window`) with its own builder and manager existed beside it, reachable from
+(`flui_native::window::Window`) with its own builder and manager existed beside it, reachable from
 nothing. Windows ignored the size constraints and `resizable`, and both Windows and X11 showed the
 window before its first frame.
 

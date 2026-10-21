@@ -82,7 +82,7 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
 
 2. **Declared once.** `platform-support.toml` at the repository root holds, per environment, the floor
    and what sets it (decision 1's last column). It is the only place a floor number is written by
-   hand. `flui-platform` and `flui-cli` are published crates whose package archives cannot read a
+   hand. `flui-native` and `flui-cli` are published crates whose package archives cannot read a
    repository-root file, so `cargo xtask platform-floor --write` generates a committed Rust source in
    each (the floor constant of each version type; the packaging values: Android `minSdk`, the iOS and
    macOS deployment targets passed to rustc, the Windows manifest's `supportedOS`), and the check mode
@@ -112,7 +112,7 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
    scheduled.
 
 4. **Above the floor, a gate is a type.** One shape for every environment, in
-   `flui-platform::shared::os_version`:
+   `flui-native::shared::os_version`:
    - each environment has one version type, read once and kept in the platform instance, never in a
      `static`: `WindowsBuild`, `AppleVersion` (macOS and iOS, separate floors), `AndroidApi`. A
      negotiated standard has its own version domain of the same shape: a Wayland interface's bound
@@ -166,9 +166,9 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
      the version map agree, and a planted drift in each is reported;
    - `packaged_artifacts_carry_the_floor` (flui-cli): the generated `Info.plist`, Windows manifest,
      APK manifest and Gradle property carry the floor, and an application `min` below it is rejected;
-   - `os_version_gate_table` (flui-platform): one row per marker, at `SINCE` minus one (no proof) and
+   - `os_version_gate_table` (flui-native): one row per marker, at `SINCE` minus one (no proof) and
      at `SINCE` (proof), plus an unknown version that unlocks nothing;
-   - `floor_refusal_contract` (flui-platform, headless with an injected version and probe): a version
+   - `floor_refusal_contract` (flui-native, headless with an injected version and probe): a version
      below the floor gives `UnsupportedOs`, a missing requirement gives `MissingRequirement`, and an
      unreadable version starts;
    - `gpu_backend_fallback_order` (flui-engine, fake adapters): the preferred backend first, then a
@@ -183,7 +183,7 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
 
 10. **An application may raise its floor, never lower it.** The chain is FLUI's floor, then the
     application's, and each link can only raise the one before it:
-    - FLUI's floor (decision 2) is compiled into `flui-platform` and applies to every build, including
+    - FLUI's floor (decision 2) is compiled into `flui-native` and applies to every build, including
       one made with plain `cargo` and no `flui.toml`;
     - an application states its own minimum per environment in `flui.toml`, in an optional
       `[platforms.<environment>]` table with a `min` key. An absent table inherits FLUI's floor, so
@@ -253,7 +253,7 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
   floor is paid once per feature.
 - **No floor, feature detection only.** Nothing tells a user which systems are supported, and an old
   system fails somewhere in the middle of a frame instead of at start.
-- **Floors as Rust constants in `flui-platform`.** `flui-cli`'s templates, `doctor` and the release
+- **Floors as Rust constants in `flui-native`.** `flui-cli`'s templates, `doctor` and the release
   workflow need the same numbers outside the crate graph; a constant per consumer drifts, as `minSdk`
   23 and API 21 already have.
 - **objc2's `available!` on Apple and `if api >= N` on Android.** A boolean is easy to forget, cannot

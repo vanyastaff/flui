@@ -93,7 +93,7 @@ jobs:
       - name: cargo nextest run (lib + integration)
         run: >
           cargo nextest run
-          --workspace --exclude flui-platform
+          --workspace --exclude flui-native
           --lib --bins --tests
           --features flui/cupertino,flui/localizations
           --no-fail-fast

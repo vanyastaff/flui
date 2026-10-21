@@ -1,7 +1,7 @@
 //! Application runner - entry points for running FLUI apps.
 //!
 //! This module provides platform-agnostic entry points that delegate
-//! to platform-specific implementations via flui-platform.
+//! to platform-specific implementations via flui-native.
 
 use flui_view::{StatelessView, View};
 
@@ -99,10 +99,10 @@ use web::run_web;
 /// constructor takes. Reading the bridge and the host here, once, is sound
 /// because every backend sets both at construction and never swaps them.
 /// The host is owner-thread state, so it is read through the loop's
-/// [`OwnerPlatform`](flui_platform::OwnerPlatform); without one installed
+/// [`OwnerPlatform`](flui_native::OwnerPlatform); without one installed
 /// (no loop on this thread) the window has none.
 pub(crate) fn presentation_window(
-    host: std::sync::Arc<dyn flui_platform::traits::HostWindow>,
+    host: std::sync::Arc<dyn flui_native::traits::HostWindow>,
 ) -> crate::app::presentation::PresentationWindow {
     let accessibility = host.accessibility();
     let text_store_host = text_store_host_of(&host);
@@ -116,7 +116,7 @@ pub(crate) fn presentation_window(
 }
 
 fn text_store_host_of(
-    window: &std::sync::Arc<dyn flui_platform::traits::HostWindow>,
+    window: &std::sync::Arc<dyn flui_native::traits::HostWindow>,
 ) -> Option<std::rc::Rc<dyn flui_platform_api::TextStoreHost>> {
     host::with_owner_platform(|owner| owner.text_store_host(window)).flatten()
 }
@@ -307,7 +307,7 @@ mod tests {
     /// (`ActiveEventLoop` is unreachable outside `Platform::run`) and creates a
     /// real GPU `Renderer`, gated behind the separate `testing` CI job
     /// (WARP), not this one. This instead drives the exact ordering invariant
-    /// headlessly: `HeadlessWindow::request_redraw` (flui-platform's headless
+    /// headlessly: `HeadlessWindow::request_redraw` (flui-native's headless
     /// backend, used elsewhere in this crate's tests) dispatches its
     /// `on_request_frame` callback SYNCHRONOUSLY — unlike a real winit window,
     /// where a queued `RedrawRequested` would not fire until `on_ready` (and
@@ -346,9 +346,9 @@ mod tests {
 
         let marker_size = flui_foundation::geometry::Size::new(4001.0, 4002.0);
 
-        let platform = flui_platform::headless_platform();
+        let platform = flui_native::headless_platform();
         let window = platform
-            .open_window(flui_platform::traits::WindowOptions::default().with_size(marker_size))
+            .open_window(flui_native::traits::WindowOptions::default().with_size(marker_size))
             .expect("headless platform always opens a window");
 
         // `on_request_frame` requires `Send` on the callback; `AppRuntime` is
@@ -402,7 +402,7 @@ mod tests {
     // ========================================================================
 
     fn owner_platform_host_panic_in_on_ready_still_clears() {
-        use flui_platform::headless_platform;
+        use flui_native::headless_platform;
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _clear_guard = OwnerHostClearGuard::arm();
@@ -452,21 +452,21 @@ mod tests {
     fn presentation_window_hands_a_pull_window_s_host_to_its_presentation() {
         use std::sync::Arc;
 
-        use flui_platform::Platform as _;
+        use flui_native::Platform as _;
 
         let heard = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let log = Arc::clone(&heard);
-        let platform = flui_platform::HeadlessPlatform::new()
+        let platform = flui_native::HeadlessPlatform::new()
             .with_text_store_host(move || std::rc::Rc::new(FocusLog(Arc::clone(&log))));
         let _clear_guard = OwnerHostClearGuard::arm();
         Box::new(platform)
             .run(Box::new(|owner| {
                 install_owner_platform(owner).expect("install owner wake transport");
                 let window = with_owner_platform(|owner| {
-                    owner.open_window(flui_platform::WindowOptions::default())
+                    owner.open_window(flui_native::WindowOptions::default())
                 })
                 .expect("BUG: install_owner_platform just ran above")
-                .and_then(flui_platform::WindowOpen::try_ready)
+                .and_then(flui_native::WindowOpen::try_ready)
                 .expect("headless open_window is always Ready");
                 let ui_runtime =
                     host::build_ui_runtime(presentation_window(window), 1.0).expect("ui_runtime");

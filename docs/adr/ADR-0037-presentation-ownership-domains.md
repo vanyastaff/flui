@@ -232,7 +232,7 @@ policy-free abstraction with two production consumers and its own ADR.
 | Alternative | Why |
 |---|---|
 | A `flui-presentation` crate | premature and anemic; a dependency cycle or a fourth owner |
-| Composition in `flui-platform` | layer inversion: platform delivery would own widget/render/input policy |
+| Composition in `flui-native` | layer inversion: platform delivery would own widget/render/input policy |
 | One cross-thread runtime object | needs locks, erased handles or forwarding for owner-affine state |
 | Keep the old intermediaries behind deprecated APIs | keeps dual ownership and lets new code pick the wrong current window |
 | Thread-local focus/gesture/mouse/IME state | cannot represent two UI runtimes on one thread; leaks across tests and presentations |

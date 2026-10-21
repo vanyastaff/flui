@@ -75,12 +75,12 @@ where
     use std::sync::Arc;
 
     use flui_engine::Renderer;
-    use flui_platform::{AndroidPlatform, Platform, WindowOptions};
+    use flui_native::{AndroidPlatform, Platform, WindowOptions};
     use parking_lot::Mutex;
 
     use crate::app::hot_reload::ScenePlugin;
 
-    tracing::info!("Starting Android platform via flui-platform");
+    tracing::info!("Starting Android platform via flui-native");
 
     // The application's development reload hook may own frames with a scene
     // plugin (`flui run --scene`); inert unless one is installed.
@@ -122,7 +122,7 @@ where
     where
         V: View + StatelessView + Clone + 'static,
     {
-        fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
+        fn owner_platform_installed<R>(f: impl FnOnce(&flui_native::OwnerPlatform) -> R) -> R {
             with_owner_platform(f)
                 .expect("BUG: bootstrap_android runs only after install_owner_platform")
         }
@@ -173,7 +173,7 @@ where
         // guaranteed inside `on_ready` (ADR-0039 §1).
         let options: WindowOptions = (&config).into();
         let host = match owner_platform_installed(|owner| owner.open_window(options))
-            .and_then(flui_platform::WindowOpen::try_ready)
+            .and_then(flui_native::WindowOpen::try_ready)
         {
             Ok(window) => window,
             Err(error) => {
@@ -379,10 +379,10 @@ where
 
         // 8b. Surface availability (issue #1146): the release that has to
         // happen before the native window behind the surface dies, and the
-        // rebuild for the window that replaces it. `flui-platform` reports
+        // rebuild for the window that replaces it. `flui-native` reports
         // both as one bool out of its own event loop — `false` on
         // `Pause`/`TerminateWindow`, `true` on `Resume`/`InitWindow`, with
-        // the mapping and its reason in `flui-platform`'s
+        // the mapping and its reason in `flui-native`'s
         // `platforms/android/mod.rs`, "# Surface Lifecycle".
         //
         // The lock below is BLOCKING, unlike the frame closure's `try_lock`
@@ -430,7 +430,7 @@ where
         // made rather than assumed:
         //
         // * The slots are cleared exactly once, on `AndroidPlatform::run`'s
-        //   exit path (`flui-platform`'s `platforms/android/mod.rs`, after the
+        //   exit path (`flui-native`'s `platforms/android/mod.rs`, after the
         //   loop and before the quit hook), on the loop's three returning
         //   routes: `MainEvent::Destroy`, a `quit()`, a bootstrap that failed,
         //   plus one named exception, a panic that unwinds out of `run` and
@@ -613,7 +613,7 @@ impl AndroidFrameDriver {
             let has_pending = ui_runtime.has_pending_work();
             // See the desktop closure's matching comment: a wake-
             // deadline source (here, `set_wake_deadline_hook` forces
-            // a dispatch once due — `flui-platform`'s
+            // a dispatch once due — `flui-native`'s
             // `platforms/android/mod.rs`'s own `run` loop) that is
             // absent from `dirty` reaches `WakeAction::Skip` and
             // returns before this closure ever calls
@@ -724,7 +724,7 @@ impl AndroidFrameDriver {
         // instead: this backend has no `ControlFlow::WaitUntil`,
         // so `AndroidPlatform::run`'s poll blocks no longer than
         // the hook's deadline and forces a
-        // dispatch once the deadline is due (`flui-platform`'s
+        // dispatch once the deadline is due (`flui-native`'s
         // `platforms/android/mod.rs`).
         if pump_with_device_recovery(ui_runtime, lane_frame, device_recovery_backoff, now).is_none()
         {

@@ -211,7 +211,7 @@ In place:
   told before the next grant) and `a_text_form_field_validates_and_saves_the_committed_text`.
 - Item 8: `flui-widgets` `owner_code_is_contained_at_every_point`, one row per point and failure
   shape, each in a child process, each followed by the next operation on the same owner.
-- Item 7: `flui-platform` `text_services::tests::a_window_offers_its_text_services_as_its_host`
+- Item 7: `flui-native` `text_services::tests::a_window_offers_its_text_services_as_its_host`
   (ADR-0135 §3).
 - Item 4, the field's part: `flui-widgets` `owner_code_is_contained_at_every_point`'s
   `editable: a blur during preedit …` rows (push and pull: the commit precedes the detach, and

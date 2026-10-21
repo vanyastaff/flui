@@ -10,8 +10,8 @@ use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 static_assertions::assert_not_impl_any!(OwnerHost: Send, Sync);
 
 pub(super) fn window() -> PresentationWindow {
-    let window = flui_platform::headless_platform()
-        .open_window(flui_platform::WindowOptions::default())
+    let window = flui_native::headless_platform()
+        .open_window(flui_native::WindowOptions::default())
         .expect("headless window");
     let accessibility = window.accessibility();
     PresentationWindow::new(window, accessibility)

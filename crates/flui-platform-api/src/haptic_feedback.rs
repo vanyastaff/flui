@@ -12,11 +12,11 @@
 //! [`HapticOutcome::Approximated`](crate::haptics::HapticOutcome::Approximated).
 //! Pattern playback, the second tier, lives in [`haptics`](crate::haptics).
 //!
-//! # Why this type lives in the contract crate, not `flui-platform`
+//! # Why this type lives in the contract crate, not `flui-native`
 //!
 //! Following the [`crate::ImeEvent`] precedent: the payload vocabulary a
 //! platform capability carries is homed in `flui-platform-api` so crates below
-//! `flui-platform` in the dependency graph (a haptics-emitting widget in
+//! `flui-native` in the dependency graph (a haptics-emitting widget in
 //! `flui-widgets` or `flui-material`) can name the type without depending on
 //! the platform layer itself.
 

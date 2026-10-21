@@ -1,7 +1,7 @@
 # flui-platform-api Architecture
 
 The contract half of the platform layer ([ADR-0082](../../docs/adr/ADR-0082-platform-api-contract-crate.md)).
-`flui-platform` holds the backends and re-exports every item here at its old
+`flui-native` holds the backends and re-exports every item here at its old
 path.
 
 ## Invariants
@@ -10,7 +10,7 @@ path.
   `ndk`, `web-sys`), winit, AccessKit or tokio type appears in a signature,
   and none of those crates is a dependency. `cargo xtask reach` holds it: tier
   C forbids the OS crates and winit, and this crate's own `reach-forbid` adds
-  `accesskit` and `tokio`. `flui-platform`'s `allowed-dependents` keeps the
+  `accesskit` and `tokio`. `flui-native`'s `allowed-dependents` keeps the
   crates above from reaching the backends through a side door.
 - **No `unsafe`.** `#![forbid(unsafe_code)]`: FFI belongs to the backends.
 - **A display id cannot be built from a number, and a period cannot be invalid.**
@@ -26,7 +26,7 @@ path.
   path: `haptics`, the second haptic tier with its requests and outcomes, which
   the facade and `flui-sdk` re-export only under `unstable-input` (ADR-0210 §9)
   while `PlatformHaptics` and `HapticFeedback` stay at the root;
-  `data_transfer` (`flui_platform::data_transfer` re-exports it whole),
+  `data_transfer` (`flui_native::data_transfer` re-exports it whole),
   `text_store`, whose four traits (`TextStore`, `TextStoreRead`,
   `TextStoreEdit`, `TextStoreObserver`) are also at the root, and `pointer` and
   `keyboard`, the input vocabulary, whose names (`PointerEvent`, `Key`,
@@ -51,14 +51,14 @@ path.
   which `cargo xtask checks` runs, so they cannot drift from the pinned
   `keyboard-types`.
 - **`PlatformWindow` has no `accessibility()` and no `as_winit`.** The
-  accessibility bridge speaks AccessKit, so `flui-platform`'s
+  accessibility bridge speaks AccessKit, so `flui-native`'s
   `HostWindow: PlatformWindow` carries it host-side: `open_window` returns an
   `Arc<dyn HostWindow>`, and the runner reads the bridge once before handing
   the UI runtime an `Arc<dyn PlatformWindow>`. A `compile_fail` doctest on the
   trait, paired with a twin that compiles, pins that the method is gone.
 - **The raw-handle impls live with the trait.** `HasWindowHandle` and
   `HasDisplayHandle` for `dyn PlatformWindow` are here because the orphan rule
-  puts them next to the trait; `flui-platform` repeats them for
+  puts them next to the trait; `flui-native` repeats them for
   `dyn HostWindow`, so an `open_window` result is a renderer target before its
   upcast. `raw-window-handle` appears only through those traits and their
   `WindowHandle`/`DisplayHandle`/`HandleError` (ADR-0089).
@@ -190,10 +190,10 @@ and its gesture phase; a trackpad gesture is one pan/zoom stream whose
 transform is cumulative since its `Start`; the pen eraser is a tool, not a
 button; a cancelled sequence says why. A value is checked once, where it is
 built, so the framework never re-checks finiteness downstream. The bridge from
-the `ui-events` values the backends still build lives in `flui-platform`
+the `ui-events` values the backends still build lives in `flui-native`
 (`shared::input_vocabulary`), because it names upstream types.
 **Tests:** `input_vocabulary_contract` here (sanitization, "no sensor",
-scroll units, button sets, generated key spellings) and `flui-platform`'s
+scroll units, button sets, generated key spellings) and `flui-native`'s
 `input_vocabulary_conversion` (every backend shape, eraser, non-finite
 release, key round trip through `keyboard-types`).
 

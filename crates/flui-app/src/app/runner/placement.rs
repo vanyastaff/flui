@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use flui_foundation::PresentationAddress;
-use flui_platform::WindowOptions;
+use flui_native::WindowOptions;
 use flui_platform_api::DisplaySnapshot;
 
 use super::host::{APP_RUNTIME, runtime_storage, with_owner_platform};

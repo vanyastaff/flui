@@ -40,7 +40,7 @@ Navigator those two records describe:
 - **No addressable state.** A pushed route is a `Box<dyn ErasedRoute>` (ADR-0019 §3); nothing in
   `crates/flui-widgets/src/navigator/` turns the stack into a URL or back. The platform already
   delivers URLs the OS opens — `Platform::on_open_urls`
-  (`crates/flui-platform/src/traits/platform.rs:550`) — and nothing in `crates/flui-app/src`
+  (`crates/flui-native/src/traits/platform.rs:550`) — and nothing in `crates/flui-app/src`
   registers for them (`grep -rn on_open_urls crates/flui-app/src` is empty). A deep link has
   nowhere to go.
 - **Lookup from `build`.** `NavigatorHandle::maybe_of(ctx: &dyn BuildContext)`

@@ -11,8 +11,8 @@ use std::sync::Mutex;
 
 use flui_foundation::geometry::{Point, Size};
 use flui_foundation::{PresentationId, UiRuntimeId};
-use flui_platform::traits::WindowId;
-use flui_platform::{HeadlessPlatform, Platform as _, WindowMode, WindowOptions};
+use flui_native::traits::WindowId;
+use flui_native::{HeadlessPlatform, Platform as _, WindowMode, WindowOptions};
 use flui_platform_api::{CursorError, CursorIcon};
 use flui_view::{WindowClosed, WindowHandle};
 
@@ -238,7 +238,7 @@ impl PlatformWindow for RecordingWindow {
     }
     fn state(&self) -> WindowState {
         WindowState::new(
-            flui_platform::WindowGeometry::new(None, Size::new(10.0, 10.0)),
+            flui_native::WindowGeometry::new(None, Size::new(10.0, 10.0)),
             Size::new(10.0, 10.0),
         )
     }
@@ -426,7 +426,7 @@ fn subscribers_hear_a_new_state_in_order_and_what_they_ask_waits() {
 
     let native = window
         .as_any()
-        .downcast_ref::<flui_platform::MockWindow>()
+        .downcast_ref::<flui_native::MockWindow>()
         .expect("headless window");
     native.simulate_move(Point::new(5.0, 6.0));
     rig.source.publish_current();

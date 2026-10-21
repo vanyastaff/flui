@@ -8,7 +8,7 @@
   `FrameFailureReport`, `PanicText`, `SegmentPhase` and `bindings::RenderingBinding` are
   unchanged.
 - **`flui-semantics`**: `PlatformAccessibility` and its listener aliases are defined in
-  `flui_semantics::platform`; `flui_platform::traits` re-exports them at their old paths
+  `flui_semantics::platform`; `flui_native::traits` re-exports them at their old paths
   ([ADR-0082](/docs/adr/ADR-0082-platform-api-contract-crate.md) §2, amended).
 - **`flui-foundation`**: `diagnostics::REDACTED_VALUE` is the redaction placeholder;
   `flui_log::REDACTED_VALUE` re-exports it.
