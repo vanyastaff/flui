@@ -56,11 +56,15 @@ impl<H: Host> HostPlatform<H> {
     }
 }
 
-impl<H: Host> std::fmt::Debug for HostPlatform<H> {
+impl<H: Host> std::fmt::Debug for HostPlatform<H>
+where
+    H::Loop: std::fmt::Debug,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HostPlatform")
             .field("host", &H::NAME)
-            .finish_non_exhaustive()
+            .field("loop", &self.owner)
+            .finish()
     }
 }
 

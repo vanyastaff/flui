@@ -378,6 +378,33 @@ impl host::Services for WebLoop {
     fn compositor_name(&self) -> &'static str {
         "Browser"
     }
+
+    // A page reveals or opens no path and shows no file prompt here: those
+    // services move to the system capability crate.
+    fn reveal_path(&self, path: &std::path::Path) {
+        let _ = path;
+    }
+
+    fn open_path(&self, path: &std::path::Path) {
+        let _ = path;
+    }
+
+    fn prompt_for_paths(
+        &self,
+        options: crate::PathPromptOptions,
+    ) -> crate::Task<Result<Option<Vec<std::path::PathBuf>>, PlatformError>> {
+        let _ = options;
+        crate::Task::ready(Ok(None))
+    }
+
+    fn prompt_for_new_path(
+        &self,
+        directory: &std::path::Path,
+        suggested_name: Option<&str>,
+    ) -> crate::Task<Result<Option<std::path::PathBuf>, PlatformError>> {
+        let _ = (directory, suggested_name);
+        crate::Task::ready(Ok(None))
+    }
 }
 
 impl host::Input<WebLoop> for WebLoop {

@@ -330,6 +330,41 @@ impl host::Services for MacOSLoop {
         let path = bundle.bundlePath();
         Ok(PathBuf::from(path.to_string()))
     }
+
+    // The macOS host opens no URL, path or file prompt and reports no
+    // compositor: those services move to the system capability crate.
+    fn open_url(&self, url: &str) {
+        let _ = url;
+    }
+
+    fn reveal_path(&self, path: &std::path::Path) {
+        let _ = path;
+    }
+
+    fn open_path(&self, path: &std::path::Path) {
+        let _ = path;
+    }
+
+    fn prompt_for_paths(
+        &self,
+        options: crate::PathPromptOptions,
+    ) -> crate::Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
+        let _ = options;
+        crate::Task::ready(Ok(None))
+    }
+
+    fn prompt_for_new_path(
+        &self,
+        directory: &std::path::Path,
+        suggested_name: Option<&str>,
+    ) -> crate::Task<Result<Option<PathBuf>, PlatformError>> {
+        let _ = (directory, suggested_name);
+        crate::Task::ready(Ok(None))
+    }
+
+    fn compositor_name(&self) -> &'static str {
+        ""
+    }
 }
 
 impl host::Window<MacOSLoop> for MacOSWindow {

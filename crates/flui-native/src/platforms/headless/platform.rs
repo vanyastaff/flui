@@ -549,6 +549,36 @@ impl host::Services for HeadlessLoop {
             state.opened_urls.push(url.to_string());
         });
     }
+
+    // Nothing is shown, so no path is revealed or opened and no prompt runs.
+    fn reveal_path(&self, path: &std::path::Path) {
+        let _ = path;
+    }
+
+    fn open_path(&self, path: &std::path::Path) {
+        let _ = path;
+    }
+
+    fn prompt_for_paths(
+        &self,
+        options: crate::PathPromptOptions,
+    ) -> crate::Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
+        let _ = options;
+        crate::Task::ready(Ok(None))
+    }
+
+    fn prompt_for_new_path(
+        &self,
+        directory: &std::path::Path,
+        suggested_name: Option<&str>,
+    ) -> crate::Task<Result<Option<PathBuf>, PlatformError>> {
+        let _ = (directory, suggested_name);
+        crate::Task::ready(Ok(None))
+    }
+
+    fn compositor_name(&self) -> &'static str {
+        ""
+    }
 }
 
 impl host::Window<HeadlessLoop> for MockWindow {

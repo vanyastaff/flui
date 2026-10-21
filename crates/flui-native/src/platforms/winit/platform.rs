@@ -2597,6 +2597,33 @@ impl host::Services for WinitLoop {
             let _ = std::process::Command::new("xdg-open").arg(path).spawn();
         }
     }
+
+    // The winit host opens no URL, shows no file prompt and reports no
+    // compositor: those services move to the system capability crate.
+    fn open_url(&self, url: &str) {
+        let _ = url;
+    }
+
+    fn prompt_for_paths(
+        &self,
+        options: crate::PathPromptOptions,
+    ) -> crate::Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
+        let _ = options;
+        crate::Task::ready(Ok(None))
+    }
+
+    fn prompt_for_new_path(
+        &self,
+        directory: &Path,
+        suggested_name: Option<&str>,
+    ) -> crate::Task<Result<Option<PathBuf>, PlatformError>> {
+        let _ = (directory, suggested_name);
+        crate::Task::ready(Ok(None))
+    }
+
+    fn compositor_name(&self) -> &'static str {
+        ""
+    }
 }
 
 impl<H: Host<Loop = WinitLoop>> HostPlatform<H> {

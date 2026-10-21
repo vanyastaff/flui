@@ -10,7 +10,8 @@
 - `WindowsPlatform`, `MacOSPlatform`, `IOSPlatform`, `AndroidPlatform`, `WebPlatform`,
   `WinitPlatform` and `HeadlessPlatform` are `HostPlatform` over each host's table. Their
   constructors and methods keep their signatures and behaviour.
-- `Platform`'s methods have no default bodies: each host's table answers every one.
+- `Platform`'s methods have no default bodies: each host answers every one, inert answers
+  included, through its table and its loop.
 
 ### Removed
 

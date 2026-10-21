@@ -1,12 +1,14 @@
 //! A host's table names a type for every position of the closed list: one
 //! left out is a compile error, never an inert default.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
 use flui_native::host::{Absent, Host, Loop, Services, position};
-use flui_native::{Platform, PlatformError, PlatformExecutor, PlatformReadyCallback};
+use flui_native::{
+    PathPromptOptions, Platform, PlatformError, PlatformExecutor, PlatformReadyCallback, Task,
+};
 
 struct Idle;
 
@@ -37,6 +39,31 @@ impl Services for Idle {
 
     fn app_path(&self) -> Result<PathBuf, PlatformError> {
         Ok(PathBuf::new())
+    }
+
+    fn open_url(&self, _: &str) {}
+
+    fn reveal_path(&self, _: &Path) {}
+
+    fn open_path(&self, _: &Path) {}
+
+    fn prompt_for_paths(
+        &self,
+        _: PathPromptOptions,
+    ) -> Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
+        Task::ready(Ok(None))
+    }
+
+    fn prompt_for_new_path(
+        &self,
+        _: &Path,
+        _: Option<&str>,
+    ) -> Task<Result<Option<PathBuf>, PlatformError>> {
+        Task::ready(Ok(None))
+    }
+
+    fn compositor_name(&self) -> &'static str {
+        ""
     }
 }
 

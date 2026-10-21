@@ -171,6 +171,10 @@ mod text_sizing;
 pub use text_sizing::{CapturedTextSizing, TextSizingCaptureError, TextSizingCaptureState};
 #[cfg(not(target_arch = "wasm32"))]
 pub mod executor;
+// Reachable so a crate outside can show that a table missing a position does
+// not compile (`tests/ui/host_table_names_every_position.rs`); not an embedding
+// API: nothing outside the crate can build a `HostPlatform`.
+#[doc(hidden)]
 pub mod host;
 mod hosts;
 mod platform;

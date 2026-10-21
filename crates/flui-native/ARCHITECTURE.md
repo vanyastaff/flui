@@ -29,7 +29,8 @@ trait depends on `flui-platform` instead.
   (`tests/ui/host_table_names_every_position.rs`). A position a platform does
   not have is `Absent<F>`, which answers in that position's words for "not
   here" (no drag offered, `HapticOutcome::Unavailable`, unknown preferences);
-  no position method has a default body to fall back on. `HostPlatform<H>`
+  no position or service method falls back to an inert default (the
+  clipboard's `write` and `read` derive from its `clipboard`). `HostPlatform<H>`
   implements `Platform` by asking the position that holds each method; the
   application-level positions are static functions over the host's loop
   (`O`), which owns what the operating system hands out once per process, and

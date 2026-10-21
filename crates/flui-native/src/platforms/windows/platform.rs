@@ -2829,6 +2829,11 @@ impl host::Services for WindowsLoop {
             Ok(result)
         })
     }
+
+    fn compositor_name(&self) -> &'static str {
+        // Nothing reads it; the name leaves `Platform` with the other services.
+        ""
+    }
 }
 
 impl host::Input<WindowsLoop> for WindowsLoop {

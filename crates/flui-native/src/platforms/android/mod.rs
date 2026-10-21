@@ -731,7 +731,7 @@ impl host::Loop for AndroidLoop {
                             }
                             // The window is cloned out of its lock: the surface
                             // observer runs embedder code that may call back
-                            // into the self.
+                            // into the platform.
                             let window = self.window.lock().clone();
                             if let Some(w) = window {
                                 w.callbacks().dispatch_surface_status_change(true);
@@ -846,7 +846,7 @@ impl host::Loop for AndroidLoop {
                         MainEvent::WindowResized { .. } => {
                             tracing::info!("Android: Window resized");
                             // Cloned out of its lock: the resize observer runs
-                            // embedder code that may call back into the self.
+                            // embedder code that may call back into the platform.
                             let window = self.window.lock().clone();
                             if let Some(w) = window {
                                 w.publish_state();
@@ -942,7 +942,7 @@ impl host::Loop for AndroidLoop {
             // deliver it. A queued Pause therefore preserves the request for
             // Resume rather than stranding an acknowledged continuation. The
             // window is cloned out of its lock: the frame runs embedder code
-            // that may call back into the self.
+            // that may call back into the platform.
             let window = self.window.lock().clone();
             if let Some(ref w) = window
                 && redraw_after_poll
@@ -954,7 +954,7 @@ impl host::Loop for AndroidLoop {
 
         self.activity.resumed.store(false, Ordering::SeqCst);
         // Unregister the choreographer callback on the thread it was registered
-        // on, before its data can be freed with the self.
+        // on, before its data can be freed with the loop.
         self.displays.stop_watching();
         self.owner_signal.close();
 
@@ -1070,6 +1070,41 @@ impl host::Services for AndroidLoop {
 
     fn app_path(&self) -> Result<PathBuf, PlatformError> {
         Ok(PathBuf::from("/data/local/tmp"))
+    }
+
+    // The Android host opens no URL, path or file prompt and reports no
+    // compositor: those services move to the system capability crate.
+    fn open_url(&self, url: &str) {
+        let _ = url;
+    }
+
+    fn reveal_path(&self, path: &std::path::Path) {
+        let _ = path;
+    }
+
+    fn open_path(&self, path: &std::path::Path) {
+        let _ = path;
+    }
+
+    fn prompt_for_paths(
+        &self,
+        options: crate::PathPromptOptions,
+    ) -> crate::Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
+        let _ = options;
+        crate::Task::ready(Ok(None))
+    }
+
+    fn prompt_for_new_path(
+        &self,
+        directory: &std::path::Path,
+        suggested_name: Option<&str>,
+    ) -> crate::Task<Result<Option<PathBuf>, PlatformError>> {
+        let _ = (directory, suggested_name);
+        crate::Task::ready(Ok(None))
+    }
+
+    fn compositor_name(&self) -> &'static str {
+        ""
     }
 }
 

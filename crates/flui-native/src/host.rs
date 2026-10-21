@@ -120,8 +120,8 @@ pub trait Loop: Send + Sync + Sized + 'static {
 /// What the host does for the application outside the closed list: the
 /// background executor, the application's path, opening URLs and paths, file
 /// prompts and the compositor's name. They leave [`Platform`] for the system
-/// capability crate (ADR-0151 §9); until then the loop carries them, and a
-/// host that does not override one keeps the inert answer it has today.
+/// capability crate (ADR-0151 §9); until then the loop carries them, and each
+/// host writes its answer, inert ones included.
 pub trait Services {
     /// [`Platform::background_executor`].
     fn background_executor(&self) -> Arc<dyn PlatformExecutor>;
@@ -133,43 +133,29 @@ pub trait Services {
     fn app_path(&self) -> Result<PathBuf, PlatformError>;
 
     /// [`Platform::open_url`].
-    fn open_url(&self, url: &str) {
-        let _ = url;
-    }
+    fn open_url(&self, url: &str);
 
     /// [`Platform::reveal_path`].
-    fn reveal_path(&self, path: &Path) {
-        let _ = path;
-    }
+    fn reveal_path(&self, path: &Path);
 
     /// [`Platform::open_path`].
-    fn open_path(&self, path: &Path) {
-        let _ = path;
-    }
+    fn open_path(&self, path: &Path);
 
     /// [`Platform::prompt_for_paths`].
     fn prompt_for_paths(
         &self,
         options: PathPromptOptions,
-    ) -> Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
-        let _ = options;
-        Task::ready(Ok(None))
-    }
+    ) -> Task<Result<Option<Vec<PathBuf>>, PlatformError>>;
 
     /// [`Platform::prompt_for_new_path`].
     fn prompt_for_new_path(
         &self,
         directory: &Path,
         suggested_name: Option<&str>,
-    ) -> Task<Result<Option<PathBuf>, PlatformError>> {
-        let _ = (directory, suggested_name);
-        Task::ready(Ok(None))
-    }
+    ) -> Task<Result<Option<PathBuf>, PlatformError>>;
 
     /// [`Platform::compositor_name`].
-    fn compositor_name(&self) -> &'static str {
-        ""
-    }
+    fn compositor_name(&self) -> &'static str;
 }
 
 /// The window position: opening windows, and what is known of them before
@@ -342,7 +328,8 @@ impl<F> std::fmt::Debug for Absent<F> {
 
 impl<O> Window<O> for Absent<position::Window> {
     fn open(_: &O, _: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
-        Err(OpenWindowError::Unavailable {
+        // Not `Unavailable`, which promises a later call may succeed.
+        Err(OpenWindowError::Backend {
             message: "this platform opens no windows".to_owned(),
         })
     }
@@ -446,6 +433,8 @@ impl PlatformHaptics for Absent<position::Haptics> {
 
 impl<O> Preferences<O> for Absent<position::Preferences> {
     fn sample(_: &O) -> Result<SystemPreferences, PlatformError> {
+        // `Platform::preferences`: a host with no observation reports every
+        // field unknown and leaves the fallback to consumers.
         Ok(SystemPreferences::default())
     }
 }
