@@ -65,6 +65,11 @@ pub(super) enum ViewEvent {
         /// `DragEvent.getResult()`.
         result: bool,
     },
+    /// A setting behind the preferences changed that no configuration change
+    /// reports: a content observer or, from API 34, the contrast listener.
+    SettingsChanged,
+    /// The window insets the view received changed.
+    InsetsChanged,
 }
 
 /// Where the view is in its life.
@@ -435,7 +440,17 @@ fn install_view(
             &[JValue::Object(activity), JValue::Long(handle)],
         )?
         .l()?;
-    Ok(env.new_global_ref(&view)?)
+    match env.new_global_ref(&view) {
+        Ok(view) => Ok(view),
+        Err(error) => {
+            // The view is in the window and names `handle`, which the caller
+            // frees on this error: take it out first, so it calls nothing.
+            env.exception_clear();
+            let _ = env.call_method(&view, jni_str!("detach"), jni_sig!("()V"), &[]);
+            env.exception_clear();
+            Err(error.into())
+        }
+    }
 }
 
 /// The dex as a read-only file in the code cache, rewritten when what is
@@ -504,6 +519,16 @@ fn register_natives(env: &mut Env<'_>, class: &JClass<'_>) -> jni::errors::Resul
                 jni_str!("nativeImeCursorUpdates"),
                 jni_str!("(JI)V"),
                 native_ime_cursor_updates as *mut std::ffi::c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeSettingsChanged"),
+                jni_str!("(J)V"),
+                native_settings_changed as *mut std::ffi::c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeInsetsChanged"),
+                jni_str!("(J)V"),
+                native_insets_changed as *mut std::ffi::c_void,
             ),
         ]
     };
@@ -688,6 +713,30 @@ extern "system" fn native_ime_cursor_updates<'local>(
     contained(|| {
         if let Some(view) = bridge(handle) {
             view.push_event(ViewEvent::CursorUpdates(mode));
+        }
+    });
+}
+
+extern "system" fn native_settings_changed<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+) {
+    contained(|| {
+        if let Some(view) = bridge(handle) {
+            view.push_event(ViewEvent::SettingsChanged);
+        }
+    });
+}
+
+extern "system" fn native_insets_changed<'local>(
+    _env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+) {
+    contained(|| {
+        if let Some(view) = bridge(handle) {
+            view.push_event(ViewEvent::InsetsChanged);
         }
     });
 }

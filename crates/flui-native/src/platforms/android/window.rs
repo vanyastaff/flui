@@ -222,14 +222,23 @@ impl AndroidWindow {
     }
 
     pub(crate) fn settle_safe_area(&self) {
-        let sample = {
+        let (sample, requery) = {
             let mut capture = self.safe_area.lock();
             let super::safe_area::Query::Ready(sample) = capture.query else {
                 return;
             };
             capture.query = super::safe_area::Query::Idle;
-            sample
+            (sample, std::mem::take(&mut capture.requery))
         };
+        self.accept_safe_area(sample);
+        if requery {
+            // Asked directly, without arming the stale retry again, so this
+            // asks once more and no more.
+            self.query_safe_area();
+        }
+    }
+
+    fn accept_safe_area(&self, sample: Option<super::safe_area::Sample>) {
         let size = self.physical_size();
         let scale = self.scale_factor();
         let changed = {
@@ -261,9 +270,17 @@ impl AndroidWindow {
     }
 
     /// Ask the Java thread for the insets. A reply taken at a size the window
-    /// no longer has is asked for once more.
+    /// no longer has is asked for once more; a request while a reply is out is
+    /// asked again once that reply settles.
     pub(crate) fn request_safe_area(&self) {
-        self.safe_area.lock().retry_stale = true;
+        {
+            let mut capture = self.safe_area.lock();
+            capture.retry_stale = true;
+            if !matches!(capture.query, super::safe_area::Query::Idle) {
+                capture.requery = true;
+                return;
+            }
+        }
         self.query_safe_area();
     }
 

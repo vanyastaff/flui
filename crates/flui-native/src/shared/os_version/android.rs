@@ -189,6 +189,26 @@ impl Gate for TouchpadGestures {
     const SINCE: u64 = 34;
 }
 
+/// `Configuration.getLocales` (API 24). Without it the preferred languages are the
+/// configuration's one `locale`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LocaleList;
+
+impl Gate for LocaleList {
+    type Version = AndroidApi;
+    const SINCE: u64 = 24;
+}
+
+/// `UiModeManager.getContrast` and its change listener (API 34). Without them high contrast
+/// comes from the high-contrast-text setting alone.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SystemContrast;
+
+impl Gate for SystemContrast {
+    type Version = AndroidApi;
+    const SINCE: u64 = 34;
+}
+
 /// The `DRAG_START`, `SEGMENT_TICK`, `SEGMENT_FREQUENT_TICK` and `GESTURE_THRESHOLD_ACTIVATE`
 /// feedback constants (API 34). Without them the view plays the nearest older constant.
 #[derive(Debug, Clone, Copy)]

@@ -65,9 +65,9 @@ pub(crate) fn since<F: Gate>(version: F::Version) -> Option<Since<F>> {
 mod tests {
     use super::android::{
         AndroidApi, ContextDisplay, DisplayCutout, DragSource, EnvelopeEffects, GestureExclusion,
-        HapticComposition, InMemoryDex, InsetsByType, InsetsController, RoundPrimitives,
-        ScaledScrollFactor, SegmentFeedback, StylusHandwriting, TextWeight, TouchpadGestures,
-        VibrationTouchUsage,
+        HapticComposition, InMemoryDex, InsetsByType, InsetsController, LocaleList,
+        RoundPrimitives, ScaledScrollFactor, SegmentFeedback, StylusHandwriting, SystemContrast,
+        TextWeight, TouchpadGestures, VibrationTouchUsage,
     };
     use super::apple::AppleVersion;
     use super::{Gate, since};
@@ -133,6 +133,13 @@ mod tests {
             unknown,
         ));
         failures.extend(row::<TextWeight>("TextWeight", api(30), api(31), unknown));
+        failures.extend(row::<LocaleList>("LocaleList", api(23), api(24), unknown));
+        failures.extend(row::<SystemContrast>(
+            "SystemContrast",
+            api(33),
+            api(34),
+            unknown,
+        ));
         failures.extend(row::<ScaledScrollFactor>(
             "ScaledScrollFactor",
             api(25),
