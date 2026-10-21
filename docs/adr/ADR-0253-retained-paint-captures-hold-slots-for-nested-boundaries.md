@@ -5,7 +5,6 @@
 - **Amends:** `crates/flui-layer/ARCHITECTURE.md` (retained paint, item 3) and the
   "A composited-layer update patches the enclosing capture" entry of
   `crates/flui-rendering/ARCHITECTURE.md`
-- **Related:** [ADR-0027](ADR-0027-not-a-flutter-port.md)
 
 ## Context
 

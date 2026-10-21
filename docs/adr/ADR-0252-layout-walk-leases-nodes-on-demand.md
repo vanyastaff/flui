@@ -4,7 +4,6 @@
 - **Date:** 2026-10-21
 - **Amends:** the render-tree storage entry of `crates/flui-rendering/ARCHITECTURE.md`
   ("Render-tree storage uses a `Slab<RenderNode>`")
-- **Related:** [ADR-0027](ADR-0027-not-a-flutter-port.md) (a relayout boundary is a cost bound, not a label)
 
 ## Context
 
