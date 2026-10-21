@@ -423,6 +423,21 @@ fn every_published_attribute_reads_through_the_consumer() {
             |n| n.data().row_span() == Some(2) && n.data().column_span() == Some(3),
         ),
         Row::new(
+            "a cell whose span the adapters cannot convert",
+            R::GridCell,
+            |a| {
+                let huge = NonZeroUsize::new(usize::MAX).expect("usize::MAX is non-zero");
+                a.collection.cell = Some(CellPosition::new(nz(2), nz(2)).spanning(huge, nz(1)));
+            },
+            // An omitted span reads as one, which would misplace the cell: it
+            // is not published at all.
+            |n| {
+                n.data().row_index().is_none()
+                    && n.data().column_index().is_none()
+                    && n.data().row_span().is_none()
+            },
+        ),
+        Row::new(
             "the sort of a column",
             R::ColumnHeader,
             |a| a.collection.sort = Some(SortDirection::Descending),

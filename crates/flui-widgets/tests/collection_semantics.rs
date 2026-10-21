@@ -873,3 +873,78 @@ pub(crate) fn a_set_declared_by_size_keeps_its_lone_member() {
         tree.describe()
     );
 }
+
+/// A table that declares no shape is still its cells' table: an outer table's
+/// shape does not bound them, so a cell at row 50 of an unbounded inner table
+/// keeps its place under an outer table of three rows.
+pub(crate) fn a_shapeless_table_bounds_its_own_cells() {
+    use SemanticsRole as R;
+    let inner = Semantics::new()
+        .container(true)
+        .role(R::Table)
+        .label("Inner")
+        .child(Column::new(vec![table_node(
+            R::Cell,
+            "deep cell",
+            Semantics::new().cell_position(CellPosition::new(nz(50), nz(1))),
+        )]));
+    let outer = Semantics::new()
+        .container(true)
+        .role(R::Table)
+        .label("Outer")
+        .table_shape(TableShape::new(SetSize::Known(3), SetSize::Known(3)))
+        .child(inner);
+    let mut laid = lay_out(outer, tight(200.0, 200.0));
+    laid.enable_semantics();
+    laid.tick();
+    let tree = tree(&laid);
+
+    assert_eq!(
+        find(&tree, "deep cell").row_index(),
+        Some(49),
+        "{}",
+        tree.describe()
+    );
+}
+
+/// An unknown set with no positioned member below leaves the totals above it
+/// alone: a tree item that holds an empty nested list of unknown size is still
+/// "item 1 of 2" in its own set.
+pub(crate) fn an_empty_unknown_set_keeps_the_outer_size() {
+    let item = |label: &str, index: usize, nested: bool| {
+        let node = Semantics::new()
+            .container(true)
+            .role(SemanticsRole::ListItem)
+            .label(label)
+            .position_in_set(index);
+        let node = if nested {
+            node.size_of_set(SetSize::Unknown)
+        } else {
+            node
+        };
+        node.child(SizedBox::new(200.0, 48.0)).boxed()
+    };
+    let outer = Semantics::new()
+        .container(true)
+        .role(SemanticsRole::List)
+        .label("Outer")
+        .size_of_set(SetSize::Known(2))
+        .child(Column::new(vec![
+            item("holds a list", 0, true),
+            item("plain", 1, false),
+        ]));
+    let mut laid = lay_out(outer, tight(200.0, 200.0));
+    laid.enable_semantics();
+    laid.tick();
+    let tree = tree(&laid);
+
+    for (label, index) in [("holds a list", 0), ("plain", 1)] {
+        let member = find(&tree, label);
+        assert_eq!(
+            (member.position_in_set(), member.size_of_containing_set()),
+            (Some(index), Some(2)),
+            "{label}: {}",
+            tree.describe()
+        );
+    }
+}

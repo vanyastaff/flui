@@ -380,7 +380,7 @@ struct SetScope {
 ///
 /// - a position past its own known set's size is not published ("item 8 of
 ///   3"), nor a cell or row outside its known table ("row 5 of 3");
-/// - an unknown or separately authored set, or a member of one, must not
+/// - a member of an unknown or separately authored set must not
 ///   acquire an unrelated total through that walk ("item 12 of 5"): the totals
 ///   of the known sets above it are withheld rather than a sentinel invented.
 fn reconcile_collections(root: &mut BuiltSemanticsNode) {
@@ -411,14 +411,27 @@ fn reconcile_collections(root: &mut BuiltSemanticsNode) {
                     .unwrap_or(SemanticsCollectionOrigin::Authored),
                 omit_total: false,
             });
-            let unknown_scope = own.is_some_and(|scope| scope.size == SetSize::Unknown);
             let unmatched_member = node.config.position_in_set().is_some() && !member_of_nearest;
-            if unknown_scope || unmatched_member {
+            // Only a member that would read an unrelated total withholds it:
+            // an unknown set with no positioned member below leaves the totals
+            // above it alone, and one with members reaches here through them.
+            if unmatched_member {
                 for scope in sets.iter_mut() {
                     scope.omit_total |= matches!(scope.size, SetSize::Known(_));
                 }
             }
-            let own_table = node.config.published_table_shape();
+            // A table, a grid or a tree grid is its cells' table whether or
+            // not it declares a shape: without one its extent is unbounded,
+            // and an outer table's shape does not bound its cells.
+            let own_table = node.config.published_table_shape().or_else(|| {
+                matches!(
+                    node.config.role(),
+                    flui_semantics::SemanticsRole::Table
+                        | flui_semantics::SemanticsRole::Grid
+                        | flui_semantics::SemanticsRole::TreeGrid
+                )
+                .then(|| TableShape::new(SetSize::Unknown, SetSize::Unknown))
+            });
             if let Some(scope) = own {
                 sets.push(scope);
             }

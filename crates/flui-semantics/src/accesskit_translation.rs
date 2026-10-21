@@ -901,20 +901,27 @@ fn apply_collection(node: &mut Node, collection: &Collection) {
             node.set_column_count(columns);
         }
     }
-    if let Some(cell) = collection.cell {
-        // AccessKit counts rows and columns from zero where the framework,
-        // like `aria-rowindex`, counts from one.
-        if fits(cell.row().get()) {
-            node.set_row_index(cell.row().get() - 1);
-        }
-        if fits(cell.column().get()) {
-            node.set_column_index(cell.column().get() - 1);
-        }
+    if let Some(cell) = collection.cell
+        && [
+            cell.row(),
+            cell.column(),
+            cell.row_span(),
+            cell.column_span(),
+        ]
+        .iter()
+        .all(|value| fits(value.get()))
+    {
+        // A cell is published whole or not at all: an omitted span reads as
+        // AccessKit's default of one, which would misplace a cell whose span
+        // cannot be converted. AccessKit counts rows and columns from zero
+        // where the framework, like `aria-rowindex`, counts from one.
+        node.set_row_index(cell.row().get() - 1);
+        node.set_column_index(cell.column().get() - 1);
         // One is AccessKit's default, so it is not published.
-        if cell.row_span().get() > 1 && fits(cell.row_span().get()) {
+        if cell.row_span().get() > 1 {
             node.set_row_span(cell.row_span().get());
         }
-        if cell.column_span().get() > 1 && fits(cell.column_span().get()) {
+        if cell.column_span().get() > 1 {
             node.set_column_span(cell.column_span().get());
         }
     }
