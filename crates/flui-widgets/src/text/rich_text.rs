@@ -1,6 +1,6 @@
 //! [`RichText`] — displays a tree of styled inline spans in one paragraph.
 
-use flui_objects::RenderParagraph;
+use flui_objects::{RenderParagraph, TextLinkFocus};
 use flui_painting::typography::{InlineSpan, TextAlign, TextDirection, TextLink};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::element::ElementKind;
@@ -31,8 +31,10 @@ use crate::support::{RefCallback, ref_callback};
 /// does something only through [`on_link`](Self::on_link): a tap on the
 /// link's glyphs, or assistive technology activating the link, calls it with
 /// the span's [`TextLink`]. While it is set, the pointer over a link is a
-/// pointing hand and each link is an accessible link node. Without it, links
-/// are plain text.
+/// pointing hand, each link is an accessible link node, and each link is a
+/// focus stop: Tab reaches it in reading order, Enter opens it, and a
+/// [`FocusRing`](crate::FocusRing)-styled ring outlines each line of its
+/// glyphs while the focus is visible. Without it, links are plain text.
 ///
 /// # Examples
 ///
@@ -140,6 +142,7 @@ impl StatelessView for RichText {
             text_sizing: MediaQuery::text_sizing_of(ctx),
             font_weight_adjustment: MediaQuery::font_weight_adjustment_of(ctx).unwrap_or(0),
             links: None,
+            link_focus: None,
         };
         match &self.on_link {
             // Links need recognizers built against the arena scope, which
@@ -159,6 +162,8 @@ pub(super) struct ResolvedParagraph {
     pub(super) font_weight_adjustment: i32,
     /// What reaches the links, when a handler activates them.
     pub(super) links: Option<LinkRouting>,
+    /// The link holding the primary keyboard focus.
+    pub(super) link_focus: Option<TextLinkFocus>,
 }
 
 impl RenderView for ResolvedParagraph {
@@ -166,12 +171,15 @@ impl RenderView for ResolvedParagraph {
     type RenderObject = RenderParagraph;
 
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
-        RenderParagraph::new(self.authored.text.clone(), self.authored.direction)
-            .with_text_align(self.authored.align)
-            .with_max_lines(self.authored.max_lines)
-            .with_text_sizing(self.text_sizing.clone())
-            .with_font_weight_adjustment(self.font_weight_adjustment)
-            .with_link_routes(LinkRouting::sync(self.links.as_ref(), ctx, &[]))
+        let mut paragraph =
+            RenderParagraph::new(self.authored.text.clone(), self.authored.direction)
+                .with_text_align(self.authored.align)
+                .with_max_lines(self.authored.max_lines)
+                .with_text_sizing(self.text_sizing.clone())
+                .with_font_weight_adjustment(self.font_weight_adjustment)
+                .with_link_routes(LinkRouting::sync(self.links.as_ref(), ctx, &[]));
+        let _ = paragraph.set_link_focus(self.link_focus);
+        paragraph
     }
 
     fn update_render_object(
@@ -188,6 +196,7 @@ impl RenderView for ResolvedParagraph {
             | render_object.set_text_sizing(self.text_sizing.clone())
             | render_object.set_font_weight_adjustment(self.font_weight_adjustment)
             | render_object.set_link_routes(routes)
+            | render_object.set_link_focus(self.link_focus)
     }
 
     fn did_unmount_render_object(

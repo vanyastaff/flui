@@ -21,7 +21,7 @@
 
 mod links;
 
-pub use links::TextLinkRoute;
+pub use links::{TextLinkFocus, TextLinkRoute};
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
@@ -60,6 +60,8 @@ pub struct RenderParagraph {
     /// How the owner reaches each link, in [`InlineSpan::links`] order;
     /// empty while nothing handles them.
     link_routes: Vec<TextLinkRoute>,
+    /// The link holding the primary keyboard focus.
+    link_focus: Option<TextLinkFocus>,
 }
 
 impl RenderParagraph {
@@ -73,6 +75,7 @@ impl RenderParagraph {
                 .with_text_direction(direction),
             soft_wrap: true,
             link_routes: Vec::new(),
+            link_focus: None,
         }
     }
 
@@ -107,6 +110,35 @@ impl RenderParagraph {
     /// The routes the text's links are reached through.
     pub fn link_routes(&self) -> &[TextLinkRoute] {
         &self.link_routes
+    }
+
+    /// Names the link that holds the primary keyboard focus and the ring it
+    /// shows, or none.
+    pub fn set_link_focus(
+        &mut self,
+        focus: Option<TextLinkFocus>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let previous = std::mem::replace(&mut self.link_focus, focus);
+        if previous.map(|focus| focus.link) != focus.map(|focus| focus.link) {
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        } else if previous != focus {
+            flui_rendering::RenderUpdateImpact::PAINT
+        } else {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
+    /// The bounds of link `link`'s glyphs, in this paragraph's coordinates,
+    /// from the layout it committed: what keyboard focus orders and reveals
+    /// the link by. `None` before layout, for an index past the text's links,
+    /// or for a link `max_lines` or an ellipsis cut.
+    #[must_use]
+    pub fn link_bounds(&self, link: usize) -> Option<flui_foundation::geometry::Rect<f64>> {
+        if !self.painter.has_layout() {
+            return None;
+        }
+        self.runs.link_bounds(&self.painter, link)
     }
 
     /// Whether the paragraph publishes its links as accessible nodes of
@@ -451,8 +483,20 @@ impl RenderBox for RenderParagraph {
     fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
         // The recorder pre-translates the canvas to this node's origin, so the
         // text paints in local coordinates. Skipped before layout (no cache).
-        if self.painter.has_layout() {
-            self.painter.paint(ctx.canvas(), Offset::ZERO);
+        if !self.painter.has_layout() {
+            return;
+        }
+        self.painter.paint(ctx.canvas(), Offset::ZERO);
+        // The ring follows each line of the focused link, just outside its
+        // glyphs, so it covers none of them.
+        if let Some(TextLinkFocus {
+            link,
+            ring: Some(style),
+        }) = self.link_focus
+        {
+            for text_box in self.runs.link_boxes(&self.painter, link) {
+                style.paint_around(ctx.canvas(), text_box.rect);
+            }
         }
     }
 
@@ -491,6 +535,7 @@ impl RenderBox for RenderParagraph {
             before_children: self.runs.semantics_regions(
                 &self.painter,
                 &self.link_routes,
+                self.link_focus.map(|focus| focus.link),
                 self.painter.text_direction().map(semantics_text_direction),
             ),
             after_children: Vec::new(),

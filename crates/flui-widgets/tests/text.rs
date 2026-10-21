@@ -441,16 +441,16 @@ fn linked_paragraph(opened: &Rc<RefCell<Vec<String>>>) -> flui_widgets::RichText
     .on_link(move |_cx, link| opened.borrow_mut().push(link.to_string()))
 }
 
-/// The window position of the middle of the paragraph's glyphs for the
-/// plain-text bytes `range`, as the paragraph laid them out last.
-fn glyph_center(
+/// The window rectangles of the paragraph's glyphs for the plain-text bytes
+/// `range`, one per line, as the paragraph laid them out last.
+fn glyph_boxes(
     laid: &crate::common::LaidOut,
     paragraph: flui_foundation::RenderId,
     range: std::ops::Range<usize>,
-) -> (f64, f64) {
+) -> Vec<flui_foundation::geometry::Rect<f64>> {
     use flui_objects::RenderParagraph;
 
-    let rect = laid.pipeline_owner().with(|owner| {
+    let boxes = laid.pipeline_owner().with(|owner| {
         // The one concrete render object `RichText` mounts, reached through
         // the storage layer's erasure.
         let render = owner
@@ -462,13 +462,35 @@ fn glyph_center(
         render
             .painter()
             .get_boxes_for_selection(range.start, range.end)
-            .into_iter()
-            .map(|text_box| text_box.rect)
-            .reduce(|bounds, rect| bounds.union(&rect))
-            .expect("the range has glyphs")
     });
-    let (origin, center) = (laid.absolute_offset(paragraph), rect.center());
-    (origin.dx + center.x, origin.dy + center.y)
+    let origin = laid.absolute_offset(paragraph);
+    boxes
+        .into_iter()
+        .map(|text_box| {
+            let rect = text_box.rect;
+            flui_foundation::geometry::Rect::from_ltwh(
+                origin.dx + rect.left(),
+                origin.dy + rect.top(),
+                rect.width(),
+                rect.height(),
+            )
+        })
+        .collect()
+}
+
+/// The window position of the middle of the paragraph's glyphs for the
+/// plain-text bytes `range`, as the paragraph laid them out last.
+fn glyph_center(
+    laid: &crate::common::LaidOut,
+    paragraph: flui_foundation::RenderId,
+    range: std::ops::Range<usize>,
+) -> (f64, f64) {
+    let center = glyph_boxes(laid, paragraph, range)
+        .into_iter()
+        .reduce(|bounds, rect| bounds.union(&rect))
+        .expect("the range has glyphs")
+        .center();
+    (center.x, center.y)
 }
 
 fn scale_text(laid: &mut crate::common::LaidOut, scale: f64) {
@@ -631,5 +653,286 @@ pub(crate) fn a_handled_link_is_a_link_node_assistive_technology_clicks() {
         tree.find_all(Role::Link).is_empty(),
         "an unhandled link is plain text:\n{}",
         tree.describe()
+    );
+}
+
+/// Two links between two buttons: "go to ", "first" (`app://first`), " or ",
+/// "second link" (`app://second`), and the presses of the button after them.
+fn links_between_buttons(
+    opened: &Rc<RefCell<Vec<String>>>,
+    after: &Rc<std::cell::Cell<u32>>,
+    width: f64,
+) -> impl flui_view::View {
+    use flui_painting::typography::TextSpan;
+    use flui_view::ViewExt;
+    use flui_widgets::{Column, RawButton, SizedBox};
+
+    let (opened, after) = (Rc::clone(opened), Rc::clone(after));
+    Column::new(vec![
+        RawButton::new(Text::new("before"))
+            .on_press(|_cx| {})
+            .boxed(),
+        SizedBox::new(width, 100.0)
+            .child(
+                flui_widgets::RichText::new(
+                    TextSpan::new("go to ")
+                        .with_child(TextSpan::new("first").with_link("app://first"))
+                        .with_child(TextSpan::new(" or "))
+                        .with_child(TextSpan::new("second link").with_link("app://second")),
+                )
+                .on_link(move |_cx, link| opened.borrow_mut().push(link.to_string())),
+            )
+            .boxed(),
+        RawButton::new(Text::new("after"))
+            .on_press(move |_cx| after.set(after.get() + 1))
+            .boxed(),
+    ])
+}
+
+/// Press `key` (or Shift+Tab) as the platform delivers it; then a frame.
+fn press_key(laid: &mut crate::common::LaidOut, pressed: flui_platform::keyboard::Key) {
+    let manager = laid.focus_manager();
+    laid.enter_owner_scope(|| crate::keyboard_focus::press(&manager, &pressed));
+    laid.pump();
+}
+
+fn shift_tab(laid: &mut crate::common::LaidOut) {
+    use flui_platform::keyboard::{Key, Modifiers, NamedKey};
+
+    let manager = laid.focus_manager();
+    laid.enter_owner_scope(|| {
+        crate::keyboard_focus::chord(&manager, &Key::Named(NamedKey::Tab), Modifiers::SHIFT)
+    });
+    laid.pump();
+}
+
+/// Tab stops on each link of a paragraph in reading order between the
+/// controls around it, Shift+Tab walks back, and Enter opens the focused
+/// link while Space does not (a link is not a button), at a text scale other
+/// than 1.0.
+///
+/// Red-check: drop the per-link `Focus` (Tab goes from the first button to
+/// the second, and Enter presses it).
+pub(crate) fn tab_stops_on_each_link_and_enter_opens_it() {
+    use flui_platform::keyboard::{Key, NamedKey};
+
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let after = Rc::new(std::cell::Cell::new(0));
+    let mut laid = lay_out(links_between_buttons(&opened, &after, 400.0), loose(400.0));
+    scale_text(&mut laid, 1.5);
+    let open = |laid: &mut crate::common::LaidOut| {
+        press_key(laid, Key::Named(NamedKey::Enter));
+        opened.borrow().last().cloned()
+    };
+
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    assert_eq!(
+        open(&mut laid).as_deref(),
+        Some("app://first"),
+        "the first link is the stop after the button"
+    );
+    press_key(&mut laid, Key::character(" "));
+    assert_eq!(opened.borrow().len(), 1, "Space does not open a link");
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    assert_eq!(
+        open(&mut laid).as_deref(),
+        Some("app://second"),
+        "then the second link"
+    );
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    press_key(&mut laid, Key::Named(NamedKey::Enter));
+    assert_eq!(after.get(), 1, "then the button after the paragraph");
+    assert_eq!(
+        opened.borrow().len(),
+        2,
+        "Enter on the button opens no link"
+    );
+    shift_tab(&mut laid);
+    assert_eq!(
+        open(&mut laid).as_deref(),
+        Some("app://second"),
+        "Shift+Tab walks back to the second link"
+    );
+    assert_eq!(opened.borrow().len(), 3);
+}
+
+/// A link focused from the keyboard draws the ring just outside each line of
+/// its glyphs, at a text scale that moves and wraps them; focus moving on
+/// takes the ring away.
+///
+/// Red-checks: drop the ring from the paragraph's paint (no band), or draw it
+/// around the paragraph's box (one band, not one per line).
+pub(crate) fn a_focused_link_rings_each_line_of_its_glyphs() {
+    use flui_painting::display_list::DrawOp;
+    use flui_painting::styling::Color;
+    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_widgets::{DefaultFocusRingStyle, FocusRingStyle};
+
+    const STYLE: FocusRingStyle = FocusRingStyle {
+        outer: Color::rgb(200, 0, 0),
+        inner: Color::rgb(0, 200, 0),
+        outer_width: 2.0,
+        inner_width: 1.0,
+    };
+    // The inner band of every ring painted, in window coordinates.
+    let rings = |laid: &crate::common::LaidOut| -> Vec<flui_foundation::geometry::Rect<f64>> {
+        laid.draw_ops()
+            .into_iter()
+            .filter_map(|command| match command.op {
+                DrawOp::DRRect { inner, paint, .. } if paint.color == STYLE.inner => {
+                    Some(command.transform.transform_rect(&inner.rect))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let after = Rc::new(std::cell::Cell::new(0));
+    // At 1.5 the words of "second link" do not fit one 90 px line.
+    let mut laid = lay_out(
+        DefaultFocusRingStyle::new(STYLE, links_between_buttons(&opened, &after, 90.0)),
+        loose(400.0),
+    );
+    scale_text(&mut laid, 1.5);
+    let paragraph = laid
+        .find_text("go to first or second link")
+        .expect("the paragraph with the links");
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    let second = glyph_boxes(&laid, paragraph, 15..26);
+    assert!(
+        second.len() >= 2,
+        "precondition: the link wraps: {second:?}"
+    );
+    let painted = rings(&laid);
+    assert_eq!(
+        painted.len(),
+        second.len(),
+        "one ring per line of the focused link: painted={painted:?}, glyphs={second:?}"
+    );
+    for (ring, glyphs) in painted.iter().zip(&second) {
+        for (edge, (got, want)) in [
+            ("left", (ring.left(), glyphs.left())),
+            ("top", (ring.top(), glyphs.top())),
+            ("right", (ring.right(), glyphs.right())),
+            ("bottom", (ring.bottom(), glyphs.bottom())),
+        ] {
+            assert!(
+                (got - want).abs() < 0.01,
+                "the ring's {edge} edge hugs the glyphs: ring={ring:?}, glyphs={glyphs:?}"
+            );
+        }
+    }
+
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    assert!(
+        rings(&laid).len() <= 1,
+        "focus moved on: the link's ring is gone"
+    );
+    assert!(
+        rings(&laid)
+            .iter()
+            .all(|ring| second.iter().all(|glyphs| ring != glyphs)),
+        "no ring is left around the link"
+    );
+}
+
+/// Assistive technology finds each link focusable, focuses one through its
+/// node, sees it focused, and Enter then opens it.
+///
+/// Red-check: drop the Focus action from the link node (the request is
+/// refused and Enter opens nothing).
+pub(crate) fn assistive_technology_focuses_a_link() {
+    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_testing::a11y::{Action, ActionRequest, Role, TreeId};
+
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let after = Rc::new(std::cell::Cell::new(0));
+    let mut laid = lay_out(links_between_buttons(&opened, &after, 400.0), loose(400.0));
+    laid.enable_semantics();
+    laid.pump();
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let second = tree
+        .find_by_role_and_label(Role::Link, "second link")
+        .unwrap_or_else(|error| panic!("{error}\n{}", tree.describe()));
+    assert!(second.supports_action(Action::Focus), "{}", tree.describe());
+    let node = second.id();
+
+    laid.invoke_semantics_action(ActionRequest {
+        action: Action::Focus,
+        target_tree: TreeId::ROOT,
+        target_node: node,
+        data: None,
+    })
+    .expect("a focus request on a link node resolves");
+    laid.pump();
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let focused = tree
+        .focus()
+        .map(|focused| focused.label().map(str::to_owned));
+    assert_eq!(
+        focused,
+        Some(Some("second link".to_owned())),
+        "the link node holds the focus:\n{}",
+        tree.describe()
+    );
+    press_key(&mut laid, Key::Named(NamedKey::Enter));
+    assert_eq!(
+        *opened.borrow(),
+        ["app://second"],
+        "Enter opens the focused link"
+    );
+}
+
+/// Tab to a link far down a paragraph taller than its scroll view scrolls
+/// the link's glyphs, not the paragraph's top, into view, at a text scale
+/// other than 1.0.
+///
+/// Red-check: measure a link's focus node by the paragraph's box (the
+/// paragraph's top is already visible, so nothing scrolls).
+pub(crate) fn tab_to_a_link_below_the_view_scrolls_it_into_view() {
+    use flui_painting::typography::TextSpan;
+    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_widgets::{RichText, Scrollable, SizedBox};
+
+    const VIEWPORT: f64 = 120.0;
+    let filler = "words to scroll past ".repeat(40);
+    let bottom = {
+        let start = "start top".len() + filler.len();
+        start..start + "bottom".len()
+    };
+    let mut laid = lay_out(
+        SizedBox::new(200.0, VIEWPORT).child(
+            Scrollable::new().child(
+                RichText::new(
+                    TextSpan::new("start ")
+                        .with_child(TextSpan::new("top").with_link("app://top"))
+                        .with_child(TextSpan::new(filler))
+                        .with_child(TextSpan::new("bottom").with_link("app://bottom")),
+                )
+                .on_link(|_cx, _link| {}),
+            ),
+        ),
+        loose(400.0),
+    );
+    scale_text(&mut laid, 1.5);
+    let paragraph = laid.find_by_render_type("RenderParagraph");
+    let below = glyph_boxes(&laid, paragraph, bottom.clone());
+    assert!(
+        below.iter().all(|glyphs| glyphs.top() > VIEWPORT),
+        "precondition: the last link starts below the view: {below:?}"
+    );
+
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    press_key(&mut laid, Key::Named(NamedKey::Tab));
+    laid.pump_for(std::time::Duration::from_secs(2));
+    let shown = glyph_boxes(&laid, paragraph, bottom);
+    assert!(
+        shown
+            .iter()
+            .all(|glyphs| glyphs.top() >= -0.5 && glyphs.bottom() <= VIEWPORT + 0.5),
+        "the focused link is in view: {shown:?}"
     );
 }

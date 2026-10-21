@@ -5,6 +5,11 @@
   the link's glyphs goes through the gesture arena, the pointer over it is a pointing hand, and
   each handled link is an accessible link node with a click action; hit testing and node bounds
   follow the text scale. `InlineSpan::links` lists a span tree's links in document order.
+- **Keyboard access to links**: each handled link is a focus stop measured by its glyphs, so
+  Tab reaches links in reading order and a focused link scrolls into view; Enter opens it
+  (Space does not); a visible focus draws the focus ring just outside each line of the link's
+  glyphs; assistive technology can focus a link node. `RenderParagraph::{set_link_focus,
+  link_bounds}` and `TextLinkFocus` carry it to the paragraph.
 - **`HitTestContext::set_self_hit_pointer_target` and `set_self_hit_cursor`**: a box's
   `hit_test` routes the hit and picks its cursor for the part under the pointer, in place of
   the node-wide `pointer_target` and `mouse_cursor`; `HitTestOutcome` carries both.
@@ -15,6 +20,9 @@
 
 - `TextSpan::mouse_cursor` and `TextSpan::with_mouse_cursor` take `CursorIcon`, the type the
   platform cursor output takes; a span's cursor now applies over its glyphs and its children's.
+- `FocusRingStyle` is defined in `flui-objects` (still re-exported as
+  `flui_widgets::FocusRingStyle`) and gains `outer_band` and `inner_band`, the widths that
+  paint.
 
 ### Removed
 

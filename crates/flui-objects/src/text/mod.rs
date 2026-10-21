@@ -4,4 +4,4 @@ mod paragraph;
 
 pub use editable::*;
 pub use icon::*;
-pub use paragraph::{RenderParagraph, TextLinkRoute};
+pub use paragraph::{RenderParagraph, TextLinkFocus, TextLinkRoute};

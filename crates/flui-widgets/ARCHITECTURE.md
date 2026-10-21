@@ -3758,3 +3758,27 @@ just this one. **Tests:** `a_focus_keeps_its_subtree_when_it_stops_being_focusab
 `the_first_focus_gain_does_not_rebuild_the_app_under_a_drag`,
 `a_held_press_moved_past_the_slop_closes_the_menu_and_drags` (a real `ContextMenuArea`
 around a long-press `Draggable`).
+
+### A paragraph's links are focus stops of their own
+
+**Choice:** `RichText` with `on_link` mounts one `Focus` per link around its paragraph,
+each hosting a node whose rect is the link's glyph bounds from the committed layout
+(`Focus::rect_provider`, `RenderParagraph::link_bounds`), so Tab reaches links in reading
+order among every other control, at any text scale, and the reveal on focus scrolls the
+link, not the paragraph, into view. Enter opens the focused link through the link's own
+key handler; the link declares `ActivateIntent` and `ActivationPressIntent` disabled,
+because the default bindings send `ActivateIntent` for Space's release too: Space neither
+opens a link nor activates a control around it, and keeps bubbling. While the focus is
+visible the paragraph draws the `FocusRingStyle` bands just outside each line of the
+link's glyphs, so a wrapped link gets a ring per line and the letters stay uncovered. The
+link nodes are focusable and focused with the link, and their `Focus` action requests
+assistive focus; the per-link `Focus` widgets publish no semantics of their own. A link
+that `max_lines` or an ellipsis cut is still a stop, measured by the paragraph's box so
+it keeps its place, as a clipped link stays in a browser's tab order.
+
+**Why:** one paragraph stop roving between its links would need to re-run outer traversal
+at its first and last link (resolution stops at the nearest `Actions`) and map entry
+direction and assistive focus by hand; a real node per link gets traversal groups,
+directional focus, reveal and modality from the focus system. **Tests:**
+`tab_stops_on_each_link_and_enter_opens_it`, `a_focused_link_rings_each_line_of_its_glyphs`,
+`assistive_technology_focuses_a_link`, `tab_to_a_link_below_the_view_scrolls_it_into_view`.

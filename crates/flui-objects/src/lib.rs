@@ -82,13 +82,13 @@ pub use shimmer::{ShimmerBand, ShimmerSweep};
 
 // --- flat re-exports (interaction) ---
 pub use interaction::{
-    HitShape, MetaDataPayload, MinTarget, MouseRegionCallback, RenderAbsorbPointer,
+    FocusRingStyle, HitShape, MetaDataPayload, MinTarget, MouseRegionCallback, RenderAbsorbPointer,
     RenderContentShape, RenderHitSlop, RenderIgnorePointer, RenderInputRegion, RenderListener,
     RenderMetaData, RenderMouseRegion, RenderOffstage,
 };
 
 // --- flat re-exports (text) ---
-pub use text::{RenderEditable, RenderIcon, RenderParagraph, TextLinkRoute};
+pub use text::{RenderEditable, RenderIcon, RenderParagraph, TextLinkFocus, TextLinkRoute};
 
 // --- flat re-exports (image) ---
 pub use image::{RenderImage, RenderTexture};

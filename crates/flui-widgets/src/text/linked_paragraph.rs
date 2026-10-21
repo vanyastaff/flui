@@ -2,39 +2,59 @@
 //!
 //! Each link gets a tap recognizer of its own, built against the enclosing
 //! arena scope, so two contacts on two links recognize independently and a
-//! link competes with the gestures around it like any other tap. The
-//! recognizers and the handler are owner-local; the render object holds only
-//! the lane identities that reach them ([`TextLinkRoute`]): one pointer
-//! target per link, and one activation ticket per link that assistive
-//! technology clicks through.
+//! link competes with the gestures around it like any other tap. Each link
+//! is also a focus stop of its own: a [`Focus`] per link hosts a node
+//! measured by the link's glyphs, so Tab reaches links in reading order
+//! among every other control, and Enter opens the focused one. Space does
+//! not: a link is not a button.
+//!
+//! The recognizers, nodes and handler are owner-local; the render object
+//! holds only the lane identities that reach them ([`TextLinkRoute`]): one
+//! pointer target per link, and one activation ticket per link that
+//! assistive technology clicks and focuses through.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use flui_foundation::geometry::Rect;
+use flui_interaction::focus::{FocusCause, FocusNode, FocusSubscription, KeyEventResult};
 use flui_interaction::{
     GestureRecognizer, InteractionDispatchError, LocalPayloadTarget, PointerDispatch,
-    PointerTarget, RecognizerSet, TapGestureRecognizer, cancel_all, resolve_local_payload,
+    PointerTarget, RecognizerSet, RectProvider, TapGestureRecognizer, cancel_all,
+    resolve_local_payload,
 };
-use flui_objects::{SemanticsActionRoute, TextLinkRoute};
+use flui_objects::{
+    RenderParagraph, SemanticsActionRoute, SubtreeAnchor, TextLinkFocus, TextLinkRoute,
+};
 use flui_painting::typography::{InlineSpan, TextLink};
+use flui_platform::keyboard::{KeyEvent, NamedKey};
 use flui_rendering::hit_testing::PointerEvent;
+use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::semantics::{ActionCall, SemanticsAction, SemanticsActionHandler};
 use flui_view::element::ElementKind;
 use flui_view::{
-    BuildContext, EventCx, IntoView, LifecycleContext, RenderObjectContext,
-    RenderObjectContextError, StatefulView, View, ViewState, WriterSource,
+    BuildContext, EventCx, IntoView, LifecycleContext, RebuildHandle, RebuildReason,
+    RenderObjectContext, RenderObjectContextError, StatefulView, View, ViewExt, ViewState,
+    WriterSource,
 };
 
 use super::rich_text::ResolvedParagraph;
+use crate::anchored_box::AnchoredBox;
 use crate::interaction::GesturePolicy;
 use crate::support::RefCallback;
+use crate::{
+    Action, ActionOutcome, Actions, ActivateIntent, ActivationPressIntent, DefaultFocusRingStyle,
+    Focus, SingleActivator,
+};
 
-/// What a link's tap and activation read when they fire: the latest handler
-/// and links, and whether the paragraph is still mounted.
+/// What a link's tap, key and assistive activation read when they fire: the
+/// latest handler, links and focus nodes, and whether the paragraph is still
+/// mounted.
 struct LiveLinks {
     on_link: RefCell<RefCallback<TextLink>>,
     links: RefCell<Vec<TextLink>>,
+    nodes: RefCell<Vec<Rc<FocusNode>>>,
     mounted: Cell<bool>,
 }
 
@@ -56,6 +76,17 @@ impl LiveLinks {
         };
         handler(cx, &link);
     }
+
+    /// Move the focus to the link at `index`, as assistive technology asked.
+    fn focus(&self, index: usize) {
+        if !self.mounted.get() {
+            return;
+        }
+        let Some(node) = self.nodes.borrow().get(index).cloned() else {
+            return;
+        };
+        let _ = node.request_focus_with(FocusCause::Assistive);
+    }
 }
 
 fn links_of(text: &InlineSpan) -> Vec<TextLink> {
@@ -63,7 +94,7 @@ fn links_of(text: &InlineSpan) -> Vec<TextLink> {
 }
 
 /// [`ResolvedParagraph`] mounted under a state that owns its links' tap
-/// recognizers.
+/// recognizers and focus nodes.
 #[derive(Clone)]
 pub(super) struct LinkedParagraph {
     paragraph: ResolvedParagraph,
@@ -93,103 +124,274 @@ impl StatefulView for LinkedParagraph {
         let live = Rc::new(LiveLinks {
             on_link: RefCell::new(Rc::clone(&self.on_link)),
             links: RefCell::new(links_of(&self.paragraph.authored.text)),
+            nodes: RefCell::new(Vec::new()),
             mounted: Cell::new(true),
         });
         LinkedParagraphState {
             live,
-            policy: None,
-            taps: Vec::new(),
+            mount: None,
+            anchor: SubtreeAnchor::new(),
+            slots: Vec::new(),
         }
     }
 }
 
-/// The links' recognizers, one per link in [`InlineSpan::links`] order.
+/// What the state acquired when it mounted, to build each link's parts.
+struct Mount {
+    policy: GesturePolicy,
+    writer: WriterSource,
+    pipeline: Option<PipelineCell>,
+    rebuild: RebuildHandle,
+}
+
+/// One link's owner-local parts.
+struct LinkSlot {
+    tap: Rc<TapGestureRecognizer>,
+    node: Rc<FocusNode>,
+    rect: RectProvider,
+    /// Rebuilds the paragraph when the node's focus or its visibility
+    /// changes, so the ring and the link node follow.
+    _subscription: FocusSubscription,
+}
+
+/// The links' recognizers and focus nodes, one slot per link in
+/// [`InlineSpan::links`] order.
 pub(super) struct LinkedParagraphState {
     live: Rc<LiveLinks>,
-    policy: Option<(GesturePolicy, WriterSource)>,
-    taps: Vec<Rc<TapGestureRecognizer>>,
+    mount: Option<Mount>,
+    /// Publishes the paragraph's render id, so a link's rect provider can
+    /// measure its glyphs.
+    anchor: SubtreeAnchor,
+    slots: Vec<LinkSlot>,
+}
+
+/// Link `index`'s tap recognizer, in `mount`'s arena.
+fn tap(live: &Rc<LiveLinks>, mount: &Mount, index: usize) -> Rc<TapGestureRecognizer> {
+    let (live, writer) = (Rc::clone(live), mount.writer.clone());
+    TapGestureRecognizer::builder(mount.policy.arena.clone())
+        .settings(mount.policy.settings.clone())
+        .on_tap(move |_| writer.write(|cx| live.activate(cx, index)))
+        .build()
 }
 
 impl LinkedParagraphState {
-    fn tap(
-        &self,
-        policy: &GesturePolicy,
-        writer: &WriterSource,
-        index: usize,
-    ) -> Rc<TapGestureRecognizer> {
-        let (live, writer) = (Rc::clone(&self.live), writer.clone());
-        TapGestureRecognizer::builder(policy.arena.clone())
-            .settings(policy.settings.clone())
-            .on_tap(move |_| writer.write(|cx| live.activate(cx, index)))
-            .build()
+    fn slot(&self, mount: &Mount, index: usize) -> LinkSlot {
+        let node = FocusNode::with_debug_label("text link");
+        let rebuild = mount.rebuild.clone();
+        let subscription = node.subscribe(Rc::new(move || {
+            rebuild.schedule(RebuildReason::StateChange);
+        }));
+        LinkSlot {
+            tap: tap(&self.live, mount, index),
+            rect: link_rect(mount.pipeline.clone(), self.anchor.clone(), index),
+            node,
+            _subscription: subscription,
+        }
     }
 
-    /// Recognizers for links `from..to` against the current policy.
-    fn taps(&self, from: usize, to: usize) -> Vec<Rc<TapGestureRecognizer>> {
-        let Some((policy, writer)) = &self.policy else {
+    /// Slots for links `from..to`.
+    fn slots(&self, from: usize, to: usize) -> Vec<LinkSlot> {
+        let Some(mount) = &self.mount else {
             return Vec::new();
         };
-        (from..to)
-            .map(|index| self.tap(policy, writer, index))
-            .collect()
+        (from..to).map(|index| self.slot(mount, index)).collect()
+    }
+
+    fn publish_nodes(&self) {
+        *self.live.nodes.borrow_mut() = self
+            .slots
+            .iter()
+            .map(|slot| Rc::clone(&slot.node))
+            .collect();
+    }
+
+    /// The link holding the primary focus, with the ring while it shows.
+    fn link_focus(&self, ctx: &dyn BuildContext) -> Option<TextLinkFocus> {
+        // Read on every build, so a new style reaches a ring shown later.
+        let style = DefaultFocusRingStyle::of(ctx);
+        let link = self
+            .slots
+            .iter()
+            .position(|slot| slot.node.has_primary_focus())?;
+        let ring = self.slots[link].node.has_visible_focus().then_some(style);
+        Some(TextLinkFocus { link, ring })
     }
 }
 
-fn cancel(taps: &[Rc<TapGestureRecognizer>]) {
-    cancel_all(taps.iter().map(|tap| &**tap as &dyn GestureRecognizer));
+/// Measures link `index` by its glyphs in the paragraph `anchor` publishes,
+/// in the render root's coordinates, from the committed layout. A link
+/// `max_lines` or an ellipsis cut has no glyphs: it is measured by the
+/// paragraph, so it keeps its place in reading order. `None` while the
+/// paragraph is unmounted or the pipeline is busy.
+fn link_rect(pipeline: Option<PipelineCell>, anchor: SubtreeAnchor, index: usize) -> RectProvider {
+    Rc::new(move || {
+        let pipeline = pipeline.as_ref()?;
+        let anchor_id = anchor.get()?;
+        pipeline
+            .try_with_layout(|owner| {
+                let root = owner.root_id()?;
+                let tree = owner.render_tree();
+                let paragraph_id = *tree.children(anchor_id).first()?;
+                // The one concrete render object `RichText` mounts under the
+                // anchor, through the storage layer's erasure.
+                let paragraph = tree
+                    .get(paragraph_id)?
+                    .as_box()?
+                    .render_object()
+                    .downcast_ref::<RenderParagraph>()?;
+                let bounds = paragraph.link_bounds(index).or_else(|| {
+                    let size = owner.box_size(paragraph_id)?;
+                    Some(Rect::from_ltwh(0.0, 0.0, size.width, size.height))
+                })?;
+                Some(
+                    owner
+                        .transform_to(paragraph_id, root)?
+                        .transform_rect(&bounds),
+                )
+            })
+            .flatten()
+    })
+}
+
+fn cancel<'a>(slots: impl IntoIterator<Item = &'a LinkSlot>) {
+    cancel_all(
+        slots
+            .into_iter()
+            .map(|slot| &*slot.tap as &dyn GestureRecognizer),
+    );
 }
 
 impl ViewState<LinkedParagraph> for LinkedParagraphState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.policy = Some((GesturePolicy::of(ctx), ctx.writer_source()));
-        self.taps = self.taps(0, self.live.links.borrow().len());
+        self.mount = Some(Mount {
+            policy: GesturePolicy::of(ctx),
+            writer: ctx.writer_source(),
+            pipeline: ctx.pipeline_owner(),
+            rebuild: ctx.rebuild_handle(),
+        });
+        self.slots = self.slots(0, self.live.links.borrow().len());
+        self.publish_nodes();
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         let policy = GesturePolicy::of(ctx);
-        let changed = self
-            .policy
-            .as_ref()
-            .is_some_and(|(current, _)| *current != policy);
-        self.policy = Some((policy, ctx.writer_source()));
-        if changed {
-            // The replacements are committed before the outgoing recognizers'
-            // cancellation runs their callbacks.
-            let replacements = self.taps(0, self.taps.len());
-            let outgoing = std::mem::replace(&mut self.taps, replacements);
-            cancel(&outgoing);
+        let Some(mount) = &mut self.mount else {
+            return;
+        };
+        mount.writer = ctx.writer_source();
+        if mount.policy == policy {
+            return;
         }
+        mount.policy = policy;
+        // The replacements are committed before the outgoing recognizers'
+        // cancellation runs their callbacks; the focus nodes stay, and with
+        // them the focus.
+        let outgoing: Vec<_> = self
+            .slots
+            .iter_mut()
+            .enumerate()
+            .map(|(index, slot)| std::mem::replace(&mut slot.tap, tap(&self.live, mount, index)))
+            .collect();
+        cancel_all(outgoing.iter().map(|tap| &**tap as &dyn GestureRecognizer));
     }
 
     fn did_update_view(&mut self, _old_view: &LinkedParagraph, new_view: &LinkedParagraph) {
         self.live.refresh(new_view);
         let count = new_view.link_count();
-        if count > self.taps.len() {
-            let added = self.taps(self.taps.len(), count);
-            self.taps.extend(added);
-        } else {
-            let retired = self.taps.split_off(count);
+        if count > self.slots.len() {
+            let added = self.slots(self.slots.len(), count);
+            self.slots.extend(added);
+            self.publish_nodes();
+        } else if count < self.slots.len() {
+            let retired = self.slots.split_off(count);
+            self.publish_nodes();
             cancel(&retired);
         }
     }
 
-    fn build(&self, view: &LinkedParagraph, _ctx: &dyn BuildContext) -> impl IntoView {
-        let links = self.policy.as_ref().map(|(_, writer)| LinkRouting {
+    fn build(&self, view: &LinkedParagraph, ctx: &dyn BuildContext) -> impl IntoView {
+        let links = self.mount.as_ref().map(|mount| LinkRouting {
             live: Rc::clone(&self.live),
-            writer: writer.clone(),
-            taps: self.taps.clone(),
+            writer: mount.writer.clone(),
+            taps: self.slots.iter().map(|slot| Rc::clone(&slot.tap)).collect(),
         });
-        ResolvedParagraph {
-            links,
-            ..view.paragraph.clone()
-        }
+        let paragraph = AnchoredBox::new(
+            self.anchor.clone(),
+            ResolvedParagraph {
+                links,
+                link_focus: self.link_focus(ctx),
+                ..view.paragraph.clone()
+            },
+        );
+        // One `Focus` per link, the first outermost. The links' semantics
+        // live on the paragraph's link nodes, so the `Focus` widgets add none.
+        self.slots
+            .iter()
+            .enumerate()
+            .rev()
+            .fold(paragraph.boxed(), |child, (index, slot)| {
+                let live = Rc::clone(&self.live);
+                Actions::new(
+                    Focus::new(child)
+                        .focus_node(Rc::clone(&slot.node))
+                        .rect_provider(Rc::clone(&slot.rect))
+                        .include_semantics(false)
+                        .on_key_event(move |cx, event| {
+                            if opens_a_link(event) {
+                                live.activate(cx, index);
+                                KeyEventResult::Handled
+                            } else {
+                                KeyEventResult::Ignored
+                            }
+                        }),
+                )
+                .action::<ActivateIntent>(DeclineActivation)
+                .action::<ActivationPressIntent>(DeclineActivation)
+                .boxed()
+            })
     }
 
     fn dispose(&mut self) {
         // Refuse taps and activations before cancellation can run callbacks.
         self.live.mounted.set(false);
-        let outgoing = std::mem::take(&mut self.taps);
+        let outgoing = std::mem::take(&mut self.slots);
+        self.live.nodes.borrow_mut().clear();
         cancel(&outgoing);
+    }
+}
+
+/// Whether `event` opens the focused link: Enter's key-down, as on every
+/// platform's links. Space is not: its release is the default bindings'
+/// [`ActivateIntent`] too, so the key a link opens on is matched here.
+fn opens_a_link(event: &KeyEvent) -> bool {
+    SingleActivator::named(NamedKey::Enter)
+        .allow_repeats(false)
+        .matches(event)
+}
+
+/// A focused link's answer to the activation intents: declared but disabled,
+/// so Space neither opens the link nor reaches a control around it, and the
+/// key keeps bubbling.
+#[derive(Clone, Copy)]
+struct DeclineActivation;
+
+impl Action<ActivateIntent> for DeclineActivation {
+    fn is_enabled(&self, _intent: &ActivateIntent) -> bool {
+        false
+    }
+
+    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+        ActionOutcome::NotPerformed
+    }
+}
+
+impl Action<ActivationPressIntent> for DeclineActivation {
+    fn is_enabled(&self, _intent: &ActivationPressIntent) -> bool {
+        false
+    }
+
+    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
+        ActionOutcome::NotPerformed
     }
 }
 
@@ -218,11 +420,12 @@ struct LinkActivation {
     index: usize,
 }
 
-/// Run the activation `target` names, on the owner thread inside its UI
-/// runtime. Every failure is a dropped action, never a panic: the platform
-/// asked for something the tree can no longer do.
+/// Run the click or focus request `target` names, on the owner thread inside
+/// its UI runtime. Every failure is a dropped action, never a panic: the
+/// platform asked for something the tree can no longer do.
 fn activate(target: LocalPayloadTarget, call: &ActionCall) {
-    if call.action() != SemanticsAction::Click {
+    let action = call.action();
+    if !matches!(action, SemanticsAction::Click | SemanticsAction::Focus) {
         return;
     }
     let payload = match resolve_local_payload(target) {
@@ -230,7 +433,8 @@ fn activate(target: LocalPayloadTarget, call: &ActionCall) {
         Err(error) => {
             tracing::warn!(
                 ?error,
-                "a link activation was dropped: its handler is owner-local and runs only \
+                ?action,
+                "a link action was dropped: its handler is owner-local and runs only \
                  inside its ui_runtime"
             );
             return;
@@ -240,9 +444,13 @@ fn activate(target: LocalPayloadTarget, call: &ActionCall) {
         tracing::error!("BUG: a link activation ticket resolved to a payload of another type");
         return;
     };
-    activation
-        .writer
-        .write(|cx| activation.live.activate(cx, activation.index));
+    if action == SemanticsAction::Focus {
+        activation.live.focus(activation.index);
+    } else {
+        activation
+            .writer
+            .write(|cx| activation.live.activate(cx, activation.index));
+    }
 }
 
 /// Hand a link's contacts to its recognizer. A revision corrects a reading

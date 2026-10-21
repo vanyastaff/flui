@@ -70,7 +70,13 @@ is a semantics boundary with explicit child nodes, and its regions publish, in
 reading order, one `Link` node per link (with a `Click` action through the
 route) and one node per stretch of text between links, each bounded by the
 union of its glyph boxes, so nothing is read twice. A stretch that `max_lines`
-or an ellipsis cut has no glyphs and publishes nothing. The widget rows
+or an ellipsis cut has no glyphs and publishes nothing. Link nodes are
+focusable, focused while their link holds the primary focus
+(`set_link_focus`), and take a `Focus` action through the route; with a
+visible focus the paragraph paints the `FocusRingStyle` bands just outside
+each of the link's glyph boxes. The link nodes are counted in order rather
+than keyed by link, because a link that encloses another is cut in two by
+it. The widget rows
 `a_tap_on_a_link_reaches_on_link_at_the_current_text_scale`,
 `a_link_shows_a_pointing_hand_and_a_span_its_own_cursor` and
 `a_handled_link_is_a_link_node_assistive_technology_clicks` check taps, cursors

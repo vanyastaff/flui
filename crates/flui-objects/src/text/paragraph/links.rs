@@ -10,10 +10,10 @@
 
 use std::ops::Range;
 
-use flui_foundation::geometry::Offset;
+use flui_foundation::geometry::{Offset, Rect};
 use flui_interaction::CursorIcon;
 use flui_painting::TextPainter;
-use flui_painting::typography::{InlineSpan, TextAffinity, TextSpan};
+use flui_painting::typography::{InlineSpan, TextAffinity, TextBox, TextSpan};
 use flui_rendering::{
     hit_testing::PointerTarget,
     semantics::{
@@ -22,7 +22,7 @@ use flui_rendering::{
     },
 };
 
-use crate::SemanticsActionRoute;
+use crate::{FocusRingStyle, SemanticsActionRoute};
 
 /// How the owner reaches one link of a paragraph: the pointer target its
 /// contacts route to, and the route assistive technology activates it
@@ -66,6 +66,16 @@ impl TextLinkRoute {
             && self.activation.target() == other.activation.target()
             && std::sync::Arc::ptr_eq(self.activation.handler(), other.activation.handler())
     }
+}
+
+/// The link that holds the primary keyboard focus, and the ring it shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextLinkFocus {
+    /// The link, by its index in [`InlineSpan::links`].
+    pub link: usize,
+    /// The ring drawn just outside each line of the link's glyphs while the
+    /// focus is visible; `None` while it is not (a pointer moved it).
+    pub ring: Option<FocusRingStyle>,
 }
 
 /// A stretch of a paragraph's text whose spans share one link and one cursor.
@@ -201,23 +211,53 @@ impl SpanRuns {
             .then_some(run)
     }
 
+    /// The boxes of link `link`'s glyphs in the committed layout, one per
+    /// stretch of one direction on one line, in reading order.
+    pub(super) fn link_boxes(&self, painter: &TextPainter, link: usize) -> Vec<TextBox> {
+        let mut boxes = Vec::new();
+        let mut runs = self.runs.iter().peekable();
+        while let Some(first) = runs.next() {
+            if first.link != Some(link) {
+                continue;
+            }
+            let mut end = first.range.end;
+            while let Some(next) = runs.next_if(|next| next.link == Some(link)) {
+                end = next.range.end;
+            }
+            boxes.extend(painter.get_boxes_for_selection(first.range.start, end));
+        }
+        boxes
+    }
+
+    /// The bounds of link `link`'s glyphs in the committed layout; `None`
+    /// when it has none (cut by `max_lines` or an ellipsis).
+    pub(super) fn link_bounds(&self, painter: &TextPainter, link: usize) -> Option<Rect<f64>> {
+        self.link_boxes(painter, link)
+            .into_iter()
+            .map(|text_box| text_box.rect)
+            .reduce(|bounds, rect| bounds.union(&rect))
+    }
+
     /// One accessible node per stretch of text that is a link or is not, in
     /// reading order, bounded by the stretch's glyphs in the committed
     /// layout.
     ///
-    /// A link with a route is a [`SemanticsRole::Link`] that assistive
-    /// technology clicks through the route's handler. A link without one is
-    /// read as plain text: nothing could run it. A stretch with no glyphs
-    /// (cut by `max_lines` or an ellipsis) publishes nothing, as it paints
-    /// nothing.
+    /// A link with a route is a focusable [`SemanticsRole::Link`] that
+    /// assistive technology clicks and focuses through the route's handler,
+    /// focused while it is `focused`. A link without one is read as plain
+    /// text: nothing could run it. A stretch with no glyphs (cut by
+    /// `max_lines` or an ellipsis) publishes nothing, as it paints nothing.
     pub(super) fn semantics_regions(
         &self,
         painter: &TextPainter,
         routes: &[TextLinkRoute],
+        focused: Option<usize>,
         direction: Option<TextDirection>,
     ) -> Vec<SemanticsRegion> {
         let mut regions = Vec::new();
-        let mut text_ordinal = 0;
+        // A link that encloses another one is cut in two by it, so link
+        // regions are counted like the text between them, not keyed by link.
+        let (mut text_ordinal, mut link_ordinal) = (0, 0);
         let mut runs = self.runs.iter().peekable();
         while let Some(first) = runs.next() {
             let mut range = first.range.clone();
@@ -227,13 +267,13 @@ impl SpanRuns {
                 label.push_str(&next.label);
             }
             let routed = first.link.and_then(|link| Some((link, routes.get(link)?)));
-            let route = routed.map(|(_, route)| route);
-            let key = if let Some((link, _)) = routed {
-                region_key(link, true)
+            let ordinal = if routed.is_some() {
+                &mut link_ordinal
             } else {
-                text_ordinal += 1;
-                region_key(text_ordinal - 1, false)
+                &mut text_ordinal
             };
+            let key = region_key(*ordinal, routed.is_some());
+            *ordinal += 1;
             let Some(rect) = painter
                 .get_boxes_for_selection(range.start, range.end)
                 .iter()
@@ -242,7 +282,7 @@ impl SpanRuns {
             else {
                 continue;
             };
-            if label.is_empty() && route.is_none() {
+            if label.is_empty() && routed.is_none() {
                 continue;
             }
             let mut config = SemanticsConfiguration::new();
@@ -252,12 +292,13 @@ impl SpanRuns {
             if let Some(direction) = direction {
                 config.set_text_direction(direction);
             }
-            if let Some(route) = route {
+            if let Some((link, route)) = routed {
+                let handler = route.activation().handler();
                 config.set_role(SemanticsRole::Link);
-                config.add_action(
-                    SemanticsAction::Click,
-                    std::sync::Arc::clone(route.activation().handler()),
-                );
+                config.set_focusable(true);
+                config.set_focused(focused == Some(link));
+                config.add_action(SemanticsAction::Click, std::sync::Arc::clone(handler));
+                config.add_action(SemanticsAction::Focus, std::sync::Arc::clone(handler));
             }
             regions.push(SemanticsRegion::new(key, rect, config));
         }
@@ -265,8 +306,8 @@ impl SpanRuns {
     }
 }
 
-/// A region's identity: links by their index, the text between them by its
-/// order, in two key spaces.
+/// A region's identity: its order among the paragraph's link regions or
+/// among the text regions between them, in two key spaces.
 fn region_key(ordinal: usize, link: bool) -> SemanticsRegionKey {
     let ordinal =
         u64::try_from(ordinal).map_or(u64::MAX >> 1, |ordinal| ordinal.min(u64::MAX >> 1));
