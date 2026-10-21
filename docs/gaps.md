@@ -1,7 +1,7 @@
 # Where FLUI falls short
 
 > [!NOTE]
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (entries 39–41: add-to-app embedding, gamepad and D-pad, rotary input; previously minor: entries 32–38: live resize, present-mode and tearing control, launch handoff, quality-bar partials, power-aware pacing, the locale edge, accessibility bridge fidelity; a bullet each on entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30; before that major: entries 23–31: the quality bar — polling, presentation feedback, HDR and colour, sandboxing, secure entry, latency modes, distribution, activation, panic gating)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (entry 42: inline links have no keyboard path; previously minor: entries 39–41: add-to-app embedding, gamepad and D-pad, rotary input; before that minor: entries 32–38: live resize, present-mode and tearing control, launch handoff, quality-bar partials, power-aware pacing, the locale edge, accessibility bridge fidelity; a bullet each on entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30; before that major: entries 23–31: the quality bar — polling, presentation feedback, HDR and colour, sandboxing, secure entry, latency modes, distribution, activation, panic gating)
 
 The work list. One entry per shortfall, ranked by how much it stops someone from choosing FLUI for a
 production app on that environment. Each entry says what is missing, the evidence, who it hurts and
@@ -55,6 +55,7 @@ request.
 | 39 | [Add-to-app: no FLUI view inside an existing native app](#39-add-to-app-no-flui-view-inside-an-existing-native-app) | all | Teams adding FLUI to an app they already ship |
 | 40 | [No gamepad, and no D-pad run on a TV](#40-no-gamepad-and-no-d-pad-run-on-a-tv) | all | TV, console-style and Steam Deck users; games |
 | 41 | [No rotary input](#41-no-rotary-input) | Windows, Android; Apple later | Surface Dial and Wear OS users |
+| 42 | [Inline links have no keyboard path](#42-inline-links-have-no-keyboard-path) | all | Keyboard and switch-access users |
 
 ## Entries
 
@@ -423,6 +424,14 @@ request.
 - Wear OS is a form factor of the Android host, not a column: its lists are expected to scroll by rotary input, so a watch app without it fails review on the first screen.
 - The check is a Surface Dial on Windows and the rotary input of a Wear OS emulator turning a scroll view by detents, recorded and replayed.
 
+### 42. Inline links have no keyboard path
+
+> **Environments:** all · **Who it hurts:** Keyboard and switch-access users: a link in running text they cannot reach · **Parity:** [Accessibility](platform-parity.md#accessibility)
+
+- A `RichText` link that `on_link` handles takes a tap through the gesture arena, shows a pointing hand and is a link node assistive technology clicks, at any text scale (headless: `a_tap_on_a_link_reaches_on_link_at_the_current_text_scale`, `a_link_shows_a_pointing_hand_and_a_span_its_own_cursor`, `a_handled_link_is_a_link_node_assistive_technology_clicks`).
+- No link is a focus node: Tab does not stop on it, no focus ring follows its glyphs and Enter does not activate it, though WCAG 2.1.1 (Keyboard) asks it of every link.
+- The check is Tab reaching each link of a paragraph in reading order, the ring following its glyphs at a non-1.0 text scale, and Enter calling `on_link`.
+
 ## Revision history
 
 <details>
@@ -466,5 +475,6 @@ request.
 | 2026-10-20 | minor | Restructured for reading: a summary table, one section per entry, the hours column removed |
 | 2026-10-20 | minor | Entries 32–38 join from the quality-bar research: live resize unaudited and unscheduled, no present-mode, queue-depth, VRR or tearing control, launch handoff on mobile and the Web, quality-bar partials with no entry, power-aware pacing, the locale edge, accessibility bridge fidelity; entries 1, 14, 18, 24, 25, 26, 27, 28, 29 and 30 gain a bullet each (client queries and session survival, the locale rows, entitlement manifests, secrets in diagnostics, timestamp conversion, and the corrections to the presentation-feedback, HDR and activation evidence) |
 | 2026-10-21 | minor | Entries 39–41 join: add-to-app embedding, gamepad and D-pad, rotary input |
+| 2026-10-21 | minor | Entry 42 joins: inline links have no keyboard path |
 
 </details>

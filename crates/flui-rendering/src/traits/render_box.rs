@@ -787,10 +787,14 @@ where
         let mut ctx =
             crate::context::BoxHitTestContext::new(inner, size).with_child_count(child_count);
         let blocks_below = T::hit_test(self, &mut ctx);
-        HitTestOutcome::new(
-            ctx.self_hit_entry_registered() || blocks_below,
-            blocks_below,
-        )
+        HitTestOutcome {
+            pointer_target: ctx.self_hit_pointer_target(),
+            cursor: ctx.self_hit_cursor(),
+            ..HitTestOutcome::new(
+                ctx.self_hit_entry_registered() || blocks_below,
+                blocks_below,
+            )
+        }
     }
 
     fn intrinsic_raw(

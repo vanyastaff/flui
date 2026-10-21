@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use cursor_icon::CursorIcon;
+
 use super::{TextBaseline, TextStyle};
 
 /// Trait for inline spans that can be embedded in text.
@@ -124,8 +126,8 @@ impl InlineSpan {
     /// `true` means the two span trees produce identical glyph
     /// geometry — a text engine may keep its shaped layout and only
     /// re-emit paint commands (colors/shadows changed at most).
-    /// Interaction-only fields (semantic labels, cursors, tap
-    /// handlers) are ignored: they affect neither shaping nor paint.
+    /// Interaction-only fields (semantic labels, cursors, links) are
+    /// ignored: they affect neither shaping nor paint.
     #[must_use]
     pub fn layout_affecting_eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -134,6 +136,24 @@ impl InlineSpan {
             (Self::Placeholder(a), Self::Placeholder(b)) => a == b,
             _ => false,
         }
+    }
+
+    /// The links of this span tree in document order: each span that sets
+    /// one, before its children. A link's position in this list is the
+    /// identity a paragraph routes that link's taps and activation by.
+    #[must_use]
+    pub fn links(&self) -> Vec<&TextLink> {
+        fn collect<'a>(span: &'a TextSpan, links: &mut Vec<&'a TextLink>) {
+            links.extend(span.link.as_ref());
+            for child in &span.children {
+                collect(child, links);
+            }
+        }
+        let mut links = Vec::new();
+        if let Self::Text(root) = self {
+            collect(root, &mut links);
+        }
+        links
     }
 }
 
@@ -151,12 +171,64 @@ impl From<PlaceholderSpan> for InlineSpan {
     }
 }
 
-/// A span of styled text with optional children and interactivity.
+/// Where a link span leads: a URL or a tag the app defines.
+///
+/// A span carries its link as data. The widget that shows the paragraph
+/// owns what activating it does: `flui_widgets::RichText::on_link` receives
+/// the link of the span a tap or assistive technology activated.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(transparent)
+)]
+pub struct TextLink(Arc<str>);
+
+impl TextLink {
+    /// A link to `target`.
+    #[must_use]
+    pub fn new(target: impl Into<Arc<str>>) -> Self {
+        Self(target.into())
+    }
+
+    /// The link's target, as authored.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for TextLink {
+    fn from(target: &str) -> Self {
+        Self::new(target)
+    }
+}
+
+impl From<String> for TextLink {
+    fn from(target: String) -> Self {
+        Self::new(target)
+    }
+}
+
+impl AsRef<str> for TextLink {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::fmt::Display for TextLink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A span of styled text with optional children, a link and a cursor.
 ///
 /// Represents a portion of text with associated styling, child spans,
-/// and optional semantic labels and event handlers for accessibility
-/// and user interaction.
-#[derive(Default, Clone)]
+/// an optional semantic label for accessibility, and the link and mouse
+/// cursor its text has. A link and a cursor cover the span's children too,
+/// unless a child sets its own.
+#[derive(Debug, Default, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextSpan {
     /// Text content.
@@ -167,42 +239,12 @@ pub struct TextSpan {
     pub children: Vec<TextSpan>,
     /// Semantic label for accessibility.
     pub semantics_label: Option<String>,
-    /// Mouse cursor when hovering.
-    pub mouse_cursor: Option<MouseCursor>,
-    /// Tap callback handler.
-    ///
-    /// Skipped by serde: a live `Arc<dyn Fn>` callback cannot be serialized,
-    /// and a deserialized span legitimately carries no handler (it defaults to
-    /// `None`). This is the universal "callbacks don't survive serialization"
-    /// rule, not a loss of styling/text content.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub on_tap: Option<Arc<dyn Fn() + Send + Sync>>,
-}
-
-impl std::fmt::Debug for TextSpan {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TextSpan")
-            .field("text", &self.text)
-            .field("style", &self.style)
-            .field("children", &self.children)
-            .field("semantics_label", &self.semantics_label)
-            .field("mouse_cursor", &self.mouse_cursor)
-            .field("on_tap", &self.on_tap.as_ref().map(|_| "<callback>"))
-            .finish()
-    }
-}
-
-impl PartialEq for TextSpan {
-    #[inline]
-    fn eq(&self, other: &Self) -> bool {
-        self.text == other.text
-            && self.style == other.style
-            && self.children == other.children
-            && self.semantics_label == other.semantics_label
-            && self.mouse_cursor == other.mouse_cursor
-        // We don't compare callbacks
-    }
+    /// Mouse cursor over this span's text. Unset, a link that something
+    /// handles shows [`CursorIcon::Pointer`] and other text defers to what
+    /// is under it.
+    pub mouse_cursor: Option<CursorIcon>,
+    /// Where this span's text links to.
+    pub link: Option<TextLink>,
 }
 
 impl TextSpan {
@@ -288,22 +330,19 @@ impl TextSpan {
         self
     }
 
-    /// Sets the mouse cursor for this span.
+    /// Sets the mouse cursor over this span's text.
     #[must_use]
     #[inline]
-    pub fn with_mouse_cursor(mut self, cursor: MouseCursor) -> Self {
+    pub fn with_mouse_cursor(mut self, cursor: CursorIcon) -> Self {
         self.mouse_cursor = Some(cursor);
         self
     }
 
-    /// Adds a tap callback handler.
+    /// Makes this span's text a link to `link`.
     #[must_use]
     #[inline]
-    pub fn with_on_tap<F>(mut self, callback: F) -> Self
-    where
-        F: Fn() + Send + Sync + 'static,
-    {
-        self.on_tap = Some(Arc::new(callback));
+    pub fn with_link(mut self, link: impl Into<TextLink>) -> Self {
+        self.link = Some(link.into());
         self
     }
 
@@ -369,13 +408,6 @@ impl TextSpan {
         self.to_plain_text().len()
     }
 
-    /// Returns true if this span has a tap handler.
-    #[must_use]
-    #[inline]
-    pub fn is_interactive(&self) -> bool {
-        self.on_tap.is_some()
-    }
-
     /// Returns true if this span has semantic labels.
     #[must_use]
     #[inline]
@@ -413,42 +445,6 @@ impl InlineSpanTrait for TextSpan {
     fn has_semantics(&self) -> bool {
         self.semantics_label.is_some()
     }
-}
-
-/// Mouse cursor types for interactive text.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum MouseCursor {
-    /// Default cursor.
-    Default,
-    /// Pointer/hand cursor (for links).
-    Pointer,
-    /// Text selection cursor.
-    Text,
-    /// Move cursor.
-    Move,
-    /// Resize north.
-    ResizeNorth,
-    /// Resize south.
-    ResizeSouth,
-    /// Resize east.
-    ResizeEast,
-    /// Resize west.
-    ResizeWest,
-    /// Resize north-east.
-    ResizeNorthEast,
-    /// Resize north-west.
-    ResizeNorthWest,
-    /// Resize south-east.
-    ResizeSouthEast,
-    /// Resize south-west.
-    ResizeSouthWest,
-    /// Not allowed cursor.
-    NotAllowed,
-    /// Wait/busy cursor.
-    Wait,
-    /// Help cursor.
-    Help,
 }
 
 /// Placeholder for inline objects (images, widgets, etc.) in text.

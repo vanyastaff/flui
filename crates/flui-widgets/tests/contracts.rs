@@ -205,6 +205,9 @@ fn text_editing() {
             ("text::media_text_scaling_changes_the_laid_out_text", crate::text::media_text_scaling_changes_the_laid_out_text),
             ("text::icon_text_sizing_keeps_box_and_glyph_together", crate::text::icon_text_sizing_keeps_box_and_glyph_together),
             ("text::icon_labels_reach_the_assembled_accessibility_tree", crate::text::icon_labels_reach_the_assembled_accessibility_tree),
+            ("text::a_tap_on_a_link_reaches_on_link_at_the_current_text_scale", crate::text::a_tap_on_a_link_reaches_on_link_at_the_current_text_scale),
+            ("text::a_link_shows_a_pointing_hand_and_a_span_its_own_cursor", crate::text::a_link_shows_a_pointing_hand_and_a_span_its_own_cursor),
+            ("text::a_handled_link_is_a_link_node_assistive_technology_clicks", crate::text::a_handled_link_is_a_link_node_assistive_technology_clicks),
         ],
     );
 }

@@ -10,23 +10,40 @@
 //! intrinsics, baseline, and paint — with soft wrap, `max_lines`, and
 //! ellipsis truncation.
 //!
+//! Its spans' links and cursors are answered from the same committed layout
+//! that paints the text, so they follow the text scale (ADR-0183): a hit on
+//! a link routes to that link's [`TextLinkRoute`] and asks for its cursor,
+//! and a paragraph with routed links publishes one accessible node per link
+//! and per stretch of text between them (`links` module).
+//!
 //! Out of scope for this object (separable): inline `WidgetSpan` children, text selection, and the
 //! clip/fade `TextOverflow` policies (only `ellipsis` is wired here).
+
+mod links;
+
+pub use links::TextLinkRoute;
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Offset, Size};
+use flui_interaction::CursorIcon;
 use flui_painting::typography::{InlineSpan, TextAlign, TextDirection};
 use flui_painting::{Invalidation, TextBaseline as PainterBaseline, TextPainter};
 
 use flui_rendering::{
     RenderResult,
     constraints::BoxConstraints,
-    context::{BoxDryBaselineCtx, BoxDryLayoutCtx, BoxIntrinsicsCtx, BoxLayoutContext, PaintCx},
+    context::{
+        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
+        PaintCx,
+    },
+    hit_testing::CursorRequest,
     parent_data::BoxParentData,
-    semantics::SemanticsConfiguration,
+    semantics::{SemanticsConfiguration, SemanticsRegions},
     traits::{RenderBox, TextBaseline},
 };
+
+use links::SpanRuns;
 
 /// Render object that lays out and paints a styled text span.
 #[derive(Debug)]
@@ -38,17 +55,64 @@ pub struct RenderParagraph {
     /// lays out at unbounded width (single logical line per hard break) and
     /// can overflow.
     soft_wrap: bool,
+    /// The text cut where its link or cursor changes.
+    runs: SpanRuns,
+    /// How the owner reaches each link, in [`InlineSpan::links`] order;
+    /// empty while nothing handles them.
+    link_routes: Vec<TextLinkRoute>,
 }
 
 impl RenderParagraph {
     /// Creates a paragraph for `text` laid out in `direction`.
     pub fn new(text: impl Into<InlineSpan>, direction: TextDirection) -> Self {
+        let text = text.into();
         Self {
+            runs: SpanRuns::of(&text),
             painter: TextPainter::new()
                 .with_text(text)
                 .with_text_direction(direction),
             soft_wrap: true,
+            link_routes: Vec::new(),
         }
+    }
+
+    /// Routes the text's links (builder form): one route per link, in
+    /// [`InlineSpan::links`] order.
+    #[must_use]
+    pub fn with_link_routes(mut self, routes: Vec<TextLinkRoute>) -> Self {
+        self.link_routes = routes;
+        self
+    }
+
+    /// Replaces the link routes. Hit testing reads them live; the
+    /// accessible link nodes change only when a route reaches a different
+    /// registration.
+    pub fn set_link_routes(
+        &mut self,
+        routes: Vec<TextLinkRoute>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let unchanged = routes.len() == self.link_routes.len()
+            && routes
+                .iter()
+                .zip(&self.link_routes)
+                .all(|(new, old)| new.same_registration(old));
+        self.link_routes = routes;
+        if unchanged {
+            flui_rendering::RenderUpdateImpact::NONE
+        } else {
+            flui_rendering::RenderUpdateImpact::SEMANTICS
+        }
+    }
+
+    /// The routes the text's links are reached through.
+    pub fn link_routes(&self) -> &[TextLinkRoute] {
+        &self.link_routes
+    }
+
+    /// Whether the paragraph publishes its links as accessible nodes of
+    /// their own: some link has a route.
+    fn routes_links(&self) -> bool {
+        self.runs.link_count() > 0 && !self.link_routes.is_empty()
     }
 
     /// Sets the text alignment (builder form).
@@ -152,8 +216,12 @@ impl RenderParagraph {
     /// - [`Invalidation::None`] — no observable change.
     pub fn set_text(&mut self, text: impl Into<InlineSpan>) -> flui_rendering::RenderUpdateImpact {
         let text = text.into();
-        let semantics_changed = self.painter.text().map(InlineSpan::to_semantics_text)
-            != Some(text.to_semantics_text());
+        let runs = SpanRuns::of(&text);
+        // The runs decide the link nodes' boundaries and labels.
+        let semantics_changed = runs != self.runs
+            || self.painter.text().map(InlineSpan::to_semantics_text)
+                != Some(text.to_semantics_text());
+        self.runs = runs;
         let impact = text_invalidation_impact(self.painter.set_text(Some(text)), true);
         if semantics_changed {
             impact | flui_rendering::RenderUpdateImpact::SEMANTICS
@@ -388,11 +456,55 @@ impl RenderBox for RenderParagraph {
         }
     }
 
+    /// The whole box is hit, as for any leaf. Over a routed link the hit
+    /// routes to that link and asks for its cursor (a pointing hand unless
+    /// the span sets another); over a span that sets a cursor it asks for
+    /// that cursor. Elsewhere the paragraph routes nowhere and defers the
+    /// cursor.
+    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {
+        if !ctx.is_within_own_size() {
+            return false;
+        }
+        if (self.link_routes.is_empty() && !self.runs.has_cursor()) || !self.painter.has_layout() {
+            return true;
+        }
+        let Some(run) = self.runs.run_at(&self.painter, ctx.offset()) else {
+            return true;
+        };
+        let route = run.link.and_then(|link| self.link_routes.get(link));
+        if let Some(route) = route {
+            ctx.set_self_hit_pointer_target(route.pointer_target());
+        }
+        if let Some(cursor) = run.cursor.or(route.map(|_| CursorIcon::Pointer)) {
+            ctx.set_self_hit_cursor(CursorRequest::Icon(cursor));
+        }
+        true
+    }
+
+    /// A paragraph with routed links publishes one region per link and per
+    /// stretch of text between them, bounded by their glyphs.
+    fn semantics_regions(&self, _size: Size) -> SemanticsRegions {
+        if !self.routes_links() || !self.painter.has_layout() {
+            return SemanticsRegions::default();
+        }
+        SemanticsRegions {
+            before_children: self.runs.semantics_regions(
+                &self.painter,
+                &self.link_routes,
+                self.painter.text_direction().map(semantics_text_direction),
+            ),
+            after_children: Vec::new(),
+        }
+    }
+
     /// Covers the plain-text case this object supports (no `WidgetSpan`
-    /// children, no gesture recognizers on the span — see the module doc's
-    /// "Out of scope" list): the label uses each span's accessibility override
-    /// in place of its own text, preserving children. The text
-    /// direction is the paragraph's.
+    /// children — see the module doc's "Out of scope" list): the label uses
+    /// each span's accessibility override in place of its own text,
+    /// preserving children. The text direction is the paragraph's.
+    ///
+    /// A paragraph with routed links is instead a boundary whose children
+    /// are its [`semantics_regions`](Self::semantics_regions): its links and
+    /// the text between them, read in order, so no text is read twice.
     ///
     /// Mapping decision (see `crates/flui-objects/ARCHITECTURE.md` "Mapping
     /// decisions"): an EMPTY plain-text span sets neither `label` nor
@@ -409,7 +521,12 @@ impl RenderBox for RenderParagraph {
         if text.is_empty() {
             return;
         }
-        config.set_label(text);
+        if self.routes_links() {
+            config.set_semantics_boundary(true);
+            config.set_explicit_child_nodes(true);
+        } else {
+            config.set_label(text);
+        }
         if let Some(direction) = self.painter.text_direction() {
             config.set_text_direction(semantics_text_direction(direction));
         }

@@ -2,6 +2,9 @@
 //! through `RenderParagraph` (a non-empty box), and that it composes as a leaf
 //! inside other widgets.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use crate::common::{lay_out, loose};
 use flui_painting::typography::TextStyle;
 use flui_widgets::{DefaultTextStyle, MediaQuery, MediaQueryData, Text};
@@ -411,5 +414,222 @@ pub(crate) fn an_enclosing_default_text_style_styles_a_bare_run() {
     assert!(
         styled.size(styled.root()).height > bare.size(bare.root()).height,
         "the ambient 40pt style must produce a taller box than the default type"
+    );
+}
+
+// ============================================================================
+// Links
+// ============================================================================
+
+/// The bytes of [`linked_paragraph`]'s runs in its plain text.
+const PLAIN: std::ops::Range<usize> = 0..6;
+const LINK: std::ops::Range<usize> = 6..10;
+const HELP: std::ops::Range<usize> = 10..15;
+
+/// `RichText` with one link between plain runs: "plain ", "link" (to
+/// `app://terms`), then " help", whose span asks for the help cursor.
+fn linked_paragraph(opened: &Rc<RefCell<Vec<String>>>) -> flui_widgets::RichText {
+    use flui_painting::typography::TextSpan;
+    use flui_platform::CursorIcon;
+
+    let opened = Rc::clone(opened);
+    flui_widgets::RichText::new(
+        TextSpan::new("plain ")
+            .with_child(TextSpan::new("link").with_link("app://terms"))
+            .with_child(TextSpan::new(" help").with_mouse_cursor(CursorIcon::Help)),
+    )
+    .on_link(move |_cx, link| opened.borrow_mut().push(link.to_string()))
+}
+
+/// The window position of the middle of the paragraph's glyphs for the
+/// plain-text bytes `range`, as the paragraph laid them out last.
+fn glyph_center(
+    laid: &crate::common::LaidOut,
+    paragraph: flui_foundation::RenderId,
+    range: std::ops::Range<usize>,
+) -> (f64, f64) {
+    use flui_objects::RenderParagraph;
+
+    let rect = laid.pipeline_owner().with(|owner| {
+        // The one concrete render object `RichText` mounts, reached through
+        // the storage layer's erasure.
+        let render = owner
+            .render_tree()
+            .get(paragraph)
+            .and_then(|node| node.as_box())
+            .and_then(|node| node.render_object().downcast_ref::<RenderParagraph>())
+            .expect("a mounted paragraph");
+        render
+            .painter()
+            .get_boxes_for_selection(range.start, range.end)
+            .into_iter()
+            .map(|text_box| text_box.rect)
+            .reduce(|bounds, rect| bounds.union(&rect))
+            .expect("the range has glyphs")
+    });
+    let (origin, center) = (laid.absolute_offset(paragraph), rect.center());
+    (origin.dx + center.x, origin.dy + center.y)
+}
+
+fn scale_text(laid: &mut crate::common::LaidOut, scale: f64) {
+    laid.set_system_preferences(
+        flui_platform::SystemPreferences::default()
+            .with_text_scale(scale)
+            .expect("supported scale"),
+    );
+    laid.tick();
+}
+
+/// A tap on a link's glyphs calls `on_link` with that link; a tap on the
+/// text around it calls nothing. Both hold after the system text scale
+/// doubles the glyphs, because the paragraph answers from the layout it
+/// committed: the link's old position is then inside the enlarged plain run.
+///
+/// Red-checks: drop the paragraph's hit-test override (no tap reaches
+/// `on_link`), or route a link from a layout at another scale (the tap at
+/// the link's unscaled position opens it).
+pub(crate) fn a_tap_on_a_link_reaches_on_link_at_the_current_text_scale() {
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let mut laid = lay_out(linked_paragraph(&opened), loose(10_000.0));
+    let paragraph = laid.find_by_render_type("RenderParagraph");
+    let tap = |laid: &crate::common::LaidOut, (x, y): (f64, f64)| {
+        laid.dispatch_pointer_down(x, y);
+        laid.dispatch_pointer_up(x, y);
+    };
+
+    let unscaled = glyph_center(&laid, paragraph, LINK);
+    tap(&laid, glyph_center(&laid, paragraph, PLAIN));
+    assert!(opened.borrow().is_empty(), "plain text is not a link");
+    tap(&laid, unscaled);
+    assert_eq!(
+        *opened.borrow(),
+        ["app://terms"],
+        "a tap on the link opens it"
+    );
+
+    scale_text(&mut laid, 2.0);
+    let scaled = glyph_center(&laid, paragraph, LINK);
+    assert!(
+        scaled.0 > unscaled.0 * 1.5,
+        "precondition: the scale moved the link: unscaled={unscaled:?}, scaled={scaled:?}"
+    );
+    tap(&laid, unscaled);
+    assert_eq!(
+        opened.borrow().len(),
+        1,
+        "the link's unscaled position is plain text at twice the size"
+    );
+    tap(&laid, scaled);
+    assert_eq!(
+        *opened.borrow(),
+        ["app://terms", "app://terms"],
+        "a tap on the scaled link opens it"
+    );
+}
+
+/// The pointer over a link is a pointing hand, over a span that sets a
+/// cursor that cursor, and elsewhere the arrow, at a text scale that moves
+/// every run from where it would be unscaled.
+///
+/// Red-check: drop the cursor from the paragraph's hit (every position shows
+/// the arrow).
+pub(crate) fn a_link_shows_a_pointing_hand_and_a_span_its_own_cursor() {
+    use flui_platform::CursorIcon;
+
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let mut laid = lay_out(linked_paragraph(&opened), loose(10_000.0));
+    scale_text(&mut laid, 1.5);
+    let paragraph = laid.find_by_render_type("RenderParagraph");
+    for (range, expected) in [
+        (LINK, CursorIcon::Pointer),
+        (PLAIN, CursorIcon::Default),
+        (HELP, CursorIcon::Help),
+        (LINK, CursorIcon::Pointer),
+    ] {
+        let (x, y) = glyph_center(&laid, paragraph, range.clone());
+        laid.dispatch_pointer_hover(x, y);
+        assert_eq!(laid.cursor(), expected, "hovering bytes {range:?}");
+    }
+    assert!(opened.borrow().is_empty(), "hovering opens nothing");
+}
+
+/// A paragraph with a handled link publishes the link as a link node that
+/// assistive technology clicks to reach `on_link`, between nodes for the
+/// text around it, so no text is read twice; each node is bounded by its
+/// glyphs at the current text scale. Without a handler the paragraph is one
+/// plain label.
+///
+/// Red-checks: drop the paragraph's semantics regions (no link node), or
+/// keep the whole-text label beside them (the link is read twice).
+pub(crate) fn a_handled_link_is_a_link_node_assistive_technology_clicks() {
+    use flui_painting::typography::TextSpan;
+    use flui_testing::a11y::{Action, ActionRequest, NodeId, Role, TreeId};
+
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let mut laid = lay_out(linked_paragraph(&opened), loose(10_000.0));
+    laid.enable_semantics();
+    laid.pump();
+    let link_node = |laid: &crate::common::LaidOut| -> (NodeId, f64) {
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        let link = tree
+            .find_by_role_and_label(Role::Link, "link")
+            .unwrap_or_else(|error| panic!("{error}\n{}", tree.describe()));
+        assert!(link.supports_action(Action::Click), "{}", tree.describe());
+        let plain = tree
+            .find_by_label("plain ")
+            .unwrap_or_else(|error| panic!("{error}\n{}", tree.describe()));
+        tree.find_by_label(" help")
+            .unwrap_or_else(|error| panic!("{error}\n{}", tree.describe()));
+        assert!(
+            tree.find_all_by_label("plain link help").is_empty(),
+            "the link is not read twice:\n{}",
+            tree.describe()
+        );
+        let (link_bounds, plain_bounds) = (
+            link.bounds().expect("link bounds"),
+            plain.bounds().expect("plain bounds"),
+        );
+        assert!(
+            link_bounds.x0 >= plain_bounds.x1 - 0.5,
+            "the link follows the text before it: link={link_bounds:?}, plain={plain_bounds:?}"
+        );
+        (link.id(), link_bounds.width())
+    };
+    let (_, unscaled) = link_node(&laid);
+    scale_text(&mut laid, 2.0);
+    let (node, scaled) = link_node(&laid);
+    assert!(
+        scaled > unscaled * 1.5,
+        "the link node is bounded by its scaled glyphs: unscaled={unscaled}, scaled={scaled}"
+    );
+
+    laid.invoke_semantics_action(ActionRequest {
+        action: Action::Click,
+        target_tree: TreeId::ROOT,
+        target_node: node,
+        data: None,
+    })
+    .expect("a click on a link node resolves");
+    assert_eq!(
+        *opened.borrow(),
+        ["app://terms"],
+        "the click opens the link"
+    );
+
+    let mut unhandled = lay_out(
+        flui_widgets::RichText::new(
+            TextSpan::new("plain ").with_child(TextSpan::new("link").with_link("app://terms")),
+        ),
+        loose(10_000.0),
+    );
+    unhandled.enable_semantics();
+    unhandled.pump();
+    let tree = unhandled.a11y_tree().expect("semantics enabled");
+    tree.find_by_label("plain link")
+        .unwrap_or_else(|error| panic!("{error}\n{}", tree.describe()));
+    assert!(
+        tree.find_all(Role::Link).is_empty(),
+        "an unhandled link is plain text:\n{}",
+        tree.describe()
     );
 }

@@ -3,6 +3,7 @@
 
 mod animated_default_text_style;
 mod default_text_style;
+mod linked_paragraph;
 mod rich_text;
 mod text;
 
