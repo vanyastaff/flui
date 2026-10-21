@@ -20,8 +20,10 @@
 pub mod harness;
 mod host;
 mod signal_probe;
+mod state_creations;
 
 pub use signal_probe::{ProbeRoot, ProbeRootState, ProbeSignals, SignalProbe};
+pub use state_creations::{StateCreations, StateCreationsState};
 
 use std::any::TypeId;
 use std::cell::Cell;

@@ -241,11 +241,6 @@ kind = "double"
 names = ["ProbeItem", "ProbeItemState"]
 
 [[allow]]
-path = "crates/flui-widgets/tests/modal_route.rs"
-kind = "double"
-names = ["Probe", "ProbeState"]
-
-[[allow]]
 path = "crates/flui-widgets/tests/nested_scroll.rs"
 kind = "pump"
 names = ["tick"]
@@ -254,16 +249,6 @@ names = ["tick"]
 path = "crates/flui-widgets/tests/nested_scroll.rs"
 kind = "double"
 names = ["Probe"]
-
-[[allow]]
-path = "crates/flui-widgets/tests/overlay.rs"
-kind = "double"
-names = ["Probe", "ProbeState"]
-
-[[allow]]
-path = "crates/flui-widgets/tests/perf.rs"
-kind = "pump"
-names = ["pump"]
 
 [[allow]]
 path = "crates/flui-widgets/tests/router.rs"
@@ -282,11 +267,6 @@ names = ["RecordingDelegate"]
 
 [[allow]]
 path = "crates/flui-widgets/tests/text_store_kit.rs"
-kind = "pump"
-names = ["pump"]
-
-[[allow]]
-path = "crates/flui-widgets/tests/transitions.rs"
 kind = "pump"
 names = ["pump"]
 

@@ -1090,6 +1090,18 @@ impl HeadlessBinding {
     /// ([`with_tree`](Self::with_tree)); a gesture-only binding stops after step 4,
     /// so a bare controller can still be driven deterministically.
     pub fn pump_frame(&mut self, dt: Duration) {
+        self.pump_frame_inner(dt);
+    }
+
+    /// [`pump_frame`](Self::pump_frame), returning the frame's
+    /// [`FrameReport`] (what [`last_frame_report`](Self::last_frame_report)
+    /// holds afterwards).
+    pub fn pump_frame_report(&mut self, dt: Duration) -> FrameReport {
+        self.pump_frame_inner(dt);
+        self.last_frame_report.clone()
+    }
+
+    fn pump_frame_inner(&mut self, dt: Duration) {
         let Self {
             clock,
             gestures,
