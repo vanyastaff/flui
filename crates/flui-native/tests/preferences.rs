@@ -130,6 +130,62 @@ fn windows_reads_preferences_before_a_user_window_exists() {
     );
 }
 
+/// A change that wakes the owner while no owner-turn callback is registered
+/// (the loop already runs; the application has not installed its callback yet,
+/// or is between two) is owed to the first callback that is: one turn runs it.
+fn a_change_with_no_turn_callback_reaches_the_next_one_registered() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use flui_native::{HeadlessPlatform, Platform as _};
+
+    let platform = HeadlessPlatform::new();
+    let turns = platform.owner_turns();
+    let source = platform.preference_source();
+    let saved = Rc::new(RefCell::new(None));
+    let installed = Rc::clone(&saved);
+    Box::new(platform)
+        .run(Box::new(move |owner| {
+            *installed.borrow_mut() = Some(owner);
+            Ok(())
+        }))
+        .expect("headless owner");
+    let owner = saved.borrow_mut().take().expect("started owner");
+
+    source.set(
+        flui_platform::SystemPreferences::default()
+            .with_text_scale(2.0)
+            .expect("valid scale"),
+    );
+    turns.drive();
+
+    let runs = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&runs);
+    owner
+        .on_wake(Box::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }))
+        .expect("register the owner's turn callback");
+    turns.drive();
+
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "the change that found no callback is owed to the first one registered"
+    );
+    assert_eq!(
+        owner
+            .preferences()
+            .expect("headless observation")
+            .text_scale(),
+        Some(2.0)
+    );
+    turns.drive();
+    assert_eq!(runs.load(Ordering::SeqCst), 1, "and is owed only once");
+}
+
 #[test]
 fn preferences_contract() {
     crate::run_table(
@@ -138,6 +194,10 @@ fn preferences_contract() {
             (
                 "unavailable_observations_do_not_claim_system_defaults",
                 unavailable_observations_do_not_claim_system_defaults as fn(),
+            ),
+            (
+                "a_change_with_no_turn_callback_reaches_the_next_one_registered",
+                a_change_with_no_turn_callback_reaches_the_next_one_registered as fn(),
             ),
             #[cfg(target_os = "windows")]
             (
